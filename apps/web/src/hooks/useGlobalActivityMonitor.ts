@@ -228,8 +228,15 @@ function subscribeNativeActivity<TState extends NativeActivityState>(
     session: ActivitySession | undefined,
   ): AgentActivityState => {
     if (!session) return "idle";
-    if (session.isLoading) return "working";
-    return config.isWaiting(state, sessionKey, session) ? "waiting" : "idle";
+    /**
+     * Blocked-on-the-user beats still-running. A turn parked on an approval is
+     * *also* loading — Codex holds `isLoading` for every non-terminal phase — so
+     * checking `isLoading` first showed the environment as busy and left the
+     * user with no signal that it was their input the turn was waiting on.
+     * Amber exists for exactly this state, so it wins.
+     */
+    if (config.isWaiting(state, sessionKey, session)) return "waiting";
+    return session.isLoading ? "working" : "idle";
   };
 
   const syncActivity = (state: TState, prevState?: TState) => {

@@ -474,6 +474,47 @@ describe("paneLayoutStore tab cleanup", () => {
     expect(consoleErrorSpy).toHaveBeenCalled();
   });
 
+  test("closing a native tab drops its drafts and selections, not just its session", () => {
+    /**
+     * Cleanup used to call `clearQueue` + `setSession(null)` only, leaving the
+     * draft, model and attachments behind. Tab ids are UUIDs, so those entries
+     * were never reclaimed for the life of the process.
+     */
+    const tabs = [
+      { id: "claude-tab", type: "claude-native" },
+      { id: "codex-tab", type: "codex-native" },
+      { id: "opencode-tab", type: "opencode-native" },
+    ];
+    seedPaneTree(
+      { kind: "leaf", id: "default", tabs, activeTabId: "claude-tab" },
+      "default",
+      "env-leak",
+    );
+
+    const claudeKey = createSessionKey("env-leak", "claude-tab");
+    const codexKey = createSessionKey("env-leak", "codex-tab");
+    const openCodeKey = createSessionKey("env-leak", "opencode-tab");
+
+    useClaudeStore.getState().setDraftText(claudeKey, "claude draft");
+    useClaudeStore.getState().setSelectedModel(claudeKey, "opus");
+    useCodexStore.getState().setDraftText(codexKey, "codex draft");
+    useCodexStore.getState().setSelectedModel(codexKey, "gpt-5");
+    useOpenCodeStore.getState().setDraftText(openCodeKey, "opencode draft");
+    useOpenCodeStore.getState().setSelectedModel(openCodeKey, "gpt-5");
+
+    const store = usePaneLayoutStore.getState();
+    for (const tab of tabs) {
+      store.removeTab("default", tab.id, "env-leak");
+    }
+
+    expect(useClaudeStore.getState().getDraftText(claudeKey)).toBe("");
+    expect(useClaudeStore.getState().selectedModel.has(claudeKey)).toBe(false);
+    expect(useCodexStore.getState().getDraftText(codexKey)).toBe("");
+    expect(useCodexStore.getState().selectedModel.has(codexKey)).toBe(false);
+    expect(useOpenCodeStore.getState().getDraftText(openCodeKey)).toBe("");
+    expect(useOpenCodeStore.getState().selectedModel.has(openCodeKey)).toBe(false);
+  });
+
   test("clears setup state and closes a child pane when its last tab is removed", () => {
     seedPaneTree({
       kind: "split",

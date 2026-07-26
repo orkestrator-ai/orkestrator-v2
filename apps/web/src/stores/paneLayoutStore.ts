@@ -252,8 +252,9 @@ function cleanupClaudeNativeTab(envId: string, tabId: string) {
   const sessionKey = createSessionKey(envId, tabId);
   const client = store.clients.get(envId);
   const session = store.sessions.get(sessionKey);
-  store.clearQueue(sessionKey);
-  store.setSession(sessionKey, null);
+  // Drops every session-keyed map for this tab, not just the queue and session:
+  // tab ids are UUIDs, so anything left behind is never reclaimed.
+  store.clearSession(sessionKey);
   if (client && session?.sessionId) {
     deleteClaudeSession(client, session.sessionId).catch((err) => {
       console.debug("[PaneLayout] Error deleting Claude native session:", err);
@@ -266,8 +267,9 @@ function cleanupOpenCodeNativeTab(envId: string, tabId: string) {
   const sessionKey = createSessionKey(envId, tabId);
   const client = store.clients.get(envId);
   const session = store.sessions.get(sessionKey);
-  store.clearQueue(sessionKey);
-  store.setSession(sessionKey, null);
+  // Drops every session-keyed map for this tab, not just the queue and session:
+  // tab ids are UUIDs, so anything left behind is never reclaimed.
+  store.clearSession(sessionKey);
   if (client && session?.sessionId) {
     deleteOpenCodeSession(client, session.sessionId).catch((err) => {
       console.debug("[PaneLayout] Error deleting OpenCode native session:", err);
@@ -280,8 +282,9 @@ function cleanupCodexNativeTab(envId: string, tabId: string) {
   const sessionKey = createSessionKey(envId, tabId);
   const client = store.clients.get(envId);
   const session = store.sessions.get(sessionKey);
-  store.clearQueue(sessionKey);
-  store.setSession(sessionKey, null);
+  // Drops every session-keyed map for this tab, not just the queue and session:
+  // tab ids are UUIDs, so anything left behind is never reclaimed.
+  store.clearSession(sessionKey);
   if (client && session?.sessionId) {
     deleteCodexSession(client, session.sessionId).catch((err) => {
       console.debug("[PaneLayout] Error deleting Codex native session:", err);

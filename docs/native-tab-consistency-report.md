@@ -108,7 +108,10 @@ Claude only.
 **Claude and OpenCode have a stalled-turn watchdog.** Only Codex polled for a
 turn that stopped reporting; the other two relied on SSE alone, so a dropped
 frame left the composer disabled until a manual refresh. `AGENTS.md` requires
-the UI be able to catch up from status APIs when events are missed.
+the UI be able to catch up from status APIs when events are missed. It fires only
+once activity has been quiet for `staleAfterMs` — a turn that is still streaming
+is not stalled, and reconciling under it costs bridge round trips and races the
+user's own refresh (see "Follow-up fixes").
 
 ---
 
@@ -212,10 +215,60 @@ differ. A shared type would be a name change over three unrelated domains.
 
 ---
 
+## Follow-up fixes
+
+Review of the consolidation found several defects in it, since fixed:
+
+**The stalled-turn watchdog only fires once a turn goes quiet.** It polled every
+second for the *whole* turn, and Claude's reconcile was wired to the manual
+refresh path — which force-refreshes the model catalog, so every tick bypassed
+the backend cache and made the bridge spawn model discovery plus a synchronous
+`claude --version`, on the same bridge streaming that turn. It now takes an
+`activitySignal` (the session object, which every SSE frame replaces) and skips
+any tick where activity is newer than `staleAfterMs`. Only a manual refresh
+forces the catalog.
+
+**Manual and background refreshes no longer share a sequence counter.** A
+watchdog tick could supersede the user's refresh into a silent no-op, or trip its
+"session changed while refreshing" guard and raise a spurious error toast. Codex
+already kept the two apart; Claude and OpenCode now do too.
+
+**Blocked-on-the-user beats still-running in the sidebar.** `activityStateFor`
+checked `isLoading` before `isWaiting`, and Codex holds `isLoading` for every
+non-terminal phase — so a turn parked on an approval read as merely busy. The
+amber state exists for exactly that case, so it now wins.
+
+**Pinned blocking prompts are bounded and scrollable.** Moving them into the
+compose dock put them in an absolute overlay inside an `overflow-hidden` root, so
+a tall card grew upward and was clipped with no way to reach it. The pinned
+region is now `max-h-[60vh] overflow-y-auto`, and the transcript's bottom spacer
+widens when cards are pinned so they do not cover the last messages.
+
+**Multi-question Submit no longer no-ops.** The button enabled on the current
+question's answer while submitting required all of them, so answering only the
+last one via the tab strip produced an enabled button that did nothing. It now
+navigates to the first unanswered question.
+
+**OpenCode single-select questions submit one answer again.** The merged card
+adopted Claude's semantics, which keep a committed custom answer alongside the
+selected option — two answers to a `multiple: false` question. `QuestionCard`
+gained `exclusiveSingleSelect`, which OpenCode sets.
+
+**The queue drain no longer drops a prompt it cannot dispatch.** It dequeues
+before consulting the sender, so a sender that was not ready lost the entry
+silently; it is now returned to the head of the queue.
+
+**Closing a tab clears all of its session-keyed state.** Cleanup cleared only the
+session and queue, orphaning drafts, models, attachments and the rest under UUID
+keys that are never reused. `clearSession` sweeps the same declarative map list
+`clearEnvironment` uses.
+
 ## Verification
 
-`bun run --cwd apps/{web,backend,desktop} typecheck` all clean. Web suite
-2,293 tests green; bridges 1,128 green; protocol 40 green; root `tests/` green
-apart from two pre-existing flakes (`FeaturesView lifecycle and navigation` and
-the `download-*.sh` script tests), both reproduced at the same rate on a stashed
-baseline and both passing in isolation.
+`bun run --cwd apps/{web,backend,desktop} typecheck` all clean. Workspace suite
+(web, backend, web-public, protocol) green; bridges 1,117 green; codex protocol
+lockfile green; root `tests/` 2,691 green apart from `FeaturesView lifecycle and
+navigation`, a pre-existing flake reproduced on a stashed baseline under the same
+full-suite load and passing in isolation. The `download-*.sh` and toolchain-cache
+script tests are 5s-timeout tests that also flake under full-suite concurrency
+and pass when their group is run alone.

@@ -57,6 +57,9 @@ export function OpenCodeQuestionCard({
       questions={questions}
       onSubmit={handleSubmit}
       onDismiss={handleDismiss}
+      // `multiple: false` means exactly one answer on this protocol, so a
+      // custom answer replaces the selected option instead of joining it.
+      exclusiveSingleSelect
     />
   );
 }

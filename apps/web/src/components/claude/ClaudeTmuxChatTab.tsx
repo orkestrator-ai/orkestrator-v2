@@ -1473,7 +1473,12 @@ export function ClaudeTmuxChatTab({
                 ) : undefined
               }
               footer={
-              <div className="max-w-3xl mx-auto min-w-0 px-2 @sm:px-4 py-3">
+              /*
+                `space-y-3` supplies the gap that the shared BlockingPromptCard
+                deliberately dropped: in the native tabs the compose dock spaces
+                these cards, but this footer stacks them itself.
+              */
+              <div className="max-w-3xl mx-auto min-w-0 px-2 @sm:px-4 py-3 space-y-3">
                 {pendingApprovals.map((a) => (
                   <ApprovalCard
                     key={a.eventId}

@@ -48,7 +48,13 @@ export function NativeComposeDock({
         </div>
 
         {pinnedContent ? (
-          <div className="pointer-events-auto mx-auto mb-1 flex w-full max-w-[56rem] flex-col gap-2 sm:w-[min(calc(100%_-_2rem),56rem)]">
+          /**
+           * Bounded and scrollable: the dock is an absolute overlay anchored to
+           * the bottom of an `overflow-hidden` root, so an unbounded card grows
+           * upward past the top and is clipped with no way to reach it — while
+           * the turn stays blocked on the prompt inside it.
+           */
+          <div className="pointer-events-auto mx-auto mb-1 flex max-h-[60vh] w-full max-w-[56rem] flex-col gap-2 overflow-y-auto sm:w-[min(calc(100%_-_2rem),56rem)]">
             {pinnedContent}
           </div>
         ) : null}

@@ -87,6 +87,14 @@ export interface NativeChatStoreSlice<TClient, TMessage, TAttachment, TQueued> {
 
   addToQueue: (sessionKey: string, message: TQueued) => void;
   removeFromQueue: (sessionKey: string) => TQueued | undefined;
+  /**
+   * Put an entry back at the head of the queue.
+   *
+   * The drain dequeues before it knows the sender is ready, so an entry it
+   * cannot dispatch has to go back where it came from — appending would silently
+   * reorder the user's prompts.
+   */
+  requeueToFront: (sessionKey: string, message: TQueued) => void;
   removeQueueItem: (sessionKey: string, messageId: string) => void;
   moveQueueItem: (
     sessionKey: string,
@@ -348,6 +356,14 @@ export function createNativeChatStoreSlice<
       return removed;
     },
 
+    requeueToFront: (sessionKey, message) =>
+      set((state) => {
+        const current = state.messageQueue.get(sessionKey) ?? [];
+        const next = new Map(state.messageQueue);
+        next.set(sessionKey, [message, ...current]);
+        return { messageQueue: next };
+      }),
+
     removeQueueItem: (sessionKey, messageId) =>
       set((state) => {
         const current = state.messageQueue.get(sessionKey) ?? [];
@@ -452,6 +468,32 @@ export function buildClearEnvironmentPatch<TState extends object>(
     // Older builds scoped some of these by environmentId. Drop that key too so
     // a stale entry cannot outlive the environment it belonged to.
     next.delete(environmentId);
+    patch[key as string] = next;
+  }
+
+  return patch as Partial<TState>;
+}
+
+/**
+ * Build the state patch that drops every trace of one *tab*.
+ *
+ * Closing a tab used to clear only its session and queue, so its draft, model,
+ * attachments and the rest were orphaned for the life of the process. Tab ids
+ * are UUIDs, so nothing ever reclaims them. Takes the same `sessionKeyed` list
+ * as `buildClearEnvironmentPatch` so the two sweeps cannot drift.
+ */
+export function buildClearSessionPatch<TState extends object>(
+  state: TState,
+  sessionKey: string,
+  sessionKeyed: ReadonlyArray<KeysOfMaps<TState>>,
+): Partial<TState> {
+  const patch: Record<string, unknown> = {};
+
+  for (const key of sessionKeyed) {
+    const map = state[key] as unknown as Map<string, unknown>;
+    if (!map.has(sessionKey)) continue;
+    const next = new Map(map);
+    next.delete(sessionKey);
     patch[key as string] = next;
   }
 

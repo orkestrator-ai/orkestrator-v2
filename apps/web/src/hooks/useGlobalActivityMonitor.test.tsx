@@ -1032,6 +1032,46 @@ describe("useGlobalActivityMonitor native agent activity", () => {
     });
   });
 
+  test("reports waiting for an approval raised mid-turn, while still loading", async () => {
+    /**
+     * Codex holds `isLoading` for every non-terminal phase, so a turn parked on
+     * an approval is *also* loading. Checking `isLoading` first showed the
+     * environment as merely busy and gave the user no signal that it was their
+     * input the turn was blocked on — which is the whole point of the amber
+     * state.
+     */
+    const sessionKey = createSessionKey("env-codex", "tab-midturn");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useCodexStore.setState({
+        clients: new Map([["env-codex", {} as any]]),
+        sessions: new Map([
+          [sessionKey, { sessionId: "codex-thread", isLoading: true } as any],
+        ]),
+        pendingApprovals: new Map([
+          [sessionKey, [{ approvalId: "approval-1" } as any]],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("waiting");
+    });
+
+    // Answering it returns the environment to plain "working" — the turn is
+    // still running, it is just no longer blocked on the user.
+    act(() => {
+      useCodexStore.setState({ pendingApprovals: new Map() });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("working");
+    });
+  });
+
   test("keeps each native environment working while any tab is still loading", async () => {
     const claudeWorkingKey = createSessionKey(
       "env-claude",

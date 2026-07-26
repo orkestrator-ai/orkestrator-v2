@@ -183,6 +183,81 @@ describe("openCodeStore attachment cleanup", () => {
   });
 });
 
+describe("openCodeStore clearSession", () => {
+  beforeEach(() => {
+    resetOpenCodeStore();
+  });
+
+  test("drops every session-keyed entry for one closed tab", () => {
+    /**
+     * Closing a tab used to clear only its session and queue, so its draft,
+     * model, variant, mode and attachments were orphaned for the life of the
+     * process — and tab ids are UUIDs, so nothing ever reclaimed them.
+     */
+    const store = useOpenCodeStore.getState();
+    const closed = "env-env-123:tab-1";
+    const kept = "env-env-123:tab-2";
+
+    for (const key of [closed, kept]) {
+      store.setDraftText(key, "draft");
+      store.setSelectedModel(key, "gpt-5");
+      store.setSelectedVariant(key, "fast");
+      store.setComposing(key, true);
+      store.addToQueue(key, { id: `q-${key}`, text: "queued" } as never);
+      store.addAttachment(key, {
+        id: `att-${key}`,
+        type: "image",
+        path: "/workspace/a.png",
+        name: "a.png",
+      } as never);
+    }
+
+    store.clearSession(closed);
+
+    const next = useOpenCodeStore.getState();
+    expect(next.getDraftText(closed)).toBe("");
+    expect(next.getSelectedModel(closed)).toBeUndefined();
+    expect(next.getSelectedVariant(closed)).toBeUndefined();
+    expect(next.isComposingFor(closed)).toBe(false);
+    expect(next.getQueueLength(closed)).toBe(0);
+    expect(next.getAttachments(closed)).toHaveLength(0);
+
+    // The sibling tab in the same environment is untouched.
+    expect(next.getDraftText(kept)).toBe("draft");
+    expect(next.getSelectedModel(kept)).toBe("gpt-5");
+    expect(next.getAttachments(kept)).toHaveLength(1);
+  });
+
+  test("sweeps pending requests belonging to the closed tab's session", () => {
+    // Pending requests are keyed by requestId, so a session-key sweep alone
+    // would leave a card pointing at a tab that no longer exists.
+    const store = useOpenCodeStore.getState();
+    const closed = "env-env-123:tab-1";
+
+    store.setSession(closed, {
+      sessionId: "session-closed",
+      messages: [],
+      isLoading: false,
+    } as never);
+    store.addPendingQuestion({
+      id: "req-1",
+      sessionId: "session-closed",
+      questions: [],
+    } as never);
+    store.addPendingQuestion({
+      id: "req-2",
+      sessionId: "session-other",
+      questions: [],
+    } as never);
+
+    store.clearSession(closed);
+
+    const next = useOpenCodeStore.getState();
+    expect(next.getPendingQuestion("req-1")).toBeUndefined();
+    expect(next.getPendingQuestion("req-2")).toBeTruthy();
+  });
+});
+
 describe("openCodeStore draft text", () => {
   beforeEach(() => {
     resetOpenCodeStore();

@@ -60,4 +60,66 @@ describe("NativeComposeDock", () => {
 
     expect(screen.queryByRole("button", { name: "Scroll down" })).toBeNull();
   });
+
+  test("shows pinned content in both centered and docked layouts", () => {
+    /**
+     * Unlike `topAccessory`, blocking prompts must never be hidden by layout:
+     * an approval can arrive before the transcript has a single message, which
+     * is exactly when the composer is centered. Gating it on `!centered` would
+     * hide the prompt the turn is blocked on.
+     */
+    const { rerender } = render(
+      <NativeComposeDock
+        centered={false}
+        pinnedContent={<div>Approve this command?</div>}
+      >
+        <textarea aria-label="Prompt" />
+      </NativeComposeDock>,
+    );
+
+    expect(screen.getByText("Approve this command?")).toBeTruthy();
+
+    rerender(
+      <NativeComposeDock
+        centered={true}
+        pinnedContent={<div>Approve this command?</div>}
+      >
+        <textarea aria-label="Prompt" />
+      </NativeComposeDock>,
+    );
+
+    expect(screen.getByText("Approve this command?")).toBeTruthy();
+  });
+
+  test("bounds and scrolls the pinned region", () => {
+    /**
+     * The dock is an absolute overlay anchored to the bottom of an
+     * `overflow-hidden` root, so an unbounded card grows upward past the top
+     * and is clipped with no way to scroll to it — while the turn stays blocked
+     * on the prompt inside.
+     */
+    render(
+      <NativeComposeDock
+        centered={false}
+        pinnedContent={<div>Approve this command?</div>}
+      >
+        <textarea aria-label="Prompt" />
+      </NativeComposeDock>,
+    );
+
+    const pinned = screen.getByText("Approve this command?")
+      .parentElement as HTMLElement;
+    expect(pinned.className).toContain("overflow-y-auto");
+    expect(pinned.className).toContain("max-h-[60vh]");
+  });
+
+  test("renders no pinned wrapper when there is nothing to pin", () => {
+    const { container } = render(
+      <NativeComposeDock centered={false}>
+        <textarea aria-label="Prompt" />
+      </NativeComposeDock>,
+    );
+
+    expect(container.querySelector(".overflow-y-auto")).toBeNull();
+  });
 });

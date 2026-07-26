@@ -2,7 +2,10 @@ import { createSessionKey } from "@/lib/utils";
 import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { useVirtuosoScrollState, clearPersistedVirtuosoState, useElapsedTimer } from "@/hooks";
 import { useEscapeToStop } from "@/hooks/useEscapeToStop";
-import { useManualSessionRefresh } from "@/hooks/useManualSessionRefresh";
+import {
+  useManualSessionRefresh,
+  type RefreshSessionOptions,
+} from "@/hooks/useManualSessionRefresh";
 import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { createUuid } from "@/lib/uuid";
@@ -133,6 +136,14 @@ export function ClaudeChatTab({
   const initialPromptSentRef = useRef(false);
   const slashCmdCleanupRef = useRef<(() => void) | null>(null);
   const manualRefreshSequenceRef = useRef(0);
+  /**
+   * Bumped by *every* refresh, manual or watchdog-driven.
+   *
+   * A background reconcile is invalidated by anything newer; a manual one is
+   * only invalidated by a newer *manual* refresh. Sharing one counter made an
+   * overlapping watchdog tick turn the user's refresh into a silent no-op.
+   */
+  const backgroundRefreshSequenceRef = useRef(0);
   const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => Promise<void>) | null>(null);
 
   const {
@@ -286,14 +297,23 @@ export function ClaudeChatTab({
     return approvals;
   }, [session?.sessionId, pendingPlanApprovalsMap]);
 
-  const refreshSessionFromServer = useCallback(async () => {
+  const refreshSessionFromServer = useCallback(async (
+    { manual = false }: RefreshSessionOptions = {},
+  ) => {
     const stateBeforeRefresh = useClaudeStore.getState();
     const activeClient = stateBeforeRefresh.clients.get(environmentId);
     const activeSession = stateBeforeRefresh.sessions.get(sessionKey);
     if (!activeClient || !activeSession?.sessionId) return;
 
     const sessionId = activeSession.sessionId;
-    const requestSequence = ++manualRefreshSequenceRef.current;
+    const backgroundSequence = ++backgroundRefreshSequenceRef.current;
+    const manualSequence = manual
+      ? ++manualRefreshSequenceRef.current
+      : manualRefreshSequenceRef.current;
+    const shouldApply = manual
+      ? () => manualSequence === manualRefreshSequenceRef.current
+      : () => backgroundSequence === backgroundRefreshSequenceRef.current;
+
     const stateBeforeAttempt = useClaudeStore.getState();
     const sessionBeforeAttempt = stateBeforeAttempt.sessions.get(sessionKey);
     if (
@@ -321,10 +341,16 @@ export function ClaudeChatTab({
       getSessionMessages(activeClient, sessionId, { throwOnError: true }),
       getPendingQuestions(activeClient, sessionId, { throwOnError: true }),
       getPendingPlanApprovals(activeClient, sessionId, { throwOnError: true }),
-      loadAuthoritativeModels(activeClient, true),
+      /**
+       * Only an explicit user refresh forces the catalog. A forced refresh
+       * bypasses the backend cache and makes the bridge spawn Claude model
+       * discovery plus a synchronous `claude --version`, on the same bridge
+       * that is streaming this turn — far too costly for a 1s watchdog tick.
+       */
+      manual ? loadAuthoritativeModels(activeClient, true) : undefined,
     ]);
 
-    if (requestSequence !== manualRefreshSequenceRef.current) return;
+    if (!shouldApply()) return;
     if (!serverSession) {
       throw new Error("The Claude session is no longer available on the server");
     }
@@ -342,7 +368,16 @@ export function ClaudeChatTab({
       stateAfterAttempt.pendingQuestions !== questionsBeforeAttempt ||
       stateAfterAttempt.pendingPlanApprovals !== approvalsBeforeAttempt;
     if (liveStateChanged) {
-      throw new Error("Claude session changed while refreshing; try again");
+      /**
+       * The snapshot is older than a frame that already landed; applying it
+       * would let a stale `running` response re-lock a session that just went
+       * idle. A manual refresh reports this so the user can retry; the
+       * watchdog stays silent and re-checks once activity goes stale again.
+       */
+      if (manual) {
+        throw new Error("Claude session changed while refreshing; try again");
+      }
+      return;
     }
 
     setMessages(sessionKey, messages);
@@ -368,6 +403,7 @@ export function ClaudeChatTab({
     for (const approvalId of existingApprovalIds) {
       if (!refreshedApprovalIds.has(approvalId)) removePendingPlanApproval(approvalId);
     }
+    return;
   }, [
     addPendingPlanApproval,
     addPendingQuestion,
@@ -395,7 +431,12 @@ export function ClaudeChatTab({
     isLoading: session?.isLoading ?? false,
     isReady:
       connectionState === "connected" && !!client && !!session?.sessionId,
-    reconcile: refreshSessionFromServer,
+    // Every SSE frame replaces the session object, so a session reference that
+    // stops changing is exactly the stall this watchdog exists to catch.
+    activitySignal: session,
+    // Explicitly background: no forced model-catalog reload, and superseded by
+    // any newer refresh rather than superseding the user's own.
+    reconcile: () => refreshSessionFromServer({ manual: false }),
   });
 
   // Memoize messages separately to provide stable reference for child components

@@ -19,6 +19,7 @@ import {
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import {
   buildClearEnvironmentPatch,
+  buildClearSessionPatch,
   createEventSubscriptionSlice,
   createNativeChatStoreSlice,
   sessionKeyPrefixFor,
@@ -146,6 +147,8 @@ interface ClaudeState
     usage: ContextUsageSnapshot | null,
   ) => void;
   clearEnvironment: (environmentId: string) => void;
+  /** Drop every session-keyed entry for one closed tab. */
+  clearSession: (sessionKey: string) => void;
 
   addPendingQuestion: (question: ClaudeQuestionRequest) => void;
   removePendingQuestion: (requestId: string) => void;
@@ -186,6 +189,24 @@ interface ClaudeState
     sdkSessionId: ClaudeSdkSessionId,
   ) => ClaudeSessionKey | null;
 }
+
+/**
+ * Every map keyed by sessionKey, shared by the environment and tab sweeps so
+ * the two cannot drift. A new session-keyed map goes here or it leaks.
+ */
+const CLAUDE_SESSION_KEYED_MAPS = [
+  "sessions",
+  "attachments",
+  "draftText",
+  "draftMentions",
+  "messageQueue",
+  "selectedModel",
+  "isComposing",
+  "effort",
+  "planMode",
+  "fastMode",
+  "contextUsage",
+] as const satisfies ReadonlyArray<keyof ClaudeState>;
 
 export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   ...createNativeChatStoreSlice<
@@ -367,24 +388,40 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
             "sessionInitData",
             "modelCatalogs",
           ],
-          sessionKeyed: [
-            "sessions",
-            "attachments",
-            "draftText",
-            "draftMentions",
-            "messageQueue",
-            "selectedModel",
-            "isComposing",
-            "effort",
-            "planMode",
-            "fastMode",
-            "contextUsage",
-          ],
+          sessionKeyed: CLAUDE_SESSION_KEYED_MAPS,
         }),
         // Keyed by requestId, so they need the session-id sweep above.
         pendingQuestions: nextPendingQuestions,
         pendingPlanApprovals: nextPendingPlanApprovals,
       };
+    });
+  },
+
+  clearSession: (sessionKey) => {
+    set((state) => {
+      const session = state.sessions.get(sessionKey);
+      const patch = buildClearSessionPatch(
+        state,
+        sessionKey,
+        CLAUDE_SESSION_KEYED_MAPS,
+      );
+      if (!session?.sessionId) return patch;
+
+      // Pending requests are keyed by requestId, so they need a sweep by the
+      // session id this tab owned rather than by its session key.
+      const pendingQuestions = new Map(state.pendingQuestions);
+      for (const [requestId, question] of pendingQuestions) {
+        if (question.sessionId === session.sessionId) {
+          pendingQuestions.delete(requestId);
+        }
+      }
+      const pendingPlanApprovals = new Map(state.pendingPlanApprovals);
+      for (const [requestId, approval] of pendingPlanApprovals) {
+        if (approval.sessionId === session.sessionId) {
+          pendingPlanApprovals.delete(requestId);
+        }
+      }
+      return { ...patch, pendingQuestions, pendingPlanApprovals };
     });
   },
 

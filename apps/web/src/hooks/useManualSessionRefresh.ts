@@ -1,6 +1,17 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 
+/** Distinguishes a user-initiated refresh from a background reconcile. */
+export interface RefreshSessionOptions {
+  /**
+   * The user asked for this refresh.
+   *
+   * Manual requests are tracked on their own sequence so only a newer *manual*
+   * refresh supersedes one, and only they pay for a forced model-catalog reload.
+   */
+  manual?: boolean;
+}
+
 interface UseManualSessionRefreshOptions {
   /**
    * Monotonically increasing counter bumped by the tab chrome's refresh
@@ -11,7 +22,7 @@ interface UseManualSessionRefreshOptions {
   /** Skip until the tab actually has something to refresh. */
   isReady: boolean;
   agentLabel: string;
-  refresh: () => Promise<void>;
+  refresh: (options: RefreshSessionOptions) => Promise<void>;
 }
 
 /**
@@ -34,7 +45,7 @@ export function useManualSessionRefresh({
     }
 
     lastHandledRefreshRequestIdRef.current = refreshRequestId;
-    void refresh().catch((error) => {
+    void refresh({ manual: true }).catch((error) => {
       console.error(`[${agentLabel}ChatTab] Manual refresh failed:`, error);
       toast.error(`Failed to refresh ${agentLabel} tab`, {
         description: error instanceof Error ? error.message : String(error),

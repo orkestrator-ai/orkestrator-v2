@@ -13,6 +13,7 @@ import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import {
   buildClearEnvironmentPatch,
+  buildClearSessionPatch,
   createEventSubscriptionSlice,
   createNativeChatStoreSlice,
   sessionKeyPrefixFor,
@@ -108,6 +109,8 @@ interface OpenCodeState
   removePendingPermission: (requestId: string) => void;
 
   clearEnvironment: (environmentId: string) => void;
+  /** Drop every session-keyed entry for one closed tab. */
+  clearSession: (sessionKey: string) => void;
 
   // Selectors
   getSelectedModel: (sessionKey: string) => string | undefined;
@@ -129,6 +132,23 @@ const EMPTY_MODELS: OpenCodeModel[] = [];
 const EMPTY_COMMANDS: OpenCodeSlashCommand[] = [];
 const EMPTY_QUESTIONS: QuestionRequest[] = [];
 const EMPTY_PERMISSIONS: PermissionRequest[] = [];
+
+/**
+ * Every map keyed by sessionKey, shared by the environment and tab sweeps so
+ * the two cannot drift. A new session-keyed map goes here or it leaks.
+ */
+const OPENCODE_SESSION_KEYED_MAPS = [
+  "sessions",
+  "attachments",
+  "draftText",
+  "draftMentions",
+  "messageQueue",
+  "selectedModel",
+  "selectedVariant",
+  "selectedMode",
+  "isComposing",
+  "contextUsage",
+] as const satisfies ReadonlyArray<keyof OpenCodeState>;
 
 export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   ...createNativeChatStoreSlice<
@@ -209,6 +229,34 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       return { contextUsage: next };
     }),
 
+  clearSession: (sessionKey) => {
+    set((state) => {
+      const session = state.sessions.get(sessionKey);
+      const patch = buildClearSessionPatch(
+        state,
+        sessionKey,
+        OPENCODE_SESSION_KEYED_MAPS,
+      );
+      if (!session?.sessionId) return patch;
+
+      // Pending requests are keyed by requestId, so they need a sweep by the
+      // session id this tab owned rather than by its session key.
+      const pendingQuestions = new Map(state.pendingQuestions);
+      for (const [requestId, question] of pendingQuestions) {
+        if (question.sessionId === session.sessionId) {
+          pendingQuestions.delete(requestId);
+        }
+      }
+      const pendingPermissions = new Map(state.pendingPermissions);
+      for (const [requestId, permission] of pendingPermissions) {
+        if (permission.sessionId === session.sessionId) {
+          pendingPermissions.delete(requestId);
+        }
+      }
+      return { ...patch, pendingQuestions, pendingPermissions };
+    });
+  },
+
   clearEnvironment: (environmentId) => {
     // Abort before dropping the map entry — losing the reference without
     // returning the iterator leaks the generator.
@@ -255,18 +303,7 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
             "slashCommands",
             "eventSubscriptions",
           ],
-          sessionKeyed: [
-            "sessions",
-            "attachments",
-            "draftText",
-            "draftMentions",
-            "messageQueue",
-            "selectedModel",
-            "selectedVariant",
-            "selectedMode",
-            "isComposing",
-            "contextUsage",
-          ],
+          sessionKeyed: OPENCODE_SESSION_KEYED_MAPS,
         }),
         // Keyed by requestId, so they need the session-id sweep above.
         pendingQuestions: newPendingQuestions,

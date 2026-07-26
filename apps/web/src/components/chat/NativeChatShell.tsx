@@ -218,7 +218,15 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                   </div>
                 </div>
               )}
-              <div className={bottomSpacerClassName} aria-hidden="true" />
+              {/*
+                Blocking cards are pinned over the transcript, so the spacer has
+                to clear them too — otherwise the prompt covers the very messages
+                the user needs to read in order to answer it.
+              */}
+              <div
+                className={hasPinnedContent ? "h-80" : bottomSpacerClassName}
+                aria-hidden="true"
+              />
             </>
           }
           scrollProps={scrollProps}

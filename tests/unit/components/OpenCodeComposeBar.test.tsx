@@ -8,6 +8,11 @@ const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
 const mockReadContainerFileBase64 = mock(async () => "Q09OVEFJTkVS");
 const mockReadFileBase64 = mock(async () => "TE9DQUw=");
+const mockUpdateGlobalConfig = mock(async (global: Record<string, unknown>) => ({
+  version: "1.0",
+  global,
+  repositories: {},
+}));
 const mockSerializeForLLM = mock((text: string, _mentions?: unknown[]) => text);
 const mockHandleFileMentionCursorChange = mock(() => {});
 const mockHandleFileMentionKeyDown = mock(() => false);
@@ -50,14 +55,14 @@ const mockUseFileMentions = () => ({
 import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
 import * as realMentionableInput from "@/components/chat/MentionableInput";
 import * as realContextUsageWheel from "@/components/chat/ContextUsageWheel";
-import * as realOpenCodeSlashCommandMenu from "@/components/opencode/OpenCodeSlashCommandMenu";
+import * as realSlashCommandMenu from "@/components/chat/SlashCommandMenu";
 import * as realHooks from "@/hooks";
 import * as realUseFileMentions from "@/hooks/useFileMentions";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
 const realFileMentionMenuSnapshot = { ...realFileMentionMenu };
 const realMentionableInputSnapshot = { ...realMentionableInput };
 const realContextUsageWheelSnapshot = { ...realContextUsageWheel };
-const realOpenCodeSlashCommandMenuSnapshot = { ...realOpenCodeSlashCommandMenu };
+const realSlashCommandMenuSnapshot = { ...realSlashCommandMenu };
 const realHooksSnapshot = { ...realHooks };
 const realUseFileMentionsSnapshot = { ...realUseFileMentions };
 const realUseFileSearchSnapshot = { ...realUseFileSearch };
@@ -66,7 +71,7 @@ afterAll(() => {
   mock.module("@/components/chat/FileMentionMenu", () => realFileMentionMenuSnapshot);
   mock.module("@/components/chat/MentionableInput", () => realMentionableInputSnapshot);
   mock.module("@/components/chat/ContextUsageWheel", () => realContextUsageWheelSnapshot);
-  mock.module("@/components/opencode/OpenCodeSlashCommandMenu", () => realOpenCodeSlashCommandMenuSnapshot);
+  mock.module("@/components/chat/SlashCommandMenu", () => realSlashCommandMenuSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/hooks/useFileMentions", () => realUseFileMentionsSnapshot);
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
@@ -79,6 +84,7 @@ mock.module("@/lib/backend", () => ({
   writeLocalFile: mockWriteLocalFile,
   readContainerFileBase64: mockReadContainerFileBase64,
   readFileBase64: mockReadFileBase64,
+  updateGlobalConfig: mockUpdateGlobalConfig,
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
 }));
@@ -167,6 +173,7 @@ mock.module("@/hooks", () => ({
 import { OpenCodeComposeBar } from "../../../apps/web/src/components/opencode/OpenCodeComposeBar";
 import { useOpenCodeStore } from "../../../apps/web/src/stores/openCodeStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import type { OpenCodeModel } from "../../../apps/web/src/lib/opencode-client";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "../../../apps/web/src/lib/review-actions";
 import type { Environment } from "../../../apps/web/src/types";
@@ -258,6 +265,12 @@ describe("OpenCodeComposeBar", () => {
     mockWriteLocalFile.mockImplementation(async () => "/tmp/file.png");
     mockReadContainerFileBase64.mockImplementation(async () => "Q09OVEFJTkVS");
     mockReadFileBase64.mockImplementation(async () => "TE9DQUw=");
+    mockUpdateGlobalConfig.mockReset();
+    mockUpdateGlobalConfig.mockImplementation(async (global: Record<string, unknown>) => ({
+      version: "1.0",
+      global,
+      repositories: {},
+    }));
     mockSerializeForLLM.mockReset();
     mockSerializeForLLM.mockImplementation((text: string) => text);
     mockHandleFileMentionCursorChange.mockReset();
@@ -300,6 +313,7 @@ describe("OpenCodeComposeBar", () => {
       contextUsage: new Map(),
     });
     useEnvironmentStore.setState({ environments: [] });
+    useConfigStore.getState().updateGlobalConfig({ opencodeModel: "opencode/gpt-4" });
   });
 
   afterEach(() => {
@@ -1823,5 +1837,19 @@ describe("OpenCodeComposeBar", () => {
     await waitFor(() => {
       expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe("gpt-5");
     });
+  });
+
+  test("persists the selected model as the OpenCode global default", async () => {
+    renderComposeBar();
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Select model/i }));
+    fireEvent.click(screen.getByText(/openai/));
+    fireEvent.click(await screen.findByText("GPT-5"));
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ opencodeModel: "gpt-5" }),
+      );
+    });
+    expect(useConfigStore.getState().config.global.opencodeModel).toBe("gpt-5");
   });
 });

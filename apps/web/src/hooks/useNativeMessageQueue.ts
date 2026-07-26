@@ -7,6 +7,7 @@ interface QueueStoreState<TQueued> {
   sessions: Map<string, { isLoading: boolean }>;
   messageQueue: Map<string, TQueued[]>;
   removeFromQueue: (sessionKey: string) => TQueued | undefined;
+  requeueToFront: (sessionKey: string, message: TQueued) => void;
 }
 
 interface QueueStore<TQueued> {
@@ -32,9 +33,10 @@ interface UseNativeMessageQueueOptions<TQueued> {
    */
   blockedByDraft: boolean;
   /**
-   * Dispatch one entry. Returning undefined means the sender was not ready, and
-   * the drain stops without consuming further entries. Any resolved value is
-   * ignored — only settling matters.
+   * Dispatch one entry. Returning undefined means the sender was not ready; the
+   * entry is put back at the head of the queue and the drain stops without
+   * consuming further entries. Any resolved value is ignored — only settling
+   * matters.
    */
   send: (entry: TQueued) => Promise<unknown> | undefined;
   /** Report a failed dispatch — each agent surfaces this its own way. */
@@ -95,6 +97,9 @@ export function useNativeMessageQueue<TQueued>({
 
     const sendPromise = sendRef.current(entry);
     if (!sendPromise) {
+      // The entry was already dequeued, so dropping it here would lose the
+      // user's prompt silently. Put it back and wait to be re-driven.
+      state.requeueToFront(sessionKey, entry);
       isProcessingRef.current = false;
       return;
     }

@@ -14,9 +14,24 @@ interface UseStalledTurnWatchdogOptions {
    * already scheduled.
    */
   shouldReconcile?: () => boolean;
+  /**
+   * A value that changes whenever live activity arrives for this session —
+   * typically the session object, which every SSE frame replaces.
+   *
+   * Without this the watchdog reconciles once per tick for the whole turn,
+   * which is pure cost during a *healthy* stream: it hammers the bridge and its
+   * store writes race the user's own refresh. A stalled turn is by definition
+   * one where this value has stopped changing.
+   */
+  activitySignal?: unknown;
+  /** How long activity must be quiet before a turn counts as stalled. */
+  staleAfterMs?: number;
   /** Poll period. Defaults to one second, matching Codex's watchdog. */
   intervalMs?: number;
 }
+
+/** Matches Codex's `CODEX_SESSION_STALE_AFTER_MS`. */
+export const DEFAULT_TURN_STALE_AFTER_MS = 1500;
 
 /**
  * Poll for a turn that has stopped reporting.
@@ -35,6 +50,8 @@ export function useStalledTurnWatchdog({
   isReady,
   reconcile,
   shouldReconcile,
+  activitySignal,
+  staleAfterMs = DEFAULT_TURN_STALE_AFTER_MS,
   intervalMs = 1000,
 }: UseStalledTurnWatchdogOptions): void {
   const isRefreshInFlightRef = useRef(false);
@@ -42,6 +59,14 @@ export function useStalledTurnWatchdog({
   const shouldReconcileRef = useRef(shouldReconcile);
   reconcileRef.current = reconcile;
   shouldReconcileRef.current = shouldReconcile;
+
+  // Reset the staleness clock whenever live activity arrives. Kept in an effect
+  // rather than compared inside `poll` so it also covers the render in which the
+  // turn starts, before the first tick fires.
+  const lastActivityAtRef = useRef(Date.now());
+  useEffect(() => {
+    lastActivityAtRef.current = Date.now();
+  }, [activitySignal, isLoading]);
 
   useEffect(() => {
     if (!isLoading || !isReady) return;
@@ -52,6 +77,9 @@ export function useStalledTurnWatchdog({
       // One reconcile at a time: these hit the network, and a slow response
       // would otherwise stack up a new request every tick.
       if (cancelled || isRefreshInFlightRef.current) return;
+      // A turn that is still reporting is not stalled; reconciling under it only
+      // costs bridge round trips and races the user's own refresh.
+      if (Date.now() - lastActivityAtRef.current < staleAfterMs) return;
       if (shouldReconcileRef.current && !shouldReconcileRef.current()) return;
 
       isRefreshInFlightRef.current = true;
@@ -74,5 +102,5 @@ export function useStalledTurnWatchdog({
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [agentLabel, isLoading, isReady, intervalMs]);
+  }, [agentLabel, isLoading, isReady, intervalMs, staleAfterMs]);
 }

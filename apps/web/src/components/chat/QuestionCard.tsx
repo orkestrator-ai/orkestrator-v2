@@ -39,6 +39,14 @@ interface QuestionCardProps {
   allowOptionDeselect?: boolean;
   /** Submit immediately on picking an option — single-question cards only. */
   submitOnOptionSelect?: boolean;
+  /**
+   * Whether a single-select question may only ever hold one answer.
+   *
+   * Claude's card keeps a committed custom answer alongside the selected option,
+   * so it defaults to `false`. OpenCode's protocol treats `multiple: false` as
+   * exactly one answer, and replying with two contradicts the question.
+   */
+  exclusiveSingleSelect?: boolean;
   hideDismiss?: boolean;
 }
 
@@ -56,6 +64,7 @@ function QuestionItem({
   onOptionSelect,
   allowCustomAnswer,
   allowOptionDeselect,
+  exclusiveSingleSelect,
   disabled,
 }: {
   info: QuestionCardQuestion;
@@ -66,6 +75,7 @@ function QuestionItem({
   onOptionSelect?: (label: string, nextAnswer: string[]) => void;
   allowCustomAnswer: boolean;
   allowOptionDeselect: boolean;
+  exclusiveSingleSelect: boolean;
   disabled: boolean;
 }) {
   const hasOptions = !!info.options && info.options.length > 0;
@@ -89,6 +99,8 @@ function QuestionItem({
           : [...answer, value];
       } else if (answer.includes(value)) {
         nextAnswer = allowOptionDeselect ? [] : answer;
+      } else if (exclusiveSingleSelect) {
+        nextAnswer = [value];
       } else {
         // Preserve committed custom answers when switching option in single-select.
         nextAnswer = [...committedCustomAnswers, value];
@@ -102,6 +114,7 @@ function QuestionItem({
       onAnswerChange,
       onOptionSelect,
       allowOptionDeselect,
+      exclusiveSingleSelect,
       committedCustomAnswers,
     ],
   );
@@ -116,6 +129,10 @@ function QuestionItem({
     }
     if (isMultiple) {
       onAnswerChange([...answer, trimmed]);
+    } else if (exclusiveSingleSelect) {
+      // The question asked for one answer, so the custom text replaces the
+      // selected option rather than joining it.
+      onAnswerChange([trimmed]);
     } else {
       // Single-select allows one custom chip at a time; keep the selected
       // option alongside it, mirroring handleOptionClick.
@@ -127,6 +144,7 @@ function QuestionItem({
     customText,
     answer,
     isMultiple,
+    exclusiveSingleSelect,
     onAnswerChange,
     onCustomTextChange,
     optionValues,
@@ -277,6 +295,7 @@ export function QuestionCard({
   allowCustomAnswer = true,
   allowOptionDeselect = true,
   submitOnOptionSelect = false,
+  exclusiveSingleSelect = false,
   hideDismiss = false,
 }: QuestionCardProps) {
   const [answers, setAnswers] = useState<string[][]>(() =>
@@ -303,9 +322,14 @@ export function QuestionCard({
       const committed = answers[i] ?? [];
       const draft = (customTexts[i] ?? "").trim();
       if (!draft || committed.includes(draft)) return committed;
+      // Uncommitted text obeys the same exclusivity rule as a committed chip,
+      // or a never-pressed-Enter draft would smuggle a second answer through.
+      if (exclusiveSingleSelect && !(questions[i]?.multiSelect ?? false)) {
+        return [draft];
+      }
       return [...committed, draft];
     },
-    [answers, customTexts],
+    [answers, customTexts, exclusiveSingleSelect, questions],
   );
 
   const questionHasAnswer = useCallback(
@@ -367,14 +391,25 @@ export function QuestionCard({
       setCurrentQuestionIndex((prev) => prev + 1);
       return;
     }
+    /**
+     * The button is enabled on the *current* question's answer, but submitting
+     * needs every question answered — and the tab strip lets the user jump
+     * straight here. Returning would leave an enabled button that does nothing
+     * and a turn blocked with no explanation, so show them what is missing.
+     */
+    if (!canSubmit) {
+      const missingIndex = questions.findIndex((_, i) => !questionHasAnswer(i));
+      if (missingIndex !== -1) setCurrentQuestionIndex(missingIndex);
+      return;
+    }
     // Include any uncommitted custom text so nothing typed is lost.
-    if (!canSubmit) return;
     await submitAnswers(questions.map((_, i) => mergeAnswerForIndex(i)));
   }, [
     currentQuestionIndex,
     questionCount,
     canSubmit,
     questions,
+    questionHasAnswer,
     mergeAnswerForIndex,
     submitAnswers,
   ]);
@@ -480,6 +515,7 @@ export function QuestionCard({
           onOptionSelect={handleOptionSelect}
           allowCustomAnswer={currentQuestion.allowCustomAnswer ?? allowCustomAnswer}
           allowOptionDeselect={allowOptionDeselect}
+          exclusiveSingleSelect={exclusiveSingleSelect}
           disabled={isSubmitting}
         />
       </div>

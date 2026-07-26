@@ -15,6 +15,7 @@ import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-
 import type { FileMention } from "@/types";
 import {
   buildClearEnvironmentPatch,
+  buildClearSessionPatch,
   createNativeChatStoreSlice,
   type NativeChatStoreSlice,
   type NativeServerStatus,
@@ -99,6 +100,8 @@ interface CodexState extends CodexChatSlice {
   removePendingApproval: (sessionKey: string, approvalId: string) => void;
   isFastMode: (sessionKey: string) => boolean;
   clearEnvironment: (environmentId: string) => void;
+  /** Drop every session-keyed entry for one closed tab. */
+  clearSession: (sessionKey: string) => void;
 }
 
 /**
@@ -134,6 +137,24 @@ function isSameApproval(a: CodexApproval, b: CodexApproval | undefined): boolean
         change.path === b.changes?.[index]?.path && change.kind === b.changes?.[index]?.kind,
     );
 }
+
+/**
+ * Every map keyed by sessionKey, shared by the environment and tab sweeps so
+ * the two cannot drift. A new session-keyed map goes here or it leaks.
+ */
+const CODEX_SESSION_KEYED_MAPS = [
+  "sessions",
+  "attachments",
+  "draftText",
+  "draftMentions",
+  "messageQueue",
+  "selectedModel",
+  "selectedMode",
+  "selectedReasoningEffort",
+  "fastMode",
+  "sessionPhase",
+  "pendingApprovals",
+] as const satisfies ReadonlyArray<keyof CodexState>;
 
 export const useCodexStore = create<CodexState>()((set, get, api) => ({
   ...createNativeChatStoreSlice<
@@ -250,20 +271,13 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
     set((state) =>
       buildClearEnvironmentPatch(state, environmentId, {
         environmentKeyed: ["serverStatus", "clients", "slashCommands"],
-        sessionKeyed: [
-          "sessions",
-          "attachments",
-          "draftText",
-          "draftMentions",
-          "messageQueue",
-          "selectedModel",
-          "selectedMode",
-          "selectedReasoningEffort",
-          "fastMode",
-          "sessionPhase",
-          "pendingApprovals",
-        ],
+        sessionKeyed: CODEX_SESSION_KEYED_MAPS,
       }),
+    ),
+
+  clearSession: (sessionKey) =>
+    set((state) =>
+      buildClearSessionPatch(state, sessionKey, CODEX_SESSION_KEYED_MAPS),
     ),
 }));
 

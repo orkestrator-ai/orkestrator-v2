@@ -2,7 +2,10 @@ import { createSessionKey } from "@/lib/utils";
 import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { useVirtuosoScrollState, clearPersistedVirtuosoState, useElapsedTimer } from "@/hooks";
 import { useEscapeToStop } from "@/hooks/useEscapeToStop";
-import { useManualSessionRefresh } from "@/hooks/useManualSessionRefresh";
+import {
+  useManualSessionRefresh,
+  type RefreshSessionOptions,
+} from "@/hooks/useManualSessionRefresh";
 import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
@@ -195,6 +198,14 @@ export function OpenCodeChatTab({
   );
   // Track when we are currently draining queued prompts
   const manualRefreshSequenceRef = useRef(0);
+  /**
+   * Bumped by *every* refresh, manual or watchdog-driven.
+   *
+   * A background reconcile is invalidated by anything newer; a manual one is
+   * only invalidated by a newer *manual* refresh. Sharing one counter made an
+   * overlapping watchdog tick turn the user's refresh into a silent no-op.
+   */
+  const backgroundRefreshSequenceRef = useRef(0);
   // Ref to store handleSend for use in effects without causing re-runs
   const handleSendRef = useRef<
     ((
@@ -424,6 +435,14 @@ export function OpenCodeChatTab({
       sessionId: string,
       options: {
         throwOnError?: boolean;
+        /**
+         * Whether a live frame landing mid-sync is an error.
+         *
+         * Separate from `throwOnError` so a background reconcile can still let
+         * *fetch* failures propagate (its caller logs them) while treating a
+         * raced snapshot as "try again later" rather than a user-facing error.
+         */
+        throwOnStale?: boolean;
         shouldApply?: () => boolean;
       } = {},
     ): Promise<boolean> => {
@@ -456,7 +475,7 @@ export function OpenCodeChatTab({
         stateAfterSync.pendingQuestions !== questionsBeforeSync ||
         stateAfterSync.pendingPermissions !== permissionsBeforeSync;
       if (pendingStateChanged) {
-        if (options.throwOnError) {
+        if (options.throwOnStale ?? options.throwOnError) {
           throw new Error(
             "OpenCode pending requests changed while refreshing; try again",
           );
@@ -500,15 +519,23 @@ export function OpenCodeChatTab({
     ],
   );
 
-  const refreshSessionFromServer = useCallback(async () => {
+  const refreshSessionFromServer = useCallback(async (
+    { manual = false }: RefreshSessionOptions = {},
+  ) => {
     const stateBeforeRefresh = useOpenCodeStore.getState();
     const activeClient = stateBeforeRefresh.clients.get(environmentId);
     const activeSession = stateBeforeRefresh.sessions.get(sessionKey);
     if (!activeClient || !activeSession?.sessionId) return;
 
     const sessionId = activeSession.sessionId;
-    const requestSequence = ++manualRefreshSequenceRef.current;
-    const shouldApply = () => requestSequence === manualRefreshSequenceRef.current;
+    const backgroundSequence = ++backgroundRefreshSequenceRef.current;
+    const manualSequence = manual
+      ? ++manualRefreshSequenceRef.current
+      : manualRefreshSequenceRef.current;
+    const shouldApply = manual
+      ? () => manualSequence === manualRefreshSequenceRef.current
+      : () => backgroundSequence === backgroundRefreshSequenceRef.current;
+
     const stateBeforeAttempt = useOpenCodeStore.getState();
     const sessionBeforeAttempt = stateBeforeAttempt.sessions.get(sessionKey);
     if (
@@ -533,7 +560,16 @@ export function OpenCodeChatTab({
       return;
     }
     if (sessionAfterAttempt !== sessionBeforeAttempt) {
-      throw new Error("OpenCode session changed while refreshing; try again");
+      /**
+       * The snapshot is older than a frame that already landed; applying it
+       * would let a stale `busy` status re-lock a session that just went idle.
+       * A manual refresh reports this so the user can retry; the watchdog
+       * stays silent and re-checks once activity goes stale again.
+       */
+      if (manual) {
+        throw new Error("OpenCode session changed while refreshing; try again");
+      }
+      return;
     }
 
     setMessages(sessionKey, messages);
@@ -542,6 +578,7 @@ export function OpenCodeChatTab({
     }
     await syncPendingRequests(activeClient, sessionId, {
       throwOnError: true,
+      throwOnStale: manual,
       shouldApply,
     });
   }, [
@@ -565,7 +602,12 @@ export function OpenCodeChatTab({
     isLoading: session?.isLoading ?? false,
     isReady:
       connectionState === "connected" && !!client && !!session?.sessionId,
-    reconcile: refreshSessionFromServer,
+    // Every SSE frame replaces the session object, so a session reference that
+    // stops changing is exactly the stall this watchdog exists to catch.
+    activitySignal: session,
+    // Explicitly background: superseded by any newer refresh rather than
+    // superseding the user's own.
+    reconcile: () => refreshSessionFromServer({ manual: false }),
   });
 
   // Initialize connection on mount.
@@ -637,7 +679,10 @@ export function OpenCodeChatTab({
           // The subscription may have progressed while this React tree was
           // inactive. Rehydrate from the authoritative parent and child
           // session transcripts without delaying the fast reconnect UI.
+          // A reconnect resets the session, so every refresh already in flight
+          // is stale — invalidate both sequences, not just the manual one.
           const reconnectSequence = ++manualRefreshSequenceRef.current;
+          backgroundRefreshSequenceRef.current += 1;
           void Promise.all([
             getSessionMessages(existingClient, existingSession.sessionId, {
               throwOnError: true,

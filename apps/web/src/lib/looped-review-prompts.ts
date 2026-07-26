@@ -5,6 +5,10 @@ import type {
 import {
   REVIEW_RECONCILIATION_JSON_SCHEMA,
 } from "@orkestrator/protocol/structured-review";
+import {
+  reviewArtifactDirectory,
+  reviewValidationArtifactPaths,
+} from "@orkestrator/protocol/review-artifacts";
 import { buildReviewInstructionBlock, createPRPrompt } from "@/prompts";
 import type {
   ReviewPackage,
@@ -197,7 +201,11 @@ export function createReviewPreparationPrompt(input: {
   targetBranch: string;
   context?: ReviewPackageContext;
 }): string {
-  const artifactDirectory = `.orkestrator/review-artifacts/${input.packageId}`;
+  const artifactDirectory = reviewArtifactDirectory(input.packageId);
+  // Derived from the same contract the backend validates against, so the two
+  // descriptions of the layout cannot drift apart again.
+  const first = reviewValidationArtifactPaths(input.packageId, 0);
+  const second = reviewValidationArtifactPaths(input.packageId, 1);
   return `You are preparing the repository state and validation artifacts for code-review round ${input.round}. Orkestrator's backend—not you—will deterministically generate the immutable review package from Git after this turn.
 
 ## Fixed safety contract
@@ -215,12 +223,12 @@ Target branch: \`${input.targetBranch}\`
 
 1. Inspect \`git status --porcelain\`, staged/unstaged diffs, and untracked files.
 2. Commit only relevant changes using the existing conventional-commit and hook safety rules. Record excluded files with their actual reasons.
-3. Create the Git-excluded directory \`${artifactDirectory}\`. Use deterministic filenames \`validation-01.stdout.txt\`, \`validation-01.stderr.txt\`, then 02, 03, and so on. The two-digit ordinal is the command's 1-based position in the \`validation\` array you return, counting skipped commands, so entry N always uses ordinal N.
+3. Create the Git-excluded directory \`${artifactDirectory}\`. Use deterministic filenames \`validation-01.stdout.txt\`, \`validation-01.stderr.txt\`, then 02, 03, and so on. The ordinal is the command's 1-based position in the \`validation\` array you return, zero-padded to at least two digits, counting skipped commands, so entry N always uses ordinal N.
 4. Run the project's relevant full tests, typechecking, and build validation exactly once for this round. Redirect each command's stdout and stderr directly to its two artifact files. Capture the original exit code and elapsed milliseconds even when the command fails; a failed validation command must not stop preparation of the remaining evidence.
 5. Return only the preparation metadata matching the enforced JSON Schema:
    - \`command\` is the exact command that was executed.
    - \`uncommittedFiles\` lists every remaining non-ignored Git status path and why it was excluded. The backend verifies this set.
-   - A command that ran has \`stdoutPath\` and \`stderrPath\` set to its full workspace-relative artifact paths, including the directory: entry 1 is exactly \`${artifactDirectory}/validation-01.stdout.txt\` and \`${artifactDirectory}/validation-01.stderr.txt\`, entry 2 uses ordinal 02, and so on. Do not return the bare filename.
+   - A command that ran has \`stdoutPath\` and \`stderrPath\` set to its full workspace-relative artifact paths, including the directory: entry 1 is exactly \`${first.stdoutPath}\` and \`${first.stderrPath}\`, entry 2 is exactly \`${second.stdoutPath}\` and \`${second.stderrPath}\`, and so on. Do not return the bare filename.
    - A skipped command has \`status="skipped"\`, \`exitCode=null\`, \`stdoutPath=null\`, and \`stderrPath=null\`, with the reason in \`limitation\`.
    - A command that ran has its actual integer exit code, \`status="passed"\` only for exit code 0, and \`limitation=null\` unless a real limitation applies.
    - Do not include Git refs, diffs, hashes, or file contents. Orkestrator resolves those from the prepared HEAD.

@@ -12,6 +12,9 @@ import {
 } from "./looped-review-prompts";
 import type { ReviewPackage } from "@/stores/loopedReviewStore";
 import {
+  reviewValidationArtifactPaths,
+} from "@orkestrator/protocol/review-artifacts";
+import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   type ReviewFindingPool,
   type StructuredReviewReport,
@@ -128,6 +131,20 @@ describe("looped-review prompts", () => {
     );
     expect(prompt).toContain("Do not return the bare filename.");
     expect(prompt).toContain("counting skipped commands");
+    // The prompt must name the exact paths the backend recomputes and compares
+    // against, for the second entry as well as the first. Numbering by execution
+    // order instead of array position shifts every ordinal after a skip.
+    for (const index of [0, 1]) {
+      const { stdoutPath, stderrPath } = reviewValidationArtifactPaths(
+        "package-2",
+        index,
+      );
+      expect(prompt).toContain(stdoutPath);
+      expect(prompt).toContain(stderrPath);
+    }
+    expect(prompt).toContain(
+      ".orkestrator/review-artifacts/package-2/validation-02.stdout.txt",
+    );
     expect(prompt).toContain("without cleanup, redaction, summarization, or truncation");
     expect(prompt).toContain("Do not include Git refs, diffs, hashes, or file contents");
     expect(prompt).toContain("Structured reviews");

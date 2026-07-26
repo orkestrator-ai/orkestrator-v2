@@ -1,11 +1,13 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { forwardRef, useImperativeHandle } from "react";
+import { forwardRef, useImperativeHandle, useState } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
 import { mockToastError } from "../../mocks/sonner";
 
 const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
+const mockReadContainerFileBase64 = mock(async () => "Q09OVEFJTkVS");
+const mockReadFileBase64 = mock(async () => "TE9DQUw=");
 const mockSerializeForLLM = mock((text: string, _mentions?: unknown[]) => text);
 const mockHandleFileMentionCursorChange = mock(() => {});
 const mockHandleFileMentionKeyDown = mock(() => false);
@@ -75,6 +77,8 @@ afterAll(() => {
 mock.module("@/lib/backend", () => ({
   writeContainerFile: mockWriteContainerFile,
   writeLocalFile: mockWriteLocalFile,
+  readContainerFileBase64: mockReadContainerFileBase64,
+  readFileBase64: mockReadFileBase64,
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
 }));
@@ -248,8 +252,12 @@ describe("OpenCodeComposeBar", () => {
     mockReadImage.mockReset();
     mockWriteContainerFile.mockReset();
     mockWriteLocalFile.mockReset();
+    mockReadContainerFileBase64.mockReset();
+    mockReadFileBase64.mockReset();
     mockWriteContainerFile.mockImplementation(async () => {});
     mockWriteLocalFile.mockImplementation(async () => "/tmp/file.png");
+    mockReadContainerFileBase64.mockImplementation(async () => "Q09OVEFJTkVS");
+    mockReadFileBase64.mockImplementation(async () => "TE9DQUw=");
     mockSerializeForLLM.mockReset();
     mockSerializeForLLM.mockImplementation((text: string) => text);
     mockHandleFileMentionCursorChange.mockReset();
@@ -481,6 +489,25 @@ describe("OpenCodeComposeBar", () => {
     expect(useOpenCodeStore.getState().getDraftText(SESSION_KEY)).toBe("");
   });
 
+  test("sends an attachment-only prompt immediately", async () => {
+    const attachment = {
+      id: "attachment-only-send",
+      type: "file" as const,
+      path: "/workspace/report.txt",
+      previewUrl: "data:text/plain;base64,UkVQT1JU",
+      name: "report.txt",
+    };
+    useOpenCodeStore.getState().addAttachment(SESSION_KEY, attachment);
+    const { onSend } = renderComposeBar();
+
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("", [attachment]);
+      expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toEqual([]);
+    });
+  });
+
   test("deduplicates a pending send and clears all compose state after success", async () => {
     const gate = deferred();
     const onSend = mock(() => gate.promise);
@@ -513,6 +540,139 @@ describe("OpenCodeComposeBar", () => {
       expect(useOpenCodeStore.getState().getDraftText(SESSION_KEY)).toBe("");
       expect(useOpenCodeStore.getState().getDraftMentions(SESSION_KEY)).toEqual([]);
       expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toEqual([]);
+    });
+  });
+
+  test.each([
+    ["send", false, "Send message"],
+    ["queue", true, "Add to queue"],
+  ] as const)(
+    "preserves newer compose state while a %s request is pending",
+    async (_kind, isLoading, buttonTitle) => {
+      const gate = deferred();
+      const pending = mock(() => gate.promise);
+      const submittedAttachment = {
+        id: "submitted-attachment",
+        type: "file" as const,
+        path: "/workspace/submitted.txt",
+        name: "submitted.txt",
+      };
+      const nextAttachment = {
+        id: "next-attachment",
+        type: "image" as const,
+        path: "/workspace/next.png",
+        name: "next.png",
+      };
+      const submittedMention = {
+        id: "submitted-mention",
+        filename: "submitted.ts",
+        relativePath: "src/submitted.ts",
+      };
+      const nextMention = {
+        id: "next-mention",
+        filename: "next.ts",
+        relativePath: "src/next.ts",
+      };
+      const store = useOpenCodeStore.getState();
+      store.setDraftText(SESSION_KEY, "Submit this");
+      store.setDraftMentions(SESSION_KEY, [submittedMention]);
+      store.addAttachment(SESSION_KEY, submittedAttachment);
+      renderComposeBar({
+        isLoading,
+        ...(isLoading ? { onQueue: pending } : { onSend: pending }),
+      });
+
+      fireEvent.click(screen.getByTitle(buttonTitle));
+      await waitFor(() => expect(pending).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId("mentionable-input").hasAttribute("disabled")).toBe(true);
+      expect(
+        screen.getByRole("button", { name: "Add attachment" }).hasAttribute("disabled"),
+      ).toBe(true);
+
+      act(() => {
+        const latest = useOpenCodeStore.getState();
+        latest.setDraftText(SESSION_KEY, "Compose next");
+        latest.setDraftMentions(SESSION_KEY, [nextMention]);
+        latest.addAttachment(SESSION_KEY, nextAttachment);
+      });
+
+      await act(async () => {
+        gate.resolve();
+        await gate.promise;
+      });
+
+      await waitFor(() => {
+        const latest = useOpenCodeStore.getState();
+        expect(latest.getDraftText(SESSION_KEY)).toBe("Compose next");
+        expect(latest.getDraftMentions(SESSION_KEY)).toEqual([nextMention]);
+        expect(latest.getAttachments(SESSION_KEY)).toEqual([nextAttachment]);
+      });
+      expect(pending).toHaveBeenCalledWith("Submit this", [submittedAttachment]);
+    },
+  );
+
+  test("preserves same-text draft state when mention metadata changes during send", async () => {
+    const gate = deferred();
+    const onSend = mock(() => gate.promise);
+    const submittedMention = {
+      id: "mention-1",
+      filename: "app.ts",
+      relativePath: "src/app.ts",
+    };
+    const updatedMention = {
+      ...submittedMention,
+      relativePath: "packages/app.ts",
+    };
+    const store = useOpenCodeStore.getState();
+    store.setDraftText(SESSION_KEY, "Review @app.ts");
+    store.setDraftMentions(SESSION_KEY, [submittedMention]);
+    renderComposeBar({ onSend });
+
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    act(() => {
+      useOpenCodeStore.getState().setDraftMentions(SESSION_KEY, [updatedMention]);
+    });
+
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
+    });
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getDraftText(SESSION_KEY)).toBe(
+        "Review @app.ts",
+      );
+      expect(useOpenCodeStore.getState().getDraftMentions(SESSION_KEY)).toEqual([
+        updatedMention,
+      ]);
+    });
+  });
+
+  test("closes and disables an open attachment picker while sending", async () => {
+    const gate = deferred();
+    const onSend = mock(() => gate.promise);
+    useEnvironmentStore.setState({ environments: [createLocalEnvironment()] });
+    useOpenCodeStore.getState().setDraftText(SESSION_KEY, "Send while picker is open");
+    renderComposeBar({ onSend });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+    );
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Add attachment" }).hasAttribute("disabled"),
+      ).toBe(true);
+    });
+
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
     });
   });
 
@@ -956,9 +1116,337 @@ describe("OpenCodeComposeBar", () => {
           type: "file",
           path: "/tmp/opencode-worktree/docs/notes.txt",
           name: "notes.txt",
+          previewUrl: "data:text/plain;base64,TE9DQUw=",
         }),
       ]);
     });
+    expect(mockReadFileBase64).toHaveBeenCalledWith(
+      "/tmp/opencode-worktree/docs/notes.txt",
+    );
+  });
+
+  test("snapshots and forwards a container image attachment", async () => {
+    mockSearchFiles.mockImplementation(() => [{
+      filename: "diagram.WEBP",
+      relativePath: "assets/diagram.WEBP",
+      isDirectory: false,
+    }]);
+    const { onSend } = renderComposeBar({ containerId: "container-1" });
+    const focusCountAfterMount = mockInputFocus.mock.calls.length;
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /diagram\.WEBP/ }));
+
+    await waitFor(() => {
+      expect(mockReadContainerFileBase64).toHaveBeenCalledWith(
+        "container-1",
+        "assets/diagram.WEBP",
+      );
+      expect(mockInputFocus.mock.calls.length).toBeGreaterThan(focusCountAfterMount);
+      expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toEqual([
+        expect.objectContaining({
+          type: "image",
+          path: "/workspace/assets/diagram.WEBP",
+          previewUrl: "data:image/webp;base64,Q09OVEFJTkVS",
+        }),
+      ]);
+    });
+
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith(
+        "",
+        [
+          expect.objectContaining({
+            type: "image",
+            path: "/workspace/assets/diagram.WEBP",
+            previewUrl: "data:image/webp;base64,Q09OVEFJTkVS",
+          }),
+        ],
+      );
+    });
+  });
+
+  test("blocks submission until a selected file snapshot finishes", async () => {
+    let resolveRead!: (base64: string) => void;
+    const readPromise = new Promise<string>((resolve) => {
+      resolveRead = resolve;
+    });
+    mockReadContainerFileBase64.mockImplementation(() => readPromise);
+    mockSearchFiles.mockImplementation(() => [{
+      filename: "design.md",
+      relativePath: "docs/design.md",
+      isDirectory: false,
+    }]);
+    useOpenCodeStore.getState().setDraftText(SESSION_KEY, "Review the design");
+    const { onSend } = renderComposeBar({ containerId: "container-1" });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /design\.md/ }));
+
+    await waitFor(() => {
+      expect(mockReadContainerFileBase64).toHaveBeenCalledWith(
+        "container-1",
+        "docs/design.md",
+      );
+      expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+      expect(
+        screen.getByRole("button", { name: "Add attachment" }).hasAttribute("disabled"),
+      ).toBe(true);
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+    expect(onSend).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveRead("REVTSUdO");
+      await readPromise;
+    });
+    await waitFor(() => {
+      expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(false);
+      expect(
+        screen.getByRole("button", { name: "Add attachment" }).hasAttribute("disabled"),
+      ).toBe(false);
+    });
+
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith(
+        "Review the design",
+        [
+          expect.objectContaining({
+            path: "/workspace/docs/design.md",
+            previewUrl: "data:text/markdown;base64,REVTSUdO",
+          }),
+        ],
+      );
+    });
+  });
+
+  test("discards an in-flight snapshot when the compose bar becomes disabled", async () => {
+    let resolveRead!: (base64: string) => void;
+    const readPromise = new Promise<string>((resolve) => {
+      resolveRead = resolve;
+    });
+    mockReadContainerFileBase64.mockImplementation(() => readPromise);
+    mockSearchFiles.mockImplementation(() => [{
+      filename: "design.md",
+      relativePath: "docs/design.md",
+      isDirectory: false,
+    }]);
+
+    function Harness() {
+      const [disabled, setDisabled] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setDisabled(true)}>
+            Disable compose
+          </button>
+          <OpenCodeComposeBar
+            environmentId={ENV_ID}
+            tabId={TAB_ID}
+            containerId="container-1"
+            models={defaultModels}
+            disabled={disabled}
+            onSend={async () => {}}
+          />
+        </>
+      );
+    }
+
+    render(<Harness />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /design\.md/ }));
+    await waitFor(() => {
+      expect(mockReadContainerFileBase64).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Disable compose" }));
+    await act(async () => {
+      resolveRead("REVTSUdO");
+      await readPromise;
+    });
+
+    expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toEqual([]);
+  });
+
+  test("discards an in-flight snapshot after unmount without mutating the store", async () => {
+    let resolveRead!: (base64: string) => void;
+    const readPromise = new Promise<string>((resolve) => {
+      resolveRead = resolve;
+    });
+    mockReadContainerFileBase64.mockImplementation(() => readPromise);
+    mockSearchFiles.mockImplementation(() => [{
+      filename: "design.md",
+      relativePath: "docs/design.md",
+      isDirectory: false,
+    }]);
+    const { unmount } = renderComposeBar({ containerId: "container-1" });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /design\.md/ }));
+    await waitFor(() => {
+      expect(mockReadContainerFileBase64).toHaveBeenCalledTimes(1);
+    });
+
+    unmount();
+    await act(async () => {
+      resolveRead("REVTSUdO");
+      await readPromise;
+    });
+
+    expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toEqual([]);
+  });
+
+  test.each([
+    ["image.png", "image/png"],
+    ["image.JPG", "image/jpeg"],
+    ["image.jpeg", "image/jpeg"],
+    ["image.GIF", "image/gif"],
+    ["image.WEBP", "image/webp"],
+    ["file.txt", "text/plain"],
+    ["file.JSON", "application/json"],
+    ["file.js", "text/javascript"],
+    ["file.mjs", "text/javascript"],
+    ["file.ts", "text/typescript"],
+    ["file.tsx", "text/typescript"],
+    ["file.md", "text/markdown"],
+    ["file.html", "text/html"],
+    ["file.css", "text/css"],
+    ["file.py", "text/x-python"],
+    ["file.rs", "text/x-rust"],
+    ["file.bin", "application/octet-stream"],
+  ] as const)("snapshots %s with MIME type %s", async (filename, mime) => {
+    mockSearchFiles.mockImplementation(() => [{
+      filename,
+      relativePath: `fixtures/${filename}`,
+      isDirectory: false,
+    }]);
+    renderComposeBar({ containerId: "container-1" });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(filename.replace(".", "\\."), "i") }));
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toEqual([
+        expect.objectContaining({
+          name: filename,
+          previewUrl: `data:${mime};base64,Q09OVEFJTkVS`,
+        }),
+      ]);
+    });
+  });
+
+  test("enforces the aggregate data-backed attachment budget", async () => {
+    const eightMiBRawBytes = 8 * 1024 * 1024;
+    const eightMiBBase64 = Buffer.alloc(eightMiBRawBytes).toString("base64");
+    mockReadContainerFileBase64.mockImplementation(async () => eightMiBBase64);
+    mockSearchFiles.mockImplementation(() =>
+      [0, 1, 2].map((index) => ({
+        filename: `large-${index}.bin`,
+        relativePath: `large-${index}.bin`,
+        isDirectory: false,
+      })),
+    );
+    renderComposeBar({ containerId: "container-1" });
+
+    const selectFile = async (index: number) => {
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+      );
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: new RegExp(`large-${index}\\.bin`),
+        }),
+      );
+    };
+
+    await selectFile(0);
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(1);
+    });
+    await selectFile(1);
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(2);
+    });
+    await selectFile(2);
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Cannot attach file",
+        expect.objectContaining({
+          description:
+            "Attachments exceed the 20 MB total limit. Remove an attachment and try again.",
+        }),
+      );
+    });
+    expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(2);
+  });
+
+  test("rejects a workspace attachment when snapshotting fails", async () => {
+    useEnvironmentStore.setState({ environments: [createLocalEnvironment()] });
+    mockSearchFiles.mockImplementation(() => [{
+      filename: "secret.txt",
+      relativePath: "secret.txt",
+      isDirectory: false,
+    }]);
+    mockReadFileBase64.mockRejectedValue(new Error("outside workspace"));
+    renderComposeBar();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /secret\.txt/ }));
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Cannot attach file",
+        expect.objectContaining({ description: "outside workspace" }),
+      );
+    });
+    expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toEqual([]);
+  });
+
+  test("rejects an invalid workspace selection before reading it", async () => {
+    useEnvironmentStore.setState({ environments: [createLocalEnvironment()] });
+    mockSearchFiles.mockImplementation(() => [{
+      filename: "secret.txt",
+      relativePath: "../secret.txt",
+      isDirectory: false,
+    }]);
+    renderComposeBar();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /secret\.txt/ }));
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Cannot attach file",
+        expect.objectContaining({
+          description: "Environment not properly configured for attachments",
+        }),
+      );
+    });
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+    expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toEqual([]);
   });
 
   test("writes pasted images into a local worktree", async () => {

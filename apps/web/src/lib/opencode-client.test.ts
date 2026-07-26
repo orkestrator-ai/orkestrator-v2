@@ -2424,4 +2424,97 @@ describe("opencode-client model and attachment edge cases", () => {
     expect(parts[1]?.url).toBe("file:///tmp/a.jpg");
     expect(parts[2]?.url).toBe("data:image/gif;base64,AA==");
   });
+
+  test("normalizes uppercase image extensions before inferring MIME types", async () => {
+    const promptAsync = mock(async (_input: unknown) => ({}));
+    const client = { session: { promptAsync } } as unknown as OpencodeClient;
+
+    await sendPrompt(client, "session-1", "images", {
+      attachments: [
+        { type: "image", path: "/tmp/a.JPG", filename: "a.JPG" },
+        { type: "image", path: "/tmp/b.JPEG", filename: "b.JPEG" },
+        { type: "image", path: "/tmp/c.GIF", filename: "c.GIF" },
+        { type: "image", path: "/tmp/d.WEBP", filename: "d.WEBP" },
+      ],
+    });
+
+    const parts = (promptAsync.mock.calls[0]?.[0] as {
+      parts: Array<Record<string, unknown>>;
+    }).parts;
+    expect(parts.slice(1).map((part) => part.mime)).toEqual([
+      "image/jpeg",
+      "image/jpeg",
+      "image/gif",
+      "image/webp",
+    ]);
+  });
+
+  test("encodes filesystem path segments without changing the selected filename", async () => {
+    const promptAsync = mock(async (_input: unknown) => ({}));
+    const client = { session: { promptAsync } } as unknown as OpencodeClient;
+
+    await sendPrompt(client, "session-1", "files", {
+      attachments: [
+        {
+          type: "file",
+          path: "/workspace/hash#name.txt",
+          filename: "hash#name.txt",
+        },
+        {
+          type: "file",
+          path: "/workspace/query?name.txt",
+          filename: "query?name.txt",
+        },
+        {
+          type: "file",
+          path: "/workspace/%2e%2e/secret.txt",
+          filename: "secret.txt",
+        },
+        {
+          type: "file",
+          path: "/workspace/space name.txt",
+          filename: "space name.txt",
+        },
+        { type: "file", path: "/workspace/資料/✓.txt", filename: "✓.txt" },
+        {
+          type: "file",
+          path: String.raw`C:\Users\Ada\report #1?.txt`,
+          filename: "report #1?.txt",
+        },
+      ],
+    });
+
+    const parts = (promptAsync.mock.calls[0]?.[0] as {
+      parts: Array<Record<string, unknown>>;
+    }).parts;
+    expect(parts.slice(1).map((part) => part.url)).toEqual([
+      "file:///workspace/hash%23name.txt",
+      "file:///workspace/query%3Fname.txt",
+      "file:///workspace/%252e%252e/secret.txt",
+      "file:///workspace/space%20name.txt",
+      "file:///workspace/%E8%B3%87%E6%96%99/%E2%9C%93.txt",
+      "file:///C:/Users/Ada/report%20%231%3F.txt",
+    ]);
+  });
+
+  test("rejects explicit traversal, relative paths, and null bytes before dispatch", async () => {
+    for (const path of [
+      "/workspace/../secret.txt",
+      "/workspace/./secret.txt",
+      String.raw`C:\workspace\..\secret.txt`,
+      "workspace/secret.txt",
+      "/workspace/\0secret.txt",
+    ]) {
+      const promptAsync = mock(async (_input: unknown) => ({}));
+      const client = { session: { promptAsync } } as unknown as OpencodeClient;
+
+      const result = await sendPrompt(client, "session-1", "file", {
+        attachments: [{ type: "file", path, filename: "secret.txt" }],
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/absolute|traversal|null bytes/);
+      expect(promptAsync).not.toHaveBeenCalled();
+    }
+  });
 });

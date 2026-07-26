@@ -42,6 +42,19 @@ const EMPTY_ATTACHMENTS: CodexAttachment[] = [];
 const EMPTY_MENTIONS: FileMention[] = [];
 const EMPTY_QUEUE: CodexQueuedMessage[] = [];
 
+function fileMentionsEqual(
+  left: readonly FileMention[],
+  right: readonly FileMention[],
+): boolean {
+  return left.length === right.length && left.every((mention, index) => {
+    const other = right[index];
+    return other !== undefined
+      && mention.id === other.id
+      && mention.filename === other.filename
+      && mention.relativePath === other.relativePath;
+  });
+}
+
 const REASONING_LABELS: Record<CodexReasoningEffort, string> = {
   minimal: "Minimal",
   low: "Low",
@@ -213,6 +226,9 @@ export function CodexComposeBar({
       return;
     }
 
+    const submittedText = text;
+    const submittedMentions = mentions;
+    const submittedAttachments = attachments;
     setIsSending(true);
     try {
       if (isQueueing) {
@@ -220,9 +236,20 @@ export function CodexComposeBar({
       } else {
         await onSend(serializeForLLM(trimmed, mentions), attachments);
       }
-      setDraftText(sessionKey, "");
-      setDraftMentions(sessionKey, []);
-      clearAttachments(sessionKey);
+      const store = useCodexStore.getState();
+      if (
+        store.getDraftText(sessionKey) === submittedText
+        && fileMentionsEqual(
+          store.getDraftMentions(sessionKey),
+          submittedMentions,
+        )
+      ) {
+        store.setDraftText(sessionKey, "");
+        store.setDraftMentions(sessionKey, []);
+      }
+      for (const attachment of submittedAttachments) {
+        store.removeAttachment(sessionKey, attachment.id);
+      }
     } catch (error) {
       console.error(
         `[CodexComposeBar] Failed to ${isQueueing ? "queue" : "send"} prompt:`,
@@ -343,11 +370,14 @@ export function CodexComposeBar({
 
   const handleWorkspaceFileSelect = useCallback(
     (file: FileCandidate) => {
+      if (disabled || isSending) {
+        return;
+      }
       const mention = createMention(file);
       closeFileMentionMenu({ suppressReopenFor: file.filename });
       inputRef.current?.insertMentionAtCursor(mention);
     },
-    [closeFileMentionMenu, createMention],
+    [closeFileMentionMenu, createMention, disabled, isSending],
   );
 
   useNativeComposeBarPaste({
@@ -436,7 +466,9 @@ export function CodexComposeBar({
               <button
                 type="button"
                 onClick={() => removeAttachment(sessionKey, attachment.id)}
+                disabled={disabled || isSending}
                 className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                aria-label={`Remove ${attachment.name}`}
               >
                 <X className="h-3 w-3" />
               </button>
@@ -521,10 +553,10 @@ export function CodexComposeBar({
             }
           }}
           placeholder="Ask Codex anything..."
-          disabled={disabled}
+          disabled={disabled || isSending}
           minHeight={MIN_HEIGHT_PX}
           maxHeight={MAX_HEIGHT_PX}
-          className={cn(disabled && "opacity-60")}
+          className={cn((disabled || isSending) && "opacity-60")}
         />
       </div>
 
@@ -537,7 +569,8 @@ export function CodexComposeBar({
           className="flex w-full min-w-0 items-center gap-1 sm:w-auto"
         >
           <NativeAttachmentMenu
-            disabled={disabled}
+            key={isSending ? "sending" : "idle"}
+            disabled={disabled || isSending}
             fileSearch={fileSearch}
             onSelectFile={handleWorkspaceFileSelect}
             onCloseAutoFocus={() => inputRef.current?.focus()}

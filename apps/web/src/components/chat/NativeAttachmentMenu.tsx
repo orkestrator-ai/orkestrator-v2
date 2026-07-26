@@ -36,7 +36,11 @@ const IMAGE_EXTENSIONS = new Set([
 ]);
 
 export interface NativeAttachmentFileSearch {
-  searchFiles: (query: string, limit?: number) => FileCandidate[];
+  searchFiles: (
+    query: string,
+    limit?: number,
+    options?: { filesOnly?: boolean },
+  ) => FileCandidate[];
   isLoading: boolean;
   error: string | null;
   refresh: () => void | Promise<void>;
@@ -71,8 +75,20 @@ interface WorkspaceFilePickerDialogProps {
 }
 
 function getFileExtension(file: FileCandidate): string {
-  const extension = file.extension || file.filename.split(".").pop() || "";
+  const lastDotIndex = file.filename.lastIndexOf(".");
+  const filenameExtension =
+    lastDotIndex > 0 && lastDotIndex < file.filename.length - 1
+      ? file.filename.slice(lastDotIndex + 1)
+      : "";
+  const extension = file.extension || filenameExtension;
   return extension.replace(/^\./, "").toLowerCase();
+}
+
+function normalizeRootPath(rootPath: string | undefined): string | undefined {
+  if (!rootPath) return undefined;
+
+  const normalized = rootPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized || (rootPath.startsWith("/") ? "/" : undefined);
 }
 
 export function createWorkspaceAttachment(
@@ -86,7 +102,7 @@ export function createWorkspaceAttachment(
   const pathSegments = relativePath.split("/");
   const rootPath = containerId
     ? "/workspace"
-    : worktreePath?.replace(/[\\/]+$/, "");
+    : normalizeRootPath(worktreePath);
 
   if (
     !rootPath
@@ -100,7 +116,7 @@ export function createWorkspaceAttachment(
   return {
     id: createUuid(),
     type: IMAGE_EXTENSIONS.has(getFileExtension(file)) ? "image" : "file",
-    path: `${rootPath}/${relativePath}`,
+    path: `${rootPath === "/" ? "" : rootPath}/${relativePath}`,
     name: file.filename,
   };
 }
@@ -128,7 +144,7 @@ function WorkspaceFilePickerDialog({
 
   const results = useMemo(
     () =>
-      searchFiles(query, MAX_RESULTS).filter((file) => !file.isDirectory),
+      searchFiles(query, MAX_RESULTS, { filesOnly: true }),
     [query, searchFiles],
   );
   const safeSelectedIndex = Math.min(
@@ -144,7 +160,11 @@ function WorkspaceFilePickerDialog({
     }
 
     setSelectedIndex(0);
-    void refresh();
+    void Promise.resolve()
+      .then(() => refresh())
+      .catch(() => {
+        // The file-search owner exposes refresh failures through `error`.
+      });
   }, [open, refresh]);
 
   useEffect(() => {
@@ -153,7 +173,7 @@ function WorkspaceFilePickerDialog({
 
   useEffect(() => {
     selectedItemRef.current?.scrollIntoView({ block: "nearest" });
-  }, [safeSelectedIndex]);
+  }, [open, safeSelectedIndex]);
 
   const handleSelect = (file: FileCandidate) => {
     onSelectFile(file);
@@ -161,6 +181,10 @@ function WorkspaceFilePickerDialog({
   };
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (!isAvailable || isLoading || error) {
+      return;
+    }
+
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setSelectedIndex((current) =>
@@ -296,6 +320,12 @@ export function NativeAttachmentMenu({
 }: NativeAttachmentMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
+
+  useEffect(() => {
+    if (!disabled) return;
+    setMenuOpen(false);
+    setFilePickerOpen(false);
+  }, [disabled]);
 
   return (
     <>

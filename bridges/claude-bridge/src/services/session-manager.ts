@@ -31,10 +31,10 @@ import { getMcpServersForSdk, getMcpServerNames } from "./mcp-config.js";
 import { getPluginsForSdk } from "./plugin-config.js";
 import type { McpToolMetadata } from "../types/mcp.js";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { constants, existsSync, type Stats } from "node:fs";
+import { lstat, open, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // Store for active sessions
 const sessions = new Map<string, SessionState>();
@@ -880,6 +880,35 @@ const SUPPORTED_IMAGE_MEDIA_TYPES = new Set([
   "image/webp",
 ]);
 
+/** Matches the renderer's final image-attachment policy. */
+export const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
+type ClaudeAttachmentErrorCode =
+  | "attachment_changed"
+  | "attachment_invalid_data"
+  | "attachment_not_regular_file"
+  | "attachment_outside_workspace"
+  | "attachment_read_failed"
+  | "attachment_symlink_not_allowed"
+  | "attachment_too_large";
+
+/** Stable error shape surfaced through the authoritative session error event. */
+class ClaudeAttachmentError extends Error {
+  readonly name = "ClaudeAttachmentError";
+
+  constructor(
+    readonly code: ClaudeAttachmentErrorCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function decodedBase64ByteLength(value: string): number {
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return (value.length / 4) * 3 - padding;
+}
+
 function parseBase64ImageData(
   value: string,
 ): { data: string; mediaType?: "image/jpeg" | "image/png" | "image/gif" | "image/webp" } | null {
@@ -900,11 +929,198 @@ function parseBase64ImageData(
     normalized.length === 0
     || normalized.length % 4 !== 0
     || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)
+    || decodedBase64ByteLength(normalized) > MAX_IMAGE_ATTACHMENT_BYTES
   ) {
     return null;
   }
 
   return { data: normalized, mediaType };
+}
+
+function isPathWithin(rootPath: string, targetPath: string): boolean {
+  const childPath = relative(rootPath, targetPath);
+  return (
+    childPath === ""
+    || (
+      childPath !== ".."
+      && !childPath.startsWith(`..${sep}`)
+      && !isAbsolute(childPath)
+    )
+  );
+}
+
+function attachmentErrorForFsFailure(error: unknown): ClaudeAttachmentError {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "ELOOP") {
+    return new ClaudeAttachmentError(
+      "attachment_symlink_not_allowed",
+      "Image attachments must be regular workspace files, not symbolic links.",
+    );
+  }
+  if (code === "EFBIG") {
+    return new ClaudeAttachmentError(
+      "attachment_too_large",
+      "Image attachment exceeds the 8MB limit.",
+    );
+  }
+  return new ClaudeAttachmentError(
+    "attachment_read_failed",
+    "Image attachment could not be read safely from the workspace.",
+  );
+}
+
+async function assertNoSymlinkComponents(
+  lexicalRoot: string,
+  targetPath: string,
+): Promise<void> {
+  const childPath = relative(lexicalRoot, targetPath);
+  let currentPath = lexicalRoot;
+  for (const segment of childPath.split(sep).filter(Boolean)) {
+    currentPath = join(currentPath, segment);
+    const stats = await lstat(currentPath).catch((error: unknown) => {
+      throw attachmentErrorForFsFailure(error);
+    });
+    if (stats.isSymbolicLink()) {
+      throw new ClaudeAttachmentError(
+        "attachment_symlink_not_allowed",
+        "Image attachments must be regular workspace files, not symbolic links.",
+      );
+    }
+  }
+}
+
+async function assertOpenedWorkspaceFile(
+  targetPath: string,
+  canonicalRoot: string,
+  openedStats: Stats,
+): Promise<void> {
+  const [pathStats, canonicalTarget] = await Promise.all([
+    lstat(targetPath),
+    realpath(targetPath),
+  ]).catch((error: unknown) => {
+    throw attachmentErrorForFsFailure(error);
+  });
+
+  if (pathStats.isSymbolicLink()) {
+    throw new ClaudeAttachmentError(
+      "attachment_symlink_not_allowed",
+      "Image attachments must be regular workspace files, not symbolic links.",
+    );
+  }
+  if (
+    !pathStats.isFile()
+    || !openedStats.isFile()
+    || pathStats.dev !== openedStats.dev
+    || pathStats.ino !== openedStats.ino
+  ) {
+    throw new ClaudeAttachmentError(
+      "attachment_not_regular_file",
+      "Image attachment is not a stable regular workspace file.",
+    );
+  }
+  if (!isPathWithin(canonicalRoot, canonicalTarget)) {
+    throw new ClaudeAttachmentError(
+      "attachment_outside_workspace",
+      "Image attachment must be contained in the current workspace.",
+    );
+  }
+}
+
+async function readWorkspaceImageAttachment(
+  filePath: string,
+  cwd: string,
+  afterInitialValidation?: (filePath: string) => void | Promise<void>,
+): Promise<Buffer> {
+  const lexicalRoot = resolve(cwd);
+  const targetPath = isAbsolute(filePath)
+    ? resolve(filePath)
+    : resolve(lexicalRoot, filePath);
+  if (!isPathWithin(lexicalRoot, targetPath)) {
+    throw new ClaudeAttachmentError(
+      "attachment_outside_workspace",
+      "Image attachment must be contained in the current workspace.",
+    );
+  }
+
+  const canonicalRoot = await realpath(lexicalRoot).catch((error: unknown) => {
+    throw attachmentErrorForFsFailure(error);
+  });
+  await assertNoSymlinkComponents(lexicalRoot, targetPath);
+
+  const canonicalTarget = await realpath(targetPath).catch((error: unknown) => {
+    throw attachmentErrorForFsFailure(error);
+  });
+  if (!isPathWithin(canonicalRoot, canonicalTarget)) {
+    throw new ClaudeAttachmentError(
+      "attachment_outside_workspace",
+      "Image attachment must be contained in the current workspace.",
+    );
+  }
+
+  const noFollow = constants.O_NOFOLLOW ?? 0;
+  const handle = await open(targetPath, constants.O_RDONLY | noFollow).catch(
+    (error: unknown) => {
+      throw attachmentErrorForFsFailure(error);
+    },
+  );
+
+  try {
+    const initialStats = await handle.stat();
+    await assertOpenedWorkspaceFile(targetPath, canonicalRoot, initialStats);
+    if (initialStats.size > MAX_IMAGE_ATTACHMENT_BYTES) {
+      throw new ClaudeAttachmentError(
+        "attachment_too_large",
+        "Image attachment exceeds the 8MB limit.",
+      );
+    }
+    await afterInitialValidation?.(targetPath);
+
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    while (totalBytes <= MAX_IMAGE_ATTACHMENT_BYTES) {
+      const remaining = (MAX_IMAGE_ATTACHMENT_BYTES + 1) - totalBytes;
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, remaining));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      totalBytes += bytesRead;
+    }
+    if (totalBytes > MAX_IMAGE_ATTACHMENT_BYTES) {
+      throw new ClaudeAttachmentError(
+        "attachment_too_large",
+        "Image attachment exceeds the 8MB limit.",
+      );
+    }
+    if (totalBytes === 0) {
+      throw new ClaudeAttachmentError(
+        "attachment_invalid_data",
+        "Image attachment file is empty.",
+      );
+    }
+
+    const finalStats = await handle.stat();
+    await assertOpenedWorkspaceFile(targetPath, canonicalRoot, finalStats);
+    if (
+      finalStats.dev !== initialStats.dev
+      || finalStats.ino !== initialStats.ino
+      || finalStats.size !== initialStats.size
+      || finalStats.size !== totalBytes
+      || finalStats.mtimeMs !== initialStats.mtimeMs
+      || finalStats.ctimeMs !== initialStats.ctimeMs
+    ) {
+      throw new ClaudeAttachmentError(
+        "attachment_changed",
+        "Image attachment changed while it was being read; please attach it again.",
+      );
+    }
+
+    return Buffer.concat(chunks, totalBytes);
+  } catch (error) {
+    if (error instanceof ClaudeAttachmentError) throw error;
+    throw attachmentErrorForFsFailure(error);
+  } finally {
+    await handle.close();
+  }
 }
 
 function escapeXmlAttribute(value: string): string {
@@ -931,7 +1147,9 @@ function attachmentTag(attachment: NonNullable<PromptOptions["attachments"]>[num
  */
 async function buildSdkPrompt(
   finalPrompt: string,
-  attachments?: PromptOptions["attachments"]
+  attachments: PromptOptions["attachments"] | undefined,
+  cwd: string,
+  afterAttachmentInitialValidation?: (filePath: string) => void | Promise<void>,
 ): Promise<string | AsyncIterable<SDKUserMessage>> {
   const imageAttachments = attachments?.filter((att) => att.type === "image") ?? [];
   if (imageAttachments.length === 0) {
@@ -948,25 +1166,29 @@ async function buildSdkPrompt(
     let base64Data: string | null = null;
     let mediaType = getImageMediaType(att.path || att.filename || "image.png");
 
-    // Prefer dataUrl from the frontend (already base64-encoded)
-    if (att.dataUrl) {
+    // Prefer dataUrl from the frontend (already base64-encoded).
+    if (att.dataUrl !== undefined) {
       const parsedData = parseBase64ImageData(att.dataUrl);
-      if (parsedData) {
-        base64Data = parsedData.data;
-        mediaType = parsedData.mediaType ?? mediaType;
+      if (!parsedData) {
+        throw new ClaudeAttachmentError(
+          "attachment_invalid_data",
+          "Image attachment data must be valid base64 and no larger than 8MB.",
+        );
       }
-    }
-    if (!base64Data && att.path && existsSync(att.path)) {
-      // Fall back to reading from disk (async to avoid blocking the event loop)
-      try {
-        const buffer = await readFile(att.path);
-        base64Data = buffer.toString("base64");
-      } catch (error) {
-        console.warn("[session-manager] Failed to read image attachment", {
-          path: att.path,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      base64Data = parsedData.data;
+      mediaType = parsedData.mediaType ?? mediaType;
+    } else if (att.path) {
+      const buffer = await readWorkspaceImageAttachment(
+        att.path,
+        cwd,
+        afterAttachmentInitialValidation,
+      );
+      base64Data = buffer.toString("base64");
+    } else {
+      throw new ClaudeAttachmentError(
+        "attachment_read_failed",
+        "Image attachment does not contain readable image data.",
+      );
     }
 
     if (base64Data) {
@@ -1012,7 +1234,10 @@ async function buildSdkPrompt(
 export async function sendPrompt(
   sessionId: string,
   prompt: string,
-  options?: PromptOptions
+  options?: PromptOptions,
+  testHooks?: {
+    afterAttachmentInitialValidation?: (filePath: string) => void | Promise<void>;
+  },
 ): Promise<void> {
   const session = sessions.get(sessionId);
   if (!session) {
@@ -1165,7 +1390,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     });
     const envPath = process.env.PATH;
     console.log("[session-manager] SDK env PATH", { path: envPath });
-    const sdkPrompt = await buildSdkPrompt(finalPrompt, options?.attachments);
+    const sdkPrompt = await buildSdkPrompt(
+      finalPrompt,
+      options?.attachments,
+      cwd,
+      testHooks?.afterAttachmentInitialValidation,
+    );
     const queryIterator = query({
       prompt: sdkPrompt,
       options: {
@@ -2119,7 +2349,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       eventEmitter.emit({
         type: "session.error",
         sessionId,
-        data: { error: session.error },
+        data: {
+          error: session.error,
+          ...(error instanceof ClaudeAttachmentError
+            ? { code: error.code }
+            : {}),
+        },
       });
     }
     throw error;

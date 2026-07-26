@@ -301,6 +301,49 @@ describe("session routes", () => {
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
+    test("rejects inline image data over the 8MB attachment limit", async () => {
+      const oversizedDataUrl = `data:image/png;base64,${
+        Buffer.alloc((8 * 1024 * 1024) + 1, 1).toString("base64")
+      }`;
+      const response = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "describe",
+        attachments: [{
+          type: "image",
+          path: "",
+          dataUrl: oversizedDataUrl,
+        }],
+      });
+
+      expect(response.status).toBe(400);
+      expect(await jsonBody(response)).toEqual({
+        error: "Attachments are invalid; inline images must be valid base64 and no larger than 8MB",
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("accepts inline image data exactly at the 8MB attachment limit", async () => {
+      const maximumDataUrl = `data:image/png;base64,${
+        Buffer.alloc(8 * 1024 * 1024, 1).toString("base64")
+      }`;
+      const response = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "describe",
+        attachments: [{
+          type: "image",
+          path: "",
+          dataUrl: maximumDataUrl,
+        }],
+      });
+
+      expect(response.status).toBe(202);
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        "s-1",
+        "describe",
+        expect.objectContaining({
+          attachments: [expect.objectContaining({ dataUrl: maximumDataUrl })],
+        }),
+      );
+    });
+
     test("passes effort and permissionMode to sendPrompt", async () => {
       await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "test",

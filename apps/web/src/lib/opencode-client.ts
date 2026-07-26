@@ -1529,6 +1529,42 @@ export interface SendPromptResult {
   requestId?: string;
 }
 
+function assertNoTraversalSegments(segments: string[]): void {
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error("Attachment path must not contain traversal segments");
+  }
+}
+
+/**
+ * Construct a file URL without letting URL parsing reinterpret filesystem
+ * characters such as `#`, `?`, or percent-encoded dot segments.
+ *
+ * `URL.pathname = path` is not suitable here: pathname assignment treats `%`
+ * sequences as URL escapes and normalizes `%2e%2e` before serializing. Encoding
+ * each filesystem segment first preserves the selected filename exactly.
+ */
+function filePathToUrl(path: string): string {
+  if (path.includes("\0")) {
+    throw new Error("Attachment path must not contain null bytes");
+  }
+
+  const windowsDriveMatch = /^([A-Za-z]:)[\\/](.*)$/.exec(path);
+  if (windowsDriveMatch) {
+    const segments = (windowsDriveMatch[2] ?? "").split(/[\\/]/);
+    assertNoTraversalSegments(segments);
+    const encodedPath = segments.map(encodeURIComponent).join("/");
+    return `file:///${windowsDriveMatch[1]}/${encodedPath}`;
+  }
+
+  if (!path.startsWith("/")) {
+    throw new Error("Attachment path must be absolute");
+  }
+
+  const segments = path.split("/");
+  assertNoTraversalSegments(segments);
+  return `file://${segments.map(encodeURIComponent).join("/")}`;
+}
+
 /**
  * Send a prompt to a session
  */
@@ -1558,18 +1594,18 @@ export async function sendPrompt(
         // SDK FilePartInput requires: type, mime, url
         // Determine MIME type based on attachment type and filename
         let mime = "application/octet-stream";
+        const ext = attachment.filename?.split(".").pop()?.toLowerCase();
         if (attachment.type === "image") {
           mime = "image/png"; // Default for clipboard images
-          if (attachment.filename?.endsWith(".jpg") || attachment.filename?.endsWith(".jpeg")) {
+          if (ext === "jpg" || ext === "jpeg") {
             mime = "image/jpeg";
-          } else if (attachment.filename?.endsWith(".gif")) {
+          } else if (ext === "gif") {
             mime = "image/gif";
-          } else if (attachment.filename?.endsWith(".webp")) {
+          } else if (ext === "webp") {
             mime = "image/webp";
           }
         } else if (attachment.filename) {
           // Try to infer MIME type from filename for files
-          const ext = attachment.filename.split(".").pop()?.toLowerCase();
           if (ext === "txt") mime = "text/plain";
           else if (ext === "json") mime = "application/json";
           else if (ext === "js" || ext === "mjs") mime = "text/javascript";
@@ -1582,7 +1618,7 @@ export async function sendPrompt(
         }
 
         // Use data URL if available, otherwise construct file:// URL
-        const url = attachment.dataUrl || `file://${attachment.path}`;
+        const url = attachment.dataUrl || filePathToUrl(attachment.path);
 
         parts.push({
           type: "file" as const,

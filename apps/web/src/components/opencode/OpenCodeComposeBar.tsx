@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { readContainerFileBase64, readFileBase64 } from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useOpenCodeStore, createOpenCodeSessionKey, type OpenCodeAttachment, type OpenCodeQueuedMessage } from "@/stores/openCodeStore";
 import { ContextUsageWheel } from "@/components/chat/ContextUsageWheel";
@@ -86,9 +87,64 @@ const MAX_LINES = 12;
 const LINE_HEIGHT = 20;
 const MIN_INPUT_HEIGHT = LINE_HEIGHT + 8;
 const MAX_INPUT_HEIGHT = MAX_LINES * LINE_HEIGHT + 16;
+const MAX_DATA_BACKED_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 /** Stable empty array to avoid infinite re-render loops in useSyncExternalStore */
 const EMPTY_QUEUE: OpenCodeQueuedMessage[] = [];
+
+function fileMentionsEqual(
+  left: readonly FileMention[],
+  right: readonly FileMention[],
+): boolean {
+  return left.length === right.length && left.every((mention, index) => {
+    const other = right[index];
+    return other !== undefined
+      && mention.id === other.id
+      && mention.filename === other.filename
+      && mention.relativePath === other.relativePath;
+  });
+}
+
+function attachmentMimeType(attachment: OpenCodeAttachment): string {
+  const lastDot = attachment.name.lastIndexOf(".");
+  const extension = lastDot > 0 && lastDot < attachment.name.length - 1
+    ? attachment.name.slice(lastDot + 1).toLowerCase()
+    : "";
+  if (attachment.type === "image") {
+    if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
+    if (extension === "gif") return "image/gif";
+    if (extension === "webp") return "image/webp";
+    return "image/png";
+  }
+  if (extension === "txt") return "text/plain";
+  if (extension === "json") return "application/json";
+  if (extension === "js" || extension === "mjs") return "text/javascript";
+  if (extension === "ts" || extension === "tsx") return "text/typescript";
+  if (extension === "md") return "text/markdown";
+  if (extension === "html") return "text/html";
+  if (extension === "css") return "text/css";
+  if (extension === "py") return "text/x-python";
+  if (extension === "rs") return "text/x-rust";
+  return "application/octet-stream";
+}
+
+function base64DecodedByteLength(base64: string): number {
+  if (!base64) return 0;
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+}
+
+function dataUrlByteLength(dataUrl: string | undefined): number {
+  if (!dataUrl) return 0;
+  const separatorIndex = dataUrl.indexOf(",");
+  if (
+    separatorIndex === -1
+    || !dataUrl.slice(0, separatorIndex).toLowerCase().endsWith(";base64")
+  ) {
+    return 0;
+  }
+  return base64DecodedByteLength(dataUrl.slice(separatorIndex + 1));
+}
 
 export function OpenCodeComposeBar({
   environmentId,
@@ -108,16 +164,35 @@ export function OpenCodeComposeBar({
   layout = "bottom",
 }: OpenCodeComposeBarProps) {
   const [isSending, setIsSending] = useState(false);
+  const [pendingAttachmentSnapshots, setPendingAttachmentSnapshots] = useState(0);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const prevFileMentionMenuOpen = useRef(false);
+  const attachmentSelectionBlockedRef = useRef(disabled || isSending);
+  const attachmentSelectionGenerationRef = useRef(0);
+  const pendingAttachmentSnapshotsRef = useRef(0);
+  const mountedRef = useRef(true);
+  const attachmentSelectionBlocked = disabled || isSending;
+  if (attachmentSelectionBlocked && !attachmentSelectionBlockedRef.current) {
+    attachmentSelectionGenerationRef.current += 1;
+  }
+  attachmentSelectionBlockedRef.current = attachmentSelectionBlocked;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    attachmentSelectionBlockedRef.current = disabled || isSending;
+    return () => {
+      mountedRef.current = false;
+      attachmentSelectionBlockedRef.current = true;
+      attachmentSelectionGenerationRef.current += 1;
+    };
+  }, []);
 
   const {
     getAttachments,
     addAttachment,
     removeAttachment,
-    clearAttachments,
     getDraftText,
     setDraftText,
     getDraftMentions,
@@ -259,7 +334,10 @@ export function OpenCodeComposeBar({
   );
 
   const handleWorkspaceFileSelect = useCallback(
-    (file: FileCandidate) => {
+    async (file: FileCandidate) => {
+      if (disabled || isSending) {
+        return;
+      }
       const attachment = createWorkspaceAttachment(
         file,
         containerId,
@@ -271,9 +349,57 @@ export function OpenCodeComposeBar({
         });
         return;
       }
-      addAttachment(sessionKey, attachment);
+      pendingAttachmentSnapshotsRef.current += 1;
+      setPendingAttachmentSnapshots((count) => count + 1);
+      try {
+        const selectionGeneration = attachmentSelectionGenerationRef.current;
+        const base64 = containerId
+          ? await readContainerFileBase64(containerId, file.relativePath)
+          : await readFileBase64(attachment.path);
+        if (
+          attachmentSelectionBlockedRef.current
+          || attachmentSelectionGenerationRef.current !== selectionGeneration
+        ) {
+          return;
+        }
+        const store = useOpenCodeStore.getState();
+        const currentAttachmentBytes = store
+          .getAttachments(sessionKey)
+          .reduce(
+            (total, currentAttachment) =>
+              total + dataUrlByteLength(currentAttachment.previewUrl),
+            0,
+          );
+        if (
+          currentAttachmentBytes + base64DecodedByteLength(base64)
+          > MAX_DATA_BACKED_ATTACHMENT_BYTES
+        ) {
+          toast.error("Cannot attach file", {
+            description:
+              "Attachments exceed the 20 MB total limit. Remove an attachment and try again.",
+          });
+          return;
+        }
+        store.addAttachment(sessionKey, {
+          ...attachment,
+          previewUrl: `data:${attachmentMimeType(attachment)};base64,${base64}`,
+        });
+      } catch (error) {
+        console.error("[OpenCodeComposeBar] Failed to snapshot attachment:", error);
+        toast.error("Cannot attach file", {
+          description: error instanceof Error ? error.message : "Failed to read selected file",
+        });
+      } finally {
+        pendingAttachmentSnapshotsRef.current = Math.max(
+          0,
+          pendingAttachmentSnapshotsRef.current - 1,
+        );
+        if (mountedRef.current) {
+          setPendingAttachmentSnapshots((count) => Math.max(0, count - 1));
+        }
+      }
     },
-    [addAttachment, containerId, sessionKey, worktreePath],
+    [addAttachment, containerId, disabled, isSending, sessionKey, worktreePath],
   );
 
   useNativeComposeBarPaste({
@@ -334,9 +460,12 @@ export function OpenCodeComposeBar({
   };
 
   const handleSend = async () => {
-    if (isSending || disabled) return;
+    if (isSending || disabled || pendingAttachmentSnapshotsRef.current > 0) return;
     if (attachments.length === 0 && !text.trim()) return;
 
+    const submittedText = text;
+    const submittedMentions = mentions;
+    const submittedAttachments = attachments;
     setIsSending(true);
     const isQueueing = isLoading && Boolean(onQueue);
     try {
@@ -346,9 +475,20 @@ export function OpenCodeComposeBar({
       } else {
         await onSend(serializedText, attachments);
       }
-      setDraftText(sessionKey, "");
-      setDraftMentions(sessionKey, []);
-      clearAttachments(sessionKey);
+      const store = useOpenCodeStore.getState();
+      if (
+        store.getDraftText(sessionKey) === submittedText
+        && fileMentionsEqual(
+          store.getDraftMentions(sessionKey),
+          submittedMentions,
+        )
+      ) {
+        store.setDraftText(sessionKey, "");
+        store.setDraftMentions(sessionKey, []);
+      }
+      for (const attachment of submittedAttachments) {
+        store.removeAttachment(sessionKey, attachment.id);
+      }
     } catch (error) {
       console.error(
         `[OpenCodeComposeBar] Failed to ${isQueueing ? "queue" : "send"} prompt:`,
@@ -499,6 +639,7 @@ export function OpenCodeComposeBar({
   const sendDisabled =
     disabled ||
     isSending ||
+    pendingAttachmentSnapshots > 0 ||
     (attachments.length === 0 && !text.trim());
   const showSendButton = !isLoading || !sendDisabled;
 
@@ -530,7 +671,9 @@ export function OpenCodeComposeBar({
                 <span className="max-w-[120px] truncate">{att.name}</span>
                 <button
                   onClick={() => handleRemoveAttachment(att.id)}
+                  disabled={disabled || isSending}
                   className="ml-1 p-0.5 rounded-full hover:bg-muted"
+                  aria-label={`Remove ${att.name}`}
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -583,7 +726,8 @@ export function OpenCodeComposeBar({
             className="flex w-full min-w-0 items-center gap-1 sm:w-auto"
           >
             <NativeAttachmentMenu
-              disabled={disabled}
+              key={isSending || pendingAttachmentSnapshots > 0 ? "blocked" : "idle"}
+              disabled={disabled || isSending || pendingAttachmentSnapshots > 0}
               fileSearch={fileSearch}
               onSelectFile={handleWorkspaceFileSelect}
               onCloseAutoFocus={() => inputRef.current?.focus()}

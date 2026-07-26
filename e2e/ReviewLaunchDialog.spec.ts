@@ -10,7 +10,7 @@ test("short mobile viewports scroll configuration while keeping actions visible"
   const dialog = page.getByRole("dialog", { name: "Configure code review" });
   const configuration = page.getByRole("region", { name: "Review configuration" });
   const cancelButton = page.getByRole("button", { name: "Cancel" });
-  const confirmButton = page.getByRole("button", { name: "OK" });
+  const confirmButton = page.getByRole("button", { name: "Start review" });
 
   await expect(dialog).toBeVisible();
   await expect(configuration).toBeVisible();
@@ -53,10 +53,10 @@ test("short mobile viewports scroll configuration while keeping actions visible"
   await confirmButton.click();
   await expect(dialog).toBeHidden();
   await expect(page.getByTestId("review-launch-selection"))
-    .toHaveText("claude-cli|claude-sonnet|default");
+    .toHaveText("claude-native|claude-sonnet|default");
 });
 
-test("provider and mode choices follow native radio keyboard behavior", async ({
+test("provider choices follow native radio keyboard behavior", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop project only");
@@ -65,6 +65,7 @@ test("provider and mode choices follow native radio keyboard behavior", async ({
   const providerGroup = page.getByRole("radiogroup", { name: "Review provider" });
   const claudeRadio = providerGroup.getByRole("radio", { name: "Claude" });
   const codexRadio = providerGroup.getByRole("radio", { name: "Codex" });
+  const openCodeRadio = providerGroup.getByRole("radio", { name: "OpenCode" });
 
   await claudeRadio.focus();
   await claudeRadio.press("ArrowRight");
@@ -73,14 +74,59 @@ test("provider and mode choices follow native radio keyboard behavior", async ({
   await expect(codexRadio).toHaveAttribute("tabindex", "0");
   await expect(claudeRadio).toHaveAttribute("tabindex", "-1");
 
-  const modeGroup = page.getByRole("radiogroup", { name: "Codex mode" });
-  const cliRadio = modeGroup.getByRole("radio", { name: /^CLI/ });
-  const nativeRadio = modeGroup.getByRole("radio", { name: /^Native/ });
+  await codexRadio.press("ArrowRight");
+  await expect(openCodeRadio).toBeChecked();
 
-  await cliRadio.focus();
-  await cliRadio.press("ArrowRight");
-  await expect(nativeRadio).toBeChecked();
-  await expect(nativeRadio).toBeFocused();
-  await expect(nativeRadio).toHaveAttribute("tabindex", "0");
-  await expect(cliRadio).toHaveAttribute("tabindex", "-1");
+  // Both ends wrap around.
+  await openCodeRadio.press("ArrowRight");
+  await expect(claudeRadio).toBeChecked();
+  await expect(claudeRadio).toBeFocused();
+  await claudeRadio.press("ArrowLeft");
+  await expect(openCodeRadio).toBeChecked();
+  await expect(openCodeRadio).toBeFocused();
+
+  // Home and End jump straight to the ends.
+  await openCodeRadio.press("Home");
+  await expect(claudeRadio).toBeChecked();
+  await claudeRadio.press("End");
+  await expect(openCodeRadio).toBeChecked();
+  await expect(openCodeRadio).toHaveAttribute("tabindex", "0");
+  await expect(claudeRadio).toHaveAttribute("tabindex", "-1");
+});
+
+test("step and header icon badges render as equally sized circles", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop project only");
+  await page.goto("/review-launch");
+
+  const dialog = page.getByRole("dialog", { name: "Configure code review" });
+  await expect(dialog).toBeVisible();
+
+  const badges = await dialog.evaluate((element) =>
+    Array.from(element.querySelectorAll<HTMLElement>(".size-8.place-items-center"))
+      .map((badge) => {
+        const rect = badge.getBoundingClientRect();
+        const glyph = badge.querySelector("svg")?.getBoundingClientRect();
+        return {
+          width: rect.width,
+          height: rect.height,
+          radius: Number.parseFloat(getComputedStyle(badge).borderTopLeftRadius),
+          glyphWidth: glyph?.width ?? 0,
+          glyphHeight: glyph?.height ?? 0,
+        };
+      }),
+  );
+
+  // The dialog header badge plus one marker per step.
+  expect(badges).toHaveLength(4);
+  for (const badge of badges) {
+    // Squares, not rectangles: shrink-0 keeps flex siblings from squashing them.
+    expect(badge.width).toBe(32);
+    expect(badge.height).toBe(32);
+    // Fully rounded, so a square box renders as a circle rather than a squircle.
+    expect(badge.radius).toBeGreaterThanOrEqual(16);
+    expect(badge.glyphWidth).toBe(16);
+    expect(badge.glyphHeight).toBe(16);
+  }
 });

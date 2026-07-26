@@ -9,6 +9,7 @@ const realSelectSnapshot = { ...realSelect };
 const SelectTestContext = createContext<{
   value: string;
   onValueChange: (value: string) => void;
+  disabled?: boolean;
 } | null>(null);
 
 mock.module("@/components/ui/dialog", () => ({
@@ -26,25 +27,36 @@ mock.module("@/components/ui/select", () => ({
   Select: ({
     value,
     onValueChange,
+    disabled,
     children,
   }: {
     value: string;
     onValueChange: (value: string) => void;
+    disabled?: boolean;
     children: React.ReactNode;
   }) => (
-    <SelectTestContext.Provider value={{ value, onValueChange }}>
+    <SelectTestContext.Provider value={{ value, onValueChange, disabled }}>
       <div>{children}</div>
     </SelectTestContext.Provider>
   ),
+  // Radix puts `disabled` on the root and the trigger inherits it through
+  // context, so the mock has to do the same or a disabled select is untestable.
   SelectTrigger: ({
     id,
     children,
-    disabled,
   }: {
     id?: string;
     children: React.ReactNode;
-    disabled?: boolean;
-  }) => <button id={id} type="button" role="combobox" disabled={disabled}>{children}</button>,
+  }) => (
+    <button
+      id={id}
+      type="button"
+      role="combobox"
+      disabled={useContext(SelectTestContext)?.disabled ?? false}
+    >
+      {children}
+    </button>
+  ),
   SelectValue: () => <span>{useContext(SelectTestContext)?.value}</span>,
   SelectContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => {
@@ -82,6 +94,29 @@ const catalog: ReviewModelCatalog = {
     { id: "provider/model-a", name: "OpenCode A", reasoningEfforts: ["fast", "deep"] },
   ],
 };
+
+/** A model with no reasoning efforts, and a provider whose catalog is empty. */
+const sparseCatalog: ReviewModelCatalog = {
+  claude: [
+    { id: "claude-a", name: "Claude A", reasoningEfforts: ["low", "high"] },
+    { id: "claude-fixed", name: "Claude Fixed", reasoningEfforts: [] },
+  ],
+  codex: [{ id: "codex-a", name: "Codex A", reasoningEfforts: ["medium"] }],
+  opencode: [],
+};
+
+function renderDialog(overrides: Partial<Parameters<typeof ReviewLaunchDialog>[0]> = {}) {
+  const onConfirm = mock((_selection: ReviewLaunchSelection) => undefined);
+  const props = {
+    open: true,
+    onOpenChange: () => undefined,
+    defaultTabType: "claude-native" as const,
+    catalog,
+    onConfirm,
+    ...overrides,
+  };
+  return { onConfirm, props, ...render(<ReviewLaunchDialog {...props} />) };
+}
 
 describe("ReviewLaunchDialog", () => {
   test("offers only native providers and confirms a one-pass review", () => {
@@ -168,6 +203,307 @@ describe("ReviewLaunchDialog", () => {
       model: "codex-a",
       reasoningEffort: "high",
     });
+  });
+});
+
+describe("ReviewLaunchDialog step markers", () => {
+  /** The header badge plus one marker per step, all `size-8` containers. */
+  function iconBadges(container: HTMLElement) {
+    return Array.from(container.querySelectorAll<HTMLElement>('[class~="size-8"]'));
+  }
+
+  test("renders every icon badge as an identically shaped, non-shrinking circle", () => {
+    const { container } = renderDialog({ kind: "looped" });
+
+    const badges = iconBadges(container);
+    // One header badge + four steps (looped adds the pass-allowance step).
+    expect(badges).toHaveLength(5);
+    for (const badge of badges) {
+      expect(badge.className).toContain("rounded-full");
+      // Without shrink-0 a flex sibling can squash the circle into an ellipse.
+      expect(badge.className).toContain("shrink-0");
+      expect(badge.className).toContain("place-items-center");
+    }
+  });
+
+  test("sizes every badge glyph consistently", () => {
+    const { container } = renderDialog({ kind: "looped" });
+
+    const glyphs = iconBadges(container).map((badge) => badge.querySelector("svg"));
+    expect(glyphs).toHaveLength(5);
+    for (const glyph of glyphs) {
+      expect(glyph).not.toBeNull();
+      expect(glyph!.getAttribute("class")).toContain("size-4");
+    }
+  });
+
+  test("drops the fourth step and its connector for a one-pass review", () => {
+    const { container } = renderDialog();
+
+    // Steps are decorative, so they are hidden from the accessibility tree.
+    for (const badge of iconBadges(container).slice(1)) {
+      expect(badge.closest("[aria-hidden]")?.getAttribute("aria-hidden")).toBe("true");
+    }
+    expect(iconBadges(container)).toHaveLength(4);
+    // Three steps, connected between each pair: the last step has no connector.
+    expect(container.querySelectorAll('[class~="bg-gradient-to-b"]')).toHaveLength(2);
+  });
+
+  test("connects all four steps for a looped review", () => {
+    const { container } = renderDialog({ kind: "looped" });
+
+    expect(container.querySelectorAll('[class~="bg-gradient-to-b"]')).toHaveLength(3);
+  });
+
+  test("renders a distinct icon for each provider", () => {
+    renderDialog();
+
+    const icons = screen.getAllByRole("radio").map((radio) => {
+      const card = radio.parentElement!.querySelector("label")!;
+      const svg = card.querySelector("svg");
+      expect(svg).not.toBeNull();
+      return svg!.outerHTML;
+    });
+
+    expect(icons).toHaveLength(3);
+    expect(new Set(icons).size).toBe(3);
+  });
+});
+
+describe("ReviewLaunchDialog provider keyboard navigation", () => {
+  function radios() {
+    return screen.getAllByRole("radio");
+  }
+
+  function selectedModelName() {
+    return screen.getByRole("combobox", { name: "Model" }).textContent;
+  }
+
+  test("moves forward with ArrowRight and ArrowDown", () => {
+    renderDialog();
+
+    // fireEvent returns false when the handler called preventDefault, which is
+    // what stops the arrow key from also scrolling the dialog.
+    expect(fireEvent.keyDown(radios()[0]!, { key: "ArrowRight" })).toBe(false);
+    expect(selectedModelName()).toContain("Codex A");
+    expect(document.activeElement).toBe(radios()[1]!);
+
+    expect(fireEvent.keyDown(radios()[1]!, { key: "ArrowDown" })).toBe(false);
+    expect(selectedModelName()).toContain("OpenCode A");
+    expect(document.activeElement).toBe(radios()[2]!);
+  });
+
+  test("moves backward with ArrowLeft and ArrowUp", () => {
+    renderDialog({ defaultTabType: "opencode-native" });
+
+    expect(fireEvent.keyDown(radios()[2]!, { key: "ArrowLeft" })).toBe(false);
+    expect(selectedModelName()).toContain("Codex A");
+
+    expect(fireEvent.keyDown(radios()[1]!, { key: "ArrowUp" })).toBe(false);
+    expect(selectedModelName()).toContain("Claude A");
+    expect(document.activeElement).toBe(radios()[0]!);
+  });
+
+  test("wraps around both ends", () => {
+    renderDialog();
+
+    // First -> previous wraps to last.
+    fireEvent.keyDown(radios()[0]!, { key: "ArrowLeft" });
+    expect(selectedModelName()).toContain("OpenCode A");
+
+    // Last -> next wraps to first.
+    fireEvent.keyDown(radios()[2]!, { key: "ArrowRight" });
+    expect(selectedModelName()).toContain("Claude A");
+  });
+
+  test("jumps to the ends with Home and End", () => {
+    renderDialog();
+
+    expect(fireEvent.keyDown(radios()[0]!, { key: "End" })).toBe(false);
+    expect(selectedModelName()).toContain("OpenCode A");
+    expect(document.activeElement).toBe(radios()[2]!);
+
+    expect(fireEvent.keyDown(radios()[2]!, { key: "Home" })).toBe(false);
+    expect(selectedModelName()).toContain("Claude A");
+    expect(document.activeElement).toBe(radios()[0]!);
+  });
+
+  test("ignores every other key", () => {
+    renderDialog();
+
+    for (const key of ["a", "Enter", "Tab", "PageDown"]) {
+      expect(fireEvent.keyDown(radios()[0]!, { key })).toBe(true);
+      expect(selectedModelName()).toContain("Claude A");
+    }
+  });
+});
+
+describe("ReviewLaunchDialog reopen behaviour", () => {
+  test("resets the selection when it is reopened", () => {
+    const { props, rerender } = renderDialog({
+      preferredModels: { claude: "claude-a" },
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: /^Codex/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Codex A/ }));
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Codex A");
+
+    rerender(<ReviewLaunchDialog {...props} open={false} />);
+    rerender(<ReviewLaunchDialog {...props} open />);
+
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Claude A");
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      .toContain("default");
+  });
+
+  test("resets the pass allowance when it is reopened", () => {
+    const { props, rerender } = renderDialog({ kind: "looped" });
+
+    fireEvent.click(screen.getByRole("option", { name: /^10 passes/ }));
+    expect(
+      screen.getByRole("combobox", { name: "Initial review-pass allowance" }).textContent,
+    ).toContain("10");
+
+    rerender(<ReviewLaunchDialog {...props} open={false} />);
+    rerender(<ReviewLaunchDialog {...props} open />);
+
+    expect(
+      screen.getByRole("combobox", { name: "Initial review-pass allowance" }).textContent,
+    ).toContain("6");
+  });
+
+  test("keeps an in-progress selection when the catalog is refreshed while open", () => {
+    const { props, rerender } = renderDialog();
+
+    fireEvent.click(screen.getByRole("radio", { name: /^Codex/ }));
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Codex A");
+
+    // A parent re-render hands down an equal but fresh catalog object, which
+    // changes the effect's dependencies without the dialog having reopened.
+    rerender(
+      <ReviewLaunchDialog {...props} catalog={structuredClone(catalog)} />,
+    );
+
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Codex A");
+  });
+
+  test("falls back to the first model when a refreshed catalog drops the selected one", () => {
+    const { props, rerender } = renderDialog({
+      preferredModels: { claude: "claude-b" },
+    });
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Claude B");
+
+    rerender(
+      <ReviewLaunchDialog
+        {...props}
+        catalog={{ ...catalog, claude: [catalog.claude[0]!] }}
+      />,
+    );
+
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Claude A");
+  });
+});
+
+describe("ReviewLaunchDialog degraded catalogs", () => {
+  test("disables reasoning effort for a model that has none", () => {
+    const { onConfirm } = renderDialog({ catalog: sparseCatalog });
+
+    fireEvent.click(screen.getByRole("option", { name: /Claude Fixed/ }));
+
+    const effort = screen.getByRole("combobox", { name: "Reasoning effort" });
+    expect(effort.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("This model uses its default reasoning setting.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude-native",
+      model: "claude-fixed",
+      reasoningEffort: undefined,
+    });
+  });
+
+  test("drops an incompatible effort when switching to a model without it", () => {
+    const { onConfirm } = renderDialog({
+      catalog: sparseCatalog,
+      preferredModels: { claude: "claude-a" },
+      preferredReasoningEfforts: { claude: "high" },
+    });
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      .toContain("high");
+
+    fireEvent.click(screen.getByRole("option", { name: /Claude Fixed/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude-native",
+      model: "claude-fixed",
+      reasoningEffort: undefined,
+    });
+  });
+
+  test("stays usable when a provider has no models at all", () => {
+    const { onConfirm } = renderDialog({ catalog: sparseCatalog });
+
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      .toContain("Choose a model");
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).hasAttribute("disabled"))
+      .toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "opencode-native",
+      model: "default",
+      reasoningEffort: undefined,
+    });
+  });
+
+  test("ignores a preferred model that is not in the catalog", () => {
+    const { onConfirm } = renderDialog({
+      preferredModels: { claude: "claude-retired" },
+      preferredReasoningEfforts: { claude: "nonsense" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude-native",
+      model: "claude-a",
+      reasoningEffort: undefined,
+    });
+  });
+});
+
+describe("ReviewLaunchDialog summary", () => {
+  test("summarises a one-pass review", () => {
+    renderDialog({
+      preferredModels: { claude: "claude-a" },
+      preferredReasoningEfforts: { claude: "high" },
+    });
+
+    expect(screen.getByText(/Claude Native · Claude A · high effort · one pass/)).toBeTruthy();
+  });
+
+  test("summarises a looped review and tracks the pass allowance", () => {
+    renderDialog({ kind: "looped" });
+
+    expect(
+      screen.getByText(/Claude Native · Claude A · default effort · 6 initial passes/),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("option", { name: /^3 passes/ }));
+    expect(
+      screen.getByText(/Claude Native · Claude A · default effort · 3 initial passes/),
+    ).toBeTruthy();
+  });
+
+  test("names the provider chosen by keyboard in the summary", () => {
+    renderDialog();
+
+    fireEvent.keyDown(screen.getAllByRole("radio")[0]!, { key: "End" });
+
+    expect(screen.getByText(/OpenCode Native · OpenCode A · default effort · one pass/))
+      .toBeTruthy();
   });
 });
 

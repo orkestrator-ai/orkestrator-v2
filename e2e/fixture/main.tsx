@@ -145,7 +145,7 @@ function ReviewLaunchDialogFixture() {
       <ReviewLaunchDialog
         open={open}
         onOpenChange={setOpen}
-        defaultTabType="claude-cli"
+        defaultTabType="claude-native"
         catalog={reviewModelCatalog}
         onConfirm={(nextSelection) => {
           setSelection(nextSelection);

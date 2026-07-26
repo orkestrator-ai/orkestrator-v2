@@ -108,7 +108,7 @@ function Step({
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-[2rem_minmax(0,1fr)]">
       <div className="hidden flex-col items-center sm:flex" aria-hidden="true">
-        <div className="relative grid size-8 place-items-center rounded-full border border-cyan-400/35 bg-cyan-500/10 text-cyan-300">
+        <div className="relative grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/35 bg-cyan-500/10 text-cyan-300">
           {icon}
           <span className="absolute -right-1.5 -top-1.5 grid size-4 place-items-center rounded-full bg-zinc-800 text-[9px] font-semibold text-zinc-300 ring-1 ring-zinc-600">
             {number}
@@ -297,7 +297,7 @@ export function ReviewLaunchDialog({
       <DialogContent className="flex w-[min(calc(100%-1rem),38rem)] flex-col gap-0 overflow-hidden border-zinc-700/80 bg-[#111113] p-0 sm:max-w-[38rem]">
         <DialogHeader className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-cyan-500/[0.08] via-transparent to-transparent px-5 pb-4 pt-5 sm:px-6">
           <DialogTitle className="flex items-center gap-2 text-base">
-            <span className="grid size-8 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
+            <span className="grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
               {kind === "looped"
                 ? <Layers3 className="size-4" />
                 : <BrainCircuit className="size-4" />}
@@ -331,7 +331,7 @@ export function ReviewLaunchDialog({
             aria-label="Review configuration"
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6"
           >
-            <Step number={1} icon={<Bot className="size-3.5" />}>
+            <Step number={1} icon={<Bot className="size-4" />}>
               <Label className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
                 Native agent
               </Label>
@@ -390,7 +390,7 @@ export function ReviewLaunchDialog({
               </div>
             </Step>
 
-            <Step number={2} icon={<Bot className="size-3.5" />}>
+            <Step number={2} icon={<Bot className="size-4" />}>
               <Label htmlFor="review-model" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
                 Model
               </Label>
@@ -424,7 +424,7 @@ export function ReviewLaunchDialog({
 
             <Step
               number={3}
-              icon={<BrainCircuit className="size-3.5" />}
+              icon={<BrainCircuit className="size-4" />}
               last={kind !== "looped"}
             >
               <Label htmlFor="review-effort" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
@@ -457,7 +457,7 @@ export function ReviewLaunchDialog({
             </Step>
 
             {kind === "looped" && (
-              <Step number={4} icon={<Layers3 className="size-3.5" />} last>
+              <Step number={4} icon={<Layers3 className="size-4" />} last>
                 <Label htmlFor="review-pass-allowance" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
                   Initial review-pass allowance
                 </Label>

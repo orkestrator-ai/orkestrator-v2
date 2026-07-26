@@ -1344,15 +1344,28 @@ describe("FeaturesView lifecycle and navigation", () => {
 
     try {
       render(<FeaturesView projectId="project-1" />);
+      // Drain the poll chain until it reaches its terminal state rather than
+      // waiting a fixed slice of wall-clock time. Every poll is rescheduled
+      // with a zero delay, so yielding repeatedly advances the loop
+      // deterministically however loaded the machine is, whereas a real-time
+      // window makes the poll count below load-sensitive. waitFor is not an
+      // option here: the setTimeout spy makes it take its fake-timer path.
       await act(async () => {
-        await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
+        for (let tick = 0; tick < 500; tick += 1) {
+          if (document.querySelector('[role="alert"]')) break;
+          await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+        }
       });
     } finally {
       timeoutSpy.mockRestore();
       dateNowSpy.mockRestore();
     }
-    expect((await screen.findByRole("alert")).textContent).toContain("no matching response");
-    expect(getSessionStatusMock.mock.calls.length).toBeGreaterThanOrEqual(6);
+    expect(screen.getByRole("alert").textContent).toContain("no matching response");
+    // The grace is 8s and each poll advances the faked clock by the 1.5s poll
+    // interval, so the loop hydrates on the first poll at or past the deadline.
+    expect(getSessionStatusMock).toHaveBeenCalledTimes(
+      Math.ceil(8_000 / 1_500) + 1,
+    );
     expect(getSessionMessagesMock).toHaveBeenCalledTimes(1);
     expect(sendPromptMock).not.toHaveBeenCalled();
   });

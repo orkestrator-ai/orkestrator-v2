@@ -152,4 +152,81 @@ describe("StorageService build pipelines", () => {
         .rejects.toThrow("must not be blank");
     });
   });
+
+  describe("backup scrubbing", () => {
+    /** Every retained copy of the pipeline file, primary and backups. */
+    async function readAllCopies(storage: StorageService): Promise<string> {
+      const dir = storage.getDataDir();
+      const names = (await fs.readdir(dir))
+        .filter((name) => name.startsWith("build-pipelines.json"));
+      const contents = await Promise.all(
+        names.map((name) => fs.readFile(path.join(dir, name), "utf8")),
+      );
+      return contents.join("\n");
+    }
+
+    test("removes a deleted environment's task snapshots from every retained backup", async () => {
+      await withStorage(async (storage) => {
+        // Task snapshots embed attachment data and full review findings, so an
+        // early revision surviving in a backup is a real disclosure.
+        await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, {
+          id: "p1", phase: "building", notes: "EMBEDDED-ATTACHMENT",
+        });
+        await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot("reviewing"), 1);
+        await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot("complete"), 2);
+        expect(await readAllCopies(storage)).toContain("EMBEDDED-ATTACHMENT");
+
+        await storage.deleteBuildPipelinesByEnvironment("e1");
+
+        expect(await readAllCopies(storage)).not.toContain("EMBEDDED-ATTACHMENT");
+      });
+    });
+
+    test("leaves another environment's pipelines intact in the backups", async () => {
+      await withStorage(async (storage) => {
+        await storage.saveBuildPipeline("p2", "proj-1", "e2", 1, {
+          id: "p2", phase: "building", notes: "KEEP-ME",
+        });
+        await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, {
+          id: "p1", phase: "building", notes: "DROP-ME",
+        });
+        await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot("complete"), 1);
+
+        await storage.deleteBuildPipelinesByEnvironment("e1");
+
+        const all = await readAllCopies(storage);
+        expect(all).toContain("KEEP-ME");
+        expect(all).not.toContain("DROP-ME");
+        expect(await storage.getBuildPipeline("p2")).not.toBeNull();
+      });
+    });
+
+    test("discards a corrupt backup that cannot be proven scrubbed", async () => {
+      await withStorage(async (storage) => {
+        await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, {
+          id: "p1", phase: "building", notes: "SENSITIVE",
+        });
+        await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot("complete"), 1);
+        const backup = path.join(storage.getDataDir(), "build-pipelines.json.bak.1");
+        await fs.writeFile(backup, "{ not json SENSITIVE");
+
+        await storage.deleteBuildPipelinesByEnvironment("e1");
+
+        expect(await readAllCopies(storage)).not.toContain("SENSITIVE");
+      });
+    });
+
+    test("does not touch backups when the environment owned no pipelines", async () => {
+      await withStorage(async (storage) => {
+        await storage.saveBuildPipeline("p2", "proj-1", "e2", 1, {
+          id: "p2", phase: "building", notes: "KEEP-ME",
+        });
+        await storage.saveBuildPipeline("p2", "proj-1", "e2", 1, snapshot("complete"), 1);
+
+        expect(await storage.deleteBuildPipelinesByEnvironment("e1")).toEqual([]);
+
+        expect(await readAllCopies(storage)).toContain("KEEP-ME");
+      });
+    });
+  });
 });

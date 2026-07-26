@@ -132,4 +132,70 @@ describe("StorageService prompt queues", () => {
       await expect(storage.listPromptQueues("")).rejects.toThrow("must not be blank");
     });
   });
+
+  describe("backup scrubbing", () => {
+    /** Every retained copy of the queue file, primary and backups. */
+    async function readAllCopies(storage: StorageService): Promise<string> {
+      const dir = storage.getDataDir();
+      const names = (await fs.readdir(dir)).filter((name) => name.startsWith("prompt-queues.json"));
+      const contents = await Promise.all(
+        names.map((name) => fs.readFile(path.join(dir, name), "utf8")),
+      );
+      return contents.join("\n");
+    }
+
+    test("removes a deleted environment's prompt text from every retained backup", async () => {
+      await withStorage(async (storage) => {
+        // Several writes so the file rotates and the early prompt survives only
+        // in a backup.
+        await storage.savePromptQueue(KEY, "e1", [{ id: "m1", text: "TOP-SECRET-PROMPT" }]);
+        await storage.savePromptQueue(KEY, "e1", [{ id: "m2", text: "second" }], 1);
+        await storage.savePromptQueue(KEY, "e1", [{ id: "m3", text: "third" }], 2);
+        expect(await readAllCopies(storage)).toContain("TOP-SECRET-PROMPT");
+
+        await storage.deletePromptQueuesByEnvironment("e1");
+
+        expect(await readAllCopies(storage)).not.toContain("TOP-SECRET-PROMPT");
+      });
+    });
+
+    test("leaves another environment's queues intact in the backups", async () => {
+      await withStorage(async (storage) => {
+        await storage.savePromptQueue("claude env-e2:t1", "e2", [{ id: "keep", text: "KEEP-ME" }]);
+        await storage.savePromptQueue(KEY, "e1", [{ id: "m1", text: "DROP-ME" }]);
+        await storage.savePromptQueue(KEY, "e1", [{ id: "m2", text: "DROP-ME-TOO" }], 1);
+
+        await storage.deletePromptQueuesByEnvironment("e1");
+
+        const all = await readAllCopies(storage);
+        expect(all).toContain("KEEP-ME");
+        expect(all).not.toContain("DROP-ME");
+        expect(await storage.listPromptQueues("e2")).toHaveLength(1);
+      });
+    });
+
+    test("discards a corrupt backup that cannot be proven scrubbed", async () => {
+      await withStorage(async (storage) => {
+        await storage.savePromptQueue(KEY, "e1", [{ id: "m1", text: "SENSITIVE" }]);
+        await storage.savePromptQueue(KEY, "e1", [{ id: "m2" }], 1);
+        const backup = path.join(storage.getDataDir(), "prompt-queues.json.bak.1");
+        await fs.writeFile(backup, "{ not json SENSITIVE");
+
+        await storage.deletePromptQueuesByEnvironment("e1");
+
+        expect(await readAllCopies(storage)).not.toContain("SENSITIVE");
+      });
+    });
+
+    test("does not touch backups when the environment owned no queues", async () => {
+      await withStorage(async (storage) => {
+        await storage.savePromptQueue("claude env-e2:t1", "e2", [{ id: "keep", text: "KEEP-ME" }]);
+        await storage.savePromptQueue("claude env-e2:t1", "e2", [{ id: "keep2" }], 1);
+
+        expect(await storage.deletePromptQueuesByEnvironment("e1")).toEqual([]);
+
+        expect(await readAllCopies(storage)).toContain("KEEP-ME");
+      });
+    });
+  });
 });

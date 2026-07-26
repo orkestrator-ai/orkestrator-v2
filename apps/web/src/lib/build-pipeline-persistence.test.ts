@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   hydrateBuildPipeline,
   hydrateBuildPipelinesForProject,
+  LEGACY_BUILD_PIPELINE_STORAGE_KEY,
+  migrateLegacyBuildPipelines,
   persistBuildPipelineNow,
   startBuildPipelinePersistence,
 } from "./build-pipeline-persistence";
@@ -147,6 +149,28 @@ describe("hydrateBuildPipelinesForProject", () => {
 
     expect(restored).toEqual([]);
     expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+  });
+
+  test("restores a pipeline that never reached an environment", async () => {
+    // The crash window this exists for: a pipeline created, then the client
+    // died before its environment existed. It is keyed only by project, so
+    // nothing about it can be recovered from the environment list.
+    const stranded = pipeline({
+      id: "pipeline-stranded",
+      environmentId: "",
+      phase: "creating-environment",
+    });
+
+    const restored = await hydrateBuildPipelinesForProject(
+      PROJECT_ID,
+      async () => [persisted(stranded, 1)],
+    );
+
+    expect(restored.map((entry) => entry.id)).toEqual(["pipeline-stranded"]);
+    expect(useBuildPipelineStore.getState().pipelines.get("pipeline-stranded")?.phase)
+      .toBe("creating-environment");
+    // A blank environment id must not be added to the derived set.
+    expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("")).toBe(false);
   });
 
   test("releases a completion-comment lease stranded by a dead client", async () => {
@@ -316,5 +340,192 @@ describe("startBuildPipelinePersistence", () => {
     await tick(40);
 
     expect(save).not.toHaveBeenCalled();
+  });
+
+  test("seeds pipelines that predate the subscription so a restart cannot strand one", async () => {
+    // A pipeline restored from localStorage, or created before the mirror
+    // started, has no transition left to observe — only this pass writes it.
+    seed(pipeline());
+    const save = mock(async () => persisted(pipeline(), 1));
+    const stop = startBuildPipelinePersistence({ debounceMs: 5, save: save as never });
+    try {
+      await tick(40);
+      expect(save).toHaveBeenCalledTimes(1);
+      expect((save.mock.calls[0] as unknown as unknown[])[0]).toBe("pipeline-1");
+    } finally {
+      stop();
+    }
+  });
+
+  test("flushes an outstanding write when the page is hidden", async () => {
+    // The debounce would otherwise lose a transition to a closing window.
+    const save = mock(async () => persisted(pipeline(), 1));
+    const stop = startBuildPipelinePersistence({ debounceMs: 10_000, save: save as never });
+    try {
+      seed(pipeline({ phase: "reviewing" }));
+      await tick(5);
+      expect(save).not.toHaveBeenCalled();
+
+      window.dispatchEvent(new Event("pagehide"));
+      await tick(20);
+
+      expect(save).toHaveBeenCalledTimes(1);
+    } finally {
+      stop();
+    }
+  });
+
+  test("flushes an outstanding write on detach rather than dropping it", async () => {
+    const save = mock(async () => persisted(pipeline(), 1));
+    const stop = startBuildPipelinePersistence({ debounceMs: 10_000, save: save as never });
+    seed(pipeline({ phase: "reviewing" }));
+    await tick(5);
+    expect(save).not.toHaveBeenCalled();
+
+    stop();
+    await tick(20);
+
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  test("stops listening for pagehide after detach", async () => {
+    const save = mock(async () => persisted(pipeline(), 1));
+    const stop = startBuildPipelinePersistence({ debounceMs: 10_000, save: save as never });
+    stop();
+    await tick(20);
+    save.mockClear();
+
+    window.dispatchEvent(new Event("pagehide"));
+    await tick(20);
+
+    expect(save).not.toHaveBeenCalled();
+  });
+});
+
+describe("migrateLegacyBuildPipelines", () => {
+  function legacyEntry(overrides: Record<string, unknown> = {}) {
+    const { backendRevision: _drop, ...legacy } = pipeline();
+    return { ...legacy, ...overrides };
+  }
+
+  function legacyStorage(value: unknown) {
+    const store = new Map<string, string>();
+    if (value !== undefined) {
+      store.set(LEGACY_BUILD_PIPELINE_STORAGE_KEY, JSON.stringify(value));
+    }
+    return {
+      store,
+      getItem: (key: string) => store.get(key) ?? null,
+      removeItem: (key: string) => { store.delete(key); },
+    };
+  }
+
+  test("adopts a pipeline left behind by a pre-backend build", () => {
+    const storage = legacyStorage({
+      state: { pipelines: [["pipeline-1", legacyEntry({ phase: "building" })]] },
+      version: 1,
+    });
+
+    const adopted = migrateLegacyBuildPipelines(storage);
+
+    expect(adopted.map((entry) => entry.id)).toEqual(["pipeline-1"]);
+    const restored = useBuildPipelineStore.getState().pipelines.get("pipeline-1");
+    expect(restored?.phase).toBe("building");
+    // The backend has never seen it, so the first save must find no prior record.
+    expect(restored?.backendRevision).toBe(0);
+    expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-1")).toBe(true);
+  });
+
+  test("removes the legacy key so the migration runs exactly once", () => {
+    const storage = legacyStorage({
+      state: { pipelines: [["pipeline-1", legacyEntry()]] },
+      version: 1,
+    });
+
+    migrateLegacyBuildPipelines(storage);
+
+    expect(storage.getItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY)).toBeNull();
+    expect(migrateLegacyBuildPipelines(storage)).toEqual([]);
+  });
+
+  test("clears a posting lease left by a client that died mid-post", () => {
+    const storage = legacyStorage({
+      state: {
+        pipelines: [["pipeline-1", legacyEntry({
+          phase: "complete",
+          completionCommentStatus: "posting",
+          completionCommentError: "half-written",
+        })]],
+      },
+      version: 1,
+    });
+
+    migrateLegacyBuildPipelines(storage);
+
+    const restored = useBuildPipelineStore.getState().pipelines.get("pipeline-1");
+    expect(restored?.completionCommentStatus).toBeUndefined();
+    expect(restored?.completionCommentError).toBeUndefined();
+  });
+
+  test("never overwrites a pipeline the backend already restored", () => {
+    // Hydration can win the race; the backend copy is by definition newer.
+    seed(pipeline({ phase: "complete", backendRevision: 9 }));
+    const storage = legacyStorage({
+      state: { pipelines: [["pipeline-1", legacyEntry({ phase: "building" })]] },
+      version: 1,
+    });
+
+    expect(migrateLegacyBuildPipelines(storage)).toEqual([]);
+    expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1")?.phase).toBe("complete");
+  });
+
+  test("skips malformed entries while retaining the valid ones", () => {
+    const storage = legacyStorage({
+      state: {
+        pipelines: [
+          null,
+          ["missing-pipeline"],
+          [42, legacyEntry()],
+          ["empty", null],
+          ["mismatched-id", legacyEntry({ id: "other" })],
+          ["broken", legacyEntry({ id: "broken", phase: "teleporting" })],
+          ["pipeline-1", legacyEntry()],
+        ],
+      },
+      version: 1,
+    });
+
+    migrateLegacyBuildPipelines(storage);
+
+    expect([...useBuildPipelineStore.getState().pipelines.keys()]).toEqual(["pipeline-1"]);
+  });
+
+  test("does nothing when there is no legacy entry", () => {
+    expect(migrateLegacyBuildPipelines(legacyStorage(undefined))).toEqual([]);
+    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+  });
+
+  test("survives an unparseable legacy entry", () => {
+    const store = new Map([[LEGACY_BUILD_PIPELINE_STORAGE_KEY, "{not json"]]);
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      removeItem: (key: string) => { store.delete(key); },
+    };
+
+    expect(() => migrateLegacyBuildPipelines(storage)).not.toThrow();
+    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+  });
+
+  test("survives storage that throws, as blocked or private-mode storage does", () => {
+    const storage = {
+      getItem: () => { throw new Error("access denied"); },
+      removeItem: () => { throw new Error("access denied"); },
+    };
+
+    expect(migrateLegacyBuildPipelines(storage)).toEqual([]);
+  });
+
+  test("does nothing when no storage is available at all", () => {
+    expect(migrateLegacyBuildPipelines(undefined)).toEqual([]);
   });
 });

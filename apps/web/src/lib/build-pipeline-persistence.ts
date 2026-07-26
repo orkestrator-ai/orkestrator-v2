@@ -148,6 +148,71 @@ export async function hydrateBuildPipelinesForProject(
 }
 
 /**
+ * Key the pre-backend build pipeline store persisted to under zustand's
+ * `persist` middleware. Retained only so the one-shot migration below can find
+ * what an upgrading client left behind.
+ */
+export const LEGACY_BUILD_PIPELINE_STORAGE_KEY = "orkestrator-build-pipelines";
+
+/**
+ * Adopts pipelines left in `localStorage` by a pre-backend build of the app.
+ *
+ * Without this an upgrade silently drops every in-flight build: the backend has
+ * no record yet, the old entry is orphaned, and a pipeline mid-`building` stops
+ * advancing while its environment and agent session carry on existing. Runs
+ * once — the key is removed on success — and must run before
+ * {@link startBuildPipelinePersistence}, whose seeding pass is what actually
+ * writes the adopted pipelines to the backend.
+ *
+ * A pipeline the backend already knows about wins: hydration may have raced
+ * ahead of this call, and the backend copy is by definition the newer one.
+ */
+export function migrateLegacyBuildPipelines(
+  storage: Pick<Storage, "getItem" | "removeItem"> | undefined =
+    typeof localStorage === "undefined" ? undefined : localStorage,
+): BuildPipeline[] {
+  if (!storage) return [];
+
+  let raw: string | null;
+  try {
+    raw = storage.getItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY);
+  } catch {
+    // Private browsing and blocked storage both throw rather than return null.
+    return [];
+  }
+  if (!raw) return [];
+
+  const adopted: BuildPipeline[] = [];
+  try {
+    const parsed = JSON.parse(raw) as { state?: { pipelines?: unknown } };
+    const entries = Array.isArray(parsed?.state?.pipelines) ? parsed.state!.pipelines : [];
+    for (const entry of entries) {
+      if (!Array.isArray(entry) || entry.length !== 2) continue;
+      const [id, stored] = entry as [unknown, unknown];
+      if (typeof id !== "string" || !id || typeof stored !== "object" || stored === null) continue;
+      // The legacy snapshot predates `backendRevision`; 0 is the correct value
+      // for it anyway, since the backend has never seen this pipeline.
+      const candidate = { ...(stored as Record<string, unknown>), backendRevision: 0 };
+      if (!isBuildPipeline(candidate) || candidate.id !== id) continue;
+      if (useBuildPipelineStore.getState().pipelines.has(id)) continue;
+      const recovered = releaseStalePostingLease(candidate);
+      useBuildPipelineStore.getState().replacePipeline(recovered);
+      adopted.push(recovered);
+    }
+  } catch (error) {
+    console.warn("[BuildPipeline] Failed to migrate legacy pipelines:", error);
+    return adopted;
+  }
+
+  try {
+    storage.removeItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY);
+  } catch {
+    // Leaving the key behind only costs a repeated no-op migration next start.
+  }
+  return adopted;
+}
+
+/**
  * Durably records the pipeline before an irreversible side effect.
  *
  * Callers use this ahead of dispatching a prompt or posting a comment, so a

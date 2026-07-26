@@ -26,24 +26,49 @@ export function useEnvironmentListSync(
   const projectIdsRef = useRef(projectIds);
   const refreshProjectRef = useRef(refreshProject);
   const inFlightProjectIdsRef = useRef(new Set<string>());
+  const rerunProjectIdsRef = useRef(new Set<string>());
 
   projectIdsRef.current = projectIds;
   refreshProjectRef.current = refreshProject;
 
   useEffect(() => {
-    const refreshAll = async () => {
-      const refreshes = projectIdsRef.current
-        .filter((projectId) => !inFlightProjectIdsRef.current.has(projectId))
-        .map(async (projectId) => {
-          inFlightProjectIdsRef.current.add(projectId);
+    // A refresh already running was started before the mutation that prompted
+    // this one, so it cannot contain it. Dropping the request would leave the
+    // list stale until the next slow resync, so record it and re-run once the
+    // in-flight read finishes instead.
+    const refreshProjectOnce = async (projectId: string): Promise<void> => {
+      if (inFlightProjectIdsRef.current.has(projectId)) {
+        rerunProjectIdsRef.current.add(projectId);
+        return;
+      }
+      inFlightProjectIdsRef.current.add(projectId);
+      try {
+        // Loops rather than recurses so a project announcing continuously
+        // cannot grow an unbounded promise chain. Any number of requests
+        // arriving during one read collapse into a single follow-up.
+        do {
+          rerunProjectIdsRef.current.delete(projectId);
           try {
             await refreshProjectRef.current(projectId);
-          } finally {
-            inFlightProjectIdsRef.current.delete(projectId);
+          } catch (error) {
+            // A failed read is still a read that predates the mutation, so a
+            // queued request has to survive it rather than be lost with it.
+            console.warn(
+              `[EnvironmentListSync] Failed to refresh environments for ${projectId}:`,
+              error,
+            );
           }
-        });
+        } while (rerunProjectIdsRef.current.has(projectId));
+      } finally {
+        inFlightProjectIdsRef.current.delete(projectId);
+        rerunProjectIdsRef.current.delete(projectId);
+      }
+    };
 
-      await Promise.allSettled(refreshes);
+    const refreshAll = async () => {
+      await Promise.allSettled(
+        projectIdsRef.current.map((projectId) => refreshProjectOnce(projectId)),
+      );
     };
 
     // An environment announcement carries the environment id, not its project.

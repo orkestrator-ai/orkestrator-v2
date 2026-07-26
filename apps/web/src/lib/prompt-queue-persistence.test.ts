@@ -130,6 +130,91 @@ describe("hydratePromptQueuesForEnvironment", () => {
   });
 });
 
+/**
+ * Every committed write is announced to every client including the one that
+ * made it, so a client hears its own queue write back. Re-applying that echo
+ * over a queue the user has added to since would silently destroy a prompt they
+ * had already committed to sending.
+ */
+describe("self-echo", () => {
+  const KEY = promptQueueKey("claude", SESSION);
+
+  /** Mirrors a queue to the backend and returns the revision it landed at. */
+  async function writeThrough(
+    source: ReturnType<typeof createSource>,
+    messages: QueuedItem[],
+    revision: number,
+  ): Promise<void> {
+    const save = mock<PromptQueueSaver>(async () => persisted(KEY, messages, revision));
+    const detach = startPromptQueuePersistence([source], { debounceMs: 1, save });
+    source.push(SESSION, messages);
+    await tick(20);
+    detach();
+    await tick(5);
+  }
+
+  test("keeps a prompt queued after the write was issued", async () => {
+    const source = createSource();
+    await writeThrough(source, [{ id: "A" }], 1);
+    // The user queues another prompt while the announcement is still in flight.
+    source.push(SESSION, [{ id: "A" }, { id: "B" }]);
+
+    await hydratePromptQueuesForEnvironment("env-1", [source], async () => [
+      persisted(KEY, [{ id: "A" }], 1),
+    ]);
+
+    expect(source.read(SESSION)).toEqual([{ id: "A" }, { id: "B" }]);
+  });
+
+  test("keeps a prompt queued when the echo arrives through the single-queue path", async () => {
+    const source = createSource();
+    await writeThrough(source, [{ id: "A" }], 1);
+    source.push(SESSION, [{ id: "A" }, { id: "B" }]);
+
+    await hydratePromptQueue(KEY, [source], async () => persisted(KEY, [{ id: "A" }], 1));
+
+    expect(source.read(SESSION)).toEqual([{ id: "A" }, { id: "B" }]);
+  });
+
+  test("still adopts a strictly newer revision from another client", async () => {
+    // Another client taking the head is the one case where losing the local
+    // edit is correct: adopting is the only outcome that cannot double-dispatch.
+    const source = createSource();
+    await writeThrough(source, [{ id: "A" }], 1);
+    source.push(SESSION, [{ id: "A" }, { id: "B" }]);
+
+    await hydratePromptQueuesForEnvironment("env-1", [source], async () => [
+      persisted(KEY, [{ id: "C" }], 2),
+    ]);
+
+    expect(source.read(SESSION)).toEqual([{ id: "C" }]);
+  });
+
+  test("re-applies an echo when the local queue matches what was written", async () => {
+    // With no unflushed edit there is nothing to protect, so the guard must not
+    // block ordinary convergence.
+    const source = createSource();
+    await writeThrough(source, [{ id: "A" }], 1);
+
+    await hydratePromptQueuesForEnvironment("env-1", [source], async () => [
+      persisted(KEY, [{ id: "A" }], 1),
+    ]);
+
+    expect(source.read(SESSION)).toEqual([{ id: "A" }]);
+  });
+
+  test("applies a first hydration even though nothing has been written yet", async () => {
+    const source = createSource();
+    source.push(SESSION, [{ id: "local-only" }]);
+
+    await hydratePromptQueuesForEnvironment("env-1", [source], async () => [
+      persisted(KEY, [{ id: "from-backend" }], 1),
+    ]);
+
+    expect(source.read(SESSION)).toEqual([{ id: "from-backend" }]);
+  });
+});
+
 describe("hydratePromptQueue", () => {
   test("clears the local queue when the backend record is gone", async () => {
     const source = createSource();

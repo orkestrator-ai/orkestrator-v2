@@ -1,11 +1,13 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import {
-  BUILD_PIPELINE_STORAGE_KEY,
+  BUILD_PIPELINE_VERSION,
   isActiveBuildPhase,
+  isBuildPipeline,
   useBuildPipelineStore,
 } from "../../../apps/web/src/stores/buildPipelineStore";
 import type {
   BuildPhase,
+  BuildPipeline,
   PipelinePromptAttempt,
   PipelineReconnectAttempt,
   PipelineSession,
@@ -75,7 +77,6 @@ function createPromptAttempt(
 
 describe("buildPipelineStore", () => {
   beforeEach(() => {
-    localStorage.removeItem(BUILD_PIPELINE_STORAGE_KEY);
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -273,8 +274,13 @@ describe("buildPipelineStore", () => {
     });
   });
 
-  describe("persistence", () => {
-    test("rehydrates pipeline source, phase, snapshot, and derived environment IDs", async () => {
+  describe("backend mirror", () => {
+    test("starts a new pipeline at revision 0 so the first save finds no prior record", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      expect(useBuildPipelineStore.getState().pipelines.get(id)?.backendRevision).toBe(0);
+    });
+
+    test("replacePipeline installs the backend snapshot and rebuilds derived environment IDs", () => {
       const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams({
         taskId: "github:acme/widget#42",
         source: {
@@ -286,17 +292,15 @@ describe("buildPipelineStore", () => {
           status: "Review",
         },
       }));
-      useBuildPipelineStore.getState().setPipelineEnvironment(id, "env-github");
-      useBuildPipelineStore.getState().setPhase(id, "reviewing");
-      const stored = localStorage.getItem(BUILD_PIPELINE_STORAGE_KEY);
-      expect(stored).not.toBeNull();
+      useBuildPipelineStore.getState().setPipelineEnvironment(id, "env-stale");
+      const local = useBuildPipelineStore.getState().pipelines.get(id)!;
 
-      useBuildPipelineStore.setState({
-        pipelines: new Map(),
-        buildEnvironmentIds: new Set(),
+      useBuildPipelineStore.getState().replacePipeline({
+        ...local,
+        environmentId: "env-github",
+        phase: "reviewing",
+        backendRevision: 7,
       });
-      if (stored) localStorage.setItem(BUILD_PIPELINE_STORAGE_KEY, stored);
-      await useBuildPipelineStore.persist.rehydrate();
 
       const pipeline = useBuildPipelineStore.getState().pipelines.get(id);
       expect(pipeline?.source).toMatchObject({
@@ -307,51 +311,97 @@ describe("buildPipelineStore", () => {
       });
       expect(pipeline?.phase).toBe("reviewing");
       expect(pipeline?.taskSnapshot).toEqual(defaultTaskSnapshot);
+      expect(pipeline?.backendRevision).toBe(7);
+      // The replaced snapshot moved environments, so the stale id must not linger.
       expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-github")).toBe(true);
+      expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-stale")).toBe(false);
     });
 
-    test("clears an interrupted posting lease during rehydration so completion can retry", async () => {
+    test("setBackendRevision records the revision a write landed at", () => {
       const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
-      useBuildPipelineStore.getState().setPhase(id, "complete");
-      useBuildPipelineStore.getState().setCompletionCommentStatus(id, "posting");
-      const stored = localStorage.getItem(BUILD_PIPELINE_STORAGE_KEY);
-
-      useBuildPipelineStore.setState({
-        pipelines: new Map(),
-        buildEnvironmentIds: new Set(),
-      });
-      if (stored) localStorage.setItem(BUILD_PIPELINE_STORAGE_KEY, stored);
-      await useBuildPipelineStore.persist.rehydrate();
-
-      expect(
-        useBuildPipelineStore.getState().pipelines.get(id)?.completionCommentStatus,
-      ).toBeUndefined();
+      useBuildPipelineStore.getState().setBackendRevision(id, 3);
+      expect(useBuildPipelineStore.getState().pipelines.get(id)?.backendRevision).toBe(3);
     });
 
-    test("skips malformed persisted entries while retaining valid pipelines", async () => {
+    test("setBackendRevision never moves the revision backwards", () => {
       const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
-      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
-      const stored = JSON.stringify({
-          state: {
-            pipelines: [
-              null,
-              ["missing-pipeline"],
-              [42, pipeline],
-              ["empty", null],
-              [id, pipeline],
-            ],
-          },
-          version: 1,
-        });
-      useBuildPipelineStore.setState({
-        pipelines: new Map(),
-        buildEnvironmentIds: new Set(),
-      });
-      localStorage.setItem(BUILD_PIPELINE_STORAGE_KEY, stored);
+      useBuildPipelineStore.getState().setBackendRevision(id, 5);
+      // A slower write landing after a faster one must not re-arm the
+      // compare-and-swap against a stale value.
+      useBuildPipelineStore.getState().setBackendRevision(id, 2);
+      expect(useBuildPipelineStore.getState().pipelines.get(id)?.backendRevision).toBe(5);
+    });
 
-      await useBuildPipelineStore.persist.rehydrate();
+    test("setBackendRevision ignores a pipeline that is no longer in the store", () => {
+      const before = useBuildPipelineStore.getState();
+      useBuildPipelineStore.getState().setBackendRevision("missing-pipeline", 4);
+      expect(useBuildPipelineStore.getState().pipelines).toBe(before.pipelines);
+    });
 
-      expect(Array.from(useBuildPipelineStore.getState().pipelines.keys())).toEqual([id]);
+    test("exposes a positive integer snapshot schema version", () => {
+      expect(Number.isInteger(BUILD_PIPELINE_VERSION)).toBe(true);
+      expect(BUILD_PIPELINE_VERSION).toBeGreaterThan(0);
+    });
+  });
+
+  describe("isBuildPipeline", () => {
+    function validSnapshot(): BuildPipeline {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      return useBuildPipelineStore.getState().pipelines.get(id)!;
+    }
+
+    test("accepts a snapshot produced by the store", () => {
+      expect(isBuildPipeline(validSnapshot())).toBe(true);
+    });
+
+    test("rejects non-objects", () => {
+      for (const value of [null, undefined, 42, "pipeline", true, []]) {
+        expect(isBuildPipeline(value)).toBe(false);
+      }
+    });
+
+    test("rejects a snapshot carrying an unknown phase", () => {
+      expect(isBuildPipeline({ ...validSnapshot(), phase: "teleporting" })).toBe(false);
+    });
+
+    test("rejects a snapshot missing a required field", () => {
+      const required = [
+        "id",
+        "taskId",
+        "projectId",
+        "environmentId",
+        "phase",
+        "sessions",
+        "currentSessionIndex",
+        "iteration",
+        "maxIterations",
+        "createdAt",
+        "taskTitle",
+        "taskSnapshot",
+        "backendRevision",
+      ] as const;
+      for (const field of required) {
+        const candidate: Record<string, unknown> = { ...validSnapshot() };
+        delete candidate[field];
+        expect(isBuildPipeline(candidate)).toBe(false);
+      }
+    });
+
+    test("rejects a snapshot with a blank id or project id", () => {
+      expect(isBuildPipeline({ ...validSnapshot(), id: "" })).toBe(false);
+      expect(isBuildPipeline({ ...validSnapshot(), projectId: "" })).toBe(false);
+    });
+
+    test("accepts a blank environment id, which is legitimate before the environment exists", () => {
+      expect(isBuildPipeline({ ...validSnapshot(), environmentId: "" })).toBe(true);
+    });
+
+    test("rejects a snapshot whose sessions are not an array", () => {
+      expect(isBuildPipeline({ ...validSnapshot(), sessions: {} })).toBe(false);
+    });
+
+    test("rejects a snapshot whose taskSnapshot is null", () => {
+      expect(isBuildPipeline({ ...validSnapshot(), taskSnapshot: null })).toBe(false);
     });
   });
 

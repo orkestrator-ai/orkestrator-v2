@@ -4734,7 +4734,10 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       storage.savePromptQueue(
         asString(queueKey, "queueKey"),
         asString(environmentId, "environmentId"),
-        Array.isArray(messages) ? messages : [],
+        // Passed through unvalidated so storage rejects a malformed payload.
+        // Coercing to [] here would turn a bad request into a queue deletion
+        // that also bumps the revision every other client compares against.
+        messages as unknown[],
         expectedRevision === undefined
           ? undefined
           : asNumber(expectedRevision, "expectedRevision"),

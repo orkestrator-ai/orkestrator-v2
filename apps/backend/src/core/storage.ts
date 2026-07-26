@@ -994,6 +994,43 @@ export class StorageService {
     );
   }
 
+  /**
+   * Removes records from every retained backup of a sensitive JSON file.
+   *
+   * Rotating the primary file leaves the deleted records readable in its
+   * backups, so a delete that is meant to remove user content — prompt text,
+   * pasted attachments, review findings — is not complete until the backups
+   * agree. Call while still holding the file's mutation lock.
+   *
+   * `keep` receives each stored entry; anything it rejects is dropped, so a
+   * caller passes the same predicate it used on the primary file.
+   */
+  private async scrubSensitiveJsonBackups(
+    filePath: string,
+    keep: (storedId: string, record: unknown) => boolean,
+  ): Promise<void> {
+    for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
+      const backup = this.backupPath(filePath, index);
+      if (!await exists(backup)) continue;
+      try {
+        const parsed = JSON.parse(await fs.readFile(backup, "utf8")) as Record<string, unknown>;
+        if (!isRecord(parsed)) throw new Error("Backup is not a record");
+        const sanitized = Object.fromEntries(
+          Object.entries(parsed).filter(([storedId, record]) => keep(storedId, record)),
+        );
+        await this.writeAtomic(
+          backup,
+          `${JSON.stringify(sanitized, null, 2)}\n`,
+          false,
+          0o600,
+        );
+      } catch {
+        // A corrupt backup cannot be proven free of the deleted records.
+        await fs.rm(backup, { force: true });
+      }
+    }
+  }
+
   async loadProjects(): Promise<Project[]> {
     const projects = await this.loadJson<Project[]>(this.projectsFile(), () => []);
     return projects.sort((a, b) => a.order - b.order);
@@ -1562,30 +1599,12 @@ export class StorageService {
       // Rotating the primary file creates a backup containing the deleted
       // workflow. Scrub every retained backup before releasing the mutation
       // lock so environment deletion removes all persisted review evidence.
-      for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
-        const backup = this.backupPath(this.loopedReviewsFile(), index);
-        if (!await exists(backup)) continue;
-        try {
-          const parsed = JSON.parse(
-            await fs.readFile(backup, "utf8"),
-          ) as Record<string, PersistedLoopedReviewWorkflow>;
-          const sanitized = Object.fromEntries(
-            Object.entries(parsed).filter(([storedId, workflow]) =>
-              isPersistedLoopedReviewWorkflow(workflow, storedId)
-              && workflow.environmentId !== environmentId
-            ),
-          );
-          await this.writeAtomic(
-            backup,
-            `${JSON.stringify(sanitized, null, 2)}\n`,
-            false,
-            0o600,
-          );
-        } catch {
-          // A corrupt backup cannot be proven free of the deleted workflow.
-          await fs.rm(backup, { force: true });
-        }
-      }
+      await this.scrubSensitiveJsonBackups(
+        this.loopedReviewsFile(),
+        (storedId, workflow) =>
+          isPersistedLoopedReviewWorkflow(workflow, storedId)
+          && workflow.environmentId !== environmentId,
+      );
     });
   }
 
@@ -1713,6 +1732,17 @@ export class StorageService {
       for (const key of removedKeys) delete queues[key];
       await this.saveSensitiveJson(this.promptQueuesFile(), queues);
       this.announce("prompt-queue", environmentId);
+
+      // Queued prompts carry user-authored text and pasted attachments, and
+      // rotating the primary file leaves them readable in its backups. Scrub
+      // before releasing the lock so deleting the environment really removes
+      // them.
+      await this.scrubSensitiveJsonBackups(
+        this.promptQueuesFile(),
+        (storedKey, queue) =>
+          isPersistedPromptQueue(queue, storedKey)
+          && queue.environmentId !== environmentId,
+      );
       return removedKeys;
     });
   }
@@ -1841,6 +1871,15 @@ export class StorageService {
       for (const removedId of removedIds) delete pipelines[removedId];
       await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
       for (const removedId of removedIds) this.announce("build-pipeline", removedId);
+
+      // Task snapshots embed base64 attachments and full review findings, so
+      // the same backup scrub the looped review path performs applies here.
+      await this.scrubSensitiveJsonBackups(
+        this.buildPipelinesFile(),
+        (storedId, pipeline) =>
+          isPersistedBuildPipeline(pipeline, storedId)
+          && pipeline.environmentId !== environmentId,
+      );
       return removedIds;
     });
   }

@@ -19,6 +19,7 @@ import {
   usePaneLayoutStore,
 } from "@/stores";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useProjectStore } from "@/stores/projectStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import {
   getEnvironmentIdFromClaudeTmuxStateKey,
@@ -36,6 +37,7 @@ import {
 } from "@/lib/looped-review-persistence";
 import {
   hydrateBuildPipelinesForProject,
+  migrateLegacyBuildPipelines,
   startBuildPipelinePersistence,
 } from "@/lib/build-pipeline-persistence";
 import {
@@ -91,7 +93,13 @@ function App() {
   useEffect(() => startStoreResourceSync(), []);
   useEffect(() => startPaneLayoutPersistence(), []);
   useEffect(() => startLoopedReviewPersistence(), []);
-  useEffect(() => startBuildPipelinePersistence(), []);
+  useEffect(() => {
+    // Adopt anything a pre-backend build left in localStorage before the mirror
+    // starts, so its seeding pass writes those pipelines to the backend rather
+    // than letting the upgrade drop an in-flight build.
+    migrateLegacyBuildPipelines();
+    return startBuildPipelinePersistence();
+  }, []);
   // One stable source set for the lifetime of the app: the mirror keys its
   // revision bookkeeping off these, so rebuilding them would drop it.
   const promptQueueSources = useMemo(() => createPromptQueueSources(), []);
@@ -122,13 +130,16 @@ function App() {
     }
   }, [environments]);
 
-  // Pipelines are stored per project, so restore once per distinct project
-  // rather than once per environment: a pipeline still in "creating-environment"
-  // has no environment to key off yet, and that is exactly the state a crash
-  // used to strand.
+  // Pipelines are stored per project, so restore once per project rather than
+  // once per environment: a pipeline still in "creating-environment" has no
+  // environment to key off yet, and that is exactly the state a crash used to
+  // strand. Driven by the project list rather than by the environments' project
+  // ids, because a project whose only pipeline never reached an environment has
+  // no environment to derive its id from either.
+  const projects = useProjectStore((state) => state.projects);
   const pipelineProjectIds = useMemo(
-    () => [...new Set(environments.map((environment) => environment.projectId))].sort().join(","),
-    [environments],
+    () => [...new Set(projects.map((project) => project.id))].sort().join(","),
+    [projects],
   );
   useEffect(() => {
     if (!pipelineProjectIds) return;

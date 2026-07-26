@@ -170,6 +170,103 @@ describe("useEnvironmentListSync", () => {
     expect(refreshProject.mock.calls.filter(([projectId]) => projectId === "project-1")).toHaveLength(2);
   });
 
+  test("re-runs a project whose refresh was requested while one was in flight", async () => {
+    // The in-flight read was started before the mutation that prompted the new
+    // request, so it cannot contain it. Dropping the request would leave the
+    // list stale until the next 60s resync.
+    let finishRefresh: (() => void) | undefined;
+    const refreshProject = mock<(projectId: string) => Promise<void>>(
+      () => new Promise<void>((resolve) => { finishRefresh = resolve; }),
+    );
+    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
+
+    renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+
+    await announceEnvironmentChange(1);
+    expect(refreshProject).toHaveBeenCalledTimes(1);
+
+    // A second announcement lands while the first read is still open.
+    await announceEnvironmentChange(2);
+    expect(refreshProject).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishRefresh?.();
+      await Promise.resolve();
+    });
+
+    expect(refreshProject).toHaveBeenCalledTimes(2);
+  });
+
+  test("collapses many requests arriving during one read into a single follow-up", async () => {
+    let finishRefresh: (() => void) | undefined;
+    const refreshProject = mock<(projectId: string) => Promise<void>>(
+      () => new Promise<void>((resolve) => { finishRefresh = resolve; }),
+    );
+    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
+
+    renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+
+    await announceEnvironmentChange(1);
+    for (const revision of [2, 3, 4]) {
+      await announceEnvironmentChange(revision);
+    }
+    expect(refreshProject).toHaveBeenCalledTimes(1);
+
+    const first = finishRefresh;
+    await act(async () => {
+      first?.();
+      await Promise.resolve();
+    });
+
+    // One follow-up, not three.
+    expect(refreshProject).toHaveBeenCalledTimes(2);
+  });
+
+  test("does not re-run when nothing was requested during the read", async () => {
+    let finishRefresh: (() => void) | undefined;
+    const refreshProject = mock<(projectId: string) => Promise<void>>(
+      () => new Promise<void>((resolve) => { finishRefresh = resolve; }),
+    );
+    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
+
+    renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+
+    await announceEnvironmentChange(1);
+    await act(async () => {
+      finishRefresh?.();
+      await Promise.resolve();
+    });
+
+    expect(refreshProject).toHaveBeenCalledTimes(1);
+  });
+
+  test("still re-runs when the in-flight refresh rejects", async () => {
+    let failRefresh: ((error: Error) => void) | undefined;
+    const refreshProject = mock<(projectId: string) => Promise<void>>(
+      () => new Promise<void>((_resolve, reject) => { failRefresh = reject; }),
+    );
+    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
+
+    renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+
+    await announceEnvironmentChange(1);
+    await announceEnvironmentChange(2);
+    expect(refreshProject).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      failRefresh?.(new Error("backend down"));
+      await Promise.resolve();
+    });
+
+    // A failed read is still a read that predates the mutation, so the pending
+    // request must survive it.
+    expect(refreshProject).toHaveBeenCalledTimes(2);
+  });
+
   test("retries a project after a rejected refresh settles", async () => {
     let intervalCallback: (() => void) | null = null;
     const refreshProject = mock<(projectId: string) => Promise<void>>()

@@ -267,6 +267,7 @@ export class ThreadRegistry {
    * response for as long as the session id is resolvable.
    */
   appendLocalMessages(session: BridgeSession, ...messages: NormalizedMessage[]): void {
+    if (messages.length === 0) return;
     session.localMessages.push(...messages);
     const excess = session.localMessages.length - MAX_LOCAL_MESSAGES;
     if (excess > 0) session.localMessages.splice(0, excess);

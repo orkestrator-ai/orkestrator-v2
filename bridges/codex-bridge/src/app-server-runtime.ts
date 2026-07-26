@@ -126,8 +126,8 @@ export interface AppServerRuntimeOptions {
 interface ThreadRuntimeState {
   render: TurnRenderState;
   coalescer: UpdateCoalescer;
-  /** Size proxy for adapting the cadence of whole-message snapshots. */
-  lastPublishedContentChars: number;
+  /** Bounded estimate for adapting the cadence of whole-message snapshots. */
+  lastPublishedSnapshotChars: number;
   /** Assistant message currently being streamed into. */
   assistantMessageId?: string;
   /**
@@ -151,10 +151,42 @@ const VERY_LARGE_MESSAGE_CHARS = 1024 * 1024;
  * Large snapshots are expensive to render, serialize and reconcile in React.
  * Slow only scheduled streaming frames; terminal flushes still publish at once.
  */
-export function messageSnapshotIntervalMs(contentChars: number): number {
-  if (contentChars >= VERY_LARGE_MESSAGE_CHARS) return 500;
-  if (contentChars >= LARGE_MESSAGE_CHARS) return 250;
+export function messageSnapshotIntervalMs(snapshotChars: number): number {
+  if (snapshotChars >= VERY_LARGE_MESSAGE_CHARS) return 500;
+  if (snapshotChars >= LARGE_MESSAGE_CHARS) return 250;
   return 100;
+}
+
+/**
+ * Estimates the complete normalized payload without allocating a second,
+ * JSON-serialized copy of it.
+ *
+ * Assistant `content` is often empty while command output, reasoning, diffs,
+ * tool arguments or nested subagent actions contain most of the snapshot. Walk
+ * every nested value so those forms slow the cadence too. Once the largest
+ * threshold is reached, more precision cannot change the chosen interval.
+ */
+export function normalizedMessageSnapshotChars(message: NormalizedMessage): number {
+  const stack: unknown[] = [message];
+  const seen = new Set<object>();
+  let chars = 0;
+
+  while (stack.length > 0 && chars < VERY_LARGE_MESSAGE_CHARS) {
+    const value = stack.pop();
+    if (typeof value === "string") {
+      chars += value.length;
+      continue;
+    }
+    if (typeof value !== "object" || value === null || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const entry of value) stack.push(entry);
+      continue;
+    }
+    for (const entry of Object.values(value)) stack.push(entry);
+  }
+
+  return Math.min(chars, VERY_LARGE_MESSAGE_CHARS);
 }
 
 /**
@@ -337,6 +369,8 @@ export class AppServerRuntime {
   private readonly now: () => number;
   private modelCache: BridgeModel[] | null = null;
   private started = false;
+  /** Shared by concurrent callers; cleared after failure so startup can retry. */
+  private startPromise: Promise<void> | null = null;
   private stopping = false;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private detachedThreads = 0;
@@ -541,7 +575,18 @@ export class AppServerRuntime {
    */
   async start(): Promise<void> {
     if (this.started) return;
-    this.started = true;
+    if (this.startPromise) return this.startPromise;
+    const startPromise = this.startOnce();
+    this.startPromise = startPromise;
+    try {
+      await startPromise;
+      this.started = true;
+    } finally {
+      if (this.startPromise === startPromise) this.startPromise = null;
+    }
+  }
+
+  private async startOnce(): Promise<void> {
     await this.journal.load();
     const persistedSessions = await this.store.load();
     for (const persisted of persistedSessions) {
@@ -568,13 +613,18 @@ export class AppServerRuntime {
       if (record.threadId) this.threadsAwaitingDispatchRecovery.add(record.threadId);
     }
 
-    await this.options.engine.start();
-    await this.generationRecovery;
-    const recovery = this.recoverUnresolvedDispatches().finally(() => {
+    try {
+      await this.options.engine.start();
+      await this.generationRecovery;
+      const recovery = this.recoverUnresolvedDispatches().finally(() => {
+        this.threadsAwaitingDispatchRecovery.clear();
+      });
+      this.dispatchRecovery = recovery.catch(() => undefined);
+      await recovery;
+    } catch (error) {
       this.threadsAwaitingDispatchRecovery.clear();
-    });
-    this.dispatchRecovery = recovery.catch(() => undefined);
-    await recovery;
+      throw error;
+    }
 
     const interval = this.options.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
     if (interval > 0) {
@@ -939,13 +989,13 @@ export class AppServerRuntime {
       state = {
         render: createTurnRenderState(),
         pendingEvents: new Map(),
-        lastPublishedContentChars: 0,
+        lastPublishedSnapshotChars: 0,
         coalescer: new UpdateCoalescer({
           intervalMs:
             this.options.coalesceIntervalMs
             ?? (() =>
               messageSnapshotIntervalMs(
-                this.threadState.get(threadId)?.lastPublishedContentChars ?? 0,
+                this.threadState.get(threadId)?.lastPublishedSnapshotChars ?? 0,
               )),
           publish: () => this.publishAssistantMessage(threadId),
           onError: (error) =>
@@ -1360,7 +1410,7 @@ export class AppServerRuntime {
     });
     message.parts = rendered.parts;
     message.content = rendered.content;
-    state.lastPublishedContentChars = rendered.content.length;
+    state.lastPublishedSnapshotChars = normalizedMessageSnapshotChars(message);
     this.bumpMessageRevision(context);
 
     for (const sessionId of context.bridgeSessionIds) {

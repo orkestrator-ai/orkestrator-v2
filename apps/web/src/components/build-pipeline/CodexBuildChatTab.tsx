@@ -1247,140 +1247,146 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
 
     pollingSessionIdRef.current = currentSdkSessionId;
     let cancelled = false;
+    let pollInFlight = false;
 
     const poll = async () => {
-      if (cancelled) return;
+      if (cancelled || pollInFlight) return;
+      pollInFlight = true;
 
-      let status: Awaited<ReturnType<typeof getSessionStatus>>;
-      let messages: CodexMessage[] | null = null;
       try {
-        status = await getSessionStatus(client, currentSdkSessionId, { throwOnError: true });
-        if (status) {
-          const previous = pollingSnapshotRef.current;
-          const hasRevision = typeof status.messageRevision === "number";
-          const shouldRefreshMessages =
-            !hasRevision
-            || previous?.sessionId !== currentSdkSessionId
-            || previous.messageRevision !== status.messageRevision
-            || previous.engineGeneration !== status.engineGeneration
-            || (previous.status === "running" && status.status !== "running");
-          if (shouldRefreshMessages) {
-            messages = await getSessionMessages(client, currentSdkSessionId, { throwOnError: true });
+        let status: Awaited<ReturnType<typeof getSessionStatus>>;
+        let messages: CodexMessage[] | null = null;
+        try {
+          status = await getSessionStatus(client, currentSdkSessionId, { throwOnError: true });
+          if (status) {
+            const previous = pollingSnapshotRef.current;
+            const hasRevision = typeof status.messageRevision === "number";
+            const shouldRefreshMessages =
+              !hasRevision
+              || previous?.sessionId !== currentSdkSessionId
+              || previous.messageRevision !== status.messageRevision
+              || previous.engineGeneration !== status.engineGeneration
+              || (previous.status === "running" && status.status !== "running");
+            if (shouldRefreshMessages) {
+              messages = await getSessionMessages(client, currentSdkSessionId, { throwOnError: true });
+            }
           }
+        } catch (error) {
+          if (cancelled) return;
+          console.error("[CodexBuildChatTab] Polling disconnected:", error);
+          isInitializedRef.current = false;
+          setConnectionState("error");
+          setErrorMessage(error instanceof Error ? error.message : "Connection to Codex bridge server was lost");
+          return;
         }
-      } catch (error) {
+
         if (cancelled) return;
-        console.error("[CodexBuildChatTab] Polling disconnected:", error);
-        isInitializedRef.current = false;
-        setConnectionState("error");
-        setErrorMessage(error instanceof Error ? error.message : "Connection to Codex bridge server was lost");
-        return;
-      }
 
-      if (cancelled) return;
-
-      debugCodexBuild("poll result", () => ({
-        pipelineId,
-        currentSessionKey,
-        currentSdkSessionId,
-        status: status?.status,
-        statusTitle: status?.title,
-        statusError: status?.error,
-        messageRevision: status?.messageRevision,
-        transcriptRefreshed: messages !== null,
-        incomingMessageCount: messages?.length,
-        incomingLastMessage: summarizeCodexMessage(messages?.at(-1)),
-      }));
-
-      const storedSession = useCodexStore.getState().sessions.get(currentSessionKey);
-
-      if (
-        messages
-        && (messages.length > 0 || typeof status?.messageRevision === "number")
-      ) {
-        const existingMessages = storedSession?.messages ?? [];
-        // A changed bridge revision already proves the transcript changed. The
-        // expensive deep comparison remains only for older bridges that do not
-        // expose revisions.
-        const changed =
-          typeof status?.messageRevision === "number"
-            ? true
-            : !codexMessagesEqual(existingMessages, messages);
-        if (changed) {
-          debugCodexBuild("set messages", () => ({
-            pipelineId,
-            currentSessionKey,
-            previousCount: existingMessages.length,
-            nextCount: messages.length,
-            previousLastMessage: summarizeCodexMessage(existingMessages[existingMessages.length - 1]),
-            nextLastMessage: summarizeCodexMessage(messages[messages.length - 1]),
-          }));
-          setMessages(currentSessionKey, messages);
-        }
-      }
-
-      if (!status) {
-        const message = "Codex session no longer exists";
-        appendCodexMessage(currentSessionKey, buildErrorMessage(message));
-        setSessionError(currentSessionKey, message);
-        setSessionLoading(currentSessionKey, false);
-        setPipelineError(pipelineId, message);
-        return;
-      }
-
-      pollingSnapshotRef.current = {
-        sessionId: currentSdkSessionId,
-        messageRevision: status.messageRevision,
-        engineGeneration: status.engineGeneration,
-        status: status.status,
-      };
-
-      const latestSession = useCodexStore.getState().sessions.get(currentSessionKey);
-
-      if (status.title && latestSession?.title !== status.title) {
-        setSessionTitle(currentSessionKey, status.title);
-      }
-
-      if (status.status === "running") {
-        if (latestSession?.isLoading !== true) {
-          debugCodexBuild("set loading true from poll", () => ({
-            pipelineId,
-            currentSessionKey,
-            currentSdkSessionId,
-          }));
-          setSessionLoading(currentSessionKey, true);
-        }
-        return;
-      }
-
-      const latestPipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId);
-      if (latestPipeline?.pendingPromptAttempt || latestPipeline?.reconnectAttempt) {
-        return;
-      }
-
-      if (status.status === "error") {
-        const message = status.error?.trim() || "Codex session failed";
-        if (latestSession?.error !== message) {
-          appendCodexMessage(currentSessionKey, buildErrorMessage(message));
-          setSessionError(currentSessionKey, message);
-        }
-        if (latestSession?.isLoading !== false) {
-          setSessionLoading(currentSessionKey, false);
-        }
-        return;
-      }
-
-      if (latestSession?.error !== undefined) {
-        setSessionError(currentSessionKey, undefined);
-      }
-      if (latestSession?.isLoading !== false) {
-        debugCodexBuild("set loading false from poll", () => ({
+        debugCodexBuild("poll result", () => ({
           pipelineId,
           currentSessionKey,
           currentSdkSessionId,
-          status: status.status,
+          status: status?.status,
+          statusTitle: status?.title,
+          statusError: status?.error,
+          messageRevision: status?.messageRevision,
+          transcriptRefreshed: messages !== null,
+          incomingMessageCount: messages?.length,
+          incomingLastMessage: summarizeCodexMessage(messages?.at(-1)),
         }));
-        setSessionLoading(currentSessionKey, false);
+
+        const storedSession = useCodexStore.getState().sessions.get(currentSessionKey);
+
+        if (
+          messages
+          && (messages.length > 0 || typeof status?.messageRevision === "number")
+        ) {
+          const existingMessages = storedSession?.messages ?? [];
+          // A changed bridge revision already proves the transcript changed. The
+          // expensive deep comparison remains only for older bridges that do not
+          // expose revisions.
+          const changed =
+            typeof status?.messageRevision === "number"
+              ? true
+              : !codexMessagesEqual(existingMessages, messages);
+          if (changed) {
+            debugCodexBuild("set messages", () => ({
+              pipelineId,
+              currentSessionKey,
+              previousCount: existingMessages.length,
+              nextCount: messages.length,
+              previousLastMessage: summarizeCodexMessage(existingMessages[existingMessages.length - 1]),
+              nextLastMessage: summarizeCodexMessage(messages[messages.length - 1]),
+            }));
+            setMessages(currentSessionKey, messages);
+          }
+        }
+
+        if (!status) {
+          const message = "Codex session no longer exists";
+          appendCodexMessage(currentSessionKey, buildErrorMessage(message));
+          setSessionError(currentSessionKey, message);
+          setSessionLoading(currentSessionKey, false);
+          setPipelineError(pipelineId, message);
+          return;
+        }
+
+        pollingSnapshotRef.current = {
+          sessionId: currentSdkSessionId,
+          messageRevision: status.messageRevision,
+          engineGeneration: status.engineGeneration,
+          status: status.status,
+        };
+
+        const latestSession = useCodexStore.getState().sessions.get(currentSessionKey);
+
+        if (status.title && latestSession?.title !== status.title) {
+          setSessionTitle(currentSessionKey, status.title);
+        }
+
+        if (status.status === "running") {
+          if (latestSession?.isLoading !== true) {
+            debugCodexBuild("set loading true from poll", () => ({
+              pipelineId,
+              currentSessionKey,
+              currentSdkSessionId,
+            }));
+            setSessionLoading(currentSessionKey, true);
+          }
+          return;
+        }
+
+        const latestPipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+        if (latestPipeline?.pendingPromptAttempt || latestPipeline?.reconnectAttempt) {
+          return;
+        }
+
+        if (status.status === "error") {
+          const message = status.error?.trim() || "Codex session failed";
+          if (latestSession?.error !== message) {
+            appendCodexMessage(currentSessionKey, buildErrorMessage(message));
+            setSessionError(currentSessionKey, message);
+          }
+          if (latestSession?.isLoading !== false) {
+            setSessionLoading(currentSessionKey, false);
+          }
+          return;
+        }
+
+        if (latestSession?.error !== undefined) {
+          setSessionError(currentSessionKey, undefined);
+        }
+        if (latestSession?.isLoading !== false) {
+          debugCodexBuild("set loading false from poll", () => ({
+            pipelineId,
+            currentSessionKey,
+            currentSdkSessionId,
+            status: status.status,
+          }));
+          setSessionLoading(currentSessionKey, false);
+        }
+      } finally {
+        pollInFlight = false;
       }
     };
 

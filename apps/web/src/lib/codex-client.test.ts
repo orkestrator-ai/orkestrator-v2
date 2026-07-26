@@ -378,6 +378,29 @@ describe("codex-client getSessionMessages", () => {
     );
   });
 
+  test("returns null when resuming a session is rejected by the bridge", async () => {
+    mockFetch(async () => new Response("thread not found", { status: 404 }));
+
+    await expect(resumeSession(client, { threadId: "missing-thread" })).resolves.toBeNull();
+  });
+
+  test("returns null when resuming a session fails in transport", async () => {
+    const originalError = console.error;
+    const consoleError = mock(() => {});
+    console.error = consoleError as unknown as typeof console.error;
+    mockFetchError(new Error("connection reset"));
+
+    try {
+      await expect(resumeSession(client, { threadId: "thread-1" })).resolves.toBeNull();
+      expect(consoleError).toHaveBeenCalledWith(
+        "[codex-client] Failed to resume session:",
+        expect.objectContaining({ message: "connection reset" }),
+      );
+    } finally {
+      console.error = originalError;
+    }
+  });
+
   test("returns messages as-is when no TodoWrite parts exist", async () => {
     mockFetch(async () =>
       new Response(JSON.stringify({
@@ -586,6 +609,29 @@ describe("codex-client getSessionStatus", () => {
       engineGeneration: 4,
       messageRevision: 12,
     });
+  });
+
+  test.each([
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["unsafe", Number.MAX_SAFE_INTEGER + 1],
+    ["string", "12"],
+    ["null", null],
+  ])("omits a %s message revision", async (_description, messageRevision) => {
+    mockFetch(async () =>
+      Response.json({
+        status: "idle",
+        messageRevision,
+      }),
+    );
+
+    const status = await getSessionStatus(client, "session-1");
+    expect(status).toEqual({
+      status: "idle",
+      title: undefined,
+      error: undefined,
+    });
+    expect(status).not.toHaveProperty("messageRevision");
   });
 
   test("accepts only known app-server lifecycle phases", async () => {
@@ -1201,6 +1247,26 @@ describe("codex-client event cursor", () => {
 
     const result = await pending;
     expect(result.value.revision).toBe(17);
+  });
+
+  test("subscribes to and yields cursor-only frames without a session payload", async () => {
+    const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    const source = instances[0] as unknown as CursorMockEventSource;
+
+    expect(source.listeners.has("bridge.cursor")).toBe(true);
+    source.emit("bridge.cursor", {}, "23");
+
+    await expect(pending).resolves.toEqual({
+      done: false,
+      value: {
+        type: "bridge.cursor",
+        sessionId: undefined,
+        data: {},
+        revision: 23,
+      },
+    });
+    await iterator.return?.();
   });
 
   test("omits the revision when the id is absent or unparseable", async () => {

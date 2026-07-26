@@ -13,6 +13,8 @@ import {
   MAX_PENDING_EVENTS_PER_TURN,
   MAX_PENDING_TURNS,
   MAX_RECOVERED_CONTEXT_CHARS,
+  messageSnapshotIntervalMs,
+  normalizedMessageSnapshotChars,
   type RuntimeSseEvent,
 } from "./app-server-runtime.js";
 import { AppServerEngine } from "./engine/app-server-engine.js";
@@ -33,6 +35,82 @@ import type { EngineEvent } from "./engine/types.js";
  * ever arrives.
  */
 const NO_RESPONSE = Symbol("no-response");
+
+test("large message snapshots use a progressively lower streaming cadence", () => {
+  expect(messageSnapshotIntervalMs(255 * 1024)).toBe(100);
+  expect(messageSnapshotIntervalMs(256 * 1024)).toBe(250);
+  expect(messageSnapshotIntervalMs(1024 * 1024)).toBe(500);
+});
+
+test("snapshot sizing includes nested tool, reasoning, diff and subagent content", () => {
+  const message = {
+    id: "large-parts",
+    role: "assistant" as const,
+    content: "",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  const reasoningChars = normalizedMessageSnapshotChars({
+    ...message,
+    parts: [{ type: "thinking" as const, content: "r".repeat(300 * 1024) }],
+  });
+  const toolChars = normalizedMessageSnapshotChars({
+    ...message,
+    parts: [{
+      type: "tool-result" as const,
+      content: "",
+      toolOutput: "o".repeat(300 * 1024),
+    }],
+  });
+  const nestedChars = normalizedMessageSnapshotChars({
+    ...message,
+    parts: [
+      {
+        type: "tool-invocation" as const,
+        content: "apply",
+        toolArgs: { nested: { prompt: "a".repeat(96 * 1024) } },
+        toolDiff: { diff: "d".repeat(96 * 1024) },
+      },
+      {
+        type: "subagent" as const,
+        content: "worker",
+        subagentPrompt: "p".repeat(48 * 1024),
+        subagentActions: [{
+          type: "tool-result" as const,
+          content: "",
+          toolOutput: "o".repeat(48 * 1024),
+        }],
+      },
+    ],
+  });
+
+  expect(messageSnapshotIntervalMs(reasoningChars)).toBe(250);
+  expect(messageSnapshotIntervalMs(toolChars)).toBe(250);
+  expect(messageSnapshotIntervalMs(nestedChars)).toBe(250);
+});
+
+test("snapshot sizing is bounded and tolerates cyclic metadata", () => {
+  const cyclicMessage: Record<string, unknown> = {
+    id: "cyclic",
+    role: "assistant",
+    content: "visible",
+    parts: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  cyclicMessage.self = cyclicMessage;
+
+  expect(
+    normalizedMessageSnapshotChars(
+      cyclicMessage as unknown as Parameters<typeof normalizedMessageSnapshotChars>[0],
+    ),
+  ).toBeGreaterThan(0);
+  expect(normalizedMessageSnapshotChars({
+    id: "bounded",
+    role: "assistant",
+    content: "x".repeat(2 * 1024 * 1024),
+    parts: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+  })).toBe(1024 * 1024);
+});
 
 /** Scripted app-server child, driven by a per-method handler map. */
 class ScriptedChild extends EventEmitter {
@@ -223,6 +301,8 @@ async function harness(
     environmentDrainTimeoutMs?: number;
     ambiguousRecoveryTimeoutMs?: number;
     fingerprintEnvironment?: () => string;
+    /** Uses the production adaptive cadence instead of deterministic immediate publishes. */
+    adaptiveCoalesce?: boolean;
     /** Leaves `runtime.start()` to the caller, so startup itself can be observed. */
     deferStart?: boolean;
   } = {},
@@ -275,8 +355,8 @@ async function harness(
       models: [{ id: "cached-model", name: "Cached", reasoningEfforts: [], reasoningOptions: [] } as never],
       source: "cache",
     }),
-    // Deltas are published on a cadence; zero keeps the tests deterministic.
-    coalesceIntervalMs: 0,
+    // Deltas are published on a cadence; zero keeps most tests deterministic.
+    ...(options.adaptiveCoalesce ? {} : { coalesceIntervalMs: 0 }),
     generateTitle: options.generateTitle,
     ...(options.now ? { now: options.now } : {}),
     ...(options.threadIdleMs !== undefined ? { threadIdleMs: options.threadIdleMs } : {}),
@@ -325,6 +405,54 @@ async function harness(
 }
 
 describe("session lifecycle", () => {
+  test("concurrent start callers share initialization and wait for it to finish", async () => {
+    const h = await harness({}, { deferStart: true });
+    const originalStart = h.engine.start.bind(h.engine);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let signalEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      signalEntered = resolve;
+    });
+    let starts = 0;
+    h.engine.start = async () => {
+      starts += 1;
+      signalEntered();
+      await gate;
+      return originalStart();
+    };
+
+    const first = h.runtime.start();
+    const second = h.runtime.start();
+    await entered;
+    expect(starts).toBe(1);
+
+    release();
+    await Promise.all([first, second]);
+    await h.runtime.start();
+    expect(h.children).toHaveLength(1);
+    expect(h.child().requests.filter((request) => request.method === "initialize")).toHaveLength(1);
+  });
+
+  test("a failed start can be retried", async () => {
+    const h = await harness({}, { deferStart: true });
+    const originalStart = h.engine.start.bind(h.engine);
+    let attempts = 0;
+    h.engine.start = async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("transient startup failure");
+      return originalStart();
+    };
+
+    await expect(h.runtime.start()).rejects.toThrow("transient startup failure");
+    await h.runtime.start();
+
+    expect(attempts).toBe(2);
+    expect(h.engine.getHealth().state).toBe("ready");
+  });
+
   test("restores durable bridge session ids lazily after a runtime restart", async () => {
     const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
     await store.upsert(
@@ -410,6 +538,7 @@ describe("session lifecycle", () => {
       "Remember the parser constraint",
       "I will preserve it.",
     ]);
+    expect(h.runtime.getStatus(resumed!.sessionId)?.messageRevision).toBe(1);
     expect(h.runtime.getRegistry().getSession(resumed!.sessionId)?.threadId).toBeNull();
     expect((await h.runtime.getMessages(resumed!.sessionId))!.map((message) => message.content))
       .toEqual(["Remember the parser constraint", "I will preserve it."]);
@@ -845,6 +974,30 @@ describe("session lifecycle", () => {
   });
 
   test("re-attaching hydrates the transcript and adopts the Codex thread name", async () => {
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, "thread-named.jsonl"),
+      `${[
+        {
+          type: "session_meta",
+          payload: {
+            id: "thread-named",
+            cwd: "/tmp/ws",
+            timestamp: "2026-07-25T12:00:00.000Z",
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Persisted answer" }],
+          },
+        },
+      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      "utf8",
+    );
     const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
     await store.upsert(
       store.toRecord({
@@ -859,7 +1012,9 @@ describe("session lifecycle", () => {
       "thread/resume": () => ({ thread: threadPayload("thread-named", { name: "Codex Name" }) }),
     });
 
-    expect(await h.runtime.getMessages("session-named")).toEqual([]);
+    expect((await h.runtime.getMessages("session-named"))?.map((message) => message.content))
+      .toEqual(["Persisted answer"]);
+    expect(h.runtime.getStatus("session-named")?.messageRevision).toBe(1);
     // app-server's own name outranks anything reconstructed from the rollout.
     expect(h.runtime.getStatus("session-named")).toMatchObject({ title: "Codex Name" });
     expect(h.runtime.getRegistry().getSession("session-named")?.titleSource).toBe("codex");
@@ -1214,7 +1369,10 @@ describe("session lifecycle", () => {
   test("a full turn streams deltas and finalizes the transcript", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
+    expect(h.runtime.getStatus(sessionId)?.messageRevision).toBe(0);
     await h.runtime.prompt(sessionId, { prompt: "hello", requestId: "req-1", attachments: [] });
+    const promptRevision = h.runtime.getStatus(sessionId)!.messageRevision;
+    expect(promptRevision).toBe(1);
 
     const child = h.child();
     child.notify("turn/started", { threadId: "thread-1", turn: { id: "turn-1" } });
@@ -1238,6 +1396,18 @@ describe("session lifecycle", () => {
     // Streaming text is visible before completion.
     expect(messages[1]!.content).toBe("Hi there");
 
+    const streamingRevision = h.runtime.getStatus(sessionId)!.messageRevision;
+    expect(streamingRevision).toBeGreaterThan(promptRevision);
+    const revisionBeforeRead = streamingRevision;
+    const messageEventsBeforeRead = h.events.filter(
+      (event) => event.type === "message.updated",
+    ).length;
+    await h.runtime.getMessages(sessionId);
+    expect(h.runtime.getStatus(sessionId)!.messageRevision).toBe(revisionBeforeRead);
+    expect(
+      h.events.filter((event) => event.type === "message.updated").length,
+    ).toBe(messageEventsBeforeRead);
+
     child.notify("item/completed", {
       threadId: "thread-1",
       turnId: "turn-1",
@@ -1252,6 +1422,7 @@ describe("session lifecycle", () => {
     messages = (await h.runtime.getMessages(sessionId))!;
     // item/completed is authoritative and replaces the streamed text.
     expect(messages[1]!.content).toBe("Hi there, final.");
+    expect(h.runtime.getStatus(sessionId)!.messageRevision).toBeGreaterThan(streamingRevision);
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
     expect(h.events.some((event) => event.type === "session.idle")).toBe(true);
   });
@@ -1287,6 +1458,69 @@ describe("session lifecycle", () => {
     // spliced in — otherwise the user watches an empty box.
     expect(toolPart.toolOutput).toBe("total 8\n");
     expect(toolPart.toolState).toBe("pending");
+  });
+
+  test("tool-heavy snapshots change runtime cadence and terminal events still flush immediately", async () => {
+    const h = await harness({}, { adaptiveCoalesce: true });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "produce output",
+      requestId: "req-large-output",
+      attachments: [],
+    });
+
+    const output = "x".repeat(300 * 1024);
+    h.child().notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "c-large",
+        type: "commandExecution",
+        command: "generate",
+        status: "inProgress",
+        aggregatedOutput: output,
+      },
+    });
+    await h.drain();
+
+    const runtimeState = h.runtime as unknown as {
+      threadState: Map<string, {
+        lastPublishedSnapshotChars: number;
+        coalescer: { intervalMs: () => number };
+      }>;
+    };
+    const state = runtimeState.threadState.get("thread-1")!;
+    expect(state.lastPublishedSnapshotChars).toBeGreaterThanOrEqual(256 * 1024);
+    expect(state.coalescer.intervalMs()).toBe(250);
+
+    // This update is now parked behind the slower cadence.
+    h.child().notify("item/commandExecution/outputDelta", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "c-large",
+      delta: "tail",
+    });
+    // A terminal event must cancel that timer and publish the authoritative
+    // final snapshot without waiting for the adaptive interval.
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "c-large",
+        type: "commandExecution",
+        command: "generate",
+        status: "completed",
+        aggregatedOutput: output,
+      },
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ phase: "idle" });
+    expect((await h.runtime.getMessages(sessionId))?.[1]?.parts[0]?.toolState).toBe("success");
   });
 
   test("plan mode marks the assistant message as a plan review", async () => {
@@ -1971,6 +2205,8 @@ describe("same thread in two tabs", () => {
     const second = await h.runtime.resumeSession({ threadId: "thread-7", mode: "build" });
     expect(first).not.toBeNull();
     expect(second).not.toBeNull();
+    expect(h.runtime.getStatus(first!.sessionId)?.messageRevision).toBe(0);
+    expect(h.runtime.getStatus(second!.sessionId)?.messageRevision).toBe(0);
 
     await h.runtime.prompt(first!.sessionId, {
       prompt: "from tab A",
@@ -1981,6 +2217,19 @@ describe("same thread in two tabs", () => {
     // Tab B sees tab A's message because they share the ThreadContext.
     const messagesB = (await h.runtime.getMessages(second!.sessionId))!;
     expect(messagesB.some((message) => message.content === "from tab A")).toBe(true);
+    expect(h.runtime.getStatus(first!.sessionId)?.messageRevision).toBe(1);
+    expect(h.runtime.getStatus(second!.sessionId)?.messageRevision).toBe(1);
+
+    h.child().notify("item/agentMessage/delta", {
+      threadId: "thread-7",
+      turnId: "turn-1",
+      itemId: "answer",
+      delta: "shared answer",
+    });
+    await h.drain();
+    const firstStreamingRevision = h.runtime.getStatus(first!.sessionId)!.messageRevision;
+    expect(firstStreamingRevision).toBeGreaterThan(1);
+    expect(h.runtime.getStatus(second!.sessionId)?.messageRevision).toBe(firstStreamingRevision);
   });
 
   test("a second tab cannot start an overlapping turn", async () => {
@@ -2655,6 +2904,7 @@ describe("crash recovery", () => {
     });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+    const revisionBeforeRecovery = h.runtime.getStatus(sessionId)!.messageRevision;
 
     h.child().exit(1);
     await h.drain();
@@ -2665,6 +2915,7 @@ describe("crash recovery", () => {
     const status = h.runtime.getStatus(sessionId)!;
     expect(status.phase).not.toBe("recovering");
     expect(status.status).toBe("idle");
+    expect(status.messageRevision).toBeGreaterThan(revisionBeforeRecovery);
 
     // And the session must accept work again.
     const next = await h.runtime.prompt(sessionId, {
@@ -3546,6 +3797,7 @@ describe("slash commands", () => {
   test("/help is answered locally without reaching Codex", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
+    expect(h.runtime.getStatus(sessionId)?.messageRevision).toBe(0);
 
     const outcome = await h.runtime.prompt(sessionId, {
       prompt: "/help",
@@ -3563,6 +3815,7 @@ describe("slash commands", () => {
     expect(messages).toHaveLength(2);
     expect(messages?.[0]?.content).toBe("/help");
     expect(messages?.[1]?.content).toContain("Available Codex slash commands");
+    expect(h.runtime.getStatus(sessionId)?.messageRevision).toBe(1);
   });
 
   /**
@@ -3622,6 +3875,7 @@ describe("slash commands", () => {
     // rollout to reload them from.
     expect(session.localMessages).toHaveLength(MAX_LOCAL_MESSAGES);
     expect(session.localMessages.at(-1)!.content).toContain("Available Codex slash commands");
+    expect(session.messageRevision).toBe(rounds);
   });
 });
 

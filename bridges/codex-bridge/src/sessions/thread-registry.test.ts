@@ -44,6 +44,7 @@ describe("lazy thread creation", () => {
     // No persisted Codex thread yet, so an abandoned session leaves no empty
     // thread in the resume dialog.
     expect(session.threadId).toBeNull();
+    expect(session.messageRevision).toBe(0);
     expect(registry.getThreadForSession("s1")).toBeUndefined();
     expect(registry.listThreads()).toHaveLength(0);
   });
@@ -96,6 +97,7 @@ describe("restoring a durable session", () => {
     expect(restored.createdAt).toBe(1_000);
     expect(restored.lastAccessed).toBe(1_000);
     expect(restored.localMessages).toEqual([]);
+    expect(restored.messageRevision).toBe(0);
     expect(restored.pendingAttachments).toEqual([]);
   });
 });
@@ -118,9 +120,23 @@ describe("local slash-command transcript", () => {
     expect(session.localMessages).toHaveLength(MAX_LOCAL_MESSAGES);
     expect(session.localMessages[0]!.id).toBe("m10");
     expect(session.localMessages.at(-1)!.id).toBe(`m${MAX_LOCAL_MESSAGES + 9}`);
+    expect(session.messageRevision).toBe(MAX_LOCAL_MESSAGES + 10);
   });
 
-  test("a batch larger than the cap is trimmed to the newest entries", () => {
+  test("each non-empty append operation advances the revision exactly once", () => {
+    const registry = makeRegistry();
+    const session = createSession(registry, "s1");
+
+    registry.appendLocalMessages(session);
+    expect(session.localMessages).toEqual([]);
+    expect(session.messageRevision).toBe(0);
+
+    registry.appendLocalMessages(session, localMessage("m1"), localMessage("m2"));
+    expect(session.localMessages.map((message) => message.id)).toEqual(["m1", "m2"]);
+    expect(session.messageRevision).toBe(1);
+  });
+
+  test("a capped batch advances the revision once and keeps the newest entries", () => {
     const registry = makeRegistry();
     const session = createSession(registry, "s1");
     registry.appendLocalMessages(
@@ -130,6 +146,167 @@ describe("local slash-command transcript", () => {
 
     expect(session.localMessages).toHaveLength(MAX_LOCAL_MESSAGES);
     expect(session.localMessages[0]!.id).toBe("m5");
+    expect(session.localMessages.at(-1)!.id).toBe(`m${MAX_LOCAL_MESSAGES + 4}`);
+    expect(session.messageRevision).toBe(1);
+  });
+
+  test("local transcript revisions remain scoped to their bridge session", () => {
+    const registry = makeRegistry();
+    const first = createSession(registry, "tab-a", "thread-1");
+    const second = createSession(registry, "tab-b", "thread-1");
+
+    registry.appendLocalMessages(first, localMessage("local-a"));
+
+    expect(first.messageRevision).toBe(1);
+    expect(second.messageRevision).toBe(0);
+    expect(second.localMessages).toEqual([]);
+  });
+});
+
+describe("idle retention and cleanup", () => {
+  function registryAt(now: number): ThreadRegistry {
+    return new ThreadRegistry({ now: () => now });
+  }
+
+  test("touch refreshes an existing session and ignores a missing session", () => {
+    let now = 1_000;
+    const registry = new ThreadRegistry({ now: () => now });
+    const session = createSession(registry, "s1");
+    now = 2_000;
+
+    registry.touch("missing");
+    expect(session.lastAccessed).toBe(1_000);
+
+    registry.touch("s1");
+    expect(session.lastAccessed).toBe(2_000);
+  });
+
+  test("detaches idle and failed threads only after every attached session is old", () => {
+    const registry = registryAt(10_000);
+    const oldIdle = createSession(registry, "old-idle", "thread-idle");
+    const oldFailed = createSession(registry, "old-failed", "thread-failed");
+    const oldMixed = createSession(registry, "old-mixed", "thread-mixed");
+    const recentMixed = createSession(registry, "recent-mixed", "thread-mixed");
+    oldIdle.lastAccessed = 8_000;
+    oldFailed.lastAccessed = 9_000;
+    oldMixed.lastAccessed = 8_000;
+    recentMixed.lastAccessed = 9_001;
+    registry.setPhase(registry.getThread("thread-failed")!, "failed", "turn failed");
+
+    expect(registry.detachableThreads(1_000).map((context) => context.threadId).sort()).toEqual([
+      "thread-failed",
+      "thread-idle",
+    ]);
+  });
+
+  test("does not detach threads with an active turn or dispatch in flight", () => {
+    const registry = registryAt(10_000);
+    const activeSession = createSession(registry, "active", "thread-active");
+    const dispatchSession = createSession(registry, "dispatch", "thread-dispatch");
+    activeSession.lastAccessed = 1_000;
+    dispatchSession.lastAccessed = 1_000;
+    const active = registry.getThread("thread-active")!;
+    active.activeTurn = new TurnAccumulator({
+      threadId: active.threadId,
+      turnId: "turn-1",
+      engineGeneration: 1,
+      assistantMessageId: "message-1",
+    });
+    registry.getThread("thread-dispatch")!.dispatchInFlight = true;
+
+    expect(registry.detachableThreads(1_000)).toEqual([]);
+  });
+
+  test.each(["starting", "running", "cancelling", "recovering"] as const)(
+    "does not detach a thread in the %s phase",
+    (phase) => {
+      const registry = registryAt(10_000);
+      const session = createSession(registry, "s1", "thread-1");
+      session.lastAccessed = 1_000;
+      registry.setPhase(registry.getThread("thread-1")!, phase);
+
+      expect(registry.detachableThreads(1_000)).toEqual([]);
+    },
+  );
+
+  test("an unreferenced idle thread is immediately eligible for detachment", () => {
+    const registry = registryAt(10_000);
+    const context = registry.attach("missing-session", "thread-orphan", {
+      engineHandle: "thread-orphan",
+    });
+
+    expect(context.bridgeSessionIds.size).toBe(1);
+    expect(registry.sessionsForThread(context.threadId)).toEqual([]);
+    expect(registry.detachableThreads(1_000)).toEqual([context]);
+  });
+
+  test("expires old threadless and detached sessions but retains recent and live sessions", () => {
+    const registry = registryAt(10_000);
+    const oldThreadless = createSession(registry, "old-threadless");
+    const boundaryThreadless = createSession(registry, "boundary-threadless");
+    const recentThreadless = createSession(registry, "recent-threadless");
+    const oldLive = createSession(registry, "old-live", "thread-live");
+    const oldDetached = registry.restoreSession({
+      id: "old-detached",
+      threadId: "thread-not-loaded",
+      config: CONFIG,
+      lastAccessed: 1_000,
+    });
+    oldThreadless.lastAccessed = 1_000;
+    boundaryThreadless.lastAccessed = 9_000;
+    recentThreadless.lastAccessed = 9_001;
+    oldLive.lastAccessed = 1_000;
+
+    expect(registry.expiredSessions(1_000).map((session) => session.id).sort()).toEqual([
+      "boundary-threadless",
+      "old-detached",
+      "old-threadless",
+    ]);
+    expect(oldDetached.threadId).toBe("thread-not-loaded");
+  });
+
+  test("detaching clears cached messages but leaves the session binding for rehydration", () => {
+    const registry = makeRegistry();
+    const session = createSession(registry, "s1", "thread-1");
+    const context = registry.getThread("thread-1")!;
+    context.messages.push({
+      id: "m1",
+      role: "assistant",
+      content: "cached",
+      parts: [],
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(registry.detachThread("missing")).toBeUndefined();
+    expect(registry.detachThread("thread-1")).toBe(context);
+    expect(context.messages).toEqual([]);
+    expect(registry.getThread("thread-1")).toBeUndefined();
+    expect(session.threadId).toBe("thread-1");
+  });
+
+  test("clears only matching stale thread bindings", () => {
+    const registry = makeRegistry();
+    const first = createSession(registry, "s1", "thread-1");
+    const second = createSession(registry, "s2", "thread-1");
+    const other = createSession(registry, "s3", "thread-2");
+
+    registry.clearThreadBinding("thread-1");
+
+    expect(first.threadId).toBeNull();
+    expect(second.threadId).toBeNull();
+    expect(other.threadId).toBe("thread-2");
+  });
+
+  test("removes a loaded thread without rewriting its session binding", () => {
+    const registry = makeRegistry();
+    const session = createSession(registry, "s1", "thread-1");
+
+    registry.removeThread("missing");
+    expect(registry.getThread("thread-1")).toBeDefined();
+
+    registry.removeThread("thread-1");
+    expect(registry.getThread("thread-1")).toBeUndefined();
+    expect(session.threadId).toBe("thread-1");
   });
 });
 

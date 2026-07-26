@@ -3,6 +3,17 @@ import { UpdateCoalescer } from "./coalescer.js";
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 5));
 
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 1_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await tick();
+  }
+  expect(predicate()).toBe(true);
+}
+
 describe("UpdateCoalescer", () => {
   test("coalesces a burst into one scheduled full snapshot", async () => {
     let published = 0;
@@ -19,6 +30,90 @@ describe("UpdateCoalescer", () => {
 
     expect(published).toBe(1);
     expect(coalescer.getMetrics()).toEqual({ coalesced: 3, published: 1 });
+    coalescer.stop();
+  });
+
+  test("publishes eventually at the interval selected for a schedule", async () => {
+    const selectedIntervalMs = 40;
+    const publishedAt: number[] = [];
+    const coalescer = new UpdateCoalescer({
+      intervalMs: () => selectedIntervalMs,
+      publish: () => {
+        publishedAt.push(Date.now());
+      },
+    });
+
+    await coalescer.flushNow();
+    const firstPublishedAt = publishedAt[0]!;
+    coalescer.schedule();
+
+    await tick();
+    expect(publishedAt).toHaveLength(1);
+    await waitFor(() => publishedAt.length === 2);
+
+    expect(publishedAt[1]! - firstPublishedAt).toBeGreaterThanOrEqual(
+      selectedIntervalMs - 2,
+    );
+    coalescer.stop();
+  });
+
+  test("re-reads a dynamic interval across schedules in both directions", async () => {
+    let intervalMs = 35;
+    const intervalReads: number[] = [];
+    const publishedAt: number[] = [];
+    const coalescer = new UpdateCoalescer({
+      intervalMs: () => {
+        intervalReads.push(intervalMs);
+        return intervalMs;
+      },
+      publish: () => {
+        publishedAt.push(Date.now());
+      },
+    });
+
+    await coalescer.flushNow();
+
+    // Long to short: the next schedule must observe the newly shortened
+    // interval, rather than retaining the previous schedule's value.
+    intervalMs = 35;
+    coalescer.schedule();
+    await waitFor(() => publishedAt.length === 2);
+    intervalMs = 0;
+    coalescer.schedule();
+    await waitFor(() => publishedAt.length === 3);
+
+    // Short to long: after the immediate schedule, the callback must be
+    // consulted again and defer the next publication.
+    intervalMs = 35;
+    coalescer.schedule();
+    await tick();
+    expect(publishedAt).toHaveLength(3);
+    await waitFor(() => publishedAt.length === 4);
+
+    expect(intervalReads).toEqual([35, 0, 35]);
+    coalescer.stop();
+  });
+
+  test("flushNow bypasses a pending long dynamic interval", async () => {
+    let published = 0;
+    const coalescer = new UpdateCoalescer({
+      intervalMs: () => 60_000,
+      publish: () => {
+        published += 1;
+      },
+    });
+
+    await coalescer.flushNow();
+    coalescer.schedule();
+    await tick();
+    expect(published).toBe(1);
+
+    await coalescer.flushNow();
+    expect(published).toBe(2);
+
+    // The cancelled cadence timer must not publish again.
+    await tick();
+    expect(published).toBe(2);
     coalescer.stop();
   });
 

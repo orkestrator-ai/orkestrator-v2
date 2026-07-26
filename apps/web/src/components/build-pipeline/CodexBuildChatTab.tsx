@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { AlertCircle, ArrowDown, ArrowUp, Hammer, Loader2, PlayCircle, RefreshCw, StopCircle } from "lucide-react";
 import { useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
@@ -377,63 +378,75 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
   const [advanceTick, setAdvanceTick] = useState(0);
   const [connectAttempt, setConnectAttempt] = useState(0);
   const pollingSessionIdRef = useRef<string | null>(null);
+  const pollingSnapshotRef = useRef<{
+    sessionId: string;
+    messageRevision?: number;
+    engineGeneration?: number;
+    status: "idle" | "running" | "error";
+  } | null>(null);
   const [jumpInText, setJumpInText] = useState("");
   const [isReconnecting, setIsReconnecting] = useState(false);
   const jumpInTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(pipelineId));
-  const { config } = useConfigStore();
-  const {
-    setPhase,
-    addSession: addPipelineSession,
-    markSessionIdle,
-    markSessionRunning,
-    setVerificationResult,
-    beginStructuredReview,
-    setStructuredReview,
-    incrementIteration,
-    setPipelineError,
-    beginReconnect,
-    completeReconnect,
-    failReconnect,
-    beginPromptAttempt,
-    completePromptAttempt,
-    pausePipeline,
-    resumePipeline,
-  } = useBuildPipelineStore();
+  const config = useConfigStore((state) => state.config);
+  const setPhase = useBuildPipelineStore((state) => state.setPhase);
+  const addPipelineSession = useBuildPipelineStore((state) => state.addSession);
+  const markSessionIdle = useBuildPipelineStore((state) => state.markSessionIdle);
+  const markSessionRunning = useBuildPipelineStore((state) => state.markSessionRunning);
+  const setVerificationResult = useBuildPipelineStore((state) => state.setVerificationResult);
+  const beginStructuredReview = useBuildPipelineStore((state) => state.beginStructuredReview);
+  const setStructuredReview = useBuildPipelineStore((state) => state.setStructuredReview);
+  const incrementIteration = useBuildPipelineStore((state) => state.incrementIteration);
+  const setPipelineError = useBuildPipelineStore((state) => state.setPipelineError);
+  const beginReconnect = useBuildPipelineStore((state) => state.beginReconnect);
+  const completeReconnect = useBuildPipelineStore((state) => state.completeReconnect);
+  const failReconnect = useBuildPipelineStore((state) => state.failReconnect);
+  const beginPromptAttempt = useBuildPipelineStore((state) => state.beginPromptAttempt);
+  const completePromptAttempt = useBuildPipelineStore((state) => state.completePromptAttempt);
+  const pausePipeline = useBuildPipelineStore((state) => state.pausePipeline);
+  const resumePipeline = useBuildPipelineStore((state) => state.resumePipeline);
   const isPipelinePaused = useCallback(
     () => useBuildPipelineStore.getState().pipelines.get(pipelineId)?.phase === "paused",
     [pipelineId],
   );
-  const {
-    setServerStatus,
-    setClient,
-    setSession,
-    setMessages,
-    setSessionLoading,
-    setSessionError,
-    setSessionTitle,
-    clients: clientsMap,
-    sessions: sessionsMap,
-  } = useCodexStore();
-  const client = useMemo(() => clientsMap.get(environmentId), [clientsMap, environmentId]);
+  const setServerStatus = useCodexStore((state) => state.setServerStatus);
+  const setClient = useCodexStore((state) => state.setClient);
+  const setSession = useCodexStore((state) => state.setSession);
+  const setMessages = useCodexStore((state) => state.setMessages);
+  const setSessionLoading = useCodexStore((state) => state.setSessionLoading);
+  const setSessionError = useCodexStore((state) => state.setSessionError);
+  const setSessionTitle = useCodexStore((state) => state.setSessionTitle);
+  const client = useCodexStore(
+    useCallback((state) => state.clients.get(environmentId), [environmentId]),
+  );
 
   const setupScriptsRunning = useEnvironmentStore((state) => state.setupScriptsRunning.has(environmentId));
   const setupCommandsResolved = useEnvironmentStore((state) => state.setupCommandsResolved.has(environmentId));
   const hasPendingSetupCommands = useEnvironmentStore((state) => state.pendingSetupCommands.has(environmentId));
   const workspaceReady = useEnvironmentStore((state) => state.workspaceReadyEnvironments.has(environmentId));
 
+  const pipelineSessions = pipeline?.sessions;
+  const pipelineCodexSessions = useCodexStore(
+    useShallow(
+      useCallback(
+        (state) =>
+          pipelineSessions?.map((session) => state.sessions.get(session.sessionKey)) ?? [],
+        [pipelineSessions],
+      ),
+    ),
+  );
   const allSessionMessages = useMemo(() => {
-    if (!pipeline) return [];
-    return pipeline.sessions.map((pSession) => {
-      const sessionState = sessionsMap.get(pSession.sessionKey);
+    if (!pipelineSessions) return [];
+    return pipelineSessions.map((pSession, index) => {
+      const sessionState = pipelineCodexSessions[index];
       return {
         pipelineSession: pSession,
         messages: sessionState?.messages ?? [],
         isLoading: sessionState?.isLoading ?? false,
       };
     });
-  }, [pipeline, sessionsMap]);
+  }, [pipelineCodexSessions, pipelineSessions]);
 
   useEffect(() => {
     if (!pipeline) return;
@@ -459,9 +472,13 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
   const currentPipelineSession = pipeline?.sessions[pipeline.currentSessionIndex];
   const currentSessionKey = currentPipelineSession?.sessionKey;
   const currentSdkSessionId = currentPipelineSession?.sdkSessionId;
-  const currentSessionIsLoading = useCodexStore((state) =>
-    currentSessionKey ? state.sessions.get(currentSessionKey)?.isLoading : undefined
+  const currentCodexSession = useCodexStore(
+    useCallback(
+      (state) => currentSessionKey ? state.sessions.get(currentSessionKey) : undefined,
+      [currentSessionKey],
+    ),
   );
+  const currentSessionIsLoading = currentCodexSession?.isLoading;
 
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
@@ -1230,109 +1247,146 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
 
     pollingSessionIdRef.current = currentSdkSessionId;
     let cancelled = false;
+    let pollInFlight = false;
 
     const poll = async () => {
-      if (cancelled) return;
+      if (cancelled || pollInFlight) return;
+      pollInFlight = true;
 
-      let status: Awaited<ReturnType<typeof getSessionStatus>>;
-      let messages: CodexMessage[];
       try {
-        status = await getSessionStatus(client, currentSdkSessionId, { throwOnError: true });
-        messages = await getSessionMessages(client, currentSdkSessionId, { throwOnError: true });
-      } catch (error) {
+        let status: Awaited<ReturnType<typeof getSessionStatus>>;
+        let messages: CodexMessage[] | null = null;
+        try {
+          status = await getSessionStatus(client, currentSdkSessionId, { throwOnError: true });
+          if (status) {
+            const previous = pollingSnapshotRef.current;
+            const hasRevision = typeof status.messageRevision === "number";
+            const shouldRefreshMessages =
+              !hasRevision
+              || previous?.sessionId !== currentSdkSessionId
+              || previous.messageRevision !== status.messageRevision
+              || previous.engineGeneration !== status.engineGeneration
+              || (previous.status === "running" && status.status !== "running");
+            if (shouldRefreshMessages) {
+              messages = await getSessionMessages(client, currentSdkSessionId, { throwOnError: true });
+            }
+          }
+        } catch (error) {
+          if (cancelled) return;
+          console.error("[CodexBuildChatTab] Polling disconnected:", error);
+          isInitializedRef.current = false;
+          setConnectionState("error");
+          setErrorMessage(error instanceof Error ? error.message : "Connection to Codex bridge server was lost");
+          return;
+        }
+
         if (cancelled) return;
-        console.error("[CodexBuildChatTab] Polling disconnected:", error);
-        isInitializedRef.current = false;
-        setConnectionState("error");
-        setErrorMessage(error instanceof Error ? error.message : "Connection to Codex bridge server was lost");
-        return;
-      }
 
-      if (cancelled) return;
-
-      debugCodexBuild("poll result", () => ({
-        pipelineId,
-        currentSessionKey,
-        currentSdkSessionId,
-        status: status?.status,
-        statusTitle: status?.title,
-        statusError: status?.error,
-        incomingMessageCount: messages.length,
-        incomingLastMessage: summarizeCodexMessage(messages[messages.length - 1]),
-      }));
-
-      const storedSession = useCodexStore.getState().sessions.get(currentSessionKey);
-
-      if (messages.length > 0) {
-        const existingMessages = storedSession?.messages ?? [];
-        if (!codexMessagesEqual(existingMessages, messages)) {
-          debugCodexBuild("set messages", () => ({
-            pipelineId,
-            currentSessionKey,
-            previousCount: existingMessages.length,
-            nextCount: messages.length,
-            previousLastMessage: summarizeCodexMessage(existingMessages[existingMessages.length - 1]),
-            nextLastMessage: summarizeCodexMessage(messages[messages.length - 1]),
-          }));
-          setMessages(currentSessionKey, messages);
-        }
-      }
-
-      if (!status) {
-        const message = "Codex session no longer exists";
-        appendCodexMessage(currentSessionKey, buildErrorMessage(message));
-        setSessionError(currentSessionKey, message);
-        setSessionLoading(currentSessionKey, false);
-        setPipelineError(pipelineId, message);
-        return;
-      }
-
-      const latestSession = useCodexStore.getState().sessions.get(currentSessionKey);
-
-      if (status.title && latestSession?.title !== status.title) {
-        setSessionTitle(currentSessionKey, status.title);
-      }
-
-      if (status.status === "running") {
-        if (latestSession?.isLoading !== true) {
-          debugCodexBuild("set loading true from poll", () => ({
-            pipelineId,
-            currentSessionKey,
-            currentSdkSessionId,
-          }));
-          setSessionLoading(currentSessionKey, true);
-        }
-        return;
-      }
-
-      const latestPipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId);
-      if (latestPipeline?.pendingPromptAttempt || latestPipeline?.reconnectAttempt) {
-        return;
-      }
-
-      if (status.status === "error") {
-        const message = status.error?.trim() || "Codex session failed";
-        if (latestSession?.error !== message) {
-          appendCodexMessage(currentSessionKey, buildErrorMessage(message));
-          setSessionError(currentSessionKey, message);
-        }
-        if (latestSession?.isLoading !== false) {
-          setSessionLoading(currentSessionKey, false);
-        }
-        return;
-      }
-
-      if (latestSession?.error !== undefined) {
-        setSessionError(currentSessionKey, undefined);
-      }
-      if (latestSession?.isLoading !== false) {
-        debugCodexBuild("set loading false from poll", () => ({
+        debugCodexBuild("poll result", () => ({
           pipelineId,
           currentSessionKey,
           currentSdkSessionId,
-          status: status.status,
+          status: status?.status,
+          statusTitle: status?.title,
+          statusError: status?.error,
+          messageRevision: status?.messageRevision,
+          transcriptRefreshed: messages !== null,
+          incomingMessageCount: messages?.length,
+          incomingLastMessage: summarizeCodexMessage(messages?.at(-1)),
         }));
-        setSessionLoading(currentSessionKey, false);
+
+        const storedSession = useCodexStore.getState().sessions.get(currentSessionKey);
+
+        if (
+          messages
+          && (messages.length > 0 || typeof status?.messageRevision === "number")
+        ) {
+          const existingMessages = storedSession?.messages ?? [];
+          // A changed bridge revision already proves the transcript changed. The
+          // expensive deep comparison remains only for older bridges that do not
+          // expose revisions.
+          const changed =
+            typeof status?.messageRevision === "number"
+              ? true
+              : !codexMessagesEqual(existingMessages, messages);
+          if (changed) {
+            debugCodexBuild("set messages", () => ({
+              pipelineId,
+              currentSessionKey,
+              previousCount: existingMessages.length,
+              nextCount: messages.length,
+              previousLastMessage: summarizeCodexMessage(existingMessages[existingMessages.length - 1]),
+              nextLastMessage: summarizeCodexMessage(messages[messages.length - 1]),
+            }));
+            setMessages(currentSessionKey, messages);
+          }
+        }
+
+        if (!status) {
+          const message = "Codex session no longer exists";
+          appendCodexMessage(currentSessionKey, buildErrorMessage(message));
+          setSessionError(currentSessionKey, message);
+          setSessionLoading(currentSessionKey, false);
+          setPipelineError(pipelineId, message);
+          return;
+        }
+
+        pollingSnapshotRef.current = {
+          sessionId: currentSdkSessionId,
+          messageRevision: status.messageRevision,
+          engineGeneration: status.engineGeneration,
+          status: status.status,
+        };
+
+        const latestSession = useCodexStore.getState().sessions.get(currentSessionKey);
+
+        if (status.title && latestSession?.title !== status.title) {
+          setSessionTitle(currentSessionKey, status.title);
+        }
+
+        if (status.status === "running") {
+          if (latestSession?.isLoading !== true) {
+            debugCodexBuild("set loading true from poll", () => ({
+              pipelineId,
+              currentSessionKey,
+              currentSdkSessionId,
+            }));
+            setSessionLoading(currentSessionKey, true);
+          }
+          return;
+        }
+
+        const latestPipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+        if (latestPipeline?.pendingPromptAttempt || latestPipeline?.reconnectAttempt) {
+          return;
+        }
+
+        if (status.status === "error") {
+          const message = status.error?.trim() || "Codex session failed";
+          if (latestSession?.error !== message) {
+            appendCodexMessage(currentSessionKey, buildErrorMessage(message));
+            setSessionError(currentSessionKey, message);
+          }
+          if (latestSession?.isLoading !== false) {
+            setSessionLoading(currentSessionKey, false);
+          }
+          return;
+        }
+
+        if (latestSession?.error !== undefined) {
+          setSessionError(currentSessionKey, undefined);
+        }
+        if (latestSession?.isLoading !== false) {
+          debugCodexBuild("set loading false from poll", () => ({
+            pipelineId,
+            currentSessionKey,
+            currentSdkSessionId,
+            status: status.status,
+          }));
+          setSessionLoading(currentSessionKey, false);
+        }
+      } finally {
+        pollInFlight = false;
       }
     };
 
@@ -1344,6 +1398,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     return () => {
       cancelled = true;
       pollingSessionIdRef.current = null;
+      pollingSnapshotRef.current = null;
       window.clearInterval(intervalId);
     };
   }, [
@@ -1369,7 +1424,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     if (!currentSession) return;
 
-    const sessionState = sessionsMap.get(currentSession.sessionKey);
+    const sessionState = currentCodexSession;
     if (!sessionState || sessionState.isLoading) return;
     if (sessionState.error) {
       setPipelineError(pipelineId, sessionState.error);
@@ -1423,7 +1478,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     markSessionIdle,
     pipeline,
     pipelineId,
-    sessionsMap,
+    currentCodexSession,
     setPipelineError,
     setSessionError,
     setSessionLoading,
@@ -1435,11 +1490,11 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     if (!currentSession || currentSession.status !== "running") return;
 
-    const sessionState = sessionsMap.get(currentSession.sessionKey);
+    const sessionState = currentCodexSession;
     if (!sessionState || sessionState.isLoading) return;
 
     markSessionIdle(pipelineId, currentSession.sdkSessionId);
-  }, [markSessionIdle, pipeline, pipelineId, sessionsMap]);
+  }, [currentCodexSession, markSessionIdle, pipeline, pipelineId]);
 
   useEffect(() => {
     if (!pipeline || !client || connectionState !== "connected" || pipelineAdvancingRef.current) return;
@@ -1449,7 +1504,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     if (!currentSession) return;
 
-    const sessionState = sessionsMap.get(currentSession.sessionKey);
+    const sessionState = currentCodexSession;
     if (!sessionState || sessionState.isLoading) return;
     if (sessionState.error) {
       setPipelineError(pipelineId, sessionState.error);
@@ -1502,7 +1557,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     markSessionIdle,
     pipeline,
     pipelineId,
-    sessionsMap,
+    currentCodexSession,
     setPipelineError,
     setSessionError,
     setSessionLoading,
@@ -1942,8 +1997,8 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     if (!pipeline || pipeline.phase !== "paused") return false;
     const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     if (!currentSession) return false;
-    return sessionsMap.get(currentSession.sessionKey)?.isLoading ?? false;
-  }, [pipeline, sessionsMap]);
+    return currentCodexSession?.isLoading ?? false;
+  }, [currentCodexSession, pipeline]);
 
   const handleJumpInKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {

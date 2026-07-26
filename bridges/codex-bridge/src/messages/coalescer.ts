@@ -13,7 +13,7 @@
  */
 export interface CoalescerOptions {
   /** Minimum gap between scheduled publishes. */
-  intervalMs?: number;
+  intervalMs?: number | (() => number);
   publish: () => Promise<void> | void;
   onError?: (error: unknown) => void;
 }
@@ -22,7 +22,7 @@ export interface CoalescerOptions {
 export const DEFAULT_COALESCE_INTERVAL_MS = 100;
 
 export class UpdateCoalescer {
-  private readonly intervalMs: number;
+  private readonly intervalMs: number | (() => number);
   private readonly publish: () => Promise<void> | void;
   private readonly onError?: (error: unknown) => void;
 
@@ -57,8 +57,10 @@ export class UpdateCoalescer {
     }
     if (this.timer) return;
 
+    const intervalMs =
+      typeof this.intervalMs === "function" ? this.intervalMs() : this.intervalMs;
     const elapsed = now - this.lastPublishedAt;
-    const delay = elapsed >= this.intervalMs ? 0 : this.intervalMs - elapsed;
+    const delay = elapsed >= intervalMs ? 0 : intervalMs - elapsed;
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.run();

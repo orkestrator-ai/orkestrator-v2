@@ -167,6 +167,92 @@ describe("/event/subscribe", () => {
     expect(replayed.some((frame) => frame.data.sessionId === "gap")).toBe(false);
   });
 
+  test("session filtering replaces unrelated payloads with cursor-only frames", async () => {
+    const frames = await collect(
+      "?sessionId=target",
+      () => {
+        __testing.emitForTesting({
+          type: "message.updated",
+          sessionId: "other",
+          data: { message: { content: "large unrelated payload" } },
+        });
+        __testing.emitForTesting({
+          type: "message.updated",
+          sessionId: "target",
+          data: { message: { content: "wanted" } },
+        });
+      },
+      { expected: 2 },
+    );
+
+    const cursor = frames.find((frame) => frame.event === "bridge.cursor");
+    expect(cursor).toBeDefined();
+    expect(cursor!.data).toEqual({});
+    expect(frames.some((frame) => frame.data.sessionId === "other")).toBe(false);
+    expect(
+      frames.some(
+        (frame) =>
+          frame.event === "message.updated"
+          && frame.data.sessionId === "target",
+      ),
+    ).toBe(true);
+  });
+
+  test("session filtering preserves revision order and target payloads during replay", async () => {
+    const cursor = __testing.eventRingForTesting().latestRevision;
+
+    __testing.emitForTesting({
+      type: "message.updated",
+      sessionId: "replay-other-1",
+      data: { message: { content: "large unrelated replay payload 1" } },
+    });
+    const unrelatedRevision1 = __testing.eventRingForTesting().latestRevision;
+    __testing.emitForTesting({
+      type: "message.updated",
+      sessionId: "replay-target",
+      data: {
+        message: {
+          content: "wanted replay payload",
+          parts: [{ type: "text", text: "preserve me" }],
+        },
+      },
+    });
+    const targetRevision = __testing.eventRingForTesting().latestRevision;
+    __testing.emitForTesting({
+      type: "session.idle",
+      sessionId: "replay-other-2",
+      data: { detail: "unrelated replay payload 2" },
+    });
+    const unrelatedRevision2 = __testing.eventRingForTesting().latestRevision;
+
+    const frames = await collect(
+      `?since=${cursor}&sessionId=replay-target`,
+      () => undefined,
+      { expected: 3 },
+    );
+
+    expect(frames.find((frame) => frame.event === "connected")!.data.replayed).toBe(3);
+    const replayed = frames.filter((frame) => frame.event !== "connected");
+    expect(replayed.map((frame) => ({ event: frame.event, id: frame.id }))).toEqual([
+      { event: "bridge.cursor", id: String(unrelatedRevision1) },
+      { event: "message.updated", id: String(targetRevision) },
+      { event: "bridge.cursor", id: String(unrelatedRevision2) },
+    ]);
+    expect(replayed[0]!.data).toEqual({});
+    expect(replayed[1]!.data).toEqual({
+      sessionId: "replay-target",
+      message: {
+        content: "wanted replay payload",
+        parts: [{ type: "text", text: "preserve me" }],
+      },
+    });
+    expect(replayed[2]!.data).toEqual({});
+    expect(
+      replayed.some((frame) =>
+        JSON.stringify(frame.data).includes("unrelated replay payload")),
+    ).toBe(false);
+  });
+
   test("a caught-up cursor replays nothing", async () => {
     const cursor = __testing.eventRingForTesting().latestRevision;
     const frames = await collect(`?since=${cursor}`, () => undefined);

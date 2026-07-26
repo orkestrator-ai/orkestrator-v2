@@ -87,6 +87,14 @@ export interface BridgeSession {
   /** Built-in slash-command transcript entries, which have no Codex rollout. */
   localMessages: NormalizedMessage[];
   /**
+   * Monotonic in-memory transcript revision for cheap change detection.
+   *
+   * This deliberately belongs to the bridge session rather than the thread:
+   * local slash-command messages are session-only, while shared thread changes
+   * advance every attached session together.
+   */
+  messageRevision: number;
+  /**
    * True when `localMessages` contains history recovered from a rollout that
    * app-server could no longer resume. The first accepted turn on the replacement
    * thread carries a bounded copy so the model does not silently lose context.
@@ -193,6 +201,7 @@ export class ThreadRegistry {
       | "createdAt"
       | "pendingAttachments"
       | "localMessages"
+      | "messageRevision"
       | "recoveredContextPending"
     >,
   ): BridgeSession {
@@ -200,6 +209,7 @@ export class ThreadRegistry {
       ...session,
       pendingAttachments: [],
       localMessages: [],
+      messageRevision: 0,
       recoveredContextPending: false,
       lastAccessed: this.now(),
       createdAt: this.now(),
@@ -221,6 +231,7 @@ export class ThreadRegistry {
       | "createdAt"
       | "pendingAttachments"
       | "localMessages"
+      | "messageRevision"
       | "recoveredContextPending"
     > & { lastAccessed: number },
   ): BridgeSession {
@@ -228,6 +239,7 @@ export class ThreadRegistry {
       ...session,
       pendingAttachments: [],
       localMessages: [],
+      messageRevision: 0,
       recoveredContextPending: false,
       createdAt: session.lastAccessed,
     };
@@ -255,9 +267,11 @@ export class ThreadRegistry {
    * response for as long as the session id is resolvable.
    */
   appendLocalMessages(session: BridgeSession, ...messages: NormalizedMessage[]): void {
+    if (messages.length === 0) return;
     session.localMessages.push(...messages);
     const excess = session.localMessages.length - MAX_LOCAL_MESSAGES;
     if (excess > 0) session.localMessages.splice(0, excess);
+    session.messageRevision += 1;
   }
 
   getThread(threadId: string): ThreadContext | undefined {

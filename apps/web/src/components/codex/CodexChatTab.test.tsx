@@ -79,7 +79,14 @@ const mockGetStructuredOutput = mock<
     _requestId?: string,
   ) => Promise<any>
 >(async () => null);
-const mockSubscribeToEvents = mock(() => (async function* () {})());
+const mockSubscribeToEvents = mock<
+  (
+    _client: unknown,
+    _signal?: AbortSignal,
+    _since?: number,
+    _sessionId?: string,
+  ) => AsyncIterable<any>
+>(() => (async function* () {})());
 const mockUpdateSessionConfig = mock<
   (
     _client: unknown,
@@ -1013,6 +1020,18 @@ describe("CodexChatTab", () => {
     expect(screen.getByRole("button", { name: /Retry/i })).toBeTruthy();
   });
 
+  test("turns a rejected cached-client health check into a reconnectable error", async () => {
+    mockCheckHealth.mockRejectedValue(new Error("health request reset"));
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(
+      await screen.findByText("Codex bridge server disconnected. Click retry to reconnect."),
+    ).toBeTruthy();
+    expect(useCodexStore.getState().clients.has(ENVIRONMENT_ID)).toBe(false);
+    expect(screen.getByRole("button", { name: /Retry/i })).toBeTruthy();
+  });
+
   test("queues prompts with a generated UUID", async () => {
     composeText = "Queue this prompt";
     useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
@@ -1248,6 +1267,108 @@ describe("CodexChatTab", () => {
       expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.error).toBeUndefined();
       expect(useCodexStore.getState().sessionPhase.has(SESSION_KEY)).toBe(false);
     });
+  });
+
+  test("subscribes to events for the current session and follows a session switch", async () => {
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    mockSubscribeToEvents.mockImplementation(
+      (_client: unknown, signal?: AbortSignal) => (async function* () {
+        if (!signal) return;
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      })(),
+    );
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+    expect(mockSubscribeToEvents.mock.calls[0]?.[3]).toBe(SESSION_ID);
+
+    const switchedSessionId = "session-2";
+    act(() => {
+      useCodexStore.getState().setSession(SESSION_KEY, {
+        sessionId: switchedSessionId,
+        messages: [],
+        isLoading: true,
+        title: "Switched session",
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        mockSubscribeToEvents.mock.calls.some((call) => call[3] === switchedSessionId),
+      ).toBe(true);
+    });
+  });
+
+  test("uses a cursor-only frame as the reconnect revision without changing session state", async () => {
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    mockSubscribeToEvents
+      .mockImplementationOnce(() => (async function* () {
+        yield { type: "bridge.cursor", data: {}, revision: 41 };
+      })() as any)
+      .mockImplementation(
+        (_client: unknown, signal?: AbortSignal) => (async function* () {
+          if (!signal) return;
+          await new Promise<void>((resolve) => {
+            if (signal.aborted) {
+              resolve();
+              return;
+            }
+            signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        })(),
+      );
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(
+      () => expect(mockSubscribeToEvents.mock.calls.length).toBeGreaterThanOrEqual(2),
+      { timeout: 3_000 },
+    );
+    expect(mockSubscribeToEvents.mock.calls[1]?.[2]).toBe(41);
+    expect(mockSubscribeToEvents.mock.calls[1]?.[3]).toBe(SESSION_ID);
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+      sessionId: SESSION_ID,
+      messages: [],
+      isLoading: true,
+    });
+  });
+
+  test("reconciles an authoritative error and refreshes its final transcript", async () => {
+    const finalMessage = createMessage("failed-turn-message", "Partial response before failure");
+    mockGetSessionStatus.mockResolvedValue({
+      status: "error",
+      phase: "failed",
+      title: "Failed turn",
+      error: "Tool execution failed",
+    });
+    mockGetSessionMessages.mockResolvedValue([finalMessage]);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        messages: [finalMessage],
+        title: "Failed turn",
+        isLoading: false,
+        error: "Tool execution failed",
+      });
+    });
+    expect(mockGetSessionMessages).toHaveBeenCalledWith(
+      MOCK_CLIENT,
+      SESSION_ID,
+      expect.objectContaining({ throwOnError: undefined }),
+    );
+    expect(useCodexStore.getState().sessionPhase.has(SESSION_KEY)).toBe(false);
   });
 
   test("a deferred running reconcile cannot overwrite a newer idle SSE event", async () => {
@@ -2894,6 +3015,32 @@ describe("CodexChatTab", () => {
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.error).toBe(
       "Failed to update Codex session settings",
+    );
+  });
+
+  test("rolls back a rejected reasoning-effort change", async () => {
+    mockUpdateSessionConfig.mockResolvedValue({
+      outcome: "rejected",
+      httpStatus: 409,
+    });
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("codex-effort-change"));
+
+    await waitFor(() => {
+      expect(mockUpdateSessionConfig).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        SESSION_ID,
+        expect.objectContaining({ modelReasoningEffort: "low" }),
+      );
+      expect(useCodexStore.getState().selectedReasoningEffort.get(SESSION_KEY)).toBe(
+        "medium",
+      );
+    });
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.error).toBe(
+      "Failed to update Codex session settings (HTTP 409)",
     );
   });
 

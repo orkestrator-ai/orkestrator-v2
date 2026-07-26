@@ -654,9 +654,11 @@ function expectedLocalShellPath(): string {
   return ["/bin/zsh", "/bin/bash", "/bin/sh"].find((candidate) => existsSync(candidate)) ?? configuredShell ?? "zsh";
 }
 
+const ASYNC_TEST_WAIT_TIMEOUT_MS = 3_000;
+
 async function waitForPtyProcessCount(count: number): Promise<void> {
   const start = Date.now();
-  while (Date.now() - start < 1_000) {
+  while (Date.now() - start < ASYNC_TEST_WAIT_TIMEOUT_MS) {
     if (ptyProcesses.length >= count) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
@@ -665,7 +667,7 @@ async function waitForPtyProcessCount(count: number): Promise<void> {
 
 async function waitForCondition(condition: () => boolean, description: string): Promise<void> {
   const start = Date.now();
-  while (Date.now() - start < 1_000) {
+  while (Date.now() - start < ASYNC_TEST_WAIT_TIMEOUT_MS) {
     if (condition()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }

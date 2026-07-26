@@ -26,9 +26,9 @@ async function createTempDir(prefix: string): Promise<string> {
   return dir;
 }
 
-function createEnvironment(worktreePath: string): Environment {
+function createEnvironment(worktreePath: string, environmentId: string): Environment {
   return {
-    id: "env-tmux",
+    id: environmentId,
     projectId: "project-1",
     name: "tmux",
     branch: "main",
@@ -221,10 +221,24 @@ exit 0
   process.env.CLAUDE_CONFIG_DIR = path.join(home, ".claude");
   process.env.FAKE_TMUX_LOG = log;
   process.env.FAKE_TMUX_ALIVE = alive;
+  const environment = createEnvironment(worktree, `env-${path.basename(root)}`);
 
   try {
-    await run({ worktree, home, log, alive, environment: createEnvironment(worktree) });
+    await run({
+      worktree,
+      home,
+      log,
+      alive,
+      // Session metadata lives below a process-external temp root keyed by
+      // environment id. A fixed id lets concurrent Bun invocations remove each
+      // other's session directories even though their fake runtimes are unique.
+      environment,
+    });
   } finally {
+    await fs.rm(
+      path.join("/tmp", "orkestrator-v2-claude-tmux", environment.id),
+      { recursive: true, force: true },
+    );
     if (originalPath === undefined) delete process.env.PATH;
     else process.env.PATH = originalPath;
     if (originalHome === undefined) delete process.env.HOME;

@@ -70,7 +70,22 @@ mock.module("@monaco-editor/react", () => ({
   },
 }));
 
-const { DiffViewerTab } = await import("./DiffViewerTab");
+const { DiffViewerTab, formatBaseRef } = await import("./DiffViewerTab");
+
+const originalMatchMedia = window.matchMedia;
+
+function setMobileViewport(matches: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches,
+    media: query,
+    onchange: null,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    dispatchEvent: () => true,
+  })) as unknown as typeof window.matchMedia;
+}
 
 const baseProps = {
   filePath: "src/components/Button.tsx",
@@ -118,6 +133,7 @@ afterEach(() => {
 });
 
 afterAll(() => {
+  window.matchMedia = originalMatchMedia;
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@monaco-editor/react", () => realMonacoReactSnapshot);
 });
@@ -415,6 +431,81 @@ describe("DiffViewerTab editor lifecycle and controls", () => {
     expect(screen.getByTestId("diff-editor").dataset.modified).toBe(
       "container modified",
     );
+  });
+});
+
+describe("formatBaseRef", () => {
+  test.each([
+    ["63d12576e9198f24bc2271a6a8c3702dfb391eae", "63d1257"],
+    ["main", "main"],
+    ["feature/63d12576", "feature/63d12576"],
+    ["63d1257", "63d1257"],
+  ])("renders %s as %s", (baseBranch, expected) => {
+    expect(formatBaseRef(baseBranch)).toBe(expected);
+  });
+});
+
+describe("DiffViewerTab on a mobile viewport", () => {
+  beforeEach(() => {
+    setMobileViewport(true);
+  });
+
+  afterEach(() => {
+    setMobileViewport(false);
+  });
+
+  test("forces the inline view and hides the mode toggle", async () => {
+    render(
+      <DiffViewerTab
+        {...baseProps}
+        containerId="container-1"
+        onSwitchToFileView={() => {}}
+      />,
+    );
+
+    expect((await screen.findByTestId("diff-editor")).dataset.sideBySide).toBe("false");
+    expect(screen.queryByRole("button", { name: "Side by side" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Inline" })).toBeNull();
+    expect(screen.getByTitle("View file")).toBeTruthy();
+  });
+
+  test("trims the editor chrome and wraps long lines", async () => {
+    render(<DiffViewerTab {...baseProps} containerId="container-1" />);
+    await screen.findByTestId("diff-editor");
+
+    const options = renderedDiffEditorProps?.options ?? {};
+    expect(options.wordWrap).toBe("on");
+    expect(options.diffWordWrap).toBe("on");
+    expect(options.compactMode).toBe(true);
+    expect(options.minimap).toEqual({ enabled: false });
+    expect(options.renderOverviewRuler).toBe(false);
+    expect(options.folding).toBe(false);
+    expect(
+      (options.hideUnchangedRegions as { enabled?: boolean } | undefined)?.enabled,
+    ).toBe(true);
+    // The configured terminal font size is capped so code fits across the screen.
+    expect(options.fontSize).toBe(12);
+  });
+
+  test("shows only the basename and the short base ref", async () => {
+    render(
+      <DiffViewerTab
+        {...baseProps}
+        baseBranch="63d12576e9198f24bc2271a6a8c3702dfb391eae"
+        containerId="container-1"
+        gitStatus="A"
+      />,
+    );
+    await screen.findByTestId("diff-editor");
+
+    const path = screen.getByTitle(baseProps.filePath);
+    expect(path.querySelector(".sr-only")?.textContent).toBe(baseProps.filePath);
+    const visualPath = path.querySelector('[aria-hidden="true"]');
+    expect(visualPath?.children.length).toBe(1);
+    expect(visualPath?.textContent).toBe("Button.tsx");
+    expect(screen.getByText("vs 63d1257")).toBeTruthy();
+    // The status badge is dropped; the colour-coded icon carries the status.
+    expect(screen.queryByText("New file")).toBeNull();
   });
 });
 

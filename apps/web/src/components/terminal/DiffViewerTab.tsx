@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { DiffEditor, type BeforeMount } from "@monaco-editor/react";
 import type * as monaco from "monaco-editor";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,7 @@ import {
 import { useConfigStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { Button } from "@/components/ui/button";
+import { useMediaQuery } from "@/hooks";
 import type { GitFileStatus } from "@/types/paneLayout";
 
 interface DiffViewerTabProps {
@@ -35,6 +36,23 @@ interface DiffViewerTabProps {
 
 type DiffMode = "side-by-side" | "inline";
 
+/** Viewports narrower than this get the touch-oriented single-column layout. */
+const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
+
+/**
+ * Cap for the configured terminal font size on a phone. A comfortable desktop size
+ * fits too few characters per line to read code on a ~390px screen.
+ */
+const MOBILE_MAX_FONT_SIZE = 12;
+
+/**
+ * A 40-character object name eats the whole header on a phone (and most of it on
+ * a desktop), so show the short form and keep the full ref in the tooltip.
+ */
+export function formatBaseRef(baseBranch: string): string {
+  return /^[0-9a-f]{40}$/i.test(baseBranch) ? baseBranch.slice(0, 7) : baseBranch;
+}
+
 export function DiffViewerTab({
   filePath,
   containerId,
@@ -49,6 +67,7 @@ export function DiffViewerTab({
   const terminalAppearance =
     useConfigStore((state) => state.config.global.terminalAppearance) ||
     DEFAULT_TERMINAL_APPEARANCE;
+  const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
 
   const [originalContent, setOriginalContent] = useState<string | null>(null);
   const [modifiedContent, setModifiedContent] = useState<string | null>(null);
@@ -59,8 +78,73 @@ export function DiffViewerTab({
   const [isLoading, setIsLoading] = useState(true);
   const [diffMode, setDiffMode] = useState<DiffMode>("side-by-side");
 
+  // Two columns of code cannot fit on a phone, so the mode toggle is hidden there
+  // and the view is pinned to inline regardless of the remembered desktop mode.
+  const effectiveDiffMode: DiffMode = isMobile ? "inline" : diffMode;
+
   // Track editor instance for proper cleanup
   const editorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
+
+  const editorOptions = useMemo<monaco.editor.IDiffEditorConstructionOptions>(() => {
+    const shared = {
+      readOnly: true,
+      renderSideBySide: effectiveDiffMode === "side-by-side",
+      fontFamily: `"${terminalAppearance.fontFamily}", "Fira Code", monospace`,
+      automaticLayout: true,
+      ignoreTrimWhitespace: false,
+    };
+
+    if (!isMobile) {
+      return {
+        ...shared,
+        fontSize: terminalAppearance.fontSize,
+        enableSplitViewResizing: true,
+      };
+    }
+
+    // Every pixel of width is code on a phone: no minimap, no ruler, no folding or
+    // revert gutter, and wrapping instead of a horizontal scroll nobody can aim at.
+    return {
+      ...shared,
+      fontSize: Math.min(terminalAppearance.fontSize, MOBILE_MAX_FONT_SIZE),
+      enableSplitViewResizing: false,
+      compactMode: true,
+      wordWrap: "on",
+      diffWordWrap: "on",
+      minimap: { enabled: false },
+      renderOverviewRuler: false,
+      overviewRulerLanes: 0,
+      overviewRulerBorder: false,
+      renderMarginRevertIcon: false,
+      renderGutterMenu: false,
+      glyphMargin: false,
+      folding: false,
+      // Just enough margin for the +/- indicators: colour alone should not be the
+      // only thing distinguishing an addition from a deletion.
+      lineDecorationsWidth: 12,
+      lineNumbersMinChars: 2,
+      scrollBeyondLastLine: false,
+      // Long files are mostly untouched context; collapse it so the changes are
+      // reachable without a lot of scrolling.
+      hideUnchangedRegions: {
+        enabled: true,
+        contextLineCount: 2,
+        minimumLineCount: 4,
+        revealLineCount: 10,
+      },
+      scrollbar: {
+        verticalScrollbarSize: 6,
+        horizontalScrollbarSize: 6,
+        useShadows: false,
+      },
+      padding: { top: 4, bottom: 24 },
+    };
+  }, [
+    effectiveDiffMode,
+    isMobile,
+    terminalAppearance.fontFamily,
+    terminalAppearance.fontSize,
+  ]);
 
   // Disable linting/diagnostics before editor mounts
   const handleEditorWillMount: BeforeMount = useCallback((monacoInstance) => {
@@ -227,6 +311,7 @@ export function DiffViewerTab({
           baseBranch={baseBranch}
           diffMode={diffMode}
           onDiffModeChange={setDiffMode}
+          isMobile={isMobile}
           // Don't show "View file" button for deleted files - the file doesn't exist
           onSwitchToFileView={undefined}
           statusIcon={<FileX className="h-3 w-3 text-red-500" />}
@@ -241,15 +326,7 @@ export function DiffViewerTab({
             theme="vs-dark"
             beforeMount={handleEditorWillMount}
             onMount={handleEditorMount}
-            options={{
-              readOnly: true,
-              renderSideBySide: diffMode === "side-by-side",
-              fontSize: terminalAppearance.fontSize,
-              fontFamily: `"${terminalAppearance.fontFamily}", "Fira Code", monospace`,
-              automaticLayout: true,
-              enableSplitViewResizing: true,
-              ignoreTrimWhitespace: false,
-            }}
+            options={editorOptions}
           />
         </div>
       </div>
@@ -270,6 +347,7 @@ export function DiffViewerTab({
         baseBranch={baseBranch}
         diffMode={diffMode}
         onDiffModeChange={setDiffMode}
+        isMobile={isMobile}
         onSwitchToFileView={onSwitchToFileView}
         statusIcon={
           isNewFile ? (
@@ -289,15 +367,7 @@ export function DiffViewerTab({
           theme="vs-dark"
           beforeMount={handleEditorWillMount}
           onMount={handleEditorMount}
-          options={{
-            readOnly: true,
-            renderSideBySide: diffMode === "side-by-side",
-            fontSize: terminalAppearance.fontSize,
-            fontFamily: `"${terminalAppearance.fontFamily}", "Fira Code", monospace`,
-            automaticLayout: true,
-            enableSplitViewResizing: true,
-            ignoreTrimWhitespace: false,
-          }}
+          options={editorOptions}
         />
       </div>
     </div>
@@ -310,6 +380,7 @@ interface DiffHeaderProps {
   baseBranch: string;
   diffMode: DiffMode;
   onDiffModeChange: (mode: DiffMode) => void;
+  isMobile: boolean;
   onSwitchToFileView?: () => void;
   statusIcon: React.ReactNode;
   statusText: string;
@@ -320,6 +391,7 @@ function DiffHeader({
   baseBranch,
   diffMode,
   onDiffModeChange,
+  isMobile,
   onSwitchToFileView,
   statusIcon,
   statusText,
@@ -328,9 +400,15 @@ function DiffHeader({
   const directory = separatorIndex >= 0 ? filePath.slice(0, separatorIndex) : "";
   const separator = separatorIndex >= 0 ? filePath[separatorIndex] : "";
   const filename = separatorIndex >= 0 ? filePath.slice(separatorIndex + 1) : filePath;
+  const baseRef = formatBaseRef(baseBranch);
 
   return (
-    <div className="flex items-center gap-2 border-b border-border bg-background px-4 py-2">
+    <div
+      className={cn(
+        "flex items-center gap-2 border-b border-border bg-background py-2",
+        isMobile ? "px-2" : "px-4",
+      )}
+    >
       <div className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
         <span className="shrink-0">{statusIcon}</span>
         <span
@@ -338,69 +416,79 @@ function DiffHeader({
           title={filePath}
         >
           <span className="sr-only">{filePath}</span>
+          {/* On a phone the directory is dropped entirely: the basename is the only
+              part that fits, and the full path is still on the title/sr-only node. */}
           <span aria-hidden="true" className="flex min-w-0 overflow-hidden">
-            {directory && (
+            {directory && !isMobile && (
               <span className="min-w-0 shrink truncate text-left [direction:rtl]">
                 {directory}
               </span>
             )}
             <span className="max-w-full min-w-0 shrink-0 truncate">
-              {separator}
-              {filename}
+              {isMobile ? filename : `${separator}${filename}`}
             </span>
           </span>
         </span>
-        <span className="shrink-0 text-xs opacity-60">vs {baseBranch}</span>
-        <span
-          className={cn(
-            "shrink-0 rounded px-1.5 py-0.5 text-xs",
-            statusText === "New file" && "bg-green-500/20 text-green-400",
-            statusText === "Modified" && "bg-yellow-500/20 text-yellow-400",
-            statusText === "Deleted" && "bg-red-500/20 text-red-400"
-          )}
-        >
-          {statusText}
+        <span className="shrink-0 text-xs opacity-60" title={`vs ${baseBranch}`}>
+          vs {baseRef}
         </span>
+        {/* The status is already colour-coded by the icon, so the badge is desktop-only. */}
+        {!isMobile && (
+          <span
+            className={cn(
+              "shrink-0 rounded px-1.5 py-0.5 text-xs",
+              statusText === "New file" && "bg-green-500/20 text-green-400",
+              statusText === "Modified" && "bg-yellow-500/20 text-yellow-400",
+              statusText === "Deleted" && "bg-red-500/20 text-red-400"
+            )}
+          >
+            {statusText}
+          </span>
+        )}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        {/* Diff mode toggle */}
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "h-7 px-2",
-            diffMode === "side-by-side" &&
-              "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
-          )}
-          onClick={() => onDiffModeChange("side-by-side")}
-          title="Side by side"
-          aria-label="Side by side"
-          aria-pressed={diffMode === "side-by-side"}
-        >
-          <Columns className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "h-7 px-2",
-            diffMode === "inline" &&
-              "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
-          )}
-          onClick={() => onDiffModeChange("inline")}
-          title="Inline"
-          aria-label="Inline"
-          aria-pressed={diffMode === "inline"}
-        >
-          <AlignJustify className="h-3.5 w-3.5" />
-        </Button>
-        <div className="mx-1 h-4 w-px bg-border" />
+        {/* Diff mode toggle - inline is forced on mobile, so the toggle is hidden there */}
+        {!isMobile && (
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                "h-7 px-2",
+                diffMode === "side-by-side" &&
+                  "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
+              )}
+              onClick={() => onDiffModeChange("side-by-side")}
+              title="Side by side"
+              aria-label="Side by side"
+              aria-pressed={diffMode === "side-by-side"}
+            >
+              <Columns className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                "h-7 px-2",
+                diffMode === "inline" &&
+                  "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
+              )}
+              onClick={() => onDiffModeChange("inline")}
+              title="Inline"
+              aria-label="Inline"
+              aria-pressed={diffMode === "inline"}
+            >
+              <AlignJustify className="h-3.5 w-3.5" />
+            </Button>
+            <div className="mx-1 h-4 w-px bg-border" />
+          </>
+        )}
         {/* Switch to file view toggle */}
         {onSwitchToFileView && (
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 px-2"
+            className={cn("px-2", isMobile ? "h-8" : "h-7")}
             onClick={onSwitchToFileView}
             title="View file"
           >

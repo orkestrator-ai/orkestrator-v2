@@ -262,8 +262,86 @@ function PathTruncationFixture() {
   );
 }
 
+const diffFixtureOriginal = [
+  "# Frontend State Audit",
+  "",
+  "**Goal:** minimise renderer-owned state so that every client of the same backend",
+  "converges on a consistent view.",
+  "",
+  "## 1. Current architecture",
+  "",
+  "The backend already owns a lot. Storage persists projects, environments and review",
+  "workflows, plus kanban tasks and completion-comment markers.",
+  "",
+  "### The gap",
+  "",
+  "Two things are missing, and every finding below is downstream of them.",
+].join("\n");
+
+const diffFixtureModified = [
+  "# Frontend State Audit — What Should Move",
+  "",
+  "**Goal:** minimise renderer-owned state so that every client of the same backend",
+  "converges on a consistent view of the world.",
+  "",
+  "## 1. Current architecture",
+  "",
+  "The backend already owns a lot. `StorageService` persists projects, environments,",
+  "config, review workflows, kanban tasks and completion-comment markers.",
+  "",
+  "### The gap",
+  "",
+  "Two things are missing, and every finding below is downstream of them.",
+  "",
+  "**(a) There is no general change-notification broadcast** — only a fixed set of",
+  "event names is ever emitted across the whole surface:",
+  "",
+  "```",
+  "environment-renamed",
+  "environment-setup-started",
+  "claude-model-catalog-updated",
+  "```",
+].join("\n");
+
+/**
+ * Renders the diff viewer at full height so the phone layout (inline mode, wrapped
+ * lines, trimmed gutters) can be inspected at a real mobile viewport.
+ */
+function DiffViewerFixture() {
+  const params = new URLSearchParams(window.location.search);
+  const gitStatus = params.get("status") === "new" ? "A" : "M";
+
+  window.orkestrator = {
+    invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
+      const content =
+        command === "read_file_at_branch" ? diffFixtureOriginal : diffFixtureModified;
+      return {
+        path: String(args?.filePath ?? ""),
+        content,
+        language: "markdown",
+      } as T;
+    },
+  } as Window["orkestrator"];
+
+  return (
+    <main className="h-screen bg-background text-foreground">
+      <section data-testid="diff-viewer-pane" className="relative h-full w-full">
+        <DiffViewerTab
+          filePath="docs/audits/frontend-state-audit.md"
+          containerId="fixture-container"
+          baseBranch="63d12576e9198f24bc2271a6a8c3702dfb391eae"
+          gitStatus={gitStatus}
+          isActive
+          onSwitchToFileView={() => {}}
+        />
+      </section>
+    </main>
+  );
+}
+
 function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
+  if (window.location.pathname === "/diff-viewer") return <DiffViewerFixture />;
   if (window.location.pathname === "/codex-compose") return <CodexComposeFixture />;
   if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;

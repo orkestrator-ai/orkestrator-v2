@@ -272,6 +272,21 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
 
   setPendingInteractions: (sessionKey, interactions) =>
     set((state) => {
+      const existing = state.pendingInteractions.get(sessionKey) ?? [];
+      // Same rationale as `setPendingApprovals`: reconcile calls this on every
+      // tick, almost always with an empty list, so an always-new Map here would
+      // rerender the whole tab. `expiresAt` is compared as well as the id because
+      // the bridge re-reports a pending interaction with a refreshed deadline.
+      if (
+        existing.length === interactions.length
+        && existing.every(
+          (entry, index) =>
+            entry.interactionId === interactions[index]?.interactionId
+            && entry.expiresAt === interactions[index]?.expiresAt,
+        )
+      ) {
+        return state;
+      }
       const next = new Map(state.pendingInteractions);
       if (interactions.length === 0) next.delete(sessionKey);
       else next.set(sessionKey, interactions);

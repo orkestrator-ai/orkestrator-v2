@@ -1891,3 +1891,88 @@ describe("NativeMessage agent status and grouping details", () => {
     expect(screen.getByText("1 update")).toBeTruthy();
   });
 });
+
+describe("NativeMessage actions slot", () => {
+  afterEach(() => {
+    cleanup();
+    useMessagePartExpansionStore.getState().reset();
+  });
+
+  test("renders caller-supplied actions before the copy button on a user message", () => {
+    // This is the shared render path for all three tabs' fork buttons.
+    const message = makeMessage([{ type: "text", content: "Ship it" }], {
+      id: "user-1",
+      role: "user",
+      content: "Ship it",
+    });
+
+    render(
+      <NativeMessage
+        message={message}
+        actions={<button type="button">Fork from here</button>}
+      />,
+    );
+
+    const fork = screen.getByRole("button", { name: "Fork from here" });
+    const copy = screen.getByRole("button", { name: "Copy text" });
+    expect(fork).toBeTruthy();
+    // Ordering is load-bearing: copy stays the right-most control.
+    expect(
+      fork.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  test("renders actions on an assistant message alongside the copy button", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Done" }])}
+        actions={<button type="button">Custom action</button>}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Custom action" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy text" })).toBeTruthy();
+  });
+
+  test("renders actions even when there is nothing to copy", () => {
+    /*
+     * With no copy content the action row used to be `undefined`, so
+     * `MessageShell` hid it — and with it any caller-supplied action.
+     */
+    const message = makeMessage([
+      { type: "tool-invocation", content: "Read", toolName: "Read", toolState: "success" },
+    ]);
+
+    render(
+      <NativeMessage
+        message={message}
+        actions={<button type="button">Fork from here</button>}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Fork from here" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Copy text" })).toBeNull();
+  });
+
+  test("leaves the copy-only layout undisturbed when no actions are passed", () => {
+    render(<NativeMessage message={makeMessage([{ type: "text", content: "Done" }])} />);
+
+    const copy = screen.getByRole("button", { name: "Copy text" });
+    expect(copy).toBeTruthy();
+    // Exactly one control in the action row — nothing extra was introduced.
+    expect(copy.parentElement?.querySelectorAll("button")).toHaveLength(1);
+  });
+
+  test("renders no action row at all when there is neither copy content nor actions", () => {
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([
+          { type: "tool-invocation", content: "Read", toolName: "Read", toolState: "success" },
+        ])}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Copy text" })).toBeNull();
+    expect(container.textContent).not.toContain("Fork from here");
+  });
+});

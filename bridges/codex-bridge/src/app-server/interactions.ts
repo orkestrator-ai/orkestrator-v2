@@ -54,6 +54,58 @@ export type InteractionAnswer =
     }
   | { action: "decline" | "cancel"; meta?: unknown };
 
+/**
+ * True when `value` is the exact `Record<string, string[]>` the question
+ * response shape requires.
+ *
+ * This must be checked *before* anything calls `.some()` on the map's values.
+ * `answers?.[id]?.some(...)` guards nullish, not non-callable: a client sending
+ * `{"answers":{"q":"TypeScript"}}` would throw a `TypeError` deep inside the
+ * runtime and surface as a 500 while the interaction stayed parked until its
+ * auto-cancel.
+ */
+export function isInteractionAnswerMap(value: unknown): value is Record<string, string[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every(
+    (entry) =>
+      Array.isArray(entry)
+      && entry.length > 0
+      && entry.every((item) => typeof item === "string" && item.length > 0),
+  );
+}
+
+/**
+ * Validates an untrusted request body into an `InteractionAnswer`.
+ *
+ * Returns null for anything malformed so the route can answer 400 rather than
+ * handing an unchecked shape to the runtime.
+ */
+export function parseInteractionAnswer(body: unknown): InteractionAnswer | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const source = body as Record<string, unknown>;
+  const action = source.action;
+  if (action === "decline" || action === "cancel") {
+    return { action, ...("meta" in source ? { meta: source.meta } : {}) };
+  }
+  if (action !== "accept") return null;
+
+  // `null`/absent means "no answers supplied", which is a legitimate accept for
+  // an MCP form. Anything present but not a `Record<string, string[]>` is a
+  // malformed request, not an empty one.
+  let answers: Record<string, string[]> | undefined;
+  if (source.answers !== undefined && source.answers !== null) {
+    if (!isInteractionAnswerMap(source.answers)) return null;
+    answers = source.answers;
+  }
+
+  return {
+    action: "accept",
+    ...(answers ? { answers } : {}),
+    ...("content" in source ? { content: source.content } : {}),
+    ...("meta" in source ? { meta: source.meta } : {}),
+  };
+}
+
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>

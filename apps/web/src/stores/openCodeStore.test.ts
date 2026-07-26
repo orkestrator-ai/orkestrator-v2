@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { ERROR_MESSAGE_PREFIX, type OpenCodeMessage, type PermissionRequest } from "../lib/opencode-client";
+import {
+  ERROR_MESSAGE_PREFIX,
+  type OpenCodeMessage,
+  type OpenCodeRuntimeHealth,
+  type PermissionRequest,
+} from "../lib/opencode-client";
 import { OPTIMISTIC_MESSAGE_PREFIX } from "../lib/chat/client-only-messages";
 import { type OpenCodeAttachment, useOpenCodeStore } from "./openCodeStore";
 import type { ContextUsageSnapshot } from "../lib/context-usage";
@@ -23,6 +28,11 @@ function resetOpenCodeStore() {
     pendingPermissions: new Map(),
     eventSubscriptions: new Map(),
     contextUsage: new Map(),
+    // Every map the store owns has to be reset here. A map left out is a map
+    // that carries state between test files, which makes the first test anyone
+    // writes for that action order-dependent.
+    runtimeHealth: new Map(),
+    selectedAgent: new Map(),
   });
 }
 
@@ -719,11 +729,35 @@ describe("openCodeStore attachments, drafts, and composing state", () => {
   test("stores and clears context usage snapshots", () => {
     const store = useOpenCodeStore.getState();
     const sessionKey = "env-env-1:tab-1";
+    // Every provider-exact field has to survive the round trip: the store is
+    // where the usage panel reads them back from, so a field the store quietly
+    // dropped would simply never render.
     const usage: ContextUsageSnapshot = {
       usedTokens: 1200,
       totalTokens: 8000,
       percentUsed: 15,
       modelId: "openai/gpt-5",
+      inputTokens: 900,
+      outputTokens: 200,
+      cacheReadTokens: 100,
+      cacheWriteTokens: 40,
+      reasoningTokens: 25,
+      lastTurnTokens: 1200,
+      sessionTokens: 1240,
+      costUsd: 0.031,
+      durationMs: 4200,
+      apiDurationMs: 3900,
+      estimated: false,
+      source: "opencode",
+      updatedAt: "2026-07-26T00:00:00.000Z",
+      rateLimits: [
+        { label: "5h", usedPercent: 12, resetsAt: "2026-07-26T05:00:00.000Z", windowMinutes: 300 },
+      ],
+      credits: { hasCredits: true, unlimited: false, balance: "12.00" },
+      contextCategories: [{ name: "tools", tokens: 500, color: "#fff" }],
+      permissionDenials: 2,
+      linesAdded: 30,
+      linesRemoved: 4,
     };
 
     store.setContextUsage(sessionKey, usage);
@@ -731,6 +765,32 @@ describe("openCodeStore attachments, drafts, and composing state", () => {
 
     store.setContextUsage(sessionKey, null);
     expect(store.getContextUsage(sessionKey)).toBeUndefined();
+    expect(useOpenCodeStore.getState().contextUsage.has(sessionKey)).toBe(false);
+  });
+
+  test("replaces rather than merges an earlier usage snapshot", () => {
+    const store = useOpenCodeStore.getState();
+    const sessionKey = "env-env-1:tab-1";
+
+    store.setContextUsage(sessionKey, {
+      usedTokens: 1200,
+      totalTokens: 8000,
+      percentUsed: 15,
+      costUsd: 0.5,
+    });
+    store.setContextUsage(sessionKey, {
+      usedTokens: 10,
+      totalTokens: 8000,
+      percentUsed: 0.125,
+    });
+
+    // A stale `costUsd` surviving a replacement would show a cost from a turn
+    // that no longer exists.
+    expect(store.getContextUsage(sessionKey)).toEqual({
+      usedTokens: 10,
+      totalTokens: 8000,
+      percentUsed: 0.125,
+    });
   });
 });
 
@@ -873,5 +933,147 @@ describe("openCodeStore questions and event subscriptions", () => {
     expect(store.getPendingPermission("permission-b")?.id).toBe("permission-b");
     expect(store.hasActiveEventSubscription("env-1")).toBe(false);
     expect(returnSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("openCodeStore runtime health and agents", () => {
+  beforeEach(resetOpenCodeStore);
+
+  const HEALTH: OpenCodeRuntimeHealth = {
+    agents: [
+      { name: "build", description: "Default", mode: "primary", native: true },
+      { name: "plan", mode: "primary" },
+    ],
+    skills: [{ name: "review", location: "/skills/review" }],
+    mcpServers: [{ name: "docs", status: "connected" }],
+    lspServers: [{ id: "ts", name: "typescript", root: "/repo", status: "ready" }],
+    formatters: [{ name: "prettier", enabled: true, extensions: [".ts"] }],
+    todos: [{ content: "ship", status: "pending", priority: "high" }],
+    diffs: [{ file: "a.ts", additions: 3, deletions: 1, status: "modified" }],
+    fetchedAt: "2026-07-26T00:00:00.000Z",
+  };
+
+  test("stores and reads a snapshot per environment", () => {
+    const store = useOpenCodeStore.getState();
+
+    store.setRuntimeHealth("env-1", HEALTH);
+
+    expect(store.getRuntimeHealth("env-1")).toEqual(HEALTH);
+    expect(store.getRuntimeHealth("env-2")).toBeUndefined();
+  });
+
+  test("clears the snapshot when passed null", () => {
+    const store = useOpenCodeStore.getState();
+    store.setRuntimeHealth("env-1", HEALTH);
+
+    store.setRuntimeHealth("env-1", null);
+
+    expect(store.getRuntimeHealth("env-1")).toBeUndefined();
+    expect(useOpenCodeStore.getState().runtimeHealth.has("env-1")).toBe(false);
+  });
+
+  test("getAgents reads the agents out of the health snapshot", () => {
+    const store = useOpenCodeStore.getState();
+    store.setRuntimeHealth("env-1", HEALTH);
+
+    expect(store.getAgents("env-1").map((agent) => agent.name)).toEqual([
+      "build",
+      "plan",
+    ]);
+  });
+
+  test("getAgents returns a stable reference when there is no snapshot", () => {
+    // `useSyncExternalStore` compares the selector result by identity, so a
+    // freshly allocated `[]` on every read is an infinite render loop for the
+    // first component that selects this.
+    const store = useOpenCodeStore.getState();
+
+    expect(store.getAgents("env-1")).toBe(store.getAgents("env-1"));
+    expect(store.getAgents("env-1")).toBe(store.getAgents("env-2"));
+    expect(store.getAgents("env-1")).toEqual([]);
+
+    // Still stable once an unrelated environment has a snapshot.
+    store.setRuntimeHealth("env-2", HEALTH);
+    expect(store.getAgents("env-1")).toBe(store.getAgents("env-1"));
+  });
+
+  test("getAgents returns the snapshot's own array without copying it", () => {
+    const store = useOpenCodeStore.getState();
+    store.setRuntimeHealth("env-1", HEALTH);
+
+    expect(store.getAgents("env-1")).toBe(store.getAgents("env-1"));
+    expect(store.getAgents("env-1")).toBe(HEALTH.agents);
+  });
+
+  test("clearEnvironment drops the snapshot for that environment only", () => {
+    const store = useOpenCodeStore.getState();
+    store.setRuntimeHealth("env-1", HEALTH);
+    store.setRuntimeHealth("env-2", HEALTH);
+
+    store.clearEnvironment("env-1");
+
+    const state = useOpenCodeStore.getState();
+    expect(state.getRuntimeHealth("env-1")).toBeUndefined();
+    expect(state.getRuntimeHealth("env-2")).toEqual(HEALTH);
+    expect(state.getAgents("env-1")).toEqual([]);
+  });
+});
+
+describe("openCodeStore selected agent", () => {
+  beforeEach(resetOpenCodeStore);
+
+  const SESSION_KEY = "env-env-1:tab-1";
+  const OTHER_TAB_KEY = "env-env-1:tab-2";
+
+  test("stores and reads an agent per session", () => {
+    const store = useOpenCodeStore.getState();
+
+    store.setSelectedAgent(SESSION_KEY, "reviewer");
+
+    expect(store.getSelectedAgent(SESSION_KEY)).toBe("reviewer");
+    expect(store.getSelectedAgent(OTHER_TAB_KEY)).toBeUndefined();
+  });
+
+  test("clears the key rather than storing an empty selection", () => {
+    // The absence of a key is what the prompt builder reads as "no agent", so
+    // an empty string stored under the key would be sent as `agent: ""`.
+    const store = useOpenCodeStore.getState();
+    store.setSelectedAgent(SESSION_KEY, "reviewer");
+
+    store.setSelectedAgent(SESSION_KEY, undefined);
+    expect(store.getSelectedAgent(SESSION_KEY)).toBeUndefined();
+    expect(useOpenCodeStore.getState().selectedAgent.has(SESSION_KEY)).toBe(false);
+
+    store.setSelectedAgent(SESSION_KEY, "reviewer");
+    store.setSelectedAgent(SESSION_KEY, "");
+    expect(useOpenCodeStore.getState().selectedAgent.has(SESSION_KEY)).toBe(false);
+  });
+
+  test("clearEnvironment prunes by session key, not by environment id", () => {
+    // `runtimeHealth` is keyed by environment id while `selectedAgent` is keyed
+    // by `env-<id>:<tab>`, so the two need different pruning and both key
+    // schemes have to be exercised.
+    const store = useOpenCodeStore.getState();
+    const otherEnvKey = "env-env-2:tab-1";
+    store.setSelectedAgent(SESSION_KEY, "reviewer");
+    store.setSelectedAgent(OTHER_TAB_KEY, "build");
+    store.setSelectedAgent(otherEnvKey, "plan");
+    store.setRuntimeHealth("env-1", {
+      agents: [],
+      skills: [],
+      mcpServers: [],
+      lspServers: [],
+      formatters: [],
+      fetchedAt: "2026-07-26T00:00:00.000Z",
+    });
+
+    store.clearEnvironment("env-1");
+
+    const state = useOpenCodeStore.getState();
+    // Both tabs of env-1 go, including the one that was never the active tab.
+    expect(state.getSelectedAgent(SESSION_KEY)).toBeUndefined();
+    expect(state.getSelectedAgent(OTHER_TAB_KEY)).toBeUndefined();
+    expect(state.getSelectedAgent(otherEnvKey)).toBe("plan");
+    expect(state.getRuntimeHealth("env-1")).toBeUndefined();
   });
 });

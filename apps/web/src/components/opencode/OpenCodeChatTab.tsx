@@ -295,6 +295,9 @@ export function OpenCodeChatTab({
     [sessionsMap, sessionKey],
   );
 
+  const forkInFlightRef = useRef(false);
+  const [forkInFlight, setForkInFlight] = useState(false);
+
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
   const displayMessages = useMemo(
     () => pinActiveNativeAgentParts(
@@ -442,7 +445,15 @@ export function OpenCodeChatTab({
       session?.sessionId,
     )
       .then((health) => {
-        if (!cancelled) setRuntimeHealth(environmentId, health);
+        if (cancelled) return;
+        // The inventory half (agents/MCP/skills/LSP/formatters) is environment
+        // wide, so it stays on the environment key. `todos` and `diffs` are
+        // scoped to `session?.sessionId`, and every OpenCode tab in this
+        // environment writes to that same environment key — last write wins.
+        // Mirroring the snapshot onto the session key gives the agent-info
+        // popover a per-session read that a sibling tab cannot clobber.
+        setRuntimeHealth(environmentId, health);
+        if (session?.sessionId) setRuntimeHealth(sessionKey, health);
       })
       .catch((error) => {
         console.warn("[OpenCodeChatTab] Failed to load runtime health:", error);
@@ -454,6 +465,7 @@ export function OpenCodeChatTab({
     client,
     environmentId,
     session?.sessionId,
+    sessionKey,
     setRuntimeHealth,
     slashCommandDirectory,
   ]);
@@ -1436,13 +1448,20 @@ export function OpenCodeChatTab({
             && eventSessionId
           ) {
             const state = useOpenCodeStore.getState();
-            const affectedSession = [...state.sessions.entries()].find(
-              ([, value]) => value.sessionId === eventSessionId,
-            );
-            if (affectedSession) {
-              const current = state.runtimeHealth.get(environmentId);
+            /*
+             * Todos and diffs belong to one session. Every mounted OpenCode tab
+             * runs this handler, so an unguarded write here published another
+             * session's todos under this environment's key and the agent-info
+             * popover showed them as the active session's counts. Two guards:
+             * the event must be for *this* tab's session, and the write is
+             * keyed by session rather than environment.
+             */
+            const ownSessionId = state.sessions.get(sessionKey)?.sessionId;
+            if (ownSessionId && eventSessionId === ownSessionId) {
+              const current = state.runtimeHealth.get(sessionKey)
+                ?? state.runtimeHealth.get(environmentId);
               if (current) {
-                state.setRuntimeHealth(environmentId, {
+                state.setRuntimeHealth(sessionKey, {
                   ...current,
                   ...(eventType === "todo.updated"
                     && Array.isArray(event.properties?.todos)
@@ -1561,6 +1580,7 @@ export function OpenCodeChatTab({
     },
     [
       environmentId,
+      sessionKey,
       hasActiveEventSubscription,
       getOrCreateEventSubscription,
       setEventStream,
@@ -1960,6 +1980,12 @@ export function OpenCodeChatTab({
 
   const handleForkFromMessage = useCallback(async (messageId: string) => {
     if (!client || !session?.sessionId) return;
+    // Each call forks server-side and then adds a tab with a freshly generated
+    // id, so the pane store cannot dedupe a double click. The ref latches
+    // synchronously; the state drives the disabled attribute.
+    if (forkInFlightRef.current) return;
+    forkInFlightRef.current = true;
+    setForkInFlight(true);
     try {
       const fork = await forkOpenCodeSession(client, session.sessionId, messageId);
       const paneStore = usePaneLayoutStore.getState();
@@ -1975,6 +2001,9 @@ export function OpenCodeChatTab({
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to fork OpenCode session");
+    } finally {
+      forkInFlightRef.current = false;
+      setForkInFlight(false);
     }
   }, [client, data, environmentId, session?.sessionId]);
 
@@ -2110,6 +2139,7 @@ export function OpenCodeChatTab({
                   className="h-6 w-6"
                   title="Fork from here"
                   aria-label="Fork OpenCode session from this message"
+                  disabled={forkInFlight}
                   onClick={() => void handleForkFromMessage(message.id)}
                 >
                   <GitFork className="h-3.5 w-3.5" />

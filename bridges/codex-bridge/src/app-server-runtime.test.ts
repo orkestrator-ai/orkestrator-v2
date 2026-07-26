@@ -4214,3 +4214,1063 @@ describe("interactive approvals", () => {
     expect(h.events.some((event) => event.type === "session.approval-requested")).toBe(false);
   });
 });
+
+/** Writes a rollout with real `turn_context` boundaries, as Codex does. */
+function writeRolloutWithTurns(
+  threadId: string,
+  turns: Array<{ turnId: string; user: string; assistant: string }>,
+): void {
+  const sessionsDir = join(codexHome, "sessions");
+  mkdirSync(sessionsDir, { recursive: true });
+  const records: unknown[] = [
+    {
+      type: "session_meta",
+      payload: { id: threadId, cwd: "/tmp/ws", timestamp: "2026-07-25T12:00:00.000Z" },
+    },
+  ];
+  for (const turn of turns) {
+    records.push({ type: "turn_context", payload: { turn_id: turn.turnId, cwd: "/tmp/ws" } });
+    records.push({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: turn.user }],
+      },
+    });
+    records.push({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: turn.assistant }],
+      },
+    });
+  }
+  writeFileSync(
+    join(sessionsDir, `${threadId}.jsonl`),
+    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+    "utf8",
+  );
+}
+
+describe("forking", () => {
+  const FORK_HANDLERS = {
+    "thread/fork": (params: Record<string, unknown>) => ({
+      thread: threadPayload(`fork-of-${String(params.threadId)}`),
+    }),
+  };
+
+  test("a session with no thread yet reports not-found, not a fork failure", async () => {
+    const h = await harness(FORK_HANDLERS);
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    expect(await h.runtime.forkSession(sessionId)).toEqual({ outcome: "not-found" });
+    expect(await h.runtime.forkSession("session-does-not-exist")).toEqual({
+      outcome: "not-found",
+    });
+  });
+
+  test("a running session cannot be forked", async () => {
+    const h = await harness({ ...FORK_HANDLERS });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+
+    expect(await h.runtime.forkSession(sessionId)).toEqual({ outcome: "running" });
+  });
+
+  test("a lastMessageId that is in no transcript reports unknown-message", async () => {
+    const h = await harness(FORK_HANDLERS);
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    expect(await h.runtime.forkSession(sessionId, "message-that-never-existed")).toEqual({
+      outcome: "unknown-message",
+    });
+  });
+
+  test("forks the whole thread when no boundary message is given", async () => {
+    const h = await harness(FORK_HANDLERS);
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const forked = await h.runtime.forkSession(sessionId);
+    expect(forked).toMatchObject({ outcome: "created", threadId: "fork-of-thread-1" });
+    const params = h.child().requests.find((request) => request.method === "thread/fork")?.params;
+    expect(params && "lastTurnId" in params).toBe(false);
+  });
+
+  test("forks at the turn of an in-process message, on either bubble", async () => {
+    const h = await harness(FORK_HANDLERS);
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const messages = (await h.runtime.getMessages(sessionId))!;
+    for (const message of messages) {
+      // Both halves of the exchange carry the turn, so "fork from here" works
+      // wherever the user clicks.
+      expect(message.turnId).toBe("turn-1");
+      const forked = await h.runtime.forkSession(sessionId, message.id);
+      expect(forked.outcome).toBe("created");
+      expect(h.child().requests.at(-1)?.params).toMatchObject({ lastTurnId: "turn-1" });
+    }
+  });
+
+  /**
+   * The regression. `turnId` used to be set in exactly one place — the user
+   * message of a prompt this process dispatched — so after a detach/re-attach or
+   * a bridge restart every message lost it and `forkSession` returned null, which
+   * the route reported as "cannot fork while running".
+   */
+  test("forks at a turn reconstructed from the rollout, with no in-process dispatch", async () => {
+    writeRolloutWithTurns("thread-hydrated", [
+      { turnId: "turn-a", user: "first question", assistant: "first answer" },
+      { turnId: "turn-b", user: "second question", assistant: "second answer" },
+    ]);
+    const h = await harness({
+      ...FORK_HANDLERS,
+      "thread/resume": () => ({ thread: threadPayload("thread-hydrated") }),
+    });
+
+    const resumed = await h.runtime.resumeSession({
+      threadId: "thread-hydrated",
+      mode: "build",
+    });
+    const messages = resumed!.messages;
+    expect(messages.map((message) => message.turnId)).toEqual([
+      "turn-a",
+      "turn-a",
+      "turn-b",
+      "turn-b",
+    ]);
+
+    const forked = await h.runtime.forkSession(resumed!.sessionId, messages[1]!.id);
+    expect(forked).toMatchObject({ outcome: "created" });
+    expect(h.child().requests.at(-1)?.params).toMatchObject({ lastTurnId: "turn-a" });
+  });
+
+  test("survives a detach and re-attach, which used to erase every turn id", async () => {
+    writeRolloutWithTurns("thread-detached", [
+      { turnId: "turn-a", user: "question", assistant: "answer" },
+    ]);
+    const h = await harness(
+      { ...FORK_HANDLERS, "thread/resume": () => ({ thread: threadPayload("thread-detached") }) },
+      { threadIdleMs: 1 },
+    );
+
+    const resumed = await h.runtime.resumeSession({
+      threadId: "thread-detached",
+      mode: "build",
+    });
+    await Bun.sleep(5);
+    expect((await h.runtime.sweepIdle()).detached).toBe(1);
+
+    // Re-attaching rehydrates from the rollout, which is where the turn ids now
+    // come from.
+    const messages = (await h.runtime.getMessages(resumed!.sessionId))!;
+    expect(messages[0]?.turnId).toBe("turn-a");
+    expect(await h.runtime.forkSession(resumed!.sessionId, messages[0]!.id))
+      .toMatchObject({ outcome: "created" });
+  });
+
+  test("a message with no resolvable turn reports no-fork-point, not a 409", async () => {
+    // A rollout with no turn markers at all: every message is real, but none can
+    // be attributed to a Codex turn, so there is no boundary to fork at.
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, "thread-no-turns.jsonl"),
+      `${[
+        {
+          type: "session_meta",
+          payload: { id: "thread-no-turns", cwd: "/tmp/ws", timestamp: "2026-07-25T12:00:00.000Z" },
+        },
+        {
+          type: "response_item",
+          payload: { type: "message", role: "user", content: [{ type: "input_text", text: "a" }] },
+        },
+        {
+          type: "response_item",
+          payload: { type: "message", role: "user", content: [{ type: "input_text", text: "b" }] },
+        },
+      ].map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf8",
+    );
+    const h = await harness({
+      ...FORK_HANDLERS,
+      "thread/resume": () => ({ thread: threadPayload("thread-no-turns") }),
+      // Two user messages, one turn: the mapping is unprovable, so nothing is
+      // guessed.
+      "thread/read": () => ({
+        thread: threadPayload("thread-no-turns", {
+          turns: [{ id: "turn-only", status: "completed", items: [] }],
+        }),
+      }),
+    });
+
+    const resumed = await h.runtime.resumeSession({
+      threadId: "thread-no-turns",
+      mode: "build",
+    });
+    expect(await h.runtime.forkSession(resumed!.sessionId, resumed!.messages[0]!.id)).toEqual({
+      outcome: "no-fork-point",
+    });
+    expect(h.child().requests.some((request) => request.method === "thread/fork")).toBe(false);
+  });
+
+  test("falls back to thread/read when the rollout carried no turn ids", async () => {
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, "thread-legacy.jsonl"),
+      `${[
+        {
+          type: "session_meta",
+          payload: { id: "thread-legacy", cwd: "/tmp/ws", timestamp: "2026-07-25T12:00:00.000Z" },
+        },
+        {
+          type: "response_item",
+          payload: { type: "message", role: "user", content: [{ type: "input_text", text: "a" }] },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "b" }],
+          },
+        },
+      ].map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf8",
+    );
+    const h = await harness({
+      ...FORK_HANDLERS,
+      "thread/resume": () => ({ thread: threadPayload("thread-legacy") }),
+      "thread/read": () => ({
+        thread: threadPayload("thread-legacy", {
+          turns: [{ id: "turn-real", status: "completed", items: [] }],
+        }),
+      }),
+    });
+
+    const resumed = await h.runtime.resumeSession({ threadId: "thread-legacy", mode: "build" });
+    expect(resumed!.messages[0]?.turnId).toBeUndefined();
+
+    const forked = await h.runtime.forkSession(resumed!.sessionId, resumed!.messages[0]!.id);
+    expect(forked).toMatchObject({ outcome: "created" });
+    expect(h.child().requests.at(-1)?.params).toMatchObject({ lastTurnId: "turn-real" });
+  });
+
+  test("a fork that returns no thread id reports unavailable, not success", async () => {
+    const h = await harness({
+      "thread/fork": () => ({ thread: threadPayload("fork-1", { id: null }) }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    expect(await h.runtime.forkSession(sessionId)).toEqual({ outcome: "unavailable" });
+  });
+});
+
+describe("compaction", () => {
+  const COMPACT_HANDLERS = { "thread/compact/start": () => ({}) };
+
+  async function compactableSession(
+    extraHandlers: Record<string, (params: Record<string, unknown>) => unknown> = {},
+  ) {
+    const h = await harness({ ...COMPACT_HANDLERS, ...extraHandlers });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+    return { h, sessionId };
+  }
+
+  test("a session with no thread reports not-found", async () => {
+    const h = await harness(COMPACT_HANDLERS);
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    expect(await h.runtime.compactSession(sessionId)).toBe("not-found");
+    expect(await h.runtime.compactSession("session-nope")).toBe("not-found");
+  });
+
+  test("a running session cannot be compacted", async () => {
+    const h = await harness(COMPACT_HANDLERS);
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+
+    expect(await h.runtime.compactSession(sessionId)).toBe("running");
+  });
+
+  /**
+   * The regression. `thread/compact/start` returns immediately and the rewrite
+   * continues in the background, so reporting `idle` in between let the next
+   * prompt — or a build-pipeline step — race a context rewrite in progress.
+   */
+  test("the thread stays busy until thread/compacted arrives", async () => {
+    const { h, sessionId } = await compactableSession();
+
+    expect(await h.runtime.compactSession(sessionId)).toBe("accepted");
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "running" });
+
+    // A prompt in this window must be refused, not interleaved with the rewrite.
+    const overlapping = await h.runtime.prompt(sessionId, {
+      prompt: "next",
+      requestId: "req-2",
+      attachments: [],
+    });
+    expect(overlapping).toMatchObject({ ok: false, status: 409 });
+
+    h.child().notify("thread/compacted", { threadId: "thread-1", turnId: "turn-compact" });
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
+    expect(h.events.some((event) => event.type === "session.idle")).toBe(true);
+    expect(
+      h.events.some((event) => event.data?.compacted === true && event.data?.compacting === false),
+    ).toBe(true);
+  });
+
+  test("a compacting thread is never detached by the idle sweep", async () => {
+    const { h, sessionId } = await compactableSession();
+    await h.runtime.compactSession(sessionId);
+
+    // Detaching would drop the state that is waiting for `thread/compacted`.
+    expect((await h.runtime.sweepIdle()).detached).toBe(0);
+  });
+
+  test("a rejected compaction releases the busy state instead of wedging the thread", async () => {
+    const { h, sessionId } = await compactableSession({
+      "thread/compact/start": () => {
+        throw new Error("nothing to compact");
+      },
+    });
+
+    expect(await h.runtime.compactSession(sessionId)).toBe("unavailable");
+    expect(h.runtime.getStatus(sessionId)?.status).toBe("error");
+    // The next prompt is accepted: the failed compaction holds nothing.
+    expect(await h.runtime.prompt(sessionId, {
+      prompt: "next",
+      requestId: "req-2",
+      attachments: [],
+    })).toMatchObject({ ok: true });
+  });
+
+  test("abort releases a compaction hold so a lost notification cannot wedge it", async () => {
+    const { h, sessionId } = await compactableSession();
+    await h.runtime.compactSession(sessionId);
+    expect(h.runtime.getStatus(sessionId)?.status).toBe("running");
+
+    await h.runtime.abort(sessionId);
+
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle" });
+    expect(await h.runtime.prompt(sessionId, {
+      prompt: "next",
+      requestId: "req-2",
+      attachments: [],
+    })).toMatchObject({ ok: true });
+  });
+
+  test("a generation change releases a compaction the dead child can never finish", async () => {
+    const { h, sessionId } = await compactableSession();
+    await h.runtime.compactSession(sessionId);
+
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+    await h.drain();
+
+    // Recovery must not leave the thread pinned on a notification that belongs to
+    // a process that no longer exists.
+    expect(h.runtime.getRegistry().getThread("thread-1")?.compacting).toBe(false);
+  });
+
+  test("a late thread/compacted never drags a newly running turn back to idle", async () => {
+    const { h, sessionId } = await compactableSession();
+    await h.runtime.compactSession(sessionId);
+    h.child().notify("thread/compacted", { threadId: "thread-1", turnId: "turn-compact" });
+    await h.drain();
+
+    await h.runtime.prompt(sessionId, { prompt: "next", requestId: "req-2", attachments: [] });
+    h.child().notify("thread/compacted", { threadId: "thread-1", turnId: "turn-compact" });
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)?.status).toBe("running");
+  });
+});
+
+describe("steering", () => {
+  test("reports not-found without a session or a thread", async () => {
+    const h = await harness();
+    expect(await h.runtime.steerSession("session-nope", "more")).toBe("not-found");
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    expect(await h.runtime.steerSession(sessionId, "more")).toBe("not-found");
+  });
+
+  test("reports idle when no turn is running", async () => {
+    const h = await harness({ "turn/steer": () => ({ turnId: "turn-1" }) });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    expect(await h.runtime.steerSession(sessionId, "more")).toBe("idle");
+  });
+
+  test("steers the active turn, pinning the turn id the user was looking at", async () => {
+    const h = await harness({ "turn/steer": () => ({ turnId: "turn-1" }) });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+
+    expect(await h.runtime.steerSession(sessionId, "also check the tests", "req-steer"))
+      .toBe("accepted");
+    expect(h.child().requests.find((request) => request.method === "turn/steer")?.params)
+      .toMatchObject({
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        clientUserMessageId: "req-steer",
+      });
+  });
+
+  test("every engine failure is reported as a mismatch, never as success", async () => {
+    // The catch is deliberately broad. A steer that did not land must never look
+    // accepted, whether the turn moved on or the transport failed.
+    for (const [index, failure] of [
+      "expectedTurnId does not match",
+      "transport is closed",
+    ].entries()) {
+      const h = await harness({
+        "turn/steer": () => {
+          throw new Error(failure);
+        },
+      });
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      // A distinct request id per iteration: the dispatch journal is durable and
+      // both runtimes in this test share one CODEX_HOME, so reusing an id would
+      // be answered as an at-most-once duplicate rather than dispatched.
+      await h.runtime.prompt(sessionId, {
+        prompt: "go",
+        requestId: `req-steer-${index}`,
+        attachments: [],
+      });
+
+      expect(await h.runtime.steerSession(sessionId, "more")).toBe("mismatch");
+      // The turn is untouched: a failed steer is not a cancellation.
+      expect(h.runtime.getStatus(sessionId)?.status).toBe("running");
+    }
+  });
+});
+
+describe("native review", () => {
+  const REVIEW_HANDLERS = {
+    "review/start": () => ({ reviewThreadId: "review-1", turn: { id: "turn-review" } }),
+  };
+
+  async function reviewableSession(
+    extraHandlers: Record<string, (params: Record<string, unknown>) => unknown> = {},
+  ) {
+    const h = await harness({ ...REVIEW_HANDLERS, ...extraHandlers });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+    h.events.length = 0;
+    return { h, sessionId };
+  }
+
+  test("reports not-found before the session has a thread", async () => {
+    const h = await harness(REVIEW_HANDLERS);
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" }))
+      .toEqual({ outcome: "not-found" });
+  });
+
+  test("starts the review turn and streams into its assistant message", async () => {
+    const { h, sessionId } = await reviewableSession();
+
+    const started = await h.runtime.startNativeReview(sessionId, {
+      type: "baseBranch",
+      branch: "main",
+    });
+    expect(started).toEqual({ outcome: "accepted", turnId: "turn-review" });
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "running",
+      turnId: "turn-review",
+    });
+    expect(h.child().requests.find((request) => request.method === "review/start")?.params)
+      .toMatchObject({ target: { type: "baseBranch", branch: "main" }, delivery: "inline" });
+
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-review",
+      item: { id: "i1", type: "agentMessage", text: "looks fine" },
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-review", status: "completed" },
+    });
+    await h.drain();
+
+    const messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "looks fine",
+      turnId: "turn-review",
+    });
+    expect(h.runtime.getStatus(sessionId)?.status).toBe("idle");
+  });
+
+  test("a review cannot start while a turn is running", async () => {
+    const h = await harness(REVIEW_HANDLERS);
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+
+    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" }))
+      .toEqual({ outcome: "running" });
+  });
+
+  /**
+   * The regression. `review/start` is a full round-trip; the thread used to read
+   * idle to the overlap guard for its whole duration, so a prompt arriving in the
+   * gap registered its own accumulator and was then silently replaced — its
+   * `turn.completed` classified stale and dropped, leaving the thread `running`
+   * on a turn nothing would ever complete.
+   */
+  test("a prompt racing review/start is refused, not silently replaced", async () => {
+    let releaseReview!: () => void;
+    const reviewGate = new Promise<void>((resolve) => {
+      releaseReview = resolve;
+    });
+    const { h, sessionId } = await reviewableSession({
+      "review/start": async () => {
+        await reviewGate;
+        return { reviewThreadId: "review-1", turn: { id: "turn-review" } };
+      },
+    });
+
+    const review = h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" });
+    await Bun.sleep(5);
+
+    // The window the guard has to close.
+    const racing = await h.runtime.prompt(sessionId, {
+      prompt: "meanwhile",
+      requestId: "req-race",
+      attachments: [],
+    });
+    expect(racing).toMatchObject({ ok: false, status: 409 });
+
+    releaseReview();
+    expect(await review).toEqual({ outcome: "accepted", turnId: "turn-review" });
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ turnId: "turn-review" });
+
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-review", status: "completed" },
+    });
+    await h.drain();
+    // The turn that actually ran is the one that completes it.
+    expect(h.runtime.getStatus(sessionId)?.status).toBe("idle");
+  });
+
+  test("a failed review rolls the optimistic bubble back with a revision bump", async () => {
+    const { h, sessionId } = await reviewableSession({
+      "review/start": () => {
+        throw new Error("review is unavailable");
+      },
+    });
+    const revisionBefore = h.runtime.getStatus(sessionId)!.messageRevision;
+    const messagesBefore = (await h.runtime.getMessages(sessionId))!.length;
+
+    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" }))
+      .toEqual({ outcome: "unavailable" });
+
+    expect((await h.runtime.getMessages(sessionId))!).toHaveLength(messagesBefore);
+    // Without the second bump a reconciling tab has no signal to refetch and
+    // keeps a permanently blank assistant bubble.
+    expect(h.runtime.getStatus(sessionId)!.messageRevision).toBeGreaterThan(revisionBefore + 1);
+    expect(
+      h.events.some((event) => typeof event.data?.removedMessageId === "string"),
+    ).toBe(true);
+  });
+
+  test("a failed review does not mark the whole session errored", async () => {
+    const { h, sessionId } = await reviewableSession({
+      "review/start": () => {
+        throw new Error("review is unavailable");
+      },
+    });
+
+    await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" });
+
+    // No turn ran, so the thread is exactly where it was. Reporting `error` here
+    // told the UI the conversation had failed.
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
+    // The failure is still surfaced, just as an error event rather than a phase.
+    expect(h.events.some((event) => event.type === "session.error")).toBe(true);
+    // And the thread accepts work again immediately.
+    expect(await h.runtime.prompt(sessionId, {
+      prompt: "next",
+      requestId: "req-2",
+      attachments: [],
+    })).toMatchObject({ ok: true });
+  });
+});
+
+describe("runtime health", () => {
+  test("scopes the snapshot to the session's thread when there is one", async () => {
+    const h = await harness({
+      "mcpServerStatus/list": () => ({ data: [] }),
+      "skills/list": () => ({ data: [] }),
+      "hooks/list": () => ({ data: [] }),
+      "account/rateLimits/read": () => ({ rateLimits: {} }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+
+    const health = await h.runtime.getRuntimeHealth(sessionId) as Record<string, unknown>;
+    expect(health.engine).toBeDefined();
+    expect(h.child().requests.find((request) => request.method === "mcpServerStatus/list")?.params)
+      .toMatchObject({ threadId: "thread-1" });
+  });
+
+  test("an unknown session still returns the environment-wide snapshot", async () => {
+    const h = await harness({
+      "mcpServerStatus/list": () => ({ data: [] }),
+      "skills/list": () => ({ data: [] }),
+      "hooks/list": () => ({ data: [] }),
+      "account/rateLimits/read": () => ({ rateLimits: {} }),
+    });
+
+    const health = await h.runtime.getRuntimeHealth("session-nope") as Record<string, unknown>;
+    expect(health.engine).toBeDefined();
+    const params = h.child().requests.find(
+      (request) => request.method === "mcpServerStatus/list",
+    )?.params;
+    expect(params && "threadId" in params).toBe(false);
+  });
+});
+
+describe("interactions", () => {
+  const QUESTION_PARAMS = {
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+    questions: [{
+      id: "language",
+      header: "Language",
+      question: "Which language?",
+      options: [{ label: "TypeScript" }],
+    }],
+  };
+
+  async function askingSession(params: Record<string, unknown> = QUESTION_PARAMS) {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 7001,
+      method: "item/tool/requestUserInput",
+      params,
+    });
+    await h.drain();
+    return { h, sessionId };
+  }
+
+  test("presents a question to every tab on the thread and serves it for rehydration", async () => {
+    const { h, sessionId } = await askingSession();
+
+    const requested = h.events.filter((event) => event.type === "session.interaction-requested");
+    expect(requested).toHaveLength(1);
+    // The authoritative rehydration path: a tab that was unmounted for the SSE
+    // frame must still be able to ask.
+    const listed = h.runtime.listInteractions(sessionId);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ kind: "question", threadId: "thread-1" });
+  });
+
+  test("an interaction for a thread with no session is declined, never parked", async () => {
+    const h = await harness();
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 7002,
+      method: "item/tool/requestUserInput",
+      params: { ...QUESTION_PARAMS, threadId: "thread-unbound" },
+    });
+    await h.drain();
+
+    expect(h.child().stdin.lines.join("")).toContain('"answers":{}');
+    expect(h.events.some((event) => event.type === "session.interaction-requested")).toBe(false);
+  });
+
+  test("listInteractions is empty for an unknown or unbound session", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    expect(h.runtime.listInteractions(sessionId)).toEqual([]);
+    expect(h.runtime.listInteractions("session-nope")).toEqual([]);
+  });
+
+  test("an accepted answer is sent to Codex and resolves the card", async () => {
+    const { h, sessionId } = await askingSession();
+    const interactionId = h.runtime.listInteractions(sessionId)[0]!.interactionId;
+
+    expect(h.runtime.respondToInteraction(sessionId, interactionId, {
+      action: "accept",
+      answers: { language: ["TypeScript"] },
+    })).toBe("applied");
+    await h.drain();
+
+    expect(h.child().stdin.lines.join("")).toContain('"language":{"answers":["TypeScript"]}');
+    expect(h.runtime.listInteractions(sessionId)).toEqual([]);
+    expect(h.events.some((event) => event.type === "session.interaction-resolved")).toBe(true);
+  });
+
+  test("an unknown interaction id reports unknown rather than throwing", async () => {
+    const { h, sessionId } = await askingSession();
+    expect(h.runtime.respondToInteraction(sessionId, "ask-nope", { action: "cancel" }))
+      .toBe("unknown");
+  });
+
+  test("another session cannot answer this thread's card", async () => {
+    const { h } = await askingSession();
+    const other = h.runtime.createSession({ mode: "build" });
+    const interactionId = h.runtime.listInteractions(
+      h.runtime.getRegistry().listSessions()[0]!.id,
+    )[0]!.interactionId;
+
+    expect(h.runtime.respondToInteraction(other.sessionId, interactionId, { action: "cancel" }))
+      .toBe("wrong-session");
+  });
+
+  /**
+   * The regression. `answers?.[id]?.some(...)` guards nullish, not non-callable:
+   * `{"answers":{"language":"TypeScript"}}` threw a TypeError from inside the
+   * runtime, which surfaced as a 500 while the card stayed parked until its
+   * auto-cancel.
+   */
+  test("a malformed answers map is rejected, not thrown on", async () => {
+    const { h, sessionId } = await askingSession();
+    const interactionId = h.runtime.listInteractions(sessionId)[0]!.interactionId;
+
+    for (const answers of [
+      { language: "TypeScript" },
+      { language: [] },
+      { language: [""] },
+      { language: [1] },
+      { language: { answers: ["TypeScript"] } },
+    ]) {
+      expect(h.runtime.respondToInteraction(sessionId, interactionId, {
+        action: "accept",
+        answers: answers as never,
+      })).toBe("invalid");
+    }
+    // Still answerable: a rejected answer must not consume the card.
+    expect(h.runtime.listInteractions(sessionId)).toHaveLength(1);
+  });
+
+  test("an accept must answer every question and invent none", async () => {
+    const { h, sessionId } = await askingSession({
+      ...QUESTION_PARAMS,
+      questions: [
+        { id: "language", header: "L", question: "Which language?" },
+        { id: "framework", header: "F", question: "Which framework?" },
+      ],
+    });
+    const interactionId = h.runtime.listInteractions(sessionId)[0]!.interactionId;
+
+    expect(h.runtime.respondToInteraction(sessionId, interactionId, { action: "accept" }))
+      .toBe("invalid");
+    expect(h.runtime.respondToInteraction(sessionId, interactionId, {
+      action: "accept",
+      answers: { language: ["ts"] },
+    })).toBe("invalid");
+    expect(h.runtime.respondToInteraction(sessionId, interactionId, {
+      action: "accept",
+      answers: { language: ["ts"], framework: ["bun"], extra: ["nope"] },
+    })).toBe("invalid");
+    expect(h.runtime.respondToInteraction(sessionId, interactionId, {
+      action: "accept",
+      answers: { language: ["ts"], framework: ["bun"] },
+    })).toBe("applied");
+  });
+
+  test.each(["decline", "cancel"] as const)(
+    "a %s needs no answers and always resolves the card",
+    async (action) => {
+      const { h, sessionId } = await askingSession();
+      const interactionId = h.runtime.listInteractions(sessionId)[0]!.interactionId;
+
+      expect(h.runtime.respondToInteraction(sessionId, interactionId, { action }))
+        .toBe("applied");
+      await h.drain();
+      expect(h.runtime.listInteractions(sessionId)).toEqual([]);
+    },
+  );
+
+  async function elicitationSession(params: Record<string, unknown>) {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 7003,
+      method: "mcpServer/elicitation/request",
+      params: { threadId: "thread-1", turnId: "turn-1", ...params },
+    });
+    await h.drain();
+    return { h, sessionId };
+  }
+
+  test("an MCP form accept requires a JSON object", async () => {
+    const { h, sessionId } = await elicitationSession({
+      serverName: "deploy",
+      mode: "form",
+      message: "Pick a region",
+      requestedSchema: { type: "object" },
+    });
+    const interactionId = h.runtime.listInteractions(sessionId)[0]!.interactionId;
+
+    for (const content of [undefined, null, "eu-west-1", 7, ["eu-west-1"]]) {
+      expect(h.runtime.respondToInteraction(sessionId, interactionId, {
+        action: "accept",
+        content,
+      })).toBe("invalid");
+    }
+    expect(h.runtime.respondToInteraction(sessionId, interactionId, {
+      action: "accept",
+      content: { region: "eu-west-1" },
+    })).toBe("applied");
+  });
+
+  test("a url elicitation may accept with nothing, but not with an arbitrary scalar", async () => {
+    const { h, sessionId } = await elicitationSession({
+      serverName: "linear",
+      mode: "url",
+      message: "Authorize",
+      url: "https://linear.app/oauth",
+      elicitationId: "elicit-1",
+    });
+    const listed = h.runtime.listInteractions(sessionId)[0]!;
+    expect(listed.kind).toBe("mcp-url");
+
+    // There is no form to fill, so an empty accept is legitimate — but arbitrary
+    // content must not pass straight through to the MCP server.
+    for (const content of ["done", 7, ["done"]]) {
+      expect(h.runtime.respondToInteraction(sessionId, listed.interactionId, {
+        action: "accept",
+        content,
+      })).toBe("invalid");
+    }
+    expect(h.runtime.respondToInteraction(sessionId, listed.interactionId, { action: "accept" }))
+      .toBe("applied");
+  });
+
+  test("a card the router has already forgotten is dropped, not served forever", async () => {
+    const { h, sessionId } = await askingSession();
+    const interactionId = h.runtime.listInteractions(sessionId)[0]!.interactionId;
+    // Force the divergence the approval path guards against: the router forgets
+    // the request without notifying us.
+    h.engine.abandonThreadApprovals("thread-1");
+    // `onInteractionResolved` normally clears our copy; re-add it to model a
+    // notification that never landed.
+    (h.runtime as unknown as {
+      pendingInteractions: Map<string, unknown>;
+    }).pendingInteractions.set(interactionId, { request: { threadId: "thread-1" } });
+
+    expect(h.runtime.respondToInteraction(sessionId, interactionId, { action: "cancel" }))
+      .toBe("unknown");
+    // Mirrors the approval path: a card no client can ever resolve must not stay
+    // in the rehydration snapshot.
+    expect(h.runtime.listInteractions(sessionId)).toEqual([]);
+  });
+});
+
+describe("usage and account rate limits", () => {
+  async function usageSession() {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    return { h, sessionId };
+  }
+
+  test("usage arriving after turn/completed is applied, not parked forever", async () => {
+    const { h, sessionId } = await usageSession();
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    // The fast path: a thread snapshot, not a transcript mutation, so it must not
+    // wait for an accumulator that no longer exists.
+    h.child().notify("thread/tokenUsage/updated", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      tokenUsage: {
+        total: { totalTokens: 15_000 },
+        last: { totalTokens: 25_000 },
+        modelContextWindow: 100_000,
+      },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)?.contextUsage).toMatchObject({
+      usedTokens: 25_000,
+      totalTokens: 100_000,
+      percentUsed: 25,
+    });
+    expect(
+      h.events.some((event) => event.data?.contextUsage !== undefined),
+    ).toBe(true);
+  });
+
+  test("getStatus reports no usage before any has been observed", async () => {
+    const { h, sessionId } = await usageSession();
+    expect(h.runtime.getStatus(sessionId)?.contextUsage).toBeUndefined();
+  });
+
+  /**
+   * The regression. `account/rateLimits/updated` is a sparse rolling update: an
+   * update carrying only `secondary` used to erase the primary window, and one
+   * omitting `credits` used to erase the balance.
+   */
+  test("a sparse rate-limit update merges instead of replacing", async () => {
+    const { h, sessionId } = await usageSession();
+    h.child().notify("thread/tokenUsage/updated", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      tokenUsage: { last: { totalTokens: 10 }, modelContextWindow: 100 },
+    });
+    h.child().notify("account/rateLimits/updated", {
+      rateLimits: {
+        limitName: "Five hour",
+        primary: { usedPercent: 60 },
+        secondary: { usedPercent: 20 },
+        credits: { balance: "12.50", hasCredits: true },
+      },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)?.contextUsage).toMatchObject({
+      rateLimits: [
+        { slot: "primary", label: "Five hour", usedPercent: 60 },
+        { slot: "secondary", usedPercent: 20 },
+      ],
+      credits: { balance: "12.50", hasCredits: true },
+    });
+
+    // Secondary only, and no credits at all.
+    h.child().notify("account/rateLimits/updated", {
+      rateLimits: { secondary: { usedPercent: 35 } },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)?.contextUsage).toMatchObject({
+      rateLimits: [
+        { slot: "primary", label: "Five hour", usedPercent: 60 },
+        { slot: "secondary", usedPercent: 35 },
+      ],
+      // Absent metadata does not clear a previously observed value.
+      credits: { balance: "12.50", hasCredits: true },
+    });
+  });
+
+  test("a partial credits update merges field by field", async () => {
+    const { h, sessionId } = await usageSession();
+    h.child().notify("thread/tokenUsage/updated", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      tokenUsage: { last: { totalTokens: 10 }, modelContextWindow: 100 },
+    });
+    h.child().notify("account/rateLimits/updated", {
+      rateLimits: { credits: { balance: "12.50", hasCredits: true, unlimited: false } },
+    });
+    await h.drain();
+    h.child().notify("account/rateLimits/updated", {
+      rateLimits: { credits: { balance: "3.00" } },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)?.contextUsage?.credits).toEqual({
+      balance: "3.00",
+      hasCredits: true,
+      unlimited: false,
+    });
+  });
+
+  /**
+   * The regression. `usageByThread` was only ever written, so every thread the
+   * bridge had ever touched left a permanent entry that the rate-limit fan-out
+   * walked on every tick.
+   */
+  test("releasing a thread frees its retained usage snapshot", async () => {
+    const { h, sessionId } = await usageSession();
+    h.child().notify("thread/tokenUsage/updated", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      tokenUsage: { last: { totalTokens: 10 }, modelContextWindow: 100 },
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const usageByThread = (h.runtime as unknown as {
+      usageByThread: Map<string, unknown>;
+    }).usageByThread;
+    expect(usageByThread.size).toBe(1);
+
+    await h.runtime.deleteSession(sessionId);
+    expect(usageByThread.size).toBe(0);
+  });
+
+  test("a thread with no live sessions is skipped by the rate-limit fan-out", async () => {
+    const { h } = await usageSession();
+    h.child().notify("thread/tokenUsage/updated", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      tokenUsage: { last: { totalTokens: 10 }, modelContextWindow: 100 },
+    });
+    await h.drain();
+
+    // Drop the registry's view of the thread without releasing runtime state,
+    // which is the shape of a thread mid-teardown.
+    h.runtime.getRegistry().detachThread("thread-1");
+    h.events.length = 0;
+    h.child().notify("account/rateLimits/updated", {
+      rateLimits: { primary: { usedPercent: 60 } },
+    });
+    await h.drain();
+
+    expect(h.events.filter((event) => event.data?.contextUsage !== undefined)).toHaveLength(0);
+  });
+});

@@ -17,10 +17,11 @@ import type {
   ApprovalRequest,
   ApprovalResolution,
 } from "./app-server/approvals.js";
-import type {
-  InteractionAnswer,
-  InteractionRequest,
-  InteractionResolution,
+import {
+  isInteractionAnswerMap,
+  type InteractionAnswer,
+  type InteractionRequest,
+  type InteractionResolution,
 } from "./app-server/interactions.js";
 import type {
   EngineEvent,
@@ -266,6 +267,43 @@ type AmbiguousDispatchResolution =
   | "terminal"
   | "absent";
 
+/**
+ * Merges a sparse rate-limit update into the retained snapshot.
+ *
+ * Windows are identified by `slot`, not by array position or label: the label is
+ * the account's plan name for the primary window and changes independently of
+ * which windows an update happens to carry.
+ */
+export function mergeRateLimitWindows(
+  retained: EngineRateLimitWindow[],
+  update: EngineRateLimitWindow[],
+): EngineRateLimitWindow[] {
+  if (update.length === 0) return retained;
+  const bySlot = new Map<string, EngineRateLimitWindow>();
+  for (const window of retained) bySlot.set(window.slot, window);
+  for (const window of update) bySlot.set(window.slot, window);
+  // Stable presentation order regardless of which window the update carried.
+  return [...bySlot.values()].sort((left, right) =>
+    left.slot === right.slot ? 0 : left.slot === "primary" ? -1 : 1,
+  );
+}
+
+/** A JSON object, as opposed to a scalar, an array or null. */
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Longest a `thread/compact/start` may hold the thread busy.
+ *
+ * `thread/compact/start` returns immediately and compaction continues in the
+ * background, so the only terminal signal is a `thread/compacted` notification.
+ * If that is lost — a dropped frame, a child that dies mid-compaction — the
+ * thread would report `running` forever and never accept another prompt. This
+ * bounds that to one backstop rather than a wedged session.
+ */
+const DEFAULT_COMPACTION_TIMEOUT_MS = 5 * 60_000;
+
 function codexStructuredOutputFailure(
   turn: TurnAccumulator,
 ): StructuredOutputResult<never> {
@@ -415,6 +453,13 @@ export class AppServerRuntime {
   private readonly idleWaiters = new Set<() => void>();
   /** Forces `recovering` → `failed`, keyed by thread, so it can never be permanent. */
   private readonly recoveryBackstops = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * Releases a thread whose `thread/compacted` never arrived.
+   *
+   * Compaction has no response to wait on, so a lost notification would leave
+   * the thread `running` for the life of the bridge.
+   */
+  private readonly compactionBackstops = new Map<string, ReturnType<typeof setTimeout>>();
   /**
    * Approvals the UI has been told about and can still answer.
    *
@@ -639,38 +684,63 @@ export class AppServerRuntime {
     if (!this.sessionIdsForThread(entry.request.threadId).includes(sessionId)) {
       return "wrong-session";
     }
+    /**
+     * Shape first, semantics second.
+     *
+     * The route validates too, but this is reachable from any caller, and the
+     * per-question checks below invoke `.some()` on client-supplied values. A
+     * non-array value there throws a `TypeError` rather than returning
+     * `invalid`, which the route would report as a 500 while leaving the card
+     * parked until its auto-cancel.
+     */
+    if (
+      answer.action === "accept"
+      && answer.answers !== undefined
+      && !isInteractionAnswerMap(answer.answers)
+    ) {
+      return "invalid";
+    }
+
     if (entry.request.kind === "question" && answer.action === "accept") {
       const expectedIds = new Set(entry.request.questions?.map((question) => question.id));
+      const provided = answer.answers;
       if (
-        !answer.answers
-        || [...expectedIds].some(
-          (id) => !answer.answers?.[id]?.some((value) => value.length > 0),
-        )
-        || Object.keys(answer.answers).some((id) => !expectedIds.has(id))
-        || Object.values(answer.answers).some(
-          (values) =>
-            !Array.isArray(values)
-            || values.length === 0
-            || values.some((value) => typeof value !== "string" || value.length === 0),
-        )
+        !provided
+        || [...expectedIds].some((id) => provided[id] === undefined)
+        || Object.keys(provided).some((id) => !expectedIds.has(id))
       ) {
         return "invalid";
       }
     }
-    if (
-      entry.request.kind === "mcp-form"
-      && answer.action === "accept"
-      && (
-        !answer.content
-        || typeof answer.content !== "object"
-        || Array.isArray(answer.content)
-      )
-    ) {
-      return "invalid";
+    /**
+     * MCP elicitation content.
+     *
+     * `form` (and `openai/form`) answers a schema, so an accept without a JSON
+     * object is meaningless. `url` has no form to fill — the user follows a link
+     * and comes back — so an accept may legitimately carry nothing, but if it
+     * does carry something it must still be a JSON object. Neither kind may pass
+     * an arbitrary scalar or array straight through to the MCP server.
+     */
+    if (answer.action === "accept" && entry.request.kind === "mcp-form") {
+      if (!isJsonObject(answer.content)) return "invalid";
     }
-    return this.options.engine.resolveInteraction(interactionId, answer)
-      ? "applied"
-      : "unknown";
+    if (answer.action === "accept" && entry.request.kind === "mcp-url") {
+      if (
+        answer.content !== undefined
+        && answer.content !== null
+        && !isJsonObject(answer.content)
+      ) {
+        return "invalid";
+      }
+    }
+
+    if (this.options.engine.resolveInteraction(interactionId, answer)) return "applied";
+
+    // The router no longer has it but we do. Mirrors the approval path: drop our
+    // copy rather than leave `listInteractions` serving a card no client can
+    // ever resolve.
+    this.pendingInteractions.delete(interactionId);
+    return "unknown";
   }
 
   /**
@@ -957,6 +1027,10 @@ export class AppServerRuntime {
       clearTimeout(timer);
       this.recoveryBackstops.delete(threadId);
     }
+    this.clearCompactionBackstop(threadId);
+    // Every thread the bridge has ever touched used to leave a permanent entry
+    // here, which the rate-limit fan-out then walked on every tick.
+    this.usageByThread.delete(threadId);
     const state = this.threadState.get(threadId);
     if (!state) return;
     state.coalescer.stop();
@@ -1137,9 +1211,24 @@ export class AppServerRuntime {
     }
     if (event.kind === "unknown.protocol") return;
     if (event.kind === "account.rateLimits.updated") {
-      this.accountRateLimits = event.rateLimits;
-      this.accountCredits = event.credits;
+      /**
+       * `account/rateLimits/updated` is a **sparse rolling update**, not a
+       * replacement: the generated protocol says clients must merge available
+       * values into the last full snapshot, and that absent nullable metadata
+       * "does not clear a previously observed value". Assigning wholesale meant
+       * an update carrying only `secondary` erased the primary window, and one
+       * omitting `credits` erased the balance.
+       */
+      this.accountRateLimits = mergeRateLimitWindows(this.accountRateLimits, event.rateLimits);
+      if (event.credits) {
+        this.accountCredits = { ...this.accountCredits, ...event.credits };
+      }
       for (const [threadId, usage] of this.usageByThread) {
+        const sessionIds = this.sessionIdsForThread(threadId);
+        // A thread nobody can address any more still has an entry here only until
+        // its next release. Skip it rather than re-rendering a snapshot with no
+        // reader on every rate-limit tick.
+        if (sessionIds.length === 0) continue;
         const merged = {
           ...usage,
           rateLimits: this.accountRateLimits,
@@ -1147,7 +1236,7 @@ export class AppServerRuntime {
           updatedAt: new Date(this.now()).toISOString(),
         };
         this.usageByThread.set(threadId, merged);
-        for (const sessionId of this.sessionIdsForThread(threadId)) {
+        for (const sessionId of sessionIds) {
           this.options.emit({
             type: "session.updated",
             sessionId,
@@ -1177,6 +1266,14 @@ export class AppServerRuntime {
     // accept its turn id, so apply it directly instead of parking it forever.
     if (event.kind === "thread.usage.updated") {
       this.applyEvent(context, event);
+      return;
+    }
+
+    // Compaction is thread-scoped, not turn-scoped: its turn is never the active
+    // one, so routing it through the parking logic below would drop it and leave
+    // the thread busy forever.
+    if (event.kind === "thread.compacted") {
+      this.finishCompaction(context);
       return;
     }
 
@@ -1357,6 +1454,13 @@ export class AppServerRuntime {
         this.releaseThreadRuntimeState(context.threadId);
         this.registry.removeThread(context.threadId);
         continue;
+      }
+
+      // The child that was compacting is gone, so its `thread/compacted` will
+      // never arrive. Release the hold here or the thread stays busy forever.
+      if (context.compacting) {
+        context.compacting = false;
+        this.clearCompactionBackstop(context.threadId);
       }
 
       const phaseBeforeRebind = context.phase;
@@ -1689,31 +1793,52 @@ export class AppServerRuntime {
     };
   }
 
+  /**
+   * Forks the thread, optionally truncated at a message.
+   *
+   * The outcomes are deliberately distinct. Everything used to collapse into
+   * `null`, which the route reported as "cannot be forked while running or
+   * before its first turn" — the wrong explanation for the most common failure,
+   * which was a message the bridge could not resolve to a turn at all.
+   */
   async forkSession(
     sessionId: string,
     lastMessageId?: string,
-  ): Promise<{
-    sessionId: string;
-    title?: string;
-    threadId: string;
-    messages: NormalizedMessage[];
-  } | null> {
+  ): Promise<
+    | {
+        outcome: "created";
+        sessionId: string;
+        title?: string;
+        threadId: string;
+        messages: NormalizedMessage[];
+      }
+    | { outcome: "not-found" | "running" | "unknown-message" | "no-fork-point" | "unavailable" }
+  > {
     const parent = this.registry.getSession(sessionId);
-    if (!parent?.threadId) return null;
+    if (!parent?.threadId) return { outcome: "not-found" };
     const parentContext = await this.ensureAttached(sessionId);
-    if (!parentContext || phaseToExternalStatus(parentContext.phase) === "running") {
-      return null;
+    if (!parentContext) return { outcome: "not-found" };
+    if (phaseToExternalStatus(parentContext.phase) === "running") {
+      return { outcome: "running" };
     }
-    const lastTurnId = lastMessageId
-      ? parentContext.messages.find((message) => message.id === lastMessageId)?.turnId
-      : undefined;
-    if (lastMessageId && !lastTurnId) return null;
+
+    let lastTurnId: string | undefined;
+    if (lastMessageId) {
+      const message = parentContext.messages.find((entry) => entry.id === lastMessageId);
+      if (!message) return { outcome: "unknown-message" };
+      lastTurnId = message.turnId ?? (await this.resolveTurnIdFromEngine(parentContext, message));
+      // Present in the transcript but not attributable to a Codex turn: a local
+      // slash-command reply, or a rollout too old to record turn boundaries.
+      // Neither is a boundary `thread/fork` could honour.
+      if (!lastTurnId) return { outcome: "no-fork-point" };
+    }
+
     const fork = await this.options.engine.forkThread(
       parent.threadId,
       parent.config,
       lastTurnId,
     );
-    if (!fork.id) return null;
+    if (!fork.id) return { outcome: "unavailable" };
     const child = this.registry.createSession({
       id: createSessionId(),
       threadId: null,
@@ -1734,6 +1859,7 @@ export class AppServerRuntime {
     if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
     await this.persistSession(child);
     return {
+      outcome: "created",
       sessionId: child.id,
       title: child.title,
       threadId: fork.id,
@@ -1741,19 +1867,153 @@ export class AppServerRuntime {
     };
   }
 
-  async compactSession(sessionId: string): Promise<"accepted" | "not-found" | "running"> {
+  /**
+   * Last resort for a message with no reconstructed `turnId`.
+   *
+   * Asks app-server for the thread's turns and, if the transcript's shape lines
+   * up, backfills every message's turn so the *next* fork is a straight lookup.
+   * Deliberately conservative: an alignment it cannot prove yields `undefined`
+   * and the caller reports "not a usable fork point" rather than forking the
+   * conversation at a turn the user did not choose.
+   */
+  private async resolveTurnIdFromEngine(
+    context: ThreadContext,
+    message: NormalizedMessage,
+  ): Promise<string | undefined> {
+    let turns: { id: string }[] | undefined;
+    try {
+      const thread = await this.options.engine.readThread(context.threadId, {
+        includeTurns: true,
+      });
+      turns = thread?.turns;
+    } catch (error) {
+      console.warn(
+        `[codex-bridge] Could not read turns for thread ${context.threadId}:`,
+        error instanceof Error ? error.message : error,
+      );
+      return undefined;
+    }
+    if (!turns?.length) return undefined;
+
+    // One turn per user message is app-server's own model of a thread. If the
+    // transcript disagrees, the mapping is unprovable and nothing is backfilled.
+    const userMessages = context.messages.filter((entry) => entry.role === "user");
+    if (userMessages.length !== turns.length) return undefined;
+
+    let index = -1;
+    for (const entry of context.messages) {
+      if (entry.role === "user") index += 1;
+      if (index < 0) continue;
+      const turnId = turns[index]?.id;
+      if (turnId && !entry.turnId) entry.turnId = turnId;
+    }
+    return message.turnId;
+  }
+
+  /**
+   * Compacts the thread's context.
+   *
+   * `thread/compact/start` returns as soon as the request is accepted and the
+   * rewrite continues in the background, ending with `thread/compacted`. The
+   * thread is busy for that whole span: reporting `idle` in between let the next
+   * prompt — or a build-pipeline step — race a context rewrite in progress.
+   */
+  async compactSession(
+    sessionId: string,
+  ): Promise<"accepted" | "not-found" | "running" | "unavailable"> {
     const session = this.registry.getSession(sessionId);
     if (!session?.threadId) return "not-found";
     const context = await this.ensureAttached(sessionId);
     if (!context) return "not-found";
-    if (phaseToExternalStatus(context.phase) === "running") return "running";
-    await this.options.engine.compactThread(session.threadId);
-    this.options.emit({
-      type: "session.updated",
-      sessionId,
-      data: { compacted: true },
-    });
+    try {
+      this.registry.assertNoActiveTurn(context);
+    } catch {
+      return "running";
+    }
+
+    // Claimed before the first await, so a prompt arriving during the RPC sees a
+    // busy thread rather than an idle one.
+    context.compacting = true;
+    this.registry.setPhase(context, "running");
+    this.emitStatus(context);
+    this.armCompactionBackstop(context.threadId);
+
+    try {
+      await this.options.engine.compactThread(session.threadId);
+    } catch (error) {
+      this.finishCompaction(
+        context,
+        error instanceof Error ? error.message : "Compaction could not be started",
+      );
+      return "unavailable";
+    }
+
+    for (const id of context.bridgeSessionIds) {
+      this.options.emit({
+        type: "session.updated",
+        sessionId: id,
+        data: { compacted: true, compacting: true },
+      });
+    }
     return "accepted";
+  }
+
+  private armCompactionBackstop(threadId: string): void {
+    this.clearCompactionBackstop(threadId);
+    const timer = setTimeout(() => {
+      this.compactionBackstops.delete(threadId);
+      const context = this.registry.getThread(threadId);
+      if (!context?.compacting) return;
+      this.finishCompaction(
+        context,
+        "Codex never reported that compaction finished. The session was released.",
+      );
+    }, DEFAULT_COMPACTION_TIMEOUT_MS);
+    timer.unref?.();
+    this.compactionBackstops.set(threadId, timer);
+  }
+
+  private clearCompactionBackstop(threadId: string): void {
+    const timer = this.compactionBackstops.get(threadId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.compactionBackstops.delete(threadId);
+  }
+
+  /**
+   * Releases the compaction hold.
+   *
+   * Never overrides a turn: an `abort` or a generation recovery may already have
+   * moved the thread on, and compaction finishing must not drag it back to idle.
+   */
+  private finishCompaction(context: ThreadContext, error?: string): void {
+    this.clearCompactionBackstop(context.threadId);
+    if (!context.compacting) return;
+    context.compacting = false;
+    if (!context.activeTurn && !context.dispatchInFlight && context.phase === "running") {
+      this.registry.setPhase(context, error ? "failed" : "idle", error);
+    }
+    this.emitStatus(context);
+    for (const sessionId of context.bridgeSessionIds) {
+      if (error) {
+        this.options.emit({ type: "session.error", sessionId, data: { error } });
+        continue;
+      }
+      this.options.emit({
+        type: "session.updated",
+        sessionId,
+        data: { compacted: true, compacting: false },
+      });
+      this.options.emit({
+        type: "session.idle",
+        sessionId,
+        data: {
+          title: this.registry.getSession(sessionId)?.title,
+          phase: context.phase,
+        },
+      });
+    }
+    this.notifyThreadActivity();
   }
 
   async steerSession(
@@ -1788,15 +2048,37 @@ export class AppServerRuntime {
       | { type: "custom"; instructions: string },
   ): Promise<
     | { outcome: "accepted"; turnId: string }
-    | { outcome: "not-found" | "running" | "unavailable" }
+    // Split rather than a union of literals in one member, so a route that has
+    // handled the three failures narrows to the accepted shape.
+    | { outcome: "not-found" }
+    | { outcome: "running" }
+    | { outcome: "unavailable" }
   > {
     const session = this.registry.getSession(sessionId);
     if (!session?.threadId) return { outcome: "not-found" };
     const context = await this.ensureAttached(sessionId);
     if (!context) return { outcome: "not-found" };
-    if (phaseToExternalStatus(context.phase) === "running") {
+
+    /**
+     * Close the overlap window *before* the first await, exactly as the prompt
+     * path does.
+     *
+     * `review/start` is a full RPC round-trip. Checking liveness and only then
+     * awaiting left the thread reading idle to `assertNoActiveTurn` for its whole
+     * duration, so a `/prompt` arriving in the gap was accepted, registered its
+     * own accumulator, and was then silently replaced when the review turn was
+     * assigned — its `turn.completed` classified stale and dropped, leaving the
+     * thread `running` on a turn nothing would ever complete.
+     */
+    try {
+      this.registry.assertNoActiveTurn(context);
+    } catch {
       return { outcome: "running" };
     }
+    const phaseBeforeReview = context.phase;
+    const errorBeforeReview = context.error;
+    context.dispatchInFlight = true;
+    this.registry.setPhase(context, "starting");
 
     const assistantMessage: NormalizedMessage = {
       id: createMessageId(),
@@ -1830,7 +2112,9 @@ export class AppServerRuntime {
         expectsStructuredOutput: false,
       });
       accumulator.markRunning();
+      assistantMessage.turnId = review.turnId;
       context.activeTurn = accumulator;
+      context.dispatchInFlight = false;
       this.registry.setPhase(context, "running");
       const state = this.stateFor(context.threadId);
       state.render = beginTurnRenderState(state.render);
@@ -1839,15 +2123,35 @@ export class AppServerRuntime {
       this.drainPendingEvents(context, review.turnId);
       return { outcome: "accepted", turnId: review.turnId };
     } catch (error) {
+      context.dispatchInFlight = false;
       context.messages = context.messages.filter(
         (message) => message.id !== assistantMessage.id,
       );
-      this.registry.setPhase(
-        context,
-        "failed",
-        error instanceof Error ? error.message : "Native review failed",
-      );
+      /**
+       * The optimistic bubble was announced with a revision bump, so its removal
+       * needs one too: a tab that was unmounted for the SSE frames reconciles on
+       * `messageRevision`, and without a second bump it would keep a permanently
+       * blank assistant bubble with nothing to tell it to refetch.
+       */
+      this.bumpMessageRevision(context);
+      for (const id of context.bridgeSessionIds) {
+        this.options.emit({
+          type: "message.updated",
+          sessionId: id,
+          data: { removedMessageId: assistantMessage.id },
+        });
+      }
+      /**
+       * The *thread* did not fail — no turn ran. Marking it `failed` reported the
+       * whole session as `error` because a review could not be started, which is
+       * a different and much louder claim. Restore what it was.
+       */
+      this.registry.setPhase(context, phaseBeforeReview, errorBeforeReview);
       this.emitStatus(context);
+      const message = error instanceof Error ? error.message : "Native review failed";
+      for (const id of context.bridgeSessionIds) {
+        this.options.emit({ type: "session.error", sessionId: id, data: { error: message } });
+      }
       return { outcome: "unavailable" };
     }
   }
@@ -2351,7 +2655,11 @@ export class AppServerRuntime {
         requestId,
         outputSchema: input.outputSchema,
       });
+      // Both halves of the exchange, so "fork from here" works on either bubble
+      // for the lifetime of this process; hydration re-derives the same ids from
+      // the rollout afterwards.
       userMessage.turnId = turn.turnId;
+      assistantMessage.turnId = turn.turnId;
 
       await this.journal.markAccepted(requestId, {
         threadId: context.threadId,
@@ -2872,6 +3180,7 @@ export class AppServerRuntime {
     return (
       context.activeTurn !== null
       || context.dispatchInFlight
+      || context.compacting
       || phaseToExternalStatus(context.phase) === "running"
     );
   }
@@ -2971,6 +3280,16 @@ export class AppServerRuntime {
     await this.touchSession(sessionId);
 
     const context = this.registry.getThreadForSession(sessionId);
+    // Cancelling releases a compaction hold too. Compaction has no interrupt, but
+    // an explicit stop must not leave the thread pinned busy on a notification
+    // that may never arrive.
+    if (context?.compacting) {
+      context.compacting = false;
+      this.clearCompactionBackstop(context.threadId);
+      if (!context.activeTurn && context.phase === "running") {
+        this.registry.setPhase(context, "idle");
+      }
+    }
     const turn = context?.activeTurn;
     if (!context || !turn) {
       // Nothing running; report the real phase rather than forcing idle.

@@ -1081,8 +1081,14 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
             variants: variants.length > 0 ? variants : undefined,
             inputCost: typeof inputCost === "number" ? inputCost : undefined,
             outputCost: typeof outputCost === "number" ? outputCost : undefined,
+            // A non-positive window is not a window. Keeping a `0` here would
+            // reach `summarizeOpenCodeUsage` and produce `0/0` -> `NaN%`.
             contextWindow:
-              typeof contextWindow === "number" ? contextWindow : undefined,
+              typeof contextWindow === "number"
+              && Number.isFinite(contextWindow)
+              && contextWindow > 0
+                ? contextWindow
+                : undefined,
           });
         }
       }
@@ -1609,6 +1615,46 @@ function filePathToUrl(path: string): string {
 }
 
 /**
+ * Splits a model id into its provider half and its model half.
+ *
+ * Model ids are built as `${provider.id}/${modelId}` and the model id may itself
+ * contain slashes (openrouter-style `openrouter/anthropic/claude-…`), so only
+ * the **first** slash separates the two. `split("/")` and a destructure silently
+ * truncate such an id to its middle segment and send the wrong model.
+ *
+ * Returns null when there is no slash at all; each caller decides what a bare id
+ * means, because they disagree — see {@link toOpenCodeModelRef} and
+ * {@link splitOpenCodeModelId}.
+ */
+function splitModelIdOnFirstSlash(
+  model: string,
+): { providerHalf: string; modelHalf: string } | null {
+  const separator = model.indexOf("/");
+  if (separator === -1) return null;
+  return {
+    providerHalf: model.slice(0, separator),
+    modelHalf: model.slice(separator + 1),
+  };
+}
+
+/**
+ * Builds the `{ providerID, modelID }` pair `session.promptAsync` expects.
+ *
+ * A bare id with no slash is deliberately sent as *both* halves, which is the
+ * long-standing behaviour of this path — the server resolves it. The store's
+ * `"default"` sentinel never reaches here: `OpenCodeChatTab` maps it to
+ * `undefined` before calling, so this helper only ever sees a real id.
+ */
+function toOpenCodeModelRef(model: string): { providerID: string; modelID: string } {
+  const split = splitModelIdOnFirstSlash(model);
+  if (!split) return { providerID: model, modelID: model };
+  return {
+    providerID: split.providerHalf || "",
+    modelID: split.modelHalf || model,
+  };
+}
+
+/**
  * Send a prompt to a session
  */
 export async function sendPrompt(
@@ -1687,7 +1733,12 @@ export async function sendPrompt(
           directory: options.directory,
           messageID: requestId,
           command: options.command.name.replace(/^\//, ""),
-          arguments: options.command.arguments,
+          // `arguments` is a *required* field on the server's command request
+          // body, so a bare `/init` must still send an empty string. Passing
+          // `undefined` drops the key in `JSON.stringify` and the server answers
+          // 400 — which the caller reads as a failed send and then deletes the
+          // user's own message from the transcript.
+          arguments: options.command.arguments ?? "",
           model: options.model,
           agent: options.agent ?? options.mode,
           variant: options.variant,
@@ -1698,10 +1749,7 @@ export async function sendPrompt(
           directory: options?.directory,
           messageID: requestId,
           parts,
-          model: options?.model ? {
-            providerID: options.model.split("/")[0] || "",
-            modelID: options.model.split("/")[1] || options.model,
-          } : undefined,
+          model: options?.model ? toOpenCodeModelRef(options.model) : undefined,
           agent: options?.agent ?? options?.mode,
           variant: options?.variant,
           format: options?.outputSchema
@@ -1758,15 +1806,51 @@ export interface OpenCodeRuntimeHealth {
   fetchedAt: string;
 }
 
+type OpenCodeProviderUsage = NonNullable<OpenCodeMessage["providerUsage"]>;
+
+/**
+ * Tokens this turn occupies in the context window.
+ *
+ * `totalTokens` is the provider's own figure when it reports one; the sum is the
+ * fallback. A reported `0` is not trusted as a total — the SDK zero-initialises
+ * `tokens` on an in-flight assistant message, so a literal zero means "not
+ * counted yet", not "this turn was free".
+ */
+function openCodeTurnTokens(turn: OpenCodeProviderUsage): number {
+  if (typeof turn.totalTokens === "number" && turn.totalTokens > 0) {
+    return turn.totalTokens;
+  }
+  return turn.inputTokens + turn.outputTokens + turn.cacheReadTokens;
+}
+
 export function summarizeOpenCodeUsage(
   messages: OpenCodeMessage[],
   models: OpenCodeModel[],
 ): ContextUsageSnapshot | null {
   const turns = messages
     .map((message) => message.providerUsage)
-    .filter((usage): usage is NonNullable<OpenCodeMessage["providerUsage"]> => !!usage);
-  const latest = turns.at(-1);
+    .filter((usage): usage is OpenCodeProviderUsage => !!usage);
+  // `AssistantMessage.tokens` is required and zero-initialised while the turn
+  // streams, so the in-flight turn always carries an all-zero usage block.
+  // Anchoring on `turns.at(-1)` would therefore collapse the reading to 0% for
+  // the whole duration of every turn. Anchor on the last turn that actually
+  // reported tokens instead; the session-level reduce below is unaffected
+  // because an all-zero turn contributes nothing to any sum.
+  const latest = turns.findLast((turn) => openCodeTurnTokens(turn) > 0);
   if (!latest) return null;
+
+  const model = models.find((candidate) => candidate.id === latest.modelId);
+  const contextWindow = model?.contextWindow;
+  // Without a catalogue context window there is no denominator. Synthesising one
+  // from the used tokens would report exactly 100% for every model missing from
+  // the catalogue — including every mount before the async model list arrives.
+  if (
+    typeof contextWindow !== "number"
+    || !Number.isFinite(contextWindow)
+    || contextWindow <= 0
+  ) {
+    return null;
+  }
 
   const session = turns.reduce(
     (sum, turn) => ({
@@ -1788,16 +1872,12 @@ export function summarizeOpenCodeUsage(
       duration: 0,
     },
   );
-  const model = models.find((candidate) => candidate.id === latest.modelId);
-  const usedTokens =
-    latest.totalTokens
-    ?? latest.inputTokens + latest.outputTokens + latest.cacheReadTokens;
-  const totalTokens = model?.contextWindow ?? Math.max(usedTokens, 1);
+  const usedTokens = openCodeTurnTokens(latest);
 
   return {
     usedTokens,
-    totalTokens,
-    percentUsed: Math.max(0, Math.min(100, (usedTokens / totalTokens) * 100)),
+    totalTokens: contextWindow,
+    percentUsed: Math.max(0, Math.min(100, (usedTokens / contextWindow) * 100)),
     modelId: latest.modelId,
     inputTokens: session.input,
     outputTokens: session.output,
@@ -1809,7 +1889,8 @@ export function summarizeOpenCodeUsage(
       session.input + session.output + session.cacheRead + session.cacheWrite,
     costUsd: session.cost,
     durationMs: session.duration,
-    estimated: model?.contextWindow === undefined,
+    // Provider-exact counters against a catalogue context window: never inferred.
+    estimated: false,
     source: "opencode",
     updatedAt: new Date().toISOString(),
   };
@@ -1913,12 +1994,34 @@ export async function forkOpenCodeSession(
   };
 }
 
+/**
+ * Splits a stored model id into an *optional* provider/model override.
+ *
+ * Shares {@link splitModelIdOnFirstSlash} with the prompting path, but disagrees
+ * with it about a bare id: compaction takes an override the server may ignore, so
+ * anything that cannot name both halves is safer as "no override" than as a
+ * half-specified one that would resolve a provider naming no model.
+ *
+ * `"default"` is the store's sentinel for "no explicit model" and the info-panel
+ * caller passes the raw stored value straight through, so it is filtered here —
+ * destructuring it yielded `providerID: "default", modelID: undefined`.
+ */
+export function splitOpenCodeModelId(
+  model: string | undefined,
+): { providerID?: string; modelID?: string } {
+  const trimmed = model?.trim();
+  if (!trimmed || trimmed === "default") return {};
+  const split = splitModelIdOnFirstSlash(trimmed);
+  if (!split || !split.providerHalf || !split.modelHalf) return {};
+  return { providerID: split.providerHalf, modelID: split.modelHalf };
+}
+
 export async function compactOpenCodeSession(
   client: OpencodeClient,
   sessionId: string,
   model?: string,
 ): Promise<void> {
-  const [providerID, modelID] = model?.split("/") ?? [];
+  const { providerID, modelID } = splitOpenCodeModelId(model);
   const response = await client.session.summarize({
     sessionID: sessionId,
     providerID,

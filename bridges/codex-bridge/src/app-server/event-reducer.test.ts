@@ -105,19 +105,86 @@ describe("usage and limits", () => {
       },
     });
 
-    expect(events[0]).toMatchObject({
+    const event = events[0] as Extract<EngineEvent, { kind: "thread.usage.updated" }>;
+    expect(event).toMatchObject({
       kind: "thread.usage.updated",
       threadId: "t1",
+      // The turn id is what lets the runtime attribute usage to a turn; dropping
+      // it would strand the snapshot.
+      turnId: "turn-1",
+      engineGeneration: 1,
+      handle: "handle-1",
+    });
+    // Every mapped field, including the ones the fixture supplied but nothing
+    // asserted: `cacheWriteTokens` came from `cacheWriteInputTokens`, and
+    // `lastTurnTokens` must track the *last* turn, not the session total.
+    expect(event.usage).toMatchObject({
+      usedTokens: 25_000,
+      totalTokens: 100_000,
+      percentUsed: 25,
+      inputTokens: 10_000,
+      outputTokens: 3_000,
+      cacheReadTokens: 2_000,
+      cacheWriteTokens: 500,
+      reasoningTokens: 1_000,
+      lastTurnTokens: 25_000,
+      sessionTokens: 15_000,
+      estimated: false,
+      source: "provider",
+    });
+    expect(Number.isNaN(Date.parse(event.usage.updatedAt))).toBe(false);
+  });
+
+  test("usage without params, thread, turn or tokenUsage is dropped", () => {
+    expect(reduce("thread/tokenUsage/updated", undefined)).toEqual([]);
+    expect(reduce("thread/tokenUsage/updated", "not an object")).toEqual([]);
+    expect(reduce("thread/tokenUsage/updated", { turnId: "turn-1", tokenUsage: {} })).toEqual([]);
+    expect(reduce("thread/tokenUsage/updated", { threadId: "t1", tokenUsage: {} })).toEqual([]);
+    expect(reduce("thread/tokenUsage/updated", { threadId: "t1", turnId: "turn-1" })).toEqual([]);
+    expect(
+      reduce("thread/tokenUsage/updated", {
+        threadId: "t1",
+        turnId: "turn-1",
+        tokenUsage: "nope",
+      }),
+    ).toEqual([]);
+  });
+
+  test("an unknown context window reports 0% rather than dividing by zero", () => {
+    const events = reduce("thread/tokenUsage/updated", {
+      threadId: "t1",
+      turnId: "turn-1",
+      tokenUsage: { last: { totalTokens: 1_000 }, modelContextWindow: 0 },
+    });
+    expect(events[0]).toMatchObject({
+      usage: { usedTokens: 1_000, totalTokens: 0, percentUsed: 0 },
+    });
+  });
+
+  test("percentUsed is clamped at 100 when a turn overruns the window", () => {
+    const events = reduce("thread/tokenUsage/updated", {
+      threadId: "t1",
+      turnId: "turn-1",
+      tokenUsage: { last: { totalTokens: 250_000 }, modelContextWindow: 100_000 },
+    });
+    expect(events[0]).toMatchObject({ usage: { percentUsed: 100 } });
+  });
+
+  test("absent token counters stay undefined instead of becoming zero", () => {
+    const events = reduce("thread/tokenUsage/updated", {
+      threadId: "t1",
+      turnId: "turn-1",
+      tokenUsage: { modelContextWindow: 100_000 },
+    });
+    expect(events[0]).toMatchObject({
       usage: {
-        usedTokens: 25_000,
-        totalTokens: 100_000,
-        percentUsed: 25,
-        inputTokens: 10_000,
-        outputTokens: 3_000,
-        cacheReadTokens: 2_000,
-        reasoningTokens: 1_000,
-        sessionTokens: 15_000,
-        estimated: false,
+        usedTokens: 0,
+        inputTokens: undefined,
+        outputTokens: undefined,
+        cacheReadTokens: undefined,
+        cacheWriteTokens: undefined,
+        reasoningTokens: undefined,
+        sessionTokens: undefined,
       },
     });
   });
@@ -136,10 +203,145 @@ describe("usage and limits", () => {
       kind: "account.rateLimits.updated",
       credits: { balance: "12.50", hasCredits: true, unlimited: false },
       rateLimits: [
-        { label: "Five hour", usedPercent: 60 },
-        { label: "Secondary", usedPercent: 20 },
+        // `slot` is the merge key: the primary label is the account's plan name
+        // and changes independently of which window an update carries.
+        {
+          slot: "primary",
+          label: "Five hour",
+          usedPercent: 60,
+          // Codex reports epoch *seconds*; pinning the exact ISO string is what
+          // makes dropping or inverting the ×1000 a test failure.
+          resetsAt: "2027-01-15T08:00:00.000Z",
+        },
+        { slot: "secondary", label: "Secondary", usedPercent: 20 },
       ],
     });
+    // A null resetsAt is omitted, not rendered as the epoch.
+    expect(
+      (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
+        .rateLimits[1]?.resetsAt,
+    ).toBeUndefined();
+  });
+
+  test("an out-of-range resetsAt is dropped rather than throwing inside the reducer", () => {
+    // `new Date(x).toISOString()` throws a RangeError beyond ±8.64e15 ms, and the
+    // reducer is documented as total.
+    for (const resetsAt of [1e18, -1e18, Number.MAX_VALUE]) {
+      const events = reduce("account/rateLimits/updated", {
+        rateLimits: { primary: { usedPercent: 10, resetsAt } },
+      });
+      expect(events[0]).toMatchObject({
+        rateLimits: [{ slot: "primary", usedPercent: 10 }],
+      });
+      expect(
+        (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
+          .rateLimits[0]?.resetsAt,
+      ).toBeUndefined();
+    }
+  });
+
+  test("a non-numeric resetsAt is ignored", () => {
+    const events = reduce("account/rateLimits/updated", {
+      rateLimits: { primary: { usedPercent: 10, resetsAt: "soon" } },
+    });
+    expect(
+      (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
+        .rateLimits[0]?.resetsAt,
+    ).toBeUndefined();
+  });
+
+  test("a missing or malformed rateLimits payload emits nothing", () => {
+    expect(reduce("account/rateLimits/updated", undefined)).toEqual([]);
+    expect(reduce("account/rateLimits/updated", {})).toEqual([]);
+    expect(reduce("account/rateLimits/updated", { rateLimits: null })).toEqual([]);
+    expect(reduce("account/rateLimits/updated", { rateLimits: "none" })).toEqual([]);
+  });
+
+  test("a snapshot with neither window emits an empty list, not a fabricated one", () => {
+    // Sparse update semantics: an empty list means "this update said nothing
+    // about the windows", which the runtime must merge as a no-op.
+    expect(reduce("account/rateLimits/updated", { rateLimits: {} })[0]).toMatchObject({
+      kind: "account.rateLimits.updated",
+      rateLimits: [],
+    });
+  });
+
+  test("a non-string or empty limitName falls back to \"Primary\"", () => {
+    for (const limitName of [undefined, null, "", 7, {}]) {
+      const events = reduce("account/rateLimits/updated", {
+        rateLimits: { limitName, primary: { usedPercent: 5 } },
+      });
+      expect(events[0]).toMatchObject({ rateLimits: [{ slot: "primary", label: "Primary" }] });
+    }
+  });
+
+  test("limitName never relabels the secondary window", () => {
+    const events = reduce("account/rateLimits/updated", {
+      rateLimits: { limitName: "Weekly", secondary: { usedPercent: 5 } },
+    });
+    expect(events[0]).toMatchObject({
+      rateLimits: [{ slot: "secondary", label: "Secondary" }],
+    });
+  });
+
+  test("a secondary-only snapshot carries only the secondary window", () => {
+    const events = reduce("account/rateLimits/updated", {
+      rateLimits: { secondary: { usedPercent: 20 } },
+    });
+    // The reducer must not invent a primary window: an absent one means
+    // "unchanged", and the runtime merges it against the retained snapshot.
+    expect(events[0]).toMatchObject({
+      rateLimits: [{ slot: "secondary", usedPercent: 20 }],
+    });
+  });
+
+  test("credits carry only the fields the update actually supplied", () => {
+    const partial = reduce("account/rateLimits/updated", {
+      rateLimits: { credits: { balance: "3.00", hasCredits: "yes", unlimited: null } },
+    });
+    expect(
+      (partial[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>).credits,
+    ).toEqual({ balance: "3.00" });
+  });
+
+  test("absent credits are omitted so the consumer keeps the last balance", () => {
+    const events = reduce("account/rateLimits/updated", {
+      rateLimits: { primary: { usedPercent: 1 } },
+    });
+    expect("credits" in (events[0] as object)).toBe(false);
+
+    const nulled = reduce("account/rateLimits/updated", {
+      rateLimits: { primary: { usedPercent: 1 }, credits: null },
+    });
+    expect("credits" in (nulled[0] as object)).toBe(false);
+  });
+
+  test("an empty credits object is omitted rather than emitted as a clearing update", () => {
+    const events = reduce("account/rateLimits/updated", {
+      rateLimits: { credits: {} },
+    });
+    expect("credits" in (events[0] as object)).toBe(false);
+  });
+});
+
+describe("compaction", () => {
+  test("thread/compacted is a thread-scoped terminal edge, not a turn event", () => {
+    // The only signal that background compaction finished. It carries a turnId on
+    // the wire, but the compaction turn is never the thread's active turn, so
+    // including it would get the event parked and then dropped as stale.
+    const events = reduce("thread/compacted", { threadId: "t1", turnId: "turn-9" });
+    expect(events).toEqual([
+      { kind: "thread.compacted", threadId: "t1", engineGeneration: 1, handle: "handle-1" },
+    ]);
+  });
+
+  test("thread/compacted without a thread id is dropped", () => {
+    expect(reduce("thread/compacted", { turnId: "turn-9" })).toEqual([]);
+    expect(reduce("thread/compacted", undefined)).toEqual([]);
+  });
+
+  test("thread/compacted is no longer silently ignored", () => {
+    expect(isIgnoredNotification("thread/compacted")).toBe(false);
   });
 });
 

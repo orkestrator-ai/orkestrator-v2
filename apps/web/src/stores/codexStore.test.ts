@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createOptimisticNativeMessage } from "@/lib/chat/client-only-messages";
-import { CODEX_MODELS, DEFAULT_CODEX_MODEL, type CodexApproval } from "@/lib/codex-client";
+import {
+  CODEX_MODELS,
+  DEFAULT_CODEX_MODEL,
+  type CodexApproval,
+  type CodexInteraction,
+} from "@/lib/codex-client";
+import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import {
   createCodexSessionKey,
   useCodexStore,
@@ -25,7 +31,33 @@ function resetCodexStore() {
     fastMode: new Map(),
     sessionPhase: new Map(),
     pendingApprovals: new Map(),
+    // Every map the store owns has to be reset here. A map left out is a map
+    // that carries state between test files, which makes the first test anyone
+    // writes for that action order-dependent.
+    pendingInteractions: new Map(),
+    contextUsage: new Map(),
   });
+}
+
+/** Minimal interaction, with only the fields the store keys on. */
+function interaction(
+  interactionId: string,
+  overrides: Partial<CodexInteraction> = {},
+): CodexInteraction {
+  return {
+    interactionId,
+    kind: "question",
+    method: "item/userInput/request",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+    requestedAt: 0,
+    expiresAt: 300_000,
+    questions: [
+      { id: "q-1", header: "Deploy", question: "Where?", isOther: false, isSecret: false },
+    ],
+    ...overrides,
+  };
 }
 
 /** Minimal approval, with only the fields the store keys on. */
@@ -528,5 +560,239 @@ describe("codexStore pending approvals", () => {
 
     expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false);
     expect(useCodexStore.getState().pendingApprovals.has(otherEnvKey)).toBe(true);
+  });
+});
+
+describe("codexStore pending interactions", () => {
+  const OTHER_KEY = createCodexSessionKey("env-1", "tab-2");
+
+  beforeEach(resetCodexStore);
+
+  test("adds interactions in arrival order, scoped per session", () => {
+    const store = useCodexStore.getState();
+    store.addPendingInteraction(SESSION_KEY, interaction("int-1"));
+    store.addPendingInteraction(SESSION_KEY, interaction("int-2"));
+    store.addPendingInteraction(OTHER_KEY, interaction("int-3"));
+
+    expect(
+      useCodexStore
+        .getState()
+        .pendingInteractions.get(SESSION_KEY)
+        ?.map((entry) => entry.interactionId),
+    ).toEqual(["int-1", "int-2"]);
+    expect(
+      useCodexStore
+        .getState()
+        .pendingInteractions.get(OTHER_KEY)
+        ?.map((entry) => entry.interactionId),
+    ).toEqual(["int-3"]);
+  });
+
+  test("ignores a duplicate interaction id", () => {
+    // A replayed SSE frame can deliver the same interaction twice; two cards for
+    // one request would let the user answer it twice.
+    const store = useCodexStore.getState();
+    store.addPendingInteraction(SESSION_KEY, interaction("int-1"));
+    const before = useCodexStore.getState().pendingInteractions;
+
+    store.addPendingInteraction(SESSION_KEY, interaction("int-1", { expiresAt: 999 }));
+
+    expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY)).toHaveLength(1);
+    // Same object identity: a no-op must not trigger a rerender.
+    expect(useCodexStore.getState().pendingInteractions).toBe(before);
+  });
+
+  test("removes by id and drops the key when the last one goes", () => {
+    const store = useCodexStore.getState();
+    store.addPendingInteraction(SESSION_KEY, interaction("int-1"));
+    store.addPendingInteraction(SESSION_KEY, interaction("int-2"));
+
+    store.removePendingInteraction(SESSION_KEY, "int-1");
+    expect(
+      useCodexStore
+        .getState()
+        .pendingInteractions.get(SESSION_KEY)
+        ?.map((entry) => entry.interactionId),
+    ).toEqual(["int-2"]);
+
+    store.removePendingInteraction(SESSION_KEY, "int-2");
+    expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
+  });
+
+  test("removing an unknown id is a no-op that does not rerender", () => {
+    const store = useCodexStore.getState();
+    store.addPendingInteraction(SESSION_KEY, interaction("int-1"));
+    const before = useCodexStore.getState().pendingInteractions;
+
+    store.removePendingInteraction(SESSION_KEY, "int-missing");
+    store.removePendingInteraction("env-1:nonexistent", "int-1");
+
+    expect(useCodexStore.getState().pendingInteractions).toBe(before);
+  });
+
+  test("setPendingInteractions replaces the list — the rehydration path", () => {
+    const store = useCodexStore.getState();
+    store.addPendingInteraction(SESSION_KEY, interaction("stale-1"));
+
+    // The bridge is authoritative: an interaction it no longer knows about must
+    // disappear, because nothing will ever resolve it.
+    store.setPendingInteractions(SESSION_KEY, [interaction("int-9")]);
+    expect(
+      useCodexStore
+        .getState()
+        .pendingInteractions.get(SESSION_KEY)
+        ?.map((entry) => entry.interactionId),
+    ).toEqual(["int-9"]);
+
+    store.setPendingInteractions(SESSION_KEY, []);
+    expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
+  });
+
+  test("an empty snapshot for a session with no interactions does not rerender", () => {
+    // The component calls this on every reconcile tick, almost always with an
+    // empty list. An unconditional `new Map(...)` here rerendered the whole tab
+    // on every tick.
+    const store = useCodexStore.getState();
+    const before = useCodexStore.getState().pendingInteractions;
+
+    store.setPendingInteractions(SESSION_KEY, []);
+    expect(useCodexStore.getState().pendingInteractions).toBe(before);
+
+    store.setPendingInteractions(SESSION_KEY, []);
+    expect(useCodexStore.getState().pendingInteractions).toBe(before);
+  });
+
+  test("setPendingInteractions with an identical list does not rerender", () => {
+    const store = useCodexStore.getState();
+    store.setPendingInteractions(SESSION_KEY, [interaction("int-1"), interaction("int-2")]);
+    const before = useCodexStore.getState().pendingInteractions;
+
+    store.setPendingInteractions(SESSION_KEY, [interaction("int-1"), interaction("int-2")]);
+    expect(useCodexStore.getState().pendingInteractions).toBe(before);
+
+    // A reordering is a real change.
+    store.setPendingInteractions(SESSION_KEY, [interaction("int-2"), interaction("int-1")]);
+    expect(useCodexStore.getState().pendingInteractions).not.toBe(before);
+  });
+
+  test("adopts a refreshed deadline for the same interaction ids", () => {
+    // Comparing ids alone would discard a re-reported interaction whose
+    // `expiresAt` moved, leaving the card counting down to a deadline the bridge
+    // no longer holds.
+    const store = useCodexStore.getState();
+    store.setPendingInteractions(SESSION_KEY, [interaction("int-1")]);
+
+    store.setPendingInteractions(SESSION_KEY, [
+      interaction("int-1", { expiresAt: 900_000 }),
+    ]);
+
+    expect(
+      useCodexStore.getState().pendingInteractions.get(SESSION_KEY)?.[0]?.expiresAt,
+    ).toBe(900_000);
+  });
+
+  test("a longer or shorter list is always a real change", () => {
+    const store = useCodexStore.getState();
+    store.setPendingInteractions(SESSION_KEY, [interaction("int-1")]);
+    const before = useCodexStore.getState().pendingInteractions;
+
+    store.setPendingInteractions(SESSION_KEY, [interaction("int-1"), interaction("int-2")]);
+    expect(useCodexStore.getState().pendingInteractions).not.toBe(before);
+    expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY)).toHaveLength(2);
+  });
+
+  test("clearEnvironment drops interactions for that environment only", () => {
+    const store = useCodexStore.getState();
+    const otherEnvKey = createCodexSessionKey("env-2", "tab-1");
+    store.addPendingInteraction(SESSION_KEY, interaction("int-1"));
+    store.addPendingInteraction(otherEnvKey, interaction("int-2"));
+
+    store.clearEnvironment("env-1");
+
+    expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
+    expect(useCodexStore.getState().pendingInteractions.has(otherEnvKey)).toBe(true);
+  });
+});
+
+describe("codexStore context usage", () => {
+  beforeEach(resetCodexStore);
+
+  const USAGE: ContextUsageSnapshot = {
+    usedTokens: 12_500,
+    totalTokens: 200_000,
+    percentUsed: 6.25,
+    modelId: "gpt-5-codex",
+    inputTokens: 10_000,
+    outputTokens: 2_000,
+    cacheReadTokens: 400,
+    cacheWriteTokens: 100,
+    reasoningTokens: 50,
+    lastTurnTokens: 900,
+    sessionTokens: 12_500,
+    costUsd: 0.42,
+    durationMs: 1_200,
+    estimated: false,
+    source: "provider",
+    updatedAt: "2026-07-26T00:00:00.000Z",
+    rateLimits: [{ label: "5h", usedPercent: 12 }],
+    credits: { hasCredits: true, balance: "12.00" },
+  };
+
+  test("round-trips a full provider-exact snapshot", () => {
+    const store = useCodexStore.getState();
+
+    store.setContextUsage(SESSION_KEY, USAGE);
+
+    expect(useCodexStore.getState().getContextUsage(SESSION_KEY)).toEqual(USAGE);
+  });
+
+  test("replaces rather than merges an earlier snapshot", () => {
+    const store = useCodexStore.getState();
+    store.setContextUsage(SESSION_KEY, USAGE);
+
+    store.setContextUsage(SESSION_KEY, {
+      usedTokens: 1,
+      totalTokens: 2,
+      percentUsed: 50,
+    });
+
+    // A stale `costUsd` surviving a replacement would show the user a cost from
+    // a session that no longer exists.
+    expect(useCodexStore.getState().getContextUsage(SESSION_KEY)).toEqual({
+      usedTokens: 1,
+      totalTokens: 2,
+      percentUsed: 50,
+    });
+  });
+
+  test("clears the snapshot when passed null", () => {
+    const store = useCodexStore.getState();
+    store.setContextUsage(SESSION_KEY, USAGE);
+
+    store.setContextUsage(SESSION_KEY, null);
+
+    expect(useCodexStore.getState().getContextUsage(SESSION_KEY)).toBeUndefined();
+    expect(useCodexStore.getState().contextUsage.has(SESSION_KEY)).toBe(false);
+  });
+
+  test("is scoped per session", () => {
+    const store = useCodexStore.getState();
+    const otherKey = createCodexSessionKey("env-1", "tab-2");
+
+    store.setContextUsage(SESSION_KEY, USAGE);
+
+    expect(useCodexStore.getState().getContextUsage(otherKey)).toBeUndefined();
+  });
+
+  test("clearEnvironment drops usage for that environment only", () => {
+    const store = useCodexStore.getState();
+    const otherEnvKey = createCodexSessionKey("env-2", "tab-1");
+    store.setContextUsage(SESSION_KEY, USAGE);
+    store.setContextUsage(otherEnvKey, USAGE);
+
+    store.clearEnvironment("env-1");
+
+    expect(useCodexStore.getState().getContextUsage(SESSION_KEY)).toBeUndefined();
+    expect(useCodexStore.getState().getContextUsage(otherEnvKey)).toEqual(USAGE);
   });
 });

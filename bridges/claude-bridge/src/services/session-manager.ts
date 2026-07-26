@@ -24,6 +24,8 @@ import type {
   MessagePatchEventData,
   SessionUsageSnapshot,
   BackgroundTaskSnapshot,
+  SessionRateLimitWindow,
+  StopBackgroundTaskResult,
 } from "../types/index.js";
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
@@ -92,6 +94,37 @@ const planApprovalResolvers = new Map<
 // Timeouts for user interactions (5 minutes)
 const QUESTION_TIMEOUT_MS = 5 * 60 * 1000;
 const PLAN_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Reason a session operation refused, carried as a plain string property.
+ *
+ * Deliberately not an `instanceof` check at the HTTP layer: `routes/session.ts`
+ * imports the session manager through a module boundary that tests replace
+ * wholesale, so the class identity is not stable there. A `code` field is.
+ */
+export type SessionOperationCode = "not_found" | "conflict" | "invalid";
+
+export class SessionOperationError extends Error {
+  readonly name = "SessionOperationError";
+
+  constructor(
+    readonly code: SessionOperationCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function sessionOperationError(
+  code: SessionOperationCode,
+  message: string,
+): SessionOperationError {
+  return new SessionOperationError(code, message);
+}
+
+/** Canonical RFC 4122 shape, used to reject ids that cannot be transcript uuids. */
+const TRANSCRIPT_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 class ClaudeStructuredOutputError extends Error {
   constructor(readonly result: StructuredOutputResult<never>) {
@@ -316,10 +349,18 @@ async function buildClaudeUsageSnapshot(
   }
 
   const heuristic = extractContextUsageFromUnknown(result, fallbackModel);
+  // The heuristic BFS walks into `result.modelUsage[model]`, where it can only
+  // reach `inputTokens + outputTokens` — cache reads are invisible to it. On a
+  // resumed turn that is the whole context (120k of cache read reported as
+  // ~205 tokens), so the cache-inclusive sum wins whenever there is one, and
+  // the heuristic is the fallback for shapes this function does not model.
+  const cacheInclusiveTurnTotal =
+    totals.input + totals.cacheRead + totals.cacheWrite + totals.output;
   const usedTokens =
     context?.totalTokens
+    ?? (cacheInclusiveTurnTotal > 0 ? cacheInclusiveTurnTotal : undefined)
     ?? heuristic?.usedTokens
-    ?? totals.input + totals.output + totals.cacheRead;
+    ?? 0;
   const contextWindow =
     context?.maxTokens
     ?? heuristic?.totalTokens
@@ -327,7 +368,7 @@ async function buildClaudeUsageSnapshot(
   if (usedTokens <= 0 || contextWindow <= 0) return undefined;
 
   const previous = session.usage;
-  const lastTurnTokens = totals.input + totals.output + totals.cacheRead + totals.cacheWrite;
+  const lastTurnTokens = cacheInclusiveTurnTotal;
   return {
     usedTokens,
     totalTokens: contextWindow,
@@ -353,7 +394,9 @@ async function buildClaudeUsageSnapshot(
     estimated: context?.totalTokens === undefined,
     source: "claude",
     updatedAt: new Date().toISOString(),
-    rateLimits: previous?.rateLimits,
+    // Read from the session, not the previous snapshot: rate-limit events land
+    // mid-turn, so the first turn's windows exist before any snapshot does.
+    rateLimits: session.rateLimits ?? previous?.rateLimits,
   };
 }
 
@@ -644,6 +687,10 @@ export function deleteSession(sessionId: string): boolean {
     if (session.abortController) {
       session.abortController.abort();
     }
+    // The control handle outlives the turn while background tasks are alive
+    // (see `stopBackgroundTask`); deleting the session is the point at which
+    // the user has said that work should stop.
+    releaseQueryControl(session);
     cleanupPendingInteractions(sessionId);
     sessions.delete(sessionId);
     return true;
@@ -668,6 +715,7 @@ export function abortSession(sessionId: string): boolean {
     session.abortController.abort();
     session.status = "idle";
     session.abortController = undefined;
+    releaseQueryControl(session);
 
     cleanupPendingInteractions(sessionId);
 
@@ -1086,6 +1134,10 @@ function normalizePersistedSessionMessages(
       content: entry.content,
       parts,
       timestamp,
+      // Recorded explicitly rather than inferred from `id`: a record with no
+      // uuid falls back to a generated id, which must never be mistaken for a
+      // transcript uuid by `resolvePersistedMessageId`.
+      ...(entry.raw.uuid ? { sdkUuid: entry.raw.uuid } : {}),
     });
   }
   return { messages, taskRegistry };
@@ -1108,11 +1160,22 @@ function currentWorkingDirectory(): string {
 export async function reconcilePersistedSessions(): Promise<void> {
   const sdk = await claudeSdk();
   if (typeof sdk.listSessions !== "function") return;
+  const cwd = currentWorkingDirectory();
   const infos = await sdk.listSessions({
-    dir: currentWorkingDirectory(),
+    dir: cwd,
     includeProgrammatic: true,
+    // Every Orkestrator environment is a worktree of the same repository, so
+    // the SDK default (`true`) would hand this bridge every *other*
+    // environment's sessions — which rename, delete and fork would then act on.
+    includeWorktrees: false,
   });
   for (const info of infos) {
+    // Belt and braces: an SDK that ignores `includeWorktrees` (or a store
+    // backend where it does not apply) must still not leak another
+    // environment's sessions into this registry.
+    if (typeof info.cwd === "string" && info.cwd.length > 0 && !isPathWithin(cwd, info.cwd)) {
+      continue;
+    }
     const id = bridgeSessionIdFromSdkId(info.sessionId);
     const existing = sessions.get(id);
     if (existing) {
@@ -1162,23 +1225,43 @@ export async function ensurePersistedSession(
   return state;
 }
 
+/**
+ * Read and normalize a session's persisted transcript.
+ *
+ * Split out of {@link hydratePersistedSessionMessages} so `sendPrompt` can load
+ * the transcript for a session it has *already* marked running, which the
+ * public entry point deliberately refuses to do.
+ */
+async function readPersistedSessionMessages(
+  session: SessionState,
+): Promise<{ messages: NormalizedMessage[]; taskRegistry: TaskRegistry } | undefined> {
+  if (!session.sdkSessionId) return undefined;
+  const sdk = await claudeSdk();
+  if (typeof sdk.getSessionMessages !== "function") return undefined;
+  const persisted = await sdk.getSessionMessages(session.sdkSessionId, {
+    dir: currentWorkingDirectory(),
+    includeSystemMessages: true,
+  });
+  return normalizePersistedSessionMessages(persisted);
+}
+
 export async function hydratePersistedSessionMessages(
   sessionId: string,
 ): Promise<NormalizedMessage[]> {
   const session = await ensurePersistedSession(sessionId);
   if (!session) return [];
+  // Hydration replaces `messages` and `taskRegistry` wholesale. A turn holds a
+  // direct reference to both (the user message it pushed, the registry it
+  // captured), so doing that mid-turn silently discards live state. The
+  // in-memory transcript is authoritative while a turn runs.
+  if (session.status === "running") return session.messages;
   if (session.persistedMessagesLoaded !== false) return session.messages;
-  if (!session.sdkSessionId) return session.messages;
 
-  const sdk = await claudeSdk();
-  if (typeof sdk.getSessionMessages !== "function") return session.messages;
-  const persisted = await sdk.getSessionMessages(session.sdkSessionId, {
-    dir: currentWorkingDirectory(),
-    includeSystemMessages: true,
-  });
-  const hydrated = normalizePersistedSessionMessages(persisted);
-  session.messages = hydrated.messages;
-  session.taskRegistry = hydrated.taskRegistry;
+  const hydrated = await readPersistedSessionMessages(session);
+  if (hydrated) {
+    session.messages = hydrated.messages;
+    session.taskRegistry = hydrated.taskRegistry;
+  }
   session.persistedMessagesLoaded = true;
   return session.messages;
 }
@@ -1226,17 +1309,27 @@ export async function forkPersistedSession(
   options: { upToMessageId?: string; title?: string } = {},
 ): Promise<SessionState> {
   const source = await ensurePersistedSession(sessionId);
-  if (!source?.sdkSessionId) throw new Error("Session has not been materialized");
-  if (source.status === "running") throw new Error("Cannot fork a running session");
+  if (!source?.sdkSessionId) {
+    throw sessionOperationError("not_found", "Session has not been materialized");
+  }
+  if (source.status === "running") {
+    throw sessionOperationError("conflict", "Cannot fork a running session");
+  }
   const sdk = await claudeSdk();
   if (typeof sdk.forkSession !== "function") {
-    throw new Error("Installed Claude Agent SDK does not support session forking");
+    throw sessionOperationError(
+      "conflict",
+      "Installed Claude Agent SDK does not support session forking",
+    );
   }
   const boundaryId = options.upToMessageId
     ? await resolvePersistedMessageId(source, options.upToMessageId)
     : undefined;
   if (options.upToMessageId && !boundaryId) {
-    throw new Error("The selected Claude message is not a persisted fork boundary");
+    throw sessionOperationError(
+      "invalid",
+      "The selected Claude message is not a persisted fork boundary",
+    );
   }
   const result = await sdk.forkSession(source.sdkSessionId, {
     dir: currentWorkingDirectory(),
@@ -1259,30 +1352,101 @@ export async function forkPersistedSession(
   return forked;
 }
 
+/**
+ * Map a bridge message id onto the transcript uuid it stands for.
+ *
+ * Resolution is by *identity only*. There is no positional fallback: the
+ * normalized transcript drops records the persisted list keeps (every
+ * `tool_result` arrives as an empty `type:"user"` entry), so the two lists are
+ * not index-aligned and an ordinal lookup silently returns a neighbouring
+ * message — which the callers then fork at, or restore files to. Returning
+ * `undefined` makes them fail closed instead.
+ */
 async function resolvePersistedMessageId(
   session: SessionState,
   normalizedMessageId: string,
 ): Promise<string | undefined> {
   if (!session.sdkSessionId) return undefined;
+
+  // A live message's `id` is locally generated (`msg-…`) and exists nowhere on
+  // disk; `sdkUuid` is the uuid the SDK reported for it. A hydrated message has
+  // both, and they agree.
+  const local = session.messages.find((message) => message.id === normalizedMessageId);
+  const candidate = local
+    ? local.sdkUuid
+    : TRANSCRIPT_UUID_PATTERN.test(normalizedMessageId)
+      ? normalizedMessageId
+      : undefined;
+  if (!candidate) return undefined;
+  if (local && local.role === "system") return undefined;
+
   const sdk = await claudeSdk();
-  if (typeof sdk.getSessionMessages !== "function") return normalizedMessageId;
+  if (typeof sdk.getSessionMessages !== "function") return candidate;
   const persisted = await sdk.getSessionMessages(session.sdkSessionId, {
     dir: currentWorkingDirectory(),
     includeSystemMessages: false,
   });
-  const conversational = persisted.filter(
-    (message) => message.type === "user" || message.type === "assistant",
+  const match = persisted.find(
+    (message) =>
+      message.uuid === candidate
+      && (message.type === "user" || message.type === "assistant"),
   );
-  const direct = conversational.find((message) => message.uuid === normalizedMessageId);
-  if (direct) return direct.uuid;
-  const normalized = session.messages.filter(
-    (message) => message.role === "user" || message.role === "assistant",
-  );
-  const ordinal = normalized.findIndex((message) => message.id === normalizedMessageId);
-  if (ordinal < 0) return undefined;
-  const role = normalized[ordinal]?.role;
-  const candidate = conversational[ordinal];
-  return candidate?.type === role ? candidate.uuid : undefined;
+  return match?.uuid;
+}
+
+/**
+ * How long a transient rewind query may take to produce its first message.
+ *
+ * Without a bound, a CLI that never speaks leaves the HTTP request hanging
+ * forever with the session flagged busy.
+ */
+const REWIND_OPEN_TIMEOUT_MS = 30_000;
+
+async function rewindViaTransientQuery(
+  sdkSessionId: string,
+  persistedMessageId: string,
+  dryRun: boolean,
+): Promise<unknown> {
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), REWIND_OPEN_TIMEOUT_MS);
+  const iterator = query({
+    prompt: "",
+    options: {
+      cwd: currentWorkingDirectory(),
+      ...claudeExecutableOptions(),
+      resume: sdkSessionId,
+      enableFileCheckpointing: true,
+      // This query exists only to obtain a control handle. `maxTurns: 0` keeps
+      // it from running a turn that would append to the very rollout the
+      // checkpoints are indexed against.
+      maxTurns: 0,
+      abortController,
+    },
+  });
+  try {
+    for await (const _message of iterator) {
+      if (typeof iterator.rewindFiles !== "function") {
+        throw sessionOperationError(
+          "conflict",
+          "Installed Claude Agent SDK does not support file rewind",
+        );
+      }
+      return await iterator.rewindFiles(persistedMessageId, { dryRun });
+    }
+    throw sessionOperationError(
+      "conflict",
+      abortController.signal.aborted
+        ? "Timed out opening the Claude session for file rewind"
+        : "Claude session could not be opened for file rewind",
+    );
+  } finally {
+    clearTimeout(timeout);
+    try {
+      await iterator.return?.();
+    } catch (error) {
+      console.debug("[session-manager] Failed to close rewind query:", error);
+    }
+  }
 }
 
 export async function rewindSessionFiles(
@@ -1291,40 +1455,94 @@ export async function rewindSessionFiles(
   dryRun = false,
 ): Promise<unknown> {
   const session = await ensurePersistedSession(sessionId);
-  if (!session?.sdkSessionId) throw new Error("Session has not been materialized");
-  if (session.status === "running") throw new Error("Cannot rewind a running session");
-  const persistedMessageId = await resolvePersistedMessageId(session, userMessageId);
-  if (!persistedMessageId) {
-    throw new Error("The selected Claude message is not a persisted checkpoint");
+  if (!session?.sdkSessionId) {
+    throw sessionOperationError("not_found", "Session has not been materialized");
   }
-  const iterator = query({
-    prompt: "",
-    options: {
-      cwd: currentWorkingDirectory(),
-      ...claudeExecutableOptions(),
-      resume: session.sdkSessionId,
-      enableFileCheckpointing: true,
-    },
-  });
-  for await (const _message of iterator) {
-    if (typeof iterator.rewindFiles !== "function") {
-      throw new Error("Installed Claude Agent SDK does not support file rewind");
+  if (session.status === "running") {
+    throw sessionOperationError("conflict", "Cannot rewind a running session");
+  }
+  if (session.rewindInProgress) {
+    throw sessionOperationError(
+      "conflict",
+      "A file rewind is already in progress for this session",
+    );
+  }
+
+  // Claimed before the first await: a rewind restores the working tree, and
+  // `status` never leaves `idle` while it runs, so nothing else would stop a
+  // prompt accepted a millisecond later from executing against files mid-restore.
+  session.rewindInProgress = true;
+  try {
+    const persistedMessageId = await resolvePersistedMessageId(session, userMessageId);
+    if (!persistedMessageId) {
+      throw sessionOperationError(
+        "invalid",
+        "The selected Claude message is not a persisted checkpoint",
+      );
     }
-    const result = await iterator.rewindFiles(persistedMessageId, { dryRun });
-    await iterator.return?.();
-    return result;
+    // Prefer the handle a live session already holds. Spawning a second CLI
+    // against the same rollout only to ask it to rewind is both slower and a
+    // write to the transcript this operation is indexed against.
+    const liveRewind = session.queryControl?.rewindFiles;
+    if (typeof liveRewind === "function") {
+      return await liveRewind.call(session.queryControl, persistedMessageId, { dryRun });
+    }
+    return await rewindViaTransientQuery(session.sdkSessionId, persistedMessageId, dryRun);
+  } finally {
+    session.rewindInProgress = false;
   }
-  throw new Error("Claude session could not be opened for file rewind");
+}
+
+/** Statuses from which a background task can still be doing work. */
+const LIVE_BACKGROUND_TASK_STATUSES = new Set<BackgroundTaskSnapshot["status"]>([
+  "pending",
+  "running",
+  "paused",
+]);
+
+function hasLiveBackgroundTasks(session: SessionState): boolean {
+  return Object.values(session.backgroundTasks ?? {}).some((task) =>
+    LIVE_BACKGROUND_TASK_STATUSES.has(task.status),
+  );
 }
 
 export async function stopBackgroundTask(
   sessionId: string,
   taskId: string,
-): Promise<boolean> {
+): Promise<StopBackgroundTaskResult> {
   const session = sessions.get(sessionId);
-  if (!session?.queryControl?.stopTask) return false;
-  await session.queryControl.stopTask(taskId);
-  return true;
+  if (!session) {
+    return { ok: false, reason: "session_not_found", message: "Session not found" };
+  }
+  const task = session.backgroundTasks?.[taskId];
+  if (!task) {
+    return { ok: false, reason: "task_not_found", message: "Task not found" };
+  }
+  const stopTask = session.queryControl?.stopTask;
+  if (typeof stopTask !== "function") {
+    return {
+      ok: false,
+      reason: "no_control_channel",
+      message: "No live Claude control channel can reach this task",
+    };
+  }
+  await stopTask.call(session.queryControl, taskId);
+  return { ok: true };
+}
+
+/**
+ * Release a session's control handle, closing the underlying query if the SDK
+ * exposes a way to. Called when the session is deleted or explicitly aborted —
+ * the two points at which the user has said the background work should stop.
+ */
+function releaseQueryControl(session: SessionState): void {
+  const control = session.queryControl;
+  session.queryControl = undefined;
+  if (typeof control?.close === "function") {
+    void Promise.resolve(control.close()).catch((error) => {
+      console.debug("[session-manager] Failed to close query control:", error);
+    });
+  }
 }
 
 /**
@@ -1772,10 +1990,24 @@ export async function sendPrompt(
     throw new Error("Session is already processing a prompt");
   }
 
+  if (session.rewindInProgress) {
+    throw sessionOperationError(
+      "conflict",
+      "Session is restoring files from a checkpoint",
+    );
+  }
+
   if (structuredRequestId) {
     session.structuredOutput = undefined;
     session.structuredOutputRequestId = structuredRequestId;
   }
+
+  // Claim the transcript before any await. A session materialized from disk by
+  // `reconcilePersistedSessions` still reports `persistedMessagesLoaded ===
+  // false`; leaving it false would let a concurrent `GET /:id/messages` replace
+  // `session.messages` (and `taskRegistry`) out from under this turn.
+  const needsTranscriptHydration = session.persistedMessagesLoaded === false;
+  session.persistedMessagesLoaded = true;
 
   // Create abort controller for this query
   const abortController = new AbortController();
@@ -1783,6 +2015,30 @@ export async function sendPrompt(
   session.status = "running";
   session.error = undefined;
   session.lastActivity = new Date();
+
+  // A suggestion belongs to the turn that produced it. Nothing else clears it,
+  // and `GET /session/:id` replays it on every mount, restore and reconnect, so
+  // without this the user is handed a stale follow-up turns later.
+  if (session.promptSuggestion !== undefined) {
+    session.promptSuggestion = undefined;
+    eventEmitter.emit({
+      type: "session.updated",
+      sessionId,
+      data: { promptSuggestion: undefined },
+    });
+  }
+
+  if (needsTranscriptHydration) {
+    try {
+      const hydrated = await readPersistedSessionMessages(session);
+      if (hydrated) {
+        session.messages = hydrated.messages;
+        session.taskRegistry = hydrated.taskRegistry;
+      }
+    } catch (error) {
+      console.debug("[session-manager] Failed to hydrate transcript before prompt:", error);
+    }
+  }
 
   // Build the display prompt (what the user sees) - includes all attachment references
   let displayPrompt = prompt;
@@ -2639,7 +2895,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           const label = (info.rateLimitType ?? "usage")
             .replaceAll("_", " ")
             .replace(/\b\w/g, (letter) => letter.toUpperCase());
-          const nextWindow = {
+          const nextWindow: SessionRateLimitWindow = {
             label,
             usedPercent: info.utilization,
             resetsAt:
@@ -2647,22 +2903,29 @@ Plan mode is read-only: do not write or edit files until the user approves your 
                 ? new Date(info.resetsAt).toISOString()
                 : undefined,
           };
-          const existing = session.usage?.rateLimits ?? [];
+          // Held on the session, not inside `usage`. Rate-limit events arrive
+          // mid-turn and `usage` only exists after the first `result`, so
+          // gating on it discarded every window a first turn reported.
+          const existing = session.rateLimits ?? session.usage?.rateLimits ?? [];
+          session.rateLimits = [
+            ...existing.filter((window) => window.label !== label),
+            nextWindow,
+          ];
           if (session.usage) {
             session.usage = {
               ...session.usage,
-              rateLimits: [
-                ...existing.filter((window) => window.label !== label),
-                nextWindow,
-              ],
+              rateLimits: session.rateLimits,
               updatedAt: new Date().toISOString(),
             };
-            eventEmitter.emit({
-              type: "session.updated",
-              sessionId,
-              data: { contextUsage: session.usage },
-            });
           }
+          eventEmitter.emit({
+            type: "session.updated",
+            sessionId,
+            data: {
+              rateLimits: session.rateLimits,
+              ...(session.usage ? { contextUsage: session.usage } : {}),
+            },
+          });
         }
       } else if (message.type === "system") {
         // Handle other system messages (log for debugging)
@@ -2676,6 +2939,15 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           subtype?: string;
           task_id?: string;
           description?: string;
+          summary?: string;
+          /** Only on `task_notification`; the terminal edge of a task. */
+          status?: "completed" | "failed" | "stopped";
+          /** Only on `background_tasks_changed`; the full live set. */
+          tasks?: Array<{
+            task_id?: string;
+            task_type?: string;
+            description?: string;
+          }>;
           patch?: {
             status?: BackgroundTaskSnapshot["status"];
             description?: string;
@@ -2684,6 +2956,15 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             is_backgrounded?: boolean;
           };
         };
+
+        const emitBackgroundTasks = () => {
+          eventEmitter.emit({
+            type: "session.updated",
+            sessionId,
+            data: { backgroundTasks: session.backgroundTasks },
+          });
+        };
+
         if (
           (taskMessage.subtype === "task_started"
             || taskMessage.subtype === "task_progress"
@@ -2712,11 +2993,61 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             ...(session.backgroundTasks ?? {}),
             [task.id]: task,
           };
-          eventEmitter.emit({
-            type: "session.updated",
-            sessionId,
-            data: { backgroundTasks: session.backgroundTasks },
-          });
+          emitBackgroundTasks();
+        } else if (taskMessage.subtype === "task_notification" && taskMessage.task_id) {
+          // The terminal edge. Without it nothing ever leaves `running`, so
+          // `GET /session/:id` reported a finished task as live indefinitely.
+          const previous = session.backgroundTasks?.[taskMessage.task_id];
+          const terminalStatus: BackgroundTaskSnapshot["status"] =
+            taskMessage.status === "failed"
+              ? "failed"
+              : taskMessage.status === "stopped"
+                ? "killed"
+                : "completed";
+          const task: BackgroundTaskSnapshot = {
+            id: taskMessage.task_id,
+            description:
+              previous?.description
+              ?? taskMessage.description
+              ?? taskMessage.summary,
+            status: terminalStatus,
+            isBackgrounded: previous?.isBackgrounded,
+            startedAt: previous?.startedAt ?? Date.now(),
+            endedAt: Date.now(),
+            error:
+              terminalStatus === "failed"
+                ? (taskMessage.summary ?? previous?.error)
+                : previous?.error,
+          };
+          session.backgroundTasks = {
+            ...(session.backgroundTasks ?? {}),
+            [task.id]: task,
+          };
+          emitBackgroundTasks();
+        } else if (
+          taskMessage.subtype === "background_tasks_changed"
+          && Array.isArray(taskMessage.tasks)
+        ) {
+          // A level signal, not an edge: the SDK's own contract is that
+          // consumers REPLACE their set from it, so a bookend lost to a
+          // reconnect cannot wedge a stale running indicator.
+          const replacement: Record<string, BackgroundTaskSnapshot> = {};
+          for (const entry of taskMessage.tasks) {
+            const id = entry?.task_id;
+            if (typeof id !== "string" || id.length === 0) continue;
+            const previous = session.backgroundTasks?.[id];
+            replacement[id] = {
+              id,
+              description: entry.description ?? previous?.description,
+              status: LIVE_BACKGROUND_TASK_STATUSES.has(previous?.status ?? "running")
+                ? (previous?.status ?? "running")
+                : "running",
+              isBackgrounded: previous?.isBackgrounded ?? true,
+              startedAt: previous?.startedAt ?? Date.now(),
+            };
+          }
+          session.backgroundTasks = replacement;
+          emitBackgroundTasks();
         }
 
         // Emit generic system event for other subtypes
@@ -2785,6 +3116,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // would blank out the turn's text whenever the block is thinking/tool_use.
         const accumulatedContent = getMessageTextFromParts(finalParts);
 
+        // The transcript uuid of the record this block was written to. The SDK
+        // emits one `assistant` message per content block, each its own
+        // transcript record; the latest is the inclusive end of this message,
+        // which is what a fork boundary must point at.
+        const sdkMessageUuid = (message as { uuid?: unknown }).uuid;
         if (!currentAssistantMessage) {
           currentAssistantMessage = {
             id: messageKey,
@@ -2792,6 +3128,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             content: accumulatedContent,
             parts: finalParts,
             timestamp: new Date().toISOString(),
+            ...(typeof sdkMessageUuid === "string" ? { sdkUuid: sdkMessageUuid } : {}),
           };
           session.messages.push(currentAssistantMessage);
           debugLog("[session-manager] Created assistant message", {
@@ -2801,6 +3138,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         } else {
           currentAssistantMessage.content = accumulatedContent;
           currentAssistantMessage.parts = finalParts;
+          if (typeof sdkMessageUuid === "string") {
+            currentAssistantMessage.sdkUuid = sdkMessageUuid;
+          }
           debugLog("[session-manager] Updated assistant message", {
             sessionId,
             messageId: currentAssistantMessage.id,
@@ -2872,6 +3212,23 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           costUSD: resultMsg.total_cost_usd,
           durationMs: resultMsg.duration_ms,
         });
+
+        // The only authoritative link between the id this bridge minted for the
+        // prompt and the transcript record it became. Everything destructive
+        // (fork boundary, file rewind) resolves through it, so it is recorded
+        // and republished rather than inferred from message ordering.
+        if (
+          typeof resultMsg.user_message_uuid === "string"
+          && resultMsg.user_message_uuid.length > 0
+          && userMessage.sdkUuid !== resultMsg.user_message_uuid
+        ) {
+          userMessage.sdkUuid = resultMsg.user_message_uuid;
+          eventEmitter.emit({
+            type: "message.updated",
+            sessionId,
+            data: { message: userMessage },
+          });
+        }
 
         const exactUsage = await buildClaudeUsageSnapshot(
           session,
@@ -3116,7 +3473,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     }
     throw error;
   } finally {
-    if (session.queryControl === queryIteratorControl) {
+    // A backgrounded task outlives the turn that started it by definition, and
+    // `stopTask` is only reachable through this handle. Dropping it here made
+    // `POST /:id/tasks/:taskId/stop` fail for exactly the tasks the user can
+    // still see. `deleteSession`/`abortSession` release it when the user says so.
+    if (
+      session.queryControl === queryIteratorControl
+      && !hasLiveBackgroundTasks(session)
+    ) {
       session.queryControl = undefined;
     }
     if (heartbeat) {

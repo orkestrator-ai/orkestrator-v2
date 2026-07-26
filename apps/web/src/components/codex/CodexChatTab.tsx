@@ -38,6 +38,7 @@ import {
   isCodexSessionPhase,
   lookupSessionStatus,
   parseApproval,
+  parseContextUsage,
   parseInteraction,
   resumeSession,
   sendPrompt,
@@ -193,6 +194,8 @@ export function CodexChatTab({
   const approvalActivitySequenceRef = useRef(0);
   const interactionSnapshotSequenceRef = useRef(0);
   const interactionActivitySequenceRef = useRef(0);
+  const forkInFlightRef = useRef(false);
+  const [forkInFlight, setForkInFlight] = useState(false);
   const reconcileSessionStateRef = useRef<
     (options?: ReconcileSessionOptions) => Promise<ReconcileSessionResult>
   >(async () => "unavailable");
@@ -951,6 +954,14 @@ export function CodexChatTab({
 
   const handleForkFromMessage = useCallback(async (messageId: string) => {
     if (!client || !session?.sessionId) return;
+    // A fork POSTs then opens a tab with a freshly generated id, so the pane
+    // store's existing-id dedupe cannot collapse a double click: it would
+    // create two server-side forks and two tabs. The ref latches synchronously
+    // (before React has re-rendered the disabled button) and the state drives
+    // the disabled attribute.
+    if (forkInFlightRef.current) return;
+    forkInFlightRef.current = true;
+    setForkInFlight(true);
     try {
       const fork = await forkCodexSession(client, session.sessionId, messageId);
       if (!fork) throw new Error("This Codex turn cannot be used as a fork boundary");
@@ -967,6 +978,9 @@ export function CodexChatTab({
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to fork Codex session");
+    } finally {
+      forkInFlightRef.current = false;
+      setForkInFlight(false);
     }
   }, [client, data, environmentId, session?.sessionId]);
 
@@ -1862,11 +1876,12 @@ export function CodexChatTab({
             }
 
             if (event.type === "session.updated") {
-              if (event.data?.contextUsage) {
-                setContextUsage(
-                  sessionKey,
-                  event.data.contextUsage as import("@/lib/context-usage").ContextUsageSnapshot,
-                );
+              // Validate exactly like the HTTP path does. A bare cast here let a
+              // malformed frame reach `usage.percentUsed.toFixed(...)` in the
+              // agent-info popover and throw inside render.
+              const usageFromEvent = parseContextUsage(event.data?.contextUsage);
+              if (usageFromEvent) {
+                setContextUsage(sessionKey, usageFromEvent);
               }
               const phase = event.data?.phase;
               if (isCodexSessionPhase(phase)) {
@@ -2136,6 +2151,7 @@ export function CodexChatTab({
                   className="h-6 w-6"
                   title="Fork from here"
                   aria-label="Fork Codex session from this message"
+                  disabled={forkInFlight}
                   onClick={() => void handleForkFromMessage(message.id)}
                 >
                   <GitFork className="h-3.5 w-3.5" />

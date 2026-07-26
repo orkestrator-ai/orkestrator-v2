@@ -70,6 +70,13 @@ export interface SdkResultMessage extends SdkMessageBase {
   permission_denials?: unknown[];
   /** Present on successful turns requested with Agent SDK `outputFormat`. */
   structured_output?: unknown;
+  /**
+   * Transcript uuid of the user message that opened this turn.
+   *
+   * The authoritative link between the locally generated id the bridge handed
+   * the client and the record a fork or file rewind must address.
+   */
+  user_message_uuid?: string;
 }
 
 /** Type guard for compact boundary message */
@@ -142,6 +149,17 @@ export interface NormalizedMessage {
   parts: NormalizedPart[];
   timestamp: string;
   /**
+   * UUID of the record this message occupies in the SDK's persisted transcript.
+   *
+   * The only id that a fork boundary or a file rewind may be resolved against.
+   * Live messages carry a locally generated `id` (`msg-…`), which exists
+   * nowhere on disk, so without this the bridge would have to *guess* which
+   * transcript record the user pointed at — and both consumers of that answer
+   * (`forkSession({ upToMessageId })` and `rewindFiles()`) act destructively on
+   * it. Absent means "not resolvable"; callers must fail rather than guess.
+   */
+  sdkUuid?: string;
+  /**
    * How many frames have been published for this message, starting at 1 for
    * the full frame. Present only on assistant messages the streaming path
    * publishes incrementally.
@@ -190,6 +208,22 @@ export interface SessionState {
   promptSuggestion?: string;
   /** Live background/subagent tasks keyed by provider task id. */
   backgroundTasks?: Record<string, BackgroundTaskSnapshot>;
+  /**
+   * Provider rate-limit windows, held independently of {@link usage}.
+   *
+   * `rate_limit_event` arrives mid-turn, long before the first `result` builds
+   * a usage snapshot, so hanging these off `usage` dropped every window the
+   * first turn reported.
+   */
+  rateLimits?: SessionRateLimitWindow[];
+  /**
+   * True while a destructive file rewind is restoring the working tree.
+   *
+   * A rewind is not a turn, so `status` stays `idle` throughout; without a
+   * separate flag a prompt accepted a millisecond later would run against files
+   * that are being rewritten underneath it.
+   */
+  rewindInProgress?: boolean;
   queryControl?: {
     stopTask?: (taskId: string) => Promise<void>;
     backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
@@ -198,8 +232,30 @@ export interface SessionState {
       userMessageId: string,
       options?: { dryRun?: boolean },
     ) => Promise<unknown>;
+    close?: () => void | Promise<void>;
   };
 }
+
+export interface SessionRateLimitWindow {
+  label: string;
+  usedPercent?: number;
+  resetsAt?: string;
+}
+
+/**
+ * Outcome of a background-task stop request.
+ *
+ * Discriminated so the HTTP layer can tell "there is nothing by that name"
+ * (404) from "the task exists but no live control channel can reach it" (409);
+ * a single boolean collapsed both into a misleading 404.
+ */
+export type StopBackgroundTaskResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: "session_not_found" | "task_not_found" | "no_control_channel";
+      message: string;
+    };
 
 export interface SessionUsageSnapshot {
   usedTokens: number;
@@ -221,11 +277,7 @@ export interface SessionUsageSnapshot {
   updatedAt: string;
   permissionDenials?: number;
   contextCategories?: Array<{ name: string; tokens: number; color?: string }>;
-  rateLimits?: Array<{
-    label: string;
-    usedPercent?: number;
-    resetsAt?: string;
-  }>;
+  rateLimits?: SessionRateLimitWindow[];
 }
 
 export interface BackgroundTaskSnapshot {

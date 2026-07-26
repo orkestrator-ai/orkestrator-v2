@@ -65,6 +65,33 @@ const mockSubscribeToEvents = mock(
 );
 const mockGetAvailableSlashCommands = mock(async () => [] as any[]);
 const mockCreateClient = mock(() => MOCK_CLIENT as any);
+function emptyRuntimeHealth(overrides: Record<string, unknown> = {}) {
+  return {
+    agents: [],
+    skills: [],
+    mcpServers: [],
+    lspServers: [],
+    formatters: [],
+    todos: [],
+    diffs: [],
+    fetchedAt: "2026-04-15T00:00:00.000Z",
+    ...overrides,
+  };
+}
+const mockGetOpenCodeRuntimeHealth = mock<
+  (
+    _client: unknown,
+    _directory?: string,
+    _sessionId?: string,
+  ) => Promise<ReturnType<typeof emptyRuntimeHealth>>
+>(async () => emptyRuntimeHealth());
+const mockForkOpenCodeSession = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _messageId?: string,
+  ) => Promise<{ id: string; title?: string }>
+>(async () => ({ id: "fork-session", title: "OpenCode fork" }));
 const mockStartOpenCodeServer = mock(async () => ({ hostPort: 9999 }));
 const mockGetOpenCodeServerStatus = mock(async () => ({ running: true, hostPort: 9999 }));
 const mockGetOpenCodeServerLog = mock(async () => "");
@@ -127,6 +154,11 @@ mock.module("@/lib/opencode-client", () => ({
   formatOpenCodeError: mock((error) => String(error)),
   abortSession: mockAbortSession,
   subscribeToEvents: mockSubscribeToEvents,
+  // Both hit the network. `getOpenCodeRuntimeHealth` ran for real against the
+  // fake client in every test with its rejection swallowed, and a fork click
+  // would have attempted a live SDK call.
+  getOpenCodeRuntimeHealth: mockGetOpenCodeRuntimeHealth,
+  forkOpenCodeSession: mockForkOpenCodeSession,
   ERROR_MESSAGE_PREFIX: "error-",
   SYSTEM_MESSAGE_PREFIX: "system-",
 }));
@@ -384,6 +416,8 @@ function resetStores(name = "20260415-123456") {
     pendingPermissions: new Map(),
     eventSubscriptions: new Map(),
     contextUsage: new Map(),
+    runtimeHealth: new Map(),
+    selectedAgent: new Map(),
   });
 
   useEnvironmentStore.setState({
@@ -530,6 +564,13 @@ describe("OpenCodeChatTab", () => {
     mockGetAvailableSlashCommands.mockResolvedValue([]);
     mockCreateClient.mockReset();
     mockCreateClient.mockImplementation(() => MOCK_CLIENT as any);
+    mockGetOpenCodeRuntimeHealth.mockClear();
+    mockGetOpenCodeRuntimeHealth.mockImplementation(async () => emptyRuntimeHealth());
+    mockForkOpenCodeSession.mockClear();
+    mockForkOpenCodeSession.mockImplementation(async () => ({
+      id: "fork-session",
+      title: "OpenCode fork",
+    }));
     mockStartOpenCodeServer.mockReset();
     mockStartOpenCodeServer.mockResolvedValue({ hostPort: 9999 });
     mockGetOpenCodeServerStatus.mockReset();
@@ -2178,13 +2219,14 @@ describe("OpenCodeChatTab", () => {
       });
       await waitFor(() => {
         expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
-        expect(useOpenCodeStore.getState().contextUsage.get(SESSION_KEY)).toMatchObject({
+        expect(useOpenCodeStore.getState().contextUsage.get(SESSION_KEY)).toEqual({
           usedTokens: 50,
           totalTokens: 1_000,
           percentUsed: 5,
           modelId: "openai/gpt-5",
           estimated: true,
           source: "heuristic",
+          updatedAt: expect.any(String),
         });
       });
 

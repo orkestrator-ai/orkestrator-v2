@@ -40,6 +40,23 @@ function num(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+/**
+ * ECMAScript `Date` only represents ±8.64e15 ms around the epoch. `new Date(x)`
+ * outside that range yields an Invalid Date and `toISOString()` *throws* — inside
+ * a reducer this file's header promises is total, from a value app-server can
+ * report as any JSON number. Out-of-range resets are dropped rather than clamped:
+ * a fabricated boundary timestamp would be shown to the user as fact.
+ */
+const MAX_DATE_MS = 8.64e15;
+
+function epochSecondsToIso(value: unknown): string | undefined {
+  const seconds = num(value);
+  if (seconds === undefined) return undefined;
+  const ms = seconds * 1_000;
+  if (!Number.isFinite(ms) || Math.abs(ms) > MAX_DATE_MS) return undefined;
+  return new Date(ms).toISOString();
+}
+
 /** app-server `TurnError` → engine error, keeping the structured code. */
 export function toTurnError(raw: unknown): EngineError {
   if (!isRecord(raw)) {
@@ -101,7 +118,6 @@ const IGNORED_METHODS = new Set([
   "serverRequest/resolved",
   "thread/status/changed",
   "thread/settings/updated",
-  "thread/compacted",
   "thread/archived",
   "thread/unarchived",
   "thread/deleted",
@@ -189,6 +205,13 @@ export function reduceNotification(
       };
     }
 
+    /**
+     * A **sparse** rolling update, per the generated protocol: only the fields
+     * present carry information, and an absent one must not clear the last
+     * observed value. The event therefore lists only the windows this update
+     * actually carried, and omits `credits` entirely when it carried none —
+     * merging into the retained snapshot is the consumer's job.
+     */
     case "account/rateLimits/updated": {
       if (!isRecord(params) || !isRecord(params.rateLimits)) return { events: [] };
       const snapshot = params.rateLimits;
@@ -196,15 +219,15 @@ export function reduceNotification(
       for (const [key, label] of [["primary", "Primary"], ["secondary", "Secondary"]] as const) {
         const window = isRecord(snapshot[key]) ? snapshot[key] : undefined;
         if (!window) continue;
-        const resetsAt = num(window.resetsAt);
+        const resetsAt = epochSecondsToIso(window.resetsAt);
         windows.push({
-          label: typeof snapshot.limitName === "string" && key === "primary"
+          slot: key,
+          label: typeof snapshot.limitName === "string" && snapshot.limitName.length > 0
+            && key === "primary"
             ? snapshot.limitName
             : label,
           usedPercent: num(window.usedPercent),
-          ...(resetsAt !== undefined
-            ? { resetsAt: new Date(resetsAt * 1_000).toISOString() }
-            : {}),
+          ...(resetsAt !== undefined ? { resetsAt } : {}),
         });
       }
       const rawCredits = isRecord(snapshot.credits) ? snapshot.credits : null;
@@ -225,7 +248,10 @@ export function reduceNotification(
         events: [{
           kind: "account.rateLimits.updated",
           rateLimits: windows,
-          ...(credits ? { credits } : {}),
+          // An empty credits object carries no information, and emitting one
+          // would look like an update in a stream whose whole contract is
+          // "present means changed".
+          ...(credits && Object.keys(credits).length > 0 ? { credits } : {}),
           ...base,
         }],
       };
@@ -236,6 +262,20 @@ export function reduceNotification(
       const id = isRecord(thread) ? str(thread.id) : undefined;
       if (!id) return { events: [] };
       return { events: [{ kind: "thread.started", threadId: id, ...base }] };
+    }
+
+    /**
+     * The only terminal edge for `thread/compact/start`, which returns before the
+     * rewrite has happened. Without it the bridge could never learn that
+     * compaction finished, and the thread it marked busy would stay busy.
+     *
+     * The notification's `turnId` is deliberately dropped: the compaction turn is
+     * never the thread's active turn, so a turn-scoped event would be parked and
+     * then discarded as stale.
+     */
+    case "thread/compacted": {
+      if (!threadId) return { events: [] };
+      return { events: [{ kind: "thread.compacted", threadId, ...base }] };
     }
 
     case "thread/name/updated": {

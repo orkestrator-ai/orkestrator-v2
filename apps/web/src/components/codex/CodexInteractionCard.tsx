@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Check, Circle, ExternalLink, HelpCircle } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -40,9 +41,15 @@ export function CodexInteractionCard({
   sessionKey,
 }: CodexInteractionCardProps) {
   const remove = useCodexStore((state) => state.removePendingInteraction);
-  const [answers, setAnswers] = useState<Record<string, string[]>>({});
+  // Selection is tracked by option *index*, never by label: labels are
+  // untrusted MCP-supplied text and are not de-duplicated upstream, so two
+  // options can share one. Keying/selecting by label would make them a single
+  // control. The submitted answer is still the label — that is the wire format.
+  const [answers, setAnswers] = useState<Record<string, number[]>>({});
   const [form, setForm] = useState<Record<string, unknown>>({});
+  const [freeText, setFreeText] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const schema = object(interaction.schema);
   const properties = object(schema.properties);
   const externalUrl = safeExternalUrl(interaction.url);
@@ -52,10 +59,28 @@ export function CodexInteractionCard({
       : [],
   );
 
+  // Selected indices become labels here — indices are a local rendering
+  // concern, the bridge only understands labels.
+  const resolvedAnswers = useMemo(() => {
+    const entries: Record<string, string[]> = {};
+    for (const question of interaction.questions ?? []) {
+      const selected = (answers[question.id] ?? [])
+        .map((index) => question.options?.[index]?.label)
+        .filter((label): label is string => typeof label === "string");
+      if (selected.length > 0) {
+        entries[question.id] = selected;
+        continue;
+      }
+      const typed = freeText[question.id]?.trim() ?? "";
+      if (typed) entries[question.id] = [typed];
+    }
+    return entries;
+  }, [answers, freeText, interaction.questions]);
+
   const canSubmit = useMemo(() => {
     if (interaction.kind === "question") {
       return (interaction.questions ?? []).every(
-        (question) => (answers[question.id]?.length ?? 0) > 0,
+        (question) => (resolvedAnswers[question.id]?.length ?? 0) > 0,
       );
     }
     if (interaction.kind === "mcp-form") {
@@ -65,10 +90,11 @@ export function CodexInteractionCard({
       });
     }
     return Boolean(externalUrl);
-  }, [answers, externalUrl, form, interaction.kind, interaction.questions, required]);
+  }, [externalUrl, form, interaction.kind, interaction.questions, required, resolvedAnswers]);
 
   const submit = async (action: "accept" | "decline" | "cancel") => {
     setSubmitting(true);
+    setError(null);
     const result = await respondToInteraction(
       client,
       sessionId,
@@ -76,14 +102,26 @@ export function CodexInteractionCard({
       action === "accept"
         ? {
             action,
-            ...(interaction.kind === "question" ? { answers } : {}),
+            ...(interaction.kind === "question" ? { answers: resolvedAnswers } : {}),
             ...(interaction.kind === "mcp-form" ? { content: form } : {}),
           }
         : { action },
     );
+    // `respondToInteraction` never throws; it reports the outcome. Only
+    // `applied`/`stale` mean the bridge is done with this interaction. On
+    // `forbidden`/`error` the turn is still blocked on it, so the card has to
+    // stay mounted, say so, and let the user retry.
     if (result === "applied" || result === "stale") {
       remove(sessionKey, interaction.interactionId);
+      setSubmitting(false);
+      return;
     }
+    const message =
+      result === "forbidden"
+        ? "Codex refused this response. The interaction may have been reassigned or the session locked."
+        : "Could not send your response to Codex. Check the bridge connection and try again.";
+    setError(message);
+    toast.error(message);
     setSubmitting(false);
   };
 
@@ -118,16 +156,22 @@ export function CodexInteractionCard({
                   </div>
                   <div className="mt-1 text-sm text-foreground">{question.question}</div>
                 </div>
-                {question.options?.map((option) => {
-                  const selected = answers[question.id]?.includes(option.label) ?? false;
+                {question.options?.map((option, index) => {
+                  const selected = answers[question.id]?.includes(index) ?? false;
                   return (
                     <button
-                      key={option.label}
+                      key={`${question.id}:${index}`}
                       type="button"
-                      onClick={() => setAnswers((current) => ({
-                        ...current,
-                        [question.id]: selected ? [] : [option.label],
-                      }))}
+                      aria-pressed={selected}
+                      onClick={() => {
+                        setAnswers((current) => ({
+                          ...current,
+                          [question.id]: selected ? [] : [index],
+                        }));
+                        if (!selected) {
+                          setFreeText((current) => ({ ...current, [question.id]: "" }));
+                        }
+                      }}
                       className={cn(
                         "flex w-full items-start gap-2 rounded-md px-3 py-2 text-left transition-colors hover:bg-muted",
                         selected && "bg-muted",
@@ -150,11 +194,15 @@ export function CodexInteractionCard({
                 {question.isOther || !question.options?.length ? (
                   <Input
                     type={question.isSecret ? "password" : "text"}
-                    value={answers[question.id]?.[0] ?? ""}
-                    onChange={(event) => setAnswers((current) => ({
-                      ...current,
-                      [question.id]: event.target.value ? [event.target.value] : [],
-                    }))}
+                    aria-label={`Answer for ${question.question}`}
+                    value={freeText[question.id] ?? ""}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setFreeText((current) => ({ ...current, [question.id]: value }));
+                      if (value) {
+                        setAnswers((current) => ({ ...current, [question.id]: [] }));
+                      }
+                    }}
                     placeholder="Type your answer"
                   />
                 ) : null}
@@ -236,6 +284,15 @@ export function CodexInteractionCard({
           </Button>
         ) : null}
       </div>
+
+      {error ? (
+        <div
+          role="alert"
+          className="border-t border-destructive/30 bg-destructive/10 px-4 py-2.5 text-xs text-destructive-foreground"
+        >
+          {error}
+        </div>
+      ) : null}
 
       <div className="flex justify-end gap-2 border-t border-border bg-muted/30 px-4 py-3">
         <Button

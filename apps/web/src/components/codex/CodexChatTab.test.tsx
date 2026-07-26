@@ -8,6 +8,7 @@ import type { NativeMessage } from "@/lib/chat/native-message-types";
 import type {
   CodexAbortOutcome,
   CodexApproval,
+  CodexInteraction,
   CodexPromptAcceptedResponse,
   CodexPromptSendOutcome,
   CodexSessionConfigUpdateOutcome,
@@ -100,7 +101,17 @@ const mockAbortSession = mock<
 const mockFetchPendingApprovals = mock<
   (_client: unknown, _sessionId: string) => Promise<CodexApproval[]>
 >(async () => []);
-const mockFetchPendingInteractions = mock(async () => []);
+const mockFetchPendingInteractions = mock<
+  (_client: unknown, _sessionId: string) => Promise<CodexInteraction[]>
+>(async () => []);
+const mockRespondToInteraction = mock(async () => "applied" as const);
+const mockForkCodexSession = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _messageId?: string,
+  ) => Promise<{ sessionId: string; title?: string } | null>
+>(async () => ({ sessionId: "fork-session", title: "Codex fork" }));
 const mockCreateSession = mock(async () => ({ sessionId: "session-1", title: "Test session" }));
 const mockGetSessionStatus = mock<
   (
@@ -194,6 +205,13 @@ mock.module("@/lib/codex-client", () => ({
     && ["starting", "running", "cancelling", "recovering", "idle", "failed"].includes(value),
   lookupSessionStatus: mockLookupSessionStatus,
   parseApproval: realCodexClientSnapshot.parseApproval,
+  // The interaction and usage paths run their SSE payloads through the real
+  // validators for the same reason `parseApproval` does: a permissive stub
+  // would let the suite accept a frame the app itself would refuse.
+  parseInteraction: realCodexClientSnapshot.parseInteraction,
+  parseContextUsage: realCodexClientSnapshot.parseContextUsage,
+  forkCodexSession: mockForkCodexSession,
+  respondToInteraction: mockRespondToInteraction,
   resumeSession: mockResumeSession,
   sendPrompt: mockSendPrompt,
   subscribeToEvents: mockSubscribeToEvents,
@@ -576,7 +594,36 @@ function seedCodexStore(messages: ReturnType<typeof createMessage>[] = []) {
     fastMode: new Map(),
     sessionPhase: new Map(),
     pendingApprovals: new Map(),
+    pendingInteractions: new Map(),
+    contextUsage: new Map(),
   });
+}
+
+function createInteraction(
+  interactionId = "interaction-1",
+  overrides: Partial<CodexInteraction> = {},
+): CodexInteraction {
+  return {
+    interactionId,
+    kind: "question",
+    method: "item/question/request",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+    requestedAt: 1_700_000_000_000,
+    expiresAt: 1_700_000_300_000,
+    questions: [
+      {
+        id: "q1",
+        header: "Deployment",
+        question: "Which environment should I target?",
+        isOther: false,
+        isSecret: false,
+        options: [{ label: "staging" }, { label: "production" }],
+      },
+    ],
+    ...overrides,
+  };
 }
 
 function resetStores() {
@@ -624,6 +671,13 @@ describe("CodexChatTab", () => {
     mockFetchPendingApprovals.mockImplementation(async () => []);
     mockFetchPendingInteractions.mockClear();
     mockFetchPendingInteractions.mockImplementation(async () => []);
+    mockForkCodexSession.mockClear();
+    mockForkCodexSession.mockImplementation(async () => ({
+      sessionId: "fork-session",
+      title: "Codex fork",
+    }));
+    mockRespondToInteraction.mockClear();
+    mockRespondToInteraction.mockImplementation(async () => "applied" as const);
     mockCreateSession.mockClear();
     mockCreateSession.mockImplementation(async () => ({ sessionId: "session-1", title: "Test session" }));
     mockGetSessionStatus.mockReset();
@@ -3906,6 +3960,423 @@ describe("CodexChatTab", () => {
       });
     });
   });
+
+  describe("interaction rehydration and SSE", () => {
+    test("adopts interactions raised while the tab was unmounted", async () => {
+      // Same reason as approvals: an unmounted tab saw no frame and its fresh
+      // subscription has no cursor for the bridge to replay from.
+      mockFetchPendingInteractions.mockResolvedValue([createInteraction("int-rehydrated")]);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() =>
+        expect(
+          useCodexStore
+            .getState()
+            .pendingInteractions.get(SESSION_KEY)
+            ?.map((item) => item.interactionId),
+        ).toEqual(["int-rehydrated"]),
+      );
+      expect(mockFetchPendingInteractions).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
+    });
+
+    test("drops an interaction the bridge no longer reports", async () => {
+      useCodexStore.getState().addPendingInteraction(SESSION_KEY, createInteraction("int-answered"));
+      mockFetchPendingInteractions.mockResolvedValue([]);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() =>
+        expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false),
+      );
+    });
+
+    test("renders the card for a pending interaction and hides it once resolved", async () => {
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      let markRequested!: () => void;
+      const requested = new Promise<void>((resolve) => {
+        markRequested = resolve;
+      });
+      let releaseResolve!: () => void;
+      const resolveGate = new Promise<void>((resolve) => {
+        releaseResolve = resolve;
+      });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        yield {
+          type: "session.interaction-requested",
+          sessionId: SESSION_ID,
+          data: { interaction: createInteraction("int-live") },
+        };
+        markRequested();
+        await resolveGate;
+        yield {
+          type: "session.interaction-resolved",
+          sessionId: SESSION_ID,
+          data: { interactionId: "int-live" },
+        };
+        await new Promise(() => {});
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await requested;
+
+      // `showInteractions` gates on a pending list, a client and a session id.
+      await waitFor(() => expect(screen.getByText("Codex has a question")).toBeTruthy());
+      expect(screen.getByRole("button", { name: /staging/ })).toBeTruthy();
+
+      await act(async () => {
+        releaseResolve();
+        await resolveGate;
+      });
+      await waitFor(() =>
+        expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false),
+      );
+      expect(screen.queryByText("Codex has a question")).toBeNull();
+    });
+
+    test("does not render the card while there is nothing pending", async () => {
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockFetchPendingInteractions).toHaveBeenCalled());
+      expect(screen.queryByText("Codex has a question")).toBeNull();
+      expect(screen.queryByText("MCP input requested")).toBeNull();
+    });
+
+    test.each([
+      ["an unknown kind", { kind: "diagnostic" }],
+      ["an empty interaction id", { interactionId: "" }],
+      ["a question payload with no questions", { questions: [] }],
+    ])("rejects an SSE interaction with %s", async (_label, overrides) => {
+      // The frame is validated exactly like the HTTP snapshot: an interaction
+      // the card cannot render is one the user can never answer.
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        yield {
+          type: "session.interaction-requested",
+          sessionId: SESSION_ID,
+          data: { interaction: { ...createInteraction("int-malformed"), ...overrides } },
+        };
+        yield { type: "session.idle", sessionId: SESSION_ID, data: {} };
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() =>
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false),
+      );
+      expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
+    });
+
+    test("an unrelated SSE frame does not discard the interactions snapshot", async () => {
+      /*
+       * Mirrors the approval guard: gating the snapshot on the broad reconcile
+       * counter would let any current-session frame throw away the only
+       * rehydration path, leaving the turn blocked on a card nobody can see.
+       */
+      let markFrameApplied!: () => void;
+      const frameApplied = new Promise<void>((resolve) => {
+        markFrameApplied = resolve;
+      });
+      let releaseSnapshot!: (interactions: CodexInteraction[]) => void;
+      const snapshot = new Promise<CodexInteraction[]>((resolve) => {
+        releaseSnapshot = resolve;
+      });
+
+      mockFetchPendingInteractions.mockImplementationOnce(() => snapshot);
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { message: createMessage("streamed", "Streamed mid-snapshot") },
+        };
+        markFrameApplied();
+        await new Promise(() => {});
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await frameApplied;
+
+      await act(async () => {
+        releaseSnapshot([createInteraction("int-blocked")]);
+        await snapshot;
+      });
+
+      await waitFor(() =>
+        expect(
+          useCodexStore
+            .getState()
+            .pendingInteractions.get(SESSION_KEY)
+            ?.map((item) => item.interactionId),
+        ).toEqual(["int-blocked"]),
+      );
+    });
+
+    test("a stale snapshot cannot resurrect a just-resolved interaction", async () => {
+      let markResolved!: () => void;
+      const resolvedFrameSent = new Promise<void>((resolve) => {
+        markResolved = resolve;
+      });
+      let releaseSnapshot!: (interactions: CodexInteraction[]) => void;
+      const snapshot = new Promise<CodexInteraction[]>((resolve) => {
+        releaseSnapshot = resolve;
+      });
+      const answered = createInteraction("int-answered");
+
+      useCodexStore.getState().addPendingInteraction(SESSION_KEY, answered);
+      mockFetchPendingInteractions.mockImplementationOnce(() => snapshot);
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        yield {
+          type: "session.interaction-resolved",
+          sessionId: SESSION_ID,
+          data: { interactionId: "int-answered" },
+        };
+        markResolved();
+        await new Promise(() => {});
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await resolvedFrameSent;
+      await waitFor(() =>
+        expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false),
+      );
+
+      await act(async () => {
+        releaseSnapshot([answered]);
+        await snapshot;
+      });
+
+      expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
+    });
+
+    test("the live SSE frame and the reconcile poll cannot double-add one card", async () => {
+      // Both paths are now live. `addPendingInteraction` dedupes on id, and the
+      // snapshot replaces rather than appends.
+      const shared = createInteraction("int-shared");
+      mockFetchPendingInteractions.mockResolvedValue([shared]);
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        yield {
+          type: "session.interaction-requested",
+          sessionId: SESSION_ID,
+          data: { interaction: shared },
+        };
+        await new Promise(() => {});
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() =>
+        expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY)?.length).toBe(1),
+      );
+      expect(screen.getAllByText("Codex has a question")).toHaveLength(1);
+    });
+
+    test("a failed interactions snapshot leaves the existing cards alone", async () => {
+      const originalError = console.error;
+      console.error = mock(() => {}) as unknown as typeof console.error;
+      try {
+        useCodexStore
+          .getState()
+          .addPendingInteraction(SESSION_KEY, createInteraction("int-existing"));
+        mockFetchPendingInteractions.mockImplementation(async () => {
+          throw new Error("interactions endpoint unavailable");
+        });
+
+        render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+        await waitFor(() => expect(mockFetchPendingInteractions).toHaveBeenCalled());
+        expect(
+          useCodexStore
+            .getState()
+            .pendingInteractions.get(SESSION_KEY)
+            ?.map((item) => item.interactionId),
+        ).toEqual(["int-existing"]);
+      } finally {
+        console.error = originalError;
+      }
+    });
+  });
+
+  describe("context usage", () => {
+    test("stores the usage the status lookup reports", async () => {
+      mockGetSessionStatus.mockResolvedValue({
+        status: "idle",
+        contextUsage: {
+          usedTokens: 1_000,
+          totalTokens: 10_000,
+          percentUsed: 10,
+          source: "provider",
+          updatedAt: "2026-04-15T00:00:00.000Z",
+        },
+      } as any);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() =>
+        expect(useCodexStore.getState().contextUsage.get(SESSION_KEY)?.percentUsed).toBe(10),
+      );
+    });
+
+    test("stores a well-formed session.updated usage frame", async () => {
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        yield {
+          type: "session.updated",
+          sessionId: SESSION_ID,
+          data: {
+            contextUsage: {
+              usedTokens: 4_000,
+              totalTokens: 20_000,
+              percentUsed: 20,
+              source: "provider",
+              updatedAt: "2026-04-15T00:01:00.000Z",
+            },
+          },
+        };
+        yield { type: "session.idle", sessionId: SESSION_ID, data: {} };
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() =>
+        expect(useCodexStore.getState().contextUsage.get(SESSION_KEY)?.usedTokens).toBe(4_000),
+      );
+    });
+
+    test.each([
+      ["a non-numeric percentage", { percentUsed: "lots" }],
+      ["a missing token total", { totalTokens: undefined }],
+      ["a null payload", null],
+      ["an array payload", []],
+    ])("ignores a session.updated frame with %s", async (_label, contextUsage) => {
+      /*
+       * The SSE branch used to store the frame behind a bare cast, bypassing
+       * the validation the HTTP path performs. The agent-info popover then
+       * called `percentUsed.toFixed(...)` on it and threw inside render.
+       */
+      const previous = {
+        usedTokens: 1,
+        totalTokens: 2,
+        percentUsed: 50,
+        source: "provider" as const,
+        updatedAt: "2026-04-15T00:00:00.000Z",
+      };
+      useCodexStore.getState().setContextUsage(SESSION_KEY, previous);
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        yield {
+          type: "session.updated",
+          sessionId: SESSION_ID,
+          data: contextUsage === undefined ? {} : { contextUsage },
+        };
+        yield { type: "session.idle", sessionId: SESSION_ID, data: {} };
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() =>
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false),
+      );
+      // The last good reading survives rather than being replaced by junk.
+      const stored = useCodexStore.getState().contextUsage.get(SESSION_KEY);
+      expect(stored?.percentUsed).toBe(50);
+      expect(typeof stored?.percentUsed).toBe("number");
+    });
+  });
+
+  describe("forking from a message", () => {
+    function forkButtons() {
+      return screen.getAllByRole("button", { name: "Fork Codex session from this message" });
+    }
+
+    async function renderWithUserTurn() {
+      mockGetSessionMessages.mockResolvedValue([
+        {
+          id: "user-1",
+          role: "user",
+          content: "Add pagination",
+          parts: [{ type: "text", content: "Add pagination" }],
+          createdAt: "2026-04-15T00:00:00.000Z",
+          turnId: "turn-1",
+        } as any,
+      ]);
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(forkButtons().length).toBeGreaterThan(0));
+    }
+
+    test("opens a fork tab for the chosen message", async () => {
+      await renderWithUserTurn();
+      fireEvent.click(forkButtons()[0]!);
+
+      await waitFor(() =>
+        expect(mockForkCodexSession).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID, "user-1"),
+      );
+      await waitFor(() => {
+        const tabs = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID);
+        expect(tabs).toHaveLength(2);
+      });
+      const forked = usePaneLayoutStore
+        .getState()
+        .getAllTabs(ENVIRONMENT_ID)
+        .find((tab) => tab.id !== TAB_ID)!;
+      expect(forked.type).toBe("codex-native");
+      expect(forked.displayTitle).toBe("Codex fork");
+      expect(forked.codexNativeData?.sessionId).toBe("fork-session");
+      expect(forked.initialPrompt).toBeUndefined();
+    });
+
+    test("reports a boundary Codex refuses and opens no tab", async () => {
+      mockForkCodexSession.mockImplementation(async () => null);
+      await renderWithUserTurn();
+      fireEvent.click(forkButtons()[0]!);
+
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          "This Codex turn cannot be used as a fork boundary",
+        ),
+      );
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+    });
+
+    test("a double click forks once", async () => {
+      /*
+       * Every call POSTs a fork and then adds a tab with a freshly generated
+       * id, so the pane store cannot dedupe: two clicks produced two
+       * server-side forks and two tabs.
+       */
+      let release!: (value: { sessionId: string; title?: string }) => void;
+      mockForkCodexSession.mockImplementation(
+        () => new Promise((resolve) => {
+          release = resolve;
+        }),
+      );
+      await renderWithUserTurn();
+
+      fireEvent.click(forkButtons()[0]!);
+      await waitFor(() => expect(forkButtons()[0]!.hasAttribute("disabled")).toBe(true));
+      fireEvent.click(forkButtons()[0]!);
+
+      await act(async () => {
+        release({ sessionId: "fork-session", title: "Codex fork" });
+      });
+
+      expect(mockForkCodexSession).toHaveBeenCalledTimes(1);
+      await waitFor(() =>
+        expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+      );
+      // The latch releases so a second, deliberate fork is still possible.
+      await waitFor(() => expect(forkButtons()[0]!.hasAttribute("disabled")).toBe(false));
+    });
+  });
+
 
 });
 

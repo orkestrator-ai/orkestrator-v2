@@ -38,6 +38,7 @@ import type {
   InteractionResolution,
 } from "../app-server/interactions.js";
 import { reduceHistoricalTurns, reduceNotification } from "../app-server/event-reducer.js";
+import { redactSecrets, redactSecretsDeep } from "../app-server/redaction.js";
 import {
   AppServerRpcError,
   classifyDispatchFailure,
@@ -376,7 +377,11 @@ export class AppServerEngine implements CodexEngine {
         ?? notification.method.replaceAll("/", " ");
       this.runtimeNotices.push({
         method: notification.method,
-        message: message.slice(0, 1_000),
+        // Redacted at *capture*, not on the way out: MCP-server startup errors
+        // are the likeliest place for a real token or a credentialed URL to
+        // appear, and `/session/:id/runtime-health` serves these cross-origin
+        // with no auth. Truncate afterwards so redaction sees whole tokens.
+        message: redactSecrets(message).slice(0, 1_000),
         receivedAt: new Date().toISOString(),
       });
       if (this.runtimeNotices.length > 100) this.runtimeNotices.shift();
@@ -579,6 +584,16 @@ export class AppServerEngine implements CodexEngine {
     return { reviewThreadId: response.reviewThreadId, turnId: response.turn.id };
   }
 
+  /**
+   * One snapshot of everything the running child has loaded.
+   *
+   * Served by `GET /session/:id/runtime-health`, which — like every bridge route
+   * — is reachable cross-origin and unauthenticated. Each sub-request is settled
+   * independently so one failing list degrades a single panel instead of the
+   * whole view, and the whole payload is redacted before it leaves the process:
+   * MCP inventories carry auth state, hook definitions carry commands and
+   * environments, and notices carry startup errors.
+   */
   async getRuntimeHealth(threadId?: string): Promise<{
     engine: ReturnType<AppServerEngine["getHealth"]>;
     mcp: unknown;
@@ -607,10 +622,13 @@ export class AppServerEngine implements CodexEngine {
         : { error: result.reason instanceof Error ? result.reason.message : String(result.reason) };
     return {
       engine: this.getHealth(),
-      mcp: value(mcp),
-      skills: value(skills),
-      hooks: value(hooks),
-      notices: [...this.runtimeNotices],
+      // `dropAuthStatus` removes the per-server auth mode from the inventory: it
+      // is not a credential, but it is not something an arbitrary origin should
+      // be able to enumerate for the user's MCP servers either.
+      mcp: redactSecretsDeep(value(mcp), { dropAuthStatus: true }),
+      skills: redactSecretsDeep(value(skills)),
+      hooks: redactSecretsDeep(value(hooks)),
+      notices: redactSecretsDeep([...this.runtimeNotices]),
       rateLimits: value(rateLimits),
     };
   }

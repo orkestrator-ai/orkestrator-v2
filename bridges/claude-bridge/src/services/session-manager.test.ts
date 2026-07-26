@@ -70,6 +70,17 @@ interface QueryCall {
 const pendingCalls: QueryCall[] = [];
 const queryWaiters: Array<(call: QueryCall) => void> = [];
 
+/**
+ * Extra members spliced onto the object `query()` returns.
+ *
+ * The bridge feature-detects `stopTask`, `rewindFiles` and `getContextUsage`
+ * with `typeof x === "function"` and skips them silently when absent, so they
+ * are opt-in per test: installing them unconditionally would change what every
+ * other test's turn does (a present `getContextUsage` rewrites the whole usage
+ * snapshot).
+ */
+let queryControlOverrides: Record<string, unknown> = {};
+
 function nextQueryCall(timeoutMs = 1000): Promise<QueryCall> {
   return new Promise((resolve, reject) => {
     if (pendingCalls.length > 0) {
@@ -168,11 +179,97 @@ const mockQuery = mock((args: { prompt: unknown; options: QueryCall["options"] }
         supportsAutoMode: true,
       },
     ],
+    ...queryControlOverrides,
   });
 });
 
+// ---------------------------------------------------------------------------
+// Module-level SDK session store
+// ---------------------------------------------------------------------------
+//
+// Real RFC 4122 shapes: the bridge derives an SDK session id from the bridge
+// id by pattern, so a placeholder string would never round-trip.
+const PERSISTED_SDK_ID = "11111111-2222-4333-8444-555555555555";
+const OTHER_SDK_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+const FORK_SDK_ID = "99999999-8888-4777-8666-555555555555";
+
+// The bridge feature-detects every one of these with `typeof x === "function"`
+// and silently degrades to a no-op when absent, so they have to be present as
+// real functions here or the persisted-session surface is never exercised at
+// all. Defaults are the empty/inert answer; each test drives the seam it needs.
+
+type SdkSessionInfo = {
+  sessionId: string;
+  summary: string;
+  lastModified: number;
+  customTitle?: string;
+  cwd?: string;
+  createdAt?: number;
+};
+
+type SdkSessionMessage = {
+  type: "user" | "assistant" | "system";
+  uuid: string;
+  session_id: string;
+  message: unknown;
+  parent_tool_use_id: string | null;
+};
+
+const mockSdkListSessions = mock(
+  async (_options?: Record<string, unknown>): Promise<SdkSessionInfo[]> => [],
+);
+const mockSdkGetSessionInfo = mock(
+  async (
+    _sessionId: string,
+    _options?: Record<string, unknown>,
+  ): Promise<SdkSessionInfo | undefined> => undefined,
+);
+const mockSdkGetSessionMessages = mock(
+  async (
+    _sessionId: string,
+    _options?: Record<string, unknown>,
+  ): Promise<SdkSessionMessage[]> => [],
+);
+const mockSdkDeleteSession = mock(
+  async (_sessionId: string, _options?: Record<string, unknown>): Promise<void> => {},
+);
+const mockSdkRenameSession = mock(
+  async (
+    _sessionId: string,
+    _title: string,
+    _options?: Record<string, unknown>,
+  ): Promise<void> => {},
+);
+const mockSdkForkSession = mock(
+  async (
+    _sessionId: string,
+    _options?: Record<string, unknown>,
+  ): Promise<{ sessionId: string }> => ({ sessionId: FORK_SDK_ID }),
+);
+
+function resetSdkSessionStoreMocks(): void {
+  mockSdkListSessions.mockReset();
+  mockSdkListSessions.mockImplementation(async () => []);
+  mockSdkGetSessionInfo.mockReset();
+  mockSdkGetSessionInfo.mockImplementation(async () => undefined);
+  mockSdkGetSessionMessages.mockReset();
+  mockSdkGetSessionMessages.mockImplementation(async () => []);
+  mockSdkDeleteSession.mockReset();
+  mockSdkDeleteSession.mockImplementation(async () => {});
+  mockSdkRenameSession.mockReset();
+  mockSdkRenameSession.mockImplementation(async () => {});
+  mockSdkForkSession.mockReset();
+  mockSdkForkSession.mockImplementation(async () => ({ sessionId: FORK_SDK_ID }));
+}
+
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({
   query: mockQuery,
+  listSessions: mockSdkListSessions,
+  getSessionInfo: mockSdkGetSessionInfo,
+  getSessionMessages: mockSdkGetSessionMessages,
+  deleteSession: mockSdkDeleteSession,
+  renameSession: mockSdkRenameSession,
+  forkSession: mockSdkForkSession,
 }));
 
 const mockGetMcpServersForSdk = mock(async () => ({}));
@@ -203,8 +300,10 @@ mock.module("./plugin-config.js", () => ({
 const sessionManager = await import("./session-manager.js");
 const { eventEmitter } = await import("./event-emitter.js");
 import type {
+  BackgroundTaskSnapshot,
   MessagePatchEventData,
   NormalizedPart,
+  SessionUsageSnapshot,
   SSEEvent,
 } from "../types/index.js";
 import {
@@ -231,6 +330,14 @@ const {
   getAvailableModels,
   getClaudeRuntimeVersions,
   MAX_IMAGE_ATTACHMENT_BYTES,
+  reconcilePersistedSessions,
+  ensurePersistedSession,
+  hydratePersistedSessionMessages,
+  deleteSessionDurably,
+  renameSessionDurably,
+  forkPersistedSession,
+  rewindSessionFiles,
+  stopBackgroundTask,
 } = sessionManager;
 
 // ---------------------------------------------------------------------------
@@ -303,6 +410,8 @@ afterEach(() => {
   mockGetMcpServerNames.mockImplementation(async () => new Set<string>());
   mockGetPluginsForSdk.mockReset();
   mockGetPluginsForSdk.mockImplementation(async () => []);
+  resetSdkSessionStoreMocks();
+  queryControlOverrides = {};
 });
 
 afterAll(() => {
@@ -2643,6 +2752,24 @@ describe("sendPrompt", () => {
         mcpServers: { local: { command: "safe-command", args: [] } },
         plugins: [{ type: "local", path: "/plugin" }],
       });
+
+      // Asserted explicitly rather than folded into the `toMatchObject` above:
+      // half of these are legitimately `undefined` on this path, and
+      // `toMatchObject`/`toEqual` both ignore undefined-valued keys, so an
+      // option that silently stopped being forwarded would still pass there.
+      expect(call.options.resume).toBeUndefined();
+      expect(call.options.sessionId).toBe(session.id.slice("session-".length));
+      expect(call.options.agent).toBeUndefined();
+      expect(call.options.enableFileCheckpointing).toBe(true);
+      expect(call.options.agentProgressSummaries).toBe(true);
+      expect(call.options.promptSuggestions).toBe(false);
+      expect(call.options.includePartialMessages).toBe(true);
+      expect(call.options.thinking).toEqual({ type: "adaptive", display: "summarized" });
+      expect(call.options.settingSources).toEqual(["user", "project"]);
+      expect(call.options.systemPrompt).toMatchObject({
+        type: "preset",
+        preset: "claude_code",
+      });
       expect(getSessionInitData(session.id)).toMatchObject({
         mcpServers: [{ name: "local", status: "connected" }],
         plugins: [
@@ -2652,17 +2779,63 @@ describe("sendPrompt", () => {
       });
       expect(events.some((event) => event.type === "system.compact")).toBe(true);
       expect(events.some((event) => event.type === "system.message")).toBe(true);
-      expect(events).toContainEqual(expect.objectContaining({
-        type: "session.updated",
-        data: {
-          contextUsage: expect.objectContaining({
-            usedTokens: 15,
-            totalTokens: 200000,
-            modelId: "claude-test",
-            source: "claude",
-          }),
-        },
-      }));
+
+      // Pinned in full. Every field here is rendered by the UI, and an
+      // `objectContaining` on four of them cannot notice the other fourteen
+      // regressing — including the cache counters that Issue 12 was about.
+      const usageEvent = events.find(
+        (event) =>
+          event.type === "session.updated"
+          && (event.data as { contextUsage?: unknown })?.contextUsage !== undefined,
+      );
+      const contextUsage = (usageEvent?.data as { contextUsage: SessionUsageSnapshot })
+        .contextUsage;
+      expect(contextUsage).toEqual({
+        usedTokens: 15,
+        totalTokens: 200000,
+        percentUsed: 0.0075,
+        modelId: "claude-test",
+        inputTokens: 12,
+        outputTokens: 3,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        lastTurnTokens: 15,
+        sessionTokens: 15,
+        costUsd: 0,
+        durationMs: 0,
+        apiDurationMs: 0,
+        permissionDenials: 0,
+        contextCategories: undefined,
+        estimated: true,
+        source: "claude",
+        updatedAt: expect.any(String),
+        rateLimits: undefined,
+      });
+      // `toEqual` ignores undefined-valued keys in Bun, so the key set is
+      // asserted separately: without this, a field that stopped being emitted
+      // entirely would still satisfy the object above.
+      expect(Object.keys(contextUsage).sort()).toEqual([
+        "apiDurationMs",
+        "cacheReadTokens",
+        "cacheWriteTokens",
+        "contextCategories",
+        "costUsd",
+        "durationMs",
+        "estimated",
+        "inputTokens",
+        "lastTurnTokens",
+        "modelId",
+        "outputTokens",
+        "percentUsed",
+        "permissionDenials",
+        "rateLimits",
+        "sessionTokens",
+        "source",
+        "totalTokens",
+        "updatedAt",
+        "usedTokens",
+      ]);
+      expect(getSession(session.id)?.usage).toEqual(contextUsage);
     } finally {
       if (previousCwd === undefined) delete process.env.CWD;
       else process.env.CWD = previousCwd;
@@ -3446,5 +3619,1280 @@ describe("getClaudeRuntimeVersions", () => {
 
       expect(versions.cliVersion).toBe(manifest.claudeCodeVersion);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Persisted session registry
+// ---------------------------------------------------------------------------
+
+const U1 = "00000000-0000-4000-8000-000000000001";
+const A1 = "00000000-0000-4000-8000-000000000002";
+const TOOL_RESULT_UUID = "00000000-0000-4000-8000-000000000003";
+const A2 = "00000000-0000-4000-8000-000000000004";
+const U2 = "00000000-0000-4000-8000-000000000005";
+const U3 = "00000000-0000-4000-8000-000000000006";
+
+/**
+ * A transcript containing the shape that broke ordinal resolution: a
+ * `tool_result` arrives as an empty `type:"user"` record, which normalization
+ * drops and the persisted list keeps. From that point on the two lists are
+ * offset by one and every positional lookup is wrong by a message.
+ */
+function transcriptWithToolResult(sessionId = PERSISTED_SDK_ID): SdkSessionMessage[] {
+  return [
+    {
+      type: "user",
+      uuid: U1,
+      session_id: sessionId,
+      message: { role: "user", content: [{ type: "text", text: "first prompt" }] },
+      parent_tool_use_id: null,
+    },
+    {
+      type: "assistant",
+      uuid: A1,
+      session_id: sessionId,
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/a" } }],
+      },
+      parent_tool_use_id: null,
+    },
+    {
+      type: "user",
+      uuid: TOOL_RESULT_UUID,
+      session_id: sessionId,
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "file body" }],
+      },
+      parent_tool_use_id: null,
+    },
+    {
+      type: "assistant",
+      uuid: A2,
+      session_id: sessionId,
+      message: { role: "assistant", content: [{ type: "text", text: "all done" }] },
+      parent_tool_use_id: null,
+    },
+    {
+      type: "user",
+      uuid: U2,
+      session_id: sessionId,
+      message: { role: "user", content: [{ type: "text", text: "second prompt" }] },
+      parent_tool_use_id: null,
+    },
+  ];
+}
+
+function sdkSessionInfo(overrides: Partial<SdkSessionInfo> = {}): SdkSessionInfo {
+  return {
+    sessionId: PERSISTED_SDK_ID,
+    summary: "Persisted session",
+    lastModified: Date.parse("2026-07-01T00:00:00.000Z"),
+    createdAt: Date.parse("2026-06-01T00:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+async function materializePersistedSession(
+  overrides: Partial<SdkSessionInfo> = {},
+): Promise<ReturnType<typeof getSession> & object> {
+  const info = sdkSessionInfo(overrides);
+  mockSdkGetSessionInfo.mockImplementation(async () => info);
+  const bridgeId = `session-${info.sessionId}`;
+  track(bridgeId);
+  const state = await ensurePersistedSession(bridgeId);
+  if (!state) throw new Error("expected the session to materialize");
+  return state;
+}
+
+describe("reconcilePersistedSessions", () => {
+  test("asks the SDK for this directory only and drops worktree siblings", async () => {
+    mockSdkListSessions.mockImplementation(async () => [
+      sdkSessionInfo({ sessionId: PERSISTED_SDK_ID, cwd: "/repo/env-a" }),
+      sdkSessionInfo({ sessionId: OTHER_SDK_ID, cwd: "/repo/env-b" }),
+    ]);
+
+    await withWorkspaceCwd("/repo/env-a", async () => {
+      await reconcilePersistedSessions();
+    });
+    track(`session-${PERSISTED_SDK_ID}`);
+    track(`session-${OTHER_SDK_ID}`);
+
+    expect(mockSdkListSessions).toHaveBeenCalledWith({
+      dir: "/repo/env-a",
+      includeProgrammatic: true,
+      includeWorktrees: false,
+    });
+    // Every Orkestrator environment is a worktree of the same repo, so an
+    // adopted sibling would be renamable, forkable and deletable from the
+    // wrong environment.
+    expect(getSession(`session-${PERSISTED_SDK_ID}`)).toBeDefined();
+    expect(getSession(`session-${OTHER_SDK_ID}`)).toBeUndefined();
+  });
+
+  test("keeps sessions whose cwd the SDK did not report", async () => {
+    mockSdkListSessions.mockImplementation(async () => [
+      sdkSessionInfo({ sessionId: PERSISTED_SDK_ID, cwd: undefined }),
+    ]);
+
+    await withWorkspaceCwd("/repo/env-a", async () => {
+      await reconcilePersistedSessions();
+    });
+    track(`session-${PERSISTED_SDK_ID}`);
+
+    expect(getSession(`session-${PERSISTED_SDK_ID}`)?.title).toBe("Persisted session");
+  });
+
+  test("adopts a new session with metadata and a deferred transcript", async () => {
+    mockSdkListSessions.mockImplementation(async () => [
+      sdkSessionInfo({ customTitle: "Named by the user", cwd: "/repo/env-a" }),
+    ]);
+
+    await withWorkspaceCwd("/repo/env-a", async () => {
+      await reconcilePersistedSessions();
+    });
+    const adopted = getSession(track(`session-${PERSISTED_SDK_ID}`));
+
+    expect(adopted).toMatchObject({
+      title: "Named by the user",
+      status: "idle",
+      sdkSessionId: PERSISTED_SDK_ID,
+      persistedMessagesLoaded: false,
+    });
+    expect(adopted?.createdAt.toISOString()).toBe("2026-06-01T00:00:00.000Z");
+    expect(adopted?.lastActivity.toISOString()).toBe("2026-07-01T00:00:00.000Z");
+    // Listing must stay bounded for a large Claude home.
+    expect(mockSdkGetSessionMessages).not.toHaveBeenCalled();
+  });
+
+  test("updates an existing session in place instead of replacing it", async () => {
+    const existing = createSession("Local title");
+    track(existing.id);
+    const sdkId = existing.id.slice("session-".length);
+    existing.messages.push({
+      id: "msg-local",
+      role: "user",
+      content: "in memory",
+      parts: [],
+      timestamp: "2026-07-01T00:00:00.000Z",
+    });
+
+    mockSdkListSessions.mockImplementation(async () => [
+      sdkSessionInfo({ sessionId: sdkId, customTitle: "Renamed on disk", cwd: "/repo/env-a" }),
+    ]);
+    await withWorkspaceCwd("/repo/env-a", async () => {
+      await reconcilePersistedSessions();
+    });
+
+    // Same object: replacing it would drop the transcript, task registry and
+    // any in-flight turn state hanging off this session.
+    expect(getSession(existing.id)).toBe(existing);
+    expect(existing.title).toBe("Renamed on disk");
+    expect(existing.sdkSessionId).toBe(sdkId);
+    expect(existing.messages).toHaveLength(1);
+  });
+
+  test("falls back to a derived title when the SDK reports neither", async () => {
+    mockSdkListSessions.mockImplementation(async () => [
+      { sessionId: PERSISTED_SDK_ID, summary: "", lastModified: Date.now() },
+    ]);
+    await reconcilePersistedSessions();
+    expect(getSession(track(`session-${PERSISTED_SDK_ID}`))?.title).toBe(
+      `Session ${PERSISTED_SDK_ID.slice(-6)}`,
+    );
+  });
+
+  test("propagates a listSessions failure to its caller", async () => {
+    mockSdkListSessions.mockImplementation(async () => {
+      throw new Error("claude home unreadable");
+    });
+    // The route is what must survive this (see routes/session.test.ts); the
+    // service reports it rather than swallowing an unreadable Claude home.
+    await expect(reconcilePersistedSessions()).rejects.toThrow("claude home unreadable");
+  });
+});
+
+describe("ensurePersistedSession", () => {
+  test("returns an in-memory session without consulting the SDK", async () => {
+    const existing = createSession("live");
+    track(existing.id);
+    expect(await ensurePersistedSession(existing.id)).toBe(existing);
+    expect(mockSdkGetSessionInfo).not.toHaveBeenCalled();
+  });
+
+  test("returns undefined for an id that cannot be an SDK session", async () => {
+    expect(await ensurePersistedSession("session-not-a-uuid")).toBeUndefined();
+    expect(mockSdkGetSessionInfo).not.toHaveBeenCalled();
+  });
+
+  test("returns undefined when the SDK has no such session", async () => {
+    mockSdkGetSessionInfo.mockImplementation(async () => undefined);
+    expect(await ensurePersistedSession(`session-${PERSISTED_SDK_ID}`)).toBeUndefined();
+  });
+
+  test("materializes a session from SDK metadata", async () => {
+    const state = await materializePersistedSession({ customTitle: "From disk" });
+    expect(state).toMatchObject({
+      id: `session-${PERSISTED_SDK_ID}`,
+      title: "From disk",
+      status: "idle",
+      sdkSessionId: PERSISTED_SDK_ID,
+      persistedMessagesLoaded: false,
+    });
+    expect(mockSdkGetSessionInfo).toHaveBeenCalledWith(PERSISTED_SDK_ID, {
+      dir: process.env.CWD || process.cwd(),
+    });
+  });
+});
+
+describe("hydratePersistedSessionMessages", () => {
+  test("normalizes the transcript, dropping system and empty user records", async () => {
+    const state = await materializePersistedSession();
+    mockSdkGetSessionMessages.mockImplementation(async () => [
+      {
+        type: "system",
+        uuid: "system-record",
+        session_id: PERSISTED_SDK_ID,
+        message: { role: "system", content: "ignored" },
+        parent_tool_use_id: null,
+      },
+      ...transcriptWithToolResult(),
+    ]);
+
+    const messages = await hydratePersistedSessionMessages(state.id);
+
+    // The tool_result record is a `type:"user"` entry with no text, and the
+    // system record is skipped outright.
+    expect(messages.map((message) => message.id)).toEqual([U1, A1, A2, U2]);
+    expect(messages.map((message) => message.sdkUuid)).toEqual([U1, A1, A2, U2]);
+    expect(messages[1]?.parts.some((part) => part.type === "tool-invocation")).toBe(true);
+    // The tool result was still applied to the tool it belongs to.
+    expect(messages[1]?.parts[0]?.toolState).toBe("success");
+    expect(state.persistedMessagesLoaded).toBe(true);
+  });
+
+  test("generates an id for a record with no uuid and marks it unresolvable", async () => {
+    const state = await materializePersistedSession();
+    mockSdkGetSessionMessages.mockImplementation(async () => [
+      {
+        type: "user",
+        uuid: "",
+        session_id: PERSISTED_SDK_ID,
+        message: { role: "user", content: [{ type: "text", text: "orphan" }] },
+        parent_tool_use_id: null,
+      },
+    ]);
+
+    const [message] = await hydratePersistedSessionMessages(state.id);
+    expect(message?.id).toMatch(/^msg-/);
+    // A generated id is not a transcript uuid and must never be mistaken for one.
+    expect(message?.sdkUuid).toBeUndefined();
+  });
+
+  test("reads the transcript once and serves the cached copy afterwards", async () => {
+    const state = await materializePersistedSession();
+    mockSdkGetSessionMessages.mockImplementation(async () => transcriptWithToolResult());
+
+    await hydratePersistedSessionMessages(state.id);
+    await hydratePersistedSessionMessages(state.id);
+    expect(mockSdkGetSessionMessages).toHaveBeenCalledTimes(1);
+  });
+
+  test("returns an empty transcript for a session that does not exist", async () => {
+    expect(await hydratePersistedSessionMessages(`session-${OTHER_SDK_ID}`)).toEqual([]);
+  });
+
+  test("refuses to hydrate underneath a running turn", async () => {
+    mockSdkGetSessionMessages.mockImplementation(async () => transcriptWithToolResult());
+    const state = await materializePersistedSession();
+
+    const promptPromise = sendPrompt(state.id, "third prompt");
+    const call = await nextQueryCall();
+
+    // The turn hydrated once on entry, then took ownership of the transcript.
+    expect(mockSdkGetSessionMessages).toHaveBeenCalledTimes(1);
+    expect(state.status).toBe("running");
+    const liveUserMessage = getSessionMessages(state.id).at(-1);
+    expect(liveUserMessage?.content).toBe("third prompt");
+
+    // A tab mounting mid-turn hits GET /:id/messages, which lands here. Before
+    // the guard this replaced `messages` and `taskRegistry` wholesale and the
+    // in-flight user message vanished from the transcript.
+    const midTurn = await hydratePersistedSessionMessages(state.id);
+    expect(mockSdkGetSessionMessages).toHaveBeenCalledTimes(1);
+    expect(midTurn.at(-1)).toBe(liveUserMessage!);
+
+    call.finish();
+    await promptPromise;
+    expect(getSessionMessages(state.id).at(-1)?.content).toBe("third prompt");
+  });
+
+  test("survives an SDK that cannot read the transcript before a prompt", async () => {
+    mockSdkGetSessionMessages.mockImplementation(async () => {
+      throw new Error("transcript unreadable");
+    });
+    const state = await materializePersistedSession();
+
+    const promptPromise = sendPrompt(state.id, "still works");
+    const call = await nextQueryCall();
+    call.finish();
+    await promptPromise;
+
+    expect(getSessionMessages(state.id).map((message) => message.content)).toEqual([
+      "still works",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Transcript id resolution (fork boundaries and file rewind)
+// ---------------------------------------------------------------------------
+
+describe("persisted message id resolution", () => {
+  async function hydratedSession() {
+    mockSdkGetSessionMessages.mockImplementation(async () => transcriptWithToolResult());
+    const state = await materializePersistedSession();
+    await hydratePersistedSessionMessages(state.id);
+    return state;
+  }
+
+  const resolvableCases: Array<{ name: string; targetIndex: number; expected: string }> = [
+    { name: "the first user message", targetIndex: 0, expected: U1 },
+    { name: "an assistant message before the dropped tool_result", targetIndex: 1, expected: A1 },
+    { name: "an assistant message after the dropped tool_result", targetIndex: 2, expected: A2 },
+    { name: "the last user message", targetIndex: 3, expected: U2 },
+  ];
+
+  for (const { name, targetIndex, expected } of resolvableCases) {
+    test(`forks at the exact uuid of ${name}`, async () => {
+      const state = await hydratedSession();
+      const target = getSessionMessages(state.id)[targetIndex]!;
+
+      const forked = await forkPersistedSession(state.id, { upToMessageId: target.id });
+      track(forked.id);
+
+      expect(mockSdkForkSession).toHaveBeenCalledWith(PERSISTED_SDK_ID, {
+        dir: process.env.CWD || process.cwd(),
+        upToMessageId: expected,
+        title: undefined,
+      });
+    });
+  }
+
+  test("refuses an id that is not in the transcript rather than picking a neighbour", async () => {
+    const state = await hydratedSession();
+    await expect(
+      forkPersistedSession(state.id, { upToMessageId: "msg-does-not-exist" }),
+    ).rejects.toThrow("not a persisted fork boundary");
+    expect(mockSdkForkSession).not.toHaveBeenCalled();
+  });
+
+  test("refuses a uuid that is not present in the transcript", async () => {
+    const state = await hydratedSession();
+    await expect(
+      forkPersistedSession(state.id, { upToMessageId: U3 }),
+    ).rejects.toThrow("not a persisted fork boundary");
+  });
+
+  test("resolves a live message through the uuid the SDK reported for it", async () => {
+    const state = await hydratedSession();
+
+    const promptPromise = sendPrompt(state.id, "third prompt");
+    const call = await nextQueryCall();
+    call.push({ type: "result", subtype: "success", user_message_uuid: U3 });
+    call.finish();
+    await promptPromise;
+
+    const live = getSessionMessages(state.id).at(-1)!;
+    // Locally minted, so it exists nowhere on disk: the ONLY link back to the
+    // transcript is the uuid recorded from the result message.
+    expect(live.id).toMatch(/^msg-/);
+    expect(live.sdkUuid).toBe(U3);
+
+    mockSdkGetSessionMessages.mockImplementation(async () => [
+      ...transcriptWithToolResult(),
+      {
+        type: "user",
+        uuid: U3,
+        session_id: PERSISTED_SDK_ID,
+        message: { role: "user", content: [{ type: "text", text: "third prompt" }] },
+        parent_tool_use_id: null,
+      },
+    ]);
+
+    const forked = await forkPersistedSession(state.id, { upToMessageId: live.id });
+    track(forked.id);
+
+    // The ordinal fallback resolved this to U2 — the *previous* user message —
+    // because normalization drops the tool_result record the transcript keeps.
+    expect(mockSdkForkSession).toHaveBeenCalledWith(
+      PERSISTED_SDK_ID,
+      expect.objectContaining({ upToMessageId: U3 }),
+    );
+  });
+
+  test("refuses a live message the SDK never reported a uuid for", async () => {
+    const state = await hydratedSession();
+
+    const promptPromise = sendPrompt(state.id, "unlogged prompt");
+    const call = await nextQueryCall();
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    const live = getSessionMessages(state.id).at(-1)!;
+    expect(live.sdkUuid).toBeUndefined();
+    await expect(
+      forkPersistedSession(state.id, { upToMessageId: live.id }),
+    ).rejects.toThrow("not a persisted fork boundary");
+  });
+});
+
+describe("forkPersistedSession", () => {
+  test("throws not_found when the session was never materialized", async () => {
+    await expect(forkPersistedSession(`session-${OTHER_SDK_ID}`)).rejects.toMatchObject({
+      code: "not_found",
+      message: "Session has not been materialized",
+    });
+  });
+
+  test("throws conflict while a turn is running", async () => {
+    const state = await materializePersistedSession();
+    const promptPromise = sendPrompt(state.id, "busy");
+    const call = await nextQueryCall();
+
+    await expect(forkPersistedSession(state.id)).rejects.toMatchObject({
+      code: "conflict",
+      message: "Cannot fork a running session",
+    });
+
+    call.finish();
+    await promptPromise;
+  });
+
+  test("throws invalid for a boundary that is not in the transcript", async () => {
+    mockSdkGetSessionMessages.mockImplementation(async () => transcriptWithToolResult());
+    const state = await materializePersistedSession();
+    await expect(
+      forkPersistedSession(state.id, { upToMessageId: U3 }),
+    ).rejects.toMatchObject({ code: "invalid" });
+  });
+
+  test("registers the fork and derives a title when none is given", async () => {
+    const state = await materializePersistedSession({ customTitle: "Original" });
+    const forked = await forkPersistedSession(state.id);
+    track(forked.id);
+
+    expect(forked).toMatchObject({
+      id: `session-${FORK_SDK_ID}`,
+      title: "Original (fork)",
+      status: "idle",
+      sdkSessionId: FORK_SDK_ID,
+      persistedMessagesLoaded: false,
+    });
+    expect(getSession(forked.id)).toBe(forked);
+    expect(mockSdkForkSession).toHaveBeenCalledWith(PERSISTED_SDK_ID, {
+      dir: process.env.CWD || process.cwd(),
+      upToMessageId: undefined,
+      title: undefined,
+    });
+  });
+
+  test("forwards an explicit fork title", async () => {
+    const state = await materializePersistedSession();
+    const forked = await forkPersistedSession(state.id, { title: "Experiment" });
+    track(forked.id);
+    expect(forked.title).toBe("Experiment");
+    expect(mockSdkForkSession).toHaveBeenCalledWith(
+      PERSISTED_SDK_ID,
+      expect.objectContaining({ title: "Experiment" }),
+    );
+  });
+});
+
+describe("renameSessionDurably and deleteSessionDurably", () => {
+  test("renames on disk, in memory, and announces the new title", async () => {
+    const state = await materializePersistedSession();
+    const { events, stop } = captureEvents();
+    try {
+      expect(await renameSessionDurably(state.id, "Renamed")).toBe(true);
+    } finally {
+      stop();
+    }
+
+    expect(mockSdkRenameSession).toHaveBeenCalledWith(PERSISTED_SDK_ID, "Renamed", {
+      dir: process.env.CWD || process.cwd(),
+    });
+    expect(state.title).toBe("Renamed");
+    expect(events).toContainEqual({
+      type: "session.title-updated",
+      sessionId: state.id,
+      data: { title: "Renamed" },
+    });
+  });
+
+  test("reports a missing session rather than renaming nothing", async () => {
+    expect(await renameSessionDurably(`session-${OTHER_SDK_ID}`, "Nope")).toBe(false);
+    expect(mockSdkRenameSession).not.toHaveBeenCalled();
+  });
+
+  test("deletes the rollout and the registry entry together", async () => {
+    const state = await materializePersistedSession();
+    expect(await deleteSessionDurably(state.id)).toBe(true);
+    expect(mockSdkDeleteSession).toHaveBeenCalledWith(PERSISTED_SDK_ID, {
+      dir: process.env.CWD || process.cwd(),
+    });
+    expect(getSession(state.id)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Destructive file rewind
+// ---------------------------------------------------------------------------
+
+describe("rewindSessionFiles", () => {
+  async function rewindableSession() {
+    mockSdkGetSessionMessages.mockImplementation(async () => transcriptWithToolResult());
+    const state = await materializePersistedSession();
+    await hydratePersistedSessionMessages(state.id);
+    return state;
+  }
+
+  test("throws not_found when the session was never materialized", async () => {
+    await expect(
+      rewindSessionFiles(`session-${OTHER_SDK_ID}`, U1),
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  test("throws conflict while a turn is running", async () => {
+    const state = await rewindableSession();
+    const promptPromise = sendPrompt(state.id, "busy");
+    const call = await nextQueryCall();
+
+    await expect(rewindSessionFiles(state.id, U1)).rejects.toMatchObject({
+      code: "conflict",
+      message: "Cannot rewind a running session",
+    });
+
+    call.finish();
+    await promptPromise;
+  });
+
+  test("throws invalid for a message that is not a checkpoint", async () => {
+    const state = await rewindableSession();
+    await expect(rewindSessionFiles(state.id, "msg-unknown")).rejects.toMatchObject({
+      code: "invalid",
+      message: "The selected Claude message is not a persisted checkpoint",
+    });
+  });
+
+  test("reuses a live control handle instead of spawning a second CLI", async () => {
+    const state = await rewindableSession();
+    const liveRewind = mock(async () => ({ canRewind: true, filesChanged: ["/a"] }));
+    state.queryControl = { rewindFiles: liveRewind };
+
+    await expect(rewindSessionFiles(state.id, U1)).resolves.toEqual({
+      canRewind: true,
+      filesChanged: ["/a"],
+    });
+    expect(liveRewind).toHaveBeenCalledWith(U1, { dryRun: false });
+    // Spawning a second query against the same rollout would append to the very
+    // transcript the checkpoints are indexed against.
+    expect(mockQuery).not.toHaveBeenCalled();
+    state.queryControl = undefined;
+  });
+
+  test("forwards dryRun to the control handle", async () => {
+    const state = await rewindableSession();
+    const liveRewind = mock(async () => ({ canRewind: true, insertions: 0, deletions: 0 }));
+    state.queryControl = { rewindFiles: liveRewind };
+
+    await rewindSessionFiles(state.id, A2, true);
+    expect(liveRewind).toHaveBeenCalledWith(A2, { dryRun: true });
+    state.queryControl = undefined;
+  });
+
+  test("opens a bounded, turnless query when no handle is live", async () => {
+    const state = await rewindableSession();
+    const rewindFiles = mock(async () => ({ canRewind: true }));
+    const returnSpy = mock(async () => ({ done: true, value: undefined }));
+    queryControlOverrides.rewindFiles = rewindFiles;
+    queryControlOverrides.return = returnSpy;
+
+    const rewindPromise = rewindSessionFiles(state.id, U1);
+    const call = await nextQueryCall();
+    call.push({ type: "system", subtype: "init" });
+
+    await expect(rewindPromise).resolves.toEqual({ canRewind: true });
+    expect(call.options).toMatchObject({
+      resume: PERSISTED_SDK_ID,
+      enableFileCheckpointing: true,
+      // Purely a control handle: a real turn would write to the rollout.
+      maxTurns: 0,
+    });
+    expect(call.options.abortController).toBeInstanceOf(AbortController);
+    expect(rewindFiles).toHaveBeenCalledWith(U1, { dryRun: false });
+    // The transient query is closed on every exit path.
+    expect(returnSpy).toHaveBeenCalled();
+  });
+
+  test("closes the transient query when the SDK cannot rewind", async () => {
+    const state = await rewindableSession();
+    const returnSpy = mock(async () => ({ done: true, value: undefined }));
+    queryControlOverrides.return = returnSpy;
+
+    const rewindPromise = rewindSessionFiles(state.id, U1);
+    const call = await nextQueryCall();
+    call.push({ type: "system", subtype: "init" });
+
+    await expect(rewindPromise).rejects.toMatchObject({
+      code: "conflict",
+      message: "Installed Claude Agent SDK does not support file rewind",
+    });
+    expect(returnSpy).toHaveBeenCalled();
+  });
+
+  test("fails closed when the CLI never produces a message", async () => {
+    const state = await rewindableSession();
+    const returnSpy = mock(async () => ({ done: true, value: undefined }));
+    queryControlOverrides.return = returnSpy;
+
+    const rewindPromise = rewindSessionFiles(state.id, U1);
+    const call = await nextQueryCall();
+    call.finish();
+
+    await expect(rewindPromise).rejects.toMatchObject({ code: "conflict" });
+    expect(returnSpy).toHaveBeenCalled();
+    expect(getSession(state.id)?.rewindInProgress).toBe(false);
+  });
+
+  test("rejects a prompt accepted while files are being restored", async () => {
+    const state = await rewindableSession();
+    let releaseRewind: (() => void) | null = null;
+    state.queryControl = {
+      rewindFiles: async () =>
+        new Promise((resolve) => {
+          releaseRewind = () => resolve({ canRewind: true });
+        }),
+    };
+
+    const rewindPromise = rewindSessionFiles(state.id, U1);
+    await waitFor(() => releaseRewind !== null);
+
+    // `status` never leaves "idle" during a rewind, so this is the only thing
+    // stopping a turn from running against a working tree mid-restore.
+    expect(getSession(state.id)?.rewindInProgress).toBe(true);
+    await expect(sendPrompt(state.id, "meanwhile")).rejects.toMatchObject({
+      code: "conflict",
+      message: "Session is restoring files from a checkpoint",
+    });
+    await expect(rewindSessionFiles(state.id, U1)).rejects.toMatchObject({
+      code: "conflict",
+      message: "A file rewind is already in progress for this session",
+    });
+
+    releaseRewind!();
+    await rewindPromise;
+    expect(getSession(state.id)?.rewindInProgress).toBe(false);
+    state.queryControl = undefined;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Background tasks
+// ---------------------------------------------------------------------------
+
+describe("background task reducer", () => {
+  test("records a started task as running", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-1",
+        description: "Run the suite",
+      },
+    ]);
+
+    expect(session.backgroundTasks?.["task-1"]).toMatchObject({
+      id: "task-1",
+      description: "Run the suite",
+      status: "running",
+    });
+    expect(session.backgroundTasks?.["task-1"]?.startedAt).toBeNumber();
+  });
+
+  test("merges task_progress and task_updated patches", async () => {
+    const { session } = await runPromptWithMessages([
+      { type: "system", subtype: "task_started", task_id: "task-1", description: "Build" },
+      { type: "system", subtype: "task_progress", task_id: "task-1" },
+      {
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-1",
+        patch: { is_backgrounded: true, description: "Build (backgrounded)" },
+      },
+    ]);
+
+    expect(session.backgroundTasks?.["task-1"]).toMatchObject({
+      description: "Build (backgrounded)",
+      status: "running",
+      isBackgrounded: true,
+    });
+  });
+
+  const terminalCases: Array<{
+    status: string;
+    expected: BackgroundTaskSnapshot["status"];
+  }> = [
+    { status: "completed", expected: "completed" },
+    { status: "failed", expected: "failed" },
+    { status: "stopped", expected: "killed" },
+  ];
+
+  for (const { status, expected } of terminalCases) {
+    test(`task_notification '${status}' settles the task as ${expected}`, async () => {
+      const { events, stop } = captureEvents();
+      let session;
+      try {
+        ({ session } = await runPromptWithMessages([
+          { type: "system", subtype: "task_started", task_id: "task-1", description: "Build" },
+          {
+            type: "system",
+            subtype: "task_notification",
+            task_id: "task-1",
+            status,
+            summary: "the summary",
+            output_file: "/tmp/out",
+          },
+        ]));
+      } finally {
+        stop();
+      }
+
+      // Without this edge nothing ever cleared "running" and GET /session/:id
+      // reported live background work forever.
+      expect(session.backgroundTasks?.["task-1"]).toMatchObject({
+        status: expected,
+        description: "Build",
+      });
+      expect(session.backgroundTasks?.["task-1"]?.endedAt).toBeNumber();
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "session.updated"
+            && (event.data as { backgroundTasks?: unknown })?.backgroundTasks !== undefined,
+        ).length,
+      ).toBeGreaterThanOrEqual(2);
+    });
+  }
+
+  test("task_notification for an unseen task still lands terminal", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-orphan",
+        status: "failed",
+        summary: "exploded",
+        output_file: "/tmp/out",
+      },
+    ]);
+
+    expect(session.backgroundTasks?.["task-orphan"]).toMatchObject({
+      status: "failed",
+      description: "exploded",
+      error: "exploded",
+    });
+  });
+
+  test("background_tasks_changed replaces the whole set", async () => {
+    const { session } = await runPromptWithMessages([
+      { type: "system", subtype: "task_started", task_id: "task-1", description: "Build" },
+      { type: "system", subtype: "task_started", task_id: "task-2", description: "Lint" },
+      {
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [
+          { task_id: "task-2", task_type: "bash", description: "Lint" },
+          { task_id: "task-3", task_type: "agent", description: "Research" },
+        ],
+      },
+    ]);
+
+    // REPLACE semantics, per the SDK's own contract: a missed bookend must not
+    // be able to wedge a stale running indicator.
+    expect(Object.keys(session.backgroundTasks ?? {}).sort()).toEqual(["task-2", "task-3"]);
+    expect(session.backgroundTasks?.["task-2"]).toMatchObject({
+      description: "Lint",
+      status: "running",
+    });
+    expect(session.backgroundTasks?.["task-3"]).toMatchObject({
+      description: "Research",
+      status: "running",
+      isBackgrounded: true,
+    });
+  });
+
+  test("an empty background_tasks_changed clears every task", async () => {
+    const { session } = await runPromptWithMessages([
+      { type: "system", subtype: "task_started", task_id: "task-1", description: "Build" },
+      { type: "system", subtype: "background_tasks_changed", tasks: [] },
+    ]);
+    expect(session.backgroundTasks).toEqual({});
+  });
+
+  test("ignores task messages with no task id", async () => {
+    const { session } = await runPromptWithMessages([
+      { type: "system", subtype: "task_started", description: "no id" },
+      { type: "system", subtype: "task_notification", status: "completed" },
+    ]);
+    expect(session.backgroundTasks).toBeUndefined();
+  });
+});
+
+describe("stopBackgroundTask", () => {
+  test("distinguishes an unknown session from an unknown task", async () => {
+    expect(await stopBackgroundTask("session-missing", "task-1")).toEqual({
+      ok: false,
+      reason: "session_not_found",
+      message: "Session not found",
+    });
+
+    const session = createSession("no tasks");
+    track(session.id);
+    expect(await stopBackgroundTask(session.id, "task-1")).toEqual({
+      ok: false,
+      reason: "task_not_found",
+      message: "Task not found",
+    });
+  });
+
+  test("stops a backgrounded task after the turn that started it has ended", async () => {
+    const stopTask = mock(async (_taskId: string) => {});
+    queryControlOverrides.stopTask = stopTask;
+
+    const { session } = await runPromptWithMessages([
+      {
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-1",
+        description: "Long build",
+      },
+      {
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-1",
+        patch: { is_backgrounded: true },
+      },
+    ]);
+
+    // The turn is over; a backgrounded task outlives it by definition, and the
+    // control handle is the only route to `stopTask`.
+    expect(session.status).toBe("idle");
+    expect(await stopBackgroundTask(session.id, "task-1")).toEqual({ ok: true });
+    expect(stopTask).toHaveBeenCalledWith("task-1");
+  });
+
+  test("releases the control handle once every task has settled", async () => {
+    queryControlOverrides.stopTask = mock(async () => {});
+
+    const { session } = await runPromptWithMessages([
+      { type: "system", subtype: "task_started", task_id: "task-1", description: "Build" },
+      {
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-1",
+        status: "completed",
+        summary: "done",
+        output_file: "/tmp/out",
+      },
+    ]);
+
+    expect(session.queryControl).toBeUndefined();
+    expect(await stopBackgroundTask(session.id, "task-1")).toEqual({
+      ok: false,
+      reason: "no_control_channel",
+      message: "No live Claude control channel can reach this task",
+    });
+  });
+
+  test("aborting a session drops the retained control handle", async () => {
+    queryControlOverrides.stopTask = mock(async () => {});
+    const session = createSession("abortable");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "start work");
+    const call = await nextQueryCall();
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "task-1",
+      description: "Build",
+    });
+    await waitFor(() => getSession(session.id)?.backgroundTasks?.["task-1"] !== undefined);
+
+    expect(abortSession(session.id)).toBe(true);
+    expect(getSession(session.id)?.queryControl).toBeUndefined();
+
+    call.finish();
+    await promptPromise;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rate limits and usage
+// ---------------------------------------------------------------------------
+
+describe("rate_limit_event", () => {
+  test("retains a window that arrives before any turn has completed", async () => {
+    const { events, stop } = captureEvents();
+    let session;
+    try {
+      // No `result` message: `usage` never exists, which is exactly when the
+      // old handler discarded every window it was told about.
+      ({ session } = await runPromptWithMessages([
+        {
+          type: "rate_limit_event",
+          rate_limit_info: {
+            rateLimitType: "five_hour",
+            utilization: 42,
+            resetsAt: Date.parse("2026-07-26T18:00:00.000Z"),
+          },
+        },
+      ]));
+    } finally {
+      stop();
+    }
+
+    expect(session.usage).toBeUndefined();
+    expect(session.rateLimits).toEqual([
+      {
+        label: "Five Hour",
+        usedPercent: 42,
+        resetsAt: "2026-07-26T18:00:00.000Z",
+      },
+    ]);
+    expect(events).toContainEqual({
+      type: "session.updated",
+      sessionId: session.id,
+      data: { rateLimits: session.rateLimits },
+    });
+  });
+
+  test("deduplicates by label and keeps distinct windows", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "rate_limit_event",
+        rate_limit_info: { rateLimitType: "five_hour", utilization: 10 },
+      },
+      {
+        type: "rate_limit_event",
+        rate_limit_info: { rateLimitType: "seven_day", utilization: 20 },
+      },
+      {
+        type: "rate_limit_event",
+        rate_limit_info: { rateLimitType: "five_hour", utilization: 55 },
+      },
+    ]);
+
+    expect(session.rateLimits).toEqual([
+      { label: "Seven Day", usedPercent: 20, resetsAt: undefined },
+      { label: "Five Hour", usedPercent: 55, resetsAt: undefined },
+    ]);
+  });
+
+  test("defaults the label and omits an absent reset time", async () => {
+    const { session } = await runPromptWithMessages([
+      { type: "rate_limit_event", rate_limit_info: { utilization: 5 } },
+    ]);
+    expect(session.rateLimits).toEqual([
+      { label: "Usage", usedPercent: 5, resetsAt: undefined },
+    ]);
+  });
+
+  test("ignores an event with no rate limit payload", async () => {
+    const { session } = await runPromptWithMessages([{ type: "rate_limit_event" }]);
+    expect(session.rateLimits).toBeUndefined();
+  });
+
+  test("carries retained windows into the usage snapshot the turn produces", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "rate_limit_event",
+        rate_limit_info: { rateLimitType: "five_hour", utilization: 42 },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        usage: { input_tokens: 10, output_tokens: 5, context_window_tokens: 1000 },
+      },
+    ]);
+
+    expect(session.usage?.rateLimits).toEqual([
+      { label: "Five Hour", usedPercent: 42, resetsAt: undefined },
+    ]);
+  });
+
+  test("merges a window into an existing snapshot without dropping it", async () => {
+    const session = createSession("late limit");
+    track(session.id);
+
+    const first = sendPrompt(session.id, "one");
+    const firstCall = await nextQueryCall();
+    firstCall.push({
+      type: "result",
+      subtype: "success",
+      usage: { input_tokens: 10, output_tokens: 5, context_window_tokens: 1000 },
+    });
+    firstCall.finish();
+    await first;
+    expect(getSession(session.id)?.usage?.rateLimits).toBeUndefined();
+
+    const second = sendPrompt(session.id, "two");
+    const secondCall = await nextQueryCall();
+    secondCall.push({
+      type: "rate_limit_event",
+      rate_limit_info: { rateLimitType: "five_hour", utilization: 88 },
+    });
+    await waitFor(() => (getSession(session.id)?.rateLimits?.length ?? 0) > 0);
+    expect(getSession(session.id)?.usage?.rateLimits).toEqual([
+      { label: "Five Hour", usedPercent: 88, resetsAt: undefined },
+    ]);
+    secondCall.finish();
+    await second;
+  });
+});
+
+describe("claude usage snapshot", () => {
+  test("counts cache reads on a resumed turn", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "result",
+        subtype: "success",
+        modelUsage: {
+          "claude-opus-5": {
+            inputTokens: 5,
+            outputTokens: 200,
+            cacheReadInputTokens: 120000,
+            contextWindow: 200000,
+          },
+        },
+      },
+    ]);
+
+    // The heuristic walk reaches modelUsage, where it can only see
+    // input + output. Reporting 120k of cached context as ~205 tokens
+    // understated the context gauge by three orders of magnitude.
+    expect(session.usage).toMatchObject({
+      usedTokens: 120205,
+      totalTokens: 200000,
+      cacheReadTokens: 120000,
+      inputTokens: 5,
+      outputTokens: 200,
+      lastTurnTokens: 120205,
+      modelId: "claude-opus-5",
+    });
+    expect(session.usage?.percentUsed).toBeCloseTo(60.1025, 4);
+  });
+
+  test("counts cache writes too", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "result",
+        subtype: "success",
+        modelUsage: {
+          "claude-opus-5": {
+            inputTokens: 10,
+            outputTokens: 20,
+            cacheReadInputTokens: 100,
+            cacheCreationInputTokens: 400,
+            contextWindow: 10000,
+            costUSD: 0.25,
+          },
+        },
+      },
+    ]);
+
+    expect(session.usage).toMatchObject({
+      usedTokens: 530,
+      cacheWriteTokens: 400,
+      lastTurnTokens: 530,
+      costUsd: 0.25,
+    });
+  });
+
+  test("accumulates counters across turns while context stays a level", async () => {
+    const session = createSession("accumulating");
+    track(session.id);
+    const turn = {
+      type: "result",
+      subtype: "success",
+      modelUsage: {
+        "claude-opus-5": {
+          inputTokens: 10,
+          outputTokens: 20,
+          cacheReadInputTokens: 70,
+          contextWindow: 1000,
+        },
+      },
+      total_cost_usd: 0.5,
+      duration_ms: 100,
+      duration_api_ms: 80,
+      permission_denials: [{ tool_name: "Bash" }],
+    };
+
+    for (let index = 0; index < 2; index += 1) {
+      const promptPromise = sendPrompt(session.id, `turn ${index}`);
+      const call = await nextQueryCall();
+      call.push(turn);
+      call.finish();
+      await promptPromise;
+    }
+
+    expect(getSession(session.id)?.usage).toMatchObject({
+      // A level, not a running total: this is the size of the context now.
+      usedTokens: 100,
+      totalTokens: 1000,
+      inputTokens: 20,
+      outputTokens: 40,
+      cacheReadTokens: 140,
+      lastTurnTokens: 100,
+      sessionTokens: 200,
+      costUsd: 1,
+      durationMs: 200,
+      apiDurationMs: 160,
+      permissionDenials: 2,
+    });
+  });
+
+  test("publishes nothing when a turn reports no tokens", async () => {
+    const { session } = await runPromptWithMessages([
+      { type: "result", subtype: "success" },
+    ]);
+    expect(session.usage).toBeUndefined();
+  });
+
+  test("publishes nothing when no context window can be determined", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "result",
+        subtype: "success",
+        modelUsage: { "claude-opus-5": { inputTokens: 10, outputTokens: 5 } },
+      },
+    ]);
+    expect(session.usage).toBeUndefined();
+  });
+
+  test("prefers an exact context report over the token arithmetic", async () => {
+    queryControlOverrides.getContextUsage = mock(async () => ({
+      totalTokens: 51_200,
+      maxTokens: 200_000,
+      percentage: 25.6,
+      model: "claude-opus-5",
+      categories: [
+        { name: "System prompt", tokens: 1200, color: "#fff" },
+        { name: "bad entry" },
+      ],
+    }));
+
+    const { session } = await runPromptWithMessages([
+      {
+        type: "result",
+        subtype: "success",
+        modelUsage: {
+          "claude-opus-5": { inputTokens: 5, outputTokens: 5, contextWindow: 1 },
+        },
+      },
+    ]);
+
+    expect(session.usage).toMatchObject({
+      usedTokens: 51_200,
+      totalTokens: 200_000,
+      percentUsed: 25.6,
+      estimated: false,
+      contextCategories: [{ name: "System prompt", tokens: 1200, color: "#fff" }],
+    });
+  });
+
+  test("falls back to arithmetic when the context request fails", async () => {
+    queryControlOverrides.getContextUsage = mock(async () => {
+      throw new Error("control channel closed");
+    });
+
+    const { session } = await runPromptWithMessages([
+      {
+        type: "result",
+        subtype: "success",
+        modelUsage: {
+          "claude-opus-5": {
+            inputTokens: 5,
+            outputTokens: 200,
+            cacheReadInputTokens: 120000,
+            contextWindow: 200000,
+          },
+        },
+      },
+    ]);
+
+    expect(session.usage).toMatchObject({ usedTokens: 120205, estimated: true });
+  });
+});
+
+describe("prompt suggestions", () => {
+  test("records a suggestion the turn produced", async () => {
+    const { session } = await runPromptWithMessages([
+      { type: "prompt_suggestion", suggestion: "  Run the tests  " },
+    ]);
+    expect(session.promptSuggestion).toBe("Run the tests");
+  });
+
+  test("ignores a blank suggestion", async () => {
+    const { session } = await runPromptWithMessages([
+      { type: "prompt_suggestion", suggestion: "   " },
+    ]);
+    expect(session.promptSuggestion).toBeUndefined();
+  });
+
+  test("clears the previous suggestion when the next turn starts", async () => {
+    const session = createSession("suggesting");
+    track(session.id);
+
+    const first = sendPrompt(session.id, "one");
+    const firstCall = await nextQueryCall();
+    firstCall.push({ type: "prompt_suggestion", suggestion: "Run the tests" });
+    firstCall.finish();
+    await first;
+    expect(getSession(session.id)?.promptSuggestion).toBe("Run the tests");
+
+    const { events, stop } = captureEvents();
+    try {
+      const second = sendPrompt(session.id, "two");
+      const secondCall = await nextQueryCall();
+
+      // Nothing else clears it, and GET /session/:id replays the snapshot on
+      // every mount, restore and reconnect — so a consumed suggestion would be
+      // resurrected turns later.
+      expect(getSession(session.id)?.promptSuggestion).toBeUndefined();
+      const cleared = events.find(
+        (event) =>
+          event.type === "session.updated"
+          && event.sessionId === session.id
+          && (event.data as object | undefined) !== undefined
+          && "promptSuggestion" in (event.data as object),
+      );
+      // The client tests for presence of the key, not truthiness, so an
+      // explicit `undefined` is the clear signal.
+      expect(cleared).toBeDefined();
+      expect((cleared?.data as { promptSuggestion?: string }).promptSuggestion).toBeUndefined();
+
+      secondCall.finish();
+      await second;
+    } finally {
+      stop();
+    }
+
+    expect(getSession(session.id)?.promptSuggestion).toBeUndefined();
   });
 });

@@ -159,6 +159,81 @@ function inventoryCount(value: unknown): number {
   return Object.keys(record(value)).filter((key) => key !== "error").length;
 }
 
+/**
+ * Read the authoritative share state for an OpenCode session.
+ *
+ * The store's session record carries no share field, so the server's own
+ * session document is the only snapshot that survives a tab switch or an app
+ * restart. Probed structurally rather than against the SDK types so a partial
+ * client (older server, test double) reports "not shared" instead of throwing.
+ *
+ * Follow-up for the lib owner: this belongs in `opencode-client.ts` as a typed
+ * `getOpenCodeShareUrl(client, sessionId)`.
+ */
+async function readOpenCodeShareUrl(
+  client: unknown,
+  sessionId: string,
+): Promise<string | null> {
+  const sessions = record(client).session;
+  const get = record(sessions).get;
+  if (typeof get !== "function") return null;
+  const response = await (get as (parameters: { sessionID: string }) => Promise<unknown>)
+    .call(sessions, { sessionID: sessionId });
+  const url = record(record(record(response).data).share).url;
+  return typeof url === "string" && url.length > 0 ? url : null;
+}
+
+/**
+ * Turn the opaque rewind dry-run payload into something a person can act on.
+ *
+ * `rewindClaudeFiles` returns `unknown` — it is whatever the installed Agent
+ * SDK hands back — so every shape is probed defensively and anything
+ * unrecognised degrades to "no files reported" rather than to raw JSON. The
+ * previous confirm dialog pasted `JSON.stringify(...).slice(0, 800)` into a
+ * `window.confirm`, which truncated mid-structure and asked the user to approve
+ * a destructive worktree mutation they could not read.
+ */
+export function summarizeRewindPreview(preview: unknown): {
+  files: string[];
+  fileCount: number;
+} {
+  const root = record(preview);
+  const candidates = [
+    root.files,
+    root.restoredFiles,
+    root.changedFiles,
+    root.filesRestored,
+    root.filesChanged,
+    record(root.preview).files,
+  ];
+  const list = candidates.find((value): value is unknown[] => Array.isArray(value)) ?? [];
+  const files = list.flatMap((entry) => {
+    if (typeof entry === "string") return [entry];
+    const item = record(entry);
+    for (const key of ["path", "file", "filePath", "name"]) {
+      const value = item[key];
+      if (typeof value === "string" && value.length > 0) return [value];
+    }
+    return [];
+  });
+  const reportedCount = [root.fileCount, root.count, root.totalFiles].find(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
+  return {
+    files,
+    fileCount: files.length > 0 ? files.length : reportedCount ?? 0,
+  };
+}
+
+/** One short line naming the message a destructive action is anchored to. */
+export function describeRewindTarget(text: string | undefined): string {
+  const normalized = (text ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "your most recent message";
+  return normalized.length > 80
+    ? `“${normalized.slice(0, 80)}…”`
+    : `“${normalized}”`;
+}
+
 function codexLimitsFromHealth(health: unknown): {
   rateLimits: NonNullable<ContextUsageSnapshot["rateLimits"]>;
   credits?: NonNullable<ContextUsageSnapshot["credits"]>;
@@ -463,6 +538,17 @@ export function AgentInfoButton({
       ? state.runtimeHealth.get(activeSession.environmentId)
       : undefined,
   );
+  /*
+   * Todos and diffs belong to one session, but the environment-keyed snapshot
+   * is written by whichever OpenCode tab reported last. `OpenCodeChatTab`
+   * mirrors its own snapshot under the session key, so prefer that and fall
+   * back to the environment entry only until the first session-scoped write.
+   */
+  const openCodeSessionHealth = useOpenCodeStore((state) =>
+    activeSession?.provider === "opencode"
+      ? state.runtimeHealth.get(activeSession.sessionKey)
+      : undefined,
+  );
   const openCodeAgent = useOpenCodeStore((state) =>
     activeSession?.provider === "opencode"
       ? state.selectedAgent.get(activeSession.sessionKey)
@@ -534,9 +620,17 @@ export function AgentInfoButton({
   const openForkTab = (sessionId: string, title?: string) => {
     if (!activeTab || !activeSession) return;
     const id = createUuid();
+    /*
+     * Built field by field, never by spreading the source tab. `TabInfo`
+     * carries one-shot bootstrap fields (`initialPrompt`, `initialCommands`,
+     * `initialAgentModel`, `initialReasoningEffort`) that are cleared only once
+     * consumed; forking a tab whose initial prompt had not run yet produced a
+     * fork that immediately auto-submitted it. The three in-tab fork handlers
+     * construct their tabs the same way.
+     */
     const tab: TabInfo = {
-      ...activeTab,
       id,
+      type: activeTab.type,
       displayTitle: title ?? `${activeSession.providerLabel} fork`,
       ...(activeSession.provider === "claude"
         ? {
@@ -613,10 +707,49 @@ export function AgentInfoButton({
     setOpen(false);
   };
 
+  /*
+   * One component instance serves every tab, so everything typed or latched
+   * for the previous session has to go when the active tab changes. `steerText`
+   * in particular is posted to `currentSessionId`: text composed for session A
+   * would otherwise be delivered to session B's active turn.
+   */
   useEffect(() => {
     setOpen(false);
     setOpenCodeShared(false);
+    setSteerText("");
+    setBusyAction(null);
   }, [activeTab?.id, activeSession?.environmentId]);
+
+  /*
+   * `openCodeShared` is an optimistic flag; the server's session record is the
+   * truth. Re-reading it whenever the popover opens is what makes revocation
+   * reachable after a tab switch or an app restart — component state alone
+   * loses the fact that the conversation is published while the link stays
+   * live.
+   */
+  useEffect(() => {
+    if (
+      !open
+      || activeSession?.provider !== "opencode"
+      || !openCodeClient
+      || !currentSessionId
+    ) {
+      return;
+    }
+    let cancelled = false;
+    void readOpenCodeShareUrl(openCodeClient, currentSessionId)
+      .then((url) => {
+        if (!cancelled && url) setOpenCodeShared(true);
+      })
+      .catch((error: unknown) => {
+        // A failed lookup must not clear the flag: that would hide "Stop
+        // sharing" for a conversation that is still published.
+        console.warn("[AgentInfoButton] Failed to read OpenCode share state:", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSession?.provider, currentSessionId, open, openCodeClient]);
 
   useEffect(() => {
     if (!open && restoreFocusRef.current) {
@@ -744,37 +877,49 @@ export function AgentInfoButton({
                         </option>
                       ))}
                     </select>
-                    {activeSession.provider === "claude" ? (
-                      <div className="space-y-1.5">
-                        <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-                          <input
-                            type="checkbox"
-                            checked={includeLocalSettings}
-                            onChange={(event) =>
-                              useClaudeStore.getState().setIncludeLocalSettings(
-                                activeSession.sessionKey,
-                                event.target.checked,
-                              )}
-                          />
-                          Include .claude/settings.local.json
-                        </label>
-                        <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-                          <input
-                            type="checkbox"
-                            checked={promptSuggestionOptIn}
-                            onChange={(event) =>
-                              useClaudeStore.getState().setPromptSuggestionOptIn(
-                                activeSession.sessionKey,
-                                event.target.checked,
-                              )}
-                          />
-                          Suggest a follow-up after each turn
-                        </label>
-                      </div>
-                    ) : null}
                   </div>
                 )
                 : null}
+
+              {/*
+                Deliberately outside the execution-profile block. These are
+                session options, not agent options: `sessionInitData.agents`
+                defaults to `[]`, so nesting them under a non-empty agent list
+                hid both toggles — including the prompt-suggestion opt-in that
+                gates the feature — for any Claude session whose init payload
+                omitted agents.
+              */}
+              {activeSession.provider === "claude" ? (
+                <div className="space-y-1.5 border-t border-border/60 pt-4">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+                    Session options
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={includeLocalSettings}
+                      onChange={(event) =>
+                        useClaudeStore.getState().setIncludeLocalSettings(
+                          activeSession.sessionKey,
+                          event.target.checked,
+                        )}
+                    />
+                    Include .claude/settings.local.json
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={promptSuggestionOptIn}
+                      onChange={(event) =>
+                        useClaudeStore.getState().setPromptSuggestionOptIn(
+                          activeSession.sessionKey,
+                          event.target.checked,
+                        )}
+                    />
+                    Suggest a follow-up after each turn
+                  </label>
+                </div>
+              ) : null}
 
               <div className="space-y-2 border-t border-border/60 pt-4">
                 <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
@@ -809,25 +954,50 @@ export function AgentInfoButton({
                       disabled={busyAction !== null}
                       className="justify-start gap-2"
                       onClick={() => void runAction("rewind", async () => {
-                        const messageId = claudeSession?.messages
+                        const target = claudeSession?.messages
                           .filter((message) => message.role === "user")
-                          .at(-1)?.id;
-                        if (!messageId) throw new Error("No file checkpoint is available");
+                          .at(-1);
+                        if (!target?.id) throw new Error("No file checkpoint is available");
                         const preview = await rewindClaudeFiles(
                           claudeClient,
                           currentSessionId,
-                          messageId,
+                          target.id,
                           true,
                         );
+                        /*
+                         * This mutates the worktree, so the confirmation names
+                         * the message it is anchored to and lists the files it
+                         * will touch. It used to paste a truncated
+                         * `JSON.stringify` of the dry run into the dialog.
+                         */
+                        const { files, fileCount } = summarizeRewindPreview(preview);
+                        const shown = files.slice(0, 10);
+                        const body = fileCount === 0
+                          ? "Claude reported no file changes for this checkpoint."
+                          : [
+                              `${fileCount} ${fileCount === 1 ? "file" : "files"} will be restored:`,
+                              ...shown.map((file) => `  • ${file}`),
+                              ...(files.length > shown.length
+                                ? [`  • …and ${files.length - shown.length} more`]
+                                : []),
+                            ].join("\n");
                         if (!window.confirm(
-                          `Rewind files through the latest user message?\n\n${JSON.stringify(preview, null, 2).slice(0, 800)}`,
+                          [
+                            `Rewind your files to the state before ${describeRewindTarget(target.content)}?`,
+                            body,
+                            "This overwrites the working tree and cannot be undone.",
+                          ].join("\n\n"),
                         )) return;
                         await rewindClaudeFiles(
                           claudeClient,
                           currentSessionId,
-                          messageId,
+                          target.id,
                         );
-                        toast.success("Claude files rewound");
+                        toast.success(
+                          fileCount === 0
+                            ? "Claude files rewound"
+                            : `Claude restored ${fileCount} ${fileCount === 1 ? "file" : "files"}`,
+                        );
                       })}
                     >
                       <RotateCcw className="h-3.5 w-3.5" />
@@ -870,10 +1040,29 @@ export function AgentInfoButton({
                             openCodeClient,
                             currentSessionId,
                           );
-                          if (!url) throw new Error("OpenCode did not return a share URL");
-                          await navigator.clipboard.writeText(url);
+                          /*
+                           * The conversation is published the moment `share()`
+                           * resolves. Latch that first: every failure after this
+                           * point (a missing URL, a clipboard rejection on focus
+                           * or permission grounds) used to skip the flag, so the
+                           * user saw an error while the link was live and
+                           * "Stop sharing" never rendered.
+                           */
                           setOpenCodeShared(true);
-                          toast.success("Share link copied");
+                          if (!url) {
+                            toast.warning(
+                              "Session shared, but OpenCode did not return the link. Use Stop sharing to revoke it.",
+                            );
+                            return;
+                          }
+                          try {
+                            await navigator.clipboard.writeText(url);
+                            toast.success("Share link copied");
+                          } catch {
+                            toast.warning(
+                              `Session shared, but the link could not be copied: ${url}`,
+                            );
+                          }
                         })}
                       >
                         <Share2 className="h-3.5 w-3.5" />
@@ -1039,8 +1228,18 @@ export function AgentInfoButton({
                     <Metric label="MCP" value={String(openCodeHealth?.mcpServers.length ?? 0)} />
                     <Metric label="Skills" value={String(openCodeHealth?.skills.length ?? 0)} />
                     <Metric label="LSP" value={String(openCodeHealth?.lspServers.length ?? 0)} />
-                    <Metric label="Todos" value={String(openCodeHealth?.todos?.length ?? 0)} />
-                    <Metric label="Files" value={String(openCodeHealth?.diffs?.length ?? 0)} />
+                    <Metric
+                      label="Todos"
+                      value={String(
+                        (openCodeSessionHealth ?? openCodeHealth)?.todos?.length ?? 0,
+                      )}
+                    />
+                    <Metric
+                      label="Files"
+                      value={String(
+                        (openCodeSessionHealth ?? openCodeHealth)?.diffs?.length ?? 0,
+                      )}
+                    />
                   </div>
                 ) : (
                   <CodexRuntimePanel health={codexHealth} />

@@ -84,8 +84,28 @@ const mockForkPersistedSession = mock(async () => ({
   id: "session-fork",
   title: "Test (fork)",
 }));
-const mockRewindSessionFiles = mock(async () => ({ filesChanged: [] }));
-const mockStopBackgroundTask = mock(async () => true);
+const mockRewindSessionFiles = mock(
+  async (..._args: Parameters<typeof realSessionManager.rewindSessionFiles>): Promise<unknown> => ({
+    canRewind: true,
+    filesChanged: [],
+  }),
+);
+const mockStopBackgroundTask = mock(
+  async (
+    ..._args: Parameters<typeof realSessionManager.stopBackgroundTask>
+  ): Promise<Awaited<ReturnType<typeof realSessionManager.stopBackgroundTask>>> => ({ ok: true }),
+);
+
+/**
+ * A refusal shaped the way the session manager shapes them: a plain `code`
+ * property the route maps to a status. Deliberately not an instance of the real
+ * `SessionOperationError` — the route reaches the manager through the module
+ * mock installed below, so it must not depend on class identity surviving that
+ * boundary.
+ */
+function refusal(code: "not_found" | "conflict" | "invalid", message: string): Error {
+  return Object.assign(new Error(message), { code });
+}
 
 mock.module("../services/session-manager.js", () => ({
   createSession: mockCreateSession,
@@ -111,6 +131,36 @@ mock.module("../services/session-manager.js", () => ({
   respondToPlanApproval: mockRespondToPlanApproval,
   getStructuredPromptDispatchState: mockGetStructuredPromptDispatchState,
 }));
+
+/**
+ * Restore every persistence seam to its inert default.
+ *
+ * These are the mocks the branch declared and then never invoked, so each
+ * suite below drives them directly; without a reset a `mockRejectedValueOnce`
+ * left armed by one test would surface as an unrelated 500 in the next.
+ */
+function resetPersistenceMocks(): void {
+  mockReconcilePersistedSessions.mockReset();
+  mockReconcilePersistedSessions.mockImplementation(async () => {});
+  mockHydratePersistedSessionMessages.mockReset();
+  mockHydratePersistedSessionMessages.mockImplementation(async () => mockGetSessionMessages());
+  mockRenameSessionDurably.mockReset();
+  mockRenameSessionDurably.mockImplementation(async (id: string) => id === "s-1");
+  mockForkPersistedSession.mockReset();
+  mockForkPersistedSession.mockImplementation(async () => ({
+    id: "session-fork",
+    title: "Test (fork)",
+  }));
+  mockRewindSessionFiles.mockReset();
+  mockRewindSessionFiles.mockImplementation(async () => ({
+    canRewind: true,
+    filesChanged: [],
+  }));
+  mockStopBackgroundTask.mockReset();
+  mockStopBackgroundTask.mockImplementation(async () => ({ ok: true }));
+  mockEnsurePersistedSession.mockReset();
+  mockEnsurePersistedSession.mockImplementation(async (id: string) => mockGetSession(id));
+}
 
 // Import the route after mocking
 import session from "./session.js";
@@ -159,6 +209,7 @@ describe("session routes", () => {
     mockRespondToPlanApproval.mockClear();
     mockGetStructuredPromptDispatchState.mockReset();
     mockGetStructuredPromptDispatchState.mockImplementation(() => "new");
+    resetPersistenceMocks();
   });
 
   // --- POST /session/create ---
@@ -412,12 +463,85 @@ describe("session routes", () => {
       const callArgs = mockSendPrompt.mock.calls[0];
       expect(callArgs[0]).toBe("s-1");
       expect(callArgs[1]).toBe("test");
+
+      // The key set, asserted first. Bun's `toEqual` treats a missing key and
+      // an `undefined` one as equal, so a `toEqual` on this object alone cannot
+      // notice `agent`, `includeLocalSettings` or `promptSuggestions` dropping
+      // out of the forwarded options entirely.
+      expect(Object.keys(callArgs[2]!).sort()).toEqual([
+        "agent",
+        "attachments",
+        "effort",
+        "fastMode",
+        "includeLocalSettings",
+        "model",
+        "outputSchema",
+        "permissionMode",
+        "promptSuggestions",
+        "requestId",
+      ]);
       expect(callArgs[2]).toEqual({
         model: "opus",
         attachments: undefined,
         effort: "xhigh",
         permissionMode: "auto",
+        fastMode: undefined,
+        agent: undefined,
+        includeLocalSettings: undefined,
+        promptSuggestions: undefined,
+        outputSchema: undefined,
+        requestId: undefined,
       });
+    });
+
+    test("forwards the agent, local-settings and suggestion options", async () => {
+      await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "test",
+        agent: "  reviewer  ",
+        includeLocalSettings: true,
+        promptSuggestions: true,
+        fastMode: true,
+      });
+
+      const options = mockSendPrompt.mock.calls[0]![2]!;
+      expect(options.agent).toBe("reviewer");
+      expect(options.includeLocalSettings).toBe(true);
+      expect(options.promptSuggestions).toBe(true);
+      expect(options.fastMode).toBe(true);
+    });
+
+    test("drops a blank agent and non-boolean toggles", async () => {
+      await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "test",
+        agent: "   ",
+        includeLocalSettings: "yes",
+        promptSuggestions: 1,
+        fastMode: "true",
+      });
+
+      const options = mockSendPrompt.mock.calls[0]![2]!;
+      expect(options.agent).toBeUndefined();
+      expect(options.includeLocalSettings).toBeUndefined();
+      expect(options.promptSuggestions).toBeUndefined();
+      expect(options.fastMode).toBeUndefined();
+    });
+
+    test("returns 409 while a file rewind is restoring the working tree", async () => {
+      mockGetSession.mockReturnValueOnce({
+        id: "s-1",
+        title: "Test",
+        status: "idle" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+        rewindInProgress: true,
+      } as ReturnType<typeof mockGetSession>);
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", { prompt: "test" });
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toEqual({
+        error: "Session is restoring files from a checkpoint",
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
     test("validates effort level - rejects invalid values", async () => {
@@ -848,6 +972,432 @@ describe("session routes", () => {
     test("returns 404 for unknown session", async () => {
       const res = await app.request("/session/s-unknown/plan-approvals");
       expect(res.status).toBe(404);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Persisted-session routes
+// ---------------------------------------------------------------------------
+//
+// Every handler here reaches an SDK-backed operation that can legitimately
+// refuse, and each refusal has a distinct meaning to the client: 404 "there is
+// nothing by that name", 409 "it exists but not in a state that permits this",
+// 400 "the thing you pointed at is not addressable". Collapsing them into an
+// opaque 500 is what these suites exist to prevent.
+
+describe("persisted session routes", () => {
+  beforeEach(() => {
+    mockGetSession.mockClear();
+    mockGetSessionMessages.mockClear();
+    mockListSessions.mockClear();
+    mockSendPrompt.mockClear();
+    resetPersistenceMocks();
+  });
+
+  // --- GET /session/list ---
+  describe("GET /session/list", () => {
+    test("reconciles the on-disk sessions before listing", async () => {
+      const res = await app.request("/session/list");
+      expect(res.status).toBe(200);
+      expect(mockReconcilePersistedSessions).toHaveBeenCalledTimes(1);
+    });
+
+    test("still serves the in-memory list when reconciliation fails", async () => {
+      mockReconcilePersistedSessions.mockImplementation(async () => {
+        throw new Error("claude home unreadable");
+      });
+
+      const res = await app.request("/session/list");
+
+      // Adopting on-disk sessions is an enrichment. Letting it fail the request
+      // would hide the sessions the user is actually working in behind a 500.
+      expect(res.status).toBe(200);
+      const data = await jsonBody(res);
+      expect(data.sessions).toHaveLength(1);
+      expect(data.sessions[0].id).toBe("s-1");
+    });
+  });
+
+  // --- GET /session/:id ---
+  describe("GET /session/:id", () => {
+    test("serves the authoritative background-task and rate-limit snapshot", async () => {
+      mockGetSession.mockReturnValueOnce({
+        id: "s-1",
+        title: "Test",
+        status: "idle" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+        backgroundTasks: {
+          "task-1": { id: "task-1", status: "running", description: "Build" },
+        },
+        rateLimits: [{ label: "Five Hour", usedPercent: 42 }],
+        rewindInProgress: true,
+      } as ReturnType<typeof mockGetSession>);
+
+      const data = await jsonBody(await app.request("/session/s-1"));
+
+      // A tab that was unmounted while this changed rehydrates from here.
+      expect(data.backgroundTasks).toEqual({
+        "task-1": { id: "task-1", status: "running", description: "Build" },
+      });
+      expect(data.rateLimits).toEqual([{ label: "Five Hour", usedPercent: 42 }]);
+      expect(data.rewindInProgress).toBe(true);
+    });
+
+    test("reports an empty task set and no rewind for a fresh session", async () => {
+      const data = await jsonBody(await app.request("/session/s-1"));
+      expect(data.backgroundTasks).toEqual({});
+      expect(data.rewindInProgress).toBe(false);
+    });
+  });
+
+  // --- GET /session/:id/messages ---
+  describe("GET /session/:id/messages", () => {
+    test("hydrates a session whose transcript has not been read yet", async () => {
+      mockGetSession.mockReturnValueOnce(undefined as ReturnType<typeof mockGetSession>);
+      mockEnsurePersistedSession.mockImplementation(async () => ({
+        id: "s-persisted",
+        title: "From disk",
+        status: "idle" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+        persistedMessagesLoaded: false,
+      }) as Awaited<ReturnType<typeof mockEnsurePersistedSession>>);
+      mockHydratePersistedSessionMessages.mockImplementation(async () => [
+        {
+          id: "u-1",
+          role: "user" as const,
+          content: "from the transcript",
+          parts: [],
+          timestamp: "2026-01-01T00:00:00Z",
+        },
+      ]);
+
+      const res = await app.request("/session/s-persisted/messages");
+
+      expect(res.status).toBe(200);
+      expect(mockHydratePersistedSessionMessages).toHaveBeenCalledWith("s-persisted");
+      // The in-memory getter must not be consulted for a session whose
+      // transcript still lives only on disk.
+      expect(mockGetSessionMessages).not.toHaveBeenCalled();
+      expect((await jsonBody(res)).messages[0].content).toBe("from the transcript");
+    });
+
+    test("serves the in-memory transcript once it has been loaded", async () => {
+      const res = await app.request("/session/s-1/messages");
+      expect(res.status).toBe(200);
+      expect(mockHydratePersistedSessionMessages).not.toHaveBeenCalled();
+      expect(mockGetSessionMessages).toHaveBeenCalledWith("s-1");
+    });
+  });
+
+  // --- POST /session/:id/rename ---
+  describe("POST /session/:id/rename", () => {
+    test("renames a session and echoes the trimmed title", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/rename", { title: "  Renamed  " });
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({ status: "renamed", title: "Renamed" });
+      expect(mockRenameSessionDurably).toHaveBeenCalledWith("s-1", "Renamed");
+    });
+
+    test("returns 400 for a blank or missing title", async () => {
+      expect((await jsonRequest("POST", "/session/s-1/rename", { title: "   " })).status).toBe(400);
+      expect((await jsonRequest("POST", "/session/s-1/rename", {})).status).toBe(400);
+      expect(mockRenameSessionDurably).not.toHaveBeenCalled();
+    });
+
+    test("returns 404 when the session does not exist", async () => {
+      const res = await jsonRequest("POST", "/session/s-unknown/rename", { title: "x" });
+      expect(res.status).toBe(404);
+      expect(await jsonBody(res)).toEqual({ error: "Session not found" });
+    });
+
+    test("maps a rename refusal to its status instead of a 500", async () => {
+      mockRenameSessionDurably.mockImplementation(async () => {
+        throw refusal("not_found", "Session has not been materialized");
+      });
+      const res = await jsonRequest("POST", "/session/s-1/rename", { title: "x" });
+      expect(res.status).toBe(404);
+      expect(await jsonBody(res)).toEqual({ error: "Session has not been materialized" });
+    });
+
+    test("returns 500 for an unexpected rename failure", async () => {
+      mockRenameSessionDurably.mockImplementation(async () => {
+        throw new Error("disk full");
+      });
+      const res = await jsonRequest("POST", "/session/s-1/rename", { title: "x" });
+      expect(res.status).toBe(500);
+      expect(await jsonBody(res)).toEqual({ error: "disk full" });
+    });
+  });
+
+  // --- POST /session/:id/fork ---
+  describe("POST /session/:id/fork", () => {
+    test("forks a session and returns 201 with the new id", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/fork", {
+        upToMessageId: "  msg-7  ",
+        title: "  Experiment  ",
+      });
+
+      expect(res.status).toBe(201);
+      expect(await jsonBody(res)).toEqual({
+        sessionId: "session-fork",
+        title: "Test (fork)",
+      });
+      expect(mockForkPersistedSession).toHaveBeenCalledWith("s-1", {
+        upToMessageId: "msg-7",
+        title: "Experiment",
+      });
+    });
+
+    test("forks the whole session when no boundary is given", async () => {
+      await jsonRequest("POST", "/session/s-1/fork", {});
+      expect(mockForkPersistedSession).toHaveBeenCalledWith("s-1", {
+        upToMessageId: undefined,
+        title: undefined,
+      });
+    });
+
+    test("returns 404 for an unknown session before touching the SDK", async () => {
+      const res = await jsonRequest("POST", "/session/s-unknown/fork", {});
+      expect(res.status).toBe(404);
+      expect(mockForkPersistedSession).not.toHaveBeenCalled();
+    });
+
+    const forkRefusals: Array<{ code: "not_found" | "conflict" | "invalid"; message: string; status: number }> = [
+      { code: "not_found", message: "Session has not been materialized", status: 404 },
+      { code: "conflict", message: "Cannot fork a running session", status: 409 },
+      {
+        code: "conflict",
+        message: "Installed Claude Agent SDK does not support session forking",
+        status: 409,
+      },
+      {
+        code: "invalid",
+        message: "The selected Claude message is not a persisted fork boundary",
+        status: 400,
+      },
+    ];
+
+    for (const { code, message, status } of forkRefusals) {
+      test(`returns ${status} for "${message}"`, async () => {
+        mockForkPersistedSession.mockImplementation(async () => {
+          throw refusal(code, message);
+        });
+        const res = await jsonRequest("POST", "/session/s-1/fork", {});
+        expect(res.status).toBe(status);
+        expect(await jsonBody(res)).toEqual({ error: message });
+      });
+    }
+
+    test("returns 500 for an unexpected fork failure", async () => {
+      mockForkPersistedSession.mockImplementation(async () => {
+        throw new Error("rollout copy failed");
+      });
+      const res = await jsonRequest("POST", "/session/s-1/fork", {});
+      expect(res.status).toBe(500);
+      expect(await jsonBody(res)).toEqual({ error: "rollout copy failed" });
+    });
+  });
+
+  // --- POST /session/:id/rewind ---
+  describe("POST /session/:id/rewind", () => {
+    test("rewinds files and returns the SDK result", async () => {
+      mockRewindSessionFiles.mockImplementation(async () => ({
+        canRewind: true,
+        filesChanged: ["/src/a.ts"],
+        insertions: 3,
+        deletions: 1,
+      }));
+
+      const res = await jsonRequest("POST", "/session/s-1/rewind", { messageId: " msg-7 " });
+
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({
+        status: "rewound",
+        result: { canRewind: true, filesChanged: ["/src/a.ts"], insertions: 3, deletions: 1 },
+      });
+      expect(mockRewindSessionFiles).toHaveBeenCalledWith("s-1", "msg-7", false);
+    });
+
+    test("previews without touching files when dryRun is set", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/rewind", {
+        messageId: "msg-7",
+        dryRun: true,
+      });
+      expect((await jsonBody(res)).status).toBe("previewed");
+      expect(mockRewindSessionFiles).toHaveBeenCalledWith("s-1", "msg-7", true);
+    });
+
+    test("treats a non-true dryRun as a real rewind", async () => {
+      await jsonRequest("POST", "/session/s-1/rewind", {
+        messageId: "msg-7",
+        dryRun: "yes",
+      });
+      expect(mockRewindSessionFiles).toHaveBeenCalledWith("s-1", "msg-7", false);
+    });
+
+    test("returns 400 when no messageId is given", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/rewind", { messageId: "   " });
+      expect(res.status).toBe(400);
+      expect(await jsonBody(res)).toEqual({ error: "messageId is required" });
+      expect(mockRewindSessionFiles).not.toHaveBeenCalled();
+    });
+
+    test("returns 404 for an unknown session before touching the SDK", async () => {
+      const res = await jsonRequest("POST", "/session/s-unknown/rewind", { messageId: "m" });
+      expect(res.status).toBe(404);
+      expect(mockRewindSessionFiles).not.toHaveBeenCalled();
+    });
+
+    const rewindRefusals: Array<{ code: "not_found" | "conflict" | "invalid"; message: string; status: number }> = [
+      { code: "not_found", message: "Session has not been materialized", status: 404 },
+      { code: "conflict", message: "Cannot rewind a running session", status: 409 },
+      {
+        code: "conflict",
+        message: "A file rewind is already in progress for this session",
+        status: 409,
+      },
+      {
+        code: "invalid",
+        message: "The selected Claude message is not a persisted checkpoint",
+        status: 400,
+      },
+    ];
+
+    for (const { code, message, status } of rewindRefusals) {
+      test(`returns ${status} for "${message}"`, async () => {
+        mockRewindSessionFiles.mockImplementation(async () => {
+          throw refusal(code, message);
+        });
+        const res = await jsonRequest("POST", "/session/s-1/rewind", { messageId: "m" });
+        expect(res.status).toBe(status);
+        expect(await jsonBody(res)).toEqual({ error: message });
+      });
+    }
+
+    test("returns 500 for an unexpected rewind failure", async () => {
+      mockRewindSessionFiles.mockImplementation(async () => {
+        throw new Error("backup unreadable");
+      });
+      const res = await jsonRequest("POST", "/session/s-1/rewind", { messageId: "m" });
+      expect(res.status).toBe(500);
+      expect(await jsonBody(res)).toEqual({ error: "backup unreadable" });
+    });
+  });
+
+  // --- POST /session/:id/compact ---
+  describe("POST /session/:id/compact", () => {
+    test("dispatches the compaction turn and returns 202", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/compact");
+      expect(res.status).toBe(202);
+      expect(await jsonBody(res)).toEqual({ status: "processing" });
+      expect(mockSendPrompt).toHaveBeenCalledWith("s-1", "/compact");
+    });
+
+    test("returns 404 for an unknown session", async () => {
+      const res = await jsonRequest("POST", "/session/s-unknown/compact");
+      expect(res.status).toBe(404);
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("returns 409 while a turn is already running", async () => {
+      mockGetSession.mockReturnValueOnce({
+        id: "s-1",
+        title: "Test",
+        status: "running" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+      } as ReturnType<typeof mockGetSession>);
+
+      const res = await jsonRequest("POST", "/session/s-1/compact");
+      expect(res.status).toBe(409);
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("returns 409 while files are being restored", async () => {
+      mockGetSession.mockReturnValueOnce({
+        id: "s-1",
+        title: "Test",
+        status: "idle" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+        rewindInProgress: true,
+      } as ReturnType<typeof mockGetSession>);
+
+      const res = await jsonRequest("POST", "/session/s-1/compact");
+      expect(res.status).toBe(409);
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("maps a materialization refusal instead of returning 500", async () => {
+      mockGetSession.mockReturnValueOnce(undefined as ReturnType<typeof mockGetSession>);
+      mockEnsurePersistedSession.mockImplementation(async () => {
+        throw refusal("conflict", "Session store is locked");
+      });
+
+      const res = await jsonRequest("POST", "/session/s-1/compact");
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toEqual({ error: "Session store is locked" });
+    });
+  });
+
+  // --- POST /session/:id/tasks/:taskId/stop ---
+  describe("POST /session/:id/tasks/:taskId/stop", () => {
+    test("stops a background task", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/tasks/task-1/stop");
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({ status: "stopped" });
+      expect(mockStopBackgroundTask).toHaveBeenCalledWith("s-1", "task-1");
+    });
+
+    test("returns 404 when the session is unknown", async () => {
+      mockStopBackgroundTask.mockImplementation(async () => ({
+        ok: false,
+        reason: "session_not_found",
+        message: "Session not found",
+      }));
+      const res = await jsonRequest("POST", "/session/s-x/tasks/task-1/stop");
+      expect(res.status).toBe(404);
+      expect(await jsonBody(res)).toEqual({ error: "Session not found" });
+    });
+
+    test("returns 404 when the task is unknown", async () => {
+      mockStopBackgroundTask.mockImplementation(async () => ({
+        ok: false,
+        reason: "task_not_found",
+        message: "Task not found",
+      }));
+      const res = await jsonRequest("POST", "/session/s-1/tasks/nope/stop");
+      expect(res.status).toBe(404);
+      expect(await jsonBody(res)).toEqual({ error: "Task not found" });
+    });
+
+    test("returns 409 when the task exists but nothing live can reach it", async () => {
+      mockStopBackgroundTask.mockImplementation(async () => ({
+        ok: false,
+        reason: "no_control_channel",
+        message: "No live Claude control channel can reach this task",
+      }));
+
+      const res = await jsonRequest("POST", "/session/s-1/tasks/task-1/stop");
+
+      // Not a 404: the user can see this task. A 404 told them it did not
+      // exist, which is the opposite of the truth.
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toEqual({
+        error: "No live Claude control channel can reach this task",
+      });
+    });
+
+    test("returns 500 when the stop request itself throws", async () => {
+      mockStopBackgroundTask.mockImplementation(async () => {
+        throw new Error("control channel died");
+      });
+      const res = await jsonRequest("POST", "/session/s-1/tasks/task-1/stop");
+      expect(res.status).toBe(500);
+      expect(await jsonBody(res)).toEqual({ error: "control channel died" });
     });
   });
 });

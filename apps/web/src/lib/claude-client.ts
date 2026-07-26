@@ -828,7 +828,19 @@ export async function forkClaudeSession(
   if (!response.ok) {
     throw new Error(`Failed to fork Claude session: HTTP ${response.status}`);
   }
-  return response.json();
+  // A `200 {}` would otherwise bind the new tab to `sessionId: undefined`, which
+  // every subsequent request then addresses as the literal string "undefined".
+  const body = (await response.json().catch(() => ({}))) as {
+    sessionId?: unknown;
+    title?: unknown;
+  };
+  if (typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+    throw new Error("Claude fork response did not include a session id");
+  }
+  return {
+    sessionId: body.sessionId,
+    ...(typeof body.title === "string" ? { title: body.title } : {}),
+  };
 }
 
 export async function compactClaudeSession(

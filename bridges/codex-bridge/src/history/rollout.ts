@@ -502,6 +502,23 @@ export function extractPersistedMessageText(
   return text;
 }
 
+/**
+ * Reads a Codex turn id from a rollout record payload.
+ *
+ * Codex writes it as `turn_id`; accept the camelCase spelling too so a future
+ * rollout-format change degrades to "no fork point" rather than silently
+ * assigning messages to the previous turn.
+ */
+function readTurnId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const record = payload as Record<string, unknown>;
+  for (const key of ["turn_id", "turnId"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) return value;
+  }
+  return undefined;
+}
+
 export async function hydrateMessagesFromPersistedSession(
   threadId: string,
 ): Promise<{
@@ -518,8 +535,24 @@ export async function hydrateMessagesFromPersistedSession(
 
   const { records } = await readCachedTranscript(meta.transcriptPath);
   const messages: NormalizedMessage[] = [];
+  /**
+   * Turn boundaries reconstructed from the rollout.
+   *
+   * `turn_context` records and the turn-scoped `event_msg` records both carry the
+   * real Codex `turn_id`, and both precede the messages of their turn, so the
+   * last id seen is the turn a message belongs to.
+   *
+   * This is what makes `turnId` durable. It used to be set in exactly one place —
+   * on the user message of a prompt this process dispatched — so every message
+   * lost it across a detach/re-attach or a bridge restart, and forking from a
+   * message ("fork from here") silently became impossible.
+   */
+  let currentTurnId: string | undefined;
 
   for (const record of records) {
+    const recordTurnId = readTurnId(record.payload);
+    if (recordTurnId) currentTurnId = recordTurnId;
+
     if (record.type !== "response_item" || record.payload?.type !== "message") {
       continue;
     }
@@ -542,6 +575,7 @@ export async function hydrateMessagesFromPersistedSession(
         typeof record.timestamp === "string"
           ? record.timestamp
           : new Date().toISOString(),
+      ...(currentTurnId ? { turnId: currentTurnId } : {}),
     });
   }
 

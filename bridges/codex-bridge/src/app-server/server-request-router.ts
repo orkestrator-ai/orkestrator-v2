@@ -424,19 +424,26 @@ export class ServerRequestRouter {
         );
 
       /**
-       * Interactive input. We have no UI for it in this migration, so cancel
-       * promptly and say so — leaving the turn hanging would look like a freeze.
+       * Interactive input that could not be parked — an unparseable question set,
+       * or no tab attached to the thread to show it. Cancel promptly and say so;
+       * leaving the turn hanging would look like a freeze.
        */
       case "item/tool/requestUserInput":
-        this.explain(record, "Codex asked a question that needs interactive input, which Orkestrator does not support yet. The request was cancelled.");
+        this.explain(record, "Codex asked a question, but no Orkestrator tab was attached to answer it. The request was cancelled.");
         return this.finish(key, record, "cancelled", () =>
           this.options.respond(generation, request.id, { answers: {} }),
         );
 
       case "mcpServer/elicitation/request":
-        // We set mcpServerOpenaiFormElicitation: false, so this is unexpected.
-        this.violation(method, "MCP elicitation requested despite capability opt-out");
-        this.explain(record, "An MCP server requested input Orkestrator cannot display. The request was cancelled.");
+        /**
+         * Reached whenever the request could not be parked: an elicitation `mode`
+         * this build does not recognise, or no tab attached to the thread to show
+         * it. We *do* advertise `mcpServerOpenaiFormElicitation: true`, so this is
+         * an ordinary outcome, not a protocol violation — counting it as one
+         * inflated the `protocol.serverRequests` figure operators watch for real
+         * drift.
+         */
+        this.explain(record, "An MCP server asked for input, but no Orkestrator tab was attached to display it. The request was cancelled.");
         return this.finish(key, record, "cancelled", () =>
           this.options.respond(generation, request.id, {
             action: "cancel",

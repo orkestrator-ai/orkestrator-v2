@@ -25,12 +25,51 @@ function renderLayout(overrides: Partial<React.ComponentProps<typeof MobileAppSh
 
 describe("MobileAppShellLayout", () => {
   test("places agent information immediately left of the tools spanner", () => {
-    renderLayout();
+    /*
+     * No CSS is compiled under `bun test`, so restating the Tailwind offset
+     * literals proves nothing — the button could be anywhere. What is testable
+     * is the structure: both controls are right-anchored siblings of the title
+     * bar, the info slot sits directly beside the tools trigger with nothing
+     * between them, and its offset from the right edge is the larger of the two.
+     */
+    const { container } = renderLayout();
 
+    const titleBar = container.querySelector<HTMLElement>("div[data-backend-drag-region]")!;
     const tools = screen.getByRole("button", { name: "Open tools" });
-    const info = screen.getByRole("button", { name: "Agent info" });
-    expect(tools.classList.contains("right-1.5")).toBe(true);
-    expect(info.parentElement?.classList.contains("right-11.5")).toBe(true);
+    const slot = screen.getByTestId("mobile-agent-info-slot");
+
+    expect(slot.contains(screen.getByRole("button", { name: "Agent info" }))).toBe(true);
+    expect(tools.parentElement).toBe(titleBar);
+    expect(slot.parentElement).toBe(titleBar);
+    expect(tools.nextElementSibling).toBe(slot);
+
+    const rightOffset = (element: Element): number => {
+      const match = [...element.classList].find((name) => /^right-\d/.test(name));
+      expect(match).toBeTruthy();
+      // Right-anchored, not left-anchored: a `left-*` control is on the wrong side.
+      expect([...element.classList].some((name) => /^left-/.test(name))).toBe(false);
+      return Number.parseFloat(match!.slice("right-".length));
+    };
+    expect(rightOffset(slot)).toBeGreaterThan(rightOffset(tools));
+  });
+
+  test("keeps the agent-info slot out of the title bar's drag region", () => {
+    // The bar starts a window drag on mouse-down; without the stop, tapping the
+    // button drags the window instead of opening the panel.
+    const { props } = renderLayout();
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Agent info" }));
+    expect(props.onTitleBarMouseDown).not.toHaveBeenCalled();
+
+    // The bar itself still drags, so the guard is scoped to the slot.
+    fireEvent.mouseDown(screen.getByText("pgstack1 - feature-auth"));
+    expect(props.onTitleBarMouseDown).toHaveBeenCalledTimes(1);
+  });
+
+  test("renders whatever the shell puts in the agent-info slot", () => {
+    renderLayout({ agentInfoButton: <span>Custom slot content</span> });
+    expect(
+      screen.getByTestId("mobile-agent-info-slot").textContent,
+    ).toBe("Custom slot content");
   });
 
   test("shows the active project name and opens tools in a popover", () => {

@@ -151,6 +151,7 @@ const EMPTY_MODELS: OpenCodeModel[] = [];
 const EMPTY_COMMANDS: OpenCodeSlashCommand[] = [];
 const EMPTY_QUESTIONS: QuestionRequest[] = [];
 const EMPTY_PERMISSIONS: PermissionRequest[] = [];
+const EMPTY_AGENTS: OpenCodeAgent[] = [];
 
 export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   ...createNativeChatStoreSlice<
@@ -476,6 +477,6 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   getContextUsage: (sessionKey) => get().contextUsage.get(sessionKey),
   getRuntimeHealth: (environmentId) => get().runtimeHealth.get(environmentId),
   getAgents: (environmentId) =>
-    get().runtimeHealth.get(environmentId)?.agents ?? [],
+    get().runtimeHealth.get(environmentId)?.agents ?? EMPTY_AGENTS,
   getSelectedAgent: (sessionKey) => get().selectedAgent.get(sessionKey),
 }));

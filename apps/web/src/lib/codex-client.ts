@@ -332,12 +332,18 @@ export function parseInteraction(value: unknown): CodexInteraction | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   if (
+    // An empty id cannot be routed back to the bridge — it would POST to
+    // `/session/:id/interactions/`, which matches no route — so the card would
+    // render but never be answerable and the turn would stay blocked.
     typeof raw.interactionId !== "string"
+    || raw.interactionId.length === 0
     || (raw.kind !== "question" && raw.kind !== "mcp-form" && raw.kind !== "mcp-url")
     || typeof raw.method !== "string"
     || typeof raw.threadId !== "string"
     || typeof raw.requestedAt !== "number"
+    || !Number.isFinite(raw.requestedAt)
     || typeof raw.expiresAt !== "number"
+    || !Number.isFinite(raw.expiresAt)
   ) {
     return null;
   }
@@ -755,6 +761,155 @@ export async function getSessionMessages(
   }
 }
 
+const CONTEXT_USAGE_SOURCES: ReadonlySet<string> = new Set([
+  "claude",
+  "opencode",
+  "codex",
+  "heuristic",
+  "provider",
+]);
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** Copies `keys` across only where the source holds a finite number. */
+function pickFiniteNumbers(
+  raw: Record<string, unknown>,
+  keys: readonly (keyof ContextUsageSnapshot)[],
+): Partial<ContextUsageSnapshot> {
+  const picked: Record<string, number> = {};
+  for (const key of keys) {
+    const value = finiteNumber(raw[key as string]);
+    if (value !== undefined) picked[key as string] = value;
+  }
+  return picked as Partial<ContextUsageSnapshot>;
+}
+
+const OPTIONAL_USAGE_NUMBERS = [
+  "inputTokens",
+  "outputTokens",
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "reasoningTokens",
+  "lastTurnTokens",
+  "sessionTokens",
+  "costUsd",
+  "durationMs",
+  "apiDurationMs",
+  "permissionDenials",
+  "linesAdded",
+  "linesRemoved",
+] as const satisfies readonly (keyof ContextUsageSnapshot)[];
+
+/**
+ * Validates a context-usage snapshot arriving from the bridge.
+ *
+ * Exported so the SSE frame and the `/status` snapshot agree on what a usable
+ * reading is. The UI formats `percentUsed` with `toFixed`, so a frame carrying a
+ * string (or nothing at all) where a number belongs throws inside render — the
+ * whole tab, not just the meter. Anything that fails the numeric triple is
+ * dropped; every optional field is kept only when it is the right shape, so one
+ * malformed extra never costs the reading itself.
+ */
+export function parseContextUsage(value: unknown): ContextUsageSnapshot | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+
+  const usedTokens = finiteNumber(raw.usedTokens);
+  const totalTokens = finiteNumber(raw.totalTokens);
+  const percentUsed = finiteNumber(raw.percentUsed);
+  if (
+    usedTokens === undefined
+    || totalTokens === undefined
+    || percentUsed === undefined
+  ) {
+    return null;
+  }
+
+  const rateLimits = Array.isArray(raw.rateLimits)
+    ? raw.rateLimits.flatMap((window) => {
+        if (!window || typeof window !== "object" || Array.isArray(window)) return [];
+        const entry = window as Record<string, unknown>;
+        const label = nonEmptyString(entry.label);
+        if (label === undefined) return [];
+        return [{
+          label,
+          ...(finiteNumber(entry.usedPercent) !== undefined
+            ? { usedPercent: finiteNumber(entry.usedPercent) }
+            : {}),
+          ...(nonEmptyString(entry.resetsAt) !== undefined
+            ? { resetsAt: entry.resetsAt as string }
+            : {}),
+          ...(finiteNumber(entry.windowMinutes) !== undefined
+            ? { windowMinutes: finiteNumber(entry.windowMinutes) }
+            : {}),
+        }];
+      })
+    : undefined;
+
+  const contextCategories = Array.isArray(raw.contextCategories)
+    ? raw.contextCategories.flatMap((category) => {
+        if (!category || typeof category !== "object" || Array.isArray(category)) return [];
+        const entry = category as Record<string, unknown>;
+        const name = nonEmptyString(entry.name);
+        const tokens = finiteNumber(entry.tokens);
+        if (name === undefined || tokens === undefined) return [];
+        return [{
+          name,
+          tokens,
+          ...(nonEmptyString(entry.color) !== undefined
+            ? { color: entry.color as string }
+            : {}),
+        }];
+      })
+    : undefined;
+
+  const rawCredits =
+    raw.credits && typeof raw.credits === "object" && !Array.isArray(raw.credits)
+      ? (raw.credits as Record<string, unknown>)
+      : undefined;
+  const credits = rawCredits
+    ? {
+        ...(typeof rawCredits.hasCredits === "boolean"
+          ? { hasCredits: rawCredits.hasCredits }
+          : {}),
+        ...(typeof rawCredits.unlimited === "boolean"
+          ? { unlimited: rawCredits.unlimited }
+          : {}),
+        ...(nonEmptyString(rawCredits.balance) !== undefined
+          ? { balance: rawCredits.balance as string }
+          : {}),
+      }
+    : undefined;
+
+  return {
+    usedTokens,
+    totalTokens,
+    percentUsed,
+    ...pickFiniteNumbers(raw, OPTIONAL_USAGE_NUMBERS),
+    ...(nonEmptyString(raw.modelId) !== undefined
+      ? { modelId: raw.modelId as string }
+      : {}),
+    ...(nonEmptyString(raw.updatedAt) !== undefined
+      ? { updatedAt: raw.updatedAt as string }
+      : {}),
+    ...(typeof raw.estimated === "boolean" ? { estimated: raw.estimated } : {}),
+    ...(typeof raw.source === "string" && CONTEXT_USAGE_SOURCES.has(raw.source)
+      ? { source: raw.source as ContextUsageSnapshot["source"] }
+      : {}),
+    ...(rateLimits && rateLimits.length > 0 ? { rateLimits } : {}),
+    ...(contextCategories && contextCategories.length > 0
+      ? { contextCategories }
+      : {}),
+    ...(credits && Object.keys(credits).length > 0 ? { credits } : {}),
+  };
+}
+
 export async function lookupSessionStatus(
   client: CodexClient,
   sessionId: string,
@@ -775,6 +930,7 @@ export async function lookupSessionStatus(
     ) {
       throw new Error("Codex session status response was malformed");
     }
+    const contextUsage = parseContextUsage(data.contextUsage);
     // Spread in only when present, so the response shape is unchanged for a
     // bridge that does not report them.
     return {
@@ -801,13 +957,7 @@ export async function lookupSessionStatus(
         ...(isStructuredOutputResult(data.structuredOutput)
           ? { structuredOutput: data.structuredOutput }
           : {}),
-        ...(data.contextUsage
-          && typeof data.contextUsage === "object"
-          && typeof data.contextUsage.usedTokens === "number"
-          && typeof data.contextUsage.totalTokens === "number"
-          && typeof data.contextUsage.percentUsed === "number"
-          ? { contextUsage: data.contextUsage }
-          : {}),
+        ...(contextUsage ? { contextUsage } : {}),
       },
     };
   } catch (error) {
@@ -1309,6 +1459,11 @@ export function subscribeToEvents(
           "message.updated",
           "session.approval-requested",
           "session.approval-resolved",
+          // Named SSE events are only delivered to an explicit listener, so a
+          // missing entry here silently drops every interaction frame the bridge
+          // emits — the card never appears and the turn blocks until auto-deny.
+          "session.interaction-requested",
+          "session.interaction-resolved",
           "session.reconcile-required",
         ]) {
           eventSource.addEventListener(eventType, handleEvent);

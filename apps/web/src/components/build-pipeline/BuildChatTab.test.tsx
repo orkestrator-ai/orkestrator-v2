@@ -1309,14 +1309,29 @@ describe("BuildChatTab", () => {
         expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
           refreshedMessage,
         ]);
-        expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)).toMatchObject({
+        const usage = useClaudeStore.getState().contextUsage.get(SESSION_KEY);
+        expect(usage).toEqual({
           usedTokens: 2_500,
           totalTokens: 10_000,
           percentUsed: 25,
           modelId: "anthropic/claude-sonnet",
           estimated: true,
           source: "heuristic",
+          updatedAt: expect.any(String),
         });
+        // `toEqual` ignores keys whose value is `undefined`, so it cannot catch a
+        // field silently disappearing from the snapshot. Pin the key set too —
+        // this is the shape the agent information panel renders from.
+        expect(Object.keys(usage ?? {}).sort()).toEqual([
+          "estimated",
+          "modelId",
+          "percentUsed",
+          "source",
+          "totalTokens",
+          "updatedAt",
+          "usedTokens",
+        ]);
+        expect(Number.isNaN(Date.parse(usage?.updatedAt ?? ""))).toBe(false);
       });
     });
 

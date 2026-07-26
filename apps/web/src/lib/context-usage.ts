@@ -17,7 +17,8 @@ export interface ContextUsageSnapshot {
   apiDurationMs?: number;
   /** False for exact provider data; true only for legacy heuristic extraction. */
   estimated?: boolean;
-  source?: "claude" | "opencode" | "codex" | "heuristic";
+  /** `"provider"` is what the Codex bridge labels its exact app-server counters. */
+  source?: "claude" | "opencode" | "codex" | "heuristic" | "provider";
   updatedAt?: string;
   rateLimits?: AgentRateLimitWindow[];
   credits?: {

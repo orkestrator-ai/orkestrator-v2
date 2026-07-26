@@ -820,3 +820,342 @@ describe("server requests", () => {
     ).toBe(true);
   });
 });
+
+describe("thread operations behind the new session routes", () => {
+  test("forkThread forwards lastTurnId and binds the returned thread", async () => {
+    const h = harness({ "thread/fork": () => ({ thread: thread("fork-1") }) });
+    await h.engine.start();
+
+    const forked = await h.engine.forkThread("t1", BUILD, "turn-3");
+
+    expect(forked.id).toBe("fork-1");
+    // A handle is what every later call addresses; a fork with none would be
+    // unusable even though the RPC succeeded.
+    expect(forked.handle).toBeTruthy();
+    expect(h.child().requests.find((entry) => entry.method === "thread/fork")?.params)
+      .toMatchObject({ threadId: "t1", lastTurnId: "turn-3" });
+  });
+
+  test("forkThread omits lastTurnId entirely when forking the whole thread", async () => {
+    const h = harness({ "thread/fork": () => ({ thread: thread("fork-1") }) });
+    await h.engine.start();
+    await h.engine.forkThread("t1", BUILD);
+
+    const params = h.child().requests.find((entry) => entry.method === "thread/fork")?.params;
+    // Sending `lastTurnId: undefined` would serialize as an explicit null and
+    // truncate the fork at nothing.
+    expect(params && "lastTurnId" in params).toBe(false);
+  });
+
+  test("a rejected fork propagates rather than yielding a half-bound thread", async () => {
+    const h = harness({
+      "thread/fork": () => {
+        throw new Error("no such turn");
+      },
+    });
+    await h.engine.start();
+    await expect(h.engine.forkThread("t1", BUILD, "turn-nope")).rejects.toThrow("no such turn");
+  });
+
+  test("compactThread starts compaction and does not wait for it to finish", async () => {
+    const h = harness({ "thread/compact/start": () => ({}) });
+    await h.engine.start();
+    await h.engine.compactThread("t1");
+
+    expect(h.child().requests.find((entry) => entry.method === "thread/compact/start")?.params)
+      .toEqual({ threadId: "t1" });
+  });
+
+  test("a rejected compaction propagates so the caller can release the busy state", async () => {
+    const h = harness({
+      "thread/compact/start": () => {
+        throw new Error("nothing to compact");
+      },
+    });
+    await h.engine.start();
+    await expect(h.engine.compactThread("t1")).rejects.toThrow("nothing to compact");
+  });
+
+  test("steerTurn pins the expected turn and returns the turn it steered", async () => {
+    const h = harness({ "turn/steer": () => ({ turnId: "turn-1" }) });
+    await h.engine.start();
+
+    const turnId = await h.engine.steerTurn(
+      "t1",
+      "turn-1",
+      [{ type: "text", text: "also check the tests" }],
+      "req-9",
+    );
+
+    expect(turnId).toBe("turn-1");
+    expect(h.child().requests.find((entry) => entry.method === "turn/steer")?.params)
+      .toMatchObject({
+        threadId: "t1",
+        // Without expectedTurnId the steer could land on a turn the user never
+        // saw, which is the whole reason the caller reports "mismatch".
+        expectedTurnId: "turn-1",
+        clientUserMessageId: "req-9",
+        input: [{ type: "text", text: "also check the tests" }],
+      });
+  });
+
+  test("steerTurn omits the client id when no request id was supplied", async () => {
+    const h = harness({ "turn/steer": () => ({ turnId: "turn-1" }) });
+    await h.engine.start();
+    await h.engine.steerTurn("t1", "turn-1", [{ type: "text", text: "x" }]);
+
+    const params = h.child().requests.find((entry) => entry.method === "turn/steer")?.params;
+    expect(params && "clientUserMessageId" in params).toBe(false);
+  });
+
+  test("startReview reads the turn id out of the nested turn object", async () => {
+    const h = harness({
+      "review/start": () => ({ reviewThreadId: "review-1", turn: { id: "turn-r" } }),
+    });
+    await h.engine.start();
+
+    const review = await h.engine.startReview("t1", { type: "uncommittedChanges" });
+
+    // The response nests the turn; reading `response.turnId` would silently
+    // yield undefined and register an accumulator on nothing.
+    expect(review).toEqual({ reviewThreadId: "review-1", turnId: "turn-r" });
+    expect(h.child().requests.find((entry) => entry.method === "review/start")?.params)
+      .toEqual({
+        threadId: "t1",
+        target: { type: "uncommittedChanges" },
+        delivery: "inline",
+      });
+  });
+
+  test("startReview forwards each target shape and the requested delivery", async () => {
+    const h = harness({
+      "review/start": () => ({ reviewThreadId: "review-1", turn: { id: "turn-r" } }),
+    });
+    await h.engine.start();
+
+    await h.engine.startReview("t1", { type: "baseBranch", branch: "main" }, "detached");
+    expect(h.child().requests.at(-1)?.params).toMatchObject({
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "detached",
+    });
+
+    await h.engine.startReview("t1", { type: "commit", sha: "abc123", title: null });
+    expect(h.child().requests.at(-1)?.params).toMatchObject({
+      target: { type: "commit", sha: "abc123", title: null },
+    });
+
+    await h.engine.startReview("t1", { type: "custom", instructions: "check the auth path" });
+    expect(h.child().requests.at(-1)?.params).toMatchObject({
+      target: { type: "custom", instructions: "check the auth path" },
+    });
+  });
+});
+
+describe("runtime health", () => {
+  const HEALTH_HANDLERS = {
+    "mcpServerStatus/list": () => ({
+      data: [{ name: "deploy", serverInfo: { name: "deploy", version: "1" }, tools: {} }],
+      nextCursor: null,
+    }),
+    "skills/list": () => ({ data: [{ name: "review" }] }),
+    "hooks/list": () => ({ data: [{ event: "preTurn", command: "./hook.sh" }] }),
+    "account/rateLimits/read": () => ({ rateLimits: { primary: { usedPercent: 4 } } }),
+  };
+
+  test("collects every panel in one snapshot", async () => {
+    const h = harness(HEALTH_HANDLERS);
+    await h.engine.start();
+
+    const health = await h.engine.getRuntimeHealth("t1") as Record<string, unknown>;
+    expect(health.engine).toMatchObject({ state: expect.any(String) });
+    expect(health.mcp).toMatchObject({ data: [{ name: "deploy" }] });
+    expect(health.skills).toMatchObject({ data: [{ name: "review" }] });
+    expect(health.hooks).toMatchObject({ data: [{ event: "preTurn" }] });
+    expect(health.rateLimits).toMatchObject({ rateLimits: { primary: { usedPercent: 4 } } });
+    expect(h.child().requests.find((entry) => entry.method === "mcpServerStatus/list")?.params)
+      .toMatchObject({ threadId: "t1", detail: "full" });
+  });
+
+  test("scopes the MCP list to the whole environment when no thread is given", async () => {
+    const h = harness(HEALTH_HANDLERS);
+    await h.engine.start();
+    await h.engine.getRuntimeHealth();
+
+    const params = h.child().requests.find(
+      (entry) => entry.method === "mcpServerStatus/list",
+    )?.params;
+    expect(params && "threadId" in params).toBe(false);
+  });
+
+  test("one failing sub-request degrades a single panel, not the whole view", async () => {
+    // Promise.allSettled is the point: an app-server too old for `hooks/list`
+    // must not make the MCP and skills panels unusable too.
+    const h = harness({
+      ...HEALTH_HANDLERS,
+      "hooks/list": () => {
+        throw new Error("hooks/list unavailable");
+      },
+    });
+    await h.engine.start();
+
+    const health = await h.engine.getRuntimeHealth() as Record<string, unknown>;
+    expect(health.hooks).toMatchObject({ error: expect.stringContaining("hooks/list") });
+    expect(health.mcp).toMatchObject({ data: [{ name: "deploy" }] });
+    expect(health.skills).toMatchObject({ data: [{ name: "review" }] });
+  });
+
+  test("every sub-request failing still returns a renderable snapshot", async () => {
+    const h = harness();
+    await h.engine.start();
+
+    const health = await h.engine.getRuntimeHealth() as Record<string, unknown>;
+    for (const key of ["mcp", "skills", "hooks", "rateLimits"]) {
+      expect(health[key]).toMatchObject({ error: expect.any(String) });
+    }
+    expect(health.engine).toBeDefined();
+  });
+
+  test("the MCP inventory is redacted and its auth mode dropped", async () => {
+    const h = harness({
+      ...HEALTH_HANDLERS,
+      "mcpServerStatus/list": () => ({
+        data: [{
+          name: "deploy",
+          authStatus: "bearerToken",
+          serverInfo: {
+            name: "deploy",
+            websiteUrl: "https://deploy.test/api?api_key=abcdef123456",
+          },
+          headers: { Authorization: "Bearer abcdef1234567890" },
+          tools: { ship: { description: "Ships it" } },
+        }],
+      }),
+    });
+    await h.engine.start();
+
+    const health = await h.engine.getRuntimeHealth() as { mcp: { data: unknown[] } };
+    const server = health.mcp.data[0] as Record<string, unknown>;
+    // Reachable cross-origin with no auth, so nothing credential-shaped leaves.
+    expect(server.authStatus).toBeUndefined();
+    expect(server.headers).toBe("[redacted]");
+    expect(JSON.stringify(health)).not.toContain("abcdef123456");
+    // The useful inventory survives.
+    expect(server.name).toBe("deploy");
+    expect(server.tools).toMatchObject({ ship: { description: "Ships it" } });
+  });
+
+  test("hook commands and skill paths are redacted without being emptied", async () => {
+    const h = harness({
+      ...HEALTH_HANDLERS,
+      "hooks/list": () => ({
+        data: [{
+          event: "preTurn",
+          command: "curl -H 'Authorization: Bearer ghp_0123456789abcdefghij' https://x.test",
+          env: { OPENAI_API_KEY: "sk-live-0123456789abcdef" },
+        }],
+      }),
+    });
+    await h.engine.start();
+
+    const health = await h.engine.getRuntimeHealth() as { hooks: { data: unknown[] } };
+    const hook = health.hooks.data[0] as Record<string, unknown>;
+    expect(hook.event).toBe("preTurn");
+    expect(hook.env).toBe("[redacted]");
+    expect(String(hook.command)).not.toContain("ghp_0123456789abcdefghij");
+    expect(String(hook.command)).toContain("https://x.test");
+  });
+});
+
+describe("runtime notices", () => {
+  async function noticesFor(
+    notifications: Array<[string, unknown]>,
+  ): Promise<Array<{ method: string; message: string }>> {
+    const h = harness();
+    await h.engine.start();
+    for (const [method, params] of notifications) h.child().notify(method, params);
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+    const health = await h.engine.getRuntimeHealth() as {
+      notices: Array<{ method: string; message: string }>;
+    };
+    return health.notices;
+  }
+
+  test("captures exactly the six advisory methods", async () => {
+    const captured = await noticesFor([
+      ["warning", { message: "a warning" }],
+      ["guardianWarning", { message: "a guardian warning" }],
+      ["deprecationNotice", { message: "a deprecation" }],
+      ["configWarning", { message: "a config warning" }],
+      ["model/rerouted", { message: "rerouted" }],
+      ["mcpServer/startupStatus/updated", { status: "starting deploy" }],
+      // Not advisory: it has a rendering of its own and must not be duplicated
+      // into the notice ring.
+      ["thread/name/updated", { threadId: "t1", threadName: "not a notice" }],
+    ]);
+
+    expect(captured.map((notice) => notice.method)).toEqual([
+      "warning",
+      "guardianWarning",
+      "deprecationNotice",
+      "configWarning",
+      "model/rerouted",
+      "mcpServer/startupStatus/updated",
+    ]);
+  });
+
+  test("prefers message, then reason, then error, then status", async () => {
+    const captured = await noticesFor([
+      ["warning", { message: "m", reason: "r", error: "e", status: "s" }],
+      ["warning", { reason: "r", error: "e", status: "s" }],
+      ["warning", { error: "e", status: "s" }],
+      ["warning", { status: "s" }],
+    ]);
+    expect(captured.map((notice) => notice.message)).toEqual(["m", "r", "e", "s"]);
+  });
+
+  test("falls back to a readable form of the method when nothing is quotable", async () => {
+    const captured = await noticesFor([
+      ["mcpServer/startupStatus/updated", {}],
+      ["configWarning", { message: 7, reason: null }],
+      ["warning", undefined],
+    ]);
+    expect(captured.map((notice) => notice.message)).toEqual([
+      "mcpServer startupStatus updated",
+      "configWarning",
+      "warning",
+    ]);
+  });
+
+  test("a very long notice is truncated to 1000 characters", async () => {
+    const captured = await noticesFor([["warning", { message: "x".repeat(5_000) }]]);
+    expect(captured[0]?.message).toHaveLength(1_000);
+  });
+
+  test("the notice ring keeps only the most recent 100", async () => {
+    const captured = await noticesFor(
+      Array.from({ length: 130 }, (_, index) => ["warning", { message: `w${index}` }] as [string, unknown]),
+    );
+    expect(captured).toHaveLength(100);
+    expect(captured[0]?.message).toBe("w30");
+    expect(captured.at(-1)?.message).toBe("w129");
+  });
+
+  test("credentials in a startup error are redacted at capture, not on the way out", async () => {
+    const captured = await noticesFor([
+      ["mcpServer/startupStatus/updated", {
+        error:
+          "deploy failed: GET https://svc:hunter2@api.test/v1?api_key=abcdef123456 "
+          + "(Authorization: Bearer ghp_0123456789abcdefghij)",
+      }],
+    ]);
+
+    const message = captured[0]!.message;
+    expect(message).not.toContain("hunter2");
+    expect(message).not.toContain("abcdef123456");
+    expect(message).not.toContain("ghp_0123456789abcdefghij");
+    // Still diagnosable: the host and the shape of the failure survive.
+    expect(message).toContain("api.test");
+    expect(message).toContain("deploy failed");
+  });
+});

@@ -124,6 +124,7 @@ export function MobileAppShellLayout({
         </Button>
         <div
           className="absolute right-11.5 h-9 w-9"
+          data-testid="mobile-agent-info-slot"
           style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
           onMouseDown={(event) => event.stopPropagation()}
         >

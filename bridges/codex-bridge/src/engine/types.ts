@@ -152,6 +152,14 @@ export interface EngineTurn {
 }
 
 export interface EngineRateLimitWindow {
+  /**
+   * Which of the account's two windows this is.
+   *
+   * `account/rateLimits/updated` is a sparse rolling update, so a snapshot must
+   * be merged per window rather than replaced. The label cannot be that key: for
+   * the primary window it is the account's plan name and changes independently.
+   */
+  slot: "primary" | "secondary";
   label: string;
   usedPercent?: number;
   resetsAt?: string;
@@ -308,6 +316,14 @@ export type EngineEvent = EngineEventMeta &
         willRetry: boolean;
       }
     | { kind: "thread.name.updated"; threadId: string; name?: string }
+    /**
+     * Background context compaction finished.
+     *
+     * Deliberately carries no `turnId` even though the notification does: the
+     * runtime parks turn-scoped events against the active turn, and compaction's
+     * turn is never the active one, so it would be dropped as stale.
+     */
+    | { kind: "thread.compacted"; threadId: string }
     | {
         kind: "thread.usage.updated";
         threadId: string;

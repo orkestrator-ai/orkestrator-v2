@@ -34,7 +34,10 @@ import {
 } from "./engine/app-server-engine.js";
 import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
-import type { InteractionAnswer } from "./app-server/interactions.js";
+import {
+  parseInteractionAnswer,
+  type InteractionAnswer,
+} from "./app-server/interactions.js";
 import { EventRing, parseEventCursor } from "./event-ring.js";
 import {
   BUILTIN_SLASH_COMMANDS,
@@ -968,17 +971,20 @@ app.post("/session/:id/interactions/:interactionId", async (c) => {
   ) {
     return c.json({ error: "action must be accept, decline, or cancel" }, 400);
   }
-  const answer: InteractionAnswer =
-    body.action === "accept"
-      ? {
-          action: "accept",
-          ...(body.answers && typeof body.answers === "object"
-            ? { answers: body.answers }
-            : {}),
-          ...("content" in body ? { content: body.content } : {}),
-          ...("meta" in body ? { meta: body.meta } : {}),
-        }
-      : { action: body.action, ...("meta" in body ? { meta: body.meta } : {}) };
+  /**
+   * Shape-checked here so the runtime only ever receives a typed answer.
+   * `typeof body.answers === "object"` was not enough: `{"q":"TypeScript"}` is an
+   * object, and the per-question validation downstream calls `.some()` on each
+   * value, so a string there threw a `TypeError` and Hono answered 500 while the
+   * interaction stayed parked until its auto-cancel.
+   */
+  const answer: InteractionAnswer | null = parseInteractionAnswer(body);
+  if (!answer) {
+    return c.json(
+      { error: "answers must map each question id to a non-empty array of non-empty strings" },
+      400,
+    );
+  }
   const outcome = appServerRuntime.respondToInteraction(
     c.req.param("id"),
     c.req.param("interactionId"),
@@ -1002,15 +1008,36 @@ app.post("/session/:id/fork", async (c) => {
     c.req.param("id"),
     typeof body.lastMessageId === "string" ? body.lastMessageId : undefined,
   );
-  return result
-    ? c.json(result, 201)
-    : c.json({ error: "Session cannot be forked while it is running or before its first turn" }, 409);
+  // Each failure has its own cause. Reporting them all as "running or before its
+  // first turn" sent users looking for a running turn that was not there.
+  switch (result.outcome) {
+    case "created": {
+      const { outcome: _outcome, ...payload } = result;
+      return c.json(payload, 201);
+    }
+    case "not-found":
+      return c.json({ error: "Session not found" }, 404);
+    case "running":
+      return c.json({ error: "Session cannot be forked while it is running" }, 409);
+    case "unknown-message":
+      return c.json({ error: "lastMessageId is not a message in this session" }, 404);
+    case "no-fork-point":
+      return c.json(
+        { error: "That message is not a usable fork point: it belongs to no Codex turn" },
+        422,
+      );
+    default:
+      return c.json({ error: "Codex did not return a forked thread" }, 503);
+  }
 });
 
 app.post("/session/:id/compact", async (c) => {
   const outcome = await appServerRuntime.compactSession(c.req.param("id"));
   if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
   if (outcome === "running") return c.json({ error: "Session is running" }, 409);
+  if (outcome === "unavailable") return c.json({ error: "Compaction could not be started" }, 503);
+  // 202: `thread/compact/start` returns before the rewrite has happened. The
+  // session stays busy until the bridge sees `thread/compacted`.
   return c.json({ status: "accepted" }, 202);
 });
 
@@ -1034,29 +1061,74 @@ app.post("/session/:id/steer", async (c) => {
 
 app.post("/session/:id/review", async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  const target =
-    body.type === "baseBranch" && typeof body.branch === "string" && body.branch.trim()
-      ? { type: "baseBranch" as const, branch: body.branch.trim() }
-      : body.type === "commit" && typeof body.sha === "string" && body.sha.trim()
-        ? {
-            type: "commit" as const,
-            sha: body.sha.trim(),
-            title: typeof body.title === "string" ? body.title : null,
-          }
-        : body.type === "custom"
-          && typeof body.instructions === "string"
-          && body.instructions.trim()
-          ? { type: "custom" as const, instructions: body.instructions.trim() }
-          : { type: "uncommittedChanges" as const };
+  /**
+   * A named target with a missing or blank field is a client bug, not a request
+   * to review the working tree. Silently degrading it to `uncommittedChanges`
+   * started a *different* review from the one asked for — spending a turn and
+   * tokens — and answered 202 as if it had succeeded.
+   */
+  const trimmed = (value: unknown): string =>
+    typeof value === "string" ? value.trim() : "";
+  let target:
+    | { type: "uncommittedChanges" }
+    | { type: "baseBranch"; branch: string }
+    | { type: "commit"; sha: string; title: string | null }
+    | { type: "custom"; instructions: string };
+
+  switch (body.type) {
+    case "baseBranch": {
+      const branch = trimmed(body.branch);
+      if (!branch) return c.json({ error: "branch is required for a baseBranch review" }, 400);
+      target = { type: "baseBranch", branch };
+      break;
+    }
+    case "commit": {
+      const sha = trimmed(body.sha);
+      if (!sha) return c.json({ error: "sha is required for a commit review" }, 400);
+      target = {
+        type: "commit",
+        sha,
+        title: typeof body.title === "string" ? body.title : null,
+      };
+      break;
+    }
+    case "custom": {
+      const instructions = trimmed(body.instructions);
+      if (!instructions) {
+        return c.json({ error: "instructions are required for a custom review" }, 400);
+      }
+      target = { type: "custom", instructions };
+      break;
+    }
+    case undefined:
+    case null:
+    case "uncommittedChanges":
+      // Only an *absent* type defaults; this is the documented default target.
+      target = { type: "uncommittedChanges" };
+      break;
+    default:
+      return c.json(
+        { error: "type must be uncommittedChanges, baseBranch, commit, or custom" },
+        400,
+      );
+  }
+
   const result = await appServerRuntime.startNativeReview(c.req.param("id"), target);
   if (result.outcome === "not-found") return c.json({ error: "Session not found" }, 404);
   if (result.outcome === "running") return c.json({ error: "Session is running" }, 409);
   if (result.outcome === "unavailable") return c.json({ error: "Native review failed" }, 503);
-  return result.outcome === "accepted"
-    ? c.json({ status: "processing", turnId: result.turnId }, 202)
-    : c.json({ error: "Native review failed" }, 503);
+  return c.json({ status: "processing", turnId: result.turnId }, 202);
 });
 
+/**
+ * Everything the running Codex child has loaded: MCP servers, skills, hooks and
+ * recent runtime notices.
+ *
+ * Like every route here this is served under `cors({ origin: "*" })` with no
+ * authentication, so treat the response as public to any page the user has open.
+ * The engine redacts credential-shaped content and per-server auth state before
+ * returning it; do not add unredacted fields to this payload.
+ */
 app.get("/session/:id/runtime-health", async (c) => {
   return c.json(await appServerRuntime.getRuntimeHealth(c.req.param("id")));
 });

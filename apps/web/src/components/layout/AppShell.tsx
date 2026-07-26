@@ -125,7 +125,19 @@ export function AppShell({ children }: AppShellProps) {
             <span className="text-xs font-medium text-muted-foreground" data-backend-drag-region>
               {windowTitle}
             </span>
-            <div className="absolute right-1 top-1">
+            {/*
+              The title bar is a drag region: every left mouse-down on it calls
+              `startDragging()`. A nested control inherits that, so without the
+              `no-drag` app region *and* the mouse-down stop the info button
+              would drag the window instead of opening. `MobileAppShellLayout`
+              wraps the same slot the same way.
+            */}
+            <div
+              className="absolute right-1 top-1"
+              data-testid="desktop-agent-info-slot"
+              style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
               <AgentInfoButton activeTab={activeTab} />
             </div>
           </div>

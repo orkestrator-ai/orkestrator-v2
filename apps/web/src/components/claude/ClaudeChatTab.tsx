@@ -135,7 +135,9 @@ export function ClaudeChatTab({
   const [serverLog, setServerLog] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
+  const [forkInFlight, setForkInFlight] = useState(false);
 
+  const forkInFlightRef = useRef(false);
   const tabSessionIdRef = useRef<string | null>(null);
   const isInitializedRef = useRef(false);
   const initialPromptSentRef = useRef(false);
@@ -267,6 +269,30 @@ export function ClaudeChatTab({
       [sessionKey],
     ),
   );
+  /**
+   * The suggestion this tab has already used or dismissed.
+   *
+   * The bridge does not clear `session.promptSuggestion` once a turn has
+   * produced one, so every authoritative snapshot — mount, restore, reconnect
+   * and each `session.idle` — re-delivers it. Without this the chip a user
+   * just consumed reappears, sometimes several turns later. Remembering the
+   * exact string (not just "dismissed") means a genuinely new suggestion still
+   * gets through.
+   */
+  const dismissedPromptSuggestionRef = useRef<string | null>(null);
+  const applyPromptSuggestion = useCallback(
+    (key: string, suggestion: string | undefined) => {
+      if (
+        key === sessionKey
+        && suggestion !== undefined
+        && suggestion === dismissedPromptSuggestionRef.current
+      ) {
+        return;
+      }
+      setPromptSuggestion(key, suggestion);
+    },
+    [sessionKey, setPromptSuggestion],
+  );
   const applyServerSessionMetadata = useCallback(
     (
       key: string,
@@ -276,10 +302,10 @@ export function ClaudeChatTab({
       if (serverSession.contextUsage) {
         setContextUsage(key, serverSession.contextUsage);
       }
-      setPromptSuggestion(key, serverSession.promptSuggestion);
+      applyPromptSuggestion(key, serverSession.promptSuggestion);
       setBackgroundTasks(key, serverSession.backgroundTasks ?? {});
     },
-    [setBackgroundTasks, setContextUsage, setPromptSuggestion],
+    [applyPromptSuggestion, setBackgroundTasks, setContextUsage],
   );
   const showAddressAll = Boolean(
     isReviewTab &&
@@ -1135,7 +1161,7 @@ export function ClaudeChatTab({
                 setContextUsage(sessionTabId, sessionUpdate.contextUsage);
               }
               if ("promptSuggestion" in sessionUpdate) {
-                setPromptSuggestion(sessionTabId, sessionUpdate.promptSuggestion);
+                applyPromptSuggestion(sessionTabId, sessionUpdate.promptSuggestion);
               }
               if (sessionUpdate.backgroundTasks) {
                 setBackgroundTasks(sessionTabId, sessionUpdate.backgroundTasks);
@@ -1661,6 +1687,12 @@ export function ClaudeChatTab({
 
   const handleForkFromMessage = useCallback(async (messageId: string) => {
     if (!client || !session?.sessionId) return;
+    // Each call POSTs a fork and then adds a tab with a freshly generated id,
+    // so the pane store cannot dedupe a double click into one tab. The ref
+    // latches synchronously; the state drives the disabled attribute.
+    if (forkInFlightRef.current) return;
+    forkInFlightRef.current = true;
+    setForkInFlight(true);
     try {
       const fork = await forkClaudeSession(client, session.sessionId, {
         upToMessageId: messageId,
@@ -1678,6 +1710,9 @@ export function ClaudeChatTab({
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to fork Claude session");
+    } finally {
+      forkInFlightRef.current = false;
+      setForkInFlight(false);
     }
   }, [client, data, environmentId, session?.sessionId]);
 
@@ -1754,6 +1789,7 @@ export function ClaudeChatTab({
                   className="h-6 w-6"
                   title="Fork from here"
                   aria-label="Fork Claude session from this message"
+                  disabled={forkInFlight}
                   onClick={() => void handleForkFromMessage(message.id)}
                 >
                   <GitFork className="h-3.5 w-3.5" />
@@ -1847,7 +1883,20 @@ export function ClaudeChatTab({
                 <button
                   type="button"
                   onClick={() => {
-                    useClaudeStore.getState().setDraftText(sessionKey, promptSuggestion);
+                    /*
+                     * `draftText` is the composer's backing store, so replacing
+                     * it unconditionally silently destroyed a half-written
+                     * message. Append instead whenever there is one.
+                     */
+                    const store = useClaudeStore.getState();
+                    const draft = store.getDraftText(sessionKey);
+                    store.setDraftText(
+                      sessionKey,
+                      draft.trim().length > 0
+                        ? `${draft.replace(/\s+$/, "")}\n\n${promptSuggestion}`
+                        : promptSuggestion,
+                    );
+                    dismissedPromptSuggestionRef.current = promptSuggestion;
                     setPromptSuggestion(sessionKey, undefined);
                   }}
                   className="max-w-[min(70vw,34rem)] truncate rounded-full border border-border/60 bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground"

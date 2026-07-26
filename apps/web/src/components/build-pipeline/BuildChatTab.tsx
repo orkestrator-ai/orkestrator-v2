@@ -18,6 +18,7 @@ import {
   subscribeToEvents,
   checkHealth,
   ERROR_MESSAGE_PREFIX,
+  USAGE_SCAN_EXEMPT_EVENT_TYPES,
   type ClaudeMessage as ClaudeMessageType,
   type ClaudeAttachment,
 } from "@/lib/claude-client";
@@ -469,7 +470,11 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
           const eventType = event?.type;
           const eventSessionId = event?.sessionId;
-          const usageFromEvent = extractContextUsage(event.data);
+          // `extractContextUsage` walks the whole payload; transcript frames
+          // and keepalives are the frequent ones and never carry usage.
+          const usageFromEvent = USAGE_SCAN_EXEMPT_EVENT_TYPES.has(eventType || "")
+            ? null
+            : extractContextUsage(event.data);
 
           if (!eventSessionId) continue;
 
@@ -480,7 +485,16 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
             const isFinalEvent = eventType === "session.idle";
 
-            if (eventType === "message.updated" || eventType === "session.updated" || isFinalEvent) {
+            // This tab never applies an event payload — it always refetches —
+            // so an incremental patch is just another "something changed"
+            // signal. Without it the transcript would freeze after the first
+            // frame of each message and only catch up at `session.idle`.
+            if (
+              eventType === "message.updated" ||
+              eventType === "message.patched" ||
+              eventType === "session.updated" ||
+              isFinalEvent
+            ) {
               fetchMessagesDebounced(eventSessionId, sessionTabId, isFinalEvent);
             }
 

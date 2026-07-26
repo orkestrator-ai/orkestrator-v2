@@ -949,6 +949,277 @@ describe("ClaudeChatTab", () => {
       }
     });
 
+    test("applies incremental part patches and refetches when it has no base message", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockImplementation(() => channel.stream);
+
+      try {
+        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+        mockGetSessionMessages.mockClear();
+
+        const streamed: ClaudeMessageType = {
+          id: "patched-assistant",
+          role: "assistant",
+          content: "Reading",
+          parts: [
+            { type: "text", content: "Reading" },
+            { type: "tool-invocation", toolName: "Read", toolUseId: "t-1", toolState: "pending" },
+          ],
+          timestamp: "2026-07-20T12:00:00.000Z",
+          revision: 1,
+        };
+        channel.push({
+          type: "message.updated",
+          sessionId: "session-1",
+          data: { message: streamed },
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toContainEqual(
+            streamed,
+          );
+        });
+
+        // A patch touching only the text block must leave the tool part — the
+        // payload the bridge no longer resends — exactly as it was.
+        channel.push({
+          type: "message.patched",
+          sessionId: "session-1",
+          data: {
+            messageId: "patched-assistant",
+            partCount: 2,
+            changedParts: [{ index: 0, part: { type: "text", content: "Reading the file" } }],
+            timestamp: "2026-07-20T12:00:01.000Z",
+            revision: 2,
+          },
+        });
+        await waitFor(() => {
+          const message = useClaudeStore
+            .getState()
+            .sessions.get(SESSION_KEY)
+            ?.messages.find((candidate) => candidate.id === "patched-assistant");
+          expect(message?.content).toBe("Reading the file");
+          expect(message?.parts[1]).toEqual(streamed.parts[1]);
+        });
+        expect(mockGetSessionMessages).not.toHaveBeenCalled();
+
+        // A patch for a message this tab never received cannot be applied, so
+        // it must fall back to the authoritative transcript rather than being
+        // dropped on the floor.
+        const refetched: ClaudeMessageType = {
+          id: "arrived-mid-turn",
+          role: "assistant",
+          content: "Recovered from the server",
+          parts: [{ type: "text", content: "Recovered from the server" }],
+          timestamp: "2026-07-20T12:00:02.000Z",
+          revision: 3,
+        };
+        mockGetSessionMessages.mockResolvedValue([refetched]);
+        channel.push({
+          type: "message.patched",
+          sessionId: "session-1",
+          data: {
+            messageId: "arrived-mid-turn",
+            partCount: 1,
+            changedParts: [{ index: 0, part: { type: "text", content: "unseen" } }],
+            timestamp: "2026-07-20T12:00:02.000Z",
+            revision: 4,
+          },
+        });
+        await waitFor(() => {
+          expect(mockGetSessionMessages).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toContainEqual(
+            refetched,
+          );
+        });
+      } finally {
+        useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+        channel.close();
+      }
+    });
+
+    test("refetches instead of corrupting the transcript when patch frames were missed", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockImplementation(() => channel.stream);
+
+      try {
+        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+        mockGetSessionMessages.mockClear();
+
+        const streamed: ClaudeMessageType = {
+          id: "gap-assistant",
+          role: "assistant",
+          content: "Working",
+          parts: [
+            { type: "text", content: "Working" },
+            { type: "tool-invocation", toolName: "Read", toolUseId: "t-1", toolState: "pending" },
+          ],
+          timestamp: "2026-07-20T12:00:00.000Z",
+          revision: 1,
+        };
+        channel.push({
+          type: "message.updated",
+          sessionId: "session-1",
+          data: { message: streamed },
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toContainEqual(
+            streamed,
+          );
+        });
+
+        // The SSE socket drops and reconnects mid-turn. The bridge does not
+        // replay, and it keeps patching because it has already published this
+        // message in full — so the next frame this tab sees is several
+        // revisions ahead of the copy it holds, addressing indices it has
+        // never seen. Applying it would fill 2..4 with blank blocks and lose
+        // whatever really happened there, permanently: the bridge only sends
+        // what changed since *its* last frame, so it will never re-send them.
+        const recovered: ClaudeMessageType = {
+          id: "gap-assistant",
+          role: "assistant",
+          content: "Working and done",
+          parts: [
+            { type: "text", content: "Working" },
+            { type: "tool-invocation", toolName: "Read", toolUseId: "t-1", toolState: "success" },
+            { type: "thinking", content: "considering" },
+            { type: "tool-invocation", toolName: "Grep", toolUseId: "t-2", toolState: "success" },
+            { type: "text", content: " and done" },
+          ],
+          timestamp: "2026-07-20T12:00:05.000Z",
+          revision: 6,
+        };
+        mockGetSessionMessages.mockResolvedValue([recovered]);
+        channel.push({
+          type: "message.patched",
+          sessionId: "session-1",
+          data: {
+            messageId: "gap-assistant",
+            partCount: 5,
+            changedParts: [{ index: 4, part: { type: "text", content: " and done" } }],
+            timestamp: "2026-07-20T12:00:05.000Z",
+            revision: 6,
+          },
+        });
+
+        await waitFor(() => {
+          expect(mockGetSessionMessages).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+        });
+        await waitFor(() => {
+          const message = useClaudeStore
+            .getState()
+            .sessions.get(SESSION_KEY)
+            ?.messages.find((candidate) => candidate.id === "gap-assistant");
+          expect(message).toEqual(recovered);
+        });
+
+        // Nothing blank was ever rendered into the transcript on the way.
+        const message = useClaudeStore
+          .getState()
+          .sessions.get(SESSION_KEY)!
+          .messages.find((candidate) => candidate.id === "gap-assistant")!;
+        expect(message.parts.some((part) => part.type === "text" && part.content === "")).toBe(
+          false,
+        );
+
+        // And the refetched revision is a valid base again, so the tab rejoins
+        // the patch stream rather than refetching for the rest of the turn.
+        mockGetSessionMessages.mockClear();
+        channel.push({
+          type: "message.patched",
+          sessionId: "session-1",
+          data: {
+            messageId: "gap-assistant",
+            partCount: 5,
+            changedParts: [{ index: 4, part: { type: "text", content: " and finished" } }],
+            timestamp: "2026-07-20T12:00:06.000Z",
+            revision: 7,
+          },
+        });
+        await waitFor(() => {
+          const patched = useClaudeStore
+            .getState()
+            .sessions.get(SESSION_KEY)
+            ?.messages.find((candidate) => candidate.id === "gap-assistant");
+          expect(patched?.content).toBe("Working and finished");
+        });
+        expect(mockGetSessionMessages).not.toHaveBeenCalled();
+      } finally {
+        useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+        channel.close();
+      }
+    });
+
+    test("survives a malformed patch payload without dropping the subscription", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockImplementation(() => channel.stream);
+
+      try {
+        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+        mockGetSessionMessages.mockClear();
+
+        const streamed: ClaudeMessageType = {
+          id: "malformed-assistant",
+          role: "assistant",
+          content: "Working",
+          parts: [{ type: "text", content: "Working" }],
+          timestamp: "2026-07-20T12:00:00.000Z",
+          revision: 1,
+        };
+        channel.push({
+          type: "message.updated",
+          sessionId: "session-1",
+          data: { message: streamed },
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toContainEqual(
+            streamed,
+          );
+        });
+
+        mockGetSessionMessages.mockResolvedValue([streamed]);
+        // A frame with no `changedParts` would throw out of the `for await`
+        // loop and tear down the shared subscription for every tab in this
+        // environment. It must degrade to a refetch instead.
+        channel.push({
+          type: "message.patched",
+          sessionId: "session-1",
+          data: {
+            messageId: "malformed-assistant",
+            partCount: 2,
+            timestamp: "2026-07-20T12:00:01.000Z",
+            revision: 2,
+          },
+        });
+        await waitFor(() => {
+          expect(mockGetSessionMessages).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+        });
+
+        // The stream is still live: a later well-formed frame is still applied.
+        const later: ClaudeMessageType = {
+          ...streamed,
+          content: "Working still",
+          parts: [{ type: "text", content: "Working still" }],
+          revision: 4,
+        };
+        channel.push({
+          type: "message.updated",
+          sessionId: "session-1",
+          data: { message: later },
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toContainEqual(
+            later,
+          );
+        });
+      } finally {
+        useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+        channel.close();
+      }
+    });
+
     test("reconciles questions, plan state, approvals, initialization, and system notices", async () => {
       const channel = eventChannel();
       mockSubscribeToEvents.mockImplementation(() => channel.stream);

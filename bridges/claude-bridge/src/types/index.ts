@@ -131,6 +131,19 @@ export interface NormalizedMessage {
   content: string;
   parts: NormalizedPart[];
   timestamp: string;
+  /**
+   * How many frames have been published for this message, starting at 1 for
+   * the full frame. Present only on assistant messages the streaming path
+   * publishes incrementally.
+   *
+   * This is what makes a `message.patched` gap detectable: a recipient applies
+   * a patch only when it is the immediate successor of the revision it holds,
+   * and otherwise refetches. It is carried on the message (rather than only on
+   * the event) so the REST transcript is a valid base for the next patch —
+   * without that, a client that recovered by refetching could never rejoin the
+   * patch stream.
+   */
+  revision?: number;
 }
 
 /** Session state */
@@ -215,6 +228,7 @@ export type SSEEventType =
   | "session.title-updated"
   | "session.structured-output"
   | "message.updated"
+  | "message.patched"
   | "question.asked"
   | "question.answered"
   | "plan.enter-requested"
@@ -245,6 +259,37 @@ export interface SessionInitData {
   mcpServers: McpServerRuntimeStatus[];
   plugins: PluginRuntimeStatus[];
   slashCommands?: string[];
+}
+
+/**
+ * Payload of a `message.patched` event: the parts of an assistant message that
+ * changed since the last frame, addressed by their index.
+ *
+ * A streaming turn publishes a snapshot roughly ten times a second. Sending the
+ * whole message each time is O(turn size) per frame — every tool's full output
+ * and every written file, re-serialized for the rest of the turn — so once a
+ * subscriber has seen the message in full, later frames carry only the deltas.
+ *
+ * `partCount` is authoritative for the array length so that a shrink (a
+ * finalized message replacing what streamed) is representable. Recipients that
+ * hold no message with `messageId`, or whose copy is not at `revision - 1`,
+ * must refetch rather than guess: the REST transcript stays the source of
+ * truth.
+ */
+export interface MessagePatchEventData {
+  messageId: string;
+  /** Final length of the parts array after applying this patch. */
+  partCount: number;
+  changedParts: { index: number; part: NormalizedPart }[];
+  timestamp: string;
+  /**
+   * Revision this patch produces. Applying it is only valid against a copy at
+   * `revision - 1`; anything else means frames were missed (a reconnect, or a
+   * refetch that landed out of order) and the recipient must refetch. Without
+   * this, a patch addressed by index would be applied to a stale base and the
+   * missed parts would never be re-sent.
+   */
+  revision: number;
 }
 
 /** SSE event */

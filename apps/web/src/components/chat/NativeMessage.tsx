@@ -546,10 +546,22 @@ function EditToolPart({
     !fileName &&
     displayToolTitle !== displayToolName;
 
+  // Diff work is keyed on the *values* it reads, not on `toolDiff`'s identity.
+  // Normalization rebuilds every part object on each streaming frame, so an
+  // identity dependency would re-derive a completed edit's diff ten times a
+  // second for the rest of the turn — and generating a diff from before/after
+  // is whole-file work.
+  const diffSource = toolDiff?.diff;
+  const diffBefore = toolDiff?.before;
+  const diffAfter = toolDiff?.after;
+  const diffAdditions = toolDiff?.additions;
+  const diffDeletions = toolDiff?.deletions;
+
   // Calculate diff stats
   const { additions, deletions } = useMemo(
     () => countDiffStats(toolOutput, toolDiff),
-    [toolOutput, toolDiff],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- value deps, see above
+    [toolOutput, diffSource, diffBefore, diffAfter, diffAdditions, diffDeletions],
   );
 
   // Parse diff lines for display - try unified diff first, then output, then generate from before/after
@@ -580,7 +592,8 @@ function EditToolPart({
     }
 
     return [];
-  }, [toolOutput, toolDiff]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- value deps, see above
+  }, [toolOutput, diffSource, diffBefore, diffAfter]);
 
   // Determine if there's content to show when expanded
   const hasExpandableContent =

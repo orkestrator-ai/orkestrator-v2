@@ -2,6 +2,7 @@
 // Manages connections and broadcasts events to all subscribers
 
 import type { SSEEvent } from "../types/index.js";
+import { debugLog, isDebugLoggingEnabled } from "./logger.js";
 
 type EventCallback = (event: SSEEvent) => void;
 
@@ -13,10 +14,10 @@ class EventEmitter {
    */
   subscribe(callback: EventCallback): () => void {
     this.subscribers.add(callback);
-    console.debug("[event-emitter] Subscriber added", { count: this.subscribers.size });
+    debugLog("[event-emitter] Subscriber added", { count: this.subscribers.size });
     return () => {
       this.subscribers.delete(callback);
-      console.debug("[event-emitter] Subscriber removed", { count: this.subscribers.size });
+      debugLog("[event-emitter] Subscriber removed", { count: this.subscribers.size });
     };
   }
 
@@ -24,11 +25,16 @@ class EventEmitter {
    * Broadcast an event to all subscribers
    */
   emit(event: SSEEvent): void {
-    console.debug("[event-emitter] Emitting event", {
-      type: event.type,
-      sessionId: event.sessionId,
-      subscribers: this.subscribers.size,
-    });
+    // Guarded rather than passed through `debugLog`: this runs on every
+    // streamed frame, and the object literal would otherwise be allocated
+    // per emit only to be dropped.
+    if (isDebugLoggingEnabled) {
+      debugLog("[event-emitter] Emitting event", {
+        type: event.type,
+        sessionId: event.sessionId,
+        subscribers: this.subscribers.size,
+      });
+    }
     for (const callback of this.subscribers) {
       try {
         callback(event);

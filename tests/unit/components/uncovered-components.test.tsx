@@ -28,6 +28,34 @@ describe("previously indirect component contracts", () => {
     expect(screen.getByText("custom").tagName).toBe("ASIDE");
   });
 
+  test("MessageMarkdown skips re-rendering a block whose content has not changed", () => {
+    // A streaming turn re-renders its whole message roughly ten times a
+    // second. Without memoization every completed block re-runs remark on each
+    // of those, which is the cost this component was memoized to avoid — so
+    // the guard is that an unchanged block does not render again at all.
+    let renders = 0;
+    // Hoisted out of the render, exactly as callers must keep their maps:
+    // an inline literal here would defeat the memo silently.
+    const components = {
+      p: ({ children }: { children?: React.ReactNode }) => {
+        renders += 1;
+        return <p>{children}</p>;
+      },
+    };
+
+    const { rerender } = render(<MessageMarkdown content="stable" components={components} />);
+    expect(renders).toBe(1);
+
+    rerender(<MessageMarkdown content="stable" components={components} />);
+    rerender(<MessageMarkdown content="stable" components={components} />);
+    expect(renders).toBe(1);
+
+    // A real content change must still get through.
+    rerender(<MessageMarkdown content="changed" components={components} />);
+    expect(renders).toBe(2);
+    expect(screen.getByText("changed")).toBeTruthy();
+  });
+
   test("CodexPlanModeCard dispatches every action and locks controls while submitting", () => {
     const approve = mock(() => undefined);
     const switchMode = mock(() => undefined);

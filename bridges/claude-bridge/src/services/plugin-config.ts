@@ -9,10 +9,11 @@
  * Project-specific configs override global configs for plugins with the same name.
  */
 
-import { readFile, readdir, access } from "node:fs/promises";
+import { readdir, access } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute } from "node:path";
-import { homedir } from "node:os";
 import type { PluginInfo, PluginConfig, ClaudeJsonPluginsConfig, InstalledPluginsFile } from "../types/plugins.js";
+import { claudeHome, claudeJsonPath, claudePluginsDir } from "./claude-home.js";
+import { readJsonSliceCached } from "./json-file-cache.js";
 
 /**
  * SDK plugin config type - matching the SDK's expected format
@@ -20,18 +21,6 @@ import type { PluginInfo, PluginConfig, ClaudeJsonPluginsConfig, InstalledPlugin
 export interface SdkPluginConfig {
   type: "local";
   path: string;
-}
-
-/**
- * Read and parse a JSON file, returning null if it doesn't exist or is invalid
- */
-async function readJsonFile<T>(filePath: string): Promise<T | null> {
-  try {
-    const content = await readFile(filePath, "utf-8");
-    return JSON.parse(content) as T;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -94,30 +83,31 @@ async function scanCliPluginsDirectory(pluginsDir: string): Promise<PluginConfig
 
 /**
  * Load global plugin configurations from ~/.claude.json
+ *
+ * Reads through a stat-validated slice cache so only the `plugins` array is
+ * retained, not the project history that dominates this file.
  */
 export async function loadGlobalPlugins(): Promise<PluginConfig[]> {
-  const claudeJsonPath = join(homedir(), ".claude.json");
-  const config = await readJsonFile<ClaudeJsonPluginsConfig>(claudeJsonPath);
+  const plugins = await readJsonSliceCached<ClaudeJsonPluginsConfig, PluginConfig[]>(
+    claudeJsonPath(),
+    "plugins",
+    (config) => config?.plugins,
+  );
 
-  if (!config?.plugins) {
-    return [];
-  }
-
-  return config.plugins;
+  return plugins ?? [];
 }
 
 /**
  * Load project-specific plugin configurations from <cwd>/.claude/plugins.json
  */
 export async function loadProjectPlugins(cwd: string): Promise<PluginConfig[]> {
-  const pluginsJsonPath = join(cwd, ".claude", "plugins.json");
-  const config = await readJsonFile<{ plugins?: PluginConfig[] }>(pluginsJsonPath);
+  const plugins = await readJsonSliceCached<{ plugins?: PluginConfig[] }, PluginConfig[]>(
+    join(cwd, ".claude", "plugins.json"),
+    "plugins",
+    (config) => config?.plugins,
+  );
 
-  if (!config?.plugins) {
-    return [];
-  }
-
-  return config.plugins;
+  return plugins ?? [];
 }
 
 /**
@@ -128,15 +118,19 @@ export async function loadProjectPlugins(cwd: string): Promise<PluginConfig[]> {
  * We detect the common `.claude/plugins/` segment and remap to the local home directory.
  */
 export async function loadCliInstalledPlugins(): Promise<PluginConfig[]> {
-  const pluginsDir = join(homedir(), ".claude", "plugins");
+  const pluginsDir = claudePluginsDir();
   const installedPluginsPath = join(pluginsDir, "installed_plugins.json");
 
-  const installedPlugins = await readJsonFile<InstalledPluginsFile>(installedPluginsPath);
-  if (!installedPlugins?.plugins) {
+  const plugins = await readJsonSliceCached<
+    InstalledPluginsFile,
+    InstalledPluginsFile["plugins"]
+  >(installedPluginsPath, "plugins", (config) => config?.plugins);
+
+  if (!plugins) {
     return scanCliPluginsDirectory(pluginsDir);
   }
 
-  return remapInstalledPlugins(pluginsDir, installedPlugins);
+  return remapInstalledPlugins(pluginsDir, { plugins });
 }
 
 /**
@@ -150,7 +144,9 @@ export async function loadCliInstalledPlugins(): Promise<PluginConfig[]> {
  */
 export function remapInstalledPlugins(
   pluginsDir: string,
-  installedPlugins: InstalledPluginsFile
+  // Only the `plugins` record is used, and that is all the slice cache
+  // retains — the file's own `version` field is not needed here.
+  installedPlugins: Pick<InstalledPluginsFile, "plugins">
 ): PluginConfig[] {
   const plugins: PluginConfig[] = [];
   const CLAUDE_PLUGINS_MARKER = "/.claude/plugins/";
@@ -195,20 +191,15 @@ export function remapInstalledPlugins(
 export async function loadProjectOverridesFromGlobal(
   cwd: string
 ): Promise<PluginConfig[]> {
-  const claudeJsonPath = join(homedir(), ".claude.json");
-  const config = await readJsonFile<ClaudeJsonPluginsConfig>(claudeJsonPath);
+  // The slice key carries `cwd` because the selector closes over it — two
+  // projects must not serve each other's overrides from the same entry.
+  const plugins = await readJsonSliceCached<ClaudeJsonPluginsConfig, PluginConfig[]>(
+    claudeJsonPath(),
+    `projects:${cwd}:plugins`,
+    (config) => config?.projects?.[cwd]?.plugins,
+  );
 
-  if (!config?.projects) {
-    return [];
-  }
-
-  // Check for project entry matching the cwd
-  const projectConfig = config.projects[cwd];
-  if (!projectConfig?.plugins) {
-    return [];
-  }
-
-  return projectConfig.plugins;
+  return plugins ?? [];
 }
 
 /**
@@ -218,10 +209,12 @@ export async function readPluginManifest(
   pluginPath: string
 ): Promise<{ name: string; description?: string } | null> {
   const manifestPath = join(pluginPath, ".claude-plugin", "plugin.json");
-  const manifest = await readJsonFile<{
-    name?: string;
-    description?: string;
-  }>(manifestPath);
+  const manifest = await readJsonSliceCached<
+    { name?: string; description?: string },
+    { name?: string; description?: string }
+  >(manifestPath, "manifest", (config) =>
+    config ? { name: config.name, description: config.description } : null,
+  );
 
   if (!manifest) {
     return null;
@@ -241,7 +234,7 @@ export async function readPluginManifest(
  */
 function resolvePath(pluginPath: string, cwd: string): string {
   if (pluginPath.startsWith("~")) {
-    return join(homedir(), pluginPath.slice(1));
+    return join(claudeHome(), pluginPath.slice(1));
   }
   if (pluginPath.startsWith("/")) {
     return pluginPath;

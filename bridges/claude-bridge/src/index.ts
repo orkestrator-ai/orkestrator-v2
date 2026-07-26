@@ -3,13 +3,13 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { logger } from "hono/logger";
 import health from "./routes/health.js";
 import config from "./routes/config.js";
 import session from "./routes/session.js";
 import events from "./routes/events.js";
 import mcp from "./routes/mcp.js";
 import plugins from "./routes/plugins.js";
+import { createRequestLogger } from "./services/logger.js";
 import {
   PARENT_PID_ENV,
   parseParentPid,
@@ -27,7 +27,11 @@ app.use(
     allowHeaders: ["Content-Type", "Authorization"],
   })
 );
-app.use("*", logger());
+// Request logging is debug-only; see `createRequestLogger`.
+const requestLogger = createRequestLogger();
+if (requestLogger) {
+  app.use("*", requestLogger);
+}
 app.use("*", async (c, next) => {
   await next();
   c.header("Access-Control-Allow-Private-Network", "true");

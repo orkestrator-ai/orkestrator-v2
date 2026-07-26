@@ -29,7 +29,9 @@ import {
   ERROR_MESSAGE_PREFIX,
   SYSTEM_MESSAGE_PREFIX,
   SessionNotFoundError,
+  USAGE_SCAN_EXEMPT_EVENT_TYPES,
   type ClaudeMessage as ClaudeMessageType,
+  type ClaudeMessagePatch,
   type ClaudeQuestionRequest,
   type ClaudePlanApprovalRequest,
   type PlanApprovalRequestedEventData,
@@ -59,6 +61,28 @@ import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { ClaudeAttachment } from "@/stores/claudeStore";
 import { normalizeClaudeMessagesForDisplay } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
+
+/**
+ * Event types that legitimately arrive without matching a stored session —
+ * during initialization, or for an older session across a reconnect — and so
+ * must not produce an "unmatched event" warning.
+ */
+const UNMATCHED_EVENT_WARNING_EXEMPT = new Set([
+  "keepalive",
+  "connected",
+  "session.init",
+  "message.updated",
+  "message.patched",
+  "session.updated",
+  "session.idle",
+  "session.title-updated",
+  "plan.enter-requested",
+  "plan.exit-requested",
+  "plan.approval-requested",
+  "plan.approval-responded",
+  "system.compact",
+  "system.message",
+]);
 
 interface ClaudeChatTabProps {
   tabId: string;
@@ -127,6 +151,7 @@ export function ClaudeChatTab({
     removeMessage,
     setMessages,
     upsertMessage,
+    patchMessage,
     setSessionLoading,
     setSessionError,
     setServerStatus,
@@ -1012,8 +1037,9 @@ export function ClaudeChatTab({
 
           const eventType = event?.type;
           const eventSessionId = event?.sessionId;
-          const usageFromEvent = extractContextUsage(event.data);
-          console.debug("[ClaudeChatTab] SSE event", { eventType, eventSessionId });
+          const usageFromEvent = USAGE_SCAN_EXEMPT_EVENT_TYPES.has(eventType || "")
+            ? null
+            : extractContextUsage(event.data);
 
           if (!eventSessionId && !["question.asked", "question.answered", "plan.enter-requested", "plan.exit-requested", "plan.approval-requested", "plan.approval-responded"].includes(eventType || "")) {
             continue;
@@ -1021,11 +1047,6 @@ export function ClaudeChatTab({
 
           const sessions = useClaudeStore.getState().sessions;
 
-          // Debug: Log all stored sessions and whether we found a match
-          const sessionIds = Array.from(sessions.entries()).map(([tabId, state]) => ({
-            tabId,
-            sessionId: state.sessionId,
-          }));
           let foundMatch = false;
 
           for (const [sessionTabId, sessionState] of sessions) {
@@ -1042,6 +1063,19 @@ export function ClaudeChatTab({
                 // Non-assistant payloads (e.g. server-originated `system`
                 // re-prompts) and payload-less events fall back to an
                 // authoritative refetch so they still surface promptly.
+                fetchMessagesDebounced(eventSessionId, sessionTabId);
+              }
+            } else if (eventType === "message.patched") {
+              const patch = event.data as ClaudeMessagePatch | undefined;
+              // A patch is only meaningful against the exact revision it
+              // extends. `patchMessage` returns false for every way that can
+              // fail — this tab never saw the message (mounted mid-turn), its
+              // copy is behind (the subscription reconnected past some frames,
+              // or a refetch landed out of order and rolled it back), or the
+              // payload is malformed. In all of them the authoritative
+              // transcript is the recovery, and it re-establishes a revision
+              // the next patch can build on.
+              if (!patch?.messageId || !patchMessage(sessionTabId, patch)) {
                 fetchMessagesDebounced(eventSessionId, sessionTabId);
               }
             } else if (isFinalEvent) {
@@ -1119,12 +1153,16 @@ export function ClaudeChatTab({
           // Debug: Warn if no session matched the event
           // Filter out events that are expected during initialization or are informational
           // Also filter message/session updates since they can arrive for old sessions during reconnects
-          const ignoredEventTypes = ["keepalive", "connected", "session.init", "message.updated", "session.updated", "session.idle", "session.title-updated", "plan.enter-requested", "plan.exit-requested", "plan.approval-requested", "plan.approval-responded", "system.compact", "system.message"];
-          if (!foundMatch && eventSessionId && !ignoredEventTypes.includes(eventType || "")) {
+          if (!foundMatch && eventSessionId && !UNMATCHED_EVENT_WARNING_EXEMPT.has(eventType || "")) {
+            // The stored-session list is built here rather than up front: this
+            // warning is rare, while the loop above runs on every frame.
             console.warn("[ClaudeChatTab] No session matched event", {
               eventType,
               eventSessionId,
-              storedSessions: sessionIds,
+              storedSessions: Array.from(sessions.entries()).map(([tabId, state]) => ({
+                tabId,
+                sessionId: state.sessionId,
+              })),
             });
           }
 
@@ -1257,7 +1295,7 @@ export function ClaudeChatTab({
         }
       }
     },
-    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, setSessionLoading, setSessionTitle, setContextUsage, addMessage, addPendingQuestion, removePendingQuestion, addPendingPlanApproval, removePendingPlanApproval, setPlanMode, getSessionKeyBySdkSessionId]
+    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setSessionTitle, setContextUsage, addMessage, addPendingQuestion, removePendingQuestion, addPendingPlanApproval, removePendingPlanApproval, setPlanMode, getSessionKeyBySdkSessionId]
   );
   startSharedEventSubscriptionRef.current = startSharedEventSubscription;
 

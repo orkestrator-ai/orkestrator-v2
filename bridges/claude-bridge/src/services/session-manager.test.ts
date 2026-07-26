@@ -179,9 +179,20 @@ const mockGetMcpServersForSdk = mock(async () => ({}));
 const mockGetMcpServerNames = mock(async () => new Set<string>());
 const mockGetPluginsForSdk = mock(async () => [] as Array<{ type: "local"; path: string }>);
 
+/**
+ * `sendPrompt` resolves both halves of the MCP config in one call
+ * (`getMcpRuntimeConfig`) so the underlying files are read once per prompt.
+ * That is the only entry point this module uses; the two mocks above are kept
+ * as the seams tests already drive with `mockImplementationOnce`, composed
+ * here into the shape the real function returns.
+ */
+const mockGetMcpRuntimeConfig = mock(async () => ({
+  servers: await mockGetMcpServersForSdk(),
+  names: await mockGetMcpServerNames(),
+}));
+
 mock.module("./mcp-config.js", () => ({
-  getMcpServersForSdk: mockGetMcpServersForSdk,
-  getMcpServerNames: mockGetMcpServerNames,
+  getMcpRuntimeConfig: mockGetMcpRuntimeConfig,
 }));
 
 mock.module("./plugin-config.js", () => ({
@@ -191,7 +202,16 @@ mock.module("./plugin-config.js", () => ({
 // Import AFTER mocks are installed so session-manager picks them up.
 const sessionManager = await import("./session-manager.js");
 const { eventEmitter } = await import("./event-emitter.js");
-import type { SSEEvent } from "../types/index.js";
+import type {
+  MessagePatchEventData,
+  NormalizedPart,
+  SSEEvent,
+} from "../types/index.js";
+import {
+  MAX_DIFF_SIDE_BYTES,
+  MAX_TOOL_TEXT_BYTES,
+  TRUNCATED_NOTICE,
+} from "./part-budget.js";
 
 const {
   createSession,
@@ -1187,19 +1207,52 @@ describe("sendPrompt", () => {
     getSessionMessages(sessionId).find((m) => m.role === "assistant")?.content;
 
   /**
-   * `message.updated` carries the live `NormalizedMessage`, so a captured event
-   * keeps changing as the turn mutates it. Snapshot `content` at emit time to
-   * see the sequence the client actually received.
+   * Reconstructs the assistant content a subscriber holds after each frame.
+   *
+   * A turn publishes one `message.updated` and then patches it, so neither
+   * event type alone shows the sequence the client sees. This applies both the
+   * way the client does — including deriving `content` from the text parts,
+   * which is what lets a patch avoid re-sending it.
+   *
+   * `message.updated` carries the live `NormalizedMessage`, which keeps
+   * mutating as the turn proceeds, so content is snapshotted at emit time.
    */
   function captureAssistantContentFrames(): { frames: string[]; stop: () => void } {
     const frames: string[] = [];
+    let parts: NormalizedPart[] = [];
+
+    const contentOf = (current: NormalizedPart[]) =>
+      current
+        .filter((part) => part.type === "text")
+        .map((part) => part.content ?? "")
+        .join("");
+
     const stop = eventEmitter.subscribe((event) => {
-      if (event.type !== "message.updated") return;
-      const message = (event.data as { message?: { role?: string; content?: string } }).message;
-      if (message?.role === "assistant") frames.push(message.content ?? "");
+      if (event.type === "message.updated") {
+        const message = (event.data as {
+          message?: { role?: string; content?: string; parts?: NormalizedPart[] };
+        }).message;
+        if (message?.role !== "assistant") return;
+        parts = (message.parts ?? []).slice();
+        frames.push(message.content ?? "");
+        return;
+      }
+
+      if (event.type !== "message.patched") return;
+      const patch = event.data as MessagePatchEventData;
+      for (const { index, part } of patch.changedParts) parts[index] = part;
+      parts.length = patch.partCount;
+      frames.push(contentOf(parts));
     });
+
     return { frames, stop };
   }
+
+  /** Frames of either kind — what the client re-renders on. */
+  const messageFrames = (events: SSEEvent[]): SSEEvent[] =>
+    events.filter(
+      (event) => event.type === "message.updated" || event.type === "message.patched",
+    );
 
   /**
    * Lets the session manager drain the messages already queued on the mock
@@ -1232,8 +1285,9 @@ describe("sendPrompt", () => {
       await waitFor(() => assistantContent(session.id) === "abcde");
 
       // The whole burst lands in one window, so it costs far fewer emits than
-      // the one-per-token rebuild this replaced.
-      const updates = events.filter((event) => event.type === "message.updated");
+      // the one-per-token rebuild this replaced. Counted across both frame
+      // kinds: the first publish is a full message and the rest are patches.
+      const updates = messageFrames(events);
       expect(updates.length).toBeLessThan(5);
       expect(updates.length).toBeGreaterThan(0);
 
@@ -1243,6 +1297,216 @@ describe("sendPrompt", () => {
     } finally {
       stop();
     }
+  });
+
+  test("publishes each message once in full, then only the parts that changed", async () => {
+    const session = createSession("patching");
+    track(session.id);
+
+    const { events, stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Stream, call a tool, stream again");
+      const call = await nextQueryCall();
+
+      call.push({
+        type: "stream_event",
+        uuid: "patch-1",
+        session_id: "sdk-session-coalesce",
+        parent_tool_use_id: null,
+        event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      });
+      call.push(textDelta("patch-1", "before"));
+      await waitFor(() => assistantContent(session.id) === "before");
+
+      // A tool with a large result: the payload that made full frames O(turn
+      // size) and must therefore appear in exactly one frame, not all of them.
+      const bulkyOutput = "x".repeat(50_000);
+      call.push({
+        type: "assistant",
+        message: {
+          id: "patch-1",
+          content: [{ type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "/a.ts" } }],
+        },
+      });
+      call.push({
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "tool-1", content: bulkyOutput }],
+        },
+      });
+      await waitFor(() =>
+        getSessionMessages(session.id).some((message) =>
+          message.parts.some((part) => part.toolOutput === bulkyOutput),
+        ),
+      );
+
+      call.push(textDelta("patch-1", " after"));
+      await waitFor(() => (assistantContent(session.id) ?? "").endsWith(" after"));
+
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+
+      // The prompt's own user message is published as a full frame too; this
+      // is about the assistant message the turn streams into.
+      const frames = messageFrames(events).filter(
+        (frame) =>
+          frame.type === "message.patched" ||
+          (frame.data as { message?: { role?: string } }).message?.role === "assistant",
+      );
+      const fullFrames = frames.filter((frame) => frame.type === "message.updated");
+      const patches = frames.filter((frame) => frame.type === "message.patched");
+      const finalMessage = getSessionMessages(session.id).find((m) => m.role === "assistant")!;
+
+      // One full frame for the message, and everything after it is a patch.
+      expect(fullFrames).toHaveLength(1);
+      expect(patches.length).toBeGreaterThan(0);
+      for (const patch of patches) {
+        expect((patch.data as MessagePatchEventData).messageId).toBe(finalMessage.id);
+      }
+
+      // The bulky tool output crosses the wire once. Before this change it rode
+      // along in every frame emitted for the rest of the turn.
+      const framesCarryingOutput = frames.filter((frame) =>
+        JSON.stringify(frame.data).includes(bulkyOutput),
+      );
+      expect(framesCarryingOutput).toHaveLength(1);
+
+      // Replaying the frames must land a subscriber exactly where the
+      // authoritative transcript is — the patches are not allowed to lose or
+      // reorder anything the full frame would have carried.
+      let parts: NormalizedPart[] = [];
+      for (const frame of frames) {
+        if (frame.type === "message.updated") {
+          parts = ((frame.data as { message: { parts: NormalizedPart[] } }).message.parts).slice();
+          continue;
+        }
+        const patch = frame.data as MessagePatchEventData;
+        for (const { index, part } of patch.changedParts) parts[index] = part;
+        parts.length = patch.partCount;
+      }
+      expect(parts).toEqual(finalMessage.parts);
+    } finally {
+      stop();
+    }
+  });
+
+  test("numbers every published frame so a recipient can detect a missed one", async () => {
+    const session = createSession("revisions");
+    track(session.id);
+
+    // `message.updated` carries the live `NormalizedMessage`, whose revision
+    // keeps advancing as the turn patches it, so the revision has to be read
+    // at emit time — which is also when the SSE writer serializes it.
+    const revisions: (number | undefined)[] = [];
+    const stop = eventEmitter.subscribe((event) => {
+      if (event.type === "message.updated") {
+        const message = (event.data as {
+          message?: { role?: string; revision?: number };
+        }).message;
+        if (message?.role !== "assistant") return;
+        revisions.push(message.revision);
+        return;
+      }
+      if (event.type !== "message.patched") return;
+      revisions.push((event.data as MessagePatchEventData).revision);
+    });
+
+    try {
+      const promptPromise = sendPrompt(session.id, "Stream something");
+      const call = await nextQueryCall();
+
+      call.push({
+        type: "stream_event",
+        uuid: "rev-1",
+        session_id: "sdk-session-coalesce",
+        parent_tool_use_id: null,
+        event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      });
+      call.push(textDelta("rev-1", "one"));
+      await waitFor(() => assistantContent(session.id) === "one");
+      call.push(textDelta("rev-1", " two"));
+      await waitFor(() => assistantContent(session.id) === "one two");
+      call.push(textDelta("rev-1", " three"));
+      await waitFor(() => assistantContent(session.id) === "one two three");
+
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+
+      // The full frame is revision 1 and every patch is exactly one more than
+      // the frame before it. A recipient that sees a jump knows it missed a
+      // frame — which, for an index-addressed patch, is the difference between
+      // recovering and silently rendering the wrong transcript.
+      expect(revisions.length).toBeGreaterThan(1);
+      expect(revisions).toEqual(revisions.map((_, index) => index + 1));
+
+      // The transcript carries the same revision the last frame announced, so
+      // a client that recovers by refetching can rejoin the patch stream.
+      const finalMessage = getSessionMessages(session.id).find((m) => m.role === "assistant")!;
+      expect(finalMessage.revision).toBe(revisions[revisions.length - 1]);
+    } finally {
+      stop();
+    }
+  });
+
+  test("bounds the payloads a session retains for the rest of its life", async () => {
+    const session = createSession("budget");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "Write a big file and read a big result");
+    const call = await nextQueryCall();
+
+    // Both fields that are unbounded by construction: the whole contents of a
+    // written file, and whatever a tool chose to return.
+    const hugeFile = "f".repeat(MAX_DIFF_SIDE_BYTES + 5_000);
+    const hugeOutput = "o".repeat(MAX_TOOL_TEXT_BYTES + 5_000);
+
+    call.push({
+      type: "assistant",
+      message: {
+        id: "budget-1",
+        content: [
+          {
+            type: "tool_use",
+            id: "write-1",
+            name: "Write",
+            input: { file_path: "/big.ts", content: hugeFile },
+          },
+        ],
+      },
+    });
+    call.push({
+      type: "user",
+      message: {
+        content: [{ type: "tool_result", tool_use_id: "write-1", content: hugeOutput }],
+      },
+    });
+    await waitFor(() =>
+      getSessionMessages(session.id).some((message) =>
+        message.parts.some((part) => part.toolUseId === "write-1" && part.toolOutput),
+      ),
+    );
+
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    const part = getSessionMessages(session.id)
+      .flatMap((message) => message.parts)
+      .find((candidate) => candidate.toolUseId === "write-1")!;
+
+    // Capped, not dropped: the head survives so the transcript still shows what
+    // happened, and the marker says why the tail is missing.
+    expect(part.toolOutput).toEndWith(TRUNCATED_NOTICE);
+    expect(Buffer.byteLength(part.toolOutput!, "utf8")).toBeLessThan(
+      MAX_TOOL_TEXT_BYTES + TRUNCATED_NOTICE.length + 8,
+    );
+    expect(part.toolDiff?.after).toEndWith(TRUNCATED_NOTICE);
+    expect(Buffer.byteLength(part.toolDiff!.after!, "utf8")).toBeLessThan(
+      MAX_DIFF_SIDE_BYTES + TRUNCATED_NOTICE.length + 8,
+    );
+    expect(part.toolDiff?.filePath).toBe("/big.ts");
   });
 
   test("a non-delta message observes every delta that preceded it", async () => {

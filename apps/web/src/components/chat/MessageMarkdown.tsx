@@ -1,6 +1,7 @@
 import {
   Children,
   isValidElement,
+  memo,
   useCallback,
   useMemo,
   type AnchorHTMLAttributes,
@@ -167,7 +168,19 @@ interface MessageMarkdownProps {
   enableBreaks?: boolean;
 }
 
-export function MessageMarkdown({
+/**
+ * Memoized: a streaming turn re-renders its whole message roughly ten times a
+ * second, and every render would otherwise re-run remark over *every* block —
+ * including the ones that finished streaming minutes ago. remark costs ~10ms
+ * for a 9KB block, so a handful of completed blocks alone can burn a large
+ * fraction of a core on output that cannot have changed.
+ *
+ * Memoizing on `content` is only sound because callers pass a stable
+ * `components` map (`markdownComponents` in NativeMessage is module-level).
+ * An inline object literal there would defeat this silently, so keep those
+ * maps hoisted out of render.
+ */
+export const MessageMarkdown = memo(function MessageMarkdown({
   content,
   components,
   className,
@@ -189,4 +202,4 @@ export function MessageMarkdown({
       </Markdown>
     </div>
   );
-}
+});

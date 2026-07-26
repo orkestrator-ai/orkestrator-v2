@@ -24,7 +24,12 @@ import {
   getSlashCommands,
   subscribeToEvents,
   SessionNotFoundError,
+  applyClaudeMessagePatch,
+  contentFromParts,
   type ClaudeClient,
+  type ClaudeMessage,
+  type ClaudeMessagePart,
+  type ClaudeMessagePatch,
 } from "./claude-client";
 import { StructuredOutputReadUnavailableError } from "@orkestrator/protocol/structured-output";
 
@@ -498,6 +503,10 @@ describe("claude-client", () => {
         this.listeners.set(type, listener);
       }
 
+      get subscribedTypes(): string[] {
+        return [...this.listeners.keys()];
+      }
+
       emit(type: string, data: unknown) {
         this.listeners.get(type)?.({
           type,
@@ -532,6 +541,58 @@ describe("claude-client", () => {
 
       await expect(pending).rejects.toThrow("SSE connection error");
       expect(MockEventSource.latest?.close).toHaveBeenCalledTimes(1);
+    });
+
+    test("subscribes to every event type the bridge emits", async () => {
+      // An EventSource only delivers the named types it listened for, so a
+      // type missing here is silently dropped — which for `message.patched`
+      // would freeze a transcript after its first frame.
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+      const subscribed = MockEventSource.latest!.subscribedTypes;
+
+      for (const type of [
+        "connected",
+        "keepalive",
+        "session.updated",
+        "session.idle",
+        "session.error",
+        "session.init",
+        "session.title-updated",
+        "session.structured-output",
+        "message.updated",
+        "message.patched",
+        "question.asked",
+        "question.answered",
+        "plan.enter-requested",
+        "plan.exit-requested",
+        "plan.approval-requested",
+        "plan.approval-responded",
+        "system.compact",
+        "system.message",
+      ]) {
+        expect(subscribed).toContain(type);
+      }
+
+      await iterator.return?.();
+    });
+
+    test("yields a patch frame with its revision intact", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+      MockEventSource.latest!.emit("message.patched", {
+        sessionId: "s-1",
+        messageId: "m-1",
+        partCount: 1,
+        changedParts: [{ index: 0, part: { type: "text", content: "streamed" } }],
+        timestamp: "2026-07-20T12:00:00.000Z",
+        revision: 7,
+      });
+
+      const next = await iterator.next();
+      expect(next.value.type).toBe("message.patched");
+      expect(next.value.data).toMatchObject({ messageId: "m-1", revision: 7 });
+      await iterator.return?.();
     });
   });
 
@@ -656,6 +717,214 @@ describe("claude-client", () => {
       expect(error.name).toBe("SessionNotFoundError");
       expect(error.message).toBe("Session not found: s-42");
       expect(error).toBeInstanceOf(Error);
+    });
+  });
+
+  describe("contentFromParts", () => {
+    test("concatenates only the text parts", () => {
+      expect(
+        contentFromParts([
+          { type: "text", content: "a" },
+          { type: "thinking", content: "IGNORED" },
+          { type: "tool-invocation", toolName: "Read" },
+          { type: "text", content: "b" },
+        ]),
+      ).toBe("ab");
+    });
+
+    test("treats a text part with no content as empty rather than 'undefined'", () => {
+      // A streamed block starts with no content at all; stringifying it would
+      // put the literal word "undefined" into the transcript.
+      expect(contentFromParts([{ type: "text" }, { type: "text", content: "x" }])).toBe("x");
+    });
+
+    test("returns an empty string for no parts", () => {
+      expect(contentFromParts([])).toBe("");
+    });
+  });
+
+  describe("applyClaudeMessagePatch", () => {
+    const base: ClaudeMessage = {
+      id: "m-1",
+      role: "assistant",
+      content: "hello",
+      parts: [
+        { type: "text", content: "hello" },
+        { type: "tool-invocation", toolName: "Read", toolUseId: "t-1", toolState: "pending" },
+      ],
+      timestamp: "2026-07-20T12:00:00.000Z",
+      revision: 4,
+    };
+
+    /** A well-formed patch that is the immediate successor of `base`. */
+    const nextPatch = (overrides: Partial<ClaudeMessagePatch> = {}): ClaudeMessagePatch => ({
+      messageId: "m-1",
+      partCount: 2,
+      changedParts: [{ index: 0, part: { type: "text", content: "hello there" } }],
+      timestamp: "2026-07-20T12:00:01.000Z",
+      revision: 5,
+      ...overrides,
+    });
+
+    test("replaces only the indexed parts and leaves the rest untouched", () => {
+      const patched = applyClaudeMessagePatch(base, nextPatch())!;
+
+      expect(patched.parts[0]).toEqual({ type: "text", content: "hello there" });
+      // The tool part was not in the patch, so it must survive by identity.
+      expect(patched.parts[1]).toBe(base.parts[1]);
+      // And the original message is not mutated in place.
+      expect(base.parts[0]).toEqual({ type: "text", content: "hello" });
+    });
+
+    test("derives content from the text parts so patches need not resend it", () => {
+      const patched = applyClaudeMessagePatch(
+        base,
+        nextPatch({
+          partCount: 3,
+          changedParts: [{ index: 2, part: { type: "text", content: " and more" } }],
+        }),
+      )!;
+
+      expect(patched.content).toBe("hello and more");
+      expect(patched.content).toBe(contentFromParts(patched.parts));
+    });
+
+    test("appends beyond the current length", () => {
+      const patched = applyClaudeMessagePatch(
+        base,
+        nextPatch({
+          partCount: 3,
+          changedParts: [{ index: 2, part: { type: "thinking", content: "pondering" } }],
+        }),
+      )!;
+
+      expect(patched.parts).toHaveLength(3);
+      expect(patched.parts[2]).toEqual({ type: "thinking", content: "pondering" });
+    });
+
+    test("truncates to partCount when a finalized message replaces streamed blocks", () => {
+      const patched = applyClaudeMessagePatch(
+        base,
+        nextPatch({
+          partCount: 1,
+          changedParts: [{ index: 0, part: { type: "text", content: "final" } }],
+        }),
+      )!;
+
+      expect(patched.parts).toHaveLength(1);
+      expect(patched.content).toBe("final");
+    });
+
+    test("advances the stored revision so the next patch can build on it", () => {
+      const patched = applyClaudeMessagePatch(base, nextPatch())!;
+      expect(patched.revision).toBe(5);
+
+      // And that result is a valid base for revision 6.
+      expect(applyClaudeMessagePatch(patched, nextPatch({ revision: 6 }))).not.toBeNull();
+    });
+
+    describe("rejects a patch it cannot safely apply", () => {
+      test("when frames were missed — the revision is not the immediate successor", () => {
+        // The reconnect case: the tab holds revision 4 but the bridge has moved
+        // on. Applying by index here would drop everything sent in between,
+        // and the bridge will never re-send it. Rejecting forces a refetch.
+        expect(applyClaudeMessagePatch(base, nextPatch({ revision: 9 }))).toBeNull();
+        // Also a replay of a revision already applied.
+        expect(applyClaudeMessagePatch(base, nextPatch({ revision: 4 }))).toBeNull();
+        expect(applyClaudeMessagePatch(base, nextPatch({ revision: 3 }))).toBeNull();
+      });
+
+      test("when the message carries no revision at all", () => {
+        const unversioned: ClaudeMessage = { ...base, revision: undefined };
+        expect(applyClaudeMessagePatch(unversioned, nextPatch({ revision: 1 }))).toBeNull();
+      });
+
+      test("when the payload would leave a hole in the parts array", () => {
+        // Second line of defence behind the revision check: a blank block is
+        // indistinguishable from real empty output once rendered, so reject
+        // rather than paper over the gap.
+        expect(
+          applyClaudeMessagePatch(
+            base,
+            nextPatch({
+              partCount: 4,
+              changedParts: [{ index: 3, part: { type: "text", content: "far" } }],
+            }),
+          ),
+        ).toBeNull();
+      });
+
+      test("when changedParts is missing or not an array", () => {
+        // This arrives as JSON from a subprocess. An unchecked iteration would
+        // throw out of the SSE loop and tear down the whole subscription.
+        expect(
+          applyClaudeMessagePatch(
+            base,
+            nextPatch({ changedParts: undefined as unknown as ClaudeMessagePatch["changedParts"] }),
+          ),
+        ).toBeNull();
+        expect(
+          applyClaudeMessagePatch(
+            base,
+            nextPatch({ changedParts: "nope" as unknown as ClaudeMessagePatch["changedParts"] }),
+          ),
+        ).toBeNull();
+      });
+
+      test("when partCount is absent, negative or not an integer", () => {
+        // `parts.length = <these>` throws a RangeError.
+        for (const partCount of [undefined, -1, 1.5, Number.NaN, "2"]) {
+          expect(
+            applyClaudeMessagePatch(
+              base,
+              nextPatch({ partCount: partCount as unknown as number }),
+            ),
+          ).toBeNull();
+        }
+      });
+
+      test("when an index is out of range or not an integer", () => {
+        for (const index of [-1, 2, 0.5, undefined]) {
+          expect(
+            applyClaudeMessagePatch(
+              base,
+              nextPatch({
+                partCount: 2,
+                changedParts: [
+                  { index: index as unknown as number, part: { type: "text", content: "x" } },
+                ],
+              }),
+            ),
+          ).toBeNull();
+        }
+      });
+
+      test("when a changed entry carries no part object", () => {
+        expect(
+          applyClaudeMessagePatch(
+            base,
+            nextPatch({
+              changedParts: [
+                { index: 0, part: undefined as unknown as ClaudeMessagePart },
+              ],
+            }),
+          ),
+        ).toBeNull();
+        expect(
+          applyClaudeMessagePatch(
+            base,
+            nextPatch({
+              changedParts: [null as unknown as { index: number; part: ClaudeMessagePart }],
+            }),
+          ),
+        ).toBeNull();
+      });
+
+      test("when the payload is not an object at all", () => {
+        expect(
+          applyClaudeMessagePatch(base, undefined as unknown as ClaudeMessagePatch),
+        ).toBeNull();
+      });
     });
   });
 });

@@ -23,6 +23,7 @@ import {
   createSession,
   getSessionMessages,
   getSessionStatus,
+  getStructuredOutput,
   sendPrompt,
   type CodexClient,
   type CodexMessage,
@@ -53,6 +54,16 @@ import {
   updatePipelineKanbanPrMetadata,
 } from "@/lib/build-pipeline-source";
 import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
+import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
+import {
+  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+  type StructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
+import {
+  readValidatedBuildReview,
+  structuredReviewHasFindings,
+} from "@/lib/build-pipeline-structured-review";
+import { hideRawStructuredReviewMessages } from "@/lib/structured-review-messages";
 
 interface CodexBuildChatTabProps {
   data: BuildTabData;
@@ -349,7 +360,12 @@ type BuildRow =
       sessionPhase: string;
       messageIndex: number;
     }
-  | { kind: "loading"; key: string };
+  | { kind: "loading"; key: string }
+  | {
+      kind: "structured-review";
+      key: string;
+      report: StructuredReviewReport;
+    };
 
 export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
   const { environmentId, pipelineId, isLocal } = data;
@@ -373,6 +389,8 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     markSessionIdle,
     markSessionRunning,
     setVerificationResult,
+    beginStructuredReview,
+    setStructuredReview,
     incrementIteration,
     setPipelineError,
     beginReconnect,
@@ -476,7 +494,10 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         return true;
       });
 
-      const displayMessages = filtered.map(normalizeCodexNativeMessage);
+      const normalizedMessages = filtered.map(normalizeCodexNativeMessage);
+      const displayMessages = phase === "review"
+        ? hideRawStructuredReviewMessages(normalizedMessages)
+        : normalizedMessages;
 
       displayMessages.forEach((message, index) => {
         rows.push({
@@ -494,8 +515,15 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         rows.push({ kind: "loading", key: `loading-${pipelineSession.sessionKey}` });
       }
     });
+    if (pipeline?.structuredReview) {
+      rows.push({
+        kind: "structured-review",
+        key: `structured-review-${pipeline.iteration}`,
+        report: pipeline.structuredReview,
+      });
+    }
     return rows;
-  }, [allSessionMessages]);
+  }, [allSessionMessages, pipeline?.iteration, pipeline?.structuredReview]);
 
   const renderBuildRow = useCallback((row: BuildRow): ReactNode => {
     if (row.kind === "divider") {
@@ -510,6 +538,13 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
               <span className="text-xs">Codex is working...</span>
             </div>
           </div>
+        </div>
+      );
+    }
+    if (row.kind === "structured-review") {
+      return (
+        <div className="mx-auto w-full max-w-5xl px-4 py-4">
+          <StructuredReviewReportView report={row.report} />
         </div>
       );
     }
@@ -680,6 +715,8 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         useTaskImages: boolean;
         attachments?: CodexPromptAttachment[];
         requestId?: string;
+        outputSchema?: Record<string, unknown>;
+        structuredReview?: boolean;
       },
     ) => {
       const attemptId = createUuid();
@@ -691,6 +728,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         phase: options.phase,
         prompt,
         useTaskImages: options.useTaskImages,
+        ...(options.structuredReview ? { structuredReview: true } : {}),
         startedAt: new Date().toISOString(),
       });
       if (!ownsAttempt) return false;
@@ -699,6 +737,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         const sent = await sendPrompt(activeClient, sdkSessionId, prompt, {
           attachments: options.attachments,
           requestId,
+          outputSchema: options.outputSchema,
         });
         if (classifyCodexPromptOutcome(sent) !== "unknown") return sent;
 
@@ -782,13 +821,25 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       if (isPipelinePaused()) return;
 
       const targetBranch = config.repositories[currentPipeline.projectId]?.prBaseBranch || "main";
-      const prompt = createBuildReviewPrompt(task, projectNotes, targetBranch);
+      const prompt = createBuildReviewPrompt(
+        task,
+        projectNotes,
+        targetBranch,
+        config.global.reviewInstruction,
+      );
       appendCodexMessage(result.sessionKey, buildUserMessage(prompt));
 
       const success = await sendPromptWithDispatchGuard(activeClient, result.sdkSessionId, prompt, {
         phase: "reviewing",
         useTaskImages: true,
         attachments: taskImagesToAttachments(task.images),
+        requestId: (() => {
+          const requestId = createUuid();
+          beginStructuredReview(pipelineId, requestId);
+          return requestId;
+        })(),
+        outputSchema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+        structuredReview: true,
       });
 
       if (!wasCodexPromptAccepted(success)) {
@@ -799,7 +850,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         setPipelineError(pipelineId, message);
       }
     },
-    [client, config.repositories, createPipelineSession, initializeClient, isPipelinePaused, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
+    [beginStructuredReview, client, config.global.reviewInstruction, config.repositories, createPipelineSession, initializeClient, isPipelinePaused, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
   );
 
   const startVerifySession = useCallback(
@@ -1012,7 +1063,10 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         return { pipelines: next };
       });
 
-      const prompt = createAddressIssuesPrompt();
+      if (!currentPipeline.structuredReview) {
+        throw new Error("Cannot address review findings before structured validation.");
+      }
+      const prompt = createAddressIssuesPrompt(currentPipeline.structuredReview);
       appendCodexMessage(reviewSession.sessionKey, buildUserMessage(prompt));
       setSessionLoading(reviewSession.sessionKey, true);
 
@@ -1040,7 +1094,26 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
             await startReviewSession(currentPipeline);
             break;
           case "review":
-            await sendAddressIssuesMessage(currentPipeline, completedSession);
+            {
+              const activeClient = client ?? await initializeClient();
+              const persisted = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+              const report = await readValidatedBuildReview(() =>
+                getStructuredOutput(
+                  activeClient,
+                  completedSession.sdkSessionId,
+                  persisted?.structuredReviewRequestId,
+                )
+              );
+              setStructuredReview(pipelineId, report);
+              if (structuredReviewHasFindings(report)) {
+                await sendAddressIssuesMessage(
+                  { ...currentPipeline, structuredReview: report },
+                  completedSession,
+                );
+              } else {
+                await startVerifySession({ ...currentPipeline, structuredReview: report });
+              }
+            }
             break;
           case "fix":
             await startReviewSession(currentPipeline);
@@ -1140,11 +1213,13 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       setPhase,
       setPipelineError,
       setVerificationResult,
+      setStructuredReview,
       sendAddressIssuesMessage,
       startFixSession,
       startPRSession,
       startResolveConflictsSession,
       startReviewSession,
+      startVerifySession,
     ],
   );
 
@@ -1548,6 +1623,11 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     const resumedPhase = resumePipeline(pipelineId, resumePhase);
     if (!resumedPhase) return;
 
+    if (resumedPhase === "reviewing") {
+      await startReviewSession(pipeline);
+      return;
+    }
+
     const prompt = createPipelineResumePrompt(resumedPhase);
     if (!prompt) {
       setAdvanceTick((value) => value + 1);
@@ -1566,7 +1646,6 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
           }
           break;
         }
-        case "reviewing":
         case "addressing":
           await startReviewSession(pipeline);
           break;
@@ -1797,6 +1876,9 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       const success = await sendPrompt(activeClient, currentSession.sdkSessionId, context.prompt, {
         attachments,
         requestId: context.requestId,
+        outputSchema: context.structuredReview
+          ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
+          : undefined,
       });
       if (!stillOwnsReconnect()) return;
       if (!wasCodexPromptAccepted(success)) {

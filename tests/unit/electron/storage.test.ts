@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { REVIEW_PROMPT_MAX_LENGTH } from "../../../packages/protocol/src/review-prompt";
+import { REVIEW_INSTRUCTION_MAX_LENGTH } from "../../../packages/protocol/src/review-prompt";
 import {
   createEnvironment,
   createProject,
@@ -249,11 +249,11 @@ describe("Electron StorageService", () => {
     expect(await storage.getRepositoryConfig(firstProject.id)).toEqual({ defaultBranch: "develop", prBaseBranch: "release" });
     const global = defaultConfig().global;
     global.webClientEnabled = false;
-    global.reviewPrompt = "Review origin/{{targetBranch}}...HEAD.";
+    global.reviewInstruction = "Review origin/{{targetBranch}}...HEAD.";
     await storage.updateGlobalConfig(global);
     expect((await storage.loadConfig()).global).toMatchObject({
       webClientEnabled: false,
-      reviewPrompt: "Review origin/{{targetBranch}}...HEAD.",
+      reviewInstruction: "Review origin/{{targetBranch}}...HEAD.",
     });
 
     await storage.removeEnvironment(otherEnvironment.id);
@@ -262,47 +262,47 @@ describe("Electron StorageService", () => {
     await expect(storage.removeProject(secondProject.id)).rejects.toThrow("Project not found");
   });
 
-  test("round-trips and removes a custom review prompt from global config", async () => {
+  test("round-trips and removes a custom review instruction from global config", async () => {
     const dataDir = await createTempDir("ork-storage-review-prompt-");
     const storage = new StorageService(dataDir);
     await storage.init();
 
     const withPrompt = defaultConfig().global;
-    withPrompt.reviewPrompt = "Review origin/{{targetBranch}}...HEAD.";
+    withPrompt.reviewInstruction = "Review origin/{{targetBranch}}...HEAD.";
     await storage.updateGlobalConfig(withPrompt);
-    expect((await storage.loadConfig()).global.reviewPrompt).toBe(
+    expect((await storage.loadConfig()).global.reviewInstruction).toBe(
       "Review origin/{{targetBranch}}...HEAD.",
     );
 
     const withoutPrompt = { ...withPrompt };
-    delete withoutPrompt.reviewPrompt;
+    delete withoutPrompt.reviewInstruction;
     await storage.updateGlobalConfig(withoutPrompt);
 
-    expect((await storage.loadConfig()).global.reviewPrompt).toBeUndefined();
+    expect((await storage.loadConfig()).global.reviewInstruction).toBeUndefined();
     const persisted = JSON.parse(
       await fs.readFile(path.join(dataDir, "config.json"), "utf8"),
     ) as { global: Record<string, unknown> };
-    expect(Object.hasOwn(persisted.global, "reviewPrompt")).toBe(false);
+    expect(Object.hasOwn(persisted.global, "reviewInstruction")).toBe(false);
   });
 
-  test("drops malformed persisted review prompts without discarding other config", async () => {
+  test("drops malformed persisted review instructions without discarding other config", async () => {
     const dataDir = await createTempDir("ork-storage-malformed-review-prompt-");
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    for (const reviewPrompt of [
+    for (const reviewInstruction of [
       null,
       123,
       { prompt: "Review" },
       "   ",
-      "x".repeat(REVIEW_PROMPT_MAX_LENGTH + 1),
+      "x".repeat(REVIEW_INSTRUCTION_MAX_LENGTH + 1),
     ]) {
       const config = defaultConfig() as unknown as {
         global: Record<string, unknown>;
         repositories: Record<string, unknown>;
       };
       config.global.defaultAgent = "codex";
-      config.global.reviewPrompt = reviewPrompt;
+      config.global.reviewInstruction = reviewInstruction;
       await fs.writeFile(
         path.join(dataDir, "config.json"),
         `${JSON.stringify(config)}\n`,
@@ -310,32 +310,63 @@ describe("Electron StorageService", () => {
 
       const loaded = await storage.loadConfig();
       expect(loaded.global.defaultAgent).toBe("codex");
-      expect(loaded.global.reviewPrompt).toBeUndefined();
+      expect(loaded.global.reviewInstruction).toBeUndefined();
     }
   });
 
-  test("validates review prompts at save and global-update boundaries", async () => {
+  test("migrates a valid legacy review prompt without losing its content", async () => {
+    const dataDir = await createTempDir("ork-storage-review-instruction-migration-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const legacyPrompt = [
+      "Keep all of this legacy review content.",
+      "Review origin/{{targetBranch}}...HEAD.",
+      "Use an organization-specific checklist.",
+    ].join("\n");
+    const config = defaultConfig() as unknown as {
+      global: Record<string, unknown>;
+      repositories: Record<string, unknown>;
+    };
+    config.global.reviewPrompt = legacyPrompt;
+    await fs.writeFile(
+      path.join(dataDir, "config.json"),
+      `${JSON.stringify(config)}\n`,
+    );
+
+    const loaded = await storage.loadConfig();
+    expect(loaded.global.reviewInstruction).toBe(legacyPrompt);
+    expect(Object.hasOwn(loaded.global, "reviewPrompt")).toBe(false);
+
+    await storage.saveConfig(loaded);
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(dataDir, "config.json"), "utf8"),
+    ) as { global: Record<string, unknown> };
+    expect(persisted.global.reviewInstruction).toBe(legacyPrompt);
+    expect(Object.hasOwn(persisted.global, "reviewPrompt")).toBe(false);
+  });
+
+  test("validates review instructions at save and global-update boundaries", async () => {
     const dataDir = await createTempDir("ork-storage-review-validation-");
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    for (const reviewPrompt of [null, 42, {}, " ", "x".repeat(REVIEW_PROMPT_MAX_LENGTH + 1)]) {
+    for (const reviewInstruction of [null, 42, {}, " ", "x".repeat(REVIEW_INSTRUCTION_MAX_LENGTH + 1)]) {
       await expect(storage.updateGlobalConfig({
         ...defaultConfig().global,
-        reviewPrompt,
-      } as never)).rejects.toThrow("Review prompt");
+        reviewInstruction,
+      } as never)).rejects.toThrow("Review instruction");
     }
 
     const malformed = defaultConfig();
-    malformed.global.reviewPrompt = 42 as never;
-    await expect(storage.saveConfig(malformed)).rejects.toThrow("Review prompt must be a string");
+    malformed.global.reviewInstruction = 42 as never;
+    await expect(storage.saveConfig(malformed)).rejects.toThrow("Review instruction must be a string");
 
     await storage.updateGlobalConfig({
       ...defaultConfig().global,
-      reviewPrompt: "x".repeat(REVIEW_PROMPT_MAX_LENGTH),
+      reviewInstruction: "x".repeat(REVIEW_INSTRUCTION_MAX_LENGTH),
     });
-    expect((await storage.loadConfig()).global.reviewPrompt).toHaveLength(
-      REVIEW_PROMPT_MAX_LENGTH,
+    expect((await storage.loadConfig()).global.reviewInstruction).toHaveLength(
+      REVIEW_INSTRUCTION_MAX_LENGTH,
     );
   });
 
@@ -1059,5 +1090,358 @@ describe("Electron StorageService", () => {
 
     expect((await storage.getKanbanTasks("project-1"))[0]?.images).toEqual([]);
     await expect(fs.readdir(path.join(dataDir, "kanban-images"))).rejects.toThrow();
+  });
+
+  test("persists revisioned looped-review snapshots and recovers them after restart", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = createEnvironment("project-1", {
+      name: "looped-review",
+      environmentType: "local",
+    });
+    await storage.addEnvironment(environment);
+
+    const first = await storage.saveLoopedReviewWorkflow(
+      "workflow-1",
+      environment.id,
+      1,
+      { phase: "discovering", requestId: "request-1" },
+      0,
+    );
+    expect(first.revision).toBe(1);
+    await expect(storage.saveLoopedReviewWorkflow(
+      "workflow-1",
+      environment.id,
+      1,
+      { phase: "fixing" },
+      0,
+    )).rejects.toThrow("revision conflict");
+
+    const second = await storage.saveLoopedReviewWorkflow(
+      "workflow-1",
+      environment.id,
+      1,
+      { phase: "fixing", activePool: { issues: ["stable-1"] } },
+      1,
+    );
+    expect(second.revision).toBe(2);
+
+    const reloaded = new StorageService(dataDir);
+    await reloaded.init();
+    await expect(reloaded.getLoopedReviewWorkflow("workflow-1")).resolves.toMatchObject({
+      revision: 2,
+      environmentId: environment.id,
+      snapshot: { phase: "fixing", activePool: { issues: ["stable-1"] } },
+    });
+    await expect(reloaded.listLoopedReviewWorkflows(environment.id)).resolves.toHaveLength(1);
+    await reloaded.deleteLoopedReviewWorkflow("workflow-1");
+    await expect(reloaded.getLoopedReviewWorkflow("workflow-1")).resolves.toBeNull();
+  });
+
+  test("filters looped-review lists by environment and rejects invalid hydrate inputs", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-list-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const firstEnvironment = createEnvironment("project-1", {
+      name: "first-looped-review",
+      environmentType: "local",
+    });
+    const secondEnvironment = createEnvironment("project-1", {
+      name: "second-looped-review",
+      environmentType: "local",
+    });
+    await storage.addEnvironment(firstEnvironment);
+    await storage.addEnvironment(secondEnvironment);
+
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-first",
+      firstEnvironment.id,
+      1,
+      { id: "workflow-first", phase: "preparing" },
+      0,
+    );
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-second",
+      secondEnvironment.id,
+      1,
+      { id: "workflow-second", phase: "preparing" },
+      0,
+    );
+
+    await expect(storage.listLoopedReviewWorkflows(firstEnvironment.id))
+      .resolves.toMatchObject([{ id: "workflow-first" }]);
+    await expect(storage.listLoopedReviewWorkflows(secondEnvironment.id))
+      .resolves.toMatchObject([{ id: "workflow-second" }]);
+    await expect(storage.saveLoopedReviewWorkflow(
+      "workflow-first",
+      secondEnvironment.id,
+      1,
+      { id: "workflow-first", phase: "preparing" },
+      1,
+    )).rejects.toThrow("belongs to another environment");
+    await expect(storage.getLoopedReviewWorkflow("missing")).resolves.toBeNull();
+    await expect(storage.getLoopedReviewWorkflow(" ")).rejects.toThrow(
+      "workflow ID must not be blank",
+    );
+    await expect(storage.listLoopedReviewWorkflows("")).rejects.toThrow(
+      "environment ID must not be blank",
+    );
+    await expect(storage.saveLoopedReviewWorkflow(
+      "workflow-invalid-version",
+      firstEnvironment.id,
+      0,
+      {},
+      0,
+    )).rejects.toThrow("version must be a positive integer");
+    await expect(storage.saveLoopedReviewWorkflow(
+      "workflow-invalid-revision",
+      firstEnvironment.id,
+      1,
+      {},
+      -1,
+    )).rejects.toThrow("expected revision must be a non-negative integer");
+    await expect(storage.saveLoopedReviewWorkflow(
+      "workflow-invalid-snapshot",
+      firstEnvironment.id,
+      1,
+      [],
+      0,
+    )).rejects.toThrow("snapshot must be a JSON object");
+  });
+
+  test("serializes compare-and-swap across storage instances", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-cas-");
+    const firstStorage = new StorageService(dataDir);
+    const secondStorage = new StorageService(dataDir);
+    await Promise.all([firstStorage.init(), secondStorage.init()]);
+    const environment = createEnvironment("project-1", {
+      name: "looped-review-cas",
+      environmentType: "local",
+    });
+    await firstStorage.addEnvironment(environment);
+
+    const attempts = await Promise.allSettled([
+      firstStorage.saveLoopedReviewWorkflow(
+        "workflow-cas",
+        environment.id,
+        1,
+        { writer: "first" },
+        0,
+      ),
+      secondStorage.saveLoopedReviewWorkflow(
+        "workflow-cas",
+        environment.id,
+        1,
+        { writer: "second" },
+        0,
+      ),
+    ]);
+
+    expect(attempts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = attempts.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({ message: expect.stringContaining("revision conflict") }),
+    });
+    await expect(firstStorage.getLoopedReviewWorkflow("workflow-cas")).resolves
+      .toMatchObject({ revision: 1 });
+  });
+
+  test("recovers a looped-review snapshot from backup after file corruption", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-corrupt-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = createEnvironment("project-1", {
+      name: "looped-review-corrupt",
+      environmentType: "local",
+    });
+    await storage.addEnvironment(environment);
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-corrupt",
+      environment.id,
+      1,
+      { phase: "preparing" },
+      0,
+    );
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-corrupt",
+      environment.id,
+      1,
+      { phase: "discovering" },
+      1,
+    );
+    await fs.writeFile(path.join(dataDir, "looped-reviews.json"), "{broken", "utf8");
+
+    const restarted = new StorageService(dataDir);
+    await restarted.init();
+    await expect(restarted.getLoopedReviewWorkflow("workflow-corrupt")).resolves
+      .toMatchObject({
+        revision: 1,
+        snapshot: { phase: "preparing" },
+      });
+  });
+
+  test("ignores structurally corrupt looped-review envelopes during hydration", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-envelope-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = createEnvironment("project-1", {
+      name: "looped-review-envelope",
+      environmentType: "local",
+    });
+    await storage.addEnvironment(environment);
+    await fs.writeFile(
+      path.join(dataDir, "looped-reviews.json"),
+      JSON.stringify({
+        "wrong-key": {
+          version: 1,
+          id: "another-id",
+          environmentId: environment.id,
+          snapshot: { phase: "preparing" },
+          updatedAt: "2026-07-25T00:00:00.000Z",
+          revision: 1,
+        },
+        "primitive-snapshot": {
+          version: 1,
+          id: "primitive-snapshot",
+          environmentId: environment.id,
+          snapshot: "not-an-object",
+          updatedAt: "2026-07-25T00:00:00.000Z",
+          revision: 1,
+        },
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    await expect(storage.getLoopedReviewWorkflow("wrong-key")).resolves.toBeNull();
+    await expect(storage.getLoopedReviewWorkflow("primitive-snapshot")).resolves.toBeNull();
+    await expect(storage.listLoopedReviewWorkflows(environment.id)).resolves.toEqual([]);
+
+    await expect(storage.saveLoopedReviewWorkflow(
+      "wrong-key",
+      environment.id,
+      1,
+      { phase: "preparing" },
+      0,
+    )).resolves.toMatchObject({ id: "wrong-key", revision: 1 });
+    await expect(storage.listLoopedReviewWorkflows(environment.id)).resolves
+      .toMatchObject([{ id: "wrong-key" }]);
+  });
+
+  test("rejects unsafe looped-review persistence instead of truncating it", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-invalid-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = createEnvironment("project-1", {
+      name: "looped-review-invalid",
+      environmentType: "local",
+    });
+    await storage.addEnvironment(environment);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    await expect(storage.saveLoopedReviewWorkflow(
+      "workflow-invalid",
+      environment.id,
+      1,
+      circular,
+      0,
+    )).rejects.toThrow("JSON serializable");
+    await expect(storage.getLoopedReviewWorkflow("workflow-invalid")).resolves.toBeNull();
+
+    await expect(storage.saveLoopedReviewWorkflow(
+      "workflow-oversized",
+      environment.id,
+      1,
+      { completeDiff: "x".repeat(32 * 1024 * 1024) },
+      0,
+    )).rejects.toThrow("exceeds the 32 MB limit");
+    await expect(storage.getLoopedReviewWorkflow("workflow-oversized")).resolves.toBeNull();
+  });
+
+  test("restricts looped-review snapshots and their backups to the current user", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-sensitive-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = createEnvironment("project-1", {
+      name: "looped-review-sensitive",
+      environmentType: "local",
+    });
+    await storage.addEnvironment(environment);
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-sensitive",
+      environment.id,
+      1,
+      { package: { completeDiff: "private review material" } },
+      0,
+    );
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-sensitive",
+      environment.id,
+      1,
+      { package: { completeDiff: "updated private review material" } },
+      1,
+    );
+
+    const primaryMode = (await fs.stat(path.join(dataDir, "looped-reviews.json"))).mode & 0o777;
+    const backupMode = (await fs.stat(path.join(dataDir, "looped-reviews.json.bak.1"))).mode & 0o777;
+    expect(primaryMode).toBe(0o600);
+    expect(backupMode).toBe(0o600);
+  });
+
+  test("deletes every workflow and retained backup for one environment", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-cascade-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const deletedEnvironment = createEnvironment("project-1", {
+      name: "looped-review-deleted",
+      environmentType: "local",
+    });
+    const retainedEnvironment = createEnvironment("project-1", {
+      name: "looped-review-retained",
+      environmentType: "local",
+    });
+    await storage.addEnvironment(deletedEnvironment);
+    await storage.addEnvironment(retainedEnvironment);
+    const privateMarker = "deleted-environment-private-review-material";
+
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-deleted",
+      deletedEnvironment.id,
+      1,
+      { completeDiff: privateMarker },
+      0,
+    );
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-retained",
+      retainedEnvironment.id,
+      1,
+      { completeDiff: "retained material" },
+      0,
+    );
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-deleted",
+      deletedEnvironment.id,
+      1,
+      { completeDiff: `${privateMarker}-updated` },
+      1,
+    );
+
+    await storage.deleteLoopedReviewWorkflowsByEnvironment(
+      deletedEnvironment.id,
+    );
+
+    await expect(storage.listLoopedReviewWorkflows(deletedEnvironment.id))
+      .resolves.toEqual([]);
+    await expect(storage.getLoopedReviewWorkflow("workflow-deleted"))
+      .resolves.toBeNull();
+    await expect(storage.listLoopedReviewWorkflows(retainedEnvironment.id))
+      .resolves.toMatchObject([{ id: "workflow-retained" }]);
+    for (const name of await fs.readdir(dataDir)) {
+      if (!name.startsWith("looped-reviews.json")) continue;
+      const contents = await fs.readFile(path.join(dataDir, name), "utf8");
+      expect(contents).not.toContain(privateMarker);
+    }
   });
 });

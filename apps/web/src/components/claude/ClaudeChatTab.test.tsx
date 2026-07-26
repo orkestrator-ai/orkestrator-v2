@@ -12,6 +12,7 @@ import type {
   ClaudeQuestionRequest,
 } from "@/lib/claude-client";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -47,7 +48,21 @@ const mockGetPendingPlanApprovals = mock(
   async (): Promise<ClaudePlanApprovalRequest[]> => [],
 );
 const mockCheckHealth = mock(async () => true);
-const mockSendPrompt = mock(async () => {});
+const mockSendPrompt = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _prompt: string,
+    _options?: { requestId?: string; outputSchema?: unknown },
+  ) => Promise<boolean>
+>(async () => true);
+const mockGetStructuredOutput = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _requestId?: string,
+  ) => Promise<any>
+>(async () => null);
 const mockAbortSession = mock(async () => true);
 const mockSubscribeToEvents = mock(
   (_client: unknown, _signal?: AbortSignal): AsyncIterable<ClaudeEvent> =>
@@ -97,6 +112,7 @@ mock.module("@/lib/claude-client", () => ({
   getPendingQuestions: mockGetPendingQuestions,
   getPendingPlanApprovals: mockGetPendingPlanApprovals,
   sendPrompt: mockSendPrompt,
+  getStructuredOutput: mockGetStructuredOutput,
   abortSession: mockAbortSession,
   subscribeToEvents: mockSubscribeToEvents,
   checkHealth: mockCheckHealth,
@@ -165,7 +181,7 @@ function createData(overrides: Partial<ClaudeNativeData> = {}): ClaudeNativeData
   };
 }
 
-function seedPaneLayout(sessionId?: string) {
+function seedPaneLayout(sessionId?: string, initialPrompt?: string) {
   usePaneLayoutStore.setState({
     environments: new Map([
       [
@@ -179,6 +195,7 @@ function seedPaneLayout(sessionId?: string) {
                 id: TAB_ID,
                 type: "claude-native",
                 claudeNativeData: createData({ sessionId }),
+                initialPrompt,
               },
             ],
             activeTabId: TAB_ID,
@@ -344,7 +361,10 @@ describe("ClaudeChatTab", () => {
     mockGetPendingPlanApprovals.mockReset();
     mockGetPendingPlanApprovals.mockResolvedValue([]);
     mockCheckHealth.mockClear();
-    mockSendPrompt.mockClear();
+    mockSendPrompt.mockReset();
+    mockSendPrompt.mockResolvedValue(true);
+    mockGetStructuredOutput.mockReset();
+    mockGetStructuredOutput.mockResolvedValue(null);
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => true);
     mockSubscribeToEvents.mockReset();
@@ -1280,6 +1300,78 @@ describe("ClaudeChatTab", () => {
       (candidate) => candidate.role === "user" && candidate.content === ADDRESS_ALL_REVIEW_PROMPT,
     );
     expect(sentMessage?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  test("retries a malformed structured review with the cleared prompt and a fresh request id", async () => {
+    const originalPrompt = "Run the structured Claude review";
+    seedPaneLayout(undefined, originalPrompt);
+    const requestIds: string[] = [];
+    mockSendPrompt.mockImplementation(async (_client, _sessionId, _prompt, options) => {
+      requestIds.push(options?.requestId ?? "");
+      queueMicrotask(() => {
+        useClaudeStore.getState().setSessionLoading(SESSION_KEY, false);
+      });
+      return true;
+    });
+    mockGetStructuredOutput.mockImplementation(
+      async (_client, _sessionId, requestId) => {
+        if (!requestId) return null;
+        if (requestId === requestIds[0]) {
+          return {
+            ok: false,
+            provider: "claude",
+            requestId,
+            error: {
+              provider: "claude",
+              code: "malformed_output",
+              message: "The first Claude structured result was malformed.",
+              retryable: true,
+              requestId,
+            },
+          };
+        }
+        if (requestId === requestIds[1]) {
+          return {
+            ok: true,
+            provider: "claude",
+            requestId,
+            value: TEST_STRUCTURED_REVIEW_REPORT,
+          };
+        }
+        return null;
+      },
+    );
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        isReviewTab
+        initialPrompt={originalPrompt}
+      />,
+    );
+
+    expect(await screen.findByText("The first Claude structured result was malformed."))
+      .toBeTruthy();
+    expect(
+      usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.initialPrompt,
+    ).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByText("Review Scope")).toBeTruthy();
+    expect(mockSendPrompt.mock.calls.map((call) => call[2])).toEqual([
+      originalPrompt,
+      originalPrompt,
+    ]);
+    expect(requestIds).toHaveLength(2);
+    expect(requestIds[1]).not.toBe(requestIds[0]);
+    expect(requestIds[1]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(mockGetStructuredOutput.mock.calls).toContainEqual([
+      MOCK_CLIENT,
+      "session-1",
+      requestIds[1],
+    ]);
   });
 
   test("queues prompts with a generated UUID while Claude is busy", async () => {

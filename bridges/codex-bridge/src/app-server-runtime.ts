@@ -77,6 +77,11 @@ import {
 } from "./session-titles.js";
 import { isMissingRolloutError } from "./app-server/errors.js";
 import type { BridgeModel } from "./models-cache.js";
+import {
+  structuredOutputFailure,
+  type JsonSchema,
+  type StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 
 export interface RuntimeSseEvent {
   type:
@@ -85,6 +90,7 @@ export interface RuntimeSseEvent {
     | "session.error"
     | "session.title-updated"
     | "message.updated"
+    | "session.structured-output"
     /** Codex is blocked on a human decision. */
     | "session.approval-requested"
     /** The approval is no longer actionable — answered, expired or withdrawn. */
@@ -197,6 +203,71 @@ const IDLE_WAIT_POLL_MS = 100;
 
 const AMBIGUOUS_DISPATCH_FAILURE_MESSAGE =
   "Codex never confirmed this turn. Check the conversation before sending it again.";
+
+type AmbiguousDispatchResolution =
+  | "attached"
+  | "recovering"
+  | "terminal"
+  | "absent";
+
+function codexStructuredOutputFailure(
+  turn: TurnAccumulator,
+): StructuredOutputResult<never> {
+  const message = turn.error?.message ?? "Codex failed to produce structured output.";
+  const marker = `${turn.error?.code ?? ""} ${message}`.toLowerCase();
+  const compactMarker = marker.replace(/[^a-z0-9]/g, "");
+  const schemaRetriesExhausted =
+    marker.includes("structured_output_retry")
+    || marker.includes("structured output retr")
+    || marker.includes("schema retr")
+    || compactMarker.includes("structuredoutputretry");
+  return structuredOutputFailure(
+    "codex",
+    turn.phase === "interrupted"
+      ? "interrupted"
+      : schemaRetriesExhausted
+        ? "schema_retry_exhausted"
+        : "provider_error",
+    message,
+    {
+      requestId: turn.requestId,
+      retryable: true,
+      details: turn.error?.code ? { code: turn.error.code } : undefined,
+    },
+  );
+}
+
+function parseCodexStructuredOutput(turn: TurnAccumulator): StructuredOutputResult {
+  if (turn.phase !== "completed") return codexStructuredOutputFailure(turn);
+  const finalAgentMessage = turn
+    .ordered()
+    .filter((entry) => entry.item?.type === "agent_message")
+    .at(-1);
+  const text = finalAgentMessage ? turn.effectiveText(finalAgentMessage) : "";
+  if (!text.trim()) {
+    return structuredOutputFailure(
+      "codex",
+      "malformed_output",
+      "Codex completed the turn without a structured final response.",
+      { requestId: turn.requestId },
+    );
+  }
+  try {
+    return {
+      ok: true,
+      provider: "codex",
+      requestId: turn.requestId,
+      value: JSON.parse(text) as unknown,
+    };
+  } catch {
+    return structuredOutputFailure(
+      "codex",
+      "malformed_output",
+      "Codex returned a final response that was not valid JSON.",
+      { requestId: turn.requestId },
+    );
+  }
+}
 
 function buildRecoveredContextPrompt(
   messages: readonly NormalizedMessage[],
@@ -467,6 +538,8 @@ export class AppServerRuntime {
         titleSource: persisted.titleSource,
         titleGenerationAttempted: Boolean(persisted.title),
         lastAcceptedRequestId: persisted.lastAcceptedRequestId,
+        structuredOutputRequestId: persisted.structuredOutputRequestId,
+        structuredOutput: persisted.structuredOutput,
         lastAccessed: Date.parse(persisted.lastAccessed),
       });
       this.lastPersistedAccess.set(
@@ -1165,6 +1238,23 @@ export class AppServerRuntime {
 
   private async finalizeTurn(context: ThreadContext, turn: TurnAccumulator): Promise<void> {
     const state = this.stateFor(context.threadId);
+    const structuredResult = turn.expectsStructuredOutput
+      ? parseCodexStructuredOutput(turn)
+      : undefined;
+    const structuredSessions = structuredResult
+      ? [...context.bridgeSessionIds]
+          .map((sessionId) => this.registry.getSession(sessionId))
+          .filter((session): session is BridgeSession =>
+            session?.structuredOutputRequestId === turn.requestId
+          )
+      : [];
+    if (structuredResult && !structuredResult.ok && turn.phase === "completed") {
+      turn.complete("failed", {
+        message: structuredResult.error.message,
+        code: structuredResult.error.code,
+        retryable: structuredResult.error.retryable,
+      });
+    }
 
     // Journal the terminal state *before* rendering. The durable "this request
     // finished" record must not wait on diff computation: a duplicate arriving in
@@ -1182,6 +1272,20 @@ export class AppServerRuntime {
     }
 
     await state.coalescer.flushNow();
+
+    if (structuredResult) {
+      for (const session of structuredSessions) {
+        session.structuredOutput = structuredResult;
+      }
+      await Promise.all(structuredSessions.map((session) => this.persistSession(session)));
+      for (const session of structuredSessions) {
+        this.options.emit({
+          type: "session.structured-output",
+          sessionId: session.id,
+          data: { structuredOutput: structuredResult },
+        });
+      }
+    }
 
     context.activeTurn = null;
     this.registry.setPhase(
@@ -1439,6 +1543,8 @@ export class AppServerRuntime {
     threadId?: string | null;
     turnId?: string;
     requestId?: string;
+    structuredOutputRequestId?: string;
+    structuredOutput?: StructuredOutputResult;
     engineGeneration: number;
   } | null {
     const session = this.registry.getSession(sessionId);
@@ -1462,7 +1568,29 @@ export class AppServerRuntime {
       threadId: session.threadId,
       turnId: context?.activeTurn?.turnId,
       requestId: context?.activeTurn?.requestId,
+      structuredOutputRequestId: session.structuredOutputRequestId,
+      structuredOutput: session.structuredOutput,
       engineGeneration: this.options.engine.info().generation,
+    };
+  }
+
+  getStructuredOutput(
+    sessionId: string,
+    requestId?: string,
+  ): { requestId?: string; structuredOutput: StructuredOutputResult | null } | null {
+    const session = this.registry.getSession(sessionId);
+    if (!session) return null;
+    void this.touchSession(sessionId);
+    if (
+      requestId
+      && session.structuredOutputRequestId
+      && requestId !== session.structuredOutputRequestId
+    ) {
+      return { requestId, structuredOutput: null };
+    }
+    return {
+      requestId: session.structuredOutputRequestId,
+      structuredOutput: session.structuredOutput ?? null,
     };
   }
 
@@ -1501,6 +1629,8 @@ export class AppServerRuntime {
           title: session.title,
           titleSource: session.titleSource,
           lastAcceptedRequestId: session.lastAcceptedRequestId,
+          structuredOutputRequestId: session.structuredOutputRequestId,
+          structuredOutput: session.structuredOutput,
         }),
       )
       .catch(() => undefined);
@@ -1602,7 +1732,12 @@ export class AppServerRuntime {
    */
   async prompt(
     sessionId: string,
-    input: { prompt: string; requestId?: string; attachments: PromptAttachmentInput[] },
+    input: {
+      prompt: string;
+      requestId?: string;
+      attachments: PromptAttachmentInput[];
+      outputSchema?: JsonSchema;
+    },
   ): Promise<
     | { ok: true; result: PromptAcceptedResult }
     | { ok: false; status: 400 | 404 | 409 | 503; error: string }
@@ -1635,7 +1770,12 @@ export class AppServerRuntime {
 
   private async dispatchPrompt(
     session: BridgeSession,
-    input: { prompt: string; requestId?: string; attachments: PromptAttachmentInput[] },
+    input: {
+      prompt: string;
+      requestId?: string;
+      attachments: PromptAttachmentInput[];
+      outputSchema?: JsonSchema;
+    },
   ): Promise<
     | { ok: true; result: PromptAcceptedResult }
     | { ok: false; status: 400 | 404 | 409 | 503; error: string }
@@ -1701,6 +1841,11 @@ export class AppServerRuntime {
       }
     }
 
+    if (input.outputSchema) {
+      session.structuredOutput = undefined;
+      session.structuredOutputRequestId = requestId;
+    }
+
     // Re-attach first: without this a detached session would fall through to
     // `thread/start` below and silently fork a second thread, orphaning the
     // conversation the user was looking at.
@@ -1729,7 +1874,11 @@ export class AppServerRuntime {
 
     // 3. Local slash commands never reach the model.
     const cwd = this.options.cwd;
-    const resolved = await this.resolveSlashCommand(session, input.prompt, cwd);
+    // Structured turns must reach the provider. A local slash-command response is
+    // plaintext and can never satisfy the caller's schema.
+    const resolved = input.outputSchema
+      ? undefined
+      : await this.resolveSlashCommand(session, input.prompt, cwd);
     if (resolved?.kind === "builtin") {
       this.emitLocalResponse(session, input.prompt, resolved.response);
       return { ok: true, result: { status: "processing", requestId } };
@@ -1796,6 +1945,7 @@ export class AppServerRuntime {
         input: engineInput,
         config: session.config,
         requestId,
+        outputSchema: input.outputSchema,
       });
 
       await this.journal.markAccepted(requestId, {
@@ -1816,6 +1966,7 @@ export class AppServerRuntime {
         requestId,
         engineGeneration: turn.engineGeneration,
         assistantMessageId: assistantMessage.id,
+        expectsStructuredOutput: input.outputSchema !== undefined,
       });
       accumulator.markRunning();
       context.activeTurn = accumulator;
@@ -1843,6 +1994,7 @@ export class AppServerRuntime {
     } catch (error) {
       context.dispatchInFlight = false;
       const classified = this.options.engine.classifyFailure(error);
+      let ambiguousResolution: AmbiguousDispatchResolution | undefined;
 
       /**
        * A rejected dispatch definitely did not run, so the session is genuinely
@@ -1854,7 +2006,64 @@ export class AppServerRuntime {
         this.registry.setPhase(context, "failed", classified.engineError.message);
         await this.journal.forget(requestId);
       } else {
-        await this.settleAmbiguousDispatch(context, requestId, assistantMessage.id);
+        ambiguousResolution = await this.settleAmbiguousDispatch(
+          context,
+          requestId,
+          assistantMessage.id,
+        );
+      }
+
+      if (
+        ambiguousResolution === "attached"
+        || ambiguousResolution === "recovering"
+      ) {
+        // A lost turn/start response is not a rejected prompt. The provider may
+        // still be executing it, so keep structured output pending and return
+        // the same accepted/processing contract as an ordinary dispatch.
+        if (ambiguousResolution === "attached") {
+          session.lastAcceptedRequestId = requestId;
+        }
+        await this.persistSession(session);
+        this.emitStatus(context);
+        return {
+          ok: true,
+          result: {
+            status: "processing",
+            requestId,
+            threadId: context.threadId,
+            ...(ambiguousResolution === "attached" && context.activeTurn
+              ? { turnId: context.activeTurn.turnId }
+              : {}),
+            duplicate: true,
+          },
+        };
+      }
+
+      if (input.outputSchema) {
+        const marker = `${classified.engineError.code ?? ""} ${classified.engineError.message}`
+          .toLowerCase();
+        const compactMarker = marker.replace(/[^a-z0-9]/g, "");
+        session.structuredOutput = structuredOutputFailure(
+          "codex",
+          (
+            marker.includes("structured") && marker.includes("retr")
+          ) || compactMarker.includes("structuredoutputretry")
+            ? "schema_retry_exhausted"
+            : "provider_error",
+          classified.engineError.message,
+          {
+            requestId,
+            details: classified.engineError.code
+              ? { code: classified.engineError.code }
+              : undefined,
+          },
+        );
+        await this.persistSession(session);
+        this.options.emit({
+          type: "session.structured-output",
+          sessionId: session.id,
+          data: { structuredOutput: session.structuredOutput },
+        });
       }
       this.emitStatus(context);
       this.options.emit({
@@ -1880,7 +2089,7 @@ export class AppServerRuntime {
     requestId: string,
     assistantMessageId: string,
     options: { forgetIfAbsent?: boolean } = {},
-  ): Promise<void> {
+  ): Promise<AmbiguousDispatchResolution> {
     this.registry.setPhase(context, "recovering");
     let accumulator = context.activeTurn;
     if (!accumulator || accumulator.requestId !== requestId) {
@@ -1890,6 +2099,9 @@ export class AppServerRuntime {
         requestId,
         engineGeneration: this.options.engine.info().generation,
         assistantMessageId,
+        expectsStructuredOutput: [...context.bridgeSessionIds].some((sessionId) =>
+          this.registry.getSession(sessionId)?.structuredOutputRequestId === requestId
+        ),
       });
       accumulator.markRunning();
       context.activeTurn = accumulator;
@@ -1909,7 +2121,7 @@ export class AppServerRuntime {
         `[codex-bridge] Could not reconcile ${requestId} on thread ${context.threadId}:`,
         error instanceof Error ? error.message : error,
       );
-      return;
+      return "recovering";
     }
 
     if (outcome.result === "attach") {
@@ -1928,7 +2140,7 @@ export class AppServerRuntime {
       this.registry.setPhase(context, "running");
       // Anything that arrived for this turn while it had no owner.
       this.drainPendingEvents(context, outcome.turnId!);
-      return;
+      return "attached";
     }
 
     this.clearRecoveryBackstop(context.threadId);
@@ -1946,7 +2158,7 @@ export class AppServerRuntime {
         AMBIGUOUS_DISPATCH_FAILURE_MESSAGE,
       );
       this.notifyThreadActivity();
-      return;
+      return "terminal";
     }
 
     // Absent: provably never executed, so release the id for a clean retry.
@@ -1960,6 +2172,7 @@ export class AppServerRuntime {
     }
     this.registry.setPhase(context, "failed", AMBIGUOUS_DISPATCH_FAILURE_MESSAGE);
     this.notifyThreadActivity();
+    return "absent";
   }
 
   /**

@@ -92,7 +92,7 @@ describe("buildReviewModelCatalog", () => {
 describe("resolveDefaultReviewTabType", () => {
   const global = useConfigStore.getState().config.global;
 
-  test("resolves Claude SDK, tmux, and terminal defaults", () => {
+  test("forces every Claude review into the SDK-native mode", () => {
     expect(resolveDefaultReviewTabType({
       defaultAgent: "claude",
       environment: { claudeMode: "native", claudeNativeBackend: "sdk" },
@@ -103,16 +103,16 @@ describe("resolveDefaultReviewTabType", () => {
       defaultAgent: "claude",
       environment: { claudeMode: "native", claudeNativeBackend: "tmux" },
       global,
-    })).toBe("claude-tmux");
+    })).toBe("claude-native");
 
     expect(resolveDefaultReviewTabType({
       defaultAgent: "claude",
       environment: { claudeMode: "terminal" },
       global,
-    })).toBe("claude-cli");
+    })).toBe("claude-native");
   });
 
-  test("resolves Codex and OpenCode modes", () => {
+  test("forces Codex and OpenCode reviews into native mode", () => {
     expect(resolveDefaultReviewTabType({
       defaultAgent: "codex",
       environment: { codexMode: "native" },
@@ -122,6 +122,6 @@ describe("resolveDefaultReviewTabType", () => {
       defaultAgent: "opencode",
       environment: { opencodeMode: "terminal" },
       global,
-    })).toBe("opencode-cli");
+    })).toBe("opencode-native");
   });
 });

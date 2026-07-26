@@ -1,6 +1,5 @@
 import type { ReviewModelCatalog, ReviewModelOption, ReviewTabType } from "@/components/review/ReviewLaunchDialog";
 import { CODEX_MODELS } from "@/lib/codex-client";
-import { resolveClaudeConfig } from "@/lib/claude-mode-resolver";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
@@ -93,21 +92,10 @@ export function resolveDefaultReviewTabType(options: {
   global: GlobalConfig;
   repositoryConfig?: RepositoryConfig;
 }): ReviewTabType {
-  const { defaultAgent, environment, global, repositoryConfig } = options;
-
-  if (defaultAgent === "claude") {
-    const resolved = resolveClaudeConfig(global, repositoryConfig, environment);
-    if (resolved.mode !== "native") return "claude-cli";
-    return resolved.nativeBackend === "tmux" ? "claude-tmux" : "claude-native";
-  }
-
-  if (defaultAgent === "opencode") {
-    return (environment?.opencodeMode ?? global.opencodeMode) === "native"
-      ? "opencode-native"
-      : "opencode-cli";
-  }
-
-  return (environment?.codexMode ?? global.codexMode) === "native"
-    ? "codex-native"
-    : "codex-cli";
+  // Reviews are always native because only native providers can enforce and
+  // return the shared structured-review schema. Environment mode preferences
+  // still govern ordinary tabs.
+  if (options.defaultAgent === "claude") return "claude-native";
+  if (options.defaultAgent === "opencode") return "opencode-native";
+  return "codex-native";
 }

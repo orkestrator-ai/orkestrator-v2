@@ -33,6 +33,7 @@ import {
   getSlashCommands,
   getSessionMessages,
   getSessionStatus,
+  getStructuredOutput,
   isCodexSessionPhase,
   lookupSessionStatus,
   parseApproval,
@@ -53,6 +54,7 @@ import {
 import { SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
+import { hideRawStructuredReviewMessages } from "@/lib/structured-review-messages";
 import { CodexComposeBar } from "./CodexComposeBar";
 import { CodexApprovalCard } from "./CodexApprovalCard";
 import { CodexPlanModeCard } from "./CodexPlanModeCard";
@@ -71,6 +73,8 @@ import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { cn } from "@/lib/utils";
 import type { CodexNativeData } from "@/types/paneLayout";
 import type { CodexAttachment } from "@/stores/codexStore";
+import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
+import { NativeStructuredReviewResult } from "@/components/review/NativeStructuredReviewResult";
 
 interface CodexChatTabProps {
   tabId: string;
@@ -170,6 +174,8 @@ export function CodexChatTab({
   const [initialPromptSent, setInitialPromptSent] = useState(false);
   const [dismissedPlanReviewMessageId, setDismissedPlanReviewMessageId] = useState<string | null>(null);
   const [isPlanTransitionPending, setIsPlanTransitionPending] = useState(false);
+  const [structuredReviewRequestId, setStructuredReviewRequestId] =
+    useState<string>();
   const lastInitTimeRef = useRef(0);
   const isInitializedRef = useRef(false);
   const isProcessingQueueRef = useRef(false);
@@ -193,6 +199,12 @@ export function CodexChatTab({
     fingerprint: string;
     requestId: string;
   } | null>(null);
+  const structuredReviewPromptRef = useRef<string | null>(
+    isReviewTab && initialPrompt ? initialPrompt : null,
+  );
+  if (isReviewTab && initialPrompt && !structuredReviewPromptRef.current) {
+    structuredReviewPromptRef.current = initialPrompt;
+  }
   /**
    * An optimistic user message whose dispatch was never confirmed.
    *
@@ -390,8 +402,13 @@ export function CodexChatTab({
     [session?.messages],
   );
   const displayMessages = useMemo(
-    () => sessionMessages.map(normalizeCodexNativeMessage),
-    [sessionMessages],
+    () => {
+      const messages = sessionMessages.map(normalizeCodexNativeMessage);
+      return isReviewTab
+        ? hideRawStructuredReviewMessages(messages)
+        : messages;
+    },
+    [isReviewTab, sessionMessages],
   );
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
@@ -527,8 +544,12 @@ export function CodexChatTab({
       text: string,
       attachments: CodexAttachment[],
       logicalRequestId?: string,
+      throwOnFailure = false,
     ) => {
-      if (!client || !session?.sessionId) return;
+      if (!client || !session?.sessionId) {
+        if (throwOnFailure) throw new Error("Codex session is unavailable.");
+        return;
+      }
 
       const fingerprint = JSON.stringify({
         text,
@@ -543,6 +564,7 @@ export function CodexChatTab({
         ?? (retryablePromptRef.current?.fingerprint === fingerprint
           ? retryablePromptRef.current.requestId
           : createUuid());
+      if (isReviewTab) setStructuredReviewRequestId(requestId);
       const userMessage = createOptimisticNativeMessage(
         `${OPTIMISTIC_MESSAGE_PREFIX}${createUuid()}`,
         text,
@@ -584,6 +606,9 @@ export function CodexChatTab({
         rawSendOutcome = await sendPrompt(client, session.sessionId, text, {
           attachments: promptAttachments.length > 0 ? promptAttachments : undefined,
           requestId,
+          outputSchema: isReviewTab
+            ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
+            : undefined,
         });
       } finally {
         dispatchInFlightRef.current -= 1;
@@ -601,6 +626,7 @@ export function CodexChatTab({
             ? `Failed to send prompt (HTTP ${sent.httpStatus})`
             : "Failed to send prompt",
         );
+        if (throwOnFailure) throw new Error("Failed to retry structured review.");
         return;
       }
 
@@ -705,6 +731,7 @@ export function CodexChatTab({
       sessionKey,
       setSessionError,
       setSessionLoading,
+      isReviewTab,
     ],
   );
 
@@ -1989,6 +2016,21 @@ export function CodexChatTab({
     tabId,
   ]);
 
+  const loadStructuredReview = useCallback(
+    () => client && session?.sessionId
+      ? getStructuredOutput(client, session.sessionId, structuredReviewRequestId)
+      : Promise.resolve(null),
+    [client, session?.sessionId, structuredReviewRequestId],
+  );
+  const retryStructuredReview = useCallback(async () => {
+    const reviewPrompt =
+      structuredReviewPromptRef.current
+      ?? session?.messages.find((message) => message.role === "user")?.content;
+    if (!reviewPrompt) throw new Error("The original review prompt is unavailable.");
+    structuredReviewPromptRef.current = reviewPrompt;
+    await handleSend(reviewPrompt, [], createUuid(), true);
+  }, [handleSend, session?.messages]);
+
   if (setupPending) {
     return (
       <SetupPendingOverlay
@@ -2097,6 +2139,14 @@ export function CodexChatTab({
                   </div>
                 </div>
               )}
+              <NativeStructuredReviewResult
+                enabled={isReviewTab}
+                sessionId={session?.sessionId}
+                resultKey={structuredReviewRequestId}
+                isLoading={session?.isLoading ?? false}
+                loadResult={loadStructuredReview}
+                onRetry={retryStructuredReview}
+              />
 
               {/* h-32 ≈ compose bar; h-80 adds room for the plan card (~230px) above it */}
               <div className={showPlanModeCard ? "h-80" : "h-32"} aria-hidden="true" />

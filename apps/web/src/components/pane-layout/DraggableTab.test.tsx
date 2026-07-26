@@ -7,6 +7,7 @@ import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
+import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 
 const realSortableSnapshot = { ...realSortable };
 const realUtilitiesSnapshot = { ...realUtilities };
@@ -55,6 +56,7 @@ describe("DraggableTab title precedence", () => {
     useClaudeStore.setState({ sessions: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
+    useLoopedReviewStore.setState({ workflows: new Map() });
   });
 
   afterEach(() => {
@@ -177,6 +179,50 @@ describe("DraggableTab title precedence", () => {
   test("browser tabs use the browser label", () => {
     renderTab({ id: "browser-a", type: "browser", browserData: { url: "" } }, 1);
     expect(screen.getByText("Browser 2")).toBeDefined();
+  });
+
+  test("looped-review tabs show their default title and workflow icon", () => {
+    const view = renderTab({
+      id: "looped-a",
+      type: "looped-review",
+      loopedReviewTabData: {
+        environmentId: "env-1",
+        workflowId: "workflow-1",
+      },
+    }, 1);
+
+    expect(screen.getByText("Looped Review 2")).toBeDefined();
+    expect(view.container.querySelector("svg.text-cyan-400")).toBeTruthy();
+  });
+
+  test("looped-review tabs reflect completed workflow state", () => {
+    const id = useLoopedReviewStore.getState().createWorkflow({
+      environmentId: "env-1",
+      projectId: "project-1",
+      agent: "codex",
+      model: "gpt-5.4",
+      targetBranch: "main",
+    });
+    useLoopedReviewStore.setState((state) => {
+      const workflows = new Map(state.workflows);
+      workflows.set(id, {
+        ...workflows.get(id)!,
+        phase: "completed",
+        pr: { status: "created", url: "https://github.com/acme/repo/pull/1" },
+      });
+      return { workflows };
+    });
+
+    renderTab({
+      id: "looped-complete",
+      type: "looped-review",
+      loopedReviewTabData: {
+        environmentId: "env-1",
+        workflowId: id,
+      },
+    });
+
+    expect(screen.getByText("Looped Review ✓")).toBeDefined();
   });
 
   test("file tab title uses the basename and ignores displayTitle", () => {

@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { TaskSnapshot } from "@/prompts";
 import { createUuid } from "@/lib/uuid";
+import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
 export type BuildPhase =
   | "creating-environment"
@@ -65,6 +66,7 @@ export interface PipelineFailureContext {
   prompt?: string;
   useTaskImages?: boolean;
   requestId?: string;
+  structuredReview?: boolean;
 }
 
 export interface PipelineReconnectAttempt {
@@ -75,6 +77,7 @@ export interface PipelineReconnectAttempt {
   prompt?: string;
   useTaskImages?: boolean;
   requestId?: string;
+  structuredReview?: boolean;
   startedAt: string;
 }
 
@@ -85,6 +88,7 @@ export interface PipelinePromptAttempt {
   phase: ResumableBuildPhase;
   prompt: string;
   useTaskImages: boolean;
+  structuredReview?: boolean;
   startedAt: string;
 }
 
@@ -102,6 +106,10 @@ export interface BuildPipeline {
   maxIterations: number;
   verificationResult?: "pass" | "fail";
   verificationFeedback?: string;
+  /** Last validated report from the authoritative provider structured channel. */
+  structuredReview?: StructuredReviewReport;
+  /** Stable provider request key, persisted for reconnect/retry recovery. */
+  structuredReviewRequestId?: string;
   pausedFromPhase?: ResumableBuildPhase;
   error?: string;
   failureContext?: PipelineFailureContext;
@@ -139,6 +147,8 @@ interface BuildPipelineState {
   markSessionIdle: (pipelineId: string, sdkSessionId: string) => void;
   setCurrentSessionIndex: (pipelineId: string, index: number) => void;
   setVerificationResult: (pipelineId: string, result: "pass" | "fail", feedback: string) => void;
+  beginStructuredReview: (pipelineId: string, requestId: string) => void;
+  setStructuredReview: (pipelineId: string, report: StructuredReviewReport) => void;
   incrementIteration: (pipelineId: string) => void;
   setPipelineError: (pipelineId: string, error: string, context?: PipelineFailureContext | null) => void;
   beginReconnect: (pipelineId: string, attempt: PipelineReconnectAttempt) => boolean;
@@ -350,6 +360,28 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
       return { pipelines: newMap };
     }),
 
+  beginStructuredReview: (pipelineId, requestId) =>
+    set((state) => {
+      const pipeline = state.pipelines.get(pipelineId);
+      if (!pipeline) return state;
+      const newMap = new Map(state.pipelines);
+      newMap.set(pipelineId, {
+        ...pipeline,
+        structuredReview: undefined,
+        structuredReviewRequestId: requestId,
+      });
+      return { pipelines: newMap };
+    }),
+
+  setStructuredReview: (pipelineId, report) =>
+    set((state) => {
+      const pipeline = state.pipelines.get(pipelineId);
+      if (!pipeline) return state;
+      const newMap = new Map(state.pipelines);
+      newMap.set(pipelineId, { ...pipeline, structuredReview: report });
+      return { pipelines: newMap };
+    }),
+
   incrementIteration: (pipelineId) =>
     set((state) => {
       const pipeline = state.pipelines.get(pipelineId);
@@ -387,6 +419,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
           || pipeline.failureContext.prompt !== context.prompt
           || pipeline.failureContext.useTaskImages !== context.useTaskImages
           || pipeline.failureContext.requestId !== context.requestId
+          || pipeline.failureContext.structuredReview !== context.structuredReview
         )
       ) {
         return state;
@@ -409,6 +442,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
         && pipeline.failureContext?.prompt === failureContext?.prompt
         && pipeline.failureContext?.useTaskImages === failureContext?.useTaskImages
         && pipeline.failureContext?.requestId === failureContext?.requestId
+        && pipeline.failureContext?.structuredReview === failureContext?.structuredReview
         && !pipeline.reconnectAttempt
         && !pipeline.pendingPromptAttempt
       ) {
@@ -441,6 +475,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
       || pipeline.failureContext.prompt !== attempt.prompt
       || pipeline.failureContext.useTaskImages !== attempt.useTaskImages
       || pipeline.failureContext.requestId !== attempt.requestId
+      || pipeline.failureContext.structuredReview !== attempt.structuredReview
     ) {
       return false;
     }
@@ -459,6 +494,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
         || latest.failureContext.prompt !== attempt.prompt
         || latest.failureContext.useTaskImages !== attempt.useTaskImages
         || latest.failureContext.requestId !== attempt.requestId
+        || latest.failureContext.structuredReview !== attempt.structuredReview
       ) {
         return state;
       }
@@ -477,6 +513,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
               prompt: attempt.prompt,
               useTaskImages: attempt.useTaskImages,
               requestId: attempt.requestId,
+              ...(attempt.structuredReview ? { structuredReview: true } : {}),
             }
           : undefined,
       });
@@ -528,6 +565,9 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
           prompt: latest.reconnectAttempt.prompt,
           useTaskImages: latest.reconnectAttempt.useTaskImages,
           requestId: latest.reconnectAttempt.requestId,
+          ...(latest.reconnectAttempt.structuredReview
+            ? { structuredReview: true }
+            : {}),
         },
         reconnectAttempt: undefined,
         pendingPromptAttempt: undefined,
@@ -572,6 +612,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
           prompt: attempt.prompt,
           useTaskImages: attempt.useTaskImages,
           requestId: attempt.requestId,
+          ...(attempt.structuredReview ? { structuredReview: true } : {}),
         },
       });
       started = true;

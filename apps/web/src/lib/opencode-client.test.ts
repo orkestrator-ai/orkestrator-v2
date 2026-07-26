@@ -14,8 +14,10 @@ import {
   getPendingQuestions,
   getSessionMessages,
   getSessionStatus,
+  getStructuredOutput,
   hasOpenCodeSubagentSession,
   listSessions,
+  lookupSessionStatus,
   mergeOpenCodeSubagentTranscript,
   normalizeOpenCodeMessage,
   normalizeOpenCodePart,
@@ -23,10 +25,12 @@ import {
   replyToPermission,
   replyToQuestion,
   sendPrompt,
+  sendStructuredPrompt,
   subscribeToEvents,
   type OpencodeClient,
   type OpenCodeMessage,
 } from "./opencode-client";
+import { StructuredOutputReadUnavailableError } from "@orkestrator/protocol/structured-output";
 
 const originalFetch = globalThis.fetch;
 
@@ -797,6 +801,55 @@ describe("opencode-client getSessionStatus", () => {
     expect(await getSessionStatus(client, "missing")).toBeNull();
   });
 
+  test("distinguishes a missing session from unavailable status transport", async () => {
+    const missing = {
+      session: {
+        status: async () => ({ data: { "another-session": { type: "idle" } } }),
+      },
+    } as unknown as OpencodeClient;
+    await expect(lookupSessionStatus(missing, "session-1")).resolves.toEqual({
+      kind: "missing",
+    });
+
+    const resolvedFailure = {
+      session: {
+        status: async () => ({
+          data: undefined,
+          error: { message: "status unavailable" },
+        }),
+      },
+    } as unknown as OpencodeClient;
+    const unavailableResponse = await lookupSessionStatus(resolvedFailure, "session-1");
+    expect(unavailableResponse.kind).toBe("unavailable");
+    if (unavailableResponse.kind === "unavailable") {
+      expect(unavailableResponse.error.message).toContain("status unavailable");
+    }
+
+    const thrownFailure = {
+      session: {
+        status: async () => {
+          throw new Error("connection lost");
+        },
+      },
+    } as unknown as OpencodeClient;
+    const unavailableTransport = await lookupSessionStatus(thrownFailure, "session-1");
+    expect(unavailableTransport.kind).toBe("unavailable");
+    if (unavailableTransport.kind === "unavailable") {
+      expect(unavailableTransport.error.message).toBe("connection lost");
+    }
+
+    const malformed = {
+      session: {
+        status: async () => ({ data: { "session-1": { type: "paused" } } }),
+      },
+    } as unknown as OpencodeClient;
+    const unavailableMalformed = await lookupSessionStatus(malformed, "session-1");
+    expect(unavailableMalformed.kind).toBe("unavailable");
+    if (unavailableMalformed.kind === "unavailable") {
+      expect(unavailableMalformed.error.message).toContain("malformed");
+    }
+  });
+
   test("surfaces resolved and thrown status failures only in strict mode", async () => {
     const resolvedFailure = {
       session: {
@@ -879,6 +932,229 @@ describe("opencode-client sendPrompt", () => {
     expect(result.error).toContain("Status: 429");
     expect(result.error).toContain("Request ID: req_123");
     expect(result.error).toContain("Raw error:");
+  });
+
+  test("passes the JSON-schema format without disabling OpenCode tools", async () => {
+    let capturedRequest: Record<string, unknown> | undefined;
+    const client = {
+      session: {
+        promptAsync: async (request: Record<string, unknown>) => {
+          capturedRequest = request;
+          return { data: undefined, error: undefined };
+        },
+      },
+    } as unknown as OpencodeClient;
+    const schema = {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: ["summary"],
+    };
+
+    const result = await sendStructuredPrompt(
+      client,
+      "session-1",
+      "Review this",
+      schema,
+      { requestId: "structured-1", retryCount: 3 },
+    );
+
+    expect(result).toEqual({ success: true, requestId: "structured-1" });
+    expect(capturedRequest).toMatchObject({
+      sessionID: "session-1",
+      messageID: "structured-1",
+      format: { type: "json_schema", schema, retryCount: 3 },
+    });
+    // Omitting `tools` preserves the server's normal agent/tool configuration.
+    expect(capturedRequest?.tools).toBeUndefined();
+  });
+
+  test("reads only OpenCode's structured field and types malformed/retry failures", async () => {
+    const successful = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: {
+                id: "structured-1",
+                role: "user",
+                format: { type: "json_schema", schema: { type: "object" } },
+              },
+              parts: [],
+            },
+            {
+              info: {
+                id: "assistant-1",
+                role: "assistant",
+                parentID: "structured-1",
+                time: { created: 1, completed: 2 },
+                structured: { summary: "Looks good" },
+              },
+              parts: [],
+            },
+          ],
+        }),
+      },
+    } as unknown as OpencodeClient;
+    expect(await getStructuredOutput(successful, "session-1", "structured-1")).toEqual({
+      ok: true,
+      provider: "opencode",
+      requestId: "structured-1",
+      value: { summary: "Looks good" },
+    });
+
+    const retryPending = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: {
+                id: "structured-old",
+                role: "user",
+                format: { type: "json_schema", schema: { type: "object" } },
+              },
+              parts: [],
+            },
+            {
+              info: {
+                id: "assistant-old",
+                role: "assistant",
+                parentID: "structured-old",
+                time: { created: 1, completed: 2 },
+                structured: { summary: "Stale result" },
+              },
+              parts: [],
+            },
+            {
+              info: {
+                id: "structured-retry",
+                role: "user",
+                format: { type: "json_schema", schema: { type: "object" } },
+              },
+              parts: [],
+            },
+          ],
+        }),
+      },
+    } as unknown as OpencodeClient;
+    expect(await getStructuredOutput(retryPending, "session-1")).toBeNull();
+    expect(
+      await getStructuredOutput(retryPending, "session-1", "structured-retry"),
+    ).toBeNull();
+
+    const plaintextOnly = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: {
+                id: "structured-2",
+                role: "user",
+                format: { type: "json_schema", schema: { type: "object" } },
+              },
+              parts: [],
+            },
+            {
+              info: {
+                id: "assistant-2",
+                role: "assistant",
+                parentID: "structured-2",
+                time: { created: 1, completed: 2 },
+              },
+              parts: [{ type: "text", text: "{\"summary\":\"not trusted\"}" }],
+            },
+          ],
+        }),
+      },
+    } as unknown as OpencodeClient;
+    expect(await getStructuredOutput(plaintextOnly, "session-1", "structured-2"))
+      .toMatchObject({
+        ok: false,
+        error: { code: "malformed_output", retryable: true },
+      });
+
+    const exhausted = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: {
+                id: "assistant-3",
+                role: "assistant",
+                parentID: "structured-3",
+                time: { created: 1, completed: 2 },
+                error: {
+                  name: "StructuredOutputError",
+                  data: { message: "Schema retries exhausted", retries: 3 },
+                },
+              },
+              parts: [],
+            },
+          ],
+        }),
+      },
+    } as unknown as OpencodeClient;
+    expect(await getStructuredOutput(exhausted, "session-1", "structured-3"))
+      .toMatchObject({
+        ok: false,
+        error: {
+          code: "schema_retry_exhausted",
+          retryable: true,
+          details: { retries: 3 },
+        },
+      });
+  });
+
+  test("keeps provider errors authoritative but throws for result-channel outages", async () => {
+    const providerFailure = {
+      session: {
+        messages: async () => ({
+          data: undefined,
+          error: {
+            name: "MessageAbortedError",
+            data: { message: "Turn was cancelled" },
+          },
+        }),
+      },
+    } as unknown as OpencodeClient;
+    await expect(
+      getStructuredOutput(providerFailure, "session-1", "structured-4"),
+    ).resolves.toMatchObject({
+      ok: false,
+      provider: "opencode",
+      requestId: "structured-4",
+      error: {
+        code: "interrupted",
+        message: "Turn was cancelled",
+      },
+    });
+
+    const unavailable = {
+      session: {
+        messages: async () => {
+          throw new Error("message history offline");
+        },
+      },
+    } as unknown as OpencodeClient;
+    const promise = getStructuredOutput(unavailable, "session-1", "structured-5");
+    await expect(promise).rejects.toBeInstanceOf(StructuredOutputReadUnavailableError);
+    await expect(promise).rejects.toMatchObject({
+      provider: "opencode",
+      requestId: "structured-5",
+      retryable: true,
+    });
+
+    const malformed = {
+      session: {
+        messages: async () => ({ data: { messages: [] } }),
+      },
+    } as unknown as OpencodeClient;
+    await expect(
+      getStructuredOutput(malformed, "session-1", "structured-6"),
+    ).resolves.toMatchObject({
+      ok: false,
+      requestId: "structured-6",
+      error: { code: "malformed_output" },
+    });
   });
 });
 

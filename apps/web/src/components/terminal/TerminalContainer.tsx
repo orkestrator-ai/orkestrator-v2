@@ -39,6 +39,8 @@ import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
 import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
+import { hydrateLoopedReviewWorkflowsForEnvironment } from "@/lib/looped-review-persistence";
 import { PaneTree } from "@/components/pane-layout";
 import { TerminalPortalHost } from "./TerminalPortalHost";
 import { InitializationLogs } from "./InitializationLogs";
@@ -804,10 +806,28 @@ export function TerminalContainer({
         return;
       } else if (hydrationStatus === undefined) {
         beginHydration(environmentId);
-        void backend.getPaneLayout(environmentId)
-          .then((saved) => {
+        void Promise.allSettled([
+          backend.getPaneLayout(environmentId),
+          hydrateLoopedReviewWorkflowsForEnvironment(environmentId),
+        ])
+          .then(([layoutResult, workflowResult]) => {
             const paneStore = usePaneLayoutStore.getState();
             if (paneStore.hydration.get(environmentId) !== "pending") return;
+
+            if (workflowResult.status === "rejected") {
+              console.warn(
+                "[TerminalContainer] Failed to restore looped reviews:",
+                workflowResult.reason,
+              );
+            }
+            if (layoutResult.status === "rejected") {
+              console.warn(
+                "[TerminalContainer] Failed to restore pane layout:",
+                layoutResult.reason,
+              );
+              paneStore.finishHydration(environmentId);
+              return;
+            }
 
             const latestEnvironment = useEnvironmentStore
               .getState()
@@ -819,22 +839,17 @@ export function TerminalContainer({
 
             const latestIsLocal = latestEnvironment.environmentType === "local";
             const latestContainerId = latestIsLocal ? null : latestEnvironment.containerId;
-            const restored = reconcilePersistedLayout(saved, {
+            const restored = reconcilePersistedLayout(layoutResult.value, {
               environmentId,
               containerId: latestContainerId,
               isLocal: latestIsLocal,
               worktreePath: latestEnvironment.worktreePath,
               hasBuildPipeline: (pipelineId) =>
                 useBuildPipelineStore.getState().pipelines.has(pipelineId),
+              hasLoopedReview: (workflowId) =>
+                useLoopedReviewStore.getState().workflows.has(workflowId),
             });
             paneStore.finishHydration(environmentId, restored ?? undefined);
-          })
-          .catch((error) => {
-            console.warn("[TerminalContainer] Failed to restore pane layout:", error);
-            const paneStore = usePaneLayoutStore.getState();
-            if (paneStore.hydration.get(environmentId) === "pending") {
-              paneStore.finishHydration(environmentId);
-            }
           });
         return;
       }
@@ -1361,23 +1376,41 @@ export function TerminalContainer({
 
   // Handler for creating new terminal tabs
   const handleCreateTab = useCallback(
-    (type: CreatableTabType, options?: CreateTabOptions) => {
+    (type: CreatableTabType, options?: CreateTabOptions): boolean => {
       // For local environments, we don't need a containerId but do need worktreePath to be set
-      if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return;
+      if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return false;
 
       const allTabs = getAllTabs(environmentId);
       if (allTabs.length >= MAX_TABS) {
         console.debug("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
-        return;
+        return false;
       }
 
       if (type === "browser") {
-        createBrowserTab(
+        return createBrowserTab(
           options?.initialUrl,
           activePaneId,
           options?.displayTitle,
         );
-        return;
+      }
+
+      if (type === "looped-review") {
+        if (!options?.loopedReviewId) {
+          console.warn("[TerminalContainer] Refusing looped-review tab without workflow ID");
+          return false;
+        }
+        const newTab: TabInfo = {
+          id: createUniqueTabId("looped-review"),
+          type: "looped-review",
+          displayTitle: options.displayTitle ?? "Looped Review",
+          loopedReviewTabData: {
+            environmentId,
+            workflowId: options.loopedReviewId,
+            isLocal: isLocalEnvironment,
+          },
+        };
+        addTab(activePaneId, newTab, environmentId);
+        return true;
       }
 
       const newTabId = createUniqueTabId("tab");
@@ -1412,7 +1445,7 @@ export function TerminalContainer({
         };
         console.debug("[TerminalContainer] Creating opencode-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         addTab(activePaneId, newTab, environmentId);
-        return;
+        return true;
       }
 
       // Native Claude mode → pick the backend (SDK or tmux) by 3-tier resolution.
@@ -1437,7 +1470,7 @@ export function TerminalContainer({
         });
         console.debug("[TerminalContainer] Creating", newTab.type, "tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         addTab(activePaneId, newTab, environmentId);
-        return;
+        return true;
       }
 
       if (shouldUseCodexNative) {
@@ -1457,7 +1490,7 @@ export function TerminalContainer({
         };
         console.debug("[TerminalContainer] Creating codex-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         addTab(activePaneId, newTab, environmentId);
-        return;
+        return true;
       }
 
       const newTab: TabInfo = {
@@ -1473,6 +1506,7 @@ export function TerminalContainer({
 
       console.debug("[TerminalContainer] Creating new tab:", newTabId, "type:", type, "for environment:", environmentId);
       addTab(activePaneId, newTab, environmentId);
+      return true;
     },
     [containerId, isEnvironmentRunning, activePaneId, addTab, getAllTabs, environmentId, opencodeMode, claudeMode, claudeNativeBackend, codexMode, isLocalEnvironmentReady, createBrowserTab]
   );

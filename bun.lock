@@ -147,6 +147,7 @@
         "@anthropic-ai/sdk": "0.111.0",
         "@hono/node-server": "^1.13.0",
         "@modelcontextprotocol/sdk": "1.29.0",
+        "@orkestrator/protocol": "workspace:*",
         "hono": "^4.6.0",
         "zod": "4.4.3",
       },
@@ -161,6 +162,7 @@
       "version": "1.0.0",
       "dependencies": {
         "@hono/node-server": "^1.13.0",
+        "@orkestrator/protocol": "workspace:*",
         "hono": "^4.6.0",
       },
       "devDependencies": {

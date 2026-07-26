@@ -28,6 +28,7 @@ import type {
   EnvironmentSetupSession,
   PersistedPaneLayout,
   ClaudeModelCatalogSnapshot,
+  PersistedLoopedReviewWorkflow,
 } from "@/types";
 import type {
   LinearCompletionCommentResult,
@@ -43,6 +44,10 @@ import type {
   GitHubIssuesSnapshot,
   GitHubIssueStatus,
 } from "@/types/github";
+import type {
+  ReviewPackage,
+  ReviewPackageFile,
+} from "@/stores/loopedReviewStore";
 
 /** PR detection result containing URL, state, and merge conflict status */
 export interface PrDetectionResult {
@@ -468,6 +473,53 @@ export async function revealInFileManager(path: string): Promise<void> {
 
 export async function getEnvironmentPrUrl(environmentId: string): Promise<string | null> {
   return invoke<string | null>("get_environment_pr_url", { environmentId });
+}
+
+export interface VerifiedEnvironmentPr {
+  url: string;
+  headRefName: string;
+  baseRefName: string;
+  state: "OPEN";
+}
+
+export async function verifyEnvironmentPr(
+  environmentId: string,
+  prUrl: string,
+  targetBranch: string,
+): Promise<VerifiedEnvironmentPr> {
+  return invoke<VerifiedEnvironmentPr>("verify_environment_pr", {
+    environmentId,
+    prUrl,
+    targetBranch,
+  });
+}
+
+export async function verifyLoopedReviewPackage(
+  environmentId: string,
+  reviewPackage: Pick<
+    ReviewPackage,
+    "targetBranch" | "baseRef" | "headRef" | "completeDiff" | "changedFiles"
+  >,
+): Promise<boolean> {
+  const changedFiles: Array<Pick<
+    ReviewPackageFile,
+    "path" | "status" | "content" | "contentSha256"
+  >> = Array.isArray(reviewPackage.changedFiles)
+    ? reviewPackage.changedFiles.map((file) => ({
+      path: file.path,
+      status: file.status,
+      content: file.content,
+      contentSha256: file.contentSha256,
+    }))
+    : [];
+  return invoke<boolean>("verify_looped_review_package", {
+    environmentId,
+    targetBranch: reviewPackage.targetBranch,
+    baseRef: reviewPackage.baseRef,
+    headRef: reviewPackage.headRef,
+    completeDiff: reviewPackage.completeDiff,
+    changedFiles,
+  });
 }
 
 export async function clearEnvironmentPr(environmentId: string): Promise<void> {
@@ -1286,6 +1338,51 @@ export async function savePaneLayout(
 
 export async function deletePaneLayout(environmentId: string): Promise<void> {
   return invoke("delete_pane_layout", { environmentId });
+}
+
+// --- Looped Code Review Workflow Commands ---
+
+export async function getLoopedReviewWorkflow<T = unknown>(
+  workflowId: string,
+): Promise<PersistedLoopedReviewWorkflow<T> | null> {
+  return invoke<PersistedLoopedReviewWorkflow<T> | null>(
+    "get_looped_review_workflow",
+    { workflowId },
+  );
+}
+
+export async function listLoopedReviewWorkflows<T = unknown>(
+  environmentId: string,
+): Promise<Array<PersistedLoopedReviewWorkflow<T>>> {
+  return invoke<Array<PersistedLoopedReviewWorkflow<T>>>(
+    "list_looped_review_workflows",
+    { environmentId },
+  );
+}
+
+export async function saveLoopedReviewWorkflow<T>(
+  workflowId: string,
+  environmentId: string,
+  version: number,
+  snapshot: T,
+  expectedRevision?: number,
+): Promise<PersistedLoopedReviewWorkflow<T>> {
+  return invoke<PersistedLoopedReviewWorkflow<T>>(
+    "save_looped_review_workflow",
+    {
+      workflowId,
+      environmentId,
+      version,
+      snapshot,
+      ...(expectedRevision === undefined ? {} : { expectedRevision }),
+    },
+  );
+}
+
+export async function deleteLoopedReviewWorkflow(
+  workflowId: string,
+): Promise<void> {
+  return invoke("delete_looped_review_workflow", { workflowId });
 }
 
 // --- Local Server Commands (for local/worktree environments) ---

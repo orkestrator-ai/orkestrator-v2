@@ -12,6 +12,7 @@ import { ClaudeChatTab } from "@/components/claude/ClaudeChatTab";
 import { ClaudeTmuxChatTab } from "@/components/claude/ClaudeTmuxChatTab";
 import { CodexChatTab } from "@/components/codex";
 import { BuildChatTab } from "@/components/build-pipeline";
+import { LoopedReviewTab } from "@/components/review/LoopedReviewTab";
 import { BrowserTab } from "@/components/browser/BrowserTab";
 import { DraggableTabBar } from "./DraggableTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
@@ -288,6 +289,23 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
               >
                 <BuildChatTab
                   data={tab.buildTabData}
+                  isActive={isTabActive && isActive}
+                />
+              </div>
+            );
+          }
+
+          if (tab.type === "looped-review" && tab.loopedReviewTabData) {
+            return (
+              <div
+                key={tab.id}
+                className={cn(
+                  "absolute inset-0",
+                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
+                )}
+              >
+                <LoopedReviewTab
+                  data={tab.loopedReviewTabData}
                   isActive={isTabActive && isActive}
                 />
               </div>

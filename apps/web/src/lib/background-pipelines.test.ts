@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { getBackgroundProcessingEnvironments } from "./background-pipelines";
 import type { BuildPipeline } from "@/stores/buildPipelineStore";
+import type { LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
 import type { Environment } from "@/types";
 
 function makeEnv(id: string, projectId = "proj-1"): Environment {
@@ -36,6 +37,17 @@ function makePipeline(
     taskTitle: `Task ${id}`,
     taskSnapshot: { title: `Task ${id}`, description: "", acceptanceCriteria: "", comments: [], images: [] },
   } as BuildPipeline;
+}
+
+function makeLoopedReview(
+  environmentId: string,
+  phase: LoopedReviewWorkflow["phase"] = "discovering",
+): LoopedReviewWorkflow {
+  return {
+    id: `looped-${environmentId}`,
+    environmentId,
+    phase,
+  } as LoopedReviewWorkflow;
 }
 
 describe("getBackgroundProcessingEnvironments", () => {
@@ -427,5 +439,42 @@ describe("getBackgroundProcessingEnvironments", () => {
 
     const ids = result.map((env) => env.id).sort();
     expect(ids).toEqual(["e1", "e2"]);
+  });
+
+  test("keeps nonterminal looped reviews mounted while their environment is inactive", () => {
+    const result = getBackgroundProcessingEnvironments(
+      new Map(),
+      [makeEnv("active"), makeEnv("reviewing")],
+      "active",
+      new Set(),
+      [],
+      [],
+      [],
+      [],
+      [],
+      [makeLoopedReview("reviewing")],
+    );
+
+    expect(result.map((environment) => environment.id)).toEqual(["reviewing"]);
+  });
+
+  test("does not keep completed or cancelled looped reviews mounted", () => {
+    const result = getBackgroundProcessingEnvironments(
+      new Map(),
+      [makeEnv("completed"), makeEnv("cancelled")],
+      null,
+      new Set(),
+      [],
+      [],
+      [],
+      [],
+      [],
+      [
+        makeLoopedReview("completed", "completed"),
+        makeLoopedReview("cancelled", "cancelled"),
+      ],
+    );
+
+    expect(result).toEqual([]);
   });
 });

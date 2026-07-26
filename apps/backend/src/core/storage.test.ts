@@ -44,9 +44,9 @@ describe("defaultConfig", () => {
     expectTypeOf<AppConfig["global"]["codexMaxConcurrentThreads"]>().toEqualTypeOf<number>();
   });
 
-  test("uses the built-in action-bar review prompt until one is saved", () => {
-    expect(defaultConfig().global.reviewPrompt).toBeUndefined();
-    expectTypeOf<AppConfig["global"]["reviewPrompt"]>().toEqualTypeOf<string | undefined>();
+  test("uses the built-in shared review instruction until one is saved", () => {
+    expect(defaultConfig().global.reviewInstruction).toBeUndefined();
+    expectTypeOf<AppConfig["global"]["reviewInstruction"]>().toEqualTypeOf<string | undefined>();
   });
 
   test("does not point defaults at any retired model id", () => {

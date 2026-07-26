@@ -14,6 +14,7 @@ import {
   createClient,
   createSession,
   getSessionMessages,
+  getStructuredOutput,
   replyToPermission,
   rejectQuestion,
   sendPrompt,
@@ -50,6 +51,13 @@ import {
   updatePipelineKanbanPrMetadata,
 } from "@/lib/build-pipeline-source";
 import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
+import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
+import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
+import {
+  readValidatedBuildReview,
+  structuredReviewHasFindings,
+} from "@/lib/build-pipeline-structured-review";
+import { hideRawStructuredReviewMessages } from "@/lib/structured-review-messages";
 
 interface OpenCodeBuildChatTabProps {
   data: BuildTabData;
@@ -103,7 +111,7 @@ function getDisplayOpenCodeBuildMessages(
   messages: OpenCodeMessage[],
   phase: string,
 ) {
-  return pinActiveNativeAgentParts(
+  const displayMessages = pinActiveNativeAgentParts(
     messages
       .filter((message, index) => {
         if ((phase === "review" || phase === "pr") && index === 0 && message.role === "user") {
@@ -113,6 +121,9 @@ function getDisplayOpenCodeBuildMessages(
       })
       .map(normalizeOpenCodeNativeMessage),
   );
+  return phase === "review"
+    ? hideRawStructuredReviewMessages(displayMessages)
+    : displayMessages;
 }
 
 function SessionDivider({ session, index }: { session: PipelineSession; index: number }) {
@@ -191,6 +202,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
   const [advanceTick, setAdvanceTick] = useState(0);
   const [connectAttempt, setConnectAttempt] = useState(0);
   const [jumpInText, setJumpInText] = useState("");
+  const [isRetryingReview, setIsRetryingReview] = useState(false);
   const jumpInTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(pipelineId));
@@ -201,6 +213,8 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     markSessionIdle,
     markSessionRunning,
     setVerificationResult,
+    beginStructuredReview,
+    setStructuredReview,
     incrementIteration,
     setPipelineError,
     pausePipeline,
@@ -536,6 +550,10 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
       text: string,
       projectId: string,
       attachments?: PromptAttachment[],
+      structured?: {
+        outputSchema: Record<string, unknown>;
+        requestId: string;
+      },
     ): Promise<boolean> => {
       if (isPipelinePaused()) return false;
       const activeClient = client ?? await initializeClient();
@@ -550,6 +568,8 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
         variant,
         mode: "build",
         attachments,
+        outputSchema: structured?.outputSchema,
+        requestId: structured?.requestId,
       });
 
       if (!result.success) {
@@ -607,19 +627,32 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
       if (isPipelinePaused()) return;
 
       const targetBranch = config.repositories[currentPipeline.projectId]?.prBaseBranch || "main";
-      const prompt = createBuildReviewPrompt(currentPipeline.taskSnapshot, projectNotes, targetBranch);
+      const prompt = createBuildReviewPrompt(
+        currentPipeline.taskSnapshot,
+        projectNotes,
+        targetBranch,
+        config.global.reviewInstruction,
+      );
       const success = await sendPipelinePrompt(
         result.sessionKey,
         result.sdkSessionId,
         prompt,
         currentPipeline.projectId,
         taskImagesToAttachments(currentPipeline.taskSnapshot.images),
+        (() => {
+          const requestId = createUuid();
+          beginStructuredReview(pipelineId, requestId);
+          return {
+            outputSchema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+            requestId,
+          };
+        })(),
       );
       if (!success) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send review prompt");
       }
     },
-    [config.repositories, createPipelineSession, isPipelinePaused, pipelineId, sendPipelinePrompt, setPhase, setPipelineError],
+    [beginStructuredReview, config.global.reviewInstruction, config.repositories, createPipelineSession, isPipelinePaused, pipelineId, sendPipelinePrompt, setPhase, setPipelineError],
   );
 
   const startVerifySession = useCallback(
@@ -787,7 +820,10 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
         return { pipelines: next };
       });
 
-      const prompt = createAddressIssuesPrompt();
+      if (!currentPipeline.structuredReview) {
+        throw new Error("Cannot address review findings before structured validation.");
+      }
+      const prompt = createAddressIssuesPrompt(currentPipeline.structuredReview);
       const success = await sendPipelinePrompt(reviewSession.sessionKey, reviewSession.sdkSessionId, prompt, currentPipeline.projectId);
       if (!success) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send address issues prompt");
@@ -805,7 +841,26 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
             await startReviewSession(currentPipeline);
             break;
           case "review":
-            await sendAddressIssuesMessage(currentPipeline, completedSession);
+            {
+              const activeClient = client ?? await initializeClient();
+              const persisted = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+              const report = await readValidatedBuildReview(() =>
+                getStructuredOutput(
+                  activeClient,
+                  completedSession.sdkSessionId,
+                  persisted?.structuredReviewRequestId,
+                )
+              );
+              setStructuredReview(pipelineId, report);
+              if (structuredReviewHasFindings(report)) {
+                await sendAddressIssuesMessage(
+                  { ...currentPipeline, structuredReview: report },
+                  completedSession,
+                );
+              } else {
+                await startVerifySession({ ...currentPipeline, structuredReview: report });
+              }
+            }
             break;
           case "fix":
             await startReviewSession(currentPipeline);
@@ -906,11 +961,13 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
       setPhase,
       setPipelineError,
       setVerificationResult,
+      setStructuredReview,
       sendAddressIssuesMessage,
       startFixSession,
       startPRSession,
       startResolveConflictsSession,
       startReviewSession,
+      startVerifySession,
     ],
   );
 
@@ -1105,6 +1162,11 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     const resumedPhase = resumePipeline(pipelineId, resumePhase);
     if (!resumedPhase) return;
 
+    if (resumedPhase === "reviewing") {
+      await startReviewSession(pipeline);
+      return;
+    }
+
     const prompt = createPipelineResumePrompt(resumedPhase);
     if (!prompt) {
       setAdvanceTick((value) => value + 1);
@@ -1123,7 +1185,6 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
           }
           break;
         }
-        case "reviewing":
         case "addressing":
           await startReviewSession(pipeline);
           break;
@@ -1190,6 +1251,25 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     startVerifySession,
     setSessionLoading,
   ]);
+
+  const handleRetryReview = useCallback(async () => {
+    const currentPipeline =
+      useBuildPipelineStore.getState().pipelines.get(pipelineId);
+    if (
+      !currentPipeline
+      || currentPipeline.phase !== "failed"
+      || currentPipeline.failureContext?.phase !== "reviewing"
+    ) {
+      return;
+    }
+
+    setIsRetryingReview(true);
+    try {
+      await startReviewSession(currentPipeline);
+    } finally {
+      setIsRetryingReview(false);
+    }
+  }, [pipelineId, startReviewSession]);
 
   const setupPending = isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady });
 
@@ -1335,7 +1415,23 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
               <span className="text-xs font-medium text-green-400">All acceptance criteria satisfied</span>
             )}
             {pipeline.phase === "failed" && (
-              <span className="max-w-[300px] truncate text-xs font-medium text-red-400">{pipeline.error}</span>
+              <>
+                <span className="max-w-[300px] truncate text-xs font-medium text-red-400">{pipeline.error}</span>
+                {pipeline.failureContext?.phase === "reviewing" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      void handleRetryReview();
+                    }}
+                    disabled={isRetryingReview}
+                    className="h-6 gap-1.5 px-2.5 text-xs"
+                  >
+                    <RefreshCw className={cn("h-3 w-3", isRetryingReview && "animate-spin")} />
+                    {isRetryingReview ? "Retrying..." : "Retry Review"}
+                  </Button>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -1382,6 +1478,11 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
                 </div>
               </div>
             ))
+          )}
+          {pipeline?.structuredReview && (
+            <div className="mx-auto w-full max-w-5xl px-4 py-4">
+              <StructuredReviewReportView report={pipeline.structuredReview} />
+            </div>
           )}
         </div>
       </div>

@@ -1,5 +1,12 @@
 import type { NativeMessage, NativeMessagePart } from "./chat/native-message-types";
 import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
+import {
+  isStructuredOutputResult,
+  structuredOutputFailure,
+  type JsonSchema,
+  type StructuredOutputResult,
+  StructuredOutputReadUnavailableError,
+} from "@orkestrator/protocol/structured-output";
 
 export interface CodexReasoningOption {
   effort: CodexReasoningEffort;
@@ -109,6 +116,8 @@ interface CodexSessionStatusResponse {
   turnId?: string;
   requestId?: string;
   engineGeneration?: number;
+  structuredOutputRequestId?: string;
+  structuredOutput?: StructuredOutputResult;
 }
 
 export interface CodexClient {
@@ -147,6 +156,8 @@ export interface CodexSessionStatus {
   /** The prompt request id this turn is executing, for reconnect reconciliation. */
   requestId?: string;
   engineGeneration?: number;
+  structuredOutputRequestId?: string;
+  structuredOutput?: StructuredOutputResult;
 }
 
 export type CodexSessionStatusLookupResult =
@@ -169,6 +180,7 @@ export interface CodexEvent {
     | "session.idle"
     | "session.error"
     | "session.title-updated"
+    | "session.structured-output"
     | "message.updated"
     | "session.approval-requested"
     | "session.approval-resolved"
@@ -656,6 +668,12 @@ export async function lookupSessionStatus(
         ...(typeof data.engineGeneration === "number"
           ? { engineGeneration: data.engineGeneration }
           : {}),
+        ...(typeof data.structuredOutputRequestId === "string"
+          ? { structuredOutputRequestId: data.structuredOutputRequestId }
+          : {}),
+        ...(isStructuredOutputResult(data.structuredOutput)
+          ? { structuredOutput: data.structuredOutput }
+          : {}),
       },
     };
   } catch (error) {
@@ -744,6 +762,7 @@ export async function sendPrompt(
   options?: {
     attachments?: CodexPromptAttachment[];
     requestId?: string;
+    outputSchema?: JsonSchema;
   },
 ): Promise<CodexPromptSendOutcome> {
   const requestId = options?.requestId ?? crypto.randomUUID();
@@ -757,6 +776,7 @@ export async function sendPrompt(
           prompt,
           attachments: options?.attachments,
           requestId,
+          outputSchema: options?.outputSchema,
         }),
       },
     );
@@ -777,6 +797,66 @@ export async function sendPrompt(
     console.error("[codex-client] Failed to send prompt:", error);
     return { outcome: "unknown", requestId };
   }
+}
+
+/**
+ * Read a completed constrained turn from bridge-owned state. `null` means the
+ * requested turn is still running (or has not been dispatched).
+ */
+export async function getStructuredOutput<T = unknown>(
+  client: CodexClient,
+  sessionId: string,
+  requestId?: string,
+): Promise<StructuredOutputResult<T> | null> {
+  let response: Response;
+  try {
+    const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
+    response = await fetchWithTimeout(
+      `${client.baseUrl}/session/${sessionId}/structured-output${query}`,
+    );
+  } catch (error) {
+    throw new StructuredOutputReadUnavailableError(
+      "codex",
+      error instanceof Error
+        ? error.message
+        : "Failed to read Codex structured output.",
+      { requestId, cause: error },
+    );
+  }
+  if (!response.ok) return null;
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return structuredOutputFailure(
+      "codex",
+      "malformed_output",
+      "Codex bridge returned malformed JSON for structured output.",
+      { requestId },
+    );
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return structuredOutputFailure(
+      "codex",
+      "malformed_output",
+      "Codex bridge returned a malformed structured-output envelope.",
+      { requestId },
+    );
+  }
+  const structuredOutput = (body as Record<string, unknown>).structuredOutput;
+  if (structuredOutput === null || structuredOutput === undefined) {
+    return null;
+  }
+  if (isStructuredOutputResult(structuredOutput)) {
+    return structuredOutput as StructuredOutputResult<T>;
+  }
+  return structuredOutputFailure(
+    "codex",
+    "malformed_output",
+    "Codex bridge returned a malformed structured-output envelope.",
+    { requestId },
+  );
 }
 
 export type CodexAbortOutcome =
@@ -956,6 +1036,7 @@ export function subscribeToEvents(
           "session.idle",
           "session.error",
           "session.title-updated",
+          "session.structured-output",
           "message.updated",
           "session.approval-requested",
           "session.approval-resolved",

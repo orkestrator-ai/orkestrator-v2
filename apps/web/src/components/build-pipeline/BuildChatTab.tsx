@@ -12,6 +12,7 @@ import {
   getModels,
   createSession,
   getSessionMessages,
+  getStructuredOutput,
   sendPrompt,
   abortSession,
   subscribeToEvents,
@@ -56,6 +57,13 @@ import {
   updatePipelineKanbanPrMetadata,
 } from "@/lib/build-pipeline-source";
 import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
+import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
+import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
+import {
+  readValidatedBuildReview,
+  structuredReviewHasFindings,
+} from "@/lib/build-pipeline-structured-review";
+import { hideRawStructuredReviewMessages } from "@/lib/structured-review-messages";
 
 const LazyCodexBuildChatTab = lazy(async () => {
   const module = await import("./CodexBuildChatTab");
@@ -131,7 +139,7 @@ function getDisplayClaudeBuildMessages(
   messages: ClaudeMessageType[],
   phase: string,
 ) {
-  return pinActiveNativeAgentParts(
+  const displayMessages = pinActiveNativeAgentParts(
     messages
       .filter((message, messageIndex) => {
         if ((phase === "review" || phase === "pr") && messageIndex === 0 && message.role === "user") {
@@ -141,6 +149,9 @@ function getDisplayClaudeBuildMessages(
       })
       .map(normalizeClaudeMessage),
   );
+  return phase === "review"
+    ? hideRawStructuredReviewMessages(displayMessages)
+    : displayMessages;
 }
 
 function SessionDivider({ session, index }: { session: PipelineSession; index: number }) {
@@ -212,6 +223,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
   const [connectAttempt, setConnectAttempt] = useState(0);
   const handledErrorIdsRef = useRef(new Set<string>());
   const [jumpInText, setJumpInText] = useState("");
+  const [isRetryingReview, setIsRetryingReview] = useState(false);
   const jumpInTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const pipeline = useBuildPipelineStore((s) => s.pipelines.get(pipelineId));
@@ -222,6 +234,8 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     markSessionIdle,
     markSessionRunning,
     setVerificationResult,
+    beginStructuredReview,
+    setStructuredReview,
     incrementIteration,
     setPipelineError,
     pausePipeline,
@@ -571,8 +585,25 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
             break;
 
           case "review":
-            // Review complete -> send "address issues" to the same session
-            await sendAddressIssuesMessage(currentPipeline, completedSession);
+            {
+              const persisted = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+              const report = await readValidatedBuildReview(() =>
+                getStructuredOutput(
+                  client,
+                  completedSession.sdkSessionId,
+                  persisted?.structuredReviewRequestId,
+                )
+              );
+              setStructuredReview(pipelineId, report);
+              if (structuredReviewHasFindings(report)) {
+                await sendAddressIssuesMessage(
+                  { ...currentPipeline, structuredReview: report },
+                  completedSession,
+                );
+              } else {
+                await startVerifySession({ ...currentPipeline, structuredReview: report });
+              }
+            }
             break;
 
           case "fix":
@@ -711,7 +742,10 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       // Set loading for the session
       setSessionLoading(reviewSession.sessionKey, true);
 
-      const addressIssuesPrompt = createAddressIssuesPrompt();
+      if (!currentPipeline.structuredReview) {
+        throw new Error("Cannot address review findings before structured validation.");
+      }
+      const addressIssuesPrompt = createAddressIssuesPrompt(currentPipeline.structuredReview);
       const userMessage: ClaudeMessageType = {
         id: createUuid(),
         role: "user",
@@ -898,7 +932,12 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
       const repoConfig = config.repositories[currentPipeline.projectId];
       const targetBranch = repoConfig?.prBaseBranch || "main";
-      const reviewPrompt = createBuildReviewPrompt(task, projectNotes, targetBranch);
+      const reviewPrompt = createBuildReviewPrompt(
+        task,
+        projectNotes,
+        targetBranch,
+        config.global.reviewInstruction,
+      );
 
       const userMessage: ClaudeMessageType = {
         id: createUuid(),
@@ -910,16 +949,20 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
       addMessage(result.sessionKey, userMessage);
 
+      const requestId = createUuid();
+      beginStructuredReview(pipelineId, requestId);
       const success = await sendPrompt(client, result.sdkSessionId, reviewPrompt, {
         permissionMode: "bypassPermissions",
         attachments: taskImagesToAttachments(task.images),
+        outputSchema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+        requestId,
       });
 
       if (!success) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send review prompt");
       }
     },
-    [client, pipelineId, config.repositories, createPipelineSession, addMessage, isPipelinePaused, setSessionLoading, setPhase, setPipelineError]
+    [client, pipelineId, config.global.reviewInstruction, config.repositories, createPipelineSession, addMessage, beginStructuredReview, isPipelinePaused, setSessionLoading, setPhase, setPipelineError]
   );
 
   // Start verification session (with ticket context)
@@ -1213,6 +1256,11 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     const resumedPhase = resumePipeline(pipelineId, resumePhase);
     if (!resumedPhase) return;
 
+    if (resumedPhase === "reviewing") {
+      await startReviewSession(pipeline);
+      return;
+    }
+
     const prompt = createPipelineResumePrompt(resumedPhase);
     if (!prompt) {
       setAdvanceTick((value) => value + 1);
@@ -1236,7 +1284,6 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
           }
           break;
         }
-        case "reviewing":
         case "addressing":
           await startReviewSession(pipeline);
           break;
@@ -1309,6 +1356,25 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     startVerifySession,
     setSessionLoading,
   ]);
+
+  const handleRetryReview = useCallback(async () => {
+    const currentPipeline =
+      useBuildPipelineStore.getState().pipelines.get(pipelineId);
+    if (
+      !currentPipeline
+      || currentPipeline.phase !== "failed"
+      || currentPipeline.failureContext?.phase !== "reviewing"
+    ) {
+      return;
+    }
+
+    setIsRetryingReview(true);
+    try {
+      await startReviewSession(currentPipeline);
+    } finally {
+      setIsRetryingReview(false);
+    }
+  }, [pipelineId, startReviewSession]);
 
   // When the bridge server is connected and environment is starting, transition to
   // waiting-for-setup. Both local and container environments must complete their setup
@@ -1560,7 +1626,23 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
               <span className="text-xs text-green-400 font-medium">All acceptance criteria satisfied</span>
             )}
             {pipeline.phase === "failed" && (
-              <span className="text-xs text-red-400 font-medium truncate max-w-[300px]">{pipeline.error}</span>
+              <>
+                <span className="text-xs text-red-400 font-medium truncate max-w-[300px]">{pipeline.error}</span>
+                {pipeline.failureContext?.phase === "reviewing" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      void handleRetryReview();
+                    }}
+                    disabled={isRetryingReview}
+                    className="h-6 px-2.5 gap-1.5 text-xs"
+                  >
+                    <RefreshCw className={cn("w-3 h-3", isRetryingReview && "animate-spin")} />
+                    {isRetryingReview ? "Retrying..." : "Retry Review"}
+                  </Button>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -1606,6 +1688,11 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
                 )}
               </div>
             ))
+          )}
+          {pipeline?.structuredReview && (
+            <div className="mx-auto w-full max-w-5xl px-4 py-4">
+              <StructuredReviewReportView report={pipeline.structuredReview} />
+            </div>
           )}
         </div>
       </div>

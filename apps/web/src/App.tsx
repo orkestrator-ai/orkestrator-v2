@@ -28,6 +28,12 @@ import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { getBackgroundProcessingEnvironments } from "@/lib/background-pipelines";
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
+import {
+  hydrateLoopedReviewWorkflowsForEnvironment,
+  startLoopedReviewPersistence,
+} from "@/lib/looped-review-persistence";
+import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
+import { LoopedReviewSupervisor } from "@/components/review/LoopedReviewSupervisor";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
@@ -66,6 +72,17 @@ function App() {
   // Monitor agent activity for ALL environments (regardless of selected project)
   useGlobalActivityMonitor();
   useEffect(() => startPaneLayoutPersistence(), []);
+  useEffect(() => startLoopedReviewPersistence(), []);
+  useEffect(() => {
+    for (const environment of environments) {
+      void hydrateLoopedReviewWorkflowsForEnvironment(environment.id).catch((error) => {
+        console.warn(
+          `[App] Failed to restore looped reviews for ${environment.id}:`,
+          error,
+        );
+      });
+    }
+  }, [environments]);
   const [claudeCliAvailable, setClaudeCliAvailable] = useState<boolean | null>(null);
   const [claudeConfigAvailable, setClaudeConfigAvailable] = useState<boolean | null>(null);
   const [opencodeCliAvailable, setOpencodeCliAvailable] = useState<boolean | null>(null);
@@ -170,6 +187,7 @@ function App() {
   // listeners, SSE subscriptions, and pipeline advancement effects continue
   // running even when the user navigates away.
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
+  const loopedReviews = useLoopedReviewStore((state) => state.workflows);
   const backgroundProcessingEnvironments = useMemo(
     () => getBackgroundProcessingEnvironments(
       pipelines,
@@ -181,6 +199,7 @@ function App() {
       loadingNativeSessionEnvironmentIds,
       queuedAgentPromptEnvironmentIds,
       pendingSetupEnvironmentIds,
+      loopedReviews.values(),
     ),
     [
       pipelines,
@@ -192,6 +211,7 @@ function App() {
       pendingInitialPromptEnvironmentIds,
       loadingNativeSessionEnvironmentIds,
       queuedAgentPromptEnvironmentIds,
+      loopedReviews,
     ],
   );
 
@@ -510,6 +530,7 @@ function App() {
     <TooltipProvider>
       <TerminalProvider>
         <AppShell>
+          <LoopedReviewSupervisor />
           <LinearPipelineCompletionMonitor />
           <GitHubPipelineCompletionMonitor />
           {selectedEnvironment ? (

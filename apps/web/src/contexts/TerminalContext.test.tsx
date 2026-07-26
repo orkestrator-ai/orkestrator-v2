@@ -39,7 +39,10 @@ describe("TerminalContext", () => {
     function Registrar() {
       const context = useTerminalContext();
       useEffect(() => {
-        context.setCreateTab((type, options) => createTab(type, options?.initialUrl));
+        context.setCreateTab((type, options) => {
+          createTab(type, options?.initialUrl);
+          return true;
+        });
         return () => context.setCreateTab(null);
       }, [context.setCreateTab]);
       return (

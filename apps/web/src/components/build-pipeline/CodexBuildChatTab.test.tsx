@@ -4,6 +4,10 @@ import {
   classifyCodexPromptOutcome as realClassifyCodexPromptOutcome,
   type CodexPromptSendOutcome,
 } from "@/lib/codex-client";
+import {
+  TEST_STRUCTURED_REVIEW_OUTPUT,
+  TEST_STRUCTURED_REVIEW_REPORT,
+} from "./structured-review-test-fixture";
 
 const mockCheckHealth = mock(async () => true);
 const mockCreateClient = mock(() => ({ baseUrl: "http://127.0.0.1:9999" }));
@@ -24,6 +28,7 @@ const mockSendPrompt = mock<
   ) => Promise<CodexPromptSendOutcome | boolean>
 >(async () => true);
 const mockAbortSession = mock(async () => true);
+const mockGetStructuredOutput = mock(async () => TEST_STRUCTURED_REVIEW_OUTPUT);
 const mockDetectPr = mock(async (): Promise<any> => null);
 const mockDetectPrLocal = mock(async (): Promise<any> => null);
 const mockGetProjectNotes = mock(async () => ({ content: "" }));
@@ -41,6 +46,7 @@ mock.module("@/lib/codex-client", () => ({
   createSession: mockCreateSession,
   getSessionMessages: mockGetSessionMessages,
   getSessionStatus: mockGetSessionStatus,
+  getStructuredOutput: mockGetStructuredOutput,
   sendPrompt: mockSendPrompt,
   // The real classifier: the component's handling of ambiguous sends is exactly
   // what these tests need to exercise, so it must not be stubbed.
@@ -488,6 +494,7 @@ function seedFailedPromptRecovery(options: {
   prompt: string;
   requestId: string;
   useTaskImages: boolean;
+  structuredReview?: boolean;
   messages?: ReturnType<typeof createTestMessage>[];
   images?: Array<{ filename: string; data: string }>;
 }) {
@@ -501,6 +508,7 @@ function seedFailedPromptRecovery(options: {
     prompt: options.prompt,
     useTaskImages: options.useTaskImages,
     requestId: options.requestId,
+    ...(options.structuredReview ? { structuredReview: true } : {}),
   };
 
   useBuildPipelineStore.setState((state) => {
@@ -1279,6 +1287,84 @@ describe("CodexBuildChatTab", () => {
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
   });
 
+  test("resuming a paused Codex review starts a fresh constrained review request", async () => {
+    seedPipeline("paused", "idle");
+    seedCodexStore(false);
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          pausedFromPhase: "reviewing",
+          structuredReviewRequestId: "stale-review-request",
+          sessions: pipeline.sessions.map((session) => ({
+            ...session,
+            phase: "review" as const,
+            label: "Review Session",
+          })),
+        }),
+      };
+    });
+    mockCreateSession.mockResolvedValueOnce({
+      sessionId: "fresh-review-session",
+      title: "Review Session",
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByText("Resume"));
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        expect.anything(),
+        "fresh-review-session",
+        expect.stringContaining("provider-enforced output schema"),
+        expect.objectContaining({
+          outputSchema: expect.objectContaining({ type: "object" }),
+          requestId: expect.any(String),
+        }),
+      );
+    });
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+    expect(pipeline?.structuredReviewRequestId).not.toBe("stale-review-request");
+    expect(pipeline?.sessions.at(-1)?.sdkSessionId).toBe("fresh-review-session");
+  });
+
+  test("hides a raw structured review carrier from the Codex build transcript", async () => {
+    seedPipeline("paused", "idle");
+    seedCodexStore(false);
+    const rawReport = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          pausedFromPhase: "reviewing",
+          sessions: pipeline.sessions.map((session) => ({
+            ...session,
+            phase: "review" as const,
+            label: "Review Session",
+          })),
+        }),
+      };
+    });
+    useCodexStore.getState().setMessages(SESSION_KEY, [{
+      id: "raw-structured-review",
+      role: "assistant",
+      content: rawReport,
+      parts: [{ type: "text", content: rawReport }],
+      createdAt: "2026-07-25T00:00:00.000Z",
+    }]);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(lastVirtualizedRows.some((row) =>
+        row.kind === "message" && row.message.content === rawReport
+      )).toBe(false);
+    });
+    expect(lastVirtualizedRows.some((row) => row.kind === "divider")).toBe(true);
+  });
+
   test("a rejected resume prompt returns the pipeline to paused and records the failure", async () => {
     seedPipeline("paused", "idle");
     seedCodexStore(false);
@@ -1985,6 +2071,7 @@ describe("CodexBuildChatTab", () => {
       prompt,
       requestId: "review-request-1",
       useTaskImages: true,
+      structuredReview: true,
       images: [{ filename: "review.webp", data: "cmV2aWV3" }],
       messages: [
         createTestMessage("old-review-prompt", "user", "Start reviewing."),
@@ -2015,6 +2102,9 @@ describe("CodexBuildChatTab", () => {
             filename: "review.webp",
           }],
           requestId: "review-request-1",
+          outputSchema: expect.objectContaining({
+            type: "object",
+          }),
         },
       );
     });

@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { FileCode, Globe2, Terminal as TerminalIcon, X, Hammer } from "lucide-react";
+import { FileCode, Globe2, Terminal as TerminalIcon, X, Hammer, Repeat2 } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
@@ -17,6 +17,7 @@ import { createDraggableTabId } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useFileDirtyStore } from "@/stores";
 import type { TabType } from "@/contexts";
 
@@ -108,6 +109,10 @@ export function DraggableTab({
     const pipeline = state.pipelines.get(tab.buildTabData.pipelineId);
     return pipeline?.taskTitle;
   });
+  const loopedReviewPhase = useLoopedReviewStore((state) => {
+    if (tab.type !== "looped-review" || !tab.loopedReviewTabData) return undefined;
+    return state.workflows.get(tab.loopedReviewTabData.workflowId)?.phase;
+  });
 
   // Check if file tab has unsaved changes
   const isDirty = useFileDirtyStore((state) =>
@@ -155,6 +160,11 @@ export function DraggableTab({
     if (isOpenCodeTab(tab.type)) return `OpenCode ${tabNumber}`;
     if (isCodexTab(tab.type)) return `Codex ${tabNumber}`;
     if (isBuildTab(tab.type)) return `Build ${tabNumber}`;
+    if (tab.type === "looped-review") {
+      return loopedReviewPhase === "completed"
+        ? `Looped Review ✓`
+        : `Looped Review ${tabNumber}`;
+    }
     if (tab.type === "browser") return `Browser ${tabNumber}`;
     if (tab.type === "root") return `ROOT ${tabNumber}`;
     return `Tab ${tabNumber}`;
@@ -179,6 +189,9 @@ export function DraggableTab({
     }
     if (isBuildTab(tab.type)) {
       return <Hammer className="h-3 w-3 shrink-0 text-yellow-400" />;
+    }
+    if (tab.type === "looped-review") {
+      return <Repeat2 className="h-3 w-3 shrink-0 text-cyan-400" />;
     }
     return <TerminalIcon className="h-3 w-3 shrink-0" />;
   };

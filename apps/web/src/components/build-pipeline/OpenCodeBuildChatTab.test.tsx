@@ -1,5 +1,9 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  TEST_STRUCTURED_REVIEW_OUTPUT,
+  TEST_STRUCTURED_REVIEW_REPORT,
+} from "./structured-review-test-fixture";
 
 const mockCreateClient = mock(() => ({ session: {}, event: {} }));
 const mockCreateSession = mock(async () => ({ id: "review-session", createdAt: "2026-04-15T00:00:00.000Z" }));
@@ -11,6 +15,7 @@ const mockSendPrompt = mock(async (
   _options: unknown,
 ): Promise<{ success: boolean; error?: string }> => ({ success: true }));
 const mockAbortSession = mock(async () => true);
+const mockGetStructuredOutput = mock(async () => TEST_STRUCTURED_REVIEW_OUTPUT);
 const mockSubscribeToEvents = mock(async () => (async function* () {})());
 const mockReplyToPermission = mock(async () => true);
 const mockRejectQuestion = mock(async () => true);
@@ -29,6 +34,7 @@ mock.module("@/lib/opencode-client", () => ({
   createClient: mockCreateClient,
   createSession: mockCreateSession,
   getSessionMessages: mockGetSessionMessages,
+  getStructuredOutput: mockGetStructuredOutput,
   rejectQuestion: mockRejectQuestion,
   replyToPermission: mockReplyToPermission,
   sendPrompt: mockSendPrompt,
@@ -1121,6 +1127,115 @@ describe("OpenCodeBuildChatTab", () => {
       expect.stringContaining("Verification is read-only"),
       expect.objectContaining({ mode: "build" }),
     );
+  });
+
+  test("resuming a paused OpenCode review starts a fresh constrained review request", async () => {
+    seedPipeline("paused", "idle");
+    seedOpenCodeStore(false);
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          pausedFromPhase: "reviewing",
+          structuredReviewRequestId: "stale-review-request",
+          sessions: pipeline.sessions.map((session) => ({
+            ...session,
+            phase: "review" as const,
+            label: "Review Session",
+          })),
+        }),
+      };
+    });
+    mockCreateSession.mockResolvedValueOnce({
+      id: "fresh-review-session",
+      createdAt: "2026-04-15T00:00:02.000Z",
+    });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByText("Resume"));
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        expect.anything(),
+        "fresh-review-session",
+        expect.stringContaining("provider-enforced output schema"),
+        expect.objectContaining({
+          outputSchema: expect.objectContaining({ type: "object" }),
+          requestId: expect.any(String),
+          mode: "build",
+        }),
+      );
+    });
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+    expect(pipeline?.structuredReviewRequestId).not.toBe("stale-review-request");
+    expect(pipeline?.sessions.at(-1)?.sdkSessionId).toBe("fresh-review-session");
+  });
+
+  test("hides a raw structured review carrier from the OpenCode build transcript", async () => {
+    seedPipeline("paused", "idle");
+    seedOpenCodeStore(false);
+    const rawReport = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          pausedFromPhase: "reviewing",
+          sessions: pipeline.sessions.map((session) => ({
+            ...session,
+            phase: "review" as const,
+            label: "Review Session",
+          })),
+        }),
+      };
+    });
+    setOpenCodeBuildMessages([{
+      id: "raw-structured-review",
+      role: "assistant",
+      content: rawReport,
+      parts: [{ type: "text", content: rawReport }],
+      createdAt: "2026-07-25T00:00:00.000Z",
+    }]);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    expect(await screen.findByText("Resume")).toBeTruthy();
+    expect(document.body.textContent).not.toContain('"reviewScope"');
+  });
+
+  test("offers a fresh structured retry after an invalid OpenCode review result", async () => {
+    seedPipelineSessionPhase("reviewing", "running", false);
+    mockGetStructuredOutput.mockResolvedValueOnce({
+      ok: true,
+      provider: "opencode",
+      value: { reviewSummary: "incomplete" },
+    } as any);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    expect(await screen.findByRole("button", { name: "Retry Review" })).toBeTruthy();
+    mockCreateSession.mockResolvedValueOnce({
+      id: "retry-review-session",
+      createdAt: "2026-04-15T00:00:03.000Z",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry Review" }));
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        expect.anything(),
+        "retry-review-session",
+        expect.any(String),
+        expect.objectContaining({
+          outputSchema: expect.objectContaining({ type: "object" }),
+          requestId: expect.any(String),
+        }),
+      );
+    });
+    expect(
+      useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)
+        ?.structuredReviewRequestId,
+    ).toBeTruthy();
   });
 
   test("restores the paused jump-in state when sending a message fails", async () => {

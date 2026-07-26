@@ -6,9 +6,9 @@ import {
   type StoredDesktopConnections,
 } from "@orkestrator/protocol/connections";
 import {
-  getReviewPromptValidationError,
-  parseReviewPrompt,
-} from "@orkestrator/protocol/review-prompt";
+  getReviewInstructionValidationError,
+  parseReviewInstruction,
+} from "@orkestrator/protocol/review-instruction";
 import {
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   isValidCodexMaxConcurrentThreads,
@@ -25,6 +25,7 @@ import type {
   PrState,
   Project,
   PersistedPaneLayout,
+  PersistedLoopedReviewWorkflow,
   RepositoryConfig,
   Session,
   SessionType,
@@ -195,6 +196,10 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
 function isPortNumber(value: unknown): value is number {
   return isPositiveInteger(value) && value <= 65_535;
 }
@@ -204,6 +209,21 @@ function isPortMapping(value: unknown): value is PortMapping {
     && isPortNumber(value.containerPort)
     && isPortNumber(value.hostPort)
     && (value.protocol === "tcp" || value.protocol === "udp");
+}
+
+function isPersistedLoopedReviewWorkflow(
+  value: unknown,
+  expectedId?: string,
+): value is PersistedLoopedReviewWorkflow {
+  return isRecord(value)
+    && isPositiveInteger(value.version)
+    && isNonBlankString(value.id)
+    && (expectedId === undefined || value.id === expectedId)
+    && isNonBlankString(value.environmentId)
+    && isRecord(value.snapshot)
+    && typeof value.updatedAt === "string"
+    && Number.isFinite(Date.parse(value.updatedAt))
+    && isPositiveInteger(value.revision);
 }
 
 function isClaudeModelCatalogSnapshot(
@@ -261,33 +281,76 @@ function validateCodexMaxConcurrentThreads(value: unknown): number {
   return value;
 }
 
-function validateConfig(value: unknown): AppConfig {
+function migrateLegacyReviewInstruction(global: JsonRecord): JsonRecord {
+  if (
+    global.reviewInstruction === undefined
+    && typeof global.reviewPrompt === "string"
+    && getReviewInstructionValidationError(global.reviewPrompt) === null
+  ) {
+    const { reviewPrompt, ...rest } = global;
+    return {
+      ...rest,
+      reviewInstruction: reviewPrompt,
+    };
+  }
+
+  if ("reviewPrompt" in global) {
+    const { reviewPrompt: _legacyReviewPrompt, ...rest } = global;
+    return rest;
+  }
+  return global;
+}
+
+function validateConfigReviewInstruction(value: unknown): AppConfig {
   if (!isRecord(value) || !isRecord(value.global)) {
     throw new Error("Expected config.global to be an object.");
   }
-  parseReviewPrompt(value.global.reviewPrompt);
-  validateCodexMaxConcurrentThreads(value.global.codexMaxConcurrentThreads);
-  return value as unknown as AppConfig;
+  const global = migrateLegacyReviewInstruction(value.global);
+  parseReviewInstruction(global.reviewInstruction);
+  validateCodexMaxConcurrentThreads(global.codexMaxConcurrentThreads);
+  return {
+    ...value,
+    global,
+  } as unknown as AppConfig;
 }
 
-function validateGlobalConfig(value: unknown): AppConfig["global"] {
+function validateGlobalReviewInstruction(value: unknown): AppConfig["global"] {
   if (!isRecord(value)) {
     throw new Error("Expected global config to be an object.");
   }
-  parseReviewPrompt(value.reviewPrompt);
-  validateCodexMaxConcurrentThreads(value.codexMaxConcurrentThreads);
-  return value as unknown as AppConfig["global"];
+  const global = migrateLegacyReviewInstruction(value);
+  parseReviewInstruction(global.reviewInstruction);
+  validateCodexMaxConcurrentThreads(global.codexMaxConcurrentThreads);
+  return global as unknown as AppConfig["global"];
 }
 
-function sanitizePersistedReviewPrompt(config: AppConfig): AppConfig {
+function sanitizePersistedReviewInstruction(config: AppConfig): AppConfig {
   const global = config && isRecord(config.global)
     ? config.global as unknown as JsonRecord
     : null;
-  if (!global || getReviewPromptValidationError(global.reviewPrompt) === null) {
+  if (!global) {
     return config;
   }
 
-  const { reviewPrompt: _invalidReviewPrompt, ...sanitizedGlobal } = global;
+  const migratedGlobal = migrateLegacyReviewInstruction(global);
+  const instructionError = getReviewInstructionValidationError(
+    migratedGlobal.reviewInstruction,
+  );
+  if (
+    instructionError === null
+    && migratedGlobal === global
+  ) {
+    return config;
+  }
+
+  const {
+    reviewInstruction: _invalidReviewInstruction,
+    ...globalWithoutInvalidInstruction
+  } = migratedGlobal;
+  const sanitizedGlobal = instructionError === null
+    ? migratedGlobal
+    : globalWithoutInvalidInstruction;
+
   return {
     ...config,
     global: sanitizedGlobal as unknown as AppConfig["global"],
@@ -295,21 +358,21 @@ function sanitizePersistedReviewPrompt(config: AppConfig): AppConfig {
 }
 
 function normalizePersistedConfig(config: AppConfig): AppConfig {
-  const reviewPromptSanitized = sanitizePersistedReviewPrompt(config);
-  const global = reviewPromptSanitized && isRecord(reviewPromptSanitized.global)
-    ? reviewPromptSanitized.global as unknown as JsonRecord
+  const reviewInstructionSanitized = sanitizePersistedReviewInstruction(config);
+  const global = reviewInstructionSanitized && isRecord(reviewInstructionSanitized.global)
+    ? reviewInstructionSanitized.global as unknown as JsonRecord
     : null;
-  if (!global) return reviewPromptSanitized;
+  if (!global) return reviewInstructionSanitized;
 
   const codexMaxConcurrentThreads = resolveCodexMaxConcurrentThreads(
     global.codexMaxConcurrentThreads,
   );
   if (global.codexMaxConcurrentThreads === codexMaxConcurrentThreads) {
-    return reviewPromptSanitized;
+    return reviewInstructionSanitized;
   }
 
   return {
-    ...reviewPromptSanitized,
+    ...reviewInstructionSanitized,
     global: {
       ...global,
       codexMaxConcurrentThreads,
@@ -505,6 +568,7 @@ export class StorageService {
   private githubCompletionCommentMutationQueue: Promise<unknown> = Promise.resolve();
   private featurePlanMutation: Promise<unknown> = Promise.resolve();
   private paneLayoutMutation: Promise<unknown> = Promise.resolve();
+  private loopedReviewMutation: Promise<unknown> = Promise.resolve();
 
   constructor(dataDir: string) {
     this.dataDir = dataDir;
@@ -540,6 +604,10 @@ export class StorageService {
 
   private paneLayoutsFile(): string {
     return this.file("pane-layouts.json");
+  }
+
+  private loopedReviewsFile(): string {
+    return this.file("looped-reviews.json");
   }
 
   private kanbanFile(): string {
@@ -599,6 +667,10 @@ export class StorageService {
       await fs.writeFile(tempPath, contents, mode === undefined ? undefined : { mode });
       if (mode !== undefined) {
         await fs.chmod(tempPath, mode);
+      }
+      if (mode !== undefined && await exists(filePath)) {
+        // Backups of sensitive files must inherit the restricted mode too.
+        await fs.chmod(filePath, mode);
       }
       if (makeBackup && await exists(filePath)) {
         await this.rotateBackups(filePath);
@@ -663,6 +735,23 @@ export class StorageService {
     };
     const next = this.githubCompletionCommentMutationQueue.then(run, run);
     this.githubCompletionCommentMutationQueue = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private enqueueLoopedReviewMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.loopedReviewsFile(),
+        "looped review workflow storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.loopedReviewMutation.then(run, run);
+    this.loopedReviewMutation = next.then(() => undefined, () => undefined);
     return next;
   }
 
@@ -795,6 +884,15 @@ export class StorageService {
 
   private async saveJson(filePath: string, value: unknown): Promise<void> {
     await this.writeAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
+  }
+
+  private async saveSensitiveJson(filePath: string, value: unknown): Promise<void> {
+    await this.writeAtomic(
+      filePath,
+      `${JSON.stringify(value, null, 2)}\n`,
+      true,
+      0o600,
+    );
   }
 
   async loadProjects(): Promise<Project[]> {
@@ -1046,7 +1144,7 @@ export class StorageService {
   }
 
   async saveConfig(config: AppConfig): Promise<void> {
-    const validated = validateConfig(config);
+    const validated = validateConfigReviewInstruction(config);
     await this.enqueueConfigMutation(() => this.saveJson(this.configFile(), validated));
   }
 
@@ -1085,7 +1183,7 @@ export class StorageService {
   }
 
   async updateGlobalConfig(globalConfig: AppConfig["global"]): Promise<AppConfig> {
-    const validated = validateGlobalConfig(globalConfig);
+    const validated = validateGlobalReviewInstruction(globalConfig);
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
       config.global = validated;
@@ -1176,6 +1274,191 @@ export class StorageService {
     });
     this.paneLayoutMutation = run.then(() => undefined, () => undefined);
     return run;
+  }
+
+  async getLoopedReviewWorkflow(
+    workflowId: string,
+  ): Promise<PersistedLoopedReviewWorkflow | null> {
+    if (!isNonBlankString(workflowId)) {
+      throw new Error("Looped review workflow ID must not be blank");
+    }
+    const workflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+      this.loopedReviewsFile(),
+      () => ({}),
+    );
+    const workflow = workflows[workflowId];
+    return isPersistedLoopedReviewWorkflow(workflow, workflowId)
+      ? workflow
+      : null;
+  }
+
+  async listLoopedReviewWorkflows(
+    environmentId: string,
+  ): Promise<PersistedLoopedReviewWorkflow[]> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Looped review environment ID must not be blank");
+    }
+    const workflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+      this.loopedReviewsFile(),
+      () => ({}),
+    );
+    return Object.entries(workflows)
+      .filter(([workflowId, workflow]) =>
+        isPersistedLoopedReviewWorkflow(workflow, workflowId)
+        && workflow.environmentId === environmentId
+      )
+      .map(([, workflow]) => workflow)
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+  }
+
+  async saveLoopedReviewWorkflow(
+    workflowId: string,
+    environmentId: string,
+    version: number,
+    snapshot: unknown,
+    expectedRevision?: number,
+  ): Promise<PersistedLoopedReviewWorkflow> {
+    if (!isNonBlankString(workflowId)) {
+      throw new Error("Looped review workflow ID must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Looped review environment ID must not be blank");
+    }
+    if (!isPositiveInteger(version)) {
+      throw new Error("Looped review workflow version must be a positive integer");
+    }
+    if (!isRecord(snapshot)) {
+      throw new Error("Looped review snapshot must be a JSON object");
+    }
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
+      throw new Error("Looped review expected revision must be a non-negative integer");
+    }
+    let serializedSnapshot: string | undefined;
+    try {
+      serializedSnapshot = JSON.stringify(snapshot);
+    } catch {
+      throw new Error("Looped review snapshot must be JSON serializable");
+    }
+    if (serializedSnapshot === undefined) {
+      throw new Error("Looped review snapshot must be JSON serializable");
+    }
+    // Review packages intentionally retain complete diffs and changed-file
+    // contents. Reject over-sized snapshots explicitly; never truncate them.
+    if (Buffer.byteLength(serializedSnapshot, "utf8") > 32 * 1024 * 1024) {
+      throw new Error("Looped review snapshot exceeds the 32 MB limit");
+    }
+
+    return this.enqueueLoopedReviewMutation(async () => {
+      if (!await this.getEnvironment(environmentId)) {
+        throw new Error(`Environment not found: ${environmentId}`);
+      }
+      const storedWorkflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+        this.loopedReviewsFile(),
+        () => ({}),
+      );
+      const workflows = Object.fromEntries(
+        Object.entries(storedWorkflows).filter(([storedId, workflow]) =>
+          isPersistedLoopedReviewWorkflow(workflow, storedId)
+        ),
+      ) as Record<string, PersistedLoopedReviewWorkflow>;
+      const previous = workflows[workflowId];
+      if (previous && previous.environmentId !== environmentId) {
+        throw new Error("Looped review workflow belongs to another environment");
+      }
+      if (
+        expectedRevision !== undefined
+        && (previous?.revision ?? 0) !== expectedRevision
+      ) {
+        throw new Error("Looped review workflow revision conflict");
+      }
+      const saved: PersistedLoopedReviewWorkflow = {
+        version,
+        id: workflowId,
+        environmentId,
+        snapshot,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      workflows[workflowId] = saved;
+      await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
+      return saved;
+    });
+  }
+
+  async deleteLoopedReviewWorkflow(workflowId: string): Promise<void> {
+    if (!isNonBlankString(workflowId)) {
+      throw new Error("Looped review workflow ID must not be blank");
+    }
+    await this.enqueueLoopedReviewMutation(async () => {
+      const storedWorkflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+        this.loopedReviewsFile(),
+        () => ({}),
+      );
+      const workflows = Object.fromEntries(
+        Object.entries(storedWorkflows).filter(([storedId, workflow]) =>
+          isPersistedLoopedReviewWorkflow(workflow, storedId)
+        ),
+      ) as Record<string, PersistedLoopedReviewWorkflow>;
+      if (!(workflowId in workflows)) return;
+      delete workflows[workflowId];
+      await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
+    });
+  }
+
+  async deleteLoopedReviewWorkflowsByEnvironment(
+    environmentId: string,
+  ): Promise<void> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Looped review environment ID must not be blank");
+    }
+    await this.enqueueLoopedReviewMutation(async () => {
+      const storedWorkflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+        this.loopedReviewsFile(),
+        () => ({}),
+      );
+      const workflows = Object.fromEntries(
+        Object.entries(storedWorkflows).filter(([storedId, workflow]) =>
+          isPersistedLoopedReviewWorkflow(workflow, storedId)
+          && workflow.environmentId !== environmentId
+        ),
+      ) as Record<string, PersistedLoopedReviewWorkflow>;
+      const removed = Object.entries(storedWorkflows).some(
+        ([storedId, workflow]) =>
+          isPersistedLoopedReviewWorkflow(workflow, storedId)
+          && workflow.environmentId === environmentId,
+      );
+      if (!removed) return;
+
+      await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
+
+      // Rotating the primary file creates a backup containing the deleted
+      // workflow. Scrub every retained backup before releasing the mutation
+      // lock so environment deletion removes all persisted review evidence.
+      for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
+        const backup = this.backupPath(this.loopedReviewsFile(), index);
+        if (!await exists(backup)) continue;
+        try {
+          const parsed = JSON.parse(
+            await fs.readFile(backup, "utf8"),
+          ) as Record<string, PersistedLoopedReviewWorkflow>;
+          const sanitized = Object.fromEntries(
+            Object.entries(parsed).filter(([storedId, workflow]) =>
+              isPersistedLoopedReviewWorkflow(workflow, storedId)
+              && workflow.environmentId !== environmentId
+            ),
+          );
+          await this.writeAtomic(
+            backup,
+            `${JSON.stringify(sanitized, null, 2)}\n`,
+            false,
+            0o600,
+          );
+        } catch {
+          // A corrupt backup cannot be proven free of the deleted workflow.
+          await fs.rm(backup, { force: true });
+        }
+      }
+    });
   }
 
   async deletePaneLayout(environmentId: string): Promise<void> {

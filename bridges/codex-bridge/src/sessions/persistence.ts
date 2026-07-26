@@ -15,6 +15,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import {
+  chmod,
   link,
   mkdir,
   readFile,
@@ -27,6 +28,10 @@ import {
 import { join } from "node:path";
 import type { EngineTurnConfig } from "../engine/types.js";
 import type { SessionTitleSource } from "./thread-registry.js";
+import {
+  isStructuredOutputResult,
+  type StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 
 export const BRIDGE_SESSION_REGISTRY_VERSION = 2;
 
@@ -40,6 +45,8 @@ export interface PersistedBridgeSession {
   config: EngineTurnConfig;
   /** Last prompt request id accepted, for duplicate suppression after restart. */
   lastAcceptedRequestId?: string;
+  structuredOutputRequestId?: string;
+  structuredOutput?: StructuredOutputResult;
   lastAccessed: string;
 }
 
@@ -135,6 +142,18 @@ function isPersistedBridgeSession(
   ) {
     return false;
   }
+  if (
+    session.structuredOutputRequestId !== undefined
+    && typeof session.structuredOutputRequestId !== "string"
+  ) {
+    return false;
+  }
+  if (
+    session.structuredOutput !== undefined
+    && !isStructuredOutputResult(session.structuredOutput)
+  ) {
+    return false;
+  }
   const lastAccessed =
     typeof session.lastAccessed === "string"
       ? Date.parse(session.lastAccessed)
@@ -176,6 +195,8 @@ const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
  * another process — so an hour is several orders of magnitude of headroom.
  */
 const TEMP_FILE_GRACE_MS = 60 * 60 * 1000;
+const PRIVATE_DIRECTORY_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
 
 export class BridgeSessionStore {
   private readonly codexHome: string;
@@ -212,6 +233,16 @@ export class BridgeSessionStore {
     return join(this.recordsDir(), `${this.recordKey(bridgeSessionId)}.json`);
   }
 
+  private async ensurePrivateStorage(): Promise<void> {
+    await mkdir(this.dir(), { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+    await chmod(this.dir(), PRIVATE_DIRECTORY_MODE);
+    await mkdir(this.recordsDir(), {
+      recursive: true,
+      mode: PRIVATE_DIRECTORY_MODE,
+    });
+    await chmod(this.recordsDir(), PRIVATE_DIRECTORY_MODE);
+  }
+
   /**
    * Returns only entries for this cwd that are still within retention.
    *
@@ -226,12 +257,15 @@ export class BridgeSessionStore {
     // A failed migration is a cache miss, not a fatal error: this store holds no
     // user data, and letting it throw here leaves the engine unstarted for the
     // whole process lifetime because nothing retries load().
-    await this.migrateLegacy(legacy).catch((error) =>
-      this.warnPersistenceFailure(error),
-    );
+    let migrationFailed = false;
+    await this.migrateLegacy(legacy).catch((error) => {
+      migrationFailed = true;
+      this.warnPersistenceFailure(error);
+    });
 
     let names: string[];
     try {
+      await this.ensurePrivateStorage();
       names = await readdir(this.recordsDir());
     } catch {
       return legacy;
@@ -241,11 +275,13 @@ export class BridgeSessionStore {
       names.map(async (name) => {
         const path = join(this.recordsDir(), name);
         if (name.endsWith(".tmp")) {
+          await chmod(path, PRIVATE_FILE_MODE).catch(() => undefined);
           await this.collectStaleTemporary(path);
           return null;
         }
         if (!name.endsWith(".json")) return null;
         try {
+          await chmod(path, PRIVATE_FILE_MODE);
           const value = JSON.parse(await readFile(path, "utf8")) as unknown;
           if (isPersistedSessionTombstone(value)) {
             // A tombstone only exists to stop legacy migration re-publishing a
@@ -265,9 +301,10 @@ export class BridgeSessionStore {
         }
       }),
     );
-    return records.filter(
+    const loaded = records.filter(
       (record): record is PersistedBridgeSession => record !== null,
     );
+    return migrationFailed && loaded.length === 0 ? legacy : loaded;
   }
 
   /** Removes a `writeAtomicPath` temp file that no live writer can still rename. */
@@ -297,7 +334,7 @@ export class BridgeSessionStore {
    */
   async remove(bridgeSessionId: string): Promise<void> {
     const attempt = this.writeChain.then(async () => {
-      await mkdir(this.recordsDir(), { recursive: true });
+      await this.ensurePrivateStorage();
       const tombstone: PersistedSessionTombstone = {
         bridgeSessionId,
         deleted: true,
@@ -314,6 +351,8 @@ export class BridgeSessionStore {
 
   private async loadLegacy(cutoff: number): Promise<PersistedBridgeSession[]> {
     try {
+      await chmod(this.dir(), PRIVATE_DIRECTORY_MODE);
+      await chmod(this.path(), PRIVATE_FILE_MODE);
       const parsed = JSON.parse(
         await readFile(this.path(), "utf8"),
       ) as RegistryFile;
@@ -336,7 +375,7 @@ export class BridgeSessionStore {
     sessions: PersistedBridgeSession[],
   ): Promise<void> {
     if (sessions.length === 0) return;
-    await mkdir(this.recordsDir(), { recursive: true });
+    await this.ensurePrivateStorage();
     await Promise.all(
       sessions.map(async (session) => {
         const target = this.recordPath(session.bridgeSessionId);
@@ -344,11 +383,13 @@ export class BridgeSessionStore {
         await writeFile(
           temporary,
           `${JSON.stringify(session, null, 2)}\n`,
-          "utf8",
+          { encoding: "utf8", mode: PRIVATE_FILE_MODE },
         );
+        await chmod(temporary, PRIVATE_FILE_MODE);
         await link(temporary, target).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== "EEXIST") throw error;
         });
+        await chmod(target, PRIVATE_FILE_MODE);
         await rm(temporary, { force: true }).catch(() => undefined);
       }),
     );
@@ -358,7 +399,7 @@ export class BridgeSessionStore {
   private async writeRecordAtomic(
     session: PersistedBridgeSession,
   ): Promise<void> {
-    await mkdir(this.recordsDir(), { recursive: true });
+    await this.ensurePrivateStorage();
     await this.writeAtomicPath(
       this.recordPath(session.bridgeSessionId),
       `${JSON.stringify(session, null, 2)}\n`,
@@ -367,11 +408,16 @@ export class BridgeSessionStore {
 
   private async writeAtomicPath(path: string, payload: string): Promise<void> {
     const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(temporary, payload, "utf8");
+    await writeFile(temporary, payload, {
+      encoding: "utf8",
+      mode: PRIVATE_FILE_MODE,
+    });
+    await chmod(temporary, PRIVATE_FILE_MODE);
     await rename(temporary, path).catch(async (error: unknown) => {
       await rm(temporary, { force: true }).catch(() => undefined);
       throw error;
     });
+    await chmod(path, PRIVATE_FILE_MODE);
   }
 
   private warnPersistenceFailure(error: unknown): void {
@@ -389,6 +435,8 @@ export class BridgeSessionStore {
     title?: string;
     titleSource?: SessionTitleSource;
     lastAcceptedRequestId?: string;
+    structuredOutputRequestId?: string;
+    structuredOutput?: StructuredOutputResult;
   }): PersistedBridgeSession {
     return {
       bridgeSessionId: options.bridgeSessionId,
@@ -398,6 +446,8 @@ export class BridgeSessionStore {
       title: options.title,
       titleSource: options.titleSource,
       lastAcceptedRequestId: options.lastAcceptedRequestId,
+      structuredOutputRequestId: options.structuredOutputRequestId,
+      structuredOutput: options.structuredOutput,
       lastAccessed: new Date(this.now()).toISOString(),
     };
   }

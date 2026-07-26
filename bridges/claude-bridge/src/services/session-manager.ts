@@ -22,6 +22,10 @@ import type {
   SdkSystemMessage,
 } from "../types/index.js";
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
+import {
+  structuredOutputFailure,
+  type StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
 import { getMcpServersForSdk, getMcpServerNames } from "./mcp-config.js";
 import { getPluginsForSdk } from "./plugin-config.js";
@@ -81,6 +85,26 @@ const planApprovalResolvers = new Map<
 // Timeouts for user interactions (5 minutes)
 const QUESTION_TIMEOUT_MS = 5 * 60 * 1000;
 const PLAN_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+
+class ClaudeStructuredOutputError extends Error {
+  constructor(readonly result: StructuredOutputResult<never>) {
+    super(result.ok ? "Claude structured output failed" : result.error.message);
+    this.name = "ClaudeStructuredOutputError";
+  }
+}
+
+function recordStructuredOutput(
+  session: SessionState,
+  result: StructuredOutputResult,
+): void {
+  session.structuredOutput = result;
+  session.structuredOutputRequestId = result.requestId;
+  eventEmitter.emit({
+    type: "session.structured-output",
+    sessionId: session.id,
+    data: { structuredOutput: result },
+  });
+}
 
 /**
  * Generate a unique session ID using crypto.randomUUID for guaranteed uniqueness
@@ -394,6 +418,17 @@ export function createSession(title?: string): SessionState {
  */
 export function getSession(sessionId: string): SessionState | undefined {
   return sessions.get(sessionId);
+}
+
+export function getStructuredPromptDispatchState(
+  sessionId: string,
+  requestId: string,
+): "new" | "processing" | "already-processed" | "not-found" {
+  const session = sessions.get(sessionId);
+  if (!session) return "not-found";
+  if (session.structuredOutputRequestId !== requestId) return "new";
+  if (session.structuredOutput) return "already-processed";
+  return session.status === "running" ? "processing" : "new";
 }
 
 /**
@@ -984,8 +1019,26 @@ export async function sendPrompt(
     throw new Error(`Session ${sessionId} not found`);
   }
 
+  const structuredRequestId = options?.outputSchema
+    ? (options.requestId?.trim() || crypto.randomUUID())
+    : undefined;
+  if (
+    structuredRequestId
+    && session.structuredOutputRequestId === structuredRequestId
+    && (session.status === "running" || session.structuredOutput !== undefined)
+  ) {
+    // The HTTP response may have been lost. Reusing a structured request id
+    // attaches to the original turn/result; it never launches another SDK query.
+    return;
+  }
+
   if (session.status === "running") {
     throw new Error("Session is already processing a prompt");
+  }
+
+  if (structuredRequestId) {
+    session.structuredOutput = undefined;
+    session.structuredOutputRequestId = structuredRequestId;
   }
 
   // Create abort controller for this query
@@ -1119,6 +1172,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         cwd,
         ...claudeExecutableOptions(),
         model: options?.model,
+        ...(options?.outputSchema
+          ? {
+              outputFormat: {
+                type: "json_schema" as const,
+                schema: options.outputSchema,
+              },
+            }
+          : {}),
         permissionMode,
         // Required when using bypassPermissions mode
         ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
@@ -1855,11 +1916,44 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         }
 
         if (resultMsg.subtype === "success") {
+          if (options?.outputSchema) {
+            if (resultMsg.structured_output === undefined) {
+              const failure = structuredOutputFailure(
+                "claude",
+                "malformed_output",
+                "Claude completed the turn without a structured result.",
+                { requestId: structuredRequestId },
+              );
+              recordStructuredOutput(session, failure);
+              throw new ClaudeStructuredOutputError(failure);
+            }
+            recordStructuredOutput(session, {
+              ok: true,
+              provider: "claude",
+              requestId: structuredRequestId,
+              value: resultMsg.structured_output,
+            });
+          }
           console.log("[session-manager] Query completed successfully", { sessionId });
         } else {
           console.error("[session-manager] Query error:", resultMsg.subtype, { sessionId });
           const resultError = resultMsg.errors?.filter(Boolean).join("\n")
             || `Claude query failed: ${resultMsg.subtype}`;
+          if (options?.outputSchema) {
+            const failure = structuredOutputFailure(
+              "claude",
+              resultMsg.subtype === "error_max_structured_output_retries"
+                ? "schema_retry_exhausted"
+                : "provider_error",
+              resultError,
+              {
+                requestId: structuredRequestId,
+                details: { subtype: resultMsg.subtype ?? "unknown" },
+              },
+            );
+            recordStructuredOutput(session, failure);
+            throw new ClaudeStructuredOutputError(failure);
+          }
           throw new Error(resultError);
         }
       } else if (message.type === "stream_event") {
@@ -1869,6 +1963,17 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     }
 
     if (abortController.signal.aborted) {
+      if (options?.outputSchema && structuredRequestId) {
+        recordStructuredOutput(
+          session,
+          structuredOutputFailure(
+            "claude",
+            "interrupted",
+            "Claude structured-output turn was interrupted.",
+            { requestId: structuredRequestId, retryable: true },
+          ),
+        );
+      }
       return;
     }
 
@@ -1975,11 +2080,37 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     });
   } catch (error) {
     if (abortController.signal.aborted) {
+      if (options?.outputSchema && structuredRequestId && !session.structuredOutput) {
+        recordStructuredOutput(
+          session,
+          structuredOutputFailure(
+            "claude",
+            "interrupted",
+            "Claude structured-output turn was interrupted.",
+            { requestId: structuredRequestId, retryable: true },
+          ),
+        );
+      }
       return;
     }
     console.error("[session-manager] Error processing prompt:", error);
 
     if (session.abortController === abortController) {
+      if (
+        options?.outputSchema
+        && structuredRequestId
+        && !session.structuredOutput
+      ) {
+        recordStructuredOutput(
+          session,
+          structuredOutputFailure(
+            "claude",
+            "provider_error",
+            error instanceof Error ? error.message : String(error),
+            { requestId: structuredRequestId },
+          ),
+        );
+      }
       session.status = "error";
       session.error = error instanceof Error ? error.message : String(error);
       session.abortController = undefined;

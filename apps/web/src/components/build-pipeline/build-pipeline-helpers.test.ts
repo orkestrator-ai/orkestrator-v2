@@ -12,6 +12,7 @@ import { parseVerificationResult } from "@/lib/parse-verification-result";
 import type { ClaudeMessage } from "@/lib/claude-client";
 import { isSetupPending } from "@/lib/setup-commands";
 import { waitForSetupInitiation } from "@/hooks/useBuildPipeline";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
 // --- parseVerificationResult ---
 
@@ -738,6 +739,155 @@ describe("buildPipelineStore", () => {
     store.setPipelineError("nonexistent", "error");
 
     expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+  });
+
+  test("stores a request-scoped structured review and ignores missing pipelines", () => {
+    const store = useBuildPipelineStore.getState();
+    const id = store.createPipeline({
+      taskId: "review-task",
+      projectId: "p1",
+      environmentType: "local",
+      agentType: "claude",
+      taskTitle: "Review",
+      taskSnapshot: {
+        title: "Review",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+    });
+
+    store.beginStructuredReview("missing", "ignored");
+    store.setStructuredReview("missing", TEST_STRUCTURED_REVIEW_REPORT);
+    store.beginStructuredReview(id, "request-1");
+    expect(useBuildPipelineStore.getState().pipelines.get(id)).toMatchObject({
+      structuredReviewRequestId: "request-1",
+      structuredReview: undefined,
+    });
+
+    store.setStructuredReview(id, TEST_STRUCTURED_REVIEW_REPORT);
+    expect(useBuildPipelineStore.getState().pipelines.get(id)?.structuredReview)
+      .toEqual(TEST_STRUCTURED_REVIEW_REPORT);
+    store.beginStructuredReview(id, "request-2");
+    expect(useBuildPipelineStore.getState().pipelines.get(id)).toMatchObject({
+      structuredReviewRequestId: "request-2",
+      structuredReview: undefined,
+    });
+  });
+
+  test("retains structured prompt identity through failure and reconnect", () => {
+    const store = useBuildPipelineStore.getState();
+    const id = store.createPipeline({
+      taskId: "review-reconnect",
+      projectId: "p1",
+      environmentType: "local",
+      agentType: "opencode",
+      taskTitle: "Review",
+      taskSnapshot: {
+        title: "Review",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+    });
+    store.setPhase(id, "reviewing");
+    store.addSession(id, {
+      phase: "review",
+      iteration: 0,
+      sessionKey: "review-session",
+      sdkSessionId: "provider-session",
+      status: "running",
+      startedAt: "2026-07-26T00:00:00.000Z",
+      label: "Review",
+    });
+    expect(store.beginPromptAttempt(id, {
+      id: "attempt-1",
+      sessionId: "provider-session",
+      requestId: "request-1",
+      phase: "reviewing",
+      prompt: "Review the change",
+      useTaskImages: true,
+      structuredReview: true,
+      startedAt: "2026-07-26T00:00:00.000Z",
+    })).toBe(true);
+    expect(store.beginPromptAttempt(id, {
+      id: "attempt-2",
+      sessionId: "provider-session",
+      requestId: "request-2",
+      phase: "reviewing",
+      prompt: "duplicate",
+      useTaskImages: false,
+      startedAt: "2026-07-26T00:00:00.000Z",
+    })).toBe(false);
+
+    store.completePromptAttempt(id, "attempt-1");
+    store.setPipelineError(id, "response lost");
+    const context = useBuildPipelineStore.getState().pipelines.get(id)?.failureContext;
+    expect(context).toEqual({
+      phase: "reviewing",
+      kind: "prompt-dispatch",
+      sessionId: "provider-session",
+      prompt: "Review the change",
+      useTaskImages: true,
+      requestId: "request-1",
+      structuredReview: true,
+    });
+
+    expect(store.beginReconnect(id, {
+      ...context!,
+      id: "reconnect-1",
+      startedAt: "2026-07-26T00:00:01.000Z",
+    })).toBe(true);
+    expect(store.completeReconnect(id, "wrong")).toBe(false);
+    expect(store.failReconnect(id, "wrong", "ignored")).toBe(false);
+    expect(store.completeReconnect(id, "reconnect-1")).toBe(true);
+  });
+
+  test("clears a prompt lease when its provider session becomes idle", () => {
+    const store = useBuildPipelineStore.getState();
+    const id = store.createPipeline({
+      taskId: "review-idle",
+      projectId: "p1",
+      environmentType: "local",
+      agentType: "codex",
+      taskTitle: "Review",
+      taskSnapshot: {
+        title: "Review",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+    });
+    store.setPhase(id, "reviewing");
+    store.addSession(id, {
+      phase: "review",
+      iteration: 0,
+      sessionKey: "review-session",
+      sdkSessionId: "provider-session",
+      status: "running",
+      startedAt: "",
+      label: "Review",
+    });
+    store.beginPromptAttempt(id, {
+      id: "attempt",
+      sessionId: "provider-session",
+      requestId: "request",
+      phase: "reviewing",
+      prompt: "Review",
+      useTaskImages: false,
+      structuredReview: true,
+      startedAt: "",
+    });
+
+    store.markSessionIdle(id, "provider-session");
+    expect(useBuildPipelineStore.getState().pipelines.get(id)).toMatchObject({
+      sessions: [expect.objectContaining({ status: "idle" })],
+      pendingPromptAttempt: undefined,
+      activePromptContext: undefined,
+    });
   });
 });
 

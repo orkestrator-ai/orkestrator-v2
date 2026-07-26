@@ -6,6 +6,13 @@ import type {
   ClaudeModelCatalogEntry,
   ClaudeModelCatalogSnapshot,
 } from "@/types";
+import {
+  isStructuredOutputResult,
+  structuredOutputFailure,
+  type JsonSchema,
+  type StructuredOutputResult,
+  StructuredOutputReadUnavailableError,
+} from "@orkestrator/protocol/structured-output";
 
 export type { ClaudeModelCatalogSnapshot };
 
@@ -113,6 +120,19 @@ export interface ClaudeMessage {
   timestamp: string;
 }
 
+export interface ClaudeSession {
+  id: string;
+  title?: string;
+  status: "idle" | "running" | "error";
+  createdAt: string;
+  lastActivity: string;
+  error?: string;
+}
+
+export type ClaudeSessionLookupResult =
+  | { kind: "found"; session: ClaudeSession }
+  | { kind: "missing" }
+  | { kind: "unavailable"; error: Error };
 
 /** Effort level for controlling Claude's thinking depth */
 export type ClaudeEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
@@ -188,6 +208,7 @@ export interface ClaudeEvent {
     | "session.error"
     | "session.init"
     | "session.title-updated"
+    | "session.structured-output"
     | "message.updated"
     | "question.asked"
     | "question.answered"
@@ -317,27 +338,68 @@ export async function listSessions(
 }
 
 /**
- * Get session details
+ * Look up session details without conflating an absent session with an
+ * unavailable bridge.
+ */
+export async function lookupSession(
+  client: ClaudeClient,
+  sessionId: string,
+): Promise<ClaudeSessionLookupResult> {
+  try {
+    const response = await fetchWithTimeout(
+      `${client.baseUrl}/session/${sessionId}`,
+    );
+    if (response.status === 404) return { kind: "missing" };
+    if (!response.ok) {
+      return {
+        kind: "unavailable",
+        error: new Error(`Failed to get Claude session: HTTP ${response.status}`),
+      };
+    }
+    const session = (await response.json()) as Partial<ClaudeSession>;
+    if (
+      typeof session.id !== "string"
+      || (
+        session.status !== "idle"
+        && session.status !== "running"
+        && session.status !== "error"
+      )
+      || typeof session.createdAt !== "string"
+      || typeof session.lastActivity !== "string"
+    ) {
+      return {
+        kind: "unavailable",
+        error: new Error("Claude session response was malformed"),
+      };
+    }
+    return {
+      kind: "found",
+      session: session as ClaudeSession,
+    };
+  } catch (error) {
+    return {
+      kind: "unavailable",
+      error: error instanceof Error
+        ? error
+        : new Error("Failed to get Claude session"),
+    };
+  }
+}
+
+/**
+ * Get session details. Retains the legacy null-on-missing-or-unavailable
+ * contract; reconciliation callers should use lookupSession.
  */
 export async function getSession(
   client: ClaudeClient,
-  sessionId: string
-): Promise<{
-  id: string;
-  title?: string;
-  status: "idle" | "running" | "error";
-  createdAt: string;
-  lastActivity: string;
-  error?: string;
-} | null> {
-  try {
-    const response = await fetch(`${client.baseUrl}/session/${sessionId}`);
-    if (!response.ok) return null;
-    return await response.json();
-  } catch (error) {
-    console.error("[claude-client] Failed to get session:", error);
-    return null;
+  sessionId: string,
+): Promise<ClaudeSession | null> {
+  const result = await lookupSession(client, sessionId);
+  if (result.kind === "found") return result.session;
+  if (result.kind === "unavailable") {
+    console.error("[claude-client] Failed to get session:", result.error);
   }
+  return null;
 }
 
 /** Error thrown when a session is not found on the server */
@@ -394,6 +456,8 @@ export async function sendPrompt(
     effort?: ClaudeEffortLevel;
     permissionMode?: PermissionMode;
     fastMode?: boolean;
+    outputSchema?: JsonSchema;
+    requestId?: string;
   }
 ): Promise<boolean> {
   try {
@@ -405,6 +469,7 @@ export async function sendPrompt(
       effort: options?.effort,
       permissionMode: options?.permissionMode,
       fastMode: options?.fastMode,
+      structured: options?.outputSchema !== undefined,
     });
     const response = await fetch(`${client.baseUrl}/session/${sessionId}/prompt`, {
       method: "POST",
@@ -416,6 +481,8 @@ export async function sendPrompt(
         effort: options?.effort,
         permissionMode: options?.permissionMode,
         fastMode: options?.fastMode,
+        outputSchema: options?.outputSchema,
+        requestId: options?.requestId,
       }),
     });
     console.debug("[claude-client] Prompt response", {
@@ -432,6 +499,111 @@ export async function sendPrompt(
     console.error("[claude-client] Failed to send prompt:", error);
     return false;
   }
+}
+
+export interface ClaudeStructuredPromptAccepted {
+  status: "processing" | "already-processed";
+  requestId: string;
+  duplicate?: boolean;
+}
+
+/** Dispatch a schema-constrained turn while retaining Claude's normal tool set. */
+export async function sendStructuredPrompt(
+  client: ClaudeClient,
+  sessionId: string,
+  prompt: string,
+  outputSchema: JsonSchema,
+  options: {
+    model?: string;
+    attachments?: ClaudeAttachment[];
+    effort?: ClaudeEffortLevel;
+    permissionMode?: PermissionMode;
+    fastMode?: boolean;
+    requestId?: string;
+  } = {},
+): Promise<ClaudeStructuredPromptAccepted | null> {
+  const requestId = options.requestId ?? crypto.randomUUID();
+  try {
+    const response = await fetch(`${client.baseUrl}/session/${sessionId}/prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...options, prompt, outputSchema, requestId }),
+    });
+    if (!response.ok) return null;
+    const body = (await response.json().catch(() => ({}))) as {
+      requestId?: unknown;
+      status?: unknown;
+      duplicate?: unknown;
+    };
+    return {
+      status: body.status === "already-processed" ? "already-processed" : "processing",
+      requestId: typeof body.requestId === "string" ? body.requestId : requestId,
+      duplicate: body.duplicate === true,
+    };
+  } catch (error) {
+    console.error("[claude-client] Failed to send structured prompt:", error);
+    return null;
+  }
+}
+
+/**
+ * Rehydrate a completed structured turn from bridge-owned session state.
+ * `null` means the requested turn is still pending or no such turn is known.
+ */
+export async function getStructuredOutput<T = unknown>(
+  client: ClaudeClient,
+  sessionId: string,
+  requestId?: string,
+): Promise<StructuredOutputResult<T> | null> {
+  let response: Response;
+  try {
+    const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
+    response = await fetchWithTimeout(
+      `${client.baseUrl}/session/${sessionId}/structured-output${query}`,
+    );
+  } catch (error) {
+    throw new StructuredOutputReadUnavailableError(
+      "claude",
+      error instanceof Error
+        ? error.message
+        : "Failed to read Claude structured output.",
+      { requestId, cause: error },
+    );
+  }
+  if (!response.ok) return null;
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return structuredOutputFailure(
+      "claude",
+      "malformed_output",
+      "Claude bridge returned malformed JSON for structured output.",
+      { requestId },
+    );
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return structuredOutputFailure(
+      "claude",
+      "malformed_output",
+      "Claude bridge returned a malformed structured-output envelope.",
+      { requestId },
+    );
+  }
+  const structuredOutput = (body as Record<string, unknown>).structuredOutput;
+  if (structuredOutput === null || structuredOutput === undefined) {
+    return null;
+  }
+  if (isStructuredOutputResult(structuredOutput)) {
+    return structuredOutput as StructuredOutputResult<T>;
+  }
+  return structuredOutputFailure(
+    "claude",
+    "malformed_output",
+    "Claude bridge returned a malformed structured-output envelope.",
+    { requestId },
+  );
 }
 
 /**
@@ -741,6 +913,7 @@ export function subscribeToEvents(
         "session.error",
         "session.init",
         "session.title-updated",
+        "session.structured-output",
         "message.updated",
         "question.asked",
         "question.answered",

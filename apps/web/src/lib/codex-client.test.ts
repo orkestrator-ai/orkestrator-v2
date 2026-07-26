@@ -13,6 +13,7 @@ import {
   getModels,
   getSessionMessages,
   getSessionStatus,
+  getStructuredOutput,
   getSlashCommands,
   isCodexSessionPhase,
   listSessions,
@@ -25,6 +26,7 @@ import {
   updateSessionConfig,
   type CodexClient,
 } from "./codex-client";
+import { StructuredOutputReadUnavailableError } from "@orkestrator/protocol/structured-output";
 
 const originalFetch = globalThis.fetch;
 const client: CodexClient = { baseUrl: "http://127.0.0.1:4000" };
@@ -753,6 +755,107 @@ describe("codex-client sendPrompt", () => {
       outcome: "accepted",
       status: "already-processed",
       duplicate: true,
+    });
+  });
+
+  test("forwards a structured-output schema with the stable request id", async () => {
+    const schema = {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: ["summary"],
+    };
+    mockFetch(async () => Response.json({ status: "processing" }, { status: 202 }));
+
+    await expect(
+      sendPrompt(client, "session-1", "Review", {
+        requestId: "structured-1",
+        outputSchema: schema,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "accepted",
+      requestId: "structured-1",
+    });
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:4000/session/session-1/prompt",
+      expect.objectContaining({
+        body: JSON.stringify({
+          prompt: "Review",
+          requestId: "structured-1",
+          outputSchema: schema,
+        }),
+      }),
+    );
+  });
+});
+
+describe("codex-client getStructuredOutput", () => {
+  afterEach(restoreFetch);
+
+  test("returns success and encodes the request id", async () => {
+    const success = {
+      ok: true,
+      provider: "codex",
+      requestId: "request/1",
+      value: { summary: "done" },
+    } as const;
+    mockFetch(async () => Response.json({ structuredOutput: success }));
+
+    await expect(
+      getStructuredOutput(client, "session-1", "request/1"),
+    ).resolves.toEqual(success);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:4000/session/session-1/structured-output?requestId=request%2F1",
+      expect.anything(),
+    );
+  });
+
+  test("returns null for missing and pending output", async () => {
+    mockFetch(async () => new Response(null, { status: 404 }));
+    await expect(getStructuredOutput(client, "session-1", "request-1"))
+      .resolves.toBeNull();
+
+    mockFetch(async () => Response.json({ structuredOutput: null }));
+    await expect(getStructuredOutput(client, "session-1", "request-1"))
+      .resolves.toBeNull();
+  });
+
+  test("returns authoritative malformed-output failures for invalid responses", async () => {
+    mockFetch(async () => Response.json({
+      structuredOutput: { ok: true, provider: "codex" },
+    }));
+    await expect(getStructuredOutput(client, "session-1", "request-1"))
+      .resolves.toMatchObject({
+        ok: false,
+        requestId: "request-1",
+        error: { code: "malformed_output" },
+      });
+
+    mockFetch(async () => Response.json(null));
+    await expect(getStructuredOutput(client, "session-1", "request-1"))
+      .resolves.toMatchObject({
+        ok: false,
+        error: { code: "malformed_output" },
+      });
+
+    mockFetch(async () =>
+      new Response("{", { status: 200, headers: { "Content-Type": "application/json" } })
+    );
+    await expect(getStructuredOutput(client, "session-1", "request-1"))
+      .resolves.toMatchObject({
+        ok: false,
+        error: { code: "malformed_output" },
+      });
+  });
+
+  test("throws a typed observation error for transport failures", async () => {
+    mockFetchError(new Error("bridge offline"));
+
+    const promise = getStructuredOutput(client, "session-1", "request-1");
+    await expect(promise).rejects.toBeInstanceOf(StructuredOutputReadUnavailableError);
+    await expect(promise).rejects.toMatchObject({
+      provider: "codex",
+      requestId: "request-1",
+      retryable: true,
     });
   });
 });

@@ -51,6 +51,7 @@ import {
   Loader2,
   Play,
   Plus,
+  Repeat2,
   Shield,
   SlidersHorizontal,
   StickyNote,
@@ -60,7 +61,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon, DockerIcon } from "@/components/icons/AgentIcons";
-import { useUIStore, useEnvironmentStore, useProjectStore, useConfigStore, useFilesPanelStore, type ProjectBoardTab } from "@/stores";
+import { useUIStore, useEnvironmentStore, useProjectStore, useConfigStore, useFilesPanelStore, useLoopedReviewStore, type ProjectBoardTab } from "@/stores";
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
 import { usePullRequest, useProjects, useEnvironments } from "@/hooks";
@@ -234,6 +235,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const [isMerging, setIsMerging] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
+  const [loopedReviewDialogOpen, setLoopedReviewDialogOpen] = useState(false);
   const reviewLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reviewClickSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reviewLongPressOriginRef = useRef<{ x: number; y: number } | null>(null);
@@ -328,6 +330,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   // Get the default agent - per-environment override takes precedence over global config
   const defaultAgent = selectedEnvironment?.defaultAgent || config.global.defaultAgent || "claude";
+  const { createLoopedReviewWorkflow, removeLoopedReviewWorkflow } =
+    useLoopedReviewStore(useShallow((state) => ({
+      createLoopedReviewWorkflow: state.createWorkflow,
+      removeLoopedReviewWorkflow: state.removeWorkflow,
+    })));
 
   // Handler for code review
   const handleReview = useCallback((
@@ -342,15 +349,19 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
     const repoConfig = config.repositories[selectedProjectId];
     const targetBranch = repoConfig?.prBaseBranch || "main";
-    const reviewPrompt = createReviewPrompt(targetBranch, config.global.reviewPrompt);
+    const reviewPrompt = createReviewPrompt(
+      targetBranch,
+      config.global.reviewInstruction,
+    );
 
     createTab(agentOverride || defaultAgent, {
       initialPrompt: reviewPrompt,
       displayTitle: "Review",
       isReviewTab: true,
+      agentLaunchMode: "native",
       ...launchOptions,
     });
-  }, [createTab, selectedProjectId, canCreateTab, config.repositories, config.global.reviewPrompt, defaultAgent]);
+  }, [createTab, selectedProjectId, canCreateTab, config.repositories, config.global.reviewInstruction, defaultAgent]);
 
   const openReviewDialog = useCallback(() => {
     if (!selectedEnvironment || !canCreateTab) return;
@@ -398,19 +409,87 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   const handleConfiguredReview = useCallback((selection: ReviewLaunchSelection) => {
     const agent = getReviewAgent(selection.tabType);
-    const agentLaunchMode: AgentLaunchModeOverride = selection.tabType.endsWith("-native")
-      ? "native"
-      : selection.tabType === "claude-tmux"
-        ? "tmux"
-        : "cli";
-
     handleReview(agent, {
-      agentLaunchMode,
+      agentLaunchMode: "native",
       initialAgentModel: selection.model,
       initialReasoningEffort: selection.reasoningEffort,
     });
     setReviewDialogOpen(false);
   }, [handleReview]);
+
+  const handleLoopedReview = useCallback((selection: ReviewLaunchSelection) => {
+    if (
+      !createTab
+      || !selectedEnvironmentId
+      || !selectedProjectId
+      || !selectedEnvironment
+      || !canCreateTab
+      || !isRunning
+      || !workspaceReady
+      || setupRunning
+    ) {
+      return;
+    }
+    const { task } = findTaskForEnvironment(selectedEnvironmentId);
+    const kanbanState = useKanbanStore.getState();
+    const hasCurrentProjectNotes =
+      kanbanState.currentNotesProjectId === selectedProjectId
+      && kanbanState.notes.trim().length > 0;
+    const context = task || hasCurrentProjectNotes
+      ? {
+          ticketTitle: task?.title,
+          ticketDescription: task?.description,
+          acceptanceCriteria: task?.acceptanceCriteria,
+          comments: task?.comments.map((comment) => comment.text),
+          imageNames: task?.images.map((image) => image.filename),
+          projectNotes: hasCurrentProjectNotes ? kanbanState.notes : undefined,
+        }
+      : undefined;
+    const workflowId = createLoopedReviewWorkflow({
+      environmentId: selectedEnvironmentId,
+      projectId: selectedProjectId,
+      agent: getReviewAgent(selection.tabType),
+      model: selection.model,
+      reasoningEffort: selection.reasoningEffort,
+      targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
+      reviewInstruction: config.global.reviewInstruction,
+      context,
+      allowance: selection.passAllowance,
+    });
+    try {
+      const created = createTab("looped-review", {
+        loopedReviewId: workflowId,
+        displayTitle: "Looped Review",
+      });
+      if (!created) {
+        removeLoopedReviewWorkflow(workflowId);
+        toast.error("Could not open looped review", {
+          description: "The environment is not ready or the maximum tab count was reached.",
+        });
+        return;
+      }
+    } catch (error) {
+      removeLoopedReviewWorkflow(workflowId);
+      toast.error("Could not open looped review", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    setLoopedReviewDialogOpen(false);
+  }, [
+    canCreateTab,
+    config.global.reviewInstruction,
+    config.repositories,
+    createLoopedReviewWorkflow,
+    createTab,
+    isRunning,
+    removeLoopedReviewWorkflow,
+    selectedEnvironment,
+    selectedEnvironmentId,
+    selectedProjectId,
+    setupRunning,
+    workspaceReady,
+  ]);
 
   // Load run commands from orkestrator-ai.json when workspace is ready
   useEffect(() => {
@@ -1147,6 +1226,35 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   </Button>
               </ToolbarTooltipTrigger>
 
+              <ToolbarTooltipTrigger
+                tooltip={
+                  <>
+                    <p>Looped Code Review</p>
+                    <p className="text-xs text-muted-foreground">
+                      Discover, reconcile, fix, repeat, and create a PR
+                    </p>
+                  </>
+                }
+              >
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => setLoopedReviewDialogOpen(true)}
+                  disabled={
+                    !selectedEnvironment
+                    || !canCreateTab
+                    || !isRunning
+                    || !workspaceReady
+                    || setupRunning
+                  }
+                  aria-label="Looped code review"
+                >
+                  <Repeat2 className="h-4 w-4" />
+                  {isGrid && <span className="truncate text-xs">Looped review</span>}
+                </Button>
+              </ToolbarTooltipTrigger>
+
               {/* Play Button - Run Commands */}
               <ContextMenu>
                 <ToolbarContextMenuTrigger
@@ -1662,6 +1770,29 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           codex: config.global.codexReasoningEffort,
         }}
         onConfirm={handleConfiguredReview}
+      />
+      <ReviewLaunchDialog
+        kind="looped"
+        open={loopedReviewDialogOpen}
+        onOpenChange={setLoopedReviewDialogOpen}
+        defaultTabType={resolveDefaultReviewTabType({
+          defaultAgent,
+          environment: selectedEnvironment ?? undefined,
+          global: config.global,
+          repositoryConfig: selectedProjectId
+            ? config.repositories[selectedProjectId]
+            : undefined,
+        })}
+        catalog={buildReviewModelCatalog(selectedEnvironmentId ?? undefined)}
+        preferredModels={{
+          claude: config.global.claudeModel,
+          codex: config.global.codexModel,
+          opencode: config.global.opencodeModel,
+        }}
+        preferredReasoningEfforts={{
+          codex: config.global.codexReasoningEffort,
+        }}
+        onConfirm={handleLoopedReview}
       />
 
       {/* Settings Dialogs */}

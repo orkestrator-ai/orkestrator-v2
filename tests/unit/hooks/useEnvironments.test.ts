@@ -3,6 +3,7 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { useLoopedReviewStore } from "../../../apps/web/src/stores/loopedReviewStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, StartEnvironmentResult } from "../../../apps/web/src/types";
 import { createMockEnvironment } from "../utils/testFactories";
@@ -87,6 +88,7 @@ describe("useEnvironments", () => {
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
+    useLoopedReviewStore.setState({ workflows: new Map() });
     useConfigStore.setState({
       config: {
         version: "1.0",
@@ -499,6 +501,20 @@ describe("useEnvironments", () => {
       },
     });
     useBuildPipelineStore.getState().setPipelineEnvironment(pipelineId, "env-1");
+    const deletedWorkflowId = useLoopedReviewStore.getState().createWorkflow({
+      environmentId: "env-1",
+      projectId: "project-1",
+      agent: "claude",
+      model: "default",
+      targetBranch: "main",
+    });
+    const retainedWorkflowId = useLoopedReviewStore.getState().createWorkflow({
+      environmentId: "env-2",
+      projectId: "project-1",
+      agent: "claude",
+      model: "default",
+      targetBranch: "main",
+    });
 
     const { result } = renderHook(() => useEnvironments("project-1"));
 
@@ -514,6 +530,8 @@ describe("useEnvironments", () => {
     expect(result.current.allEnvironments).toHaveLength(0);
     expect(result.current.error).toBeNull();
     expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(false);
+    expect(useLoopedReviewStore.getState().workflows.has(deletedWorkflowId)).toBe(false);
+    expect(useLoopedReviewStore.getState().workflows.has(retainedWorkflowId)).toBe(true);
   });
 
   test("deleteEnvironment prunes the deleted environment's unread activity marker", async () => {
@@ -569,6 +587,13 @@ describe("useEnvironments", () => {
       },
     });
     useBuildPipelineStore.getState().setPipelineEnvironment(pipelineId, "env-1");
+    const workflowId = useLoopedReviewStore.getState().createWorkflow({
+      environmentId: "env-1",
+      projectId: "project-1",
+      agent: "claude",
+      model: "default",
+      targetBranch: "main",
+    });
 
     const { result } = renderHook(() => useEnvironments("project-1"));
 
@@ -582,6 +607,7 @@ describe("useEnvironments", () => {
 
     expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-1"]);
     expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(true);
+    expect(useLoopedReviewStore.getState().workflows.has(workflowId)).toBe(true);
   });
 
   test("deleteEnvironment sets error on failure", async () => {

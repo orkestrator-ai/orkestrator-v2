@@ -16,6 +16,7 @@ export interface PaneLayoutRestoreContext {
   isLocal: boolean;
   worktreePath?: string;
   hasBuildPipeline?: (pipelineId: string) => boolean;
+  hasLoopedReview?: (workflowId: string) => boolean;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -167,6 +168,21 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
         environmentId: context.environmentId,
         pipelineId,
         taskId,
+        isLocal: context.isLocal,
+      },
+    };
+  }
+
+  if (type === "looped-review") {
+    if (!isRecord(value.loopedReviewTabData)) return null;
+    const workflowId = nonEmptyString(value.loopedReviewTabData.workflowId);
+    if (!workflowId || !context.hasLoopedReview?.(workflowId)) return null;
+    return {
+      ...common,
+      type,
+      loopedReviewTabData: {
+        environmentId: context.environmentId,
+        workflowId,
         isLocal: context.isLocal,
       },
     };

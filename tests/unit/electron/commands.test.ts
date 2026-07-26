@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, promises as fs } from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -277,6 +277,7 @@ function createContext(
         if (index >= 0) environments.splice(index, 1);
       }),
       removeSessionsByEnvironment: mock(async () => undefined),
+      deleteLoopedReviewWorkflowsByEnvironment: mock(async () => undefined),
       deletePaneLayout: mock(async () => undefined),
       getProject: mock(async (projectId: string) => {
         if (options.project) return options.project.id === projectId ? options.project : null;
@@ -1828,6 +1829,8 @@ exit 0
 
       await commands.get("delete_environment")?.({ environmentId: environment.id }, context);
 
+      expect(context.storage.deleteLoopedReviewWorkflowsByEnvironment)
+        .toHaveBeenCalledWith(environment.id);
       expect(context.storage.deletePaneLayout).toHaveBeenCalledWith(environment.id);
 
       expect(
@@ -4066,6 +4069,143 @@ exit 1
         context,
       )).rejects.toThrow("HTTP 403: Resource protected");
     });
+  });
+
+  test("verifies a PR against the trusted project and environment branches", async () => {
+    const worktreePath = await createTempDir("ork-electron-verify-pr-");
+    const environment = createEnvironment({
+      worktreePath,
+      branch: "feature/local",
+    });
+    const { context } = createContext(environment, {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: "https://github.com/acme/repo.git",
+        localPath: null,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"feature/local","baseRefName":"main","state":"OPEN"}'
+`, async (logPath) => {
+      const verified = await commands.get("verify_environment_pr")?.({
+        environmentId: environment.id,
+        prUrl: "https://github.com/acme/repo/pull/42",
+        targetBranch: "main",
+      }, context);
+      expect(verified).toEqual({
+        url: "https://github.com/acme/repo/pull/42",
+        headRefName: "feature/local",
+        baseRefName: "main",
+        state: "OPEN",
+      });
+      expect(await fs.readFile(logPath, "utf8")).toContain(
+        "pr view https://github.com/acme/repo/pull/42 --json url,headRefName,baseRefName,state",
+      );
+    });
+
+    await expect(commands.get("verify_environment_pr")?.({
+      environmentId: environment.id,
+      prUrl: "https://github.com/other/repo/pull/42",
+      targetBranch: "main",
+    }, context)).rejects.toThrow("different repository");
+    await expect(commands.get("verify_environment_pr")?.({
+      environmentId: environment.id,
+      prUrl: "https://github.com/acme/repo/pull/42/",
+      targetBranch: "main",
+    }, context)).rejects.toThrow("canonical github.com URL");
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"other-branch","baseRefName":"main","state":"OPEN"}'
+`, async () => {
+      await expect(commands.get("verify_environment_pr")?.({
+        environmentId: environment.id,
+        prUrl: "https://github.com/acme/repo/pull/42",
+        targetBranch: "main",
+      }, context)).rejects.toThrow("head branch does not match");
+    });
+  });
+
+  test("verifies package refs, diff, changed-file set, content, and SHA", async () => {
+    const worktreePath = await createTempDir("ork-electron-verify-package-");
+    await execFileAsync("git", ["init", worktreePath]);
+    await execFileAsync("git", ["-C", worktreePath, "config", "user.email", "test@example.invalid"]);
+    await execFileAsync("git", ["-C", worktreePath, "config", "user.name", "Test"]);
+    await fs.writeFile(path.join(worktreePath, "review.txt"), "before\n");
+    await execFileAsync("git", ["-C", worktreePath, "add", "review.txt"]);
+    await execFileAsync("git", ["-C", worktreePath, "commit", "-m", "base"]);
+    await execFileAsync("git", ["-C", worktreePath, "branch", "-M", "main"]);
+    const { stdout: baseOutput } = await execFileAsync(
+      "git",
+      ["-C", worktreePath, "rev-parse", "HEAD"],
+    );
+    const baseRef = baseOutput.trim();
+    await execFileAsync(
+      "git",
+      ["-C", worktreePath, "update-ref", "refs/remotes/origin/main", baseRef],
+    );
+    await execFileAsync("git", ["-C", worktreePath, "checkout", "-b", "feature/local"]);
+    const content = "after\n";
+    await fs.writeFile(path.join(worktreePath, "review.txt"), content);
+    await execFileAsync("git", ["-C", worktreePath, "add", "review.txt"]);
+    await execFileAsync("git", ["-C", worktreePath, "commit", "-m", "change"]);
+    const [{ stdout: headOutput }, { stdout: diffOutput }] = await Promise.all([
+      execFileAsync("git", ["-C", worktreePath, "rev-parse", "HEAD"]),
+      execFileAsync("git", ["-C", worktreePath, "diff", "origin/main...HEAD"]),
+    ]);
+    const environment = createEnvironment({
+      worktreePath,
+      branch: "feature/local",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const changedFiles = [{
+      path: "review.txt",
+      status: "M",
+      content,
+      contentSha256: createHash("sha256").update(content).digest("hex"),
+    }];
+    const args = {
+      environmentId: environment.id,
+      targetBranch: "main",
+      baseRef,
+      headRef: headOutput.trim(),
+      completeDiff: diffOutput,
+      changedFiles,
+    };
+
+    await expect(
+      commands.get("verify_looped_review_package")?.(args, context),
+    ).resolves.toBe(true);
+    await expect(commands.get("verify_looped_review_package")?.({
+      ...args,
+      changedFiles: [{
+        ...changedFiles[0],
+        content: "tampered\n",
+        contentSha256: createHash("sha256").update("tampered\n").digest("hex"),
+      }],
+    }, context)).rejects.toThrow("content does not match workspace bytes");
+    await expect(commands.get("verify_looped_review_package")?.({
+      ...args,
+      headRef: "f".repeat(40),
+    }, context)).rejects.toThrow("HEAD does not match");
+    await expect(commands.get("verify_looped_review_package")?.({
+      ...args,
+      completeDiff: `${diffOutput}tampered`,
+    }, context)).rejects.toThrow("diff does not match");
+    await expect(commands.get("verify_looped_review_package")?.({
+      ...args,
+      changedFiles: [{ ...changedFiles[0], status: "A" }],
+    }, context)).rejects.toThrow("changed-file set does not match");
+    await expect(commands.get("verify_looped_review_package")?.({
+      ...args,
+      changedFiles: [{ ...changedFiles[0], path: "../review.txt" }],
+    }, context)).rejects.toThrow("parent directory traversal");
   });
 
   test("deletes the remote head branch during merged local environment cleanup", async () => {

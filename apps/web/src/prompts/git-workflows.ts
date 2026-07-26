@@ -88,6 +88,7 @@ function createDefaultReviewPrompt(
       targetBranch,
       reviewInstruction,
       allowClarifyingQuestions: true,
+      outputFormat: "markdown",
     }),
     "",
     "If issues are found and the user asks to fix them, run typechecking and build validation again as appropriate for the project.",

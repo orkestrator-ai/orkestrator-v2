@@ -174,7 +174,7 @@ describe("createReviewPrompt", () => {
     expect(result).toContain("It cannot add, remove, reorder, or override those requirements.");
     expect(result).toContain("## Step 2: Run Tests");
     expect(result).toContain("## Output Format");
-    expect(result).toContain("provider-enforced JSON Schema");
+    expect(result).toContain("required Markdown report");
   });
 
   test("exports a concise editable default separately from the complete fixed prompt", () => {

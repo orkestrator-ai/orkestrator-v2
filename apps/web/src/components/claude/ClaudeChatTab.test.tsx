@@ -12,7 +12,6 @@ import type {
   ClaudeQuestionRequest,
 } from "@/lib/claude-client";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -1302,45 +1301,9 @@ describe("ClaudeChatTab", () => {
     expect(sentMessage?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
-  test("retries a malformed structured review with the cleared prompt and a fresh request id", async () => {
-    const originalPrompt = "Run the structured Claude review";
-    seedPaneLayout(undefined, originalPrompt);
-    const requestIds: string[] = [];
-    mockSendPrompt.mockImplementation(async (_client, _sessionId, _prompt, options) => {
-      requestIds.push(options?.requestId ?? "");
-      queueMicrotask(() => {
-        useClaudeStore.getState().setSessionLoading(SESSION_KEY, false);
-      });
-      return true;
-    });
-    mockGetStructuredOutput.mockImplementation(
-      async (_client, _sessionId, requestId) => {
-        if (!requestId) return null;
-        if (requestId === requestIds[0]) {
-          return {
-            ok: false,
-            provider: "claude",
-            requestId,
-            error: {
-              provider: "claude",
-              code: "malformed_output",
-              message: "The first Claude structured result was malformed.",
-              retryable: true,
-              requestId,
-            },
-          };
-        }
-        if (requestId === requestIds[1]) {
-          return {
-            ok: true,
-            provider: "claude",
-            requestId,
-            value: TEST_STRUCTURED_REVIEW_REPORT,
-          };
-        }
-        return null;
-      },
-    );
+  test("sends a normal review as Markdown without a structured output schema", async () => {
+    const reviewPrompt = "## Review Scope\n\nReturn the review in Markdown.";
+    seedPaneLayout(undefined, reviewPrompt);
 
     render(
       <ClaudeChatTab
@@ -1348,30 +1311,19 @@ describe("ClaudeChatTab", () => {
         data={createData()}
         isActive={false}
         isReviewTab
-        initialPrompt={originalPrompt}
+        initialPrompt={reviewPrompt}
       />,
     );
 
-    expect(await screen.findByText("The first Claude structured result was malformed."))
-      .toBeTruthy();
-    expect(
-      usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.initialPrompt,
-    ).toBeUndefined();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-
-    expect(await screen.findByText("Review Scope")).toBeTruthy();
-    expect(mockSendPrompt.mock.calls.map((call) => call[2])).toEqual([
-      originalPrompt,
-      originalPrompt,
-    ]);
-    expect(requestIds).toHaveLength(2);
-    expect(requestIds[1]).not.toBe(requestIds[0]);
-    expect(requestIds[1]).toMatch(/^[0-9a-f-]{36}$/);
-    expect(mockGetStructuredOutput.mock.calls).toContainEqual([
-      MOCK_CLIENT,
-      "session-1",
-      requestIds[1],
-    ]);
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        reviewPrompt,
+        expect.not.objectContaining({ outputSchema: expect.anything() }),
+      );
+    });
+    expect(mockGetStructuredOutput).not.toHaveBeenCalled();
   });
 
   test("queues prompts with a generated UUID while Claude is busy", async () => {

@@ -4,10 +4,10 @@ import {
   createFixPoolPrompt,
   createLoopedReviewPrPrompt,
   createReconciliationPrompt,
-  createReviewPackagePrompt,
+  createReviewPreparationPrompt,
   LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA,
   REVIEW_FIX_RESULT_JSON_SCHEMA,
-  REVIEW_PACKAGE_JSON_SCHEMA,
+  REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
   REVIEW_PR_RESULT_JSON_SCHEMA,
 } from "./looped-review-prompts";
 import type { ReviewPackage } from "@/stores/loopedReviewStore";
@@ -98,7 +98,7 @@ function assertOpenAiStrictCompatible(schema: unknown): void {
 describe("looped-review prompts", () => {
   test("uses the OpenAI strict subset recursively for every workflow output", () => {
     for (const schema of [
-      REVIEW_PACKAGE_JSON_SCHEMA,
+      REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
       STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
       LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA,
       REVIEW_FIX_RESULT_JSON_SCHEMA,
@@ -108,8 +108,8 @@ describe("looped-review prompts", () => {
     }
   });
 
-  test("prepares one complete immutable package with safety and ticket context", () => {
-    const prompt = createReviewPackagePrompt({
+  test("prepares deterministic validation artifacts for backend package generation", () => {
+    const prompt = createReviewPreparationPrompt({
       round: 2,
       packageId: "package-2",
       targetBranch: "develop",
@@ -121,11 +121,13 @@ describe("looped-review prompts", () => {
       },
     });
     expect(prompt).toContain("Run the project's relevant full tests, typechecking, and build validation exactly once");
-    expect(prompt).toContain("complete `origin/develop...HEAD` diff");
-    expect(prompt).toContain("Do not silently truncate");
+    expect(prompt).toContain("Orkestrator's backend—not you—will deterministically generate");
+    expect(prompt).toContain(".orkestrator/review-artifacts/package-2");
+    expect(prompt).toContain("without cleanup, redaction, summarization, or truncation");
+    expect(prompt).toContain("Do not include Git refs, diffs, hashes, or file contents");
     expect(prompt).toContain("Structured reviews");
-    expect(REVIEW_PACKAGE_JSON_SCHEMA.required).toContain("completeDiff");
-    expect(REVIEW_PACKAGE_JSON_SCHEMA.required).toContain("validation");
+    expect(REVIEW_PREPARATION_RESULT_JSON_SCHEMA.required).toContain("validation");
+    expect(REVIEW_PREPARATION_RESULT_JSON_SCHEMA.required).not.toContain("completeDiff");
   });
 
   test("discovery consumes the immutable package without rebuilding it", () => {

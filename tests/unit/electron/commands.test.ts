@@ -4131,8 +4131,8 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     });
   });
 
-  test("verifies package refs, diff, changed-file set, content, and SHA", async () => {
-    const worktreePath = await createTempDir("ork-electron-verify-package-");
+  test("deterministically generates refs, diff, Git-object contents, hashes, and validation evidence", async () => {
+    const worktreePath = await createTempDir("ork-electron-generate-package-");
     await execFileAsync("git", ["init", worktreePath]);
     await execFileAsync("git", ["-C", worktreePath, "config", "user.email", "test@example.invalid"]);
     await execFileAsync("git", ["-C", worktreePath, "config", "user.name", "Test"]);
@@ -4152,59 +4152,152 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     await execFileAsync("git", ["-C", worktreePath, "checkout", "-b", "feature/local"]);
     const content = "after\n";
     await fs.writeFile(path.join(worktreePath, "review.txt"), content);
-    await execFileAsync("git", ["-C", worktreePath, "add", "review.txt"]);
+    await fs.writeFile(
+      path.join(worktreePath, "binary.dat"),
+      Buffer.from([0, 1, 2, 255]),
+    );
+    await execFileAsync(
+      "git",
+      ["-C", worktreePath, "add", "review.txt", "binary.dat"],
+    );
     await execFileAsync("git", ["-C", worktreePath, "commit", "-m", "change"]);
-    const [{ stdout: headOutput }, { stdout: diffOutput }] = await Promise.all([
-      execFileAsync("git", ["-C", worktreePath, "rev-parse", "HEAD"]),
-      execFileAsync("git", ["-C", worktreePath, "diff", "origin/main...HEAD"]),
-    ]);
+    const { stdout: headOutput } = await execFileAsync(
+      "git",
+      ["-C", worktreePath, "rev-parse", "HEAD"],
+    );
+    const packageId = "package-1";
+    const artifactDirectory = path.join(
+      worktreePath,
+      ".orkestrator",
+      "review-artifacts",
+      packageId,
+    );
+    await fs.mkdir(artifactDirectory, { recursive: true });
+    await fs.writeFile(
+      path.join(artifactDirectory, "validation-01.stdout.txt"),
+      "TOKEN=visible-for-review\nall tests passed\n",
+    );
+    await fs.writeFile(
+      path.join(artifactDirectory, "validation-01.stderr.txt"),
+      "exact warning output\n",
+    );
+    await fs.writeFile(path.join(worktreePath, "review.txt"), "later worktree edit\n");
+    await fs.writeFile(path.join(worktreePath, "unrelated.txt"), "leave me alone\n");
     const environment = createEnvironment({
       worktreePath,
       branch: "feature/local",
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    const changedFiles = [{
-      path: "review.txt",
-      status: "M",
-      content,
-      contentSha256: createHash("sha256").update(content).digest("hex"),
-    }];
     const args = {
       environmentId: environment.id,
+      packageId,
+      round: 2,
+      targetBranch: "main",
+      preparation: {
+        validation: [{
+          command: "bun test tests --parallel",
+          status: "passed",
+          exitCode: 0,
+          stdoutPath:
+            `.orkestrator/review-artifacts/${packageId}/validation-01.stdout.txt`,
+          stderrPath:
+            `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
+          durationMs: 123,
+          limitation: null,
+        }],
+        uncommittedFiles: [
+          {
+            path: "review.txt",
+            reason: "Later user edit after the prepared commit.",
+          },
+          {
+            path: "unrelated.txt",
+            reason: "Unrelated user file.",
+          },
+        ],
+        limitations: [],
+      },
+    };
+
+    const command = commands.get("generate_looped_review_package")!;
+    const first = await command(args, context) as Record<string, unknown>;
+    const second = await command(args, context) as Record<string, unknown>;
+    expect(second).toEqual(first);
+    expect(first).toMatchObject({
+      id: packageId,
+      round: 2,
       targetBranch: "main",
       baseRef,
       headRef: headOutput.trim(),
-      completeDiff: diffOutput,
-      changedFiles,
-    };
-
-    await expect(
-      commands.get("verify_looped_review_package")?.(args, context),
-    ).resolves.toBe(true);
-    await expect(commands.get("verify_looped_review_package")?.({
-      ...args,
-      changedFiles: [{
-        ...changedFiles[0],
-        content: "tampered\n",
-        contentSha256: createHash("sha256").update("tampered\n").digest("hex"),
+      commit: {
+        sha: headOutput.trim(),
+        subject: "change",
+        committedFiles: ["binary.dat", "review.txt"],
+      },
+      changedFiles: [
+        {
+          path: "binary.dat",
+          status: "A",
+          content: null,
+          contentSha256: null,
+          omittedReason:
+            "Binary content is represented by the complete binary Git diff.",
+        },
+        {
+          path: "review.txt",
+          status: "M",
+          content,
+          contentSha256: createHash("sha256").update(content).digest("hex"),
+          omittedReason: null,
+        },
+      ],
+      validation: [{
+        command: "bun test tests --parallel",
+        status: "passed",
+        exitCode: 0,
+        stdout: "TOKEN=visible-for-review\nall tests passed\n",
+        stderr: "exact warning output\n",
+        durationMs: 123,
+        limitation: null,
       }],
-    }, context)).rejects.toThrow("content does not match workspace bytes");
-    await expect(commands.get("verify_looped_review_package")?.({
+      skippedFiles: [{
+        path: "binary.dat",
+        reason: "Binary content is represented by the complete binary Git diff.",
+      }],
+      uncommittedFiles: [
+        {
+          path: "review.txt",
+          reason: "Later user edit after the prepared commit.",
+        },
+        {
+          path: "unrelated.txt",
+          reason: "Unrelated user file.",
+        },
+      ],
+      limitations: [],
+      context: null,
+    });
+    expect(first.completeDiff).toContain("diff --git a/review.txt b/review.txt");
+    expect(first.completeDiff).toContain("GIT binary patch");
+    expect(first.completeDiff).toMatch(/index [a-f0-9]{40}\.\.[a-f0-9]{40}/);
+
+    await expect(command({
       ...args,
-      headRef: "f".repeat(40),
-    }, context)).rejects.toThrow("HEAD does not match");
-    await expect(commands.get("verify_looped_review_package")?.({
+      preparation: {
+        ...args.preparation,
+        uncommittedFiles: [],
+      },
+    }, context)).rejects.toThrow("account for every uncommitted file");
+    await expect(command({
       ...args,
-      completeDiff: `${diffOutput}tampered`,
-    }, context)).rejects.toThrow("diff does not match");
-    await expect(commands.get("verify_looped_review_package")?.({
-      ...args,
-      changedFiles: [{ ...changedFiles[0], status: "A" }],
-    }, context)).rejects.toThrow("changed-file set does not match");
-    await expect(commands.get("verify_looped_review_package")?.({
-      ...args,
-      changedFiles: [{ ...changedFiles[0], path: "../review.txt" }],
+      preparation: {
+        ...args.preparation,
+        validation: [{
+          ...args.preparation.validation[0],
+          stdoutPath: "../validation.stdout.txt",
+        }],
+      },
     }, context)).rejects.toThrow("parent directory traversal");
   });
 

@@ -19,6 +19,7 @@ import {
   LoopedReviewTab,
   parseFixResult,
   parsePrResult,
+  parseReviewPreparationResult,
 } from "./LoopedReviewTab";
 import { LoopedReviewSupervisor } from "./LoopedReviewSupervisor";
 import {
@@ -160,6 +161,12 @@ const preparedPackage = {
   uncommittedFiles: [],
   limitations: [],
   context: null,
+};
+
+const successfulPreparation = {
+  validation: [],
+  uncommittedFiles: [],
+  limitations: [],
 };
 
 const successfulReconciliation = {
@@ -770,14 +777,14 @@ describe("app-lifetime looped-review controller", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  test("advances only after the backend verifies a prepared package", async () => {
+  test("advances only after the backend generates a deterministic package", async () => {
     const workflow = seedSentWorkflow("preparing");
-    const verifyPackage = mock(async () => true);
+    const generatePackage = mock(async () => preparedPackage);
     const agent = agentWith(async () => ({
       ok: true,
       provider: "codex",
       requestId: "request-1",
-      value: preparedPackage,
+      value: successfulPreparation,
     }));
 
     render(
@@ -787,7 +794,7 @@ describe("app-lifetime looped-review controller", () => {
         driveWorkflow
         controllerOnly
         connectAgent={async () => agent}
-        verifyPackage={verifyPackage}
+        generatePackage={generatePackage}
         pollIntervalMs={1}
       />,
     );
@@ -796,22 +803,22 @@ describe("app-lifetime looped-review controller", () => {
       expect(useLoopedReviewStore.getState().workflows.get(workflow.id)?.phase)
         .toBe("discovering");
     });
-    expect(verifyPackage).toHaveBeenCalledWith(
+    expect(generatePackage).toHaveBeenCalledWith(
       data.environmentId,
-      expect.objectContaining({
-        baseRef: "a".repeat(40),
-        headRef: "b".repeat(40),
-      }),
+      "review-package-workflow-review-r1",
+      1,
+      "main",
+      successfulPreparation,
     );
   });
 
-  test("fails closed when backend package verification rejects model evidence", async () => {
+  test("fails closed when deterministic package generation rejects preparation", async () => {
     const workflow = seedSentWorkflow("preparing");
     const agent = agentWith(async () => ({
       ok: true,
       provider: "codex",
       requestId: "request-1",
-      value: preparedPackage,
+      value: successfulPreparation,
     }));
 
     render(
@@ -821,8 +828,8 @@ describe("app-lifetime looped-review controller", () => {
         driveWorkflow
         controllerOnly
         connectAgent={async () => agent}
-        verifyPackage={async () => {
-          throw new Error("Review package diff does not match the environment diff");
+        generatePackage={async () => {
+          throw new Error("Preparation result does not account for every uncommitted file");
         }}
         pollIntervalMs={1}
       />,
@@ -926,6 +933,26 @@ describe("app-lifetime looped-review controller", () => {
 });
 
 describe("LoopedReviewTab result validation", () => {
+  test("accepts preparation metadata and rejects model-authored package evidence", () => {
+    expect(parseReviewPreparationResult(successfulPreparation))
+      .toEqual(successfulPreparation);
+    expect(() => parseReviewPreparationResult(preparedPackage)).toThrow(
+      "Review preparation result failed runtime validation",
+    );
+    expect(() => parseReviewPreparationResult({
+      ...successfulPreparation,
+      validation: [{
+        command: "bun test",
+        status: "passed",
+        exitCode: 1,
+        stdoutPath: "stdout.txt",
+        stderrPath: "stderr.txt",
+        durationMs: 10,
+        limitation: null,
+      }],
+    })).toThrow("Review preparation result failed runtime validation");
+  });
+
   test("rejects contradictory fix completion", () => {
     expect(() => parseFixResult({
       complete: true,

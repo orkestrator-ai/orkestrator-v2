@@ -1,9 +1,13 @@
 import { afterAll, describe, expect, mock, test, beforeEach, afterEach } from "bun:test";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { forwardRef, useImperativeHandle } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
+import { mockToastError } from "../../mocks/sonner";
 
 const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
+const mockGetFileTree = mock(async () => []);
+const mockGetLocalFileTree = mock(async () => []);
 const mockUpdateGlobalConfig = mock(async (global: any) => ({
   version: "1.0",
   global,
@@ -18,6 +22,7 @@ const mockCreateMention = mock(() => ({
   filename: "app.ts",
   relativePath: "src/app.ts",
 }));
+const mockInputFocus = mock(() => {});
 let mockFileMentionMenuOpen = false;
 
 // Snapshot the real SlashCommandMenu module BEFORE we stub it below, so we
@@ -54,8 +59,8 @@ mock.module("@/lib/backend", () => ({
   writeContainerFile: mockWriteContainerFile,
   writeLocalFile: mockWriteLocalFile,
   updateGlobalConfig: mockUpdateGlobalConfig,
-  getFileTree: async () => [],
-  getLocalFileTree: async () => [],
+  getFileTree: mockGetFileTree,
+  getLocalFileTree: mockGetLocalFileTree,
 }));
 
 // @/lib/native/clipboard is centrally mocked in tests/setup.ts.
@@ -64,14 +69,19 @@ mock.module("@/lib/backend", () => ({
 
 // Stub complex child components to isolate compose bar logic
 mock.module("@/components/chat/MentionableInput", () => ({
-  MentionableInput: (props: {
+  MentionableInput: forwardRef(function MockMentionableInput(props: {
     value: string;
     placeholder?: string;
     disabled?: boolean;
     onKeyDown?: (e: unknown) => void;
     onChange?: (text: string, mentions: unknown[]) => void;
     onCursorChange?: (position: number, text: string) => void;
-  }) => {
+  }, ref) {
+    useImperativeHandle(ref, () => ({
+      focus: mockInputFocus,
+      insertMention: () => {},
+      insertMentionAtCursor: () => {},
+    }));
     return (
       <textarea
         data-testid="mentionable-input"
@@ -85,7 +95,7 @@ mock.module("@/components/chat/MentionableInput", () => ({
         onKeyDown={props.onKeyDown as React.KeyboardEventHandler}
       />
     );
-  },
+  }),
 }));
 
 mock.module("@/components/claude/SlashCommandMenu", () => ({
@@ -128,6 +138,7 @@ import { useClaudeStore } from "../../../apps/web/src/stores/claudeStore";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "../../../apps/web/src/lib/review-actions";
+import type { Environment } from "../../../apps/web/src/types";
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {
@@ -149,10 +160,39 @@ const SESSION_KEY = `env-${ENV_ID}:${TAB_ID}`;
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 const defaultModels = [
   { id: "opus", name: "Opus", supportsFastMode: false, supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] as const },
   { id: "sonnet", name: "Sonnet", supportsFastMode: true, supportsEffort: true, supportedEffortLevels: ["low", "medium", "high"] as const },
 ];
+
+function createLocalEnvironment(): Environment {
+  return {
+    id: ENV_ID,
+    projectId: "project-1",
+    name: "Local environment",
+    branch: "main",
+    containerId: null,
+    status: "running",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: "2026-07-26T00:00:00.000Z",
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "local",
+    worktreePath: "/tmp/claude-worktree",
+  };
+}
 
 function renderComposeBar(overrides: Partial<Parameters<typeof ClaudeComposeBar>[0]> = {}) {
   const onSend = mock(() => {});
@@ -179,6 +219,10 @@ describe("ClaudeComposeBar", () => {
     mockReadImage.mockReset();
     mockWriteContainerFile.mockReset();
     mockWriteLocalFile.mockReset();
+    mockGetFileTree.mockReset();
+    mockGetFileTree.mockResolvedValue([]);
+    mockGetLocalFileTree.mockReset();
+    mockGetLocalFileTree.mockResolvedValue([]);
     mockUpdateGlobalConfig.mockReset();
     mockUpdateGlobalConfig.mockImplementation(async (global: any) => ({
       version: "1.0",
@@ -197,6 +241,8 @@ describe("ClaudeComposeBar", () => {
       filename: "app.ts",
       relativePath: "src/app.ts",
     }));
+    mockInputFocus.mockReset();
+    mockToastError.mockClear();
     mockFileMentionMenuOpen = false;
     mockReadImage.mockImplementation(async () => ({
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
@@ -221,6 +267,7 @@ describe("ClaudeComposeBar", () => {
       sessionInitData: new Map(),
       contextUsage: new Map(),
     });
+    useEnvironmentStore.setState({ environments: [] });
     useConfigStore.getState().updateGlobalConfig({ claudeModel: "opus" });
   });
 
@@ -387,6 +434,23 @@ describe("ClaudeComposeBar", () => {
     );
   });
 
+  test("reports an Address all failure and allows retrying", async () => {
+    const onSend = mock(async () => {
+      throw new Error("review bridge unavailable");
+    });
+    renderComposeBar({ showAddressAll: true, onSend });
+    const addressAll = screen.getByRole("button", { name: "Address all" });
+
+    fireEvent.click(addressAll);
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt");
+      expect(addressAll.hasAttribute("disabled")).toBe(false);
+    });
+
+    fireEvent.click(addressAll);
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+  });
+
   test("hides Address all while Claude is loading", () => {
     renderComposeBar({ showAddressAll: true, isLoading: true });
 
@@ -429,6 +493,145 @@ describe("ClaudeComposeBar", () => {
       expect(onSend).toHaveBeenCalledWith("Ship the release", [], "high", false, false);
     });
     expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("");
+  });
+
+  test.each([
+    ["send", false, "Send message"],
+    ["queue", true, "Add to queue"],
+  ] as const)(
+    "preserves newer compose state while a %s request is pending",
+    async (_kind, isLoading, buttonTitle) => {
+      const gate = deferred();
+      const pending = mock(() => gate.promise);
+      const submittedAttachment = {
+        id: "submitted-attachment",
+        type: "file" as const,
+        path: "/workspace/submitted.txt",
+        name: "submitted.txt",
+      };
+      const nextAttachment = {
+        id: "next-attachment",
+        type: "image" as const,
+        path: "/workspace/next.png",
+        name: "next.png",
+      };
+      const submittedMention = {
+        id: "submitted-mention",
+        filename: "submitted.ts",
+        relativePath: "src/submitted.ts",
+      };
+      const nextMention = {
+        id: "next-mention",
+        filename: "next.ts",
+        relativePath: "src/next.ts",
+      };
+      const store = useClaudeStore.getState();
+      store.setDraftText(SESSION_KEY, "Submit this");
+      store.setDraftMentions(SESSION_KEY, [submittedMention]);
+      store.addAttachment(SESSION_KEY, submittedAttachment);
+      renderComposeBar({
+        isLoading,
+        ...(isLoading ? { onQueue: pending } : { onSend: pending }),
+      });
+
+      fireEvent.click(screen.getByTitle(buttonTitle));
+      await waitFor(() => expect(pending).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId("mentionable-input").hasAttribute("disabled")).toBe(true);
+      expect(
+        screen.getByRole("button", { name: "Add attachment" }).hasAttribute("disabled"),
+      ).toBe(true);
+
+      act(() => {
+        const latest = useClaudeStore.getState();
+        latest.setDraftText(SESSION_KEY, "Compose next");
+        latest.setDraftMentions(SESSION_KEY, [nextMention]);
+        latest.addAttachment(SESSION_KEY, nextAttachment);
+      });
+
+      await act(async () => {
+        gate.resolve();
+        await gate.promise;
+      });
+
+      await waitFor(() => {
+        const latest = useClaudeStore.getState();
+        expect(latest.getDraftText(SESSION_KEY)).toBe("Compose next");
+        expect(latest.getDraftMentions(SESSION_KEY)).toEqual([nextMention]);
+        expect(latest.getAttachments(SESSION_KEY)).toEqual([nextAttachment]);
+      });
+      expect(pending).toHaveBeenCalledWith(
+        "Submit this",
+        [submittedAttachment],
+        "high",
+        false,
+        false,
+      );
+    },
+  );
+
+  test("preserves same-text draft state when mention metadata changes during send", async () => {
+    const gate = deferred();
+    const onSend = mock(() => gate.promise);
+    const submittedMention = {
+      id: "mention-1",
+      filename: "app.ts",
+      relativePath: "src/app.ts",
+    };
+    const updatedMention = {
+      ...submittedMention,
+      relativePath: "packages/app.ts",
+    };
+    const store = useClaudeStore.getState();
+    store.setDraftText(SESSION_KEY, "Review @app.ts");
+    store.setDraftMentions(SESSION_KEY, [submittedMention]);
+    renderComposeBar({ onSend });
+
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    act(() => {
+      useClaudeStore.getState().setDraftMentions(SESSION_KEY, [updatedMention]);
+    });
+
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
+    });
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe(
+        "Review @app.ts",
+      );
+      expect(useClaudeStore.getState().getDraftMentions(SESSION_KEY)).toEqual([
+        updatedMention,
+      ]);
+    });
+  });
+
+  test("closes and disables an open attachment picker while sending", async () => {
+    const gate = deferred();
+    const onSend = mock(() => gate.promise);
+    useEnvironmentStore.setState({ environments: [createLocalEnvironment()] });
+    useClaudeStore.getState().setDraftText(SESSION_KEY, "Send while picker is open");
+    renderComposeBar({ onSend });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+    );
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Add attachment" }).hasAttribute("disabled"),
+      ).toBe(true);
+    });
+
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
+    });
   });
 
   test("sends an attachment-only prompt", async () => {
@@ -603,6 +806,46 @@ describe("ClaudeComposeBar", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  test("navigates slash commands with arrows and selects with Tab", async () => {
+    const { onSend } = renderComposeBar();
+    const input = screen.getByTestId("mentionable-input");
+    fireEvent.change(input, { target: { value: "/" } });
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    fireEvent.keyDown(input, { key: "Tab" });
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("/clear ");
+    });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  test("Escape closes slash selection so Enter sends the literal draft", async () => {
+    const { onSend } = renderComposeBar();
+    const input = screen.getByTestId("mentionable-input");
+    fireEvent.change(input, { target: { value: "/rev" } });
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("/rev", [], "high", false, false);
+    });
+  });
+
+  test("toggles plan mode with Shift+Tab without submitting", async () => {
+    const { onSend } = renderComposeBar();
+    const input = screen.getByTestId("mentionable-input");
+
+    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().isPlanMode(SESSION_KEY)).toBe(true);
+    });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   test("includes /goal in fallback slash commands", async () => {
     const { onSend } = renderComposeBar();
     const input = screen.getByTestId("mentionable-input") as HTMLTextAreaElement;
@@ -618,6 +861,138 @@ describe("ClaudeComposeBar", () => {
       expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("/goal ");
     });
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  test("portals the attachment menu and attaches a workspace file", async () => {
+    useEnvironmentStore.setState({ environments: [createLocalEnvironment()] });
+    mockGetLocalFileTree.mockResolvedValue([{
+      name: "requirements.md",
+      path: "docs/requirements.md",
+      isDirectory: false,
+      extension: ".md",
+    }]);
+    const { container } = renderComposeBar();
+    const toolbar = container.querySelector("[data-native-compose-toolbar]")!;
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    const menu = await screen.findByRole("menu");
+    expect(toolbar.contains(menu)).toBe(false);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Attach file from workspace" }));
+    fireEvent.click(await screen.findByRole("button", { name: /requirements\.md/ }));
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getAttachments(SESSION_KEY)).toEqual([
+        expect.objectContaining({
+          type: "file",
+          path: "/tmp/claude-worktree/docs/requirements.md",
+          name: "requirements.md",
+        }),
+      ]);
+    });
+  });
+
+  test("rejects an invalid workspace selection without adding an attachment", async () => {
+    useEnvironmentStore.setState({ environments: [createLocalEnvironment()] });
+    mockGetLocalFileTree.mockResolvedValue([{
+      name: "secret.txt",
+      path: "../secret.txt",
+      isDirectory: false,
+      extension: ".txt",
+    }]);
+    renderComposeBar();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /secret\.txt/ }));
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Cannot attach file",
+        expect.objectContaining({
+          description: "Environment not properly configured for attachments",
+        }),
+      );
+    });
+    expect(useClaudeStore.getState().getAttachments(SESSION_KEY)).toEqual([]);
+  });
+
+  test("attaches and forwards a container image, then restores input focus", async () => {
+    mockGetFileTree.mockResolvedValue([{
+      name: "diagram.PNG",
+      path: "assets/diagram.PNG",
+      isDirectory: false,
+      extension: ".PNG",
+    }]);
+    const { onSend } = renderComposeBar({ containerId: "container-1" });
+    const focusCountAfterMount = mockInputFocus.mock.calls.length;
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /diagram\.PNG/ }));
+
+    await waitFor(() => {
+      expect(mockInputFocus.mock.calls.length).toBeGreaterThan(focusCountAfterMount);
+      expect(useClaudeStore.getState().getAttachments(SESSION_KEY)).toEqual([
+        expect.objectContaining({
+          type: "image",
+          path: "/workspace/assets/diagram.PNG",
+          name: "diagram.PNG",
+        }),
+      ]);
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith(
+        "",
+        [
+          expect.objectContaining({
+            type: "image",
+            path: "/workspace/assets/diagram.PNG",
+          }),
+        ],
+        "high",
+        false,
+        false,
+      );
+    });
+  });
+
+  test("reports file search failures", async () => {
+    mockGetLocalFileTree.mockRejectedValue(new Error("tree unavailable"));
+    useEnvironmentStore.setState({ environments: [createLocalEnvironment()] });
+    renderComposeBar();
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Failed to load files for @mentions",
+        expect.objectContaining({ description: "tree unavailable" }),
+      );
+    });
+  });
+
+  test("stops loading and removes an attachment", async () => {
+    const { onStop } = renderComposeBar({ isLoading: true });
+
+    fireEvent.click(screen.getByTitle("Stop current query"));
+    act(() => {
+      useClaudeStore.getState().addAttachment(SESSION_KEY, {
+        id: "remove-me",
+        type: "file",
+        path: "/workspace/remove-me.txt",
+        name: "remove-me.txt",
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Remove remove-me.txt" }));
+
+    expect(onStop).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getAttachments(SESSION_KEY)).toEqual([]);
+    });
   });
 
   test("adds a pasted image attachment through the shared paste hook", async () => {

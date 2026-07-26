@@ -92,9 +92,8 @@ export function resolveDefaultReviewTabType(options: {
   global: GlobalConfig;
   repositoryConfig?: RepositoryConfig;
 }): ReviewTabType {
-  // Reviews are always native because only native providers can enforce and
-  // return the shared structured-review schema. Environment mode preferences
-  // still govern ordinary tabs.
+  // The review launcher exposes per-run native model and reasoning controls.
+  // Environment mode preferences still govern ordinary tabs.
   if (options.defaultAgent === "claude") return "claude-native";
   if (options.defaultAgent === "opencode") return "opencode-native";
   return "codex-native";

@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback, type KeyboardEvent } from "react";
-import { X, Plus, FileText, Image as ImageIcon, ChevronDown, ChevronUp, ArrowUp, Check, Square, Zap } from "lucide-react";
+import { X, FileText, ChevronDown, ChevronUp, ArrowUp, Check, Square, Zap } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,6 +27,10 @@ import type { ClaudeModel } from "@/lib/claude-client";
 import { SlashCommandMenu, parseSlashCommands } from "./SlashCommandMenu";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
+import {
+  createWorkspaceAttachment,
+  NativeAttachmentMenu,
+} from "@/components/chat/NativeAttachmentMenu";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useFileMentions } from "@/hooks/useFileMentions";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
@@ -72,6 +76,19 @@ interface ClaudeComposeBarProps {
 const MAX_LINES = 12;
 const LINE_HEIGHT = 20;
 
+function fileMentionsEqual(
+  left: readonly FileMention[],
+  right: readonly FileMention[],
+): boolean {
+  return left.length === right.length && left.every((mention, index) => {
+    const other = right[index];
+    return other !== undefined
+      && mention.id === other.id
+      && mention.filename === other.filename
+      && mention.relativePath === other.relativePath;
+  });
+}
+
 export function ClaudeComposeBar({
   environmentId,
   tabId,
@@ -87,10 +104,8 @@ export function ClaudeComposeBar({
   layout = "bottom",
 }: ClaudeComposeBarProps) {
   const [isSending, setIsSending] = useState(false);
-  const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
-  const attachmentMenuRef = useRef<HTMLDivElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
 
   // Create sessionKey for store lookups (format: "env-{environmentId}:{tabId}")
@@ -142,7 +157,8 @@ export function ClaudeComposeBar({
   );
 
   // File search hook for @ mentions
-  const { searchFiles, error: fileSearchError, refresh: refreshFileTree } = useFileSearch(containerId, worktreePath);
+  const fileSearch = useFileSearch(containerId, worktreePath);
+  const { searchFiles, error: fileSearchError, refresh: refreshFileTree } = fileSearch;
 
   // Show toast if file search fails to load
   useEffect(() => {
@@ -246,6 +262,27 @@ export function ClaudeComposeBar({
     [createMention, closeFileMentionMenu]
   );
 
+  const handleWorkspaceFileSelect = useCallback(
+    (file: FileCandidate) => {
+      if (disabled || isSending) {
+        return;
+      }
+      const attachment = createWorkspaceAttachment(
+        file,
+        containerId,
+        worktreePath,
+      );
+      if (!attachment) {
+        toast.error("Cannot attach file", {
+          description: "Environment not properly configured for attachments",
+        });
+        return;
+      }
+      addAttachment(sessionKey, attachment);
+    },
+    [addAttachment, containerId, disabled, isSending, sessionKey, worktreePath],
+  );
+
   // Focus input on mount
   useEffect(() => {
     inputRef.current?.focus();
@@ -287,23 +324,6 @@ export function ClaudeComposeBar({
     },
     [setText]
   );
-
-  // Close attachment menu when clicking outside
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (
-        attachmentMenuRef.current &&
-        !attachmentMenuRef.current.contains(event.target as Node)
-      ) {
-        setShowAttachmentMenu(false);
-      }
-    }
-
-    if (showAttachmentMenu) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
-    }
-  }, [showAttachmentMenu]);
 
   useNativeComposeBarPaste({
     inputContainerRef,
@@ -368,6 +388,9 @@ export function ClaudeComposeBar({
     if (isSending || disabled) return;
     if (attachments.length === 0 && !text.trim()) return;
 
+    const submittedText = text;
+    const submittedMentions = mentions;
+    const submittedAttachments = attachments;
     setIsSending(true);
     const isQueueing = isLoading && Boolean(onQueue);
     try {
@@ -397,9 +420,20 @@ export function ClaudeComposeBar({
           currentFastModeEnabled,
         );
       }
-      setText("");
-      setMentions([]);
-      clearAttachments(sessionKey);
+      const store = useClaudeStore.getState();
+      if (
+        store.getDraftText(sessionKey) === submittedText
+        && fileMentionsEqual(
+          store.getDraftMentions(sessionKey),
+          submittedMentions,
+        )
+      ) {
+        store.setDraftText(sessionKey, "");
+        store.setDraftMentions(sessionKey, []);
+      }
+      for (const attachment of submittedAttachments) {
+        store.removeAttachment(sessionKey, attachment.id);
+      }
     } catch (error) {
       console.error(
         `[ClaudeComposeBar] Failed to ${isQueueing ? "queue" : "send"} prompt:`,
@@ -546,7 +580,9 @@ export function ClaudeComposeBar({
               <span className="max-w-[120px] truncate">{att.name}</span>
               <button
                 onClick={() => handleRemoveAttachment(att.id)}
+                disabled={disabled || isSending}
                 className="ml-1 p-0.5 rounded-full hover:bg-muted"
+                aria-label={`Remove ${att.name}`}
               >
                 <X className="w-3 h-3" />
               </button>
@@ -601,38 +637,13 @@ export function ClaudeComposeBar({
           data-native-compose-controls="primary"
           className="flex w-full min-w-0 items-center gap-1 sm:w-auto"
         >
-        {/* Attachment button */}
-        <div className="relative" ref={attachmentMenuRef}>
-          <button
-            className="p-1.5 rounded hover:bg-muted/50 text-muted-foreground hover:text-foreground transition-colors"
-            disabled={disabled}
-            onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
-          >
-            <Plus className="w-4 h-4" />
-          </button>
-
-          {/* Attachment menu popover */}
-          {showAttachmentMenu && (
-            <div className="absolute bottom-full left-0 z-50 mb-1 w-56 rounded-xl border border-zinc-700/70 bg-zinc-900/95 p-1 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm">
-              <button
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-zinc-800/70 hover:text-foreground"
-                onClick={() => {
-                  setShowAttachmentMenu(false);
-                }}
-              >
-                <FileText className="w-4 h-4" />
-                Attach file from workspace
-              </button>
-              <button
-                className="flex w-full cursor-default items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground"
-                disabled
-              >
-                <ImageIcon className="w-4 h-4" />
-                Paste image (Cmd+V)
-              </button>
-            </div>
-          )}
-        </div>
+          <NativeAttachmentMenu
+            key={isSending ? "sending" : "idle"}
+            disabled={disabled || isSending}
+            fileSearch={fileSearch}
+            onSelectFile={handleWorkspaceFileSelect}
+            onCloseAutoFocus={() => inputRef.current?.focus()}
+          />
 
         {/* Model dropdown - minimal style */}
         <DropdownMenu>

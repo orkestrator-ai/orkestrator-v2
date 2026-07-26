@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { getFileTree, getLocalFileTree, type FileNode } from "@/lib/backend";
 import type { FileCandidate } from "@/types";
 
@@ -14,46 +14,93 @@ export function useFileSearch(
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestGenerationRef = useRef(0);
+  const activeRequestRef = useRef<{
+    key: string;
+    generation: number;
+    promise: Promise<void>;
+  } | null>(null);
 
   // Determine if environment is available
   const isAvailable = !!(containerId || worktreePath);
 
   // Load file tree from environment
-  const loadFileTree = useCallback(async () => {
+  const loadFileTree = useCallback((): Promise<void> => {
     if (!isAvailable) {
+      requestGenerationRef.current += 1;
+      activeRequestRef.current = null;
       setFileTree([]);
-      return;
+      setIsLoading(false);
+      setError(null);
+      return Promise.resolve();
     }
 
+    const requestKey = worktreePath
+      ? `worktree:${worktreePath}`
+      : `container:${containerId}`;
+    const activeRequest = activeRequestRef.current;
+    if (activeRequest?.key === requestKey) {
+      return activeRequest.promise;
+    }
+
+    const requestGeneration = requestGenerationRef.current + 1;
+    requestGenerationRef.current = requestGeneration;
     setIsLoading(true);
     setError(null);
 
-    try {
-      let tree: FileNode[] = [];
-      if (worktreePath) {
-        // Local environment - use local file tree command
-        tree = await getLocalFileTree(worktreePath);
-      } else if (containerId) {
-        // Container environment - use container file tree command
-        tree = await getFileTree(containerId);
+    const promise = Promise.resolve().then(async () => {
+      try {
+        let tree: FileNode[] = [];
+        if (worktreePath) {
+          // Local environment - use local file tree command
+          tree = await getLocalFileTree(worktreePath);
+        } else if (containerId) {
+          // Container environment - use container file tree command
+          tree = await getFileTree(containerId);
+        }
+
+        if (requestGenerationRef.current === requestGeneration) {
+          setFileTree(tree);
+        }
+      } catch (err) {
+        if (requestGenerationRef.current === requestGeneration) {
+          console.error("[useFileSearch] Failed to load file tree:", err);
+          setError(err instanceof Error ? err.message : "Failed to load files");
+          setFileTree([]);
+        }
+      } finally {
+        if (requestGenerationRef.current === requestGeneration) {
+          setIsLoading(false);
+        }
+        if (activeRequestRef.current?.generation === requestGeneration) {
+          activeRequestRef.current = null;
+        }
       }
-      setFileTree(tree);
-    } catch (err) {
-      console.error("[useFileSearch] Failed to load file tree:", err);
-      setError(err instanceof Error ? err.message : "Failed to load files");
-      setFileTree([]);
-    } finally {
-      setIsLoading(false);
-    }
+    });
+
+    activeRequestRef.current = {
+      key: requestKey,
+      generation: requestGeneration,
+      promise,
+    };
+    return promise;
   }, [isAvailable, containerId, worktreePath]);
 
   // Load file tree on mount and when environment changes
   useEffect(() => {
     if (!enabled) {
+      requestGenerationRef.current += 1;
+      activeRequestRef.current = null;
+      setIsLoading(false);
       return;
     }
 
-    loadFileTree();
+    void loadFileTree();
+
+    return () => {
+      requestGenerationRef.current += 1;
+      activeRequestRef.current = null;
+    };
   }, [enabled, loadFileTree]);
 
   // Flatten hierarchical file tree into searchable array of files and directories
@@ -97,10 +144,18 @@ export function useFileSearch(
    * Returns up to `limit` results (default 30).
    */
   const searchFiles = useCallback(
-    (query: string, limit = 30): FileCandidate[] => {
+    (
+      query: string,
+      limit = 30,
+      options?: { filesOnly?: boolean },
+    ): FileCandidate[] => {
+      const candidates = options?.filesOnly
+        ? flatFiles.filter((file) => !file.isDirectory)
+        : flatFiles;
+
       if (!query) {
         // Return first N files when no query, sorted by path length (shorter first)
-        return [...flatFiles]
+        return [...candidates]
           .sort((a, b) => a.relativePath.length - b.relativePath.length)
           .slice(0, limit);
       }
@@ -112,7 +167,7 @@ export function useFileSearch(
       // - Filename contains = 3
       // - Path segment prefix = 2 (e.g., "hook" matches src/hooks/)
       // - Path contains = 1 (substring match anywhere in path)
-      const scored = flatFiles
+      const scored = candidates
         .map((file) => {
           const lowerFilename = file.filename.toLowerCase();
           const lowerPath = file.relativePath.toLowerCase();

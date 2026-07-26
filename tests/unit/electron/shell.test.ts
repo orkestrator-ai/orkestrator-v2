@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { APP_SLUG } from "../../../apps/backend/src/core/constants";
+import { MAX_BINARY_FILE_BYTES } from "../../../apps/backend/src/core/path-safety";
 import {
   commandExists,
   homePath,
@@ -45,10 +46,33 @@ describe("Electron shell file helpers", () => {
 
     expect(await readFileBase64(allowedFile)).toBe(Buffer.from("image-bytes").toString("base64"));
 
+    const linkedFile = path.join(allowedDir, "linked.png");
+    const chainedFile = path.join(allowedDir, "chained.png");
+    await fs.symlink(allowedFile, linkedFile);
+    await fs.symlink(linkedFile, chainedFile);
+    await expect(readFileBase64(linkedFile)).rejects.toThrow("symbolic links are not allowed");
+    await expect(readFileBase64(chainedFile)).rejects.toThrow("symbolic links are not allowed");
+
+    const oversizedFile = path.join(allowedDir, "oversized.png");
+    await fs.writeFile(oversizedFile, Buffer.alloc(MAX_BINARY_FILE_BYTES + 1, 1));
+    await expect(readFileBase64(oversizedFile)).rejects.toThrow(
+      `File exceeds ${MAX_BINARY_FILE_BYTES} bytes`,
+    );
+
     const outsideRoot = await createTempDir("ork-shell-outside-");
     const disallowedFile = path.join(outsideRoot, "Downloads", "image.png");
     await fs.mkdir(path.dirname(disallowedFile), { recursive: true });
     await fs.writeFile(disallowedFile, "outside");
+    const linkedDirectory = path.join(allowedDir, "outside-directory");
+    await fs.symlink(path.dirname(disallowedFile), linkedDirectory);
+    await expect(readFileBase64(path.join(linkedDirectory, "image.png"))).rejects.toThrow(
+      "symbolic links are not allowed",
+    );
+
+    const directoryTarget = path.join(allowedDir, "folder.png");
+    await fs.mkdir(directoryTarget);
+    await expect(readFileBase64(directoryTarget)).rejects.toThrow("not a stable regular file");
+
     await expect(readFileBase64(disallowedFile)).rejects.toThrow("outside Orkestrator workspace storage");
   });
 

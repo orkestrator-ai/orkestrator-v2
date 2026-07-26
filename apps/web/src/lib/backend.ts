@@ -45,9 +45,8 @@ import type {
   GitHubIssueStatus,
 } from "@/types/github";
 import type {
-  ReviewPackage,
-  ReviewPackageFile,
-} from "@/stores/loopedReviewStore";
+  ReviewPreparationResult,
+} from "@/lib/looped-review-prompts";
 
 /** PR detection result containing URL, state, and merge conflict status */
 export interface PrDetectionResult {
@@ -494,31 +493,19 @@ export async function verifyEnvironmentPr(
   });
 }
 
-export async function verifyLoopedReviewPackage(
+export async function generateLoopedReviewPackage(
   environmentId: string,
-  reviewPackage: Pick<
-    ReviewPackage,
-    "targetBranch" | "baseRef" | "headRef" | "completeDiff" | "changedFiles"
-  >,
-): Promise<boolean> {
-  const changedFiles: Array<Pick<
-    ReviewPackageFile,
-    "path" | "status" | "content" | "contentSha256"
-  >> = Array.isArray(reviewPackage.changedFiles)
-    ? reviewPackage.changedFiles.map((file) => ({
-      path: file.path,
-      status: file.status,
-      content: file.content,
-      contentSha256: file.contentSha256,
-    }))
-    : [];
-  return invoke<boolean>("verify_looped_review_package", {
+  packageId: string,
+  round: number,
+  targetBranch: string,
+  preparation: ReviewPreparationResult,
+): Promise<unknown> {
+  return invoke<unknown>("generate_looped_review_package", {
     environmentId,
-    targetBranch: reviewPackage.targetBranch,
-    baseRef: reviewPackage.baseRef,
-    headRef: reviewPackage.headRef,
-    completeDiff: reviewPackage.completeDiff,
-    changedFiles,
+    packageId,
+    round,
+    targetBranch,
+    preparation,
   });
 }
 

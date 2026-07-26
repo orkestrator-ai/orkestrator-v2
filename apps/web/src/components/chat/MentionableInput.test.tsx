@@ -7,6 +7,7 @@ import type { FileMention } from "@/types";
 describe("MentionableInput", () => {
   afterEach(() => {
     cleanup();
+    window.getSelection()?.removeAllRanges();
   });
 
   test("restores draft text into the DOM on first render", () => {
@@ -313,6 +314,187 @@ describe("MentionableInput", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  test("inserts a picker mention at the last known cursor without an active token", () => {
+    const onChange = mock(() => {});
+    const inputRef = createRef<MentionableInputRef>();
+    render(
+      <MentionableInput
+        ref={inputRef}
+        value="Review utils"
+        mentions={[]}
+        onChange={onChange}
+      />,
+    );
+
+    inputRef.current!.insertMentionAtCursor({
+      id: "mention-1",
+      filename: "utils.ts",
+      relativePath: "src/utils.ts",
+    });
+
+    expect(onChange).toHaveBeenCalledWith(
+      "Review utils @utils.ts ",
+      [{ id: "mention-1", filename: "utils.ts", relativePath: "src/utils.ts" }],
+    );
+  });
+
+  test.each([
+    {
+      name: "at the start before non-whitespace",
+      value: "Review this",
+      cursor: 0,
+      expectedText: "@utils.ts Review this",
+      expectedCursor: "@utils.ts ".length,
+    },
+    {
+      name: "between non-whitespace and existing whitespace",
+      value: "Review this",
+      cursor: "Review".length,
+      expectedText: "Review @utils.ts this",
+      expectedCursor: "Review @utils.ts".length,
+    },
+    {
+      name: "between existing whitespace and non-whitespace",
+      value: "Review this",
+      cursor: "Review ".length,
+      expectedText: "Review @utils.ts this",
+      expectedCursor: "Review @utils.ts ".length,
+    },
+    {
+      name: "between whitespace on both sides",
+      value: "Review  this",
+      cursor: "Review ".length,
+      expectedText: "Review @utils.ts this",
+      expectedCursor: "Review @utils.ts".length,
+    },
+    {
+      name: "between non-whitespace on both sides",
+      value: "Reviewthis",
+      cursor: "Review".length,
+      expectedText: "Review @utils.ts this",
+      expectedCursor: "Review @utils.ts ".length,
+    },
+    {
+      name: "at the end after existing whitespace",
+      value: "Review ",
+      cursor: "Review ".length,
+      expectedText: "Review @utils.ts ",
+      expectedCursor: "Review @utils.ts ".length,
+    },
+    {
+      name: "in an empty draft",
+      value: "",
+      cursor: 0,
+      expectedText: "@utils.ts ",
+      expectedCursor: "@utils.ts ".length,
+    },
+  ])(
+    "inserts a picker mention $name",
+    ({ value, cursor, expectedText, expectedCursor }) => {
+      const inputRef = createRef<MentionableInputRef>();
+
+      function Harness() {
+        const [draftText, setDraftText] = useState<string>(value);
+        const [draftMentions, setDraftMentions] = useState<FileMention[]>([]);
+
+        return (
+          <MentionableInput
+            ref={inputRef}
+            value={draftText}
+            mentions={draftMentions}
+            onChange={(newText, newMentions) => {
+              setDraftText(newText);
+              setDraftMentions(newMentions);
+            }}
+          />
+        );
+      }
+
+      const { container } = render(<Harness />);
+      const input = container.querySelector("[contenteditable]") as HTMLElement;
+      const selection = window.getSelection()!;
+      const range = document.createRange();
+      if (input.firstChild) {
+        range.setStart(input.firstChild, cursor);
+      } else {
+        range.setStart(input, 0);
+      }
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+
+      act(() => {
+        inputRef.current!.insertMentionAtCursor({
+          id: "mention-1",
+          filename: "utils.ts",
+          relativePath: "src/utils.ts",
+        });
+      });
+
+      expect(input.textContent).toBe(expectedText);
+      expect(inputRef.current!.getCursorPosition()).toBe(expectedCursor);
+    },
+  );
+
+  test("restores focus and the remembered mid-text caret after picker insertion", () => {
+    const inputRef = createRef<MentionableInputRef>();
+    const onCursorChange = mock(() => {});
+
+    function Harness() {
+      const [draftText, setDraftText] = useState("Review this");
+      const [draftMentions, setDraftMentions] = useState<FileMention[]>([]);
+
+      return (
+        <>
+          <button type="button" data-testid="picker-focus-target">
+            Picker
+          </button>
+          <MentionableInput
+            ref={inputRef}
+            value={draftText}
+            mentions={draftMentions}
+            onChange={(newText, newMentions) => {
+              setDraftText(newText);
+              setDraftMentions(newMentions);
+            }}
+            onCursorChange={onCursorChange}
+          />
+        </>
+      );
+    }
+
+    const { container, getByTestId } = render(<Harness />);
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+    const focusTarget = getByTestId("picker-focus-target");
+    const selection = window.getSelection()!;
+    const inputRange = document.createRange();
+    inputRange.setStart(input.firstChild!, "Review".length);
+    inputRange.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(inputRange);
+    document.dispatchEvent(new Event("selectionchange"));
+
+    const outsideRange = document.createRange();
+    outsideRange.selectNodeContents(focusTarget);
+    outsideRange.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(outsideRange);
+    focusTarget.focus();
+    expect(document.activeElement).toBe(focusTarget);
+
+    act(() => {
+      inputRef.current!.insertMentionAtCursor({
+        id: "mention-1",
+        filename: "utils.ts",
+        relativePath: "src/utils.ts",
+      });
+    });
+
+    expect(input.textContent).toBe("Review @utils.ts this");
+    expect(document.activeElement).toBe(input);
+    expect(inputRef.current!.getCursorPosition()).toBe("Review @utils.ts".length);
+  });
+
   test("does not treat the cursor before @ as an active mention token", () => {
     const onChange = mock(() => {});
     const inputRef = createRef<MentionableInputRef>();
@@ -463,6 +645,149 @@ describe("MentionableInput", () => {
     });
 
     expect(onChange).toHaveBeenCalledWith("Hello world", []);
+  });
+
+  test("replaces a non-collapsed selection when pasting plain text", () => {
+    const onChange = mock(() => {});
+    const inputRef = createRef<MentionableInputRef>();
+    const { container } = render(
+      <MentionableInput
+        ref={inputRef}
+        value="Hello brave world"
+        mentions={[]}
+        onChange={onChange}
+      />,
+    );
+
+    const input = container.querySelector("[contenteditable]")!;
+    const selection = window.getSelection()!;
+    const range = document.createRange();
+    range.setStart(input.firstChild!, "Hello ".length);
+    range.setEnd(input.firstChild!, "Hello brave".length);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        getData: () => "kind",
+      },
+    });
+
+    expect(onChange).toHaveBeenCalledWith("Hello kind world", []);
+    expect(inputRef.current!.getCursorPosition()).toBe("Hello kind".length);
+  });
+
+  test("prevents paste without changing the draft when there is no selection", () => {
+    const onChange = mock(() => {});
+    const { container } = render(
+      <MentionableInput
+        value="Hello world"
+        mentions={[]}
+        onChange={onChange}
+      />,
+    );
+
+    const input = container.querySelector("[contenteditable]")!;
+    window.getSelection()!.removeAllRanges();
+
+    const pasteWasNotCancelled = fireEvent.paste(input, {
+      clipboardData: {
+        getData: () => "ignored",
+      },
+    });
+
+    expect(pasteWasNotCancelled).toBe(false);
+    expect(input.textContent).toBe("Hello world");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  test("extracts nested contenteditable blocks, line breaks, and inline text", () => {
+    const onChange = mock(() => {});
+    const { container } = render(
+      <MentionableInput
+        value=""
+        mentions={[]}
+        onChange={onChange}
+      />,
+    );
+
+    const input = container.querySelector("[contenteditable]")!;
+    input.innerHTML =
+      "Alpha<div>Beta<br>Gamma<span> delta</span></div><blockquote>Omega</blockquote>";
+    fireEvent.input(input);
+
+    expect(onChange).toHaveBeenCalledWith(
+      "Alpha\nBeta\nGamma delta\nOmega",
+      [],
+    );
+  });
+
+  test("reports selection changes only for selections inside the editor", () => {
+    const onCursorChange = mock(() => {});
+    const { container, getByTestId } = render(
+      <>
+        <button type="button" data-testid="outside-selection">
+          Outside
+        </button>
+        <MentionableInput
+          value="Alpha beta"
+          mentions={[]}
+          onChange={() => {}}
+          onCursorChange={onCursorChange}
+        />
+      </>,
+    );
+
+    const input = container.querySelector("[contenteditable]")!;
+    const selection = window.getSelection()!;
+
+    selection.removeAllRanges();
+    document.dispatchEvent(new Event("selectionchange"));
+    expect(onCursorChange).not.toHaveBeenCalled();
+
+    const outsideRange = document.createRange();
+    outsideRange.selectNodeContents(getByTestId("outside-selection"));
+    outsideRange.collapse(false);
+    selection.addRange(outsideRange);
+    document.dispatchEvent(new Event("selectionchange"));
+    expect(onCursorChange).not.toHaveBeenCalled();
+
+    const inputRange = document.createRange();
+    inputRange.setStart(input.firstChild!, "Alpha".length);
+    inputRange.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(inputRange);
+    onCursorChange.mockClear();
+    document.dispatchEvent(new Event("selectionchange"));
+
+    expect(onCursorChange).toHaveBeenCalledTimes(1);
+    expect(onCursorChange).toHaveBeenCalledWith("Alpha".length, "Alpha beta");
+  });
+
+  test("ignores a selection spanning from the editor to an outside node", () => {
+    const onCursorChange = mock(() => {});
+    const { container, getByTestId } = render(
+      <>
+        <MentionableInput
+          value="Alpha"
+          mentions={[]}
+          onChange={() => {}}
+          onCursorChange={onCursorChange}
+        />
+        <span data-testid="outside-end">Omega</span>
+      </>,
+    );
+
+    const input = container.querySelector("[contenteditable]")!;
+    const selection = window.getSelection()!;
+    const range = document.createRange();
+    range.setStart(input.firstChild!, 0);
+    range.setEnd(getByTestId("outside-end").firstChild!, "Omega".length);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+
+    expect(onCursorChange).not.toHaveBeenCalled();
   });
 
   test("defers input updates until IME composition ends", () => {

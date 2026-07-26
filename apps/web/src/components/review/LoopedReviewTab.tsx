@@ -44,19 +44,20 @@ import {
 } from "@/lib/structured-review-agent";
 import {
   verifyEnvironmentPr,
-  verifyLoopedReviewPackage,
+  generateLoopedReviewPackage,
 } from "@/lib/backend";
 import {
   createDiscoveryPrompt,
   createFixPoolPrompt,
   createLoopedReviewPrPrompt,
   createReconciliationPrompt,
-  createReviewPackagePrompt,
+  createReviewPreparationPrompt,
   LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA,
   REVIEW_FIX_RESULT_JSON_SCHEMA,
-  REVIEW_PACKAGE_JSON_SCHEMA,
+  REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
   REVIEW_PR_RESULT_JSON_SCHEMA,
   type ReviewFixResult,
+  type ReviewPreparationResult,
   type ReviewPrResult,
 } from "@/lib/looped-review-prompts";
 import { StructuredReviewReportView } from "./StructuredReviewReportView";
@@ -75,7 +76,7 @@ interface LoopedReviewTabProps {
   connectAgent?: typeof connectStructuredReviewAgent;
   hydrateWorkflow?: typeof hydrateLoopedReviewWorkflow;
   persistWorkflow?: typeof persistLoopedReviewWorkflowNow;
-  verifyPackage?: typeof verifyLoopedReviewPackage;
+  generatePackage?: typeof generateLoopedReviewPackage;
   verifyPr?: typeof verifyEnvironmentPr;
   pollIntervalMs?: number;
   missingSessionPollLimit?: number;
@@ -143,6 +144,87 @@ export function parseFixResult(value: unknown): ReviewFixResult {
     );
   }
   return value as unknown as ReviewFixResult;
+}
+
+export function parseReviewPreparationResult(
+  value: unknown,
+): ReviewPreparationResult {
+  if (
+    !isRecord(value)
+    || Object.keys(value).some((key) =>
+      ![
+        "validation",
+        "uncommittedFiles",
+        "limitations",
+      ].includes(key)
+    )
+    || !Array.isArray(value.validation)
+    || !value.validation.every((entry) => {
+      if (
+        !isRecord(entry)
+        || Object.keys(entry).some((key) =>
+          ![
+            "command",
+            "status",
+            "exitCode",
+            "stdoutPath",
+            "stderrPath",
+            "durationMs",
+            "limitation",
+          ].includes(key)
+        )
+        || typeof entry.command !== "string"
+        || entry.command.trim().length === 0
+        || (
+          entry.status !== "passed"
+          && entry.status !== "failed"
+          && entry.status !== "skipped"
+        )
+        || !Number.isInteger(entry.durationMs)
+        || (entry.durationMs as number) < 0
+        || (
+          entry.limitation !== null
+          && (
+            typeof entry.limitation !== "string"
+            || entry.limitation.trim().length === 0
+          )
+        )
+      ) {
+        return false;
+      }
+      if (entry.status === "skipped") {
+        return entry.exitCode === null
+          && entry.stdoutPath === null
+          && entry.stderrPath === null
+          && typeof entry.limitation === "string";
+      }
+      return Number.isInteger(entry.exitCode)
+        && (
+          (entry.status === "passed" && entry.exitCode === 0)
+          || (entry.status === "failed" && entry.exitCode !== 0)
+        )
+        && typeof entry.stdoutPath === "string"
+        && entry.stdoutPath.length > 0
+        && typeof entry.stderrPath === "string"
+        && entry.stderrPath.length > 0;
+    })
+    || !Array.isArray(value.uncommittedFiles)
+    || !value.uncommittedFiles.every((file) =>
+      isRecord(file)
+      && Object.keys(file).every((key) => ["path", "reason"].includes(key))
+      && typeof file.path === "string"
+      && file.path.trim().length > 0
+      && typeof file.reason === "string"
+      && file.reason.trim().length > 0
+    )
+    || !Array.isArray(value.limitations)
+    || !value.limitations.every((limitation) =>
+      typeof limitation === "string" && limitation.trim().length > 0
+    )
+  ) {
+    throw new Error("Review preparation result failed runtime validation");
+  }
+  return value as unknown as ReviewPreparationResult;
 }
 
 export function parsePrResult(value: unknown): ReviewPrResult {
@@ -220,13 +302,13 @@ export function dispatchMaterial(
   );
   if (dispatch.kind === "prepare") {
     return {
-      prompt: createReviewPackagePrompt({
+      prompt: createReviewPreparationPrompt({
         round: workflow.currentRound,
         packageId: `review-package-${workflow.id}-r${workflow.currentRound}`,
         targetBranch: workflow.targetBranch,
         context: workflow.context,
       }),
-      schema: REVIEW_PACKAGE_JSON_SCHEMA as unknown as JsonSchema,
+      schema: REVIEW_PREPARATION_RESULT_JSON_SCHEMA as unknown as JsonSchema,
     };
   }
   if (dispatch.kind === "discover") {
@@ -362,7 +444,7 @@ export function LoopedReviewTab({
   connectAgent = connectStructuredReviewAgent,
   hydrateWorkflow = hydrateLoopedReviewWorkflow,
   persistWorkflow = persistLoopedReviewWorkflowNow,
-  verifyPackage = verifyLoopedReviewPackage,
+  generatePackage = generateLoopedReviewPackage,
   verifyPr = verifyEnvironmentPr,
   pollIntervalMs = 1_000,
   missingSessionPollLimit = 5,
@@ -594,15 +676,26 @@ export function LoopedReviewTab({
           : new Date().toISOString(),
     });
     if (dispatch.kind === "prepare") {
-      const reviewPackage = parseReviewPackage(result.value, {
-        id: `review-package-${current.id}-r${current.currentRound}`,
-        round: current.currentRound,
-        targetBranch: current.targetBranch,
-        context: current.context,
-      });
-      if (!await verifyPackage(current.environmentId, reviewPackage)) {
-        throw new Error("The backend could not verify the review package");
-      }
+      const packageId = `review-package-${current.id}-r${current.currentRound}`;
+      const preparation = parseReviewPreparationResult(result.value);
+      const generated = await generatePackage(
+        current.environmentId,
+        packageId,
+        current.currentRound,
+        current.targetBranch,
+        preparation,
+      );
+      const reviewPackage = parseReviewPackage(
+        isRecord(generated)
+          ? { ...generated, context: current.context ?? null }
+          : generated,
+        {
+          id: `review-package-${current.id}-r${current.currentRound}`,
+          round: current.currentRound,
+          targetBranch: current.targetBranch,
+          context: current.context,
+        },
+      );
       store.setPreparedPackage(current.id, reviewPackage);
       return;
     }
@@ -634,7 +727,7 @@ export function LoopedReviewTab({
       current.targetBranch,
     );
     store.completePr(current.id, verified.url);
-  }, [verifyPackage, verifyPr]);
+  }, [generatePackage, verifyPr]);
 
   const advance = useCallback(async () => {
     const current = useLoopedReviewStore.getState().workflows.get(data.workflowId);

@@ -144,6 +144,89 @@ const SETUP_DONE_PRINTF_CMD = "printf '\\033]9999;setup_done\\007'";
 const SETUP_FAILED_PRINTF_CMD = "printf '\\033]9999;setup_failed\\007'";
 const MAX_TERMINAL_OUTPUT_BUFFER_CHARS = 500 * 1024;
 const TERMINAL_ACTIVITY_SETTLE_MS = 750;
+export function buildContainerSafeBase64Reader(
+  testMutation?: "append" | "replace",
+): string {
+  const afterInitialValidationForTest = testMutation === "append"
+    ? 'fs.appendFileSync(target, "x");'
+    : testMutation === "replace"
+      ? 'fs.renameSync(target, target + ".old"); fs.writeFileSync(target, "replacement");'
+      : "";
+  return `
+const fs = require("node:fs");
+const path = require("node:path");
+const root = path.resolve(process.argv[1]);
+const target = path.resolve(process.argv[2]);
+const limit = Number(process.argv[3]);
+function fail(message) {
+  const error = new Error(message);
+  error.safeMessage = true;
+  throw error;
+}
+function inside(rootPath, targetPath) {
+  const child = path.relative(rootPath, targetPath);
+  return child === "" || (child !== ".." && !child.startsWith(".." + path.sep) && !path.isAbsolute(child));
+}
+function main() {
+  if (!inside(root, target)) fail("File is outside the container workspace");
+  const canonicalRoot = fs.realpathSync(root);
+  let current = root;
+  for (const segment of path.relative(root, target).split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    if (fs.lstatSync(current).isSymbolicLink()) fail("Symbolic-link attachments are not allowed");
+  }
+  if (!inside(canonicalRoot, fs.realpathSync(target))) fail("File is outside the container workspace");
+  const fd = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  try {
+    const initial = fs.fstatSync(fd);
+    const assertStablePath = (opened) => {
+      const currentStats = fs.lstatSync(target);
+      if (currentStats.isSymbolicLink()) fail("Symbolic-link attachments are not allowed");
+      if (!currentStats.isFile() || !opened.isFile() || currentStats.dev !== opened.dev || currentStats.ino !== opened.ino) {
+        fail("Attachment is not a stable regular file");
+      }
+      if (!inside(canonicalRoot, fs.realpathSync(target))) fail("File is outside the container workspace");
+    };
+    assertStablePath(initial);
+    if (initial.size > limit) fail("File exceeds the attachment size limit");
+    ${afterInitialValidationForTest}
+    const chunks = [];
+    let total = 0;
+    while (total <= limit) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, (limit + 1) - total));
+      const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      total += bytesRead;
+    }
+    if (total > limit) fail("File exceeds the attachment size limit");
+    const final = fs.fstatSync(fd);
+    assertStablePath(final);
+    if (
+      final.dev !== initial.dev
+      || final.ino !== initial.ino
+      || final.size !== initial.size
+      || final.size !== total
+      || final.mtimeMs !== initial.mtimeMs
+      || final.ctimeMs !== initial.ctimeMs
+    ) fail("File changed while it was being read; please try again");
+    process.stdout.write(Buffer.concat(chunks, total).toString("base64"));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+try {
+  main();
+} catch (error) {
+  const message = error && error.safeMessage
+    ? error.message
+    : "File could not be read safely from the container workspace";
+  process.stderr.write(message + "\\n");
+  process.exitCode = 1;
+}
+`.trim();
+}
+export const CONTAINER_SAFE_BASE64_READER = buildContainerSafeBase64Reader();
 
 type EnvironmentSetupSession = {
   environmentId: string;
@@ -177,6 +260,16 @@ function asRecord(value: unknown, name: string): JsonRecord {
     throw new Error(`Expected ${name} to be an object`);
   }
   return value as JsonRecord;
+}
+
+function assertOnlyKeys(
+  value: JsonRecord,
+  allowed: readonly string[],
+  name: string,
+): void {
+  const allowedSet = new Set(allowed);
+  const unexpected = Object.keys(value).find((key) => !allowedSet.has(key));
+  if (unexpected) throw new Error(`Unexpected ${name} field: ${unexpected}`);
 }
 
 async function requireLinearApiKey(context: CommandContext): Promise<string> {
@@ -735,11 +828,19 @@ type EnvironmentCommandRunner = (
   timeoutMs?: number,
 ) => Promise<string>;
 
-type SubmittedReviewPackageFile = {
+type ReviewPreparationValidation = {
+  command: string;
+  status: "passed" | "failed" | "skipped";
+  exitCode: number | null;
+  stdoutPath: string | null;
+  stderrPath: string | null;
+  durationMs: number;
+  limitation: string | null;
+};
+
+type ReviewPreparationFileNote = {
   path: string;
-  status: string;
-  content: string | null;
-  contentSha256: string | null;
+  reason: string;
 };
 
 function createEnvironmentCommandRunner(
@@ -766,51 +867,159 @@ function createEnvironmentCommandRunner(
     )).stdout;
 }
 
-function parseSubmittedReviewPackageFiles(
-  value: unknown,
-): SubmittedReviewPackageFile[] {
-  if (!Array.isArray(value)) {
-    throw new Error("Expected changedFiles to be an array");
+function parseReviewPackageId(value: unknown): string {
+  const packageId = asString(value, "packageId");
+  if (
+    packageId.length === 0
+    || packageId.length > 200
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(packageId)
+    || packageId.includes("..")
+  ) {
+    throw new Error("Invalid review package ID");
   }
-  const files = value.map((candidate, index) => {
-    const file = asRecord(candidate, `changedFiles[${index}]`);
-    const filePath = validateWorkspaceMutationPath(
-      asString(file.path, `changedFiles[${index}].path`),
-      `changedFiles[${index}].path`,
+  return packageId;
+}
+
+function parseReviewRound(value: unknown): number {
+  if (!Number.isInteger(value) || (value as number) < 1) {
+    throw new Error("Expected round to be a positive integer");
+  }
+  return value as number;
+}
+
+function parseReviewPreparationValidation(
+  value: unknown,
+  packageId: string,
+): ReviewPreparationValidation[] {
+  if (!Array.isArray(value)) {
+    throw new Error("Expected validation to be an array");
+  }
+  return value.map((candidate, index) => {
+    const entry = asRecord(candidate, `validation[${index}]`);
+    assertOnlyKeys(
+      entry,
+      [
+        "command",
+        "status",
+        "exitCode",
+        "stdoutPath",
+        "stderrPath",
+        "durationMs",
+        "limitation",
+      ],
+      `validation[${index}]`,
     );
-    const status = asString(
-      file.status,
-      `changedFiles[${index}].status`,
-    );
-    if (!/^(?:[ACDMRTUXB]|[RC][0-9]{1,3})$/.test(status)) {
-      throw new Error(`Invalid changed file status: ${status}`);
-    }
-    const content = file.content;
-    const contentSha256 = file.contentSha256;
-    if (content !== null && typeof content !== "string") {
-      throw new Error(`Expected changedFiles[${index}].content to be a string or null`);
+    const command = asString(entry.command, `validation[${index}].command`);
+    if (command.trim().length === 0) {
+      throw new Error(`Expected validation[${index}].command to be non-empty`);
     }
     if (
-      contentSha256 !== null
-      && (
-        typeof contentSha256 !== "string"
-        || !/^[a-f0-9]{64}$/i.test(contentSha256)
-      )
+      entry.status !== "passed"
+      && entry.status !== "failed"
+      && entry.status !== "skipped"
     ) {
-      throw new Error(`Invalid changedFiles[${index}].contentSha256`);
+      throw new Error(`Invalid validation[${index}].status`);
     }
-    if ((content === null) !== (contentSha256 === null)) {
+    const status = entry.status;
+    const durationMs = entry.durationMs;
+    if (!Number.isInteger(durationMs) || (durationMs as number) < 0) {
       throw new Error(
-        `Changed file content and contentSha256 must either both be present or both be null: ${filePath}`,
+        `Expected validation[${index}].durationMs to be a non-negative integer`,
       );
     }
-    return { path: filePath, status, content, contentSha256 };
+    const limitation = entry.limitation;
+    if (
+      limitation !== null
+      && (typeof limitation !== "string" || limitation.trim().length === 0)
+    ) {
+      throw new Error(
+        `Expected validation[${index}].limitation to be a non-empty string or null`,
+      );
+    }
+
+    if (status === "skipped") {
+      if (
+        entry.exitCode !== null
+        || entry.stdoutPath !== null
+        || entry.stderrPath !== null
+        || typeof limitation !== "string"
+      ) {
+        throw new Error(
+          `Skipped validation[${index}] has incompatible evidence metadata`,
+        );
+      }
+      return {
+        command,
+        status,
+        exitCode: null,
+        stdoutPath: null,
+        stderrPath: null,
+        durationMs: durationMs as number,
+        limitation,
+      };
+    }
+
+    if (!Number.isInteger(entry.exitCode)) {
+      throw new Error(`Expected validation[${index}].exitCode to be an integer`);
+    }
+    const exitCode = entry.exitCode as number;
+    if (
+      (status === "passed" && exitCode !== 0)
+      || (status === "failed" && exitCode === 0)
+    ) {
+      throw new Error(`Validation[${index}] status does not match its exit code`);
+    }
+    const ordinal = String(index + 1).padStart(2, "0");
+    const artifactDirectory = `.orkestrator/review-artifacts/${packageId}`;
+    const expectedStdoutPath = `${artifactDirectory}/validation-${ordinal}.stdout.txt`;
+    const expectedStderrPath = `${artifactDirectory}/validation-${ordinal}.stderr.txt`;
+    const stdoutPath = validateWorkspaceMutationPath(
+      asString(entry.stdoutPath, `validation[${index}].stdoutPath`),
+      `validation[${index}].stdoutPath`,
+    );
+    const stderrPath = validateWorkspaceMutationPath(
+      asString(entry.stderrPath, `validation[${index}].stderrPath`),
+      `validation[${index}].stderrPath`,
+    );
+    if (stdoutPath !== expectedStdoutPath || stderrPath !== expectedStderrPath) {
+      throw new Error(`Validation[${index}] artifact paths are not deterministic`);
+    }
+    return {
+      command,
+      status,
+      exitCode,
+      stdoutPath,
+      stderrPath,
+      durationMs: durationMs as number,
+      limitation: limitation as string | null,
+    };
   });
-  const paths = files.map((file) => file.path);
-  if (new Set(paths).size !== paths.length) {
-    throw new Error("Changed file paths must be unique");
+}
+
+function parseReviewPreparationFileNotes(
+  value: unknown,
+  label: "uncommittedFiles",
+): ReviewPreparationFileNote[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Expected ${label} to be an array`);
   }
-  return files;
+  const notes = value.map((candidate, index) => {
+    const note = asRecord(candidate, `${label}[${index}]`);
+    assertOnlyKeys(note, ["path", "reason"], `${label}[${index}]`);
+    const filePath = validateWorkspaceMutationPath(
+      asString(note.path, `${label}[${index}].path`),
+      `${label}[${index}].path`,
+    );
+    const reason = asString(note.reason, `${label}[${index}].reason`);
+    if (reason.trim().length === 0) {
+      throw new Error(`Expected ${label}[${index}].reason to be non-empty`);
+    }
+    return { path: filePath, reason };
+  });
+  if (new Set(notes.map((note) => note.path)).size !== notes.length) {
+    throw new Error(`${label} paths must be unique`);
+  }
+  return notes;
 }
 
 function parseGitNameStatus(output: string): Array<{ path: string; status: string }> {
@@ -842,10 +1051,6 @@ function parseGitNameStatus(output: string): Array<{ path: string; status: strin
   return changes;
 }
 
-function withoutTrailingNewlines(value: string): string {
-  return value.replace(/(?:\r?\n)+$/, "");
-}
-
 async function readEnvironmentWorkspaceFile(
   environment: Environment,
   runner: EnvironmentCommandRunner,
@@ -863,22 +1068,55 @@ async function readEnvironmentWorkspaceFile(
       || path.isAbsolute(relative)
       || relative === ""
     ) {
-      throw new Error(`Changed file escapes the environment worktree: ${relativePath}`);
+      throw new Error(`Review artifact escapes the environment worktree: ${relativePath}`);
+    }
+    if (resolved !== path.resolve(root, relativePath)) {
+      throw new Error(`Review artifact must not traverse symbolic links: ${relativePath}`);
     }
     const info = await fs.stat(resolved);
     if (!info.isFile()) {
-      throw new Error(`Changed file is not a regular file: ${relativePath}`);
+      throw new Error(`Review artifact is not a regular file: ${relativePath}`);
     }
     return fs.readFile(resolved);
   }
 
   const workspacePath = workspaceFilePath(relativePath);
   const resolved = (await runner("realpath", ["--", workspacePath], 10_000)).trim();
-  if (resolved !== "/workspace" && !resolved.startsWith("/workspace/")) {
-    throw new Error(`Changed file escapes the container workspace: ${relativePath}`);
+  if (resolved !== workspacePath) {
+    throw new Error(`Review artifact must not traverse symbolic links: ${relativePath}`);
   }
   const base64 = (await runner("base64", ["-w", "0", "--", resolved], 30_000)).trim();
   return Buffer.from(base64, "base64");
+}
+
+async function readEnvironmentGitBlob(
+  runner: EnvironmentCommandRunner,
+  headRef: string,
+  relativePath: string,
+): Promise<{ type: string; bytes: Buffer }> {
+  const object = `${headRef}:${relativePath}`;
+  const type = (await runner("git", ["cat-file", "-t", object], 30_000)).trim();
+  if (type !== "blob") return { type, bytes: Buffer.alloc(0) };
+  const base64 = await runner(
+    "sh",
+    ["-lc", `git cat-file blob ${quoteShell(object)} | base64`],
+    60_000,
+  );
+  return { type, bytes: Buffer.from(base64, "base64") };
+}
+
+function decodeReviewText(bytes: Buffer): string | null {
+  if (bytes.includes(0)) return null;
+  const text = bytes.toString("utf8");
+  return Buffer.from(text, "utf8").equals(bytes) ? text : null;
+}
+
+function decodeValidationOutput(bytes: Buffer, artifactPath: string): string {
+  const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) {
+    throw new Error(`Validation artifact is not valid UTF-8: ${artifactPath}`);
+  }
+  return text;
 }
 
 async function verifyEnvironmentPullRequest(
@@ -942,72 +1180,265 @@ async function verifyEnvironmentPullRequest(
   return { url: verifiedUrl, headRefName, baseRefName, state: "OPEN" };
 }
 
-async function verifyLoopedReviewPackage(
+function parseGitPorcelainPaths(output: string): string[] {
+  const fields = output.split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  const paths: string[] = [];
+  for (let index = 0; index < fields.length;) {
+    const entry = fields[index++];
+    if (!entry || entry.length < 4 || entry[2] !== " ") {
+      throw new Error("Git returned malformed worktree status");
+    }
+    const status = entry.slice(0, 2);
+    paths.push(
+      validateWorkspaceMutationPath(entry.slice(3), "uncommitted file path"),
+    );
+    if (status.includes("R") || status.includes("C")) {
+      if (!fields[index++]) {
+        throw new Error("Git returned malformed renamed worktree status");
+      }
+    }
+  }
+  return paths;
+}
+
+function parseNullDelimitedPaths(output: string, label: string): string[] {
+  const fields = output.split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  return fields.map((filePath) =>
+    validateWorkspaceMutationPath(filePath, label)
+  );
+}
+
+async function generateLoopedReviewPackage(
   environmentId: string,
+  packageId: string,
+  round: number,
   targetBranch: string,
-  baseRef: string,
-  headRef: string,
-  completeDiff: string,
-  changedFiles: SubmittedReviewPackageFile[],
+  validation: ReviewPreparationValidation[],
+  uncommittedFiles: ReviewPreparationFileNote[],
+  limitations: string[],
   context: CommandContext,
-): Promise<boolean> {
+): Promise<JsonRecord> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   const branch = validateGitRefName(targetBranch, "target branch");
-  if (!/^[a-f0-9]{40}$/i.test(baseRef) || !/^[a-f0-9]{40}$/i.test(headRef)) {
-    throw new Error("Review package refs must be full commit SHAs");
-  }
   const runner = createEnvironmentCommandRunner(environment);
   const baseName = `origin/${branch}`;
-  const [actualHead, actualBase, actualDiff, actualNameStatus] = await Promise.all([
+  const [headOutput, baseOutput] = await Promise.all([
     runner("git", ["rev-parse", "--verify", "HEAD^{commit}"], 30_000),
     runner("git", ["rev-parse", "--verify", `${baseName}^{commit}`], 30_000),
-    runner("git", ["diff", `${baseName}...HEAD`], 60_000),
-    runner("git", ["diff", "--name-status", "-z", `${baseName}...HEAD`], 60_000),
   ]);
-  if (actualHead.trim().toLowerCase() !== headRef.toLowerCase()) {
-    throw new Error("Review package HEAD does not match the environment HEAD");
+  const headRef = headOutput.trim();
+  const baseRef = baseOutput.trim();
+  if (!/^[a-f0-9]{40}$/i.test(headRef) || !/^[a-f0-9]{40}$/i.test(baseRef)) {
+    throw new Error("Git did not resolve full review package commit SHAs");
   }
-  if (actualBase.trim().toLowerCase() !== baseRef.toLowerCase()) {
-    throw new Error("Review package base does not match the target branch");
-  }
-  if (withoutTrailingNewlines(actualDiff) !== withoutTrailingNewlines(completeDiff)) {
-    throw new Error("Review package diff does not match the environment diff");
-  }
+  // From this point on, Git evidence is anchored to immutable object IDs. The
+  // preparation agent supplies no refs, diff text, file bytes, or hashes.
+  const range = `${baseRef}...${headRef}`;
+  const diffArgs = [
+    "diff",
+    "--binary",
+    "--full-index",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--submodule=short",
+    range,
+  ];
+  const [
+    completeDiff,
+    nameStatus,
+    preparedAtOutput,
+    worktreeStatus,
+    commitSubject,
+    committedFileOutput,
+  ] = await Promise.all([
+    runner("git", diffArgs, 120_000),
+    runner(
+      "git",
+      ["diff", "--name-status", "-z", "--no-renames", range],
+      60_000,
+    ),
+    runner("git", ["show", "-s", "--format=%cI", headRef], 30_000),
+    runner(
+      "git",
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      30_000,
+    ),
+    runner("git", ["show", "-s", "--format=%s", headRef], 30_000),
+    runner(
+      "git",
+      [
+        "diff-tree",
+        "--root",
+        "--no-commit-id",
+        "--name-only",
+        "-r",
+        "-z",
+        "--no-renames",
+        headRef,
+      ],
+      30_000,
+    ),
+  ]);
 
-  const actualChanges = parseGitNameStatus(actualNameStatus);
-  const expectedSet = new Set(
-    changedFiles.map((file) => `${file.status}\0${file.path}`),
-  );
-  const actualSet = new Set(
-    actualChanges.map((file) => `${file.status}\0${file.path}`),
-  );
+  const changes = parseGitNameStatus(nameStatus);
+  const changeKeys = changes.map((file) => `${file.status}\0${file.path}`);
   if (
-    expectedSet.size !== changedFiles.length
-    || actualSet.size !== actualChanges.length
-    || expectedSet.size !== actualSet.size
-    || [...expectedSet].some((entry) => !actualSet.has(entry))
+    new Set(changeKeys).size !== changes.length
+    || (changes.length > 0 && completeDiff.length === 0)
   ) {
-    throw new Error("Review package changed-file set does not match the environment diff");
+    throw new Error("Git returned an incomplete or ambiguous review diff");
   }
 
-  for (const file of changedFiles) {
-    if (file.content === null || file.contentSha256 === null) continue;
-    const bytes = await readEnvironmentWorkspaceFile(
-      environment,
-      runner,
-      file.path,
+  const artifactDirectory = `.orkestrator/review-artifacts/${packageId}`;
+  const actualUncommittedPaths = parseGitPorcelainPaths(worktreeStatus)
+    .filter((filePath) =>
+      filePath !== artifactDirectory
+      && !filePath.startsWith(`${artifactDirectory}/`)
     );
-    const submittedBytes = Buffer.from(file.content, "utf8");
-    if (!bytes.equals(submittedBytes)) {
-      throw new Error(`Review package content does not match workspace bytes: ${file.path}`);
-    }
-    const digest = createHash("sha256").update(bytes).digest("hex");
-    if (digest.toLowerCase() !== file.contentSha256.toLowerCase()) {
-      throw new Error(`Review package content hash does not match workspace bytes: ${file.path}`);
-    }
+  const submittedUncommittedPaths = uncommittedFiles.map((note) => note.path);
+  const actualUncommittedSet = new Set(actualUncommittedPaths);
+  const submittedUncommittedSet = new Set(submittedUncommittedPaths);
+  if (
+    actualUncommittedSet.size !== actualUncommittedPaths.length
+    || submittedUncommittedSet.size !== submittedUncommittedPaths.length
+    || actualUncommittedSet.size !== submittedUncommittedSet.size
+    || [...actualUncommittedSet].some((filePath) =>
+      !submittedUncommittedSet.has(filePath)
+    )
+  ) {
+    throw new Error(
+      "Preparation result does not account for every uncommitted file",
+    );
   }
-  return true;
+
+  const changedFiles = await Promise.all(changes.map(async (file) => {
+    if (file.status === "D") {
+      const omittedReason = "Deleted file has no content at the prepared HEAD.";
+      return {
+        ...file,
+        content: null,
+        contentSha256: null,
+        omittedReason,
+      };
+    }
+    const object = await readEnvironmentGitBlob(runner, headRef, file.path);
+    if (object.type !== "blob") {
+      const omittedReason =
+        `Git object type ${object.type || "unknown"} has no text file content.`;
+      return {
+        ...file,
+        content: null,
+        contentSha256: null,
+        omittedReason,
+      };
+    }
+    const content = decodeReviewText(object.bytes);
+    if (content === null) {
+      const omittedReason =
+        "Binary content is represented by the complete binary Git diff.";
+      return {
+        ...file,
+        content: null,
+        contentSha256: null,
+        omittedReason,
+      };
+    }
+    return {
+      ...file,
+      content,
+      contentSha256: createHash("sha256").update(object.bytes).digest("hex"),
+      omittedReason: null,
+    };
+  }));
+  const skippedFiles = changedFiles.flatMap((file) =>
+    file.omittedReason === null
+      ? []
+      : [{ path: file.path, reason: file.omittedReason }]
+  );
+
+  const hydratedValidation = await Promise.all(validation.map(async (entry) => {
+    if (entry.status === "skipped") {
+      return {
+        command: entry.command,
+        status: entry.status,
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        durationMs: entry.durationMs,
+        limitation: entry.limitation,
+      };
+    }
+    const [stdoutBytes, stderrBytes] = await Promise.all([
+      readEnvironmentWorkspaceFile(environment, runner, entry.stdoutPath!),
+      readEnvironmentWorkspaceFile(environment, runner, entry.stderrPath!),
+    ]);
+    return {
+      command: entry.command,
+      status: entry.status,
+      exitCode: entry.exitCode,
+      stdout: decodeValidationOutput(stdoutBytes, entry.stdoutPath!),
+      stderr: decodeValidationOutput(stderrBytes, entry.stderrPath!),
+      durationMs: entry.durationMs,
+      limitation: entry.limitation,
+    };
+  }));
+
+  const [finalHeadOutput, finalWorktreeStatus] = await Promise.all([
+    runner("git", ["rev-parse", "--verify", "HEAD^{commit}"], 30_000),
+    runner(
+      "git",
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      30_000,
+    ),
+  ]);
+  const finalHead = finalHeadOutput.trim();
+  if (finalHead !== headRef) {
+    throw new Error("Environment HEAD changed while generating the review package");
+  }
+  const finalUncommittedPaths = parseGitPorcelainPaths(finalWorktreeStatus)
+    .filter((filePath) =>
+      filePath !== artifactDirectory
+      && !filePath.startsWith(`${artifactDirectory}/`)
+    );
+  if (
+    finalUncommittedPaths.length !== actualUncommittedPaths.length
+    || finalUncommittedPaths.some((filePath, index) =>
+      filePath !== actualUncommittedPaths[index]
+    )
+  ) {
+    throw new Error("Environment worktree changed while generating the review package");
+  }
+
+  return {
+    id: packageId,
+    round,
+    preparedAt: preparedAtOutput.trim(),
+    targetBranch: branch,
+    baseRef,
+    headRef,
+    commit: {
+      sha: headRef,
+      subject: commitSubject.trimEnd(),
+      committedFiles: parseNullDelimitedPaths(
+        committedFileOutput,
+        "committed file path",
+      ),
+    },
+    completeDiff,
+    changedFiles,
+    validation: hydratedValidation,
+    skippedFiles,
+    uncommittedFiles: [...uncommittedFiles].sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+    ),
+    limitations,
+    context: null,
+  };
 }
 
 async function markPullRequestReadyIfDraft(prUrl: string, runGh: GhCliRunner): Promise<void> {
@@ -1443,18 +1874,6 @@ function spawnTerminalProcess(
     cleanupTerminalSession(id);
   });
   return terminalProcess;
-}
-
-function parsePositiveInteger(value: string, name: string): number {
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    throw new Error(`Invalid ${name}: ${trimmed}`);
-  }
-  const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error(`Invalid ${name}: ${trimmed}`);
-  }
-  return parsed;
 }
 
 function parseDockerStatus(status: string): EnvironmentStatus {
@@ -2473,7 +2892,14 @@ async function buildFileTree(rootPath: string, relativePath = ""): Promise<Array
   const entries = await fs.readdir(fullPath, { withFileTypes: true });
   const nodes = [];
   for (const entry of entries) {
-    if (entry.name === ".git" || entry.name === "node_modules") continue;
+    // Workspace symlinks are not valid picker targets. In addition to keeping
+    // the tree inside its declared root, skipping them here prevents recursive
+    // traversal if platform Dirent semantics ever change.
+    if (
+      entry.name === ".git"
+      || entry.name === "node_modules"
+      || entry.isSymbolicLink()
+    ) continue;
     const childRelativePath = path.join(relativePath, entry.name);
     if (entry.isDirectory()) {
       nodes.push({
@@ -4292,7 +4718,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     });
   });
   register("get_file_tree", async ({ containerId }) => {
-    const output = await dockerExec(asString(containerId, "containerId"), "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type f -printf '%P\\n' | head -5000");
+    const output = await dockerExec(asString(containerId, "containerId"), "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type l -prune -o -type f -printf '%P\\n' | head -5000");
     return output.split("\n").filter(Boolean).map((filePath) => ({ name: path.basename(filePath), path: filePath, isDirectory: false, extension: path.extname(filePath) }));
   });
   register("read_container_file", async ({ containerId, filePath }) => {
@@ -4307,11 +4733,10 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   });
   register("read_container_file_base64", async ({ containerId, filePath }) => {
     const fullPath = workspaceFilePath(asString(filePath, "filePath"));
-    const size = parsePositiveInteger(await dockerExec(asString(containerId, "containerId"), `stat -c %s ${quoteShell(fullPath)}`), "file size");
-    if (size > MAX_BINARY_FILE_BYTES) {
-      throw new Error(`File exceeds ${MAX_BINARY_FILE_BYTES} bytes: ${fullPath}`);
-    }
-    return (await dockerExec(asString(containerId, "containerId"), `base64 -w 0 ${quoteShell(fullPath)}`)).trim();
+    return (await dockerExec(
+      asString(containerId, "containerId"),
+      `node -e ${quoteShell(CONTAINER_SAFE_BASE64_READER)} -- /workspace ${quoteShell(fullPath)} ${MAX_BINARY_FILE_BYTES}`,
+    )).trim();
   });
   register("write_container_file", async ({ containerId, filePath, base64Data }) => {
     const id = asString(containerId, "containerId");
@@ -4353,23 +4778,42 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       asString(targetBranch, "targetBranch"),
       context,
     ));
-  register("verify_looped_review_package", async ({
+  register("generate_looped_review_package", async ({
     environmentId,
+    packageId,
+    round,
     targetBranch,
-    baseRef,
-    headRef,
-    completeDiff,
-    changedFiles,
-  }, context) =>
-    verifyLoopedReviewPackage(
+    preparation,
+  }, context) => {
+    const parsedPackageId = parseReviewPackageId(packageId);
+    const prepared = asRecord(preparation, "preparation");
+    assertOnlyKeys(
+      prepared,
+      ["validation", "uncommittedFiles", "limitations"],
+      "preparation",
+    );
+    const limitations = asStringArray(prepared.limitations);
+    if (
+      !Array.isArray(prepared.limitations)
+      || limitations.length !== prepared.limitations.length
+      || limitations.some((limitation) => limitation.trim().length === 0)
+    ) {
+      throw new Error("Expected preparation.limitations to contain only non-empty strings");
+    }
+    return generateLoopedReviewPackage(
       asString(environmentId, "environmentId"),
+      parsedPackageId,
+      parseReviewRound(round),
       asString(targetBranch, "targetBranch"),
-      asString(baseRef, "baseRef"),
-      asString(headRef, "headRef"),
-      asString(completeDiff, "completeDiff"),
-      parseSubmittedReviewPackageFiles(changedFiles),
+      parseReviewPreparationValidation(prepared.validation, parsedPackageId),
+      parseReviewPreparationFileNotes(
+        prepared.uncommittedFiles,
+        "uncommittedFiles",
+      ),
+      limitations,
       context,
-    ));
+    );
+  });
 
   register("detect_pr_local", async ({ environmentId, branch }, { storage }) => {
     const env = await storage.getEnvironment(asString(environmentId, "environmentId"));

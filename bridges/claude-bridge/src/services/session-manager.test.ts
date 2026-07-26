@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, jest, mock, test } from "bun:tes
 import { EventEmitter } from "node:events";
 import * as realChildProcess from "node:child_process";
 import * as realFs from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -210,6 +210,7 @@ const {
   getAvailableModelCatalog,
   getAvailableModels,
   getClaudeRuntimeVersions,
+  MAX_IMAGE_ATTACHMENT_BYTES,
 } = sessionManager;
 
 // ---------------------------------------------------------------------------
@@ -318,6 +319,20 @@ async function runPromptWithMessages(
   call.finish();
   await promptPromise;
   return { session: getSession(session.id)!, call };
+}
+
+async function withWorkspaceCwd<T>(
+  cwd: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = process.env.CWD;
+  process.env.CWD = cwd;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env.CWD;
+    else process.env.CWD = previous;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1195,22 +1210,29 @@ describe("sendPrompt", () => {
     ]);
   });
 
-  test("falls back to a string prompt when every image is malformed or missing", async () => {
-    const { call } = await runPromptWithMessages(
-      [{ type: "result", subtype: "success" }],
-      {
-        attachments: [
-          {
-            type: "image",
-            path: "/definitely/missing/image.png",
-            dataUrl: "data:image/png;base64,not-valid!",
-          },
-        ],
-      },
-      "describe this",
-    );
-
-    expect(call.prompt).toBe("describe this");
+  test("rejects malformed inline image data instead of silently omitting it", async () => {
+    const session = createSession("malformed-image");
+    track(session.id);
+    const { events, stop } = captureEvents();
+    try {
+      await expect(sendPrompt(session.id, "describe this", {
+        attachments: [{
+          type: "image",
+          path: "/definitely/missing/image.png",
+          dataUrl: "data:image/png;base64,not-valid!",
+        }],
+      })).rejects.toMatchObject({
+        name: "ClaudeAttachmentError",
+        code: "attachment_invalid_data",
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(events.find((event) => event.type === "session.error")?.data).toEqual({
+        error: "Image attachment data must be valid base64 and no larger than 8MB.",
+        code: "attachment_invalid_data",
+      });
+    } finally {
+      stop();
+    }
   });
 
   test("rejects an image-only prompt when no image can be decoded", async () => {
@@ -1223,7 +1245,10 @@ describe("sendPrompt", () => {
         path: "",
         dataUrl: "data:image/png;base64,not-valid!",
       }],
-    })).rejects.toThrow("No valid image attachment was provided");
+    })).rejects.toMatchObject({
+      name: "ClaudeAttachmentError",
+      code: "attachment_invalid_data",
+    });
     expect(session.status).toBe("error");
     expect(mockQuery).not.toHaveBeenCalled();
   });
@@ -1233,10 +1258,11 @@ describe("sendPrompt", () => {
     const imagePath = join(directory, "image.gif");
     await writeFile(imagePath, Buffer.from("gif-data"));
     try {
-      const { call } = await runPromptWithMessages(
-        [{ type: "result", subtype: "success" }],
-        { attachments: [{ type: "image", path: imagePath }] },
-      );
+      const { call } = await withWorkspaceCwd(directory, () =>
+        runPromptWithMessages(
+          [{ type: "result", subtype: "success" }],
+          { attachments: [{ type: "image", path: imagePath }] },
+        ));
       const sdkMessages = await readSdkPrompt(call) as Array<{
         message: { content: Array<{ type: string; source?: { media_type: string; data: string } }> };
       }>;
@@ -1245,6 +1271,202 @@ describe("sendPrompt", () => {
         media_type: "image/gif",
         data: Buffer.from("gif-data").toString("base64"),
       });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects disk images outside the SDK workspace root", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-boundary-"));
+    const workspace = join(directory, "workspace");
+    const outsideImage = join(directory, "outside.png");
+    await mkdir(workspace);
+    await writeFile(outsideImage, "outside");
+    try {
+      const session = createSession("outside-image");
+      track(session.id);
+      await withWorkspaceCwd(workspace, async () => {
+        await expect(sendPrompt(session.id, "describe", {
+          attachments: [{ type: "image", path: outsideImage }],
+        })).rejects.toMatchObject({
+          name: "ClaudeAttachmentError",
+          code: "attachment_outside_workspace",
+        });
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects direct, chained, and ancestor symlinks for disk images", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-symlink-"));
+    const workspace = join(directory, "workspace");
+    const outside = join(directory, "outside");
+    await mkdir(workspace);
+    await mkdir(outside);
+    await writeFile(join(workspace, "image.png"), "inside");
+    await writeFile(join(outside, "outside.png"), "outside");
+    await symlink(join(workspace, "image.png"), join(workspace, "direct.png"));
+    await symlink(join(workspace, "direct.png"), join(workspace, "chain.png"));
+    await symlink(outside, join(workspace, "outside-dir"));
+
+    try {
+      for (const attachmentPath of [
+        join(workspace, "direct.png"),
+        join(workspace, "chain.png"),
+        join(workspace, "outside-dir", "outside.png"),
+      ]) {
+        const session = createSession("symlink-image");
+        track(session.id);
+        await withWorkspaceCwd(workspace, async () => {
+          await expect(sendPrompt(session.id, "describe", {
+            attachments: [{ type: "image", path: attachmentPath }],
+          })).rejects.toMatchObject({
+            name: "ClaudeAttachmentError",
+            code: "attachment_symlink_not_allowed",
+          });
+        });
+      }
+      expect(mockQuery).not.toHaveBeenCalled();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects non-regular disk image attachments", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-nonfile-"));
+    const imageDirectory = join(directory, "directory.png");
+    await mkdir(imageDirectory);
+    try {
+      const session = createSession("directory-image");
+      track(session.id);
+      await withWorkspaceCwd(directory, async () => {
+        await expect(sendPrompt(session.id, "describe", {
+          attachments: [{ type: "image", path: imageDirectory }],
+        })).rejects.toMatchObject({
+          name: "ClaudeAttachmentError",
+          code: "attachment_not_regular_file",
+        });
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an empty disk image instead of silently omitting it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-empty-image-"));
+    const emptyImage = join(directory, "empty.png");
+    await writeFile(emptyImage, "");
+    try {
+      const session = createSession("empty-image");
+      track(session.id);
+      await withWorkspaceCwd(directory, async () => {
+        await expect(sendPrompt(session.id, "describe", {
+          attachments: [{ type: "image", path: emptyImage }],
+        })).rejects.toMatchObject({
+          name: "ClaudeAttachmentError",
+          code: "attachment_invalid_data",
+          message: "Image attachment file is empty.",
+        });
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("maps missing disk images to an actionable read failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-missing-image-"));
+    const missingImage = join(directory, "missing.png");
+    const session = createSession("missing-image");
+    track(session.id);
+    const { events, stop } = captureEvents();
+    try {
+      await withWorkspaceCwd(directory, async () => {
+        await expect(sendPrompt(session.id, "describe", {
+          attachments: [{ type: "image", path: missingImage }],
+        })).rejects.toMatchObject({
+          name: "ClaudeAttachmentError",
+          code: "attachment_read_failed",
+          message: "Image attachment could not be read safely from the workspace.",
+        });
+      });
+      expect(events.find((event) => event.type === "session.error")?.data).toEqual({
+        error: "Image attachment could not be read safely from the workspace.",
+        code: "attachment_read_failed",
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("reports attachment_changed when a disk image mutates during the bounded read", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-changed-image-"));
+    const imagePath = join(directory, "changed.png");
+    await writeFile(imagePath, "abc");
+    const session = createSession("changed-image");
+    track(session.id);
+    try {
+      await withWorkspaceCwd(directory, async () => {
+        await expect(sendPrompt(
+          session.id,
+          "describe",
+          { attachments: [{ type: "image", path: imagePath }] },
+          {
+            afterAttachmentInitialValidation: () => writeFile(imagePath, "changed-image"),
+          },
+        )).rejects.toMatchObject({
+          name: "ClaudeAttachmentError",
+          code: "attachment_changed",
+          message: "Image attachment changed while it was being read; please attach it again.",
+        });
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts an image at the 8MB limit and rejects one byte over it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-image-size-"));
+    const allowedImage = join(directory, "allowed.png");
+    const oversizedImage = join(directory, "oversized.png");
+    await writeFile(allowedImage, Buffer.alloc(MAX_IMAGE_ATTACHMENT_BYTES, 1));
+    await writeFile(oversizedImage, Buffer.alloc(MAX_IMAGE_ATTACHMENT_BYTES + 1, 1));
+    try {
+      const allowedSession = createSession("allowed-image");
+      track(allowedSession.id);
+      await withWorkspaceCwd(directory, async () => {
+        const promptPromise = sendPrompt(allowedSession.id, "describe", {
+          attachments: [{ type: "image", path: allowedImage }],
+        });
+        const call = await nextQueryCall();
+        call.push({ type: "result", subtype: "success" });
+        call.finish();
+        await promptPromise;
+        const sdkMessages = await readSdkPrompt(call) as Array<{
+          message: { content: Array<{ source?: { data?: string } }> };
+        }>;
+        expect(sdkMessages[0].message.content[1]?.source?.data).toHaveLength(
+          Math.ceil(MAX_IMAGE_ATTACHMENT_BYTES / 3) * 4,
+        );
+      });
+
+      const oversizedSession = createSession("oversized-image");
+      track(oversizedSession.id);
+      await withWorkspaceCwd(directory, async () => {
+        await expect(sendPrompt(oversizedSession.id, "describe", {
+          attachments: [{ type: "image", path: oversizedImage }],
+        })).rejects.toMatchObject({
+          name: "ClaudeAttachmentError",
+          code: "attachment_too_large",
+        });
+      });
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import {
   assertBase64PayloadWithinLimit,
-  resolveReadableHostFilePath,
+  readReadableHostFile,
   validateRelativeFilePath,
 } from "./path-safety.js";
 
@@ -120,7 +120,7 @@ export async function pathExists(filePath: string): Promise<boolean> {
 }
 
 export async function readFileBase64(filePath: string): Promise<string> {
-  return (await fs.readFile(await resolveReadableHostFilePath(filePath))).toString("base64");
+  return (await readReadableHostFile(filePath)).toString("base64");
 }
 
 export async function writeFileBase64(rootPath: string, relativePath: string, base64Data: string): Promise<string> {

@@ -2061,8 +2061,8 @@ export function CodexChatTab({
           footer={
             <>
               {session?.isLoading && (
-                <div className="px-2 @sm:px-4 py-3">
-                  <div className="mx-auto max-w-3xl min-w-0">
+                <div className="px-2 @sm:px-4">
+                  <div className="chat-status-row mx-auto max-w-3xl min-w-0">
                     <div className="flex items-center gap-2 text-muted-foreground">
                       {/*
                         Distinguish the transient app-server phases. Both are
@@ -2089,8 +2089,8 @@ export function CodexChatTab({
               )}
 
               {!session?.isLoading && finalElapsedSeconds !== null && (
-                <div className="px-2 @sm:px-4 py-1.5">
-                  <div className="mx-auto max-w-3xl min-w-0">
+                <div className="px-2 @sm:px-4">
+                  <div className="chat-status-row mx-auto max-w-3xl min-w-0">
                     <span className="text-[10px] text-muted-foreground/40">
                       Completed in {formatElapsed(finalElapsedSeconds)}
                     </span>

@@ -51,7 +51,7 @@ interface TestMessage {
 
 function makeScrollProps() {
   return {
-    followOutput: (_atBottom: boolean) => "smooth" as const,
+    followOutput: (_atBottom: boolean) => "auto" as const,
     atBottomStateChange: () => {},
     atBottomThreshold: 50,
     restoreStateFrom: undefined,
@@ -177,7 +177,7 @@ describe("VirtualizedMessageList", () => {
 
   test("passes scroll props through to Virtuoso", () => {
     const followOutput = (atBottom: boolean) =>
-      atBottom ? ("smooth" as const) : false;
+      atBottom ? ("auto" as const) : false;
     const atBottomStateChange = () => {};
     const totalListHeightChanged = () => {};
     const restoreState = { ranges: [], scrollTop: 100 } as any;

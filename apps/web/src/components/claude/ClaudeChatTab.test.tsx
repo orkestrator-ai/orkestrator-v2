@@ -742,6 +742,42 @@ describe("ClaudeChatTab", () => {
     expect(clearIntervalCalls).toBeGreaterThan(0);
   });
 
+  test("keeps the status row the same fixed-height box across the end-of-turn swap", async () => {
+    // The status row is the last thing in the transcript, so any height change
+    // there shifts everything above it. Both states must share the class that
+    // pins the height; a bare py-3 → py-1.5 swap jolts the whole view.
+    installTimerHarness(1_000_000);
+    act(() => {
+      useClaudeStore.getState().setSessionLoading(SESSION_KEY, true);
+    });
+
+    const { container } = render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive={false} />,
+    );
+
+    const thinkingRow = container.querySelector(".chat-status-row");
+    expect(thinkingRow).not.toBeNull();
+    expect(thinkingRow?.textContent).toContain("Claude is thinking...");
+
+    mockedNow = 1_001_500;
+    act(() => {
+      intervalCallback?.();
+    });
+    act(() => {
+      useClaudeStore.getState().setSessionLoading(SESSION_KEY, false);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Completed in 1s")).not.toBeNull();
+    });
+
+    const completedRows = container.querySelectorAll(".chat-status-row");
+    expect(completedRows).toHaveLength(1);
+    expect(completedRows[0]?.textContent).toContain("Completed in 1s");
+    // No residual vertical padding on the wrapper — the class owns the height.
+    expect(completedRows[0]?.parentElement?.className).not.toContain("py-");
+  });
+
   describe("shared SSE event handling", () => {
     test("applies assistant updates, titles, usage, idle refreshes, and error payloads", async () => {
       const channel = eventChannel();

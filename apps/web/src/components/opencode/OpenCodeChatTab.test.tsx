@@ -1537,7 +1537,7 @@ describe("OpenCodeChatTab", () => {
       useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
     });
 
-    render(
+    const { container } = render(
       <OpenCodeChatTab
         tabId={TAB_ID}
         data={createData()}
@@ -1550,6 +1550,12 @@ describe("OpenCodeChatTab", () => {
     expect(screen.getByText("OpenCode is thinking...")).toBeTruthy();
     expect(screen.queryByText("0s")).toBeNull();
     expect(screen.queryByText(/Completed in/)).toBeNull();
+
+    // Both status states share a fixed-height row so the end-of-turn swap
+    // does not shift the transcript above it.
+    const thinkingRow = container.querySelector(".chat-status-row");
+    expect(thinkingRow?.textContent).toContain("OpenCode is thinking...");
+    expect(thinkingRow?.parentElement?.className).not.toContain("py-");
 
     mockedNow = 1_001_500;
     act(() => {
@@ -1568,6 +1574,11 @@ describe("OpenCodeChatTab", () => {
       expect(screen.queryByText("OpenCode is thinking...")).toBeNull();
       expect(screen.queryByText("Completed in 1s")).not.toBeNull();
     });
+
+    const completedRows = container.querySelectorAll(".chat-status-row");
+    expect(completedRows).toHaveLength(1);
+    expect(completedRows[0]?.textContent).toContain("Completed in 1s");
+    expect(completedRows[0]?.parentElement?.className).not.toContain("py-");
 
     expect(clearIntervalCalls).toBeGreaterThan(0);
   });

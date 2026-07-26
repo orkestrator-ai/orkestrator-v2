@@ -5,6 +5,13 @@ import { useUIStore } from "@/stores/uiStore";
 /** Pixels from bottom to consider "at bottom" */
 const AT_BOTTOM_THRESHOLD = 50;
 
+/**
+ * Upward movement a raw scroll event must exceed before it counts as the user
+ * pulling away from the bottom. Sub-pixel scroll positions and elastic
+ * overscroll both produce tiny negative deltas that are not intent.
+ */
+const USER_SCROLL_UP_TOLERANCE_PX = 2;
+
 /** Maximum persisted scroll states to retain (LRU eviction) */
 const MAX_PERSISTED_STATES = 200;
 
@@ -146,6 +153,12 @@ export function useVirtuosoScrollState(
    */
   const wantsStickRef = useRef<boolean>(persisted?.wantsStick ?? true);
   const lastScrollTopRef = useRef(0);
+  /**
+   * Scroll position as of the last `scroll` event, used to derive direction.
+   * Kept separate from lastScrollTopRef, which the touch handlers own and
+   * sample only between touchstart/touchmove.
+   */
+  const lastObservedScrollTopRef = useRef(0);
   const mountedRef = useRef(true);
   const scrollInFlightRef = useRef(false);
   const hasBeenActiveRef = useRef(false);
@@ -227,9 +240,10 @@ export function useVirtuosoScrollState(
     setScrollerEl(next);
   }, []);
 
-  // Core retry loop, shared by the public scrollToBottom (smooth) and the
+  // Core retry loop, shared by the public scrollToBottom (smooth), the
   // activation jump (instant — animating on every env/tab switch reads as
-  // jank). `behavior` only affects the final footer scroll; the scrollToIndex
+  // jank) and followContentGrowth's pre-mount fallback (instant).
+  // `behavior` only affects the final footer scroll; the scrollToIndex
   // retries are always instant since they correct virtual-height estimates.
   const performScrollToBottom = useCallback((behavior: "smooth" | "auto"): boolean => {
     const handle = virtuosoRef.current;
@@ -394,14 +408,100 @@ export function useVirtuosoScrollState(
     [followContentGrowth]
   );
 
+  const growthPinRafRef = useRef<number | null>(null);
+
+  const cancelScheduledGrowthPin = useCallback(() => {
+    if (growthPinRafRef.current !== null) {
+      cancelAnimationFrame(growthPinRafRef.current);
+      growthPinRafRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Pin now, and drop any pin a MutationObserver had queued for this frame.
+   *
+   * This is the ResizeObserver's callback. The browser delivers it after
+   * layout is computed and before paint, so reading scrollHeight here is free
+   * and the correction is still invisible.
+   */
+  const pinForResize = useCallback(() => {
+    cancelScheduledGrowthPin();
+    followContentGrowth();
+  }, [cancelScheduledGrowthPin, followContentGrowth]);
+
+  /**
+   * Defer a mutation-driven pin to the ResizeObserver delivery for this frame.
+   *
+   * Both observers see the same growth, but a MutationObserver callback runs
+   * at a microtask checkpoint while layout is still dirty from the commit that
+   * just mutated the DOM — so measuring there forces a synchronous reflow, once
+   * per checkpoint. Anything that grows scrollHeight also resizes an observed
+   * element, so the ResizeObserver will pin within the same frame anyway.
+   *
+   * The rAF is only a backstop for growth that produces no resize notification
+   * (margin-only growth, which ResizeObserver does not report). It costs the
+   * one frame of drift the synchronous pin exists to avoid, which is why
+   * pinForResize cancels it the moment a real resize lands.
+   */
+  const scheduleGrowthPin = useCallback(() => {
+    if (growthPinRafRef.current !== null) return;
+    if (typeof requestAnimationFrame === "undefined") {
+      followContentGrowth();
+      return;
+    }
+    growthPinRafRef.current = requestAnimationFrame(() => {
+      growthPinRafRef.current = null;
+      followContentGrowth();
+    });
+  }, [followContentGrowth]);
+
   // User-scroll-up detection: only a user action can release stick intent.
   // Virtuoso's own programmatic scrolls (followOutput, scrollToIndex) do not
   // fire wheel/touch/keydown events, so this cleanly separates the two.
+  //
+  // Dragging the scrollbar is the gap those three leave: it fires no wheel,
+  // touch or key event, so without the drag listener below the user stays
+  // flagged sticky and is pinned straight back to the bottom on the next token.
+  //
+  // The drag is detected as "scrolled up while a pointer is held down" rather
+  // than from the scroll event alone. A bare scroll listener cannot tell a
+  // drag from Virtuoso correcting an over-estimated height after restoring a
+  // snapshot, and mistaking that for intent would silently stop auto-follow
+  // on mount — a worse failure than the one being fixed.
+  //
+  // The trade-off is that this only sees drags for which the engine dispatches
+  // pointer events on the scroller. Where it does not, we simply fall back to
+  // the previous behaviour (stick stays engaged) rather than guessing.
   useEffect(() => {
     if (!scrollerEl) return;
 
+    lastObservedScrollTopRef.current = scrollerEl.scrollTop;
+    let pointerHeld = false;
+
     const handleWheel = (e: WheelEvent) => {
       if (e.deltaY < 0) wantsStickRef.current = false;
+    };
+    const handlePointerDown = () => {
+      pointerHeld = true;
+    };
+    const handlePointerRelease = () => {
+      pointerHeld = false;
+    };
+    const handleScroll = () => {
+      const st = scrollerEl.scrollTop;
+      const previous = lastObservedScrollTopRef.current;
+      lastObservedScrollTopRef.current = st;
+
+      if (!pointerHeld) return;
+      if (st >= previous - USER_SCROLL_UP_TOLERANCE_PX) return;
+      // A shrinking scrollHeight or a growing viewport also lowers scrollTop
+      // while leaving the user at the bottom. Only a move that actually ends
+      // away from the bottom is intent to stop following.
+      const distanceFromBottom =
+        scrollerEl.scrollHeight - scrollerEl.clientHeight - st;
+      if (distanceFromBottom > AT_BOTTOM_THRESHOLD) {
+        wantsStickRef.current = false;
+      }
     };
     const handleTouchStart = () => {
       lastScrollTopRef.current = scrollerEl.scrollTop;
@@ -420,6 +520,18 @@ export function useVirtuosoScrollState(
     };
 
     scrollerEl.addEventListener("wheel", handleWheel, { passive: true });
+    scrollerEl.addEventListener("scroll", handleScroll, { passive: true });
+    scrollerEl.addEventListener("pointerdown", handlePointerDown, {
+      passive: true,
+    });
+    // The pointer is often released outside the scroller (or over the
+    // scrollbar gutter), so the release has to be watched globally.
+    window.addEventListener("pointerup", handlePointerRelease, {
+      passive: true,
+    });
+    window.addEventListener("pointercancel", handlePointerRelease, {
+      passive: true,
+    });
     scrollerEl.addEventListener("touchstart", handleTouchStart, {
       passive: true,
     });
@@ -430,6 +542,10 @@ export function useVirtuosoScrollState(
 
     return () => {
       scrollerEl.removeEventListener("wheel", handleWheel);
+      scrollerEl.removeEventListener("scroll", handleScroll);
+      scrollerEl.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("pointerup", handlePointerRelease);
+      window.removeEventListener("pointercancel", handlePointerRelease);
       scrollerEl.removeEventListener("touchstart", handleTouchStart);
       scrollerEl.removeEventListener("touchmove", handleTouchMove);
       scrollerEl.removeEventListener("keydown", handleKeyDown);
@@ -445,13 +561,15 @@ export function useVirtuosoScrollState(
   // (thinking indicator, late-rendering cards) leaves Virtuoso reporting
   // atBottom=true while the new content sits below the viewport.
   //
-  // The pin runs synchronously inside the observer callbacks rather than on a
-  // scheduled rAF: both fire within the frame that produced the growth, before
-  // it is painted, so the correction is invisible instead of one frame late.
+  // The pin runs synchronously inside the ResizeObserver callback rather than
+  // on a scheduled rAF: it fires within the frame that produced the growth,
+  // before it is painted, so the correction is invisible instead of one frame
+  // late. Mutation-driven growth is folded into that same delivery — see
+  // scheduleGrowthPin for why it does not measure inline.
   useEffect(() => {
     if (!scrollerEl || typeof ResizeObserver === "undefined") return;
 
-    const resizeObserver = new ResizeObserver(followContentGrowth);
+    const resizeObserver = new ResizeObserver(pinForResize);
     const observed = new WeakSet<Element>();
     const observeChildren = () => {
       for (const child of Array.from(scrollerEl.children)) {
@@ -475,7 +593,7 @@ export function useVirtuosoScrollState(
               (r) => r.target === scrollerEl && r.addedNodes.length > 0
             );
             if (directChildAdded) observeChildren();
-            followContentGrowth();
+            scheduleGrowthPin();
           })
         : null;
     mutationObserver?.observe(scrollerEl, {
@@ -484,10 +602,11 @@ export function useVirtuosoScrollState(
     });
 
     return () => {
+      cancelScheduledGrowthPin();
       resizeObserver.disconnect();
       mutationObserver?.disconnect();
     };
-  }, [scrollerEl, followContentGrowth]);
+  }, [scrollerEl, pinForResize, scheduleGrowthPin, cancelScheduledGrowthPin]);
 
   const cancelActivationScrollFrame = useCallback(() => {
     if (activationScrollRafRef.current !== null) {

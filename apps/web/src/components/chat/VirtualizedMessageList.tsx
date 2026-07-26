@@ -13,7 +13,7 @@ interface VirtualizedMessageListProps<TMessage> {
   footer?: ReactNode;
   emptyState?: ReactNode;
   scrollProps: {
-    followOutput: (isAtBottom: boolean) => "smooth" | "auto" | false;
+    followOutput: (isAtBottom: boolean) => "auto" | false;
     atBottomStateChange: (atBottom: boolean) => void;
     atBottomThreshold: number;
     totalListHeightChanged?: (height: number) => void;

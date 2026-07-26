@@ -611,7 +611,11 @@ describe("session lifecycle", () => {
       requestId: "req-ambiguous",
       attachments: [],
     });
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    // The dispatch must be genuinely in flight before the child dies — that is
+    // what makes it ambiguous. Waiting for the request rather than sleeping keeps
+    // this deterministic; a fixed delay loses the race on a loaded machine and
+    // the turn never becomes ambiguous, so the prompt below never settles.
+    await h.child().waitForRequest("turn/start");
     h.child().exit(1);
     await pending;
     await h.drain();

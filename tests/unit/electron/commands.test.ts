@@ -654,18 +654,37 @@ function expectedLocalShellPath(): string {
   return ["/bin/zsh", "/bin/bash", "/bin/sh"].find((candidate) => existsSync(candidate)) ?? configuredShell ?? "zsh";
 }
 
-async function waitForPtyProcessCount(count: number): Promise<void> {
+const ASYNC_TEST_WAIT_TIMEOUT_MS = 3_000;
+/**
+ * Per-test budget for the tests that use the wait helpers below.
+ *
+ * Bun's default is 5s, which two of these tests can exhaust on their own: they
+ * await a helper twice, so the worst case is 2 x ASYNC_TEST_WAIT_TIMEOUT_MS
+ * before any fixture setup is counted. Without an explicit budget a slow run
+ * dies on Bun's generic "timed out after 5000ms" instead of the helper's message
+ * naming the condition that never became true.
+ */
+const ASYNC_TEST_BUDGET_MS = 20_000;
+
+async function waitForPtyProcessCount(
+  count: number,
+  timeoutMs = ASYNC_TEST_WAIT_TIMEOUT_MS,
+): Promise<void> {
   const start = Date.now();
-  while (Date.now() - start < 1_000) {
+  while (Date.now() - start < timeoutMs) {
     if (ptyProcesses.length >= count) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`Timed out waiting for ${count} PTY process(es), saw ${ptyProcesses.length}`);
 }
 
-async function waitForCondition(condition: () => boolean, description: string): Promise<void> {
+async function waitForCondition(
+  condition: () => boolean,
+  description: string,
+  timeoutMs = ASYNC_TEST_WAIT_TIMEOUT_MS,
+): Promise<void> {
   const start = Date.now();
-  while (Date.now() - start < 1_000) {
+  while (Date.now() - start < timeoutMs) {
     if (condition()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
@@ -725,6 +744,33 @@ afterEach(async () => {
 afterAll(async () => {
   const commands = createCommandRegistry();
   await commands.get("stop_local_codex_server_cmd")?.({ environmentId: "env-local" }, createContext(createEnvironment()).context);
+});
+
+// These helpers are the failure reporting path for most of the async tests in
+// this file, so their timeout messages are the first thing a developer reads
+// when a suite goes red. Pinning them keeps that diagnostic from silently
+// regressing to Bun's generic per-test timeout.
+describe("async test wait helpers", () => {
+  test("reports the condition that never became true", async () => {
+    await expect(
+      waitForCondition(() => false, "a condition that never holds", 20),
+    ).rejects.toThrow("Timed out waiting for a condition that never holds");
+  });
+
+  test("reports both the expected and observed PTY process counts", async () => {
+    ptyProcesses.splice(0);
+    await expect(waitForPtyProcessCount(2, 20)).rejects.toThrow(
+      "Timed out waiting for 2 PTY process(es), saw 0",
+    );
+  });
+
+  test("returns as soon as the condition holds without exhausting the timeout", async () => {
+    let ready = false;
+    setTimeout(() => { ready = true; }, 10);
+    const start = Date.now();
+    await waitForCondition(() => ready, "a condition that becomes true", 5_000);
+    expect(Date.now() - start).toBeLessThan(1_000);
+  });
 });
 
 describe("Electron backend command registry", () => {
@@ -915,7 +961,7 @@ exit 42
       expect(environment.pendingRenamePrompt).toBeUndefined();
       expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow");
     });
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("retains a failed pending rename so a later backend start can retry it", async () => {
     const worktreePath = await createGitRepoOnBranch("timestamp-name");
@@ -969,7 +1015,7 @@ exit 1
     } finally {
       console.warn = originalConsoleWarn;
     }
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("resumes a persisted rename while rehydrating an already-running environment", async () => {
     const worktreePath = await createGitRepoOnBranch("timestamp-name");
@@ -1002,7 +1048,7 @@ exit 1
     expect(environment.name).toBe("reconcile-session-state");
     expect(environment.pendingRenamePrompt).toBeUndefined();
     expect(await currentGitBranch(worktreePath)).toBe("reconcile-session-state");
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("does not run codex exec for initial-prompt-only environment naming", async () => {
     const { context } = createContext([]);
@@ -1602,7 +1648,7 @@ exit 0
         },
       });
     });
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("returns completed container environments without rerunning backend setup", async () => {
     const environment = createEnvironment({
@@ -1714,7 +1760,7 @@ exit 0
         (failure?.payload as { environment?: Environment }).environment?.pendingAgentLaunch,
       ).toBe(false);
     });
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("completes setup when the done marker is split across PTY chunks", async () => {
     const environment = createEnvironment({
@@ -1744,7 +1790,7 @@ exit 0
       expect(updated.setupScriptsComplete).toBe(true);
       expect(environment.setupScriptsComplete).toBe(true);
     });
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("fails setup when the PTY exits before reporting completion", async () => {
     const environment = createEnvironment({
@@ -1779,7 +1825,7 @@ exit 0
         error: "Setup terminal exited before reporting completion",
       });
     });
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("retains the setup output buffer after the setup PTY exits", async () => {
     const environment = createEnvironment({
@@ -1820,7 +1866,7 @@ exit 0
       ) as string;
       expect(afterExit).toContain("configuring workspace...");
     });
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("reports backend setup session state via get_environment_setup_session", async () => {
     const environment = createEnvironment({
@@ -1871,7 +1917,7 @@ exit 0
         terminalRunning: true,
       }));
     });
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("clears retained setup state when the environment is deleted", async () => {
     const environment = createEnvironment({
@@ -1914,7 +1960,7 @@ exit 0
       ) as string;
       expect(buffer).toBe("");
     });
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("frees a non-setup terminal output buffer when the session exits", async () => {
     const worktreePath = await createTempDir("ork-electron-terminal-buffer-");
@@ -1944,7 +1990,7 @@ exit 0
     ptyProcesses[0]?.emitExit({ exitCode: 0 });
     const afterExit = await commands.get("get_terminal_output_buffer")?.({ sessionId }, context) as string;
     expect(afterExit).toBe("");
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("caps the terminal output buffer at the maximum size", async () => {
     const worktreePath = await createTempDir("ork-electron-terminal-cap-");
@@ -1972,7 +2018,7 @@ exit 0
     expect(buffer.length).toBe(maxChars);
     expect(buffer.endsWith("B".repeat(1024))).toBe(true);
     expect(buffer.startsWith("A")).toBe(true);
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("captures container HEAD commit when frontend marks setup complete", async () => {
     const environment = createEnvironment({
@@ -2100,7 +2146,7 @@ exit 0
         expect(environment.containerId).toBe("container-created");
       });
     });
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("does not expose configured credentials in Docker argv or container creation errors", async () => {
     const githubToken = "github_secret_token";
@@ -2244,7 +2290,7 @@ exit 0
       await expect(fs.readFile(`${logs.all}.container-copy-dest`, "utf8")).resolves.toBe("container-copy-created:/project-files\n");
       expect(environment.containerId).toBe("container-copy-created");
     });
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("removes a newly created container when configured file docker copy fails", async () => {
     const projectPath = await createTempDir("ork-electron-container-copy-fail-source-");
@@ -5045,7 +5091,7 @@ exit 0
         context,
       ),
     ).resolves.toBeNull();
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("serializes simultaneous starts so one local server owns the key", async () => {
     const appRoot = await createTempDir("ork-electron-app-concurrent-start-");
@@ -5161,7 +5207,7 @@ exit 0
         context,
       ),
     ).resolves.toBeNull();
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("waits for an in-flight start before global shutdown and rejects future starts", async () => {
     const appRoot = await createTempDir("ork-electron-app-start-shutdown-");
@@ -5211,7 +5257,7 @@ exit 0
       { environmentId: environment.id },
       context,
     )).rejects.toThrow("Backend is shutting down");
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("deletes an environment only after all three local server kinds exit", async () => {
     const appRoot = await createTempDir("ork-electron-app-delete-all-servers-");
@@ -6174,7 +6220,7 @@ exit 0
       },
     });
     await commands.get("close_local_terminal_session")?.({ sessionId }, context);
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("debounces repeated output and ignores writes without a submitted prompt", async () => {
     const worktreePath = await createTempDir("ork-electron-local-agent-debounce-");
@@ -6209,17 +6255,25 @@ exit 0
     ptyProcesses[0]?.emitData("first chunk");
     await Bun.sleep(400);
     ptyProcesses[0]?.emitData("second chunk");
+    // The second chunk restarts the 750ms settle window, so nothing may have been
+    // recorded 500ms later. This sleep is load-bearing: it is the reset itself
+    // being asserted, and it leaves 250ms of slack against a stalled machine.
     await Bun.sleep(500);
     expect(recordActivity).not.toHaveBeenCalled();
 
-    await Bun.sleep(400);
+    // Wait for the restarted window to elapse rather than sleeping exactly past
+    // it, so a scheduling stall delays the test instead of failing it.
+    await waitForCondition(
+      () => recordActivity.mock.calls.length > 0,
+      "debounced terminal activity to settle",
+    );
     expect(recordActivity).toHaveBeenCalledTimes(1);
     recordActivity.mockClear();
     ptyProcesses[0]?.emitData("background output after completion");
     await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
     expect(recordActivity).not.toHaveBeenCalled();
     await commands.get("close_local_terminal_session")?.({ sessionId }, context);
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("logs terminal activity persistence failures without emitting a success event", async () => {
     const worktreePath = await createTempDir("ork-electron-local-agent-persistence-failure-");
@@ -6263,7 +6317,7 @@ exit 0
     } finally {
       consoleError.mockRestore();
     }
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("cancels pending settled-output activity when a tracked terminal is explicitly closed", async () => {
     const worktreePath = await createTempDir("ork-electron-local-agent-close-");

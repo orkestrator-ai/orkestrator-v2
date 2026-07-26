@@ -2,7 +2,11 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { forwardRef, useImperativeHandle } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
-import { setMobileViewport } from "../../mocks/match-media";
+import {
+  emitViewportChange,
+  restoreMatchMedia,
+  setMobileViewport,
+} from "../../mocks/match-media";
 
 const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
@@ -21,7 +25,6 @@ const mockInsertMentionAtCursor = mock(() => {});
 const mockInputFocus = mock(() => {});
 let mockFileMentionMenuOpen = false;
 let mockFileSearchError: string | null = null;
-const originalMatchMedia = window.matchMedia;
 
 // Snapshot modules before stubbing them so later suites that exercise the
 // real file mention flow do not inherit these isolated compose-bar stubs.
@@ -39,7 +42,7 @@ afterAll(() => {
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/hooks/useFileMentions", () => realUseFileMentionsSnapshot);
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
-  window.matchMedia = originalMatchMedia;
+  restoreMatchMedia();
 });
 
 // --- Module mocks (must be before component import) ---
@@ -295,6 +298,16 @@ describe("CodexComposeBar", () => {
     mockInputFocus.mockClear();
     setMobileViewport(true);
     renderComposeBar();
+
+    expect(mockInputFocus).not.toHaveBeenCalled();
+  });
+
+  test("does not focus when the viewport widens past the mobile breakpoint", () => {
+    setMobileViewport(true);
+    renderComposeBar();
+    expect(mockInputFocus).not.toHaveBeenCalled();
+
+    act(() => emitViewportChange(false));
 
     expect(mockInputFocus).not.toHaveBeenCalled();
   });

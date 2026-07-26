@@ -2,7 +2,11 @@ import { afterAll, describe, expect, mock, test, beforeEach, afterEach } from "b
 import { act, render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { forwardRef, useImperativeHandle } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
-import { setMobileViewport } from "../../mocks/match-media";
+import {
+  emitViewportChange,
+  restoreMatchMedia,
+  setMobileViewport,
+} from "../../mocks/match-media";
 import { mockToastError } from "../../mocks/sonner";
 
 const mockWriteContainerFile = mock(async () => {});
@@ -25,7 +29,6 @@ const mockCreateMention = mock(() => ({
 }));
 const mockInputFocus = mock(() => {});
 let mockFileMentionMenuOpen = false;
-const originalMatchMedia = window.matchMedia;
 
 // Snapshot the real SlashCommandMenu module BEFORE we stub it below, so we
 // can restore it for other test files (e.g. ClaudeTmuxChatTab.test.tsx
@@ -51,7 +54,7 @@ afterAll(() => {
   mock.module("@/components/chat/FileMentionMenu", () => realFileMentionMenuSnapshot);
   mock.module("@/hooks/useFileMentions", () => realUseFileMentionsSnapshot);
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
-  window.matchMedia = originalMatchMedia;
+  restoreMatchMedia();
 });
 
 // --- Module mocks (must be before component import) ---
@@ -286,9 +289,25 @@ describe("ClaudeComposeBar", () => {
     expect(screen.getByPlaceholderText("Ask Claude anything...")).toBeTruthy();
   });
 
+  test("focuses the mentionable input on desktop mount", () => {
+    renderComposeBar();
+
+    expect(mockInputFocus).toHaveBeenCalledTimes(1);
+  });
+
   test("does not focus the mentionable input on mobile mount", () => {
     setMobileViewport(true);
     renderComposeBar();
+
+    expect(mockInputFocus).not.toHaveBeenCalled();
+  });
+
+  test("does not focus when the viewport widens past the mobile breakpoint", () => {
+    setMobileViewport(true);
+    renderComposeBar();
+    expect(mockInputFocus).not.toHaveBeenCalled();
+
+    act(() => emitViewportChange(false));
 
     expect(mockInputFocus).not.toHaveBeenCalled();
   });

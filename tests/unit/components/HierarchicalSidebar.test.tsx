@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { createElement, type ComponentProps } from "react";
 import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { mockReadImage } from "../../mocks/clipboard";
-import { setMobileViewport } from "../../mocks/match-media";
+import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import { useClaudeOptionsStore, useConfigStore, useUIStore } from "@/stores";
 import type { Environment, Project } from "@/types";
 
@@ -20,7 +20,6 @@ const realUseEnvironmentsSnapshot = { ...realUseEnvironments };
 const realUseEnvironmentDiffStatsSnapshot = { ...realUseEnvironmentDiffStats };
 const realBackendSnapshot = { ...realBackend };
 const realEnvironmentSettingsDialogSnapshot = { ...realEnvironmentSettingsDialog };
-const originalMatchMedia = window.matchMedia;
 
 const project: Project = {
   id: "project-1",
@@ -152,7 +151,7 @@ afterAll(() => {
     "@/components/environments/EnvironmentSettingsDialog",
     () => realEnvironmentSettingsDialogSnapshot,
   );
-  window.matchMedia = originalMatchMedia;
+  restoreMatchMedia();
 });
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -1344,13 +1343,36 @@ describe("HierarchicalSidebar", () => {
     ];
     const input = document.createElement("input");
     document.body.appendChild(input);
-    input.focus();
-    render(<HierarchicalSidebar />);
+    try {
+      input.focus();
+      render(<HierarchicalSidebar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Mobile Environment" }));
+      fireEvent.click(screen.getByRole("button", { name: "Mobile Environment" }));
 
-    expect(document.activeElement).not.toBe(input);
-    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-mobile");
+      expect(document.activeElement).not.toBe(input);
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-mobile");
+    } finally {
+      input.remove();
+    }
+  });
+
+  test("keeps the focused input on desktop when activating an environment", () => {
+    environmentsValue = [
+      { ...createdEnvironment, id: "env-desktop", name: "Desktop Environment" },
+    ];
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    try {
+      input.focus();
+      render(<HierarchicalSidebar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Desktop Environment" }));
+
+      expect(document.activeElement).toBe(input);
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-desktop");
+    } finally {
+      input.remove();
+    }
   });
 
   test("reports an automatic local environment start failure", async () => {

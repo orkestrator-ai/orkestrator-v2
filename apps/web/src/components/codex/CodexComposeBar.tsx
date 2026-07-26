@@ -129,6 +129,9 @@ export function CodexComposeBar({
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const prevFileMentionMenuOpen = useRef(false);
   const isMobile = useMediaQuery("(max-width: 767px)");
+  // Sampled once so a later resize across the breakpoint cannot re-run the
+  // mount focus effect and steal focus from whatever the user is doing.
+  const autoFocusOnMountRef = useRef(!isMobile);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const text = useCodexStore((state) => state.draftText.get(sessionKey) ?? "");
   const mentions = useCodexStore(
@@ -173,11 +176,13 @@ export function CodexComposeBar({
     createMention,
   } = useFileMentions({ searchFiles });
 
+  // Focus input on mount, except on mobile where it would raise the on-screen
+  // keyboard over the transcript before the user has asked to type.
   useEffect(() => {
-    if (!isMobile) {
+    if (autoFocusOnMountRef.current) {
       inputRef.current?.focus();
     }
-  }, [isMobile]);
+  }, []);
 
   useEffect(() => {
     if (fileSearchError) {

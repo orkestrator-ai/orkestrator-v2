@@ -106,6 +106,10 @@ export function PersistentTerminal({
   onWrite,
 }: PersistentTerminalProps) {
   const isMobile = useMediaQuery("(max-width: 767px)");
+  // Mirrored into a ref so the focus effect below can read the current
+  // viewport without listing isMobile as a dependency: crossing the
+  // breakpoint must not re-fire focus on an already-active terminal.
+  const isMobileRef = useRef(isMobile);
   const terminalRef = useRef<HTMLDivElement>(null);
   const writeRef = useRef<(data: string) => Promise<void>>(() => Promise.resolve());
   const [isEnvironmentReady, setIsEnvironmentReady] = useState(false);
@@ -137,6 +141,10 @@ export function PersistentTerminal({
   const restorationInProgressRef = useRef<boolean>(false);
   // Track if initial buffer restoration has completed - prevents cleanup from overwriting buffer during mount cycle
   const initialRestorationCompleteRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    isMobileRef.current = isMobile;
+  }, [isMobile]);
 
   useEffect(() => {
     if (initialLaunchModel || initialLaunchReasoningEffort) {
@@ -1227,15 +1235,16 @@ export function PersistentTerminal({
     }
   }, [isEnvironmentReady, isConnected, tabType, tabId, initialPrompt, initialCommands, initialLaunchModel, initialLaunchReasoningEffort, isSetupTab, sessionKey, setHasLaunchedCommandStore]);
 
-  // Focus when active
+  // Focus when active. Mobile is excluded so activating a tab does not raise
+  // the on-screen keyboard; the terminal still fits, and tapping it focuses.
   useEffect(() => {
     if (isActive && isConnected) {
-      if (!isMobile) {
+      if (!isMobileRef.current) {
         terminal.focus();
       }
       scheduleFit();
     }
-  }, [isActive, isConnected, isMobile, terminal, scheduleFit]);
+  }, [isActive, isConnected, terminal, scheduleFit]);
 
   // Get setActivePane to update focus when terminal is clicked
   const setActivePane = usePaneLayoutStore((state) => state.setActivePane);

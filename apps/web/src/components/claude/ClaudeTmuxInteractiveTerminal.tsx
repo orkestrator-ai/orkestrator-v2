@@ -39,6 +39,10 @@ export function ClaudeTmuxInteractiveTerminal({
   className,
 }: ClaudeTmuxInteractiveTerminalProps) {
   const isMobile = useMediaQuery("(max-width: 767px)");
+  // Mirrored into a ref so neither the session-creating effect (whose cleanup
+  // disposes the terminal and detaches the tmux session) nor the activation
+  // effect has to depend on isMobile. Crossing the breakpoint must not tear
+  // down a live attachment or steal focus from an already-active terminal.
   const isMobileRef = useRef(isMobile);
   const terminalHostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -297,11 +301,11 @@ export function ClaudeTmuxInteractiveTerminal({
       } catch {
         return;
       }
-      if (!isMobile) {
+      if (!isMobileRef.current) {
         terminal.focus();
       }
     });
-  }, [isActive, isMobile]);
+  }, [isActive]);
 
   return (
     <div

@@ -2,7 +2,11 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { forwardRef, useImperativeHandle, useState } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
-import { setMobileViewport } from "../../mocks/match-media";
+import {
+  emitViewportChange,
+  restoreMatchMedia,
+  setMobileViewport,
+} from "../../mocks/match-media";
 import { mockToastError } from "../../mocks/sonner";
 
 const mockWriteContainerFile = mock(async () => {});
@@ -25,7 +29,6 @@ const mockCreateMention = mock(() => ({
 let mockFileMentionMenuOpen = false;
 let mockFileSearchError: string | null = null;
 let mockFilteredFiles = [{ filename: "app.ts", relativePath: "src/app.ts", isDirectory: false }];
-const originalMatchMedia = window.matchMedia;
 
 const mockUseFileSearch = () => ({
   flatFiles: [],
@@ -72,7 +75,7 @@ afterAll(() => {
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/hooks/useFileMentions", () => realUseFileMentionsSnapshot);
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
-  window.matchMedia = originalMatchMedia;
+  restoreMatchMedia();
 });
 
 // --- Module mocks (must be before component import) ---
@@ -327,6 +330,16 @@ describe("OpenCodeComposeBar", () => {
   test("does not focus the mentionable input on mobile mount", () => {
     setMobileViewport(true);
     renderComposeBar();
+
+    expect(mockInputFocus).not.toHaveBeenCalled();
+  });
+
+  test("does not focus when the viewport widens past the mobile breakpoint", () => {
+    setMobileViewport(true);
+    renderComposeBar();
+    expect(mockInputFocus).not.toHaveBeenCalled();
+
+    act(() => emitViewportChange(false));
 
     expect(mockInputFocus).not.toHaveBeenCalled();
   });

@@ -109,6 +109,9 @@ export function ClaudeComposeBar({
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
+  // Sampled once so a later resize across the breakpoint cannot re-run the
+  // mount focus effect and steal focus from whatever the user is doing.
+  const autoFocusOnMountRef = useRef(!isMobile);
 
   // Create sessionKey for store lookups (format: "env-{environmentId}:{tabId}")
   const sessionKey = createClaudeSessionKey(environmentId, tabId);
@@ -285,12 +288,13 @@ export function ClaudeComposeBar({
     [addAttachment, containerId, disabled, isSending, sessionKey, worktreePath],
   );
 
-  // Focus input on mount
+  // Focus input on mount, except on mobile where it would raise the on-screen
+  // keyboard over the transcript before the user has asked to type.
   useEffect(() => {
-    if (!isMobile) {
+    if (autoFocusOnMountRef.current) {
       inputRef.current?.focus();
     }
-  }, [isMobile]);
+  }, []);
 
   // Detect "/" being typed to show slash command menu
   useEffect(() => {

@@ -7813,3 +7813,214 @@ describe("feature plan commands", () => {
     expect(storage.appendFeatureStoryMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("agent extension discovery commands", () => {
+  type RunCall = {
+    command: string;
+    args: string[];
+    options: Record<string, unknown> | undefined;
+  };
+
+  function recordingRun(stdout = "") {
+    const calls: RunCall[] = [];
+    const run = (async (
+      command: string,
+      args: string[] = [],
+      options?: Record<string, unknown>,
+    ) => {
+      calls.push({ command, args, options });
+      return { stdout, stderr: "" };
+    }) as unknown as Parameters<typeof commandTesting.createExtensionCommandRunner>[2];
+    return { run, calls };
+  }
+
+  test("runs the agent CLI inside the worktree for a local environment", async () => {
+    const environment = createEnvironment({
+      id: "env-local",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      containerId: null,
+    });
+    const { context } = createContext(environment);
+    const { run, calls } = recordingRun("docs: cmd - Connected");
+
+    const runner = commandTesting.createExtensionCommandRunner(environment, context, run);
+    await expect(runner("claude", ["mcp", "list"])).resolves.toBe("docs: cmd - Connected");
+    await runner("opencode", ["debug", "config"]);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.args).toEqual(["mcp", "list"]);
+    expect(calls[0]!.options).toMatchObject({
+      cwd: "/tmp/worktree",
+      timeoutMs: 20_000,
+    });
+    // Colour codes would otherwise have to be stripped out of every parser.
+    expect((calls[0]!.options as { env: Record<string, string> }).env.NO_COLOR).toBe("1");
+    expect(calls[1]!.args).toEqual(["debug", "config"]);
+  });
+
+  test("runs the agent CLI in the container for a containerized environment", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const { run, calls } = recordingRun("[]");
+
+    const runner = commandTesting.createExtensionCommandRunner(environment, context, run);
+    await expect(runner("codex", ["mcp", "list", "--json"])).resolves.toBe("[]");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.command).toBe("docker");
+    expect(calls[0]!.args).toEqual([
+      "exec",
+      "-e",
+      "NO_COLOR=1",
+      "-w",
+      "/workspace",
+      "container-1",
+      "codex",
+      "mcp",
+      "list",
+      "--json",
+    ]);
+    expect(calls[0]!.options).toMatchObject({ timeoutMs: 20_000 });
+  });
+
+  test("prefers the container over a stale worktree path when both are set", async () => {
+    const environment = createEnvironment({
+      id: "env-both",
+      environmentType: "containerized",
+      containerId: "container-2",
+      worktreePath: "/tmp/worktree",
+    });
+    const { context } = createContext(environment);
+    const { run, calls } = recordingRun("[]");
+
+    await commandTesting.createExtensionCommandRunner(environment, context, run)("codex", ["mcp"]);
+
+    expect(calls[0]!.command).toBe("docker");
+  });
+
+  test("refuses to run anything when the environment has no worktree and no container", async () => {
+    const environment = createEnvironment({
+      id: "env-nowhere",
+      environmentType: "local",
+      worktreePath: undefined,
+      containerId: null,
+    });
+    const { context } = createContext(environment);
+    const { run, calls } = recordingRun();
+
+    const runner = commandTesting.createExtensionCommandRunner(environment, context, run);
+
+    await expect(runner("claude", ["mcp", "list"])).rejects.toThrow("The environment is not available");
+    expect(calls).toEqual([]);
+  });
+
+  test("reports every agent as unreadable when the environment cannot be reached", async () => {
+    const environment = createEnvironment({
+      id: "env-nowhere",
+      environmentType: "local",
+      worktreePath: undefined,
+      containerId: null,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const catalogs = await commands.get("get_environment_extensions")?.(
+      { environmentId: "env-nowhere" },
+      context,
+    ) as Array<Record<string, unknown>>;
+
+    expect(catalogs.map((catalog) => catalog.agent)).toEqual(["claude", "codex", "opencode"]);
+    for (const catalog of catalogs) {
+      expect(catalog.mcpServers).toEqual([]);
+      expect(catalog.plugins).toEqual([]);
+      expect(catalog.mcpError).toBeTruthy();
+      expect(catalog.pluginError).toBeTruthy();
+    }
+  });
+
+  test("rejects an unknown environment", async () => {
+    const { context } = createContext([]);
+    const commands = createCommandRegistry();
+
+    await expect(
+      commands.get("get_environment_extensions")?.({ environmentId: "missing" }, context),
+    ).rejects.toThrow("Environment not found: missing");
+  });
+
+  test("requires an environmentId", async () => {
+    const { context } = createContext([]);
+    const commands = createCommandRegistry();
+
+    await expect(
+      commands.get("get_environment_extensions")?.({}, context),
+    ).rejects.toThrow(/environmentId/);
+  });
+
+  test("caches per environment so reopening the dialog does not respawn MCP servers", async () => {
+    const environment = createEnvironment({
+      id: "env-nowhere",
+      environmentType: "local",
+      worktreePath: undefined,
+      containerId: null,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const lookups = context.storage.getEnvironment as unknown as { mock: { calls: unknown[] } };
+    const lookupCount = () => lookups.mock.calls.length;
+
+    await commands.get("get_environment_extensions")?.({ environmentId: "env-nowhere" }, context);
+    const afterFirst = lookupCount();
+
+    await commands.get("get_environment_extensions")?.({ environmentId: "env-nowhere" }, context);
+    expect(lookupCount()).toBe(afterFirst);
+
+    await commands.get("get_environment_extensions")?.(
+      { environmentId: "env-nowhere", refresh: true },
+      context,
+    );
+    expect(lookupCount()).toBe(afterFirst + 1);
+  });
+
+  test("drops the cached catalog when the environment is stopped", async () => {
+    const environment = createEnvironment({
+      id: "env-nowhere",
+      environmentType: "local",
+      worktreePath: undefined,
+      containerId: null,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const lookups = context.storage.getEnvironment as unknown as { mock: { calls: unknown[] } };
+
+    await commands.get("get_environment_extensions")?.({ environmentId: "env-nowhere" }, context);
+    await commands.get("stop_environment")?.({ environmentId: "env-nowhere" }, context);
+    const beforeReread = lookups.mock.calls.length;
+
+    await commands.get("get_environment_extensions")?.({ environmentId: "env-nowhere" }, context);
+
+    expect(lookups.mock.calls.length).toBe(beforeReread + 1);
+  });
+
+  test("does not cache a failed lookup", async () => {
+    const { context } = createContext([]);
+    const commands = createCommandRegistry();
+    const lookups = context.storage.getEnvironment as unknown as { mock: { calls: unknown[] } };
+
+    await expect(
+      commands.get("get_environment_extensions")?.({ environmentId: "missing" }, context),
+    ).rejects.toThrow("Environment not found: missing");
+    const afterFirst = lookups.mock.calls.length;
+
+    await expect(
+      commands.get("get_environment_extensions")?.({ environmentId: "missing" }, context),
+    ).rejects.toThrow("Environment not found: missing");
+
+    expect(lookups.mock.calls.length).toBe(afterFirst + 1);
+  });
+});

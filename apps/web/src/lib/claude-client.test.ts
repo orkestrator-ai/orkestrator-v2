@@ -18,9 +18,6 @@ import {
   answerQuestion,
   dismissQuestion,
   respondToPlanApproval,
-  getMcpServers,
-  getPlugins,
-  getSessionInitData,
   getSlashCommands,
   subscribeToEvents,
   SessionNotFoundError,
@@ -641,55 +638,6 @@ describe("claude-client", () => {
     test("returns false on network error", async () => {
       mockFetchError();
       expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe(false);
-    });
-  });
-
-  describe("getMcpServers", () => {
-    test("returns servers on success", async () => {
-      const data = { servers: [{ name: "test", type: "stdio" as const, source: "global" as const }], cwd: "/tmp" };
-      mockFetchJson(data);
-      const result = await getMcpServers(client);
-      expect(result).toEqual(data);
-    });
-
-    test("returns empty on error", async () => {
-      mockFetchError();
-      const result = await getMcpServers(client);
-      expect(result).toEqual({ servers: [], cwd: "" });
-    });
-  });
-
-  describe("getPlugins", () => {
-    test("returns plugins on success", async () => {
-      const data = { plugins: [{ name: "p1", path: "/p1", source: "global" as const, enabled: true }], cwd: "/tmp" };
-      mockFetchJson(data);
-      const result = await getPlugins(client);
-      expect(result).toEqual(data);
-    });
-
-    test("returns empty on error", async () => {
-      mockFetchError();
-      const result = await getPlugins(client);
-      expect(result).toEqual({ plugins: [], cwd: "" });
-    });
-  });
-
-  describe("getSessionInitData", () => {
-    test("returns init data on success", async () => {
-      const initData = { mcpServers: [], plugins: [], slashCommands: ["/help"] };
-      mockFetchJson({ initData });
-      const result = await getSessionInitData(client, "s-1");
-      expect(result).toEqual(initData);
-    });
-
-    test("returns null on non-ok response", async () => {
-      mockFetchStatus(404);
-      expect(await getSessionInitData(client, "s-1")).toBeNull();
-    });
-
-    test("returns null on network error", async () => {
-      mockFetchError();
-      expect(await getSessionInitData(client, "s-1")).toBeNull();
     });
   });
 

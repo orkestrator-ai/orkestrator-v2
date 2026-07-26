@@ -88,24 +88,6 @@ export interface ClaudeMessagePart {
   taskSnapshot?: TaskListSnapshot;
 }
 
-/** MCP server info from the bridge server */
-export interface McpServerInfo {
-  name: string;
-  type: "http" | "stdio";
-  url?: string;
-  command?: string;
-  source: "global" | "project";
-}
-
-/** Plugin info from the bridge server */
-export interface PluginInfo {
-  name: string;
-  path: string;
-  description?: string;
-  source: "global" | "project" | "cli";
-  enabled: boolean;
-}
-
 /** MCP server runtime status from session init */
 export interface McpServerRuntimeStatus {
   name: string;
@@ -920,59 +902,10 @@ export async function respondToPlanApproval(
 }
 
 /**
- * Get configured MCP servers
- */
-export async function getMcpServers(
-  client: ClaudeClient
-): Promise<{ servers: McpServerInfo[]; cwd: string }> {
-  try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/mcp/servers`);
-    if (!response.ok) return { servers: [], cwd: "" };
-    return await response.json();
-  } catch (error) {
-    console.error("[claude-client] Failed to get MCP servers:", error);
-    return { servers: [], cwd: "" };
-  }
-}
-
-/**
- * Get configured plugins
- */
-export async function getPlugins(
-  client: ClaudeClient
-): Promise<{ plugins: PluginInfo[]; cwd: string }> {
-  try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/plugins`);
-    if (!response.ok) return { plugins: [], cwd: "" };
-    return await response.json();
-  } catch (error) {
-    console.error("[claude-client] Failed to get plugins:", error);
-    return { plugins: [], cwd: "" };
-  }
-}
-
-/**
- * Get session initialization data (MCP servers, plugins, slash commands status)
- */
-export async function getSessionInitData(
-  client: ClaudeClient,
-  sessionId: string
-): Promise<SessionInitData | null> {
-  try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/session/${sessionId}/init`);
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data.initData || null;
-  } catch (error) {
-    console.error("[claude-client] Failed to get session init data:", error);
-    return null;
-  }
-}
-
-/**
  * Get discovered slash commands from plugins and project .claude/commands/.
- * This can be called before any session query, unlike getSessionInitData which
- * only has slash commands after the first SDK query.
+ * Effective MCP server and plugin configuration is read from the backend
+ * instead — see `getEnvironmentExtensions` in `@/lib/backend` — so that it does
+ * not depend on a running bridge.
  */
 export async function getSlashCommands(
   client: ClaudeClient,

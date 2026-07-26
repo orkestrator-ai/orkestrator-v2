@@ -1190,6 +1190,38 @@ export async function updateEnvironmentAgentSettings(
   });
 }
 
+export type AgentExtensionId = "claude" | "codex" | "opencode";
+
+export interface AgentExtensionItem {
+  name: string;
+  status: "connected" | "configured" | "disabled" | "failed" | "pending";
+  source?: string;
+}
+
+export interface AgentExtensionCatalog {
+  agent: AgentExtensionId;
+  mcpServers: AgentExtensionItem[];
+  plugins: AgentExtensionItem[];
+  mcpError?: string;
+  pluginError?: string;
+}
+
+/**
+ * Read the effective MCP and plugin configuration for every supported agent.
+ *
+ * The backend caches per environment because discovery health-checks (and so
+ * spawns) the configured MCP servers. Pass `refresh` for an explicit reload.
+ */
+export async function getEnvironmentExtensions(
+  environmentId: string,
+  options: { refresh?: boolean } = {},
+): Promise<AgentExtensionCatalog[]> {
+  return invoke<AgentExtensionCatalog[]>("get_environment_extensions", {
+    environmentId,
+    refresh: options.refresh === true,
+  });
+}
+
 // --- Session Commands (Persistent Session Tracking) ---
 
 /** Create a new persistent session for tracking */

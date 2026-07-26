@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -39,21 +39,13 @@ import {
   Server,
   Bot,
   Terminal,
+  RefreshCw,
 } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { cn } from "@/lib/utils";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "@/components/settings/FullscreenSettingsLayout";
 import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
-import { useClaudeStore } from "@/stores/claudeStore";
-import {
-  createClient,
-  getMcpServers,
-  getPlugins,
-  getSessionInitData as fetchSessionInitData,
-  type McpServerInfo,
-  type PluginInfo,
-} from "@/lib/claude-client";
 import type {
   ClaudeMode,
   ClaudeNativeBackend,
@@ -77,33 +69,199 @@ interface EnvironmentSettingsDialogProps {
   onRestart?: (environmentId: string) => Promise<void>;
 }
 
-/** Reusable component for displaying runtime-only extension items */
-function RuntimeExtensionItem({
-  name,
-  isSuccess,
-  isFailed,
-  error,
+const AGENT_ORDER: backend.AgentExtensionId[] = [
+  "claude",
+  "codex",
+  "opencode",
+];
+
+const AGENT_EXTENSION_COPY: Record<
+  backend.AgentExtensionId,
+  {
+    label: string;
+    mcpConfig: string;
+    pluginConfig: string;
+  }
+> = {
+  claude: {
+    label: "Claude",
+    mcpConfig: ".mcp.json or ~/.claude.json",
+    pluginConfig: ".claude/plugins.json or ~/.claude/plugins",
+  },
+  codex: {
+    label: "Codex",
+    mcpConfig: "~/.codex/config.toml",
+    pluginConfig: "~/.codex/config.toml",
+  },
+  opencode: {
+    label: "OpenCode",
+    mcpConfig: "opencode.json(c) or ~/.config/opencode/opencode.json(c)",
+    pluginConfig: "opencode.json(c) or ~/.config/opencode/opencode.json(c)",
+  },
+};
+
+function AgentExtensionIcon({
+  agent,
+  className,
 }: {
-  name: string;
-  isSuccess: boolean;
-  isFailed: boolean;
+  agent: backend.AgentExtensionId;
+  className?: string;
+}) {
+  if (agent === "claude") return <ClaudeIcon className={className} />;
+  if (agent === "codex") return <CodexIcon className={cn("text-emerald-400", className)} />;
+  return <OpenCodeIcon className={className} />;
+}
+
+function ExtensionStatusIcon({
+  status,
+}: {
+  status: backend.AgentExtensionItem["status"];
+}) {
+  if (status === "connected") {
+    return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />;
+  }
+  if (status === "failed") {
+    return <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />;
+  }
+  if (status === "pending") {
+    return <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-500" />;
+  }
+  return (
+    <span
+      className={cn(
+        "h-2 w-2 shrink-0 rounded-full",
+        status === "disabled" ? "bg-muted-foreground/50" : "bg-sky-500",
+      )}
+    />
+  );
+}
+
+function ExtensionCollection({
+  title,
+  emptyLabel,
+  icon,
+  items,
+  error,
+  configHint,
+}: {
+  title: string;
+  emptyLabel: string;
+  icon: React.ReactNode;
+  items: backend.AgentExtensionItem[];
   error?: string;
+  configHint: string;
 }) {
   return (
-    <div
-      className={`flex items-center justify-between p-2 rounded-md bg-muted/50 border text-sm ${isFailed ? "border-red-300" : "border-input"}`}
-      title={isFailed && error ? error : undefined}
-    >
-      <div className="flex items-center gap-2 min-w-0">
-        {isSuccess ? (
-          <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
-        ) : (
-          <XCircle className="h-3 w-3 text-red-500 shrink-0" />
-        )}
-        <span className={`font-medium truncate ${isFailed ? "text-red-600" : ""}`}>{name}</span>
+    <div className="flex min-w-0 flex-col gap-3 p-4">
+      <div className="flex items-center gap-2">
+        {icon}
+        <h4 className="text-sm font-medium">{title}</h4>
+        <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground">
+          {items.length}
+        </span>
       </div>
-      <span className="text-xs text-muted-foreground shrink-0 ml-2">runtime</span>
+      {error ? (
+        <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      ) : items.length === 0 ? (
+        <p className="py-1 text-sm text-muted-foreground">{emptyLabel}</p>
+      ) : (
+        <div className="space-y-1.5">
+          {items.map((item, index) => (
+            // Two marketplaces can publish the same plugin name, so the name
+            // alone is not a stable key.
+            <div
+              key={`${item.name}:${item.source ?? item.status}:${index}`}
+              className="flex min-w-0 items-center gap-2 rounded-md border border-border/70 bg-muted/30 px-2.5 py-2 text-sm"
+            >
+              <ExtensionStatusIcon status={item.status} />
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {item.name}
+              </span>
+              <span className="shrink-0 text-[11px] text-muted-foreground">
+                {item.source ?? item.status}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="mt-auto text-[11px] leading-relaxed text-muted-foreground">
+        Configure in{" "}
+        <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">
+          {configHint}
+        </code>
+      </p>
     </div>
+  );
+}
+
+function AgentExtensionSection({
+  catalog,
+}: {
+  catalog: backend.AgentExtensionCatalog;
+}) {
+  const copy = AGENT_EXTENSION_COPY[catalog.agent];
+  const extensionCount = catalog.mcpServers.length + catalog.plugins.length;
+  return (
+    <section className="overflow-hidden rounded-xl border border-border/80 bg-card/40">
+      <div className="flex items-center gap-3 border-b border-border/70 bg-muted/20 px-4 py-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/70 bg-background">
+          <AgentExtensionIcon agent={catalog.agent} className="h-4.5 w-4.5" />
+        </div>
+        <div>
+          <h3 className="text-sm font-semibold">{copy.label}</h3>
+          <p className="text-xs text-muted-foreground">
+            {extensionCount === 0
+              ? "No configured extensions found"
+              : `${extensionCount} configured extension${extensionCount === 1 ? "" : "s"}`}
+          </p>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 divide-y divide-border/70 md:grid-cols-2 md:divide-x md:divide-y-0">
+        <ExtensionCollection
+          title="MCP servers"
+          emptyLabel="No MCP servers configured"
+          icon={<Server className="h-4 w-4 text-muted-foreground" />}
+          items={catalog.mcpServers}
+          error={catalog.mcpError}
+          configHint={copy.mcpConfig}
+        />
+        <ExtensionCollection
+          title="Plugins"
+          emptyLabel="No plugins configured"
+          icon={<Puzzle className="h-4 w-4 text-muted-foreground" />}
+          items={catalog.plugins}
+          error={catalog.pluginError}
+          configHint={copy.pluginConfig}
+        />
+      </div>
+    </section>
+  );
+}
+
+function emptyExtensionCatalogs(): backend.AgentExtensionCatalog[] {
+  return AGENT_ORDER.map((agent) => ({
+    agent,
+    mcpServers: [],
+    plugins: [],
+  }));
+}
+
+function orderExtensionCatalogs(
+  catalogs: backend.AgentExtensionCatalog[],
+): backend.AgentExtensionCatalog[] {
+  const byAgent = new Map(catalogs.map((catalog) => [catalog.agent, catalog]));
+  return AGENT_ORDER.map(
+    (agent) =>
+      byAgent.get(agent) ?? {
+        agent,
+        mcpServers: [],
+        plugins: [],
+        mcpError: `Could not read ${AGENT_EXTENSION_COPY[agent].label} MCP servers.`,
+        pluginError: `Could not read ${AGENT_EXTENSION_COPY[agent].label} plugins.`,
+      },
   );
 }
 
@@ -165,13 +323,14 @@ export function EnvironmentSettingsDialog({
     environment.codexMode ?? "global"
   );
 
-  // MCP servers and plugins state
-  const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([]);
-  const [pluginsList, setPluginsList] = useState<PluginInfo[]>([]);
+  // Effective MCP server and plugin state for every supported agent.
+  const [extensionCatalogs, setExtensionCatalogs] = useState<
+    backend.AgentExtensionCatalog[]
+  >(emptyExtensionCatalogs);
   const [isLoadingExtensions, setIsLoadingExtensions] = useState(false);
-
-  // Get Claude session init data for runtime status
-  const sessionInitData = useClaudeStore((state) => state.getSessionInitData(environment.id));
+  const [extensionsError, setExtensionsError] = useState<string | null>(null);
+  // Only the newest extension load may write state; see the close effect below.
+  const extensionLoadSeq = useRef(0);
 
   // Track if port mappings have changed
   const portMappingsChanged = JSON.stringify(portMappings) !== JSON.stringify(environment.portMappings || []);
@@ -229,70 +388,43 @@ export function EnvironmentSettingsDialog({
   // Clear extensions data when dialog closes to prevent stale data flash
   useEffect(() => {
     if (!open) {
-      setMcpServers([]);
-      setPluginsList([]);
+      // Abandon any in-flight load too. This dialog instance is shared across
+      // environments, so a late response would repopulate the panel after it
+      // was cleared and surface one environment's extensions under the next.
+      extensionLoadSeq.current += 1;
+      setExtensionCatalogs(emptyExtensionCatalogs());
+      setExtensionsError(null);
+      setIsLoadingExtensions(false);
     }
   }, [open]);
 
-  // Fetch MCP servers and plugins when dialog opens
-  // Note: We use getState() to get a one-time snapshot when the dialog opens,
-  // rather than subscribing to changes. This is intentional - we only need
-  // the server status at fetch time, not reactive updates during the fetch.
+  const loadExtensions = useCallback(async (options: { refresh?: boolean } = {}) => {
+    const seq = ++extensionLoadSeq.current;
+    const isCurrent = () => seq === extensionLoadSeq.current;
+    setIsLoadingExtensions(true);
+    setExtensionsError(null);
+    try {
+      const catalogs = await backend.getEnvironmentExtensions(environment.id, options);
+      if (!isCurrent()) return;
+      setExtensionCatalogs(orderExtensionCatalogs(catalogs));
+    } catch (err) {
+      if (!isCurrent()) return;
+      console.error("[EnvironmentSettingsDialog] Failed to fetch extensions:", err);
+      setExtensionCatalogs(emptyExtensionCatalogs());
+      setExtensionsError(
+        "Extension settings could not be loaded. Check that the environment is available and try again.",
+      );
+    } finally {
+      if (isCurrent()) setIsLoadingExtensions(false);
+    }
+  }, [environment.id]);
+
+  // The backend owns discovery so this snapshot remains correct even if no
+  // agent chat tab is mounted or its live events were missed while inactive.
   useEffect(() => {
     if (!open) return;
-
-    // Only fetch for local environments with Claude native mode
-    const claudeServerStatus = useClaudeStore.getState().getServerStatus(environment.id);
-    if (!claudeServerStatus?.running || !claudeServerStatus.hostPort) return;
-
-    const fetchExtensions = async () => {
-      setIsLoadingExtensions(true);
-      try {
-        const client = createClient(`http://localhost:${claudeServerStatus.hostPort}`);
-        const [mcpResult, pluginsResult] = await Promise.all([
-          getMcpServers(client),
-          getPlugins(client),
-        ]);
-        setMcpServers(mcpResult.servers);
-        setPluginsList(pluginsResult.plugins);
-
-        // If sessionInitData is not available in the store, try to fetch it via API
-        // This handles race conditions where the session.init SSE event was missed
-        const currentSessionInitData = useClaudeStore.getState().getSessionInitData(environment.id);
-        if (!currentSessionInitData) {
-          // Find the session ID for this environment by looking through stored sessions
-          const sessions = useClaudeStore.getState().sessions;
-          const envPrefix = `env-${environment.id}:`;
-          let sessionId: string | null = null;
-
-          for (const [sessionKey, sessionState] of sessions) {
-            if (sessionKey.startsWith(envPrefix) && sessionState.sessionId) {
-              sessionId = sessionState.sessionId;
-              break;
-            }
-          }
-
-          if (sessionId) {
-            try {
-              const initData = await fetchSessionInitData(client, sessionId);
-              if (initData) {
-                // Store in the zustand store so it's available for subsequent renders
-                useClaudeStore.getState().setSessionInitData(environment.id, initData);
-              }
-            } catch (fetchErr) {
-              console.debug("[EnvironmentSettingsDialog] Failed to fetch session init data:", fetchErr);
-            }
-          }
-        }
-      } catch (err) {
-        console.error("[EnvironmentSettingsDialog] Failed to fetch extensions:", err);
-      } finally {
-        setIsLoadingExtensions(false);
-      }
-    };
-
-    fetchExtensions();
-  }, [open, environment.id]);
+    void loadExtensions();
+  }, [open, loadExtensions]);
 
   // Validate name
   const validateName = (value: string): boolean => {
@@ -505,17 +637,7 @@ export function EnvironmentSettingsDialog({
 
   const isFullAccess = (environment.networkAccessMode ?? "restricted") === "full";
   const isLocalEnvironment = environment.environmentType === "local";
-  const isClaudeNativeMode = isLocalEnvironment && config.global.claudeMode === "native";
   const hasErrors = nameError !== null || domainErrors.length > 0;
-
-  // Determine if we should show the extensions section
-  const hasExtensionsToShow =
-    isClaudeNativeMode ||
-    mcpServers.length > 0 ||
-    pluginsList.length > 0 ||
-    (sessionInitData?.mcpServers?.length ?? 0) > 0 ||
-    (sessionInitData?.plugins?.length ?? 0) > 0 ||
-    isLoadingExtensions;
 
   const menuItems: SettingsMenuItem[] = [
     { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
@@ -524,9 +646,7 @@ export function EnvironmentSettingsDialog({
       { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
       { id: "ports", label: "Ports", icon: <Network className="h-4 w-4" /> },
     ] : []),
-    ...(hasExtensionsToShow ? [
-      { id: "extensions", label: "Extensions", icon: <Puzzle className="h-4 w-4" /> },
-    ] : []),
+    { id: "extensions", label: "Extensions", icon: <Puzzle className="h-4 w-4" /> },
   ];
 
   const renderSection = (section: string) => {
@@ -812,65 +932,56 @@ export function EnvironmentSettingsDialog({
         );
       case "extensions":
         return (
-          <div className="max-w-2xl space-y-4">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6">
-              <div className="space-y-2">
-                <div className="flex items-center gap-2"><Server className="h-4 w-4 text-muted-foreground" /><Label>MCP Servers</Label></div>
-                {isLoadingExtensions ? (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" />Loading...</div>
-                ) : mcpServers.length === 0 && !sessionInitData?.mcpServers.length ? (
-                  <p className="text-sm text-muted-foreground">No MCP servers configured</p>
-                ) : mcpServers.length > 0 ? (
-                  <div className="space-y-1 space-y-1">
-                    {mcpServers.map((server) => {
-                      const runtimeStatus = sessionInitData?.mcpServers.find((s) => s.name === server.name);
-                      const isConnected = runtimeStatus?.status === "connected";
-                      const hasFailed = runtimeStatus?.status === "failed";
-                      return (
-                        <div key={server.name} className={`flex items-center justify-between p-2 rounded-md bg-zinc-800/50 border text-sm ${hasFailed ? "border-red-300" : "border-zinc-700"}`} title={hasFailed && runtimeStatus?.error ? runtimeStatus.error : undefined}>
-                          <div className="flex items-center gap-2 min-w-0">
-                            {runtimeStatus && (isConnected ? <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" /> : hasFailed ? <XCircle className="h-3 w-3 text-red-500 shrink-0" /> : null)}
-                            <span className={`font-medium truncate ${hasFailed ? "text-red-600" : ""}`}>{server.name}</span>
-                          </div>
-                          <span className="text-xs text-muted-foreground shrink-0 ml-2">{server.source === "project" ? "project" : "global"}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="space-y-1 space-y-1">{sessionInitData?.mcpServers.map((server) => (<RuntimeExtensionItem key={server.name} name={server.name} isSuccess={server.status === "connected"} isFailed={server.status === "failed"} error={server.error} />))}</div>
-                )}
-                <p className="text-xs text-muted-foreground">Configure in <code className="text-xs bg-zinc-800 px-1 rounded">.mcp.json</code> or <code className="text-xs bg-zinc-800 px-1 rounded">~/.claude.json</code></p>
+          <div className="max-w-5xl space-y-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-medium">Agent extensions</p>
+                <p className="text-xs text-muted-foreground">
+                  Effective MCP servers and plugins for this environment.
+                  Refreshing health-checks Claude&apos;s approved MCP servers,
+                  which starts each one.
+                </p>
               </div>
-              <div className="space-y-2">
-                <div className="flex items-center gap-2"><Puzzle className="h-4 w-4 text-muted-foreground" /><Label>Plugins</Label></div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void loadExtensions({ refresh: true })}
+                disabled={isLoadingExtensions}
+              >
                 {isLoadingExtensions ? (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" />Loading...</div>
-                ) : pluginsList.length === 0 && !sessionInitData?.plugins.length ? (
-                  <p className="text-sm text-muted-foreground">No plugins configured</p>
-                ) : pluginsList.length > 0 ? (
-                  <div className="space-y-1 space-y-1">
-                    {pluginsList.map((plugin) => {
-                      const runtimeStatus = sessionInitData?.plugins.find((p) => p.name === plugin.name);
-                      const isLoaded = runtimeStatus?.status === "loaded";
-                      const hasFailed = runtimeStatus?.status === "failed";
-                      return (
-                        <div key={plugin.path} className={`flex items-center justify-between p-2 rounded-md bg-zinc-800/50 border text-sm ${hasFailed ? "border-red-300" : "border-zinc-700"}`} title={hasFailed && runtimeStatus?.error ? runtimeStatus.error : undefined}>
-                          <div className="flex items-center gap-2 min-w-0">
-                            {runtimeStatus && (isLoaded ? <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" /> : hasFailed ? <XCircle className="h-3 w-3 text-red-500 shrink-0" /> : null)}
-                            <span className={`font-medium truncate ${hasFailed ? "text-red-600" : ""}`}>{plugin.name}</span>
-                          </div>
-                          <span className="text-xs text-muted-foreground shrink-0 ml-2">{plugin.source}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <div className="space-y-1 space-y-1">{sessionInitData?.plugins.map((plugin) => (<RuntimeExtensionItem key={plugin.name} name={plugin.name} isSuccess={plugin.status === "loaded"} isFailed={plugin.status === "failed"} error={plugin.error} />))}</div>
+                  <RefreshCw className="mr-2 h-3.5 w-3.5" />
                 )}
-                <p className="text-xs text-muted-foreground">Configure in <code className="text-xs bg-zinc-800 px-1 rounded">.claude/plugins.json</code> or <code className="text-xs bg-zinc-800 px-1 rounded">~/.claude.json</code></p>
-              </div>
+                Refresh
+              </Button>
             </div>
+            {extensionsError && (
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{extensionsError}</span>
+              </div>
+            )}
+            {isLoadingExtensions &&
+            extensionCatalogs.every(
+              (catalog) =>
+                catalog.mcpServers.length === 0 && catalog.plugins.length === 0,
+            ) ? (
+              <div className="flex items-center gap-2 rounded-xl border border-border/80 px-4 py-8 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Reading Claude, Codex, and OpenCode configuration…
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {extensionCatalogs.map((catalog) => (
+                  <AgentExtensionSection
+                    key={catalog.agent}
+                    catalog={catalog}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         );
       default:

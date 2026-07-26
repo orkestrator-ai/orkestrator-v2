@@ -108,12 +108,14 @@ export function normalizeClaudePart(part: ClaudeMessagePart): NativeMessagePart 
       return {
         type: "text",
         content: part.content ?? "",
+        ...(part.timestamp ? { createdAt: part.timestamp } : {}),
         sourcePartId: part._messageUuid,
       };
     case "thinking":
       return {
         type: "thinking",
         content: part.content ?? "",
+        ...(part.timestamp ? { createdAt: part.timestamp } : {}),
         sourcePartId: part._messageUuid,
       };
     case "file":
@@ -371,4 +373,111 @@ export function normalizeClaudeMessage(message: ClaudeMessage): NativeMessage {
 
 export function normalizeClaudeMessages(messages: ClaudeMessage[]): NativeMessage[] {
   return messages.map(normalizeClaudeMessage);
+}
+
+const CLAUDE_TEXT_BLOCK_GROUP_WINDOW_MS = 2 * 60 * 1000;
+
+interface ClaudeTextBlockSegment {
+  parts: NativeMessagePart[];
+  firstTextAt?: string;
+  firstTextAtMs?: number;
+  firstPartIndex: number;
+}
+
+function parseTimestamp(value?: string): number | undefined {
+  if (!value) return undefined;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+/**
+ * Split a long-running Claude assistant turn into separately timestamped
+ * transcript rows. A text block can start a new row only after intervening
+ * tool/reasoning activity and only when it arrives more than two minutes after
+ * the first text block in the current row.
+ */
+export function splitClaudeAssistantTextBlocks(
+  message: NativeMessage,
+): NativeMessage[] {
+  if (message.role !== "assistant") return [message];
+
+  const segments: ClaudeTextBlockSegment[] = [];
+  let current: ClaudeTextBlockSegment = {
+    parts: [],
+    firstPartIndex: 0,
+  };
+  let hasText = false;
+  let hasBoundarySinceText = false;
+
+  const finishCurrentSegment = () => {
+    if (current.parts.length > 0) segments.push(current);
+  };
+
+  for (let index = 0; index < message.parts.length; index += 1) {
+    const part = message.parts[index]!;
+
+    if (part.type !== "text") {
+      current.parts.push(part);
+      if (hasText) hasBoundarySinceText = true;
+      continue;
+    }
+
+    const partTimestamp = parseTimestamp(part.createdAt);
+    const shouldStartNewSegment =
+      hasText &&
+      hasBoundarySinceText &&
+      current.firstTextAtMs !== undefined &&
+      partTimestamp !== undefined &&
+      partTimestamp - current.firstTextAtMs >
+        CLAUDE_TEXT_BLOCK_GROUP_WINDOW_MS;
+
+    if (shouldStartNewSegment) {
+      finishCurrentSegment();
+      current = {
+        parts: [],
+        firstTextAt: part.createdAt,
+        firstTextAtMs: partTimestamp,
+        firstPartIndex: index,
+      };
+      hasText = false;
+    }
+
+    current.parts.push(part);
+    if (!hasText) {
+      current.firstTextAt = part.createdAt;
+      current.firstTextAtMs = partTimestamp;
+    }
+    hasText = true;
+    hasBoundarySinceText = false;
+  }
+
+  finishCurrentSegment();
+  if (segments.length <= 1) return [message];
+
+  return segments.map((segment, index) => ({
+    ...message,
+    id:
+      index === 0
+        ? message.id
+        : `${message.id}:text-block:${segment.firstPartIndex}`,
+    content: segment.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.content)
+      .join(""),
+    parts: segment.parts,
+    createdAt: segment.firstTextAt ?? message.createdAt,
+  }));
+}
+
+/**
+ * Claude-specific display normalization. Unlike the provider-neutral
+ * normalizer, this may expand one long assistant turn into multiple transcript
+ * rows so each delayed text block receives its own timestamp and copy action.
+ */
+export function normalizeClaudeMessagesForDisplay(
+  messages: ClaudeMessage[],
+): NativeMessage[] {
+  return messages.flatMap((message) =>
+    splitClaudeAssistantTextBlocks(normalizeClaudeMessage(message)),
+  );
 }

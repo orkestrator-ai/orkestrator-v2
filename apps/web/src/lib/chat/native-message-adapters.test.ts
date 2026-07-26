@@ -8,6 +8,7 @@ import {
   groupNativeToolActivity,
   normalizeClaudeMessage,
   normalizeClaudeMessages,
+  normalizeClaudeMessagesForDisplay,
   normalizeClaudePart,
   normalizeCodexNativeMessage,
   normalizeOpenCodeNativeMessage,
@@ -631,5 +632,141 @@ describe("native message adapters", () => {
       "user-1",
       "assistant-1",
     ]);
+  });
+
+  test("keeps tool-bounded Claude text blocks in one row within two minutes", () => {
+    const messages: ClaudeMessage[] = [
+      {
+        id: "assistant-fast",
+        role: "assistant",
+        content: "FirstSecondThird",
+        timestamp: "2026-06-18T12:00:00.000Z",
+        parts: [
+          {
+            type: "text",
+            content: "First",
+            timestamp: "2026-06-18T12:00:00.000Z",
+          },
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+          },
+          {
+            type: "text",
+            content: "Second",
+            timestamp: "2026-06-18T12:01:00.000Z",
+          },
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+          },
+          {
+            type: "text",
+            content: "Third",
+            timestamp: "2026-06-18T12:02:00.000Z",
+          },
+        ],
+      },
+    ];
+
+    const displayMessages = normalizeClaudeMessagesForDisplay(messages);
+
+    expect(displayMessages).toHaveLength(1);
+    expect(displayMessages[0]?.id).toBe("assistant-fast");
+    expect(displayMessages[0]?.parts.map((part) => part.type)).toEqual([
+      "text",
+      "tool-group",
+      "text",
+      "tool-group",
+      "text",
+    ]);
+  });
+
+  test("splits delayed tool-bounded Claude text into timestamped copy rows", () => {
+    const messages: ClaudeMessage[] = [
+      {
+        id: "assistant-slow",
+        role: "assistant",
+        content: "FirstSecondThird",
+        timestamp: "2026-06-18T12:00:00.000Z",
+        parts: [
+          {
+            type: "text",
+            content: "First",
+            timestamp: "2026-06-18T12:00:00.000Z",
+          },
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+          },
+          {
+            type: "text",
+            content: "Second",
+            timestamp: "2026-06-18T12:01:30.000Z",
+          },
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+          },
+          {
+            type: "text",
+            content: "Third",
+            timestamp: "2026-06-18T12:02:01.000Z",
+          },
+        ],
+      },
+    ];
+
+    const displayMessages = normalizeClaudeMessagesForDisplay(messages);
+
+    expect(displayMessages).toHaveLength(2);
+    expect(displayMessages.map((message) => ({
+      id: message.id,
+      content: message.content,
+      createdAt: message.createdAt,
+      partTypes: message.parts.map((part) => part.type),
+    }))).toEqual([
+      {
+        id: "assistant-slow",
+        content: "FirstSecond",
+        createdAt: "2026-06-18T12:00:00.000Z",
+        partTypes: ["text", "tool-group", "text", "tool-group"],
+      },
+      {
+        id: "assistant-slow:text-block:4",
+        content: "Third",
+        createdAt: "2026-06-18T12:02:01.000Z",
+        partTypes: ["text"],
+      },
+    ]);
+  });
+
+  test("does not split adjacent Claude text without a tool or reasoning boundary", () => {
+    const messages: ClaudeMessage[] = [
+      {
+        id: "assistant-adjacent",
+        role: "assistant",
+        content: "FirstSecond",
+        timestamp: "2026-06-18T12:00:00.000Z",
+        parts: [
+          {
+            type: "text",
+            content: "First",
+            timestamp: "2026-06-18T12:00:00.000Z",
+          },
+          {
+            type: "text",
+            content: "Second",
+            timestamp: "2026-06-18T12:05:00.000Z",
+          },
+        ],
+      },
+    ];
+
+    expect(normalizeClaudeMessagesForDisplay(messages)).toHaveLength(1);
   });
 });

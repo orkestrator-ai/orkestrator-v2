@@ -57,7 +57,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { ClaudeAttachment } from "@/stores/claudeStore";
-import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
+import { normalizeClaudeMessagesForDisplay } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 
 interface ClaudeChatTabProps {
@@ -392,7 +392,9 @@ export function ClaudeChatTab({
   // This prevents unnecessary recalculations when other session properties change
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
   const displayMessages = useMemo(
-    () => pinActiveNativeAgentParts(sessionMessages.map(normalizeClaudeMessage)),
+    () => pinActiveNativeAgentParts(
+      normalizeClaudeMessagesForDisplay(sessionMessages),
+    ),
     [sessionMessages],
   );
   const hasMessageHistory = sessionMessages.length > 0;

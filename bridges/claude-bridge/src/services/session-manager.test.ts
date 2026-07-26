@@ -751,6 +751,11 @@ describe("sendPrompt", () => {
         const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
         return assistant?.content === "Ans";
       });
+      const streamedTextTimestamp = getSessionMessages(session.id)
+        .find((m) => m.role === "assistant")
+        ?.parts.find((part) => part.type === "text")
+        ?.timestamp;
+      expect(Number.isFinite(new Date(streamedTextTimestamp ?? "").getTime())).toBe(true);
 
       // The SDK emits one assistant message per content block, each with a fresh
       // uuid but the same API `message.id`.
@@ -779,6 +784,7 @@ describe("sendPrompt", () => {
       expect(assistant?.parts.map((part) => part.type)).toEqual(["thinking", "text"]);
       expect(assistant?.parts[0]?.content).toBe("Reasoning complete.");
       expect(assistant?.parts[1]?.content).toBe("Answer final");
+      expect(assistant?.parts[1]?.timestamp).toBe(streamedTextTimestamp);
       expect(assistant?.content).toBe("Answer final");
     } finally {
       stop();
@@ -890,6 +896,9 @@ describe("sendPrompt", () => {
       ]);
       expect(assistant?.parts[0]?.content).toBe("Need the repo state.");
       expect(assistant?.parts[2]?.content).toBe("Working tree is clean.");
+      expect(
+        Number.isFinite(new Date(assistant?.parts[2]?.timestamp ?? "").getTime()),
+      ).toBe(true);
       expect(assistant?.content).toBe("Working tree is clean.");
     } finally {
       stop();

@@ -20,6 +20,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 import { NativeMessage } from "../../../apps/web/src/components/chat/NativeMessage";
+import { normalizeClaudeMessagesForDisplay } from "../../../apps/web/src/lib/chat/native-message-adapters";
 import { useMessagePartExpansionStore } from "../../../apps/web/src/stores/messagePartExpansionStore";
 
 function TerminalContextHarness({
@@ -245,6 +246,56 @@ describe("NativeMessage", () => {
 
     await waitFor(() => {
       expect(mockWriteText).toHaveBeenCalledWith("Copy this user prompt");
+    });
+  });
+
+  test("renders separate metadata and copy controls for delayed Claude text blocks", async () => {
+    const messages = normalizeClaudeMessagesForDisplay([
+      {
+        id: "claude-delayed-blocks",
+        role: "assistant",
+        content: "FirstSecond",
+        timestamp: "2026-03-07T12:00:00.000Z",
+        parts: [
+          {
+            type: "text",
+            content: "First",
+            timestamp: "2026-03-07T12:00:00.000Z",
+          },
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+          },
+          {
+            type: "text",
+            content: "Second",
+            timestamp: "2026-03-07T12:02:01.000Z",
+          },
+        ],
+      },
+    ]);
+
+    render(
+      <>
+        {messages.map((message, index) => (
+          <NativeMessage
+            key={message.id}
+            message={message}
+            previousMessage={messages[index - 1]}
+            assistantLabel="Claude"
+          />
+        ))}
+      </>,
+    );
+
+    expect(screen.getAllByText("Claude", { exact: true })).toHaveLength(2);
+    const copyButtons = screen.getAllByRole("button", { name: "Copy text" });
+    expect(copyButtons).toHaveLength(2);
+
+    fireEvent.click(copyButtons[1]!);
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalledWith("Second");
     });
   });
 

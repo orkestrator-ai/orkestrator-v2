@@ -592,6 +592,8 @@ interface OrderedPartEntry {
   type: "thinking" | "tool-ref" | "text";
   /** For thinking: the thinking content. For tool-ref: the tool use ID. For text: the text content */
   value: string;
+  /** When this content block first arrived from the SDK. */
+  timestamp?: string;
   /** Message UUID this part belongs to (for streaming updates) */
   messageUuid?: string;
   /** Parent Task tool use ID - used to group child tools under their parent Task */
@@ -856,6 +858,7 @@ function buildMessageParts(
       result.push({
         type: "thinking",
         content: entry.value,
+        timestamp: entry.timestamp,
         _messageUuid: entry.messageUuid,
       });
     } else if (entry.type === "tool-ref") {
@@ -867,6 +870,8 @@ function buildMessageParts(
       result.push({
         type: "text",
         content: entry.value,
+        timestamp: entry.timestamp,
+        _messageUuid: entry.messageUuid,
       });
     }
   }
@@ -1906,12 +1911,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           entry = {
             type: "text",
             value: typeof contentBlock.text === "string" ? contentBlock.text : "",
+            timestamp: entry?.timestamp ?? new Date().toISOString(),
             messageUuid: messageKey,
           };
         } else if (contentBlock?.type === "thinking") {
           entry = {
             type: "thinking",
             value: typeof contentBlock.thinking === "string" ? contentBlock.thinking : "",
+            timestamp: entry?.timestamp ?? new Date().toISOString(),
             messageUuid: messageKey,
           };
         } else {
@@ -1923,12 +1930,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           entry = {
             type: "text",
             value: `${entry?.value ?? ""}${typeof delta.text === "string" ? delta.text : ""}`,
+            timestamp: entry?.timestamp ?? new Date().toISOString(),
             messageUuid: messageKey,
           };
         } else if (delta?.type === "thinking_delta") {
           entry = {
             type: "thinking",
             value: `${entry?.value ?? ""}${typeof delta.thinking === "string" ? delta.thinking : ""}`,
+            timestamp: entry?.timestamp ?? new Date().toISOString(),
             messageUuid: messageKey,
           };
         } else {
@@ -2111,8 +2120,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         const blocks = getBlocksForMessage(messageKey);
         const blockIndexBase = finalizedBlockCountByApiMessage.get(messageKey) ?? 0;
         for (const part of orderedParts) {
-          blocks.set(blockIndexBase + (part.blockOffset ?? 0), {
+          const blockIndex = blockIndexBase + (part.blockOffset ?? 0);
+          const streamedPart = blocks.get(blockIndex);
+          blocks.set(blockIndex, {
             ...part,
+            timestamp: streamedPart?.timestamp ?? new Date().toISOString(),
             messageUuid: messageKey,
           });
         }

@@ -232,6 +232,31 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void
   throw new Error("Timed out waiting for condition");
 }
 
+async function withControlledNewDate<T>(
+  initialTime: string,
+  run: (setTime: (time: string) => void) => Promise<T>,
+): Promise<T> {
+  const RealDate = globalThis.Date;
+  let currentTime = RealDate.parse(initialTime);
+  const ControlledDate = new Proxy(RealDate, {
+    construct(target, args, newTarget) {
+      return Reflect.construct(
+        target,
+        args.length > 0 ? args : [currentTime],
+        newTarget,
+      );
+    },
+  });
+  globalThis.Date = ControlledDate;
+  try {
+    return await run((time) => {
+      currentTime = RealDate.parse(time);
+    });
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
+
 const createdSessionIds: string[] = [];
 function track(id: string): string {
   createdSessionIds.push(id);
@@ -621,6 +646,197 @@ describe("sendPrompt", () => {
     }
   });
 
+  test("records deterministic first-arrival timestamps for separate streamed blocks", async () => {
+    const session = createSession("streaming-block-timestamps");
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "Stream two blocks");
+    const call = await nextQueryCall();
+
+    await withControlledNewDate("2026-07-26T10:00:00.000Z", async (setTime) => {
+      const streamEvent = (uuid: string, event: Record<string, unknown>) => {
+        call.push({
+          type: "stream_event",
+          uuid,
+          session_id: "sdk-session-block-times",
+          parent_tool_use_id: null,
+          event,
+        });
+      };
+
+      streamEvent("block-message-start", {
+        type: "message_start",
+        message: { id: "msg_block_times", role: "assistant", content: [] },
+      });
+      streamEvent("block-0-start", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "First" },
+      });
+      await waitFor(() => {
+        const parts = getSessionMessages(session.id).find((message) => message.role === "assistant")?.parts;
+        return parts?.[0]?.content === "First";
+      });
+
+      setTime("2026-07-26T10:03:00.000Z");
+      streamEvent("block-1-start", {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "Second" },
+      });
+      await waitFor(() => {
+        const parts = getSessionMessages(session.id).find((message) => message.role === "assistant")?.parts;
+        return parts?.[1]?.content === "Second";
+      });
+
+      const parts = getSessionMessages(session.id).find((message) => message.role === "assistant")?.parts;
+      expect(parts?.map((part) => part.timestamp)).toEqual([
+        "2026-07-26T10:00:00.000Z",
+        "2026-07-26T10:03:00.000Z",
+      ]);
+
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+    });
+  });
+
+  test("preserves a thinking block start timestamp across deltas and final replacement", async () => {
+    const session = createSession("streaming-thinking-timestamp");
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "Think carefully");
+    const call = await nextQueryCall();
+
+    await withControlledNewDate("2026-07-26T11:00:00.000Z", async (setTime) => {
+      const streamEvent = (uuid: string, event: Record<string, unknown>) => {
+        call.push({
+          type: "stream_event",
+          uuid,
+          session_id: "sdk-session-thinking-time",
+          parent_tool_use_id: null,
+          event,
+        });
+      };
+
+      streamEvent("thinking-message-start", {
+        type: "message_start",
+        message: { id: "msg_thinking_time", role: "assistant", content: [] },
+      });
+      streamEvent("thinking-block-start", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      });
+      streamEvent("thinking-delta-1", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "Initial" },
+      });
+      await waitFor(() => {
+        const part = getSessionMessages(session.id)
+          .find((message) => message.role === "assistant")
+          ?.parts.find((candidate) => candidate.type === "thinking");
+        return part?.content === "Initial";
+      });
+
+      setTime("2026-07-26T11:01:00.000Z");
+      streamEvent("thinking-delta-2", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: " reasoning" },
+      });
+      await waitFor(() => {
+        const part = getSessionMessages(session.id)
+          .find((message) => message.role === "assistant")
+          ?.parts.find((candidate) => candidate.type === "thinking");
+        return part?.content === "Initial reasoning";
+      });
+
+      setTime("2026-07-26T11:02:00.000Z");
+      call.push({
+        type: "assistant",
+        uuid: "thinking-final",
+        message: {
+          id: "msg_thinking_time",
+          content: [{ type: "thinking", thinking: "Final reasoning" }],
+        },
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+
+      const thinkingPart = getSessionMessages(session.id)
+        .find((message) => message.role === "assistant")
+        ?.parts.find((candidate) => candidate.type === "thinking");
+      expect(thinkingPart).toMatchObject({
+        content: "Final reasoning",
+        timestamp: "2026-07-26T11:00:00.000Z",
+      });
+    });
+  });
+
+  test("timestamps a delta that arrives without a content block start", async () => {
+    const session = createSession("streaming-delta-fallback");
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "Stream without start");
+    const call = await nextQueryCall();
+
+    await withControlledNewDate("2026-07-26T12:00:00.000Z", async () => {
+      call.push({
+        type: "stream_event",
+        uuid: "delta-without-start",
+        session_id: "sdk-session-delta-fallback",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Recovered text" },
+        },
+      });
+      await waitFor(() => {
+        const assistant = getSessionMessages(session.id).find((message) => message.role === "assistant");
+        return assistant?.content === "Recovered text";
+      });
+
+      const textPart = getSessionMessages(session.id)
+        .find((message) => message.role === "assistant")
+        ?.parts.find((part) => part.type === "text");
+      expect(textPart?.timestamp).toBe("2026-07-26T12:00:00.000Z");
+
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+    });
+  });
+
+  test("timestamps a final-only assistant block when no stream events arrived", async () => {
+    const session = createSession("final-only-timestamp");
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "Answer without streaming");
+    const call = await nextQueryCall();
+
+    await withControlledNewDate("2026-07-26T13:00:00.000Z", async () => {
+      call.push({
+        type: "assistant",
+        uuid: "final-only",
+        message: {
+          id: "msg_final_only",
+          content: [{ type: "text", text: "Final answer" }],
+        },
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+
+      const textPart = getSessionMessages(session.id)
+        .find((message) => message.role === "assistant")
+        ?.parts.find((part) => part.type === "text");
+      expect(textPart).toMatchObject({
+        content: "Final answer",
+        timestamp: "2026-07-26T13:00:00.000Z",
+      });
+    });
+  });
+
   // The real SDK gives every `stream_event` its own random uuid and emits one
   // non-streaming `assistant` message per content block, all sharing
   // `message.id`. Grouping by uuid therefore produced one part per delta plus a
@@ -751,6 +967,11 @@ describe("sendPrompt", () => {
         const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
         return assistant?.content === "Ans";
       });
+      const streamedTextTimestamp = getSessionMessages(session.id)
+        .find((m) => m.role === "assistant")
+        ?.parts.find((part) => part.type === "text")
+        ?.timestamp;
+      expect(Number.isFinite(new Date(streamedTextTimestamp ?? "").getTime())).toBe(true);
 
       // The SDK emits one assistant message per content block, each with a fresh
       // uuid but the same API `message.id`.
@@ -779,6 +1000,7 @@ describe("sendPrompt", () => {
       expect(assistant?.parts.map((part) => part.type)).toEqual(["thinking", "text"]);
       expect(assistant?.parts[0]?.content).toBe("Reasoning complete.");
       expect(assistant?.parts[1]?.content).toBe("Answer final");
+      expect(assistant?.parts[1]?.timestamp).toBe(streamedTextTimestamp);
       expect(assistant?.content).toBe("Answer final");
     } finally {
       stop();
@@ -890,6 +1112,9 @@ describe("sendPrompt", () => {
       ]);
       expect(assistant?.parts[0]?.content).toBe("Need the repo state.");
       expect(assistant?.parts[2]?.content).toBe("Working tree is clean.");
+      expect(
+        Number.isFinite(new Date(assistant?.parts[2]?.timestamp ?? "").getTime()),
+      ).toBe(true);
       expect(assistant?.content).toBe("Working tree is clean.");
     } finally {
       stop();

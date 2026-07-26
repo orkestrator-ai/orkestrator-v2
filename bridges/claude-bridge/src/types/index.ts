@@ -94,6 +94,8 @@ export interface ToolDiffMetadata {
 export interface NormalizedPart {
   type: "text" | "thinking" | "tool-invocation" | "tool-result" | "file";
   content?: string;
+  /** When this content block first arrived from the SDK. */
+  timestamp?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolState?: "success" | "failure" | "pending";

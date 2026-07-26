@@ -50,6 +50,8 @@ export interface ToolDiffMetadata {
 export interface ClaudeMessagePart {
   type: "text" | "thinking" | "tool-invocation" | "tool-result" | "file";
   content?: string;
+  /** When this content block first arrived from the Claude bridge. */
+  timestamp?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolState?: "success" | "failure" | "pending";

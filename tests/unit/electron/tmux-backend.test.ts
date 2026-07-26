@@ -167,10 +167,22 @@ case "$command" in
     ;;
 esac
 `);
+  // Mirrors the real CLI closely enough for the launch-time capability probes:
+  // `--effort` is advertised by `--help`, while `--thinking-display` is hidden
+  // and only discoverable by having its argument rejected.
   await fs.writeFile(path.join(binDir, "claude"), `#!/bin/sh
 if [ "$1" = "--help" ]; then
   printf '%s\\n' '--session-id --resume --effort'
   exit 0
+fi
+if [ "$1" = "--thinking-display" ]; then
+  case "$2" in
+    summarized|omitted) ;;
+    *)
+      printf '%s\\n' "error: option '--thinking-display <display>' argument '$2' is invalid. Allowed choices are summarized, omitted." >&2
+      exit 1
+      ;;
+  esac
 fi
 printf '%s\\n' 'Claude Code test'
 exit 0
@@ -394,6 +406,51 @@ exit 0
     });
   });
 
+  test("omits the thinking flags when the installed CLI does not understand them", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const toolchainBinDir = await createTempDir("ork-tmux-old-cli-");
+      const oldClaude = path.join(toolchainBinDir, "claude");
+      // An older CLI ignores the unknown option on the `--version` path and
+      // exits 0, which is exactly what the probe treats as "unsupported".
+      await fs.writeFile(oldClaude, `#!/bin/sh
+case "$1" in
+  --help) printf '%s\n' '--session-id <uuid>' ;;
+  *) printf '2.1.2\n' ;;
+esac
+exit 0
+`);
+      await fs.chmod(oldClaude, 0o500);
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+        toolchainBinDir,
+      };
+
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-old-cli", environmentId: environment.id },
+        context,
+      );
+
+      const launchLog = await fs.readFile(log, "utf8");
+      expect(launchLog).toContain(" --dangerously-skip-permissions");
+      expect(launchLog).not.toContain("--thinking-display");
+      expect(launchLog).not.toContain("--thinking adaptive");
+
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-old-cli", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
   test("starts with installed hooks, reads transcripts, replies to hooks, and maps interactive input", async () => {
     const handlers = createHandlers();
 
@@ -428,6 +485,9 @@ exit 0
       const launchLog = await fs.readFile(log, "utf8");
       expect(launchLog).toContain(" --dangerously-skip-permissions");
       expect(launchLog).not.toContain("--permission-mode plan");
+      // Without this the CLI defaults thinking display to "omitted" on recent
+      // models, and every thinking block reaches the transcript with empty text.
+      expect(launchLog).toContain(" --thinking adaptive --thinking-display summarized");
 
       await expect(invoke(
         handlers,

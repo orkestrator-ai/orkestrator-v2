@@ -33,6 +33,8 @@ const PERMISSION_MODE_POLL_MS = 100;
 const BACKUP_SENTINEL_NO_ORIGINAL = "__orkestrator_no_original__";
 const CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN = ".claude/settings.local.json";
 const RUNTIME_ROOT_PREFIX = "/tmp/orkestrator-v2-claude-tmux";
+/** Never a valid `--thinking-display` choice, so the CLI has to reject it. */
+const THINKING_DISPLAY_PROBE_VALUE = "__orkestrator_probe__";
 
 const HOOK_EVENT_KINDS = new Set([
   "PreToolUse",
@@ -1059,7 +1061,14 @@ class TmuxSession {
     const alive = await this.tmuxAlive();
     const launchedNew = !alive;
     if (launchedNew) {
-      const claudeCmd = this.claudeLaunchCommand(claudeCommand, helpText, model, effort);
+      const thinkingDisplay = await this.supportsThinkingDisplay(claudeCommand);
+      const claudeCmd = this.claudeLaunchCommand(
+        claudeCommand,
+        helpText,
+        model,
+        effort,
+        thinkingDisplay,
+      );
       const wrapped = `${claudeCmd}; echo '[claude exited]'; exec bash`;
       const out = await this.backend.exec([
         this.tmuxCommand,
@@ -1118,11 +1127,44 @@ class TmuxSession {
     return which.status === 0 && resolved ? resolved : this.claudeCommand;
   }
 
+  /**
+   * Whether the installed CLI understands `--thinking-display`.
+   *
+   * Unlike `--effort`, the thinking flags are hidden from `--help`, so the
+   * helpText check used elsewhere would report "unsupported" on every CLI.
+   * Probe instead with a deliberately invalid value: commander validates a
+   * *known* option's argument before doing anything else and exits non-zero
+   * naming the flag, while a CLI that has never heard of the option ignores it
+   * on the `--version` path and exits 0. Neither branch contacts the API.
+   */
+  private async supportsThinkingDisplay(claudeCommand: string): Promise<boolean> {
+    try {
+      const probe = await this.backend.exec([
+        claudeCommand,
+        "--thinking-display",
+        THINKING_DISPLAY_PROBE_VALUE,
+        "--version",
+      ]);
+      const output = `${probe.stdout}\n${probe.stderr}`;
+      return (
+        probe.status !== 0 &&
+        output.includes("--thinking-display") &&
+        // A future CLI that rejects unknown options here would also name the
+        // flag; only an argument-validation failure means it is supported.
+        !output.includes("unknown option")
+      );
+    } catch (error) {
+      console.warn("[tmux] --thinking-display probe failed; launching without it", error);
+      return false;
+    }
+  }
+
   private claudeLaunchCommand(
     claudeCommand: string,
     helpText: string,
     model: string | undefined,
     effort: string | undefined,
+    supportsThinkingDisplay: boolean,
   ): string {
     let command = shellArg(claudeCommand);
     if (model?.trim()) command += ` --model ${shellArg(model)}`;
@@ -1132,6 +1174,13 @@ class TmuxSession {
       } else {
         console.warn("[tmux] claude CLI does not support --effort; launching without it");
       }
+    }
+    // Opus 4.7 and newer default adaptive thinking display to "omitted", which
+    // writes thinking blocks to the transcript with an empty `thinking` string
+    // (signature only). Native Mode opts back into "summarized" through the
+    // Agent SDK; do the same here so the tmux chat tab renders reasoning too.
+    if (supportsThinkingDisplay) {
+      command += " --thinking adaptive --thinking-display summarized";
     }
     command += " --dangerously-skip-permissions";
     command += this.resumed ? ` --resume ${this.sessionId}` : ` --session-id ${this.sessionId}`;

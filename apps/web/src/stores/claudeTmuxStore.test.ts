@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { TranscriptLine } from "@/lib/claude-tmux-client";
+import type { TranscriptContent, TranscriptLine } from "@/lib/claude-tmux-client";
 import { ERROR_MESSAGE_PREFIX, type ClaudeMessage } from "@/lib/claude-client";
 import {
   createClaudeTmuxStateKey,
@@ -552,6 +552,26 @@ describe("applyTranscriptLine", () => {
     expect(thinking?.content).toContain("let me see");
     expect(text?.content).toContain("result");
     expect(tool?.toolName).toBe("Read");
+  });
+
+  test("drops redacted thinking blocks that carry a signature but no text", () => {
+    // What the CLI writes when thinking display is "omitted" — the reasoning is
+    // sealed in the signature, so there is nothing to render. The tmux launcher
+    // asks for "summarized" precisely so this shape does not reach the UI.
+    const line: TranscriptLine = {
+      type: "assistant",
+      uuid: "a3",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "", signature: "EqQBCkYIBxgC" } as TranscriptContent,
+          { type: "text", text: "answer" },
+        ],
+      },
+    };
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
+    const msg = useClaudeTmuxStore.getState().getTab("e").messages[0]!;
+    expect(msg.parts.map((p) => p.type)).toEqual(["text"]);
   });
 });
 

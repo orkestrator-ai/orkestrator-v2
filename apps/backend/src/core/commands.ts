@@ -57,6 +57,7 @@ import {
   writeFileBase64,
 } from "./shell.js";
 import {
+  createExtensionDiscoveryCache,
   discoverAgentExtensions,
   type AgentExtensionId,
   type ExtensionCommandRunner,
@@ -572,13 +573,16 @@ function resolveAgentBinary(
   return resolveOpenCodeBinary(context);
 }
 
+const EXTENSION_DISCOVERY_TIMEOUT_MS = 20_000;
+
 function createExtensionCommandRunner(
   environment: Environment,
   context: CommandContext,
+  run: typeof runCommand = runCommand,
 ): ExtensionCommandRunner {
   if (environment.environmentType === "local" && environment.worktreePath) {
     return async (agent, args) => {
-      const { stdout } = await runCommand(
+      const { stdout } = await run(
         resolveAgentBinary(context, agent),
         args,
         {
@@ -587,7 +591,7 @@ function createExtensionCommandRunner(
             ...envWithManagedBinaries(context),
             NO_COLOR: "1",
           },
-          timeoutMs: 20_000,
+          timeoutMs: EXTENSION_DISCOVERY_TIMEOUT_MS,
         },
       );
       return stdout;
@@ -595,8 +599,9 @@ function createExtensionCommandRunner(
   }
 
   if (environment.containerId) {
+    const containerId = environment.containerId;
     return async (agent, args) => {
-      const { stdout } = await runCommand(
+      const { stdout } = await run(
         "docker",
         [
           "exec",
@@ -604,11 +609,11 @@ function createExtensionCommandRunner(
           "NO_COLOR=1",
           "-w",
           "/workspace",
-          environment.containerId!,
+          containerId,
           agent,
           ...args,
         ],
-        { timeoutMs: 20_000 },
+        { timeoutMs: EXTENSION_DISCOVERY_TIMEOUT_MS },
       );
       return stdout;
     };
@@ -3658,6 +3663,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   const pendingEnvironmentRenameTasks = new Map<string, Promise<void>>();
   const claudeModelCatalogRefreshes = new Map<string, Promise<ClaudeModelCatalogSnapshot>>();
   const validatedClaudeModelCatalogs = new Set<string>();
+  const extensionDiscoveryCache = createExtensionDiscoveryCache();
 
   const schedulePendingEnvironmentRename = (environmentId: string, context: CommandContext): void => {
     if (pendingEnvironmentRenameTasks.has(environmentId)) return;
@@ -4080,9 +4086,11 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     await storage.updateRepositoryConfig(project.id, { ...repoConfig, lastEnvironmentType: env.environmentType });
     return storage.addEnvironment(env);
   });
-  register("delete_environment", ({ environmentId }, context) =>
-    deleteEnvironment(asString(environmentId, "environmentId"), context)
-  );
+  register("delete_environment", ({ environmentId }, context) => {
+    const id = asString(environmentId, "environmentId");
+    extensionDiscoveryCache.invalidate(id);
+    return deleteEnvironment(id, context);
+  });
   register("rename_environment", ({ environmentId, name }, { storage }) => {
     const newName = sanitizeEnvironmentName(asString(name, "name"));
     return storage.updateEnvironment(asString(environmentId, "environmentId"), {
@@ -4177,6 +4185,9 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const { storage } = context;
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    // Discovery runs inside the environment, so its cached result stops being
+    // meaningful the moment the environment does.
+    extensionDiscoveryCache.invalidate(environment.id);
     if (environment.containerId) {
       await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
       await storage.updateEnvironment(environment.id, { status: "stopped" });
@@ -4207,6 +4218,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("recreate_environment", async ({ environmentId }, context) => {
     const environment = await context.storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment?.containerId) return;
+    extensionDiscoveryCache.invalidate(environment.id);
     await runCommand("docker", ["rm", "-f", environment.containerId], { timeoutMs: 60_000 }).catch(() => undefined);
     await context.storage.updateEnvironment(environment.id, { containerId: null, status: "stopped" });
     return commands.get("start_environment")?.({ environmentId }, context);
@@ -4276,11 +4288,17 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("update_environment_agent_settings", ({ environmentId, defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode }, { storage }) =>
     storage.updateEnvironment(asString(environmentId, "environmentId"), { defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode }),
   );
-  register("get_environment_extensions", async ({ environmentId }, context) => {
+  register("get_environment_extensions", async ({ environmentId, refresh }, context) => {
     const id = asString(environmentId, "environmentId");
-    const environment = await context.storage.getEnvironment(id);
-    if (!environment) throw new Error(`Environment not found: ${id}`);
-    return discoverAgentExtensions(createExtensionCommandRunner(environment, context));
+    return extensionDiscoveryCache.get(
+      id,
+      async () => {
+        const environment = await context.storage.getEnvironment(id);
+        if (!environment) throw new Error(`Environment not found: ${id}`);
+        return discoverAgentExtensions(createExtensionCommandRunner(environment, context));
+      },
+      { refresh: refresh === true },
+    );
   });
   register("update_environment_allowed_domains", ({ environmentId, domains }, { storage }) =>
     storage.updateEnvironment(asString(environmentId, "environmentId"), { allowedDomains: asStringArray(domains) }),
@@ -5016,6 +5034,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
 }
 
 export const __testing = {
+  createExtensionCommandRunner,
   setLocalServerProcess(
     key: string,
     child: ChildProcessWithoutNullStreams,

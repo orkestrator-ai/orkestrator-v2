@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -138,12 +138,14 @@ function ExtensionStatusIcon({
 
 function ExtensionCollection({
   title,
+  emptyLabel,
   icon,
   items,
   error,
   configHint,
 }: {
   title: string;
+  emptyLabel: string;
   icon: React.ReactNode;
   items: backend.AgentExtensionItem[];
   error?: string;
@@ -164,14 +166,14 @@ function ExtensionCollection({
           <span>{error}</span>
         </div>
       ) : items.length === 0 ? (
-        <p className="py-1 text-sm text-muted-foreground">
-          No {title.toLowerCase()} configured
-        </p>
+        <p className="py-1 text-sm text-muted-foreground">{emptyLabel}</p>
       ) : (
         <div className="space-y-1.5">
-          {items.map((item) => (
+          {items.map((item, index) => (
+            // Two marketplaces can publish the same plugin name, so the name
+            // alone is not a stable key.
             <div
-              key={item.name}
+              key={`${item.name}:${item.source ?? item.status}:${index}`}
               className="flex min-w-0 items-center gap-2 rounded-md border border-border/70 bg-muted/30 px-2.5 py-2 text-sm"
             >
               <ExtensionStatusIcon status={item.status} />
@@ -220,6 +222,7 @@ function AgentExtensionSection({
       <div className="grid grid-cols-1 divide-y divide-border/70 md:grid-cols-2 md:divide-x md:divide-y-0">
         <ExtensionCollection
           title="MCP servers"
+          emptyLabel="No MCP servers configured"
           icon={<Server className="h-4 w-4 text-muted-foreground" />}
           items={catalog.mcpServers}
           error={catalog.mcpError}
@@ -227,6 +230,7 @@ function AgentExtensionSection({
         />
         <ExtensionCollection
           title="Plugins"
+          emptyLabel="No plugins configured"
           icon={<Puzzle className="h-4 w-4 text-muted-foreground" />}
           items={catalog.plugins}
           error={catalog.pluginError}
@@ -325,6 +329,8 @@ export function EnvironmentSettingsDialog({
   >(emptyExtensionCatalogs);
   const [isLoadingExtensions, setIsLoadingExtensions] = useState(false);
   const [extensionsError, setExtensionsError] = useState<string | null>(null);
+  // Only the newest extension load may write state; see the close effect below.
+  const extensionLoadSeq = useRef(0);
 
   // Track if port mappings have changed
   const portMappingsChanged = JSON.stringify(portMappings) !== JSON.stringify(environment.portMappings || []);
@@ -382,25 +388,34 @@ export function EnvironmentSettingsDialog({
   // Clear extensions data when dialog closes to prevent stale data flash
   useEffect(() => {
     if (!open) {
+      // Abandon any in-flight load too. This dialog instance is shared across
+      // environments, so a late response would repopulate the panel after it
+      // was cleared and surface one environment's extensions under the next.
+      extensionLoadSeq.current += 1;
       setExtensionCatalogs(emptyExtensionCatalogs());
       setExtensionsError(null);
+      setIsLoadingExtensions(false);
     }
   }, [open]);
 
-  const loadExtensions = useCallback(async () => {
+  const loadExtensions = useCallback(async (options: { refresh?: boolean } = {}) => {
+    const seq = ++extensionLoadSeq.current;
+    const isCurrent = () => seq === extensionLoadSeq.current;
     setIsLoadingExtensions(true);
     setExtensionsError(null);
     try {
-      const catalogs = await backend.getEnvironmentExtensions(environment.id);
+      const catalogs = await backend.getEnvironmentExtensions(environment.id, options);
+      if (!isCurrent()) return;
       setExtensionCatalogs(orderExtensionCatalogs(catalogs));
     } catch (err) {
+      if (!isCurrent()) return;
       console.error("[EnvironmentSettingsDialog] Failed to fetch extensions:", err);
       setExtensionCatalogs(emptyExtensionCatalogs());
       setExtensionsError(
         "Extension settings could not be loaded. Check that the environment is available and try again.",
       );
     } finally {
-      setIsLoadingExtensions(false);
+      if (isCurrent()) setIsLoadingExtensions(false);
     }
   }, [environment.id]);
 
@@ -923,13 +938,15 @@ export function EnvironmentSettingsDialog({
                 <p className="text-sm font-medium">Agent extensions</p>
                 <p className="text-xs text-muted-foreground">
                   Effective MCP servers and plugins for this environment.
+                  Refreshing health-checks Claude&apos;s approved MCP servers,
+                  which starts each one.
                 </p>
               </div>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => void loadExtensions()}
+                onClick={() => void loadExtensions({ refresh: true })}
                 disabled={isLoadingExtensions}
               >
                 {isLoadingExtensions ? (

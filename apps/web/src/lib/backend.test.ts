@@ -549,6 +549,24 @@ describe("backend command wrapper coverage", () => {
     }
   });
 
+  test("getEnvironmentExtensions defaults to the cached backend result", async () => {
+    await backendWrappers.getEnvironmentExtensions("env-1");
+
+    expect(invokeMock).toHaveBeenCalledWith("get_environment_extensions", {
+      environmentId: "env-1",
+      refresh: false,
+    });
+  });
+
+  test("getEnvironmentExtensions forwards an explicit refresh", async () => {
+    await backendWrappers.getEnvironmentExtensions("env-1", { refresh: true });
+
+    expect(invokeMock).toHaveBeenCalledWith("get_environment_extensions", {
+      environmentId: "env-1",
+      refresh: true,
+    });
+  });
+
   test("readBinaryFile decodes the base64 wrapper result", async () => {
     await expect(backendWrappers.readBinaryFile("/tmp/image.bin")).resolves.toEqual(
       Uint8Array.from(new TextEncoder().encode("binary")),

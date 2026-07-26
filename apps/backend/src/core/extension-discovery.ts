@@ -44,16 +44,43 @@ function parseJsonOutput(output: string): unknown {
   }
 }
 
-function sortAndDedupe(items: ExtensionItem[]): ExtensionItem[] {
-  const byName = new Map<string, ExtensionItem>();
-  for (const item of items) {
-    const name = item.name.trim();
+/**
+ * An item plus the identity it should be deduplicated on. Plugins dedupe on
+ * their fully qualified id so that two marketplaces publishing the same short
+ * name stay visible as two entries; MCP servers dedupe on name, which is
+ * already unique within an agent's configuration.
+ */
+type KeyedItem = { key: string; item: ExtensionItem };
+
+function sortAndDedupeKeyed(entries: KeyedItem[]): ExtensionItem[] {
+  const byKey = new Map<string, KeyedItem>();
+  for (const entry of entries) {
+    const name = entry.item.name.trim();
     if (!name) continue;
-    byName.set(name, { ...item, name });
+    const key = entry.key.trim() || name;
+    byKey.set(key, { key, item: { ...entry.item, name } });
   }
-  return [...byName.values()].sort((left, right) =>
-    left.name.localeCompare(right.name),
-  );
+  return [...byKey.values()]
+    .sort(
+      (left, right) =>
+        left.item.name.localeCompare(right.item.name) ||
+        left.key.localeCompare(right.key),
+    )
+    .map((entry) => entry.item);
+}
+
+function sortAndDedupe(items: ExtensionItem[]): ExtensionItem[] {
+  return sortAndDedupeKeyed(items.map((item) => ({ key: item.name, item })));
+}
+
+/**
+ * Plugin ids are `<name>@<marketplace>`, but the name itself may be npm-scoped
+ * (`@team/review@official`). Splitting on the first `@` would yield an empty
+ * name for those and drop the plugin, so only the marketplace suffix is cut.
+ */
+function pluginShortName(id: string): string | undefined {
+  const marketplace = id.lastIndexOf("@");
+  return nonBlankString(marketplace > 0 ? id.slice(0, marketplace) : id);
 }
 
 function stripAnsi(value: string): string {
@@ -69,8 +96,15 @@ export function parseClaudeMcpList(output: string): ExtensionItem[] {
     const separator = line.indexOf(": ");
     if (separator <= 0) continue;
 
+    // Every server line ends in ` - <status>`. Lines without it are headers or
+    // the indented detail printed under a failed server, and accepting them
+    // would both invent entries and infer their status from command text —
+    // which routinely contains "auth", "error" or "connected".
+    const statusSeparator = line.lastIndexOf(" - ");
+    if (statusSeparator <= separator) continue;
+
     const name = line.slice(0, separator).trim();
-    const statusText = line.slice(line.lastIndexOf(" - ") + 3).trim().toLowerCase();
+    const statusText = line.slice(statusSeparator + 3).trim().toLowerCase();
     let status: ExtensionStatus = "configured";
     if (statusText.includes("connected")) status = "connected";
     else if (statusText.includes("failed") || statusText.includes("error")) status = "failed";
@@ -92,15 +126,18 @@ export function parseClaudePlugins(output: string): ExtensionItem[] {
   const parsed = parseJsonOutput(output);
   if (!Array.isArray(parsed)) return [];
 
-  return sortAndDedupe(parsed.flatMap((value): ExtensionItem[] => {
+  return sortAndDedupeKeyed(parsed.flatMap((value): KeyedItem[] => {
     if (!isRecord(value)) return [];
     const id = nonBlankString(value.id);
-    const name = nonBlankString(value.name) ?? id?.split("@")[0];
+    const name = nonBlankString(value.name) ?? (id ? pluginShortName(id) : undefined);
     if (!name) return [];
     return [{
-      name,
-      status: value.enabled === false ? "disabled" : "configured",
-      source: nonBlankString(value.scope),
+      key: id ?? name,
+      item: {
+        name,
+        status: value.enabled === false ? "disabled" : "configured",
+        source: nonBlankString(value.scope),
+      },
     }];
   }));
 }
@@ -120,7 +157,7 @@ export function parseCodexMcpList(output: string): ExtensionItem[] {
   }));
 }
 
-function collectCodexPluginRecords(value: unknown, result: ExtensionItem[]): void {
+function collectCodexPluginRecords(value: unknown, result: KeyedItem[]): void {
   if (Array.isArray(value)) {
     for (const child of value) collectCodexPluginRecords(child, result);
     return;
@@ -128,13 +165,18 @@ function collectCodexPluginRecords(value: unknown, result: ExtensionItem[]): voi
   if (!isRecord(value)) return;
 
   const pluginId = nonBlankString(value.pluginId);
-  const name = nonBlankString(value.name) ?? pluginId?.split("@")[0];
+  const name = nonBlankString(value.name) ?? (pluginId ? pluginShortName(pluginId) : undefined);
   if (name && (pluginId || typeof value.installed === "boolean")) {
+    // `codex plugin list` reports everything the configured marketplaces offer,
+    // not just what is installed here.
     if (value.installed !== false) {
       result.push({
-        name,
-        status: value.enabled === false ? "disabled" : "configured",
-        source: nonBlankString(value.marketplaceName),
+        key: pluginId ?? name,
+        item: {
+          name,
+          status: value.enabled === false ? "disabled" : "configured",
+          source: nonBlankString(value.marketplaceName),
+        },
       });
     }
     return;
@@ -146,9 +188,9 @@ function collectCodexPluginRecords(value: unknown, result: ExtensionItem[]): voi
 }
 
 export function parseCodexPlugins(output: string): ExtensionItem[] {
-  const result: ExtensionItem[] = [];
+  const result: KeyedItem[] = [];
   collectCodexPluginRecords(parseJsonOutput(output), result);
-  return sortAndDedupe(result);
+  return sortAndDedupeKeyed(result);
 }
 
 function openCodeMcpEntries(config: Record<string, unknown>): Record<string, unknown> {
@@ -305,4 +347,61 @@ export async function discoverAgentExtensions(
     discoverCodex(run),
     discoverOpenCode(run),
   ]);
+}
+
+export const EXTENSION_DISCOVERY_TTL_MS = 60_000;
+
+export type ExtensionDiscoveryCache = {
+  get(
+    key: string,
+    load: () => Promise<AgentExtensionCatalog[]>,
+    options?: { refresh?: boolean },
+  ): Promise<AgentExtensionCatalog[]>;
+  invalidate(key: string): void;
+};
+
+/**
+ * Discovery is not a passive read: `claude mcp list` health-checks every
+ * approved MCP server, which spawns each stdio server and opens each HTTP
+ * server's connection. Caching per environment keeps reopening a settings
+ * dialog from respawning them, and sharing the in-flight promise keeps
+ * concurrent callers down to a single run.
+ */
+export function createExtensionDiscoveryCache({
+  ttlMs = EXTENSION_DISCOVERY_TTL_MS,
+  now = () => Date.now(),
+}: { ttlMs?: number; now?: () => number } = {}): ExtensionDiscoveryCache {
+  const entries = new Map<
+    string,
+    { expiresAt: number; catalogs: Promise<AgentExtensionCatalog[]> }
+  >();
+
+  const prune = (): void => {
+    const current = now();
+    for (const [key, entry] of entries) {
+      if (entry.expiresAt <= current) entries.delete(key);
+    }
+  };
+
+  return {
+    get(key, load, options) {
+      prune();
+      if (!options?.refresh) {
+        const cached = entries.get(key);
+        if (cached) return cached.catalogs;
+      }
+
+      const catalogs = load();
+      entries.set(key, { expiresAt: now() + ttlMs, catalogs });
+      // A failed run must not be served for the rest of the TTL: drop it so the
+      // next open retries. The rejection is still delivered to this caller.
+      void catalogs.catch(() => {
+        if (entries.get(key)?.catalogs === catalogs) entries.delete(key);
+      });
+      return catalogs;
+    },
+    invalidate(key) {
+      entries.delete(key);
+    },
+  };
 }

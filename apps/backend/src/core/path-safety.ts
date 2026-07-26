@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { constants, promises as fs, type Stats } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { APP_SLUG } from "./constants.js";
@@ -15,7 +15,11 @@ function defaultReadableHostRoots(): string[] {
 
 function isPathInsideRoot(filePath: string, rootPath: string): boolean {
   const relative = path.relative(rootPath, filePath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return relative === "" || (
+    relative !== ".."
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
 }
 
 function rejectControlCharacters(filePath: string, label: string): void {
@@ -65,7 +69,10 @@ export function assertBase64PayloadWithinLimit(base64Data: string): void {
   }
 }
 
-export async function resolveReadableHostFilePath(filePath: string, allowedRoots = defaultReadableHostRoots()): Promise<string> {
+async function resolveReadableHostTarget(
+  filePath: string,
+  allowedRoots: string[],
+): Promise<{ canonicalRoot: string; canonicalTarget: string; targetPath: string }> {
   if (filePath.length === 0) {
     throw new Error("Invalid file path: path is empty");
   }
@@ -76,20 +83,113 @@ export async function resolveReadableHostFilePath(filePath: string, allowedRoots
     throw new Error("Invalid file path: absolute path is required");
   }
 
-  const realPath = await fs.realpath(filePath);
-  const stats = await fs.stat(realPath);
-  if (!stats.isFile()) {
-    throw new Error(`Invalid file path: not a regular file: ${filePath}`);
-  }
-  if (stats.size > MAX_BINARY_FILE_BYTES) {
-    throw new Error(`File exceeds ${MAX_BINARY_FILE_BYTES} bytes: ${filePath}`);
-  }
-
-  const normalizedRealPath = realPath.split(path.sep).join("/");
-  const normalizedAllowedRoots = await Promise.all(allowedRoots.map(async (root) => fs.realpath(root).catch(() => path.resolve(root))));
-  if (!normalizedAllowedRoots.some((root) => isPathInsideRoot(realPath, root))) {
+  const targetPath = path.resolve(filePath);
+  const lexicalRoots = allowedRoots.map((root) => path.resolve(root));
+  const lexicalRoot = lexicalRoots.find((root) => isPathInsideRoot(targetPath, root));
+  if (!lexicalRoot) {
     throw new Error("Invalid file path: file is outside Orkestrator workspace storage");
   }
 
-  return normalizedRealPath.split("/").join(path.sep);
+  let currentPath = lexicalRoot;
+  const relativeTarget = path.relative(lexicalRoot, targetPath);
+  for (const segment of relativeTarget.split(path.sep).filter(Boolean)) {
+    currentPath = path.join(currentPath, segment);
+    const stats = await fs.lstat(currentPath);
+    if (stats.isSymbolicLink()) {
+      throw new Error("Invalid file path: symbolic links are not allowed");
+    }
+  }
+
+  const [canonicalRoot, canonicalTarget] = await Promise.all([
+    fs.realpath(lexicalRoot),
+    fs.realpath(targetPath),
+  ]);
+  if (!isPathInsideRoot(canonicalTarget, canonicalRoot)) {
+    throw new Error("Invalid file path: file is outside Orkestrator workspace storage");
+  }
+
+  return { canonicalRoot, canonicalTarget, targetPath };
+}
+
+async function assertOpenedHostFile(
+  targetPath: string,
+  canonicalRoot: string,
+  openedStats: Stats,
+): Promise<void> {
+  const [pathStats, canonicalTarget] = await Promise.all([
+    fs.lstat(targetPath),
+    fs.realpath(targetPath),
+  ]);
+  if (pathStats.isSymbolicLink()) {
+    throw new Error("Invalid file path: symbolic links are not allowed");
+  }
+  if (
+    !pathStats.isFile()
+    || !openedStats.isFile()
+    || pathStats.dev !== openedStats.dev
+    || pathStats.ino !== openedStats.ino
+  ) {
+    throw new Error("Invalid file path: not a stable regular file");
+  }
+  if (!isPathInsideRoot(canonicalTarget, canonicalRoot)) {
+    throw new Error("Invalid file path: file is outside Orkestrator workspace storage");
+  }
+}
+
+/**
+ * Reads one bounded snapshot from Orkestrator-managed workspace storage.
+ * Validation, fstat, and reads all apply to the same no-follow file handle.
+ */
+export async function readReadableHostFile(
+  filePath: string,
+  allowedRoots = defaultReadableHostRoots(),
+  testHooks?: {
+    afterInitialValidation?: () => void | Promise<void>;
+  },
+): Promise<Buffer> {
+  const { canonicalRoot, targetPath } = await resolveReadableHostTarget(filePath, allowedRoots);
+  const handle = await fs.open(
+    targetPath,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+  );
+
+  try {
+    const initialStats = await handle.stat();
+    await assertOpenedHostFile(targetPath, canonicalRoot, initialStats);
+    if (initialStats.size > MAX_BINARY_FILE_BYTES) {
+      throw new Error(`File exceeds ${MAX_BINARY_FILE_BYTES} bytes`);
+    }
+    await testHooks?.afterInitialValidation?.();
+
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    while (totalBytes <= MAX_BINARY_FILE_BYTES) {
+      const remaining = (MAX_BINARY_FILE_BYTES + 1) - totalBytes;
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, remaining));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      totalBytes += bytesRead;
+    }
+    if (totalBytes > MAX_BINARY_FILE_BYTES) {
+      throw new Error(`File exceeds ${MAX_BINARY_FILE_BYTES} bytes`);
+    }
+
+    const finalStats = await handle.stat();
+    await assertOpenedHostFile(targetPath, canonicalRoot, finalStats);
+    if (
+      finalStats.dev !== initialStats.dev
+      || finalStats.ino !== initialStats.ino
+      || finalStats.size !== initialStats.size
+      || finalStats.size !== totalBytes
+      || finalStats.mtimeMs !== initialStats.mtimeMs
+      || finalStats.ctimeMs !== initialStats.ctimeMs
+    ) {
+      throw new Error("File changed while it was being read; please try again");
+    }
+
+    return Buffer.concat(chunks, totalBytes);
+  } finally {
+    await handle.close();
+  }
 }

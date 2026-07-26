@@ -5,6 +5,7 @@ import path from "node:path";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import { APP_SLUG } from "../../../apps/backend/src/core/constants";
 import * as realPty from "../../../apps/backend/src/core/pty";
+import { runCommand } from "../../../apps/backend/src/core/shell";
 
 type ExitEvent = { exitCode: number; signal?: number };
 
@@ -59,7 +60,11 @@ const spawnPty = mock((command: string, args: string[], options: Record<string, 
 const realPtySnapshot = { ...realPty };
 mock.module("../../../apps/backend/src/core/pty", () => ({ spawnPty }));
 
-const { createCommandRegistry } = await import("../../../apps/backend/src/core/commands");
+const {
+  CONTAINER_SAFE_BASE64_READER,
+  buildContainerSafeBase64Reader,
+  createCommandRegistry,
+} = await import("../../../apps/backend/src/core/commands");
 
 const tempDirs: string[] = [];
 
@@ -170,6 +175,8 @@ describe("backend command I/O coverage", () => {
     await fs.writeFile(path.join(root, "src", "app.ts"), "export const value = 1;\n");
     await fs.writeFile(path.join(root, ".git", "config"), "ignored");
     await fs.writeFile(path.join(root, "node_modules", "ignored", "index.js"), "ignored");
+    await fs.symlink(path.join(root, "README.md"), path.join(root, "readme-link.md"));
+    await fs.symlink(path.join(root, "src"), path.join(root, "src-link"));
     const commands = createCommandRegistry();
     const context = createContext();
 
@@ -223,6 +230,105 @@ describe("backend command I/O coverage", () => {
     );
   });
 
+  test("container base64 reader uses one bounded no-follow file snapshot", async () => {
+    const directory = await createTempDir("ork-container-reader-");
+    const workspace = path.join(directory, "workspace");
+    const outside = path.join(directory, "outside");
+    await fs.mkdir(workspace);
+    await fs.mkdir(outside);
+
+    const regularFile = path.join(workspace, "image.bin");
+    await fs.writeFile(regularFile, Buffer.from([0, 1, 2]));
+    await expect(runCommand("node", [
+      "-e",
+      CONTAINER_SAFE_BASE64_READER,
+      "--",
+      workspace,
+      regularFile,
+      "3",
+    ])).resolves.toMatchObject({ stdout: "AAEC" });
+
+    const oversizedFile = path.join(workspace, "oversized.bin");
+    await fs.writeFile(oversizedFile, Buffer.from([0, 1, 2, 3]));
+    await expect(runCommand("node", [
+      "-e",
+      CONTAINER_SAFE_BASE64_READER,
+      "--",
+      workspace,
+      oversizedFile,
+      "3",
+    ])).rejects.toThrow("File exceeds the attachment size limit");
+
+    const changedFile = path.join(workspace, "changed.bin");
+    await fs.writeFile(changedFile, "abc");
+    await expect(runCommand("node", [
+      "-e",
+      buildContainerSafeBase64Reader("append"),
+      "--",
+      workspace,
+      changedFile,
+      "10",
+    ])).rejects.toThrow("File changed while it was being read");
+
+    const replacedFile = path.join(workspace, "replaced.bin");
+    await fs.writeFile(replacedFile, "original");
+    await expect(runCommand("node", [
+      "-e",
+      buildContainerSafeBase64Reader("replace"),
+      "--",
+      workspace,
+      replacedFile,
+      "20",
+    ])).rejects.toThrow("Attachment is not a stable regular file");
+
+    const directLink = path.join(workspace, "direct.bin");
+    const chainLink = path.join(workspace, "chain.bin");
+    await fs.symlink(regularFile, directLink);
+    await fs.symlink(directLink, chainLink);
+    for (const linkedPath of [directLink, chainLink]) {
+      await expect(runCommand("node", [
+        "-e",
+        CONTAINER_SAFE_BASE64_READER,
+        "--",
+        workspace,
+        linkedPath,
+        "3",
+      ])).rejects.toThrow("Symbolic-link attachments are not allowed");
+    }
+
+    const outsideFile = path.join(outside, "private.bin");
+    await fs.writeFile(outsideFile, "private");
+    const linkedDirectory = path.join(workspace, "linked-directory");
+    await fs.symlink(outside, linkedDirectory);
+    await expect(runCommand("node", [
+      "-e",
+      CONTAINER_SAFE_BASE64_READER,
+      "--",
+      workspace,
+      path.join(linkedDirectory, "private.bin"),
+      "10",
+    ])).rejects.toThrow("Symbolic-link attachments are not allowed");
+    await expect(runCommand("node", [
+      "-e",
+      CONTAINER_SAFE_BASE64_READER,
+      "--",
+      workspace,
+      outsideFile,
+      "10",
+    ])).rejects.toThrow("File is outside the container workspace");
+
+    const directoryTarget = path.join(workspace, "folder.bin");
+    await fs.mkdir(directoryTarget);
+    await expect(runCommand("node", [
+      "-e",
+      CONTAINER_SAFE_BASE64_READER,
+      "--",
+      workspace,
+      directoryTarget,
+      "10",
+    ])).rejects.toThrow("Attachment is not a stable regular file");
+  });
+
   test("executes container file reads and writes through docker without a live daemon", async () => {
     const dockerScript = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
@@ -231,8 +337,7 @@ case "$*" in
   *"cat '/workspace/src/app.ts'"*) printf 'export const value = 2;\\n' ;;
   *"git show 'main':'src/app.ts'"*) printf 'export const value = 1;\\n' ;;
   *"git show 'missing':'src/app.ts'"*) ;;
-  *"stat -c %s '/workspace/assets/blob.bin'"*) printf '3\\n' ;;
-  *"base64 -w 0 '/workspace/assets/blob.bin'"*) printf 'AAEC\\n' ;;
+  *"/workspace/assets/blob.bin"*) printf 'AAEC\\n' ;;
   *"mkdir -p '/workspace/generated'"*) ;;
   *"base64 -d > '/workspace/generated/out.bin'"*) cat > "$FAKE_DOCKER_STDIN" ;;
   *) printf 'unexpected docker invocation: %s\\n' "$*" >&2; exit 33 ;;
@@ -269,7 +374,9 @@ esac
       )).resolves.toBe("/workspace/generated/out.bin");
 
       expect(await fs.readFile(stdinPath, "utf8")).toBe("AAEC");
-      expect(await fs.readFile(logPath, "utf8")).toContain("exec -i container-1 bash -lc base64 -d > '/workspace/generated/out.bin'");
+      const dockerLog = await fs.readFile(logPath, "utf8");
+      expect(dockerLog).toContain("-type l -prune");
+      expect(dockerLog).toContain("exec -i container-1 bash -lc base64 -d > '/workspace/generated/out.bin'");
     });
   });
 

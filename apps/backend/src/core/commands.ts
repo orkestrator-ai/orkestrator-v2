@@ -144,6 +144,89 @@ const SETUP_DONE_PRINTF_CMD = "printf '\\033]9999;setup_done\\007'";
 const SETUP_FAILED_PRINTF_CMD = "printf '\\033]9999;setup_failed\\007'";
 const MAX_TERMINAL_OUTPUT_BUFFER_CHARS = 500 * 1024;
 const TERMINAL_ACTIVITY_SETTLE_MS = 750;
+export function buildContainerSafeBase64Reader(
+  testMutation?: "append" | "replace",
+): string {
+  const afterInitialValidationForTest = testMutation === "append"
+    ? 'fs.appendFileSync(target, "x");'
+    : testMutation === "replace"
+      ? 'fs.renameSync(target, target + ".old"); fs.writeFileSync(target, "replacement");'
+      : "";
+  return `
+const fs = require("node:fs");
+const path = require("node:path");
+const root = path.resolve(process.argv[1]);
+const target = path.resolve(process.argv[2]);
+const limit = Number(process.argv[3]);
+function fail(message) {
+  const error = new Error(message);
+  error.safeMessage = true;
+  throw error;
+}
+function inside(rootPath, targetPath) {
+  const child = path.relative(rootPath, targetPath);
+  return child === "" || (child !== ".." && !child.startsWith(".." + path.sep) && !path.isAbsolute(child));
+}
+function main() {
+  if (!inside(root, target)) fail("File is outside the container workspace");
+  const canonicalRoot = fs.realpathSync(root);
+  let current = root;
+  for (const segment of path.relative(root, target).split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    if (fs.lstatSync(current).isSymbolicLink()) fail("Symbolic-link attachments are not allowed");
+  }
+  if (!inside(canonicalRoot, fs.realpathSync(target))) fail("File is outside the container workspace");
+  const fd = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  try {
+    const initial = fs.fstatSync(fd);
+    const assertStablePath = (opened) => {
+      const currentStats = fs.lstatSync(target);
+      if (currentStats.isSymbolicLink()) fail("Symbolic-link attachments are not allowed");
+      if (!currentStats.isFile() || !opened.isFile() || currentStats.dev !== opened.dev || currentStats.ino !== opened.ino) {
+        fail("Attachment is not a stable regular file");
+      }
+      if (!inside(canonicalRoot, fs.realpathSync(target))) fail("File is outside the container workspace");
+    };
+    assertStablePath(initial);
+    if (initial.size > limit) fail("File exceeds the attachment size limit");
+    ${afterInitialValidationForTest}
+    const chunks = [];
+    let total = 0;
+    while (total <= limit) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, (limit + 1) - total));
+      const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      total += bytesRead;
+    }
+    if (total > limit) fail("File exceeds the attachment size limit");
+    const final = fs.fstatSync(fd);
+    assertStablePath(final);
+    if (
+      final.dev !== initial.dev
+      || final.ino !== initial.ino
+      || final.size !== initial.size
+      || final.size !== total
+      || final.mtimeMs !== initial.mtimeMs
+      || final.ctimeMs !== initial.ctimeMs
+    ) fail("File changed while it was being read; please try again");
+    process.stdout.write(Buffer.concat(chunks, total).toString("base64"));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+try {
+  main();
+} catch (error) {
+  const message = error && error.safeMessage
+    ? error.message
+    : "File could not be read safely from the container workspace";
+  process.stderr.write(message + "\\n");
+  process.exitCode = 1;
+}
+`.trim();
+}
+export const CONTAINER_SAFE_BASE64_READER = buildContainerSafeBase64Reader();
 
 type EnvironmentSetupSession = {
   environmentId: string;
@@ -1793,18 +1876,6 @@ function spawnTerminalProcess(
   return terminalProcess;
 }
 
-function parsePositiveInteger(value: string, name: string): number {
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    throw new Error(`Invalid ${name}: ${trimmed}`);
-  }
-  const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error(`Invalid ${name}: ${trimmed}`);
-  }
-  return parsed;
-}
-
 function parseDockerStatus(status: string): EnvironmentStatus {
   switch (status.trim().toLowerCase()) {
     case "running":
@@ -2821,7 +2892,14 @@ async function buildFileTree(rootPath: string, relativePath = ""): Promise<Array
   const entries = await fs.readdir(fullPath, { withFileTypes: true });
   const nodes = [];
   for (const entry of entries) {
-    if (entry.name === ".git" || entry.name === "node_modules") continue;
+    // Workspace symlinks are not valid picker targets. In addition to keeping
+    // the tree inside its declared root, skipping them here prevents recursive
+    // traversal if platform Dirent semantics ever change.
+    if (
+      entry.name === ".git"
+      || entry.name === "node_modules"
+      || entry.isSymbolicLink()
+    ) continue;
     const childRelativePath = path.join(relativePath, entry.name);
     if (entry.isDirectory()) {
       nodes.push({
@@ -4640,7 +4718,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     });
   });
   register("get_file_tree", async ({ containerId }) => {
-    const output = await dockerExec(asString(containerId, "containerId"), "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type f -printf '%P\\n' | head -5000");
+    const output = await dockerExec(asString(containerId, "containerId"), "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type l -prune -o -type f -printf '%P\\n' | head -5000");
     return output.split("\n").filter(Boolean).map((filePath) => ({ name: path.basename(filePath), path: filePath, isDirectory: false, extension: path.extname(filePath) }));
   });
   register("read_container_file", async ({ containerId, filePath }) => {
@@ -4655,11 +4733,10 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   });
   register("read_container_file_base64", async ({ containerId, filePath }) => {
     const fullPath = workspaceFilePath(asString(filePath, "filePath"));
-    const size = parsePositiveInteger(await dockerExec(asString(containerId, "containerId"), `stat -c %s ${quoteShell(fullPath)}`), "file size");
-    if (size > MAX_BINARY_FILE_BYTES) {
-      throw new Error(`File exceeds ${MAX_BINARY_FILE_BYTES} bytes: ${fullPath}`);
-    }
-    return (await dockerExec(asString(containerId, "containerId"), `base64 -w 0 ${quoteShell(fullPath)}`)).trim();
+    return (await dockerExec(
+      asString(containerId, "containerId"),
+      `node -e ${quoteShell(CONTAINER_SAFE_BASE64_READER)} -- /workspace ${quoteShell(fullPath)} ${MAX_BINARY_FILE_BYTES}`,
+    )).trim();
   });
   register("write_container_file", async ({ containerId, filePath, base64Data }) => {
     const id = asString(containerId, "containerId");

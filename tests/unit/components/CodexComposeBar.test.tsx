@@ -1,5 +1,6 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { forwardRef, useImperativeHandle } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
 
 const mockWriteContainerFile = mock(async () => {});
@@ -15,6 +16,8 @@ const mockCreateMention = mock(() => ({
 }));
 const mockRefreshFileTree = mock(() => {});
 const mockSearchFiles = mock(() => []);
+const mockInsertMentionAtCursor = mock(() => {});
+const mockInputFocus = mock(() => {});
 let mockFileMentionMenuOpen = false;
 let mockFileSearchError: string | null = null;
 
@@ -50,26 +53,33 @@ mock.module("@/lib/backend", () => ({
 // terminal-paste tests that rely on them.
 
 mock.module("@/components/chat/MentionableInput", () => ({
-  MentionableInput: (props: {
+  MentionableInput: forwardRef(function MockMentionableInput(props: {
     value: string;
     placeholder?: string;
     disabled?: boolean;
     onKeyDown?: (e: unknown) => void;
     onChange?: (text: string, mentions: unknown[]) => void;
     onCursorChange?: (position: number, text: string) => void;
-  }) => (
-    <textarea
-      data-testid="mentionable-input"
-      value={props.value}
-      placeholder={props.placeholder}
-      disabled={props.disabled}
-      onChange={(e) => {
-        props.onChange?.(e.target.value, []);
-        props.onCursorChange?.(e.target.selectionStart, e.target.value);
-      }}
-      onKeyDown={props.onKeyDown as React.KeyboardEventHandler}
-    />
-  ),
+  }, ref) {
+    useImperativeHandle(ref, () => ({
+      focus: mockInputFocus,
+      insertMention: () => {},
+      insertMentionAtCursor: mockInsertMentionAtCursor,
+    }));
+    return (
+      <textarea
+        data-testid="mentionable-input"
+        value={props.value}
+        placeholder={props.placeholder}
+        disabled={props.disabled}
+        onChange={(e) => {
+          props.onChange?.(e.target.value, []);
+          props.onCursorChange?.(e.target.selectionStart, e.target.value);
+        }}
+        onKeyDown={props.onKeyDown as React.KeyboardEventHandler}
+      />
+    );
+  }),
 }));
 
 mock.module("@/components/opencode/OpenCodeSlashCommandMenu", () => ({
@@ -152,6 +162,16 @@ const SESSION_KEY = `env-${ENV_ID}:default`;
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 const defaultModels: CodexModel[] = [
   {
     id: "gpt-5.3-codex",
@@ -230,6 +250,8 @@ describe("CodexComposeBar", () => {
     mockRefreshFileTree.mockReset();
     mockSearchFiles.mockReset();
     mockSearchFiles.mockImplementation(() => []);
+    mockInsertMentionAtCursor.mockReset();
+    mockInputFocus.mockReset();
     mockFileMentionMenuOpen = false;
     mockFileSearchError = null;
     mockReadImage.mockImplementation(async () => ({
@@ -548,6 +570,162 @@ describe("CodexComposeBar", () => {
     expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("");
   });
 
+  test("sends an attachment-only prompt immediately", async () => {
+    const attachment = {
+      id: "attachment-only-send",
+      type: "image" as const,
+      path: "/workspace/attachment.png",
+      previewUrl: "data:image/png;base64,abc",
+      name: "attachment.png",
+    };
+    useCodexStore.getState().addAttachment(SESSION_KEY, attachment);
+    const { onSend } = renderComposeBar();
+
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("", [attachment]);
+      expect(useCodexStore.getState().getAttachments(SESSION_KEY)).toEqual([]);
+    });
+  });
+
+  test.each([
+    ["send", false, "Send message"],
+    ["queue", true, "Add to queue"],
+  ] as const)(
+    "preserves newer compose state while a %s request is pending",
+    async (_kind, isLoading, buttonTitle) => {
+      const gate = deferred();
+      const pending = mock(() => gate.promise);
+      const submittedAttachment = {
+        id: "submitted-attachment",
+        type: "image" as const,
+        path: "/workspace/submitted.png",
+        name: "submitted.png",
+      };
+      const nextAttachment = {
+        id: "next-attachment",
+        type: "image" as const,
+        path: "/workspace/next.png",
+        name: "next.png",
+      };
+      const submittedMention = {
+        id: "submitted-mention",
+        filename: "submitted.ts",
+        relativePath: "src/submitted.ts",
+      };
+      const nextMention = {
+        id: "next-mention",
+        filename: "next.ts",
+        relativePath: "src/next.ts",
+      };
+      const store = useCodexStore.getState();
+      store.setDraftText(SESSION_KEY, "Submit this");
+      store.setDraftMentions(SESSION_KEY, [submittedMention]);
+      store.addAttachment(SESSION_KEY, submittedAttachment);
+      renderComposeBar({
+        isLoading,
+        ...(isLoading ? { onQueue: pending } : { onSend: pending }),
+      });
+
+      fireEvent.click(screen.getByTitle(buttonTitle));
+      await waitFor(() => expect(pending).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId("mentionable-input").hasAttribute("disabled")).toBe(true);
+      expect(
+        screen.getByRole("button", { name: "Add attachment" }).hasAttribute("disabled"),
+      ).toBe(true);
+
+      act(() => {
+        const latest = useCodexStore.getState();
+        latest.setDraftText(SESSION_KEY, "Compose next");
+        latest.setDraftMentions(SESSION_KEY, [nextMention]);
+        latest.addAttachment(SESSION_KEY, nextAttachment);
+      });
+
+      await act(async () => {
+        gate.resolve();
+        await gate.promise;
+      });
+
+      await waitFor(() => {
+        const latest = useCodexStore.getState();
+        expect(latest.getDraftText(SESSION_KEY)).toBe("Compose next");
+        expect(latest.getDraftMentions(SESSION_KEY)).toEqual([nextMention]);
+        expect(latest.getAttachments(SESSION_KEY)).toEqual([nextAttachment]);
+      });
+      expect(pending).toHaveBeenCalledWith("Submit this", [submittedAttachment]);
+    },
+  );
+
+  test("preserves same-text draft state when mention metadata changes during send", async () => {
+    const gate = deferred();
+    const onSend = mock(() => gate.promise);
+    const submittedMention = {
+      id: "mention-1",
+      filename: "app.ts",
+      relativePath: "src/app.ts",
+    };
+    const updatedMention = {
+      ...submittedMention,
+      relativePath: "packages/app.ts",
+    };
+    const store = useCodexStore.getState();
+    store.setDraftText(SESSION_KEY, "Review @app.ts");
+    store.setDraftMentions(SESSION_KEY, [submittedMention]);
+    renderComposeBar({ onSend });
+
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    act(() => {
+      useCodexStore.getState().setDraftMentions(SESSION_KEY, [updatedMention]);
+    });
+
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
+    });
+    await waitFor(() => {
+      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe(
+        "Review @app.ts",
+      );
+      expect(useCodexStore.getState().getDraftMentions(SESSION_KEY)).toEqual([
+        updatedMention,
+      ]);
+    });
+  });
+
+  test("closes and disables an open attachment picker while sending", async () => {
+    const gate = deferred();
+    const onSend = mock(() => gate.promise);
+    mockSearchFiles.mockImplementation(() => [{
+      filename: "app.ts",
+      relativePath: "src/app.ts",
+      isDirectory: false,
+    }]);
+    useCodexStore.getState().setDraftText(SESSION_KEY, "Send while picker is open");
+    renderComposeBar({ onSend });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Mention file from workspace" }),
+    );
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Add attachment" }).hasAttribute("disabled"),
+      ).toBe(true);
+    });
+
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
+    });
+  });
+
   test("queues the prompt while Codex is loading", async () => {
     const { onQueue } = renderComposeBar({ isLoading: true });
     const input = screen.getByTestId("mentionable-input");
@@ -706,6 +884,32 @@ describe("CodexComposeBar", () => {
     expect(useCodexStore.getState().getDraftMentions(SESSION_KEY)).toEqual([]);
     expect(onFastModeChange).toHaveBeenCalledWith(true);
     expect(useCodexStore.getState().getQueueLength(SESSION_KEY)).toBe(0);
+  });
+
+  test("keeps an equal queued fast-mode setting without dispatching a redundant change", async () => {
+    useCodexStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-equal-fast",
+      text: "Keep fast mode unchanged",
+      attachments: [],
+      model: "gpt-5.3-codex",
+      mode: "build",
+      reasoningEffort: "high",
+      fastMode: false,
+    });
+    const { onFastModeChange } = renderComposeBar({
+      queueLength: 1,
+      fastModeEnabled: false,
+    });
+
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getByText("Keep fast mode unchanged"));
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe(
+        "Keep fast mode unchanged",
+      );
+    });
+    expect(onFastModeChange).not.toHaveBeenCalled();
   });
 
   test("serializes file mentions before sending", async () => {
@@ -935,28 +1139,49 @@ describe("CodexComposeBar", () => {
     });
   });
 
-  test("toggles and dismisses the attachment menu and removes its outside listener", () => {
-    const removeEventListener = spyOn(document, "removeEventListener");
-    const { container, unmount } = renderComposeBar();
-    const plusButton = container.querySelector(
-      '[data-native-compose-controls="primary"] button',
-    )!;
+  test("portals the attachment menu outside the scrollable toolbar", async () => {
+    const { container } = renderComposeBar();
+    const toolbar = container.querySelector("[data-native-compose-toolbar]")!;
+    const attachmentButton = screen.getByRole("button", { name: "Add attachment" });
 
-    fireEvent.click(plusButton);
-    expect(screen.getByText("Attach file from workspace")).toBeTruthy();
-    expect(screen.getByText("Paste image (Cmd+V)")).toBeTruthy();
+    fireEvent.pointerDown(attachmentButton);
 
-    fireEvent.click(plusButton);
-    expect(screen.queryByText("Attach file from workspace")).toBeNull();
+    const menu = await screen.findByRole("menu");
+    expect(toolbar.contains(menu)).toBe(false);
+    expect(screen.getByRole("menuitem", { name: "Mention file from workspace" })).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", { name: /Paste image into the input/ }).getAttribute("aria-disabled"),
+    ).toBe("true");
 
-    fireEvent.click(plusButton);
-    fireEvent.mouseDown(document.body);
-    expect(screen.queryByText("Attach file from workspace")).toBeNull();
+    fireEvent.pointerDown(attachmentButton);
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  });
 
-    fireEvent.click(plusButton);
-    unmount();
-    expect(removeEventListener).toHaveBeenCalledWith("mousedown", expect.any(Function));
-    removeEventListener.mockRestore();
+  test("inserts a selected workspace file as a Codex mention", async () => {
+    const selectedFile = {
+      filename: "architecture.md",
+      relativePath: "docs/architecture.md",
+      isDirectory: false,
+    };
+    mockSearchFiles.mockImplementation(() => [selectedFile]);
+    renderComposeBar();
+    const focusCountAfterMount = mockInputFocus.mock.calls.length;
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Mention file from workspace" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /architecture\.md/ }));
+
+    await waitFor(() => {
+      expect(mockCreateMention).toHaveBeenCalledWith(selectedFile);
+      expect(mockInsertMentionAtCursor).toHaveBeenCalledWith({
+        id: "mention-created",
+        filename: "app.ts",
+        relativePath: "src/app.ts",
+      });
+      expect(mockInputFocus.mock.calls.length).toBeGreaterThan(focusCountAfterMount);
+    });
   });
 
   test("reorders and removes queued prompts from the dialog", async () => {

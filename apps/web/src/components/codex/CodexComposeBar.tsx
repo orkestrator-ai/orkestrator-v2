@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, ChevronDown, ChevronUp, FileText, Image as ImageIcon, Plus, Square, X, Zap } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, ChevronUp, FileText, Square, X, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,6 +20,7 @@ import { useCodexStore } from "@/stores";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
+import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
 import { OpenCodeSlashCommandMenu } from "@/components/opencode/OpenCodeSlashCommandMenu";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useFileMentions, useFileSearch, useNativeComposeBarPaste } from "@/hooks";
@@ -40,6 +41,19 @@ const MAX_HEIGHT_PX = 160;
 const EMPTY_ATTACHMENTS: CodexAttachment[] = [];
 const EMPTY_MENTIONS: FileMention[] = [];
 const EMPTY_QUEUE: CodexQueuedMessage[] = [];
+
+function fileMentionsEqual(
+  left: readonly FileMention[],
+  right: readonly FileMention[],
+): boolean {
+  return left.length === right.length && left.every((mention, index) => {
+    const other = right[index];
+    return other !== undefined
+      && mention.id === other.id
+      && mention.filename === other.filename
+      && mention.relativePath === other.relativePath;
+  });
+}
 
 const REASONING_LABELS: Record<CodexReasoningEffort, string> = {
   minimal: "Minimal",
@@ -112,7 +126,6 @@ export function CodexComposeBar({
 }: CodexComposeBarProps) {
   const [isSending, setIsSending] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
-  const attachmentMenuRef = useRef<HTMLDivElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const prevFileMentionMenuOpen = useRef(false);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
@@ -139,15 +152,15 @@ export function CodexComposeBar({
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
   const [slashFilter, setSlashFilter] = useState("");
-  const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
 
   const worktreePath = useEnvironmentStore(
     (state) => state.getEnvironmentById(environmentId)?.worktreePath,
   );
-  const { searchFiles, error: fileSearchError, refresh: refreshFileTree } = useFileSearch(
+  const fileSearch = useFileSearch(
     containerId,
     worktreePath,
   );
+  const { searchFiles, error: fileSearchError, refresh: refreshFileTree } = fileSearch;
   const {
     isMenuOpen: fileMentionMenuOpen,
     selectedIndex: fileMentionSelectedIndex,
@@ -213,6 +226,9 @@ export function CodexComposeBar({
       return;
     }
 
+    const submittedText = text;
+    const submittedMentions = mentions;
+    const submittedAttachments = attachments;
     setIsSending(true);
     try {
       if (isQueueing) {
@@ -220,9 +236,20 @@ export function CodexComposeBar({
       } else {
         await onSend(serializeForLLM(trimmed, mentions), attachments);
       }
-      setDraftText(sessionKey, "");
-      setDraftMentions(sessionKey, []);
-      clearAttachments(sessionKey);
+      const store = useCodexStore.getState();
+      if (
+        store.getDraftText(sessionKey) === submittedText
+        && fileMentionsEqual(
+          store.getDraftMentions(sessionKey),
+          submittedMentions,
+        )
+      ) {
+        store.setDraftText(sessionKey, "");
+        store.setDraftMentions(sessionKey, []);
+      }
+      for (const attachment of submittedAttachments) {
+        store.removeAttachment(sessionKey, attachment.id);
+      }
     } catch (error) {
       console.error(
         `[CodexComposeBar] Failed to ${isQueueing ? "queue" : "send"} prompt:`,
@@ -341,21 +368,17 @@ export function CodexComposeBar({
     [closeFileMentionMenu, createMention],
   );
 
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (
-        attachmentMenuRef.current
-        && !attachmentMenuRef.current.contains(event.target as Node)
-      ) {
-        setShowAttachmentMenu(false);
+  const handleWorkspaceFileSelect = useCallback(
+    (file: FileCandidate) => {
+      if (disabled || isSending) {
+        return;
       }
-    }
-
-    if (showAttachmentMenu) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
-    }
-  }, [showAttachmentMenu]);
+      const mention = createMention(file);
+      closeFileMentionMenu({ suppressReopenFor: file.filename });
+      inputRef.current?.insertMentionAtCursor(mention);
+    },
+    [closeFileMentionMenu, createMention, disabled, isSending],
+  );
 
   useNativeComposeBarPaste({
     inputContainerRef,
@@ -443,7 +466,9 @@ export function CodexComposeBar({
               <button
                 type="button"
                 onClick={() => removeAttachment(sessionKey, attachment.id)}
+                disabled={disabled || isSending}
                 className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                aria-label={`Remove ${attachment.name}`}
               >
                 <X className="h-3 w-3" />
               </button>
@@ -528,10 +553,10 @@ export function CodexComposeBar({
             }
           }}
           placeholder="Ask Codex anything..."
-          disabled={disabled}
+          disabled={disabled || isSending}
           minHeight={MIN_HEIGHT_PX}
           maxHeight={MAX_HEIGHT_PX}
-          className={cn(disabled && "opacity-60")}
+          className={cn((disabled || isSending) && "opacity-60")}
         />
       </div>
 
@@ -543,37 +568,16 @@ export function CodexComposeBar({
           data-native-compose-controls="primary"
           className="flex w-full min-w-0 items-center gap-1 sm:w-auto"
         >
-        <div className="relative" ref={attachmentMenuRef}>
-          <button
-            type="button"
-            className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-            disabled={disabled}
-            onClick={() => setShowAttachmentMenu((open) => !open)}
-          >
-            <Plus className="h-4 w-4" />
-          </button>
-
-          {showAttachmentMenu ? (
-            <div className="absolute bottom-full left-0 z-50 mb-1 w-56 rounded-xl border border-zinc-700/70 bg-zinc-900/95 p-1 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm">
-              <button
-                type="button"
-                className="flex w-full cursor-default items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground"
-                disabled
-              >
-                <FileText className="h-4 w-4" />
-                Attach file from workspace
-              </button>
-              <button
-                type="button"
-                className="flex w-full cursor-default items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground"
-                disabled
-              >
-                <ImageIcon className="h-4 w-4" />
-                Paste image (Cmd+V)
-              </button>
-            </div>
-          ) : null}
-        </div>
+          <NativeAttachmentMenu
+            key={isSending ? "sending" : "idle"}
+            disabled={disabled || isSending}
+            fileSearch={fileSearch}
+            onSelectFile={handleWorkspaceFileSelect}
+            onCloseAutoFocus={() => inputRef.current?.focus()}
+            fileActionLabel="Mention file from workspace"
+            filePickerTitle="Mention workspace file"
+            filePickerDescription="Search this environment and mention a file in the current prompt."
+          />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

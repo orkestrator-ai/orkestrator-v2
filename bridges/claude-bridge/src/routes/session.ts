@@ -24,15 +24,21 @@ import type {
 import { isJsonSchema } from "@orkestrator/protocol/structured-output";
 
 const session = new Hono();
+const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 function isValidImageDataUrl(value: string): boolean {
   const match = /^data:image\/(?:jpeg|png|gif|webp);base64,([\s\S]+)$/.exec(value);
   if (!match) return false;
   const data = match[1].replace(/\s+/g, "");
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  const decodedBytes = data.length % 4 === 0
+    ? (data.length / 4) * 3 - padding
+    : Number.POSITIVE_INFINITY;
   return (
     data.length > 0
     && data.length % 4 === 0
     && /^[A-Za-z0-9+/]+={0,2}$/.test(data)
+    && decodedBytes <= MAX_IMAGE_ATTACHMENT_BYTES
   );
 }
 
@@ -198,7 +204,9 @@ session.post("/:id/prompt", async (c) => {
       )
     );
     if (!attachmentsAreValid) {
-      return c.json({ error: "Attachments are invalid" }, 400);
+      return c.json({
+        error: "Attachments are invalid; inline images must be valid base64 and no larger than 8MB",
+      }, 400);
     }
 
     if (

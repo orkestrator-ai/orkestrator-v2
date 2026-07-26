@@ -29,6 +29,7 @@ export interface MentionableInputRef {
   blur: () => void;
   getCursorPosition: () => number;
   insertMention: (mention: FileMention) => void;
+  insertMentionAtCursor: (mention: FileMention) => void;
 }
 
 function isBlockElement(el: HTMLElement): boolean {
@@ -240,6 +241,36 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
           focusEditableElement(inputRef.current);
           onChange(newText, newMentions);
         }
+      },
+      insertMentionAtCursor: (mention: FileMention) => {
+        if (!inputRef.current) return;
+
+        // Preserve the last compose-bar caret position while the attachment
+        // picker dialog has focus, then add whitespace only where needed.
+        const activeSelection = window.getSelection();
+        const cursorPos =
+          activeSelection
+          && activeSelection.rangeCount > 0
+          && inputRef.current.contains(activeSelection.getRangeAt(0).startContainer)
+            ? getCursorOffset(inputRef.current)
+            : lastCursorPositionRef.current;
+        const currentText = extractText(inputRef.current);
+        const leadingText = currentText.slice(0, cursorPos);
+        const trailingText = currentText.slice(cursorPos);
+        const leadingSeparator =
+          leadingText.length > 0 && !/\s$/.test(leadingText) ? " " : "";
+        const trailingSeparator =
+          trailingText.length > 0 && /^\s/.test(trailingText) ? "" : " ";
+        const insertedText =
+          `${leadingSeparator}@${mention.filename}${trailingSeparator}`;
+        const newText = leadingText + insertedText + trailingText;
+        const newMentions = [...mentions, mention];
+
+        pendingCursorRef.current = cursorPos + insertedText.length;
+        lastCursorPositionRef.current = pendingCursorRef.current;
+        pendingFocusRef.current = true;
+        focusEditableElement(inputRef.current);
+        onChange(newText, newMentions);
       },
     }));
 

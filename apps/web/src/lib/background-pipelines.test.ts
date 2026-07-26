@@ -33,6 +33,7 @@ function makePipeline(
     currentSessionIndex: -1,
     iteration: 0,
     maxIterations: 3,
+    backendRevision: 0,
     createdAt: new Date().toISOString(),
     taskTitle: `Task ${id}`,
     taskSnapshot: { title: `Task ${id}`, description: "", acceptanceCriteria: "", comments: [], images: [] },

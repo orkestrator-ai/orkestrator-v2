@@ -8,6 +8,7 @@
     "./connections": "./src/connections.ts",
     "./gateway-token": "./src/gateway-token.ts",
     "./parent-watchdog": "./src/parent-watchdog.ts",
+    "./resource-events": "./src/resource-events.ts",
     "./review-artifacts": "./src/review-artifacts.ts",
     "./review-instruction": "./src/review-prompt.ts",
     "./review-prompt": "./src/review-prompt.ts",

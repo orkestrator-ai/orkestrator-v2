@@ -9,6 +9,7 @@ import {
   getReviewInstructionValidationError,
   parseReviewInstruction,
 } from "@orkestrator/protocol/review-instruction";
+import type { ResourceChange, ResourceKind } from "@orkestrator/protocol/resource-events";
 import {
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   isValidCodexMaxConcurrentThreads,
@@ -26,6 +27,8 @@ import type {
   Project,
   PersistedPaneLayout,
   PersistedLoopedReviewWorkflow,
+  PersistedBuildPipeline,
+  PersistedPromptQueue,
   RepositoryConfig,
   Session,
   SessionType,
@@ -220,6 +223,37 @@ function isPersistedLoopedReviewWorkflow(
     && isNonBlankString(value.id)
     && (expectedId === undefined || value.id === expectedId)
     && isNonBlankString(value.environmentId)
+    && isRecord(value.snapshot)
+    && typeof value.updatedAt === "string"
+    && Number.isFinite(Date.parse(value.updatedAt))
+    && isPositiveInteger(value.revision);
+}
+
+function isPersistedPromptQueue(
+  value: unknown,
+  expectedKey?: string,
+): value is PersistedPromptQueue {
+  return isRecord(value)
+    && isNonBlankString(value.queueKey)
+    && (expectedKey === undefined || value.queueKey === expectedKey)
+    && isNonBlankString(value.environmentId)
+    && Array.isArray(value.messages)
+    && typeof value.updatedAt === "string"
+    && Number.isFinite(Date.parse(value.updatedAt))
+    && isPositiveInteger(value.revision);
+}
+
+function isPersistedBuildPipeline(
+  value: unknown,
+  expectedId?: string,
+): value is PersistedBuildPipeline {
+  return isRecord(value)
+    && isPositiveInteger(value.version)
+    && isNonBlankString(value.id)
+    && (expectedId === undefined || value.id === expectedId)
+    && isNonBlankString(value.projectId)
+    // Blank until the pipeline's environment exists; see PersistedBuildPipeline.
+    && typeof value.environmentId === "string"
     && isRecord(value.snapshot)
     && typeof value.updatedAt === "string"
     && Number.isFinite(Date.parse(value.updatedAt))
@@ -560,6 +594,8 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
+export type ResourceChangeListener = (change: ResourceChange) => void;
+
 export class StorageService {
   private readonly dataDir: string;
   private writeQueue = Promise.resolve();
@@ -569,9 +605,40 @@ export class StorageService {
   private featurePlanMutation: Promise<unknown> = Promise.resolve();
   private paneLayoutMutation: Promise<unknown> = Promise.resolve();
   private loopedReviewMutation: Promise<unknown> = Promise.resolve();
+  private buildPipelineMutation: Promise<unknown> = Promise.resolve();
+  private promptQueueMutation: Promise<unknown> = Promise.resolve();
+  private changeListener: ResourceChangeListener | null = null;
+  private changeRevision = 0;
 
   constructor(dataDir: string) {
     this.dataDir = dataDir;
+  }
+
+  /**
+   * Installs the sink that broadcasts persistent mutations to connected
+   * clients. Kept as a setter rather than a constructor argument because the
+   * gateway that ultimately delivers these does not exist yet when the backend
+   * builds its storage service.
+   */
+  setResourceChangeListener(listener: ResourceChangeListener | null): void {
+    this.changeListener = listener;
+  }
+
+  /**
+   * Announces a committed mutation. Called only after the write has landed, so
+   * a client that refetches in response is guaranteed to observe the new value
+   * rather than race the write it was told about.
+   */
+  private announce(resource: ResourceKind, id: string): void {
+    const listener = this.changeListener;
+    if (!listener) return;
+    this.changeRevision += 1;
+    try {
+      listener({ resource, id, revision: this.changeRevision });
+    } catch (error) {
+      // A broken client transport must never fail the mutation that succeeded.
+      console.error("[Storage] Resource change listener threw:", error);
+    }
   }
 
   getDataDir(): string {
@@ -608,6 +675,14 @@ export class StorageService {
 
   private loopedReviewsFile(): string {
     return this.file("looped-reviews.json");
+  }
+
+  private buildPipelinesFile(): string {
+    return this.file("build-pipelines.json");
+  }
+
+  private promptQueuesFile(): string {
+    return this.file("prompt-queues.json");
   }
 
   private kanbanFile(): string {
@@ -752,6 +827,30 @@ export class StorageService {
     };
     const next = this.loopedReviewMutation.then(run, run);
     this.loopedReviewMutation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  /**
+   * Serializes build pipeline writes across backend processes sharing this data
+   * directory. The cross-process lock matters more here than the in-process
+   * queue: two renderers driving the same pipeline is precisely the race the
+   * compare-and-swap revision exists to reject, and it can only reject it if the
+   * read-modify-write is atomic.
+   */
+  private enqueueBuildPipelineMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.buildPipelinesFile(),
+        "build pipeline storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.buildPipelineMutation.then(run, run);
+    this.buildPipelineMutation = next.then(() => undefined, () => undefined);
     return next;
   }
 
@@ -909,6 +1008,7 @@ export class StorageService {
     project.order = Math.max(-1, ...projects.map((item) => item.order)) + 1;
     projects.push(project);
     await this.saveJson(this.projectsFile(), projects);
+    this.announce("project", project.id);
     return project;
   }
 
@@ -917,6 +1017,7 @@ export class StorageService {
     const filtered = projects.filter((project) => project.id !== projectId);
     if (filtered.length === projects.length) throw new Error(`Project not found: ${projectId}`);
     await this.saveJson(this.projectsFile(), filtered);
+    this.announce("project", projectId);
   }
 
   async getProject(projectId: string): Promise<Project | null> {
@@ -930,6 +1031,7 @@ export class StorageService {
     if (typeof updates.name === "string") project.name = updates.name;
     if ("localPath" in updates) project.localPath = updates.localPath ?? null;
     await this.saveJson(this.projectsFile(), projects);
+    this.announce("project", projectId);
     return project;
   }
 
@@ -947,6 +1049,7 @@ export class StorageService {
     }
 
     await this.saveJson(this.projectsFile(), projects);
+    for (const project of projects) this.announce("project", project.id);
     return projects.sort((a, b) => a.order - b.order);
   }
 
@@ -970,6 +1073,7 @@ export class StorageService {
         Math.max(-1, ...environments.filter((item) => item.projectId === environment.projectId).map((item) => item.order)) + 1;
       environments.push(environment);
       await this.saveJson(this.environmentsFile(), environments);
+      this.announce("environment", environment.id);
       return environment;
     });
   }
@@ -980,6 +1084,7 @@ export class StorageService {
       const filtered = environments.filter((environment) => environment.id !== environmentId);
       if (filtered.length === environments.length) throw new Error(`Environment not found: ${environmentId}`);
       await this.saveJson(this.environmentsFile(), filtered);
+      this.announce("environment", environmentId);
     });
   }
 
@@ -1052,6 +1157,12 @@ export class StorageService {
         else if (isPortNumber(value)) environment[field] = value;
       }
 
+      if ("hasUnreadWork" in updates) {
+        if (updates.hasUnreadWork == null) environment.hasUnreadWork = false;
+        else if (typeof updates.hasUnreadWork === "boolean") {
+          environment.hasUnreadWork = updates.hasUnreadWork;
+        }
+      }
       if ("setupScriptsComplete" in updates) {
         if (updates.setupScriptsComplete == null) environment.setupScriptsComplete = false;
         else if (typeof updates.setupScriptsComplete === "boolean") {
@@ -1090,6 +1201,7 @@ export class StorageService {
       }
 
       await this.saveJson(this.environmentsFile(), environments);
+      this.announce("environment", environmentId);
       return environment;
     });
   }
@@ -1115,6 +1227,7 @@ export class StorageService {
 
       environment.lastActivityAt = normalizedActivityAt;
       await this.saveJson(this.environmentsFile(), environments);
+      this.announce("environment", environmentId);
       return environment;
     });
   }
@@ -1134,7 +1247,11 @@ export class StorageService {
       }
 
       await this.saveJson(this.environmentsFile(), environments);
-      return environments.filter((environment) => environment.projectId === projectId).sort((a, b) => a.order - b.order);
+      const reordered = environments
+        .filter((environment) => environment.projectId === projectId)
+        .sort((a, b) => a.order - b.order);
+      for (const environment of reordered) this.announce("environment", environment.id);
+      return reordered;
     });
   }
 
@@ -1146,6 +1263,7 @@ export class StorageService {
   async saveConfig(config: AppConfig): Promise<void> {
     const validated = validateConfigReviewInstruction(config);
     await this.enqueueConfigMutation(() => this.saveJson(this.configFile(), validated));
+    this.announce("config", "app");
   }
 
   async getDesktopConnections(): Promise<StoredDesktopConnections> {
@@ -1166,6 +1284,7 @@ export class StorageService {
       config.desktopConnections = validated;
       await this.saveJson(this.configFile(), config);
     });
+    this.announce("config", "app");
   }
 
   async getRepositoryConfig(projectId: string): Promise<RepositoryConfig> {
@@ -1178,6 +1297,7 @@ export class StorageService {
       const config = await this.loadConfig();
       config.repositories[projectId] = { ...defaultRepositoryConfig(), ...repoConfig };
       await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
       return config;
     });
   }
@@ -1188,6 +1308,7 @@ export class StorageService {
       const config = await this.loadConfig();
       config.global = validated;
       await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
       return config;
     });
   }
@@ -1198,6 +1319,7 @@ export class StorageService {
       if (token === null) delete config.global.githubToken;
       else config.global.githubToken = token;
       await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
       return config;
     });
   }
@@ -1221,6 +1343,7 @@ export class StorageService {
 
     sessions.push(session);
     await this.saveJson(this.sessionsFile(), sessions);
+    this.announce("session", environmentId);
     return session;
   }
 
@@ -1270,6 +1393,7 @@ export class StorageService {
       };
       layouts[environmentId] = saved;
       await this.saveJson(this.paneLayoutsFile(), layouts);
+      this.announce("pane-layout", environmentId);
       return saved;
     });
     this.paneLayoutMutation = run.then(() => undefined, () => undefined);
@@ -1381,6 +1505,7 @@ export class StorageService {
       };
       workflows[workflowId] = saved;
       await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
+      this.announce("looped-review", workflowId);
       return saved;
     });
   }
@@ -1402,6 +1527,7 @@ export class StorageService {
       if (!(workflowId in workflows)) return;
       delete workflows[workflowId];
       await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
+      this.announce("looped-review", workflowId);
     });
   }
 
@@ -1422,14 +1548,16 @@ export class StorageService {
           && workflow.environmentId !== environmentId
         ),
       ) as Record<string, PersistedLoopedReviewWorkflow>;
-      const removed = Object.entries(storedWorkflows).some(
-        ([storedId, workflow]) =>
+      const removedIds = Object.entries(storedWorkflows)
+        .filter(([storedId, workflow]) =>
           isPersistedLoopedReviewWorkflow(workflow, storedId)
           && workflow.environmentId === environmentId,
-      );
-      if (!removed) return;
+        )
+        .map(([storedId]) => storedId);
+      if (removedIds.length === 0) return;
 
       await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
+      for (const removedId of removedIds) this.announce("looped-review", removedId);
 
       // Rotating the primary file creates a backup containing the deleted
       // workflow. Scrub every retained backup before releasing the mutation
@@ -1461,6 +1589,262 @@ export class StorageService {
     });
   }
 
+  private enqueuePromptQueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.promptQueuesFile(),
+        "prompt queue storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.promptQueueMutation.then(run, run);
+    this.promptQueueMutation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async loadPromptQueues(): Promise<Record<string, PersistedPromptQueue>> {
+    const stored = await this.loadJson<Record<string, PersistedPromptQueue>>(
+      this.promptQueuesFile(),
+      () => ({}),
+    );
+    return Object.fromEntries(
+      Object.entries(stored).filter(([storedKey, queue]) =>
+        isPersistedPromptQueue(queue, storedKey)
+      ),
+    ) as Record<string, PersistedPromptQueue>;
+  }
+
+  async getPromptQueue(queueKey: string): Promise<PersistedPromptQueue | null> {
+    if (!isNonBlankString(queueKey)) {
+      throw new Error("Prompt queue key must not be blank");
+    }
+    return (await this.loadPromptQueues())[queueKey] ?? null;
+  }
+
+  async listPromptQueues(environmentId: string): Promise<PersistedPromptQueue[]> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Prompt queue environment ID must not be blank");
+    }
+    return Object.values(await this.loadPromptQueues())
+      .filter((queue) => queue.environmentId === environmentId);
+  }
+
+  /**
+   * Replaces a tab's queue wholesale under a compare-and-swap revision.
+   *
+   * Whole-list writes rather than per-item operations because the contended
+   * operation is "take the head and send it": two clients doing that must not
+   * both win, and a revision check is the cheapest way to guarantee exactly one
+   * does. The queue is a handful of messages, so rewriting it costs nothing.
+   */
+  async savePromptQueue(
+    queueKey: string,
+    environmentId: string,
+    messages: unknown[],
+    expectedRevision?: number,
+  ): Promise<PersistedPromptQueue> {
+    if (!isNonBlankString(queueKey)) {
+      throw new Error("Prompt queue key must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Prompt queue environment ID must not be blank");
+    }
+    if (!Array.isArray(messages)) {
+      throw new Error("Prompt queue messages must be an array");
+    }
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
+      throw new Error("Prompt queue expected revision must be a non-negative integer");
+    }
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(messages);
+    } catch {
+      throw new Error("Prompt queue messages must be JSON serializable");
+    }
+    if (serialized === undefined) {
+      throw new Error("Prompt queue messages must be JSON serializable");
+    }
+    // Queued prompts carry pasted image attachments, so the ceiling has to be
+    // generous; it exists to stop a runaway client, not to bound normal use.
+    if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
+      throw new Error("Prompt queue exceeds the 32 MB limit");
+    }
+
+    return this.enqueuePromptQueueMutation(async () => {
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (previous && previous.environmentId !== environmentId) {
+        throw new Error("Prompt queue belongs to another environment");
+      }
+      if (
+        expectedRevision !== undefined
+        && (previous?.revision ?? 0) !== expectedRevision
+      ) {
+        throw new Error("Prompt queue revision conflict");
+      }
+      const saved: PersistedPromptQueue = {
+        queueKey,
+        environmentId,
+        messages,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      queues[queueKey] = saved;
+      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+      this.announce("prompt-queue", environmentId);
+      return saved;
+    });
+  }
+
+  async deletePromptQueuesByEnvironment(environmentId: string): Promise<string[]> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Prompt queue environment ID must not be blank");
+    }
+    return this.enqueuePromptQueueMutation(async () => {
+      const queues = await this.loadPromptQueues();
+      const removedKeys = Object.values(queues)
+        .filter((queue) => queue.environmentId === environmentId)
+        .map((queue) => queue.queueKey);
+      if (removedKeys.length === 0) return [];
+      for (const key of removedKeys) delete queues[key];
+      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+      this.announce("prompt-queue", environmentId);
+      return removedKeys;
+    });
+  }
+
+  private async loadBuildPipelines(): Promise<Record<string, PersistedBuildPipeline>> {
+    const stored = await this.loadJson<Record<string, PersistedBuildPipeline>>(
+      this.buildPipelinesFile(),
+      () => ({}),
+    );
+    return Object.fromEntries(
+      Object.entries(stored).filter(([storedId, pipeline]) =>
+        isPersistedBuildPipeline(pipeline, storedId)
+      ),
+    ) as Record<string, PersistedBuildPipeline>;
+  }
+
+  async getBuildPipeline(pipelineId: string): Promise<PersistedBuildPipeline | null> {
+    if (!isNonBlankString(pipelineId)) {
+      throw new Error("Build pipeline ID must not be blank");
+    }
+    return (await this.loadBuildPipelines())[pipelineId] ?? null;
+  }
+
+  async listBuildPipelines(projectId: string): Promise<PersistedBuildPipeline[]> {
+    if (!isNonBlankString(projectId)) {
+      throw new Error("Build pipeline project ID must not be blank");
+    }
+    return Object.values(await this.loadBuildPipelines())
+      .filter((pipeline) => pipeline.projectId === projectId)
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+  }
+
+  async saveBuildPipeline(
+    pipelineId: string,
+    projectId: string,
+    environmentId: string,
+    version: number,
+    snapshot: unknown,
+    expectedRevision?: number,
+  ): Promise<PersistedBuildPipeline> {
+    if (!isNonBlankString(pipelineId)) {
+      throw new Error("Build pipeline ID must not be blank");
+    }
+    if (!isNonBlankString(projectId)) {
+      throw new Error("Build pipeline project ID must not be blank");
+    }
+    if (typeof environmentId !== "string") {
+      throw new Error("Build pipeline environment ID must be a string");
+    }
+    if (!isPositiveInteger(version)) {
+      throw new Error("Build pipeline version must be a positive integer");
+    }
+    if (!isRecord(snapshot)) {
+      throw new Error("Build pipeline snapshot must be a JSON object");
+    }
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
+      throw new Error("Build pipeline expected revision must be a non-negative integer");
+    }
+    let serializedSnapshot: string | undefined;
+    try {
+      serializedSnapshot = JSON.stringify(snapshot);
+    } catch {
+      throw new Error("Build pipeline snapshot must be JSON serializable");
+    }
+    if (serializedSnapshot === undefined) {
+      throw new Error("Build pipeline snapshot must be JSON serializable");
+    }
+    // Task snapshots embed base64 attachment data and structured review reports
+    // retain full findings. Reject an over-sized snapshot rather than truncating
+    // it: a silently trimmed task is a pipeline that builds the wrong thing.
+    if (Buffer.byteLength(serializedSnapshot, "utf8") > 32 * 1024 * 1024) {
+      throw new Error("Build pipeline snapshot exceeds the 32 MB limit");
+    }
+
+    return this.enqueueBuildPipelineMutation(async () => {
+      const pipelines = await this.loadBuildPipelines();
+      const previous = pipelines[pipelineId];
+      if (previous && previous.projectId !== projectId) {
+        throw new Error("Build pipeline belongs to another project");
+      }
+      if (
+        expectedRevision !== undefined
+        && (previous?.revision ?? 0) !== expectedRevision
+      ) {
+        throw new Error("Build pipeline revision conflict");
+      }
+      const saved: PersistedBuildPipeline = {
+        version,
+        id: pipelineId,
+        projectId,
+        environmentId,
+        snapshot,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      pipelines[pipelineId] = saved;
+      await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
+      this.announce("build-pipeline", pipelineId);
+      return saved;
+    });
+  }
+
+  async deleteBuildPipeline(pipelineId: string): Promise<void> {
+    if (!isNonBlankString(pipelineId)) {
+      throw new Error("Build pipeline ID must not be blank");
+    }
+    await this.enqueueBuildPipelineMutation(async () => {
+      const pipelines = await this.loadBuildPipelines();
+      if (!(pipelineId in pipelines)) return;
+      delete pipelines[pipelineId];
+      await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
+      this.announce("build-pipeline", pipelineId);
+    });
+  }
+
+  async deleteBuildPipelinesByEnvironment(environmentId: string): Promise<string[]> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Build pipeline environment ID must not be blank");
+    }
+    return this.enqueueBuildPipelineMutation(async () => {
+      const pipelines = await this.loadBuildPipelines();
+      const removedIds = Object.values(pipelines)
+        .filter((pipeline) => pipeline.environmentId === environmentId)
+        .map((pipeline) => pipeline.id);
+      if (removedIds.length === 0) return [];
+      for (const removedId of removedIds) delete pipelines[removedId];
+      await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
+      for (const removedId of removedIds) this.announce("build-pipeline", removedId);
+      return removedIds;
+    });
+  }
+
   async deletePaneLayout(environmentId: string): Promise<void> {
     const run = this.paneLayoutMutation.then(async () => {
       const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
@@ -1470,6 +1854,7 @@ export class StorageService {
       if (!(environmentId in layouts)) return;
       delete layouts[environmentId];
       await this.saveJson(this.paneLayoutsFile(), layouts);
+      this.announce("pane-layout", environmentId);
     });
     this.paneLayoutMutation = run.then(() => undefined, () => undefined);
     return run;
@@ -1491,15 +1876,18 @@ export class StorageService {
     if (!session) throw new Error(`Session not found: ${sessionId}`);
     Object.assign(session, updates);
     await this.saveJson(this.sessionsFile(), sessions);
+    this.announce("session", session.environmentId);
     return session;
   }
 
   async removeSession(sessionId: string): Promise<void> {
     const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
+    const removed = sessions.find((session) => session.id === sessionId);
     const filtered = sessions.filter((session) => session.id !== sessionId);
     if (filtered.length === sessions.length) throw new Error(`Session not found: ${sessionId}`);
     await this.saveJson(this.sessionsFile(), filtered);
     await this.deleteSessionBuffer(sessionId);
+    if (removed) this.announce("session", removed.environmentId);
   }
 
   async removeSessionsByEnvironment(environmentId: string): Promise<string[]> {
@@ -1507,6 +1895,7 @@ export class StorageService {
     const removed = sessions.filter((session) => session.environmentId === environmentId).map((session) => session.id);
     await this.saveJson(this.sessionsFile(), sessions.filter((session) => session.environmentId !== environmentId));
     await Promise.all(removed.map((sessionId) => this.deleteSessionBuffer(sessionId)));
+    if (removed.length > 0) this.announce("session", environmentId);
     return removed;
   }
 
@@ -1520,6 +1909,7 @@ export class StorageService {
       }
     }
     await this.saveJson(this.sessionsFile(), sessions);
+    if (updated.length > 0) this.announce("session", environmentId);
     return updated;
   }
 
@@ -1535,6 +1925,7 @@ export class StorageService {
       if (session.environmentId === environmentId && !provided.has(session.id)) session.order = order++;
     }
     await this.saveJson(this.sessionsFile(), sessions);
+    this.announce("session", environmentId);
     return this.getSessionsByEnvironment(environmentId);
   }
 
@@ -1592,6 +1983,7 @@ export class StorageService {
     };
     tasks.push(task);
     await this.saveJson(this.kanbanFile(), tasks);
+    this.announce("kanban", projectId);
     return task;
   }
 
@@ -1606,6 +1998,7 @@ export class StorageService {
       task.order = Math.max(-1, ...tasks.filter((candidate) => candidate.projectId === task.projectId && candidate.status === updates.status && candidate.id !== taskId).map((candidate) => candidate.order)) + 1;
     }
     await this.saveJson(this.kanbanFile(), tasks);
+    this.announce("kanban", task.projectId);
     return task;
   }
 
@@ -1615,6 +2008,7 @@ export class StorageService {
     if (!task) throw new Error(`Kanban task not found: ${taskId}`);
     await Promise.all(task.images.map((image) => fs.rm(this.kanbanImageFile(image.id), { force: true })));
     await this.saveJson(this.kanbanFile(), tasks.filter((candidate) => candidate.id !== taskId));
+    this.announce("kanban", task.projectId);
   }
 
   async addKanbanComment(taskId: string, text: string): Promise<KanbanTask> {
@@ -1623,6 +2017,7 @@ export class StorageService {
     if (!task) throw new Error(`Kanban task not found: ${taskId}`);
     task.comments.push({ id: randomUUID(), text, createdAt: nowIso() });
     await this.saveJson(this.kanbanFile(), tasks);
+    this.announce("kanban", task.projectId);
     return task;
   }
 
@@ -1632,6 +2027,7 @@ export class StorageService {
     if (!task) throw new Error(`Kanban task not found: ${taskId}`);
     task.comments = task.comments.filter((comment) => comment.id !== commentId);
     await this.saveJson(this.kanbanFile(), tasks);
+    this.announce("kanban", task.projectId);
     return task;
   }
 
@@ -1647,6 +2043,7 @@ export class StorageService {
     await fs.writeFile(this.kanbanImageFile(image.id), webpBytes);
     task.images.push(image);
     await this.saveJson(this.kanbanFile(), tasks);
+    this.announce("kanban", task.projectId);
     return task;
   }
 
@@ -1657,6 +2054,7 @@ export class StorageService {
     task.images = task.images.filter((image) => image.id !== imageId);
     await fs.rm(this.kanbanImageFile(imageId), { force: true });
     await this.saveJson(this.kanbanFile(), tasks);
+    this.announce("kanban", task.projectId);
     return task;
   }
 
@@ -1680,6 +2078,7 @@ export class StorageService {
       note.updatedAt = nowIso();
     }
     await this.saveJson(this.projectNotesFile(), notes);
+    this.announce("project-notes", projectId);
     return note;
   }
 
@@ -1695,11 +2094,15 @@ export class StorageService {
   // the same time) cannot clobber each other via stale read-modify-write races.
   // The mutator runs against the freshly loaded array; if it throws, nothing is
   // saved and the next queued mutation still proceeds.
-  private mutateFeaturePlans<T>(mutator: (plans: FeaturePlan[]) => T): Promise<T> {
+  private mutateFeaturePlans<T>(
+    mutator: (plans: FeaturePlan[]) => T,
+    affectedProjectId: (result: T) => string,
+  ): Promise<T> {
     const run = this.featurePlanMutation.then(async () => {
       const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
       const result = mutator(plans);
       await this.saveJson(this.featurePlansFile(), plans);
+      this.announce("feature-plan", affectedProjectId(result));
       return result;
     });
     this.featurePlanMutation = run.then(() => undefined, () => undefined);
@@ -1728,7 +2131,7 @@ export class StorageService {
       };
       plans.push(plan);
       return plan;
-    });
+    }, (plan) => plan.projectId);
   }
 
   async updateFeaturePlan(featureId: string, updates: Partial<FeaturePlan>): Promise<FeaturePlan> {
@@ -1743,7 +2146,7 @@ export class StorageService {
       plan.projectId = originalProjectId;
       plan.updatedAt = nowIso();
       return plan;
-    });
+    }, (plan) => plan.projectId);
   }
 
   async appendFeaturePlanMessage(
@@ -1765,7 +2168,7 @@ export class StorageService {
       });
       plan.updatedAt = nowIso();
       return plan;
-    });
+    }, (plan) => plan.projectId);
   }
 
   async appendFeatureStoryMessage(
@@ -1791,7 +2194,7 @@ export class StorageService {
       story.updatedAt = nowIso();
       plan.updatedAt = nowIso();
       return plan;
-    });
+    }, (plan) => plan.projectId);
   }
 
   async getLinearAuth(): Promise<LinearAuth | null> {

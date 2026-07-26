@@ -534,17 +534,21 @@ describe("useEnvironments", () => {
     expect(useLoopedReviewStore.getState().workflows.has(retainedWorkflowId)).toBe(true);
   });
 
-  test("deleteEnvironment prunes the deleted environment's unread activity marker", async () => {
-    const existingEnv = createMockEnvironment({ id: "env-1", projectId: "project-1", name: "test-env" });
+  test("deleteEnvironment drops the environment and its unread marker with it", async () => {
+    const deleted = createMockEnvironment({
+      id: "env-1", projectId: "project-1", name: "test-env", hasUnreadWork: true,
+    });
+    const kept = createMockEnvironment({
+      id: "env-keep", projectId: "project-1", name: "keep", hasUnreadWork: true,
+    });
 
     useEnvironmentStore.setState({
-      environments: [existingEnv],
+      environments: [deleted, kept],
       isLoading: false,
       error: null,
     });
-    useUIStore.setState({ unreadEnvironmentIds: ["env-1", "env-keep"] });
 
-    mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
+    mockGetEnvironments.mockImplementation(() => Promise.resolve([deleted, kept]));
 
     const { result } = renderHook(() => useEnvironments("project-1"));
 
@@ -556,10 +560,15 @@ describe("useEnvironments", () => {
       await result.current.deleteEnvironment("env-1");
     });
 
-    expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-keep"]);
+    // The marker is a field on the record, so there is nothing left to prune.
+    expect(
+      useEnvironmentStore.getState().environments
+        .filter((environment) => environment.hasUnreadWork)
+        .map((environment) => environment.id),
+    ).toEqual(["env-keep"]);
   });
 
-  test("deleteEnvironment keeps the unread marker when the backend delete fails", async () => {
+  test("deleteEnvironment keeps the environment and its work when the backend delete fails", async () => {
     mockDeleteEnvironment.mockImplementation(() => Promise.reject(new Error("Failed to delete")));
 
     const existingEnv = createMockEnvironment({ id: "env-1", projectId: "project-1", name: "test-env" });
@@ -569,8 +578,6 @@ describe("useEnvironments", () => {
       isLoading: false,
       error: null,
     });
-    useUIStore.setState({ unreadEnvironmentIds: ["env-1"] });
-
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
     const pipelineId = useBuildPipelineStore.getState().createPipeline({
       taskId: "task-1",
@@ -605,7 +612,7 @@ describe("useEnvironments", () => {
       await expect(result.current.deleteEnvironment("env-1")).rejects.toThrow("Failed to delete");
     });
 
-    expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-1"]);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toBeDefined();
     expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(true);
     expect(useLoopedReviewStore.getState().workflows.has(workflowId)).toBe(true);
   });

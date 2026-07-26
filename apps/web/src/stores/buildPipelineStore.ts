@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { TaskSnapshot } from "@/prompts";
 import { createUuid } from "@/lib/uuid";
@@ -124,6 +123,12 @@ export interface BuildPipeline {
   completionCommentError?: string;
   completionCommentId?: string;
   completionCommentPostedAt?: string;
+  /**
+   * Highest backend revision this snapshot is known to descend from. The
+   * persistence layer uses it as the compare-and-swap expectation, which is what
+   * stops two clients driving the same pipeline from both winning a write.
+   */
+  backendRevision: number;
 }
 
 interface BuildPipelineState {
@@ -182,6 +187,11 @@ interface BuildPipelineState {
     },
   ) => void;
 
+  /** Installs an authoritative backend snapshot, replacing any local copy. */
+  replacePipeline: (pipeline: BuildPipeline) => void;
+  /** Records the revision a successful write landed at. */
+  setBackendRevision: (pipelineId: string, revision: number) => void;
+
   // Selectors
   getPipelineByTaskId: (taskId: string) => BuildPipeline | undefined;
   getPipelineForGitHubIssue: (
@@ -197,11 +207,12 @@ interface BuildPipelineState {
   _rebuildBuildEnvironmentIds: () => Set<string>;
 }
 
-type PersistedBuildPipelineState = {
-  pipelines: Array<[string, BuildPipeline]>;
-};
-
-export const BUILD_PIPELINE_STORAGE_KEY = "orkestrator-build-pipelines";
+/**
+ * Snapshot schema version. Bump when a change would make an older persisted
+ * snapshot misread rather than merely incomplete; the backend stores it
+ * alongside each record so a stale snapshot can be recognised, not guessed at.
+ */
+export const BUILD_PIPELINE_VERSION = 1;
 
 /**
  * Whether a build phase represents an in-progress build (a running, abortable
@@ -217,8 +228,52 @@ function isResumableBuildPhase(phase: BuildPhase): phase is ResumableBuildPhase 
   return isActiveBuildPhase(phase);
 }
 
-export const useBuildPipelineStore = create<BuildPipelineState>()(
-  persist<BuildPipelineState, [], [], PersistedBuildPipelineState>((set, get) => ({
+/**
+ * Runtime validation for a snapshot arriving from the backend.
+ *
+ * The backend stores the snapshot opaquely, so this is the only boundary that
+ * can reject a record written by a different application version. A pipeline
+ * that fails validation is dropped rather than partially applied: half a state
+ * machine would advance a build in a way nobody wrote.
+ */
+export function isBuildPipeline(value: unknown): value is BuildPipeline {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === "string" && candidate.id.length > 0
+    && typeof candidate.taskId === "string"
+    && typeof candidate.projectId === "string" && candidate.projectId.length > 0
+    && typeof candidate.environmentId === "string"
+    && typeof candidate.phase === "string"
+    && BUILD_PHASES.has(candidate.phase)
+    && Array.isArray(candidate.sessions)
+    && typeof candidate.currentSessionIndex === "number"
+    && typeof candidate.iteration === "number"
+    && typeof candidate.maxIterations === "number"
+    && typeof candidate.createdAt === "string"
+    && typeof candidate.taskTitle === "string"
+    && typeof candidate.taskSnapshot === "object" && candidate.taskSnapshot !== null
+    && typeof candidate.backendRevision === "number"
+  );
+}
+
+const BUILD_PHASES: ReadonlySet<string> = new Set<BuildPhase>([
+  "creating-environment",
+  "starting-environment",
+  "waiting-for-setup",
+  "building",
+  "reviewing",
+  "addressing",
+  "verifying",
+  "fixing",
+  "creating-pr",
+  "resolving-conflicts",
+  "paused",
+  "complete",
+  "failed",
+]);
+
+export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => ({
   pipelines: new Map(),
   buildEnvironmentIds: new Set<string>(),
 
@@ -240,6 +295,8 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
       taskTitle,
       taskSnapshot,
       source: source ?? { type: "kanban", taskId },
+      // 0 means "never persisted": the first save must find no prior record.
+      backendRevision: 0,
     };
 
     set((state) => {
@@ -912,40 +969,27 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
     }
     return ids;
   },
-}), {
-    name: BUILD_PIPELINE_STORAGE_KEY,
-    version: 1,
-    partialize: (state) => ({
-      pipelines: Array.from(state.pipelines.entries()),
+
+  replacePipeline: (pipeline) =>
+    set((state) => {
+      const newMap = new Map(state.pipelines);
+      newMap.set(pipeline.id, pipeline);
+      const ids = new Set<string>();
+      for (const candidate of newMap.values()) {
+        if (candidate.environmentId) ids.add(candidate.environmentId);
+      }
+      return { pipelines: newMap, buildEnvironmentIds: ids };
     }),
-    merge: (persistedState, currentState) => {
-      const persisted = persistedState as PersistedBuildPipelineState | undefined;
-      const pipelines = new Map<string, BuildPipeline>();
-      for (const entry of Array.isArray(persisted?.pipelines) ? persisted.pipelines : []) {
-        if (!Array.isArray(entry) || entry.length !== 2) continue;
-        const [id, storedPipeline] = entry;
-        if (typeof id !== "string" || !storedPipeline) continue;
-        // "posting" is an in-process lease, not a terminal result. A renderer
-        // that disappeared while posting must retry through the backend's
-        // durable marker check instead of remaining stuck forever.
-        if (storedPipeline.completionCommentStatus === "posting") {
-          const recoveredPipeline = { ...storedPipeline };
-          delete recoveredPipeline.completionCommentStatus;
-          delete recoveredPipeline.completionCommentError;
-          pipelines.set(id, recoveredPipeline);
-        } else {
-          pipelines.set(id, storedPipeline);
-        }
-      }
-      const buildEnvironmentIds = new Set<string>();
-      for (const pipeline of pipelines.values()) {
-        if (pipeline.environmentId) buildEnvironmentIds.add(pipeline.environmentId);
-      }
-      return {
-        ...currentState,
-        pipelines,
-        buildEnvironmentIds,
-      };
-    },
-  }),
-);
+
+  setBackendRevision: (pipelineId, revision) =>
+    set((state) => {
+      const pipeline = state.pipelines.get(pipelineId);
+      // Never move the revision backwards: a slow write landing after a faster
+      // one would otherwise re-arm a compare-and-swap against a stale value and
+      // lose the newer transition on the next save.
+      if (!pipeline || pipeline.backendRevision >= revision) return state;
+      const newMap = new Map(state.pipelines);
+      newMap.set(pipelineId, { ...pipeline, backendRevision: revision });
+      return { pipelines: newMap };
+    }),
+}));

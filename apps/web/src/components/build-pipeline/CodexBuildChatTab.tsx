@@ -9,6 +9,7 @@ import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { createUuid } from "@/lib/uuid";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { persistBuildPipelineNow } from "@/lib/build-pipeline-persistence";
 import { useConfigStore, useCodexStore, useEnvironmentStore } from "@/stores";
 import type {
   BuildPhase,
@@ -749,6 +750,18 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         startedAt: new Date().toISOString(),
       });
       if (!ownsAttempt) return false;
+
+      // Flush the lease before the prompt leaves this process. The debounced
+      // mirror would land ~250ms later, which is exactly the window in which a
+      // crash leaves a dispatched turn with no record that it was attempted.
+      try {
+        await persistBuildPipelineNow(pipelineId);
+      } catch (error) {
+        console.warn(
+          `[CodexBuildChatTab] Failed to record dispatch lease for ${pipelineId}:`,
+          error,
+        );
+      }
 
       try {
         const sent = await sendPrompt(activeClient, sdkSessionId, prompt, {

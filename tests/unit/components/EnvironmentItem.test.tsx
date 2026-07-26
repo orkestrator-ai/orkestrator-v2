@@ -180,7 +180,7 @@ beforeEach(() => {
     containerRefCounts: {},
     stateChangeCallbacks: new Map(),
   });
-  useUIStore.setState({ unreadEnvironmentIds: [], selectedEnvironmentId: null });
+  useUIStore.setState({ selectedEnvironmentId: null });
 });
 
 afterEach(() => {
@@ -494,27 +494,24 @@ describe("EnvironmentItem unread activity indicator", () => {
   });
 
   test("renders the unread bell when the environment is marked unread", () => {
-    useUIStore.setState({ unreadEnvironmentIds: ["env-1"] });
-
-    const { container } = renderItem(makeEnvironment({ id: "env-1" }));
+    // Unread is a field on the environment now, so the badge follows the
+    // backend record rather than this window's own list.
+    const { container } = renderItem(makeEnvironment({ id: "env-1", hasUnreadWork: true }));
 
     expect(container.querySelector('[aria-label="New completed activity"]')).not.toBeNull();
   });
 
   test("only marks the matching environment unread, not its siblings", () => {
-    useUIStore.setState({ unreadEnvironmentIds: ["env-other"] });
-
-    const { container } = renderItem(makeEnvironment({ id: "env-1" }));
+    const { container } = renderItem(makeEnvironment({ id: "env-1", hasUnreadWork: false }));
 
     expect(container.querySelector('[aria-label="New completed activity"]')).toBeNull();
   });
 
   test("shows the unread bell for local environments too (independent of container status)", () => {
-    useUIStore.setState({ unreadEnvironmentIds: ["env-1"] });
-
     const { container } = renderItem(
       makeEnvironment({
         id: "env-1",
+        hasUnreadWork: true,
         environmentType: "local",
         containerId: null,
         status: "stopped",

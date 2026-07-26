@@ -346,10 +346,17 @@ export function useGlobalActivityMonitor(): void {
   }, []);
 
   const markCompleted = useCallback((environmentId: string) => {
-    const uiStore = useUIStore.getState();
-    if (uiStore.selectedEnvironmentId !== environmentId) {
-      uiStore.markEnvironmentUnread(environmentId);
-    }
+    // A client with the environment open has, by definition, seen the work, so
+    // it stays read. Any other client learns of the badge through the backend
+    // change feed rather than having to have witnessed the completion itself.
+    if (useUIStore.getState().selectedEnvironmentId === environmentId) return;
+    useEnvironmentStore.getState().updateEnvironment(environmentId, { hasUnreadWork: true });
+    void backend.setEnvironmentUnread(environmentId, true).catch((error) => {
+      console.warn(
+        `[GlobalActivityMonitor] Failed to record unread work for ${environmentId}:`,
+        error,
+      );
+    });
   }, []);
 
   // Persist activity independently of whichever sidebar/chat is mounted. The

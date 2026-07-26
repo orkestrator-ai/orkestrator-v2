@@ -2948,6 +2948,11 @@ async function deleteEnvironment(
       }
       await storage.removeSessionsByEnvironment(environmentId).catch(() => undefined);
       await storage.deleteLoopedReviewWorkflowsByEnvironment(environmentId);
+      // A pipeline whose environment is gone can never advance again; leaving it
+      // behind would resurrect a dead build on the next client that hydrates.
+      await storage.deleteBuildPipelinesByEnvironment(environmentId).catch(() => undefined);
+      // Queued prompts for a deleted environment can never be dispatched.
+      await storage.deletePromptQueuesByEnvironment(environmentId).catch(() => undefined);
       await storage.removeEnvironment(environmentId);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);
       cleanupEnvironmentSetupState(environmentId);
@@ -4683,6 +4688,57 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   );
   register("delete_looped_review_workflow", ({ workflowId }, { storage }) =>
     storage.deleteLoopedReviewWorkflow(asString(workflowId, "workflowId")),
+  );
+
+  register("get_build_pipeline", ({ pipelineId }, { storage }) =>
+    storage.getBuildPipeline(asString(pipelineId, "pipelineId")),
+  );
+  register("list_build_pipelines", ({ projectId }, { storage }) =>
+    storage.listBuildPipelines(asString(projectId, "projectId")),
+  );
+  register(
+    "save_build_pipeline",
+    ({ pipelineId, projectId, environmentId, version, snapshot, expectedRevision }, { storage }) =>
+      storage.saveBuildPipeline(
+        asString(pipelineId, "pipelineId"),
+        asString(projectId, "projectId"),
+        // A pipeline is stored before its environment exists, so this is the one
+        // identifier here that is legitimately blank.
+        typeof environmentId === "string" ? environmentId : "",
+        asNumber(version, "version"),
+        snapshot,
+        expectedRevision === undefined
+          ? undefined
+          : asNumber(expectedRevision, "expectedRevision"),
+      ),
+  );
+  register("delete_build_pipeline", ({ pipelineId }, { storage }) =>
+    storage.deleteBuildPipeline(asString(pipelineId, "pipelineId")),
+  );
+
+  register("set_environment_unread", async ({ environmentId, unread }, { storage }) =>
+    storage.updateEnvironment(asString(environmentId, "environmentId"), {
+      hasUnreadWork: asBoolean(unread),
+    }),
+  );
+
+  register("get_prompt_queue", ({ queueKey }, { storage }) =>
+    storage.getPromptQueue(asString(queueKey, "queueKey")),
+  );
+  register("list_prompt_queues", ({ environmentId }, { storage }) =>
+    storage.listPromptQueues(asString(environmentId, "environmentId")),
+  );
+  register(
+    "save_prompt_queue",
+    ({ queueKey, environmentId, messages, expectedRevision }, { storage }) =>
+      storage.savePromptQueue(
+        asString(queueKey, "queueKey"),
+        asString(environmentId, "environmentId"),
+        Array.isArray(messages) ? messages : [],
+        expectedRevision === undefined
+          ? undefined
+          : asNumber(expectedRevision, "expectedRevision"),
+      ),
   );
 
   register("create_terminal_session", async ({ containerId, cols, rows, user, trackEnvironmentActivity }, { storage }) => {

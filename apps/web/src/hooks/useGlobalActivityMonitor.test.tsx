@@ -87,10 +87,7 @@ function resetStores() {
     pendingPermissions: new Map(),
     messageQueue: new Map(),
   });
-  useUIStore.setState({
-    selectedEnvironmentId: null,
-    unreadEnvironmentIds: [],
-  });
+  useUIStore.setState({ selectedEnvironmentId: null });
 }
 
 function resetBackendMocks() {
@@ -103,6 +100,16 @@ function resetBackendMocks() {
   });
   mockInvoke.mockClear();
   mockInvoke.mockImplementation(() => Promise.resolve());
+}
+
+/**
+ * Environments carry their own unread flag now, so the badge is read back from
+ * the environment store rather than from a per-window list.
+ */
+function unreadEnvironmentIds(): string[] {
+  return useEnvironmentStore.getState().environments
+    .filter((environment) => environment.hasUnreadWork)
+    .map((environment) => environment.id);
 }
 
 function makeEnvironment(id: string, containerId = `container-${id}`): Environment {
@@ -196,7 +203,7 @@ describe("useGlobalActivityMonitor tmux activity", () => {
       useClaudeTmuxStore.getState().setBusy(stateKey, false);
     });
     await waitFor(() => {
-      expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-tmux"]);
+      expect(unreadEnvironmentIds()).toEqual(["env-tmux"]);
     });
   });
 
@@ -225,7 +232,7 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     await waitFor(() => {
       expect(useAgentActivityStore.getState().getContainerState(environment.id)).toBe("idle");
     });
-    expect(useUIStore.getState().unreadEnvironmentIds).toEqual([]);
+    expect(unreadEnvironmentIds()).toEqual([]);
   });
 
   test("records a second tmux tab while the environment remains working", async () => {
@@ -593,7 +600,7 @@ describe("useGlobalActivityMonitor terminal activity", () => {
     });
     expect(useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt)
       .toBe("2026-07-23T10:00:00.000Z");
-    expect(useUIStore.getState().unreadEnvironmentIds).toEqual([environment.id]);
+    expect(unreadEnvironmentIds()).toEqual([environment.id]);
 
     act(() => {
       eventCallbacks.get("environment-activity-recorded")?.({
@@ -618,7 +625,7 @@ describe("useGlobalActivityMonitor terminal activity", () => {
       lastActivityAt: "2026-07-23T10:00:00.000Z",
     };
     useEnvironmentStore.setState({ environments: [environment] });
-    useUIStore.setState({ selectedEnvironmentId: null, unreadEnvironmentIds: [] });
+    useUIStore.setState({ selectedEnvironmentId: null });
     render(<MonitorHarness />);
 
     await waitFor(() => {
@@ -644,7 +651,7 @@ describe("useGlobalActivityMonitor terminal activity", () => {
       });
     });
 
-    expect(useUIStore.getState().unreadEnvironmentIds).toEqual([]);
+    expect(unreadEnvironmentIds()).toEqual([]);
     expect(useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt)
       .toBe("2026-07-23T10:00:00.000Z");
   });
@@ -1242,7 +1249,7 @@ describe("useGlobalActivityMonitor native agent activity", () => {
         expect(useAgentActivityStore.getState().getContainerState(environmentId))
           .toBe("working");
       }
-      expect(new Set(useUIStore.getState().unreadEnvironmentIds)).toEqual(
+      expect(new Set(unreadEnvironmentIds())).toEqual(
         new Set(["env-claude", "env-opencode", "env-codex"]),
       );
     });

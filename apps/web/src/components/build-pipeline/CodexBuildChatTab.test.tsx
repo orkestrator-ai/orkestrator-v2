@@ -253,6 +253,7 @@ function seedPipeline(phase: "building" | "paused", sessionStatus: "running" | "
           currentSessionIndex: 0,
           iteration: 0,
           maxIterations: 3,
+          backendRevision: 0,
           createdAt: "2026-04-15T00:00:00.000Z",
           taskTitle: "Test task",
           taskSnapshot: {
@@ -286,6 +287,7 @@ function seedStartingPipeline() {
           currentSessionIndex: -1,
           iteration: 0,
           maxIterations: 3,
+          backendRevision: 0,
           createdAt: "2026-04-15T00:00:00.000Z",
           taskTitle: "Test task",
           taskSnapshot: {
@@ -329,6 +331,7 @@ function seedReviewPipeline() {
           currentSessionIndex: 0,
           iteration: 0,
           maxIterations: 3,
+          backendRevision: 0,
           createdAt: "2026-04-15T00:00:00.000Z",
           taskTitle: "Test task",
           taskSnapshot: {
@@ -385,6 +388,7 @@ function seedVerifyPipeline(
           currentSessionIndex: 0,
           iteration,
           maxIterations,
+          backendRevision: 0,
           createdAt: "2026-04-15T00:00:00.000Z",
           taskTitle: "Test task",
           taskSnapshot: {
@@ -457,6 +461,7 @@ function seedPrPipeline() {
           currentSessionIndex: 0,
           iteration: 0,
           maxIterations: 3,
+          backendRevision: 0,
           createdAt: "2026-04-15T00:00:00.000Z",
           taskTitle: "Test task",
           taskSnapshot: {
@@ -2163,6 +2168,7 @@ describe("CodexBuildChatTab", () => {
             currentSessionIndex: 0,
             iteration: 0,
             maxIterations: 3,
+            backendRevision: 0,
             createdAt: "2026-04-15T00:00:00.000Z",
             taskTitle: "Test task",
             taskSnapshot: {
@@ -2982,6 +2988,7 @@ describe("CodexBuildChatTab", () => {
             currentSessionIndex: 0,
             iteration: 0,
             maxIterations: 3,
+            backendRevision: 0,
             createdAt: "2026-04-15T00:00:00.000Z",
             taskTitle: "Test task",
             taskSnapshot: {

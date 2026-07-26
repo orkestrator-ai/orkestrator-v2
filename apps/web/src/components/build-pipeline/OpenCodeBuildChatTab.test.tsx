@@ -181,6 +181,7 @@ function seedPipeline(phase: "building" | "paused", sessionStatus: "running" | "
           currentSessionIndex: 0,
           iteration: 0,
           maxIterations: 3,
+          backendRevision: 0,
           createdAt: "2026-04-15T00:00:00.000Z",
           taskTitle: "Test task",
           taskSnapshot: {
@@ -218,6 +219,7 @@ function seedVerifyPipeline(
       phase: "verifying",
       iteration,
       maxIterations: options.maxIterations ?? 3,
+      backendRevision: 0,
       sessions: [{ ...pipeline.sessions[0]!, phase: "verify", iteration, label: "Verification Session" }],
     });
     return { pipelines };
@@ -268,6 +270,7 @@ function seedPendingPipeline() {
           currentSessionIndex: -1,
           iteration: 0,
           maxIterations: 3,
+          backendRevision: 0,
           createdAt: "2026-04-15T00:00:00.000Z",
           taskTitle: "Test task",
           taskSnapshot: {

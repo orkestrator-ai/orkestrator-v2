@@ -28,10 +28,21 @@ import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { getBackgroundProcessingEnvironments } from "@/lib/background-pipelines";
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
+import { startResourceSync } from "@/lib/resource-sync";
+import { startStoreResourceSync } from "@/lib/store-resource-sync";
 import {
   hydrateLoopedReviewWorkflowsForEnvironment,
   startLoopedReviewPersistence,
 } from "@/lib/looped-review-persistence";
+import {
+  hydrateBuildPipelinesForProject,
+  startBuildPipelinePersistence,
+} from "@/lib/build-pipeline-persistence";
+import {
+  hydratePromptQueuesForEnvironment,
+  startPromptQueuePersistence,
+} from "@/lib/prompt-queue-persistence";
+import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { LoopedReviewSupervisor } from "@/components/review/LoopedReviewSupervisor";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
@@ -40,6 +51,7 @@ import { ErrorDetailsDialog } from "@/components/errors";
 import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpencodeCli, checkGithubCli, getAvailableAiCli, getConfig, syncAllEnvironmentsWithDocker } from "@/lib/backend";
 import { usePrMonitorService } from "@/hooks/usePrMonitorService";
 import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
+import { useUnreadEnvironmentSync } from "@/hooks/useUnreadEnvironmentSync";
 import { useEnvironments } from "@/hooks";
 import {
   AlertDialog,
@@ -71,8 +83,34 @@ function App() {
   usePrMonitorService();
   // Monitor agent activity for ALL environments (regardless of selected project)
   useGlobalActivityMonitor();
+  // Opening an environment clears its unread badge for every client.
+  useUnreadEnvironmentSync();
+  // The backend change feed must be attached before the store bindings that
+  // consume it, and both before anything that reads a backend snapshot.
+  useEffect(() => startResourceSync(), []);
+  useEffect(() => startStoreResourceSync(), []);
   useEffect(() => startPaneLayoutPersistence(), []);
   useEffect(() => startLoopedReviewPersistence(), []);
+  useEffect(() => startBuildPipelinePersistence(), []);
+  // One stable source set for the lifetime of the app: the mirror keys its
+  // revision bookkeeping off these, so rebuilding them would drop it.
+  const promptQueueSources = useMemo(() => createPromptQueueSources(), []);
+  useEffect(
+    () => startPromptQueuePersistence(promptQueueSources),
+    [promptQueueSources],
+  );
+  useEffect(() => {
+    for (const environment of environments) {
+      void hydratePromptQueuesForEnvironment(environment.id, promptQueueSources)
+        .catch((error) => {
+          console.warn(
+            `[App] Failed to restore prompt queues for ${environment.id}:`,
+            error,
+          );
+        });
+    }
+  }, [environments, promptQueueSources]);
+
   useEffect(() => {
     for (const environment of environments) {
       void hydrateLoopedReviewWorkflowsForEnvironment(environment.id).catch((error) => {
@@ -83,6 +121,26 @@ function App() {
       });
     }
   }, [environments]);
+
+  // Pipelines are stored per project, so restore once per distinct project
+  // rather than once per environment: a pipeline still in "creating-environment"
+  // has no environment to key off yet, and that is exactly the state a crash
+  // used to strand.
+  const pipelineProjectIds = useMemo(
+    () => [...new Set(environments.map((environment) => environment.projectId))].sort().join(","),
+    [environments],
+  );
+  useEffect(() => {
+    if (!pipelineProjectIds) return;
+    for (const projectId of pipelineProjectIds.split(",")) {
+      void hydrateBuildPipelinesForProject(projectId).catch((error) => {
+        console.warn(
+          `[App] Failed to restore build pipelines for ${projectId}:`,
+          error,
+        );
+      });
+    }
+  }, [pipelineProjectIds]);
   const [claudeCliAvailable, setClaudeCliAvailable] = useState<boolean | null>(null);
   const [claudeConfigAvailable, setClaudeConfigAvailable] = useState<boolean | null>(null);
   const [opencodeCliAvailable, setOpencodeCliAvailable] = useState<boolean | null>(null);

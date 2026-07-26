@@ -8,6 +8,7 @@ import {
   useProjectStore,
 } from "@/stores/projectStore";
 import * as backend from "@/lib/backend";
+import { onResourceChanged } from "@/lib/resource-sync";
 
 interface ProjectLoad {
   mutationVersion: number;
@@ -74,6 +75,14 @@ export function useProjects() {
   useEffect(() => {
     void loadProjects();
   }, [loadProjects]);
+
+  // Converge when another client adds, renames, reorders or removes a project.
+  // The snapshot cache is keyed by mutation version, so it must be invalidated
+  // first or the shared in-flight read would replay stale data.
+  useEffect(() => onResourceChanged("project", () => {
+    invalidateProjectSnapshots();
+    void loadProjects();
+  }), [loadProjects]);
 
   const addProject = useCallback(
     async (gitUrl: string, localPath?: string) => {

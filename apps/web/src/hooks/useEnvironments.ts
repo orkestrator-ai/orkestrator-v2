@@ -2,7 +2,7 @@
 import { useCallback, useEffect } from "react";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
-import { createSessionKey, useBuildPipelineStore, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore, useUIStore } from "@/stores";
+import { createSessionKey, useBuildPipelineStore, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore } from "@/stores";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import * as backend from "@/lib/backend";
@@ -380,9 +380,8 @@ export function useEnvironments(
           }
         }
         removeEnvironmentFromStore(environmentId);
-        // Prune any persisted unread-activity marker so it does not leak for a
-        // deleted environment (unreadEnvironmentIds is persisted to localStorage).
-        useUIStore.getState().clearEnvironmentUnread(environmentId);
+        // The unread marker lives on the environment record, so deleting the
+        // environment takes it with it — nothing to prune here any more.
         toast.success("Environment deleted");
       } catch (err) {
         const message = getErrorMessage(err, "Failed to delete environment");

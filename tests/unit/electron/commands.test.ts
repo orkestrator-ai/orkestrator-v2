@@ -342,6 +342,8 @@ function createContext(
       }),
       removeSessionsByEnvironment: mock(async () => undefined),
       deleteLoopedReviewWorkflowsByEnvironment: mock(async () => undefined),
+      deleteBuildPipelinesByEnvironment: mock(async () => [] as string[]),
+      deletePromptQueuesByEnvironment: mock(async () => [] as string[]),
       deletePaneLayout: mock(async () => undefined),
       getProject: mock(async (projectId: string) => {
         if (options.project) return options.project.id === projectId ? options.project : null;

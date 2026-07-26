@@ -13,6 +13,7 @@ import {
   MAX_PENDING_EVENTS_PER_TURN,
   MAX_PENDING_TURNS,
   MAX_RECOVERED_CONTEXT_CHARS,
+  messageSnapshotIntervalMs,
   type RuntimeSseEvent,
 } from "./app-server-runtime.js";
 import { AppServerEngine } from "./engine/app-server-engine.js";
@@ -33,6 +34,12 @@ import type { EngineEvent } from "./engine/types.js";
  * ever arrives.
  */
 const NO_RESPONSE = Symbol("no-response");
+
+test("large message snapshots use a progressively lower streaming cadence", () => {
+  expect(messageSnapshotIntervalMs(255 * 1024)).toBe(100);
+  expect(messageSnapshotIntervalMs(256 * 1024)).toBe(250);
+  expect(messageSnapshotIntervalMs(1024 * 1024)).toBe(500);
+});
 
 /** Scripted app-server child, driven by a per-method handler map. */
 class ScriptedChild extends EventEmitter {
@@ -1237,6 +1244,16 @@ describe("session lifecycle", () => {
     expect(messages[0]!.content).toBe("hello");
     // Streaming text is visible before completion.
     expect(messages[1]!.content).toBe("Hi there");
+
+    const revisionBeforeRead = h.runtime.getStatus(sessionId)!.messageRevision;
+    const messageEventsBeforeRead = h.events.filter(
+      (event) => event.type === "message.updated",
+    ).length;
+    await h.runtime.getMessages(sessionId);
+    expect(h.runtime.getStatus(sessionId)!.messageRevision).toBe(revisionBeforeRead);
+    expect(
+      h.events.filter((event) => event.type === "message.updated").length,
+    ).toBe(messageEventsBeforeRead);
 
     child.notify("item/completed", {
       threadId: "thread-1",

@@ -22,6 +22,26 @@ describe("UpdateCoalescer", () => {
     coalescer.stop();
   });
 
+  test("reads a dynamic interval when scheduling the next snapshot", async () => {
+    let intervalMs = 0;
+    let published = 0;
+    const coalescer = new UpdateCoalescer({
+      intervalMs: () => intervalMs,
+      publish: () => {
+        published += 1;
+      },
+    });
+
+    await coalescer.flushNow();
+    expect(published).toBe(1);
+
+    intervalMs = 50;
+    coalescer.schedule();
+    await tick();
+    expect(published).toBe(1);
+    coalescer.stop();
+  });
+
   test("a terminal flush waits for the follow-up snapshot after an in-flight publish", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {

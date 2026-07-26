@@ -126,6 +126,8 @@ export interface AppServerRuntimeOptions {
 interface ThreadRuntimeState {
   render: TurnRenderState;
   coalescer: UpdateCoalescer;
+  /** Size proxy for adapting the cadence of whole-message snapshots. */
+  lastPublishedContentChars: number;
   /** Assistant message currently being streamed into. */
   assistantMessageId?: string;
   /**
@@ -142,6 +144,18 @@ interface ThreadRuntimeState {
 /** Bounds the pre-registration buffer so a misbehaving peer cannot grow it. */
 export const MAX_PENDING_EVENTS_PER_TURN = 2_000;
 export const MAX_PENDING_TURNS = 8;
+const LARGE_MESSAGE_CHARS = 256 * 1024;
+const VERY_LARGE_MESSAGE_CHARS = 1024 * 1024;
+
+/**
+ * Large snapshots are expensive to render, serialize and reconcile in React.
+ * Slow only scheduled streaming frames; terminal flushes still publish at once.
+ */
+export function messageSnapshotIntervalMs(contentChars: number): number {
+  if (contentChars >= VERY_LARGE_MESSAGE_CHARS) return 500;
+  if (contentChars >= LARGE_MESSAGE_CHARS) return 250;
+  return 100;
+}
 
 /**
  * How long a thread may sit untouched before it is detached.
@@ -690,7 +704,10 @@ export class AppServerRuntime {
                 parts: [],
                 createdAt: new Date(this.now()).toISOString(),
               };
-        if (lastMessage !== assistantMessage) context.messages.push(assistantMessage);
+        if (lastMessage !== assistantMessage) {
+          context.messages.push(assistantMessage);
+          this.bumpMessageRevision(context);
+        }
 
         this.registry.setPhase(context, "recovering");
         this.emitStatus(context);
@@ -841,6 +858,7 @@ export class AppServerRuntime {
       if (context.messages.length === 0) {
         const hydrated = await hydrateMessagesFromPersistedSession(threadId);
         context.messages = hydrated.messages;
+        if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
         if (!session.title) {
           session.title = thread.name ?? hydrated.title;
           session.titleSource = thread.name ? "codex" : hydrated.titleSource;
@@ -921,8 +939,14 @@ export class AppServerRuntime {
       state = {
         render: createTurnRenderState(),
         pendingEvents: new Map(),
+        lastPublishedContentChars: 0,
         coalescer: new UpdateCoalescer({
-          intervalMs: this.options.coalesceIntervalMs,
+          intervalMs:
+            this.options.coalesceIntervalMs
+            ?? (() =>
+              messageSnapshotIntervalMs(
+                this.threadState.get(threadId)?.lastPublishedContentChars ?? 0,
+              )),
           publish: () => this.publishAssistantMessage(threadId),
           onError: (error) =>
             console.error("[codex-bridge] Failed to publish message update:", error),
@@ -1336,6 +1360,8 @@ export class AppServerRuntime {
     });
     message.parts = rendered.parts;
     message.content = rendered.content;
+    state.lastPublishedContentChars = rendered.content.length;
+    this.bumpMessageRevision(context);
 
     for (const sessionId of context.bridgeSessionIds) {
       this.options.emit({ type: "message.updated", sessionId, data: { message } });
@@ -1440,6 +1466,7 @@ export class AppServerRuntime {
     if (context.messages.length === 0) {
       const hydrated = await hydrateMessagesFromPersistedSession(threadId);
       context.messages = hydrated.messages;
+      if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
       session.title = thread.name ?? hydrated.title;
       session.titleSource = thread.name ? "codex" : hydrated.titleSource;
     } else {
@@ -1531,9 +1558,6 @@ export class AppServerRuntime {
     }
     if (!context) return [...session.localMessages];
 
-    // Rehydrate the streaming message so a tab that reconnects mid-turn catches
-    // up without waiting for the next delta.
-    if (context.activeTurn) await this.publishAssistantMessage(context.threadId);
     return this.messagesForSession(session, context);
   }
 
@@ -1548,6 +1572,7 @@ export class AppServerRuntime {
     structuredOutputRequestId?: string;
     structuredOutput?: StructuredOutputResult;
     engineGeneration: number;
+    messageRevision: number;
   } | null {
     const session = this.registry.getSession(sessionId);
     if (!session) return null;
@@ -1573,6 +1598,7 @@ export class AppServerRuntime {
       structuredOutputRequestId: session.structuredOutputRequestId,
       structuredOutput: session.structuredOutput,
       engineGeneration: this.options.engine.info().generation,
+      messageRevision: session.messageRevision,
     };
   }
 
@@ -1916,6 +1942,7 @@ export class AppServerRuntime {
       ...(isPlanReview ? { planReview: true } : {}),
     };
     context.messages.push(assistantMessage);
+    this.bumpMessageRevision(context);
 
     this.applyPromptTitle(session, context, input.prompt);
     for (const id of context.bridgeSessionIds) {
@@ -2240,6 +2267,14 @@ export class AppServerRuntime {
     for (const sessionId of context.bridgeSessionIds) {
       const session = this.registry.getSession(sessionId);
       if (session) session.recoveredContextPending = false;
+    }
+  }
+
+  /** Advances every bridge view of the canonical thread transcript together. */
+  private bumpMessageRevision(context: ThreadContext): void {
+    for (const sessionId of context.bridgeSessionIds) {
+      const session = this.registry.getSession(sessionId);
+      if (session) session.messageRevision += 1;
     }
   }
 

@@ -167,6 +167,37 @@ describe("/event/subscribe", () => {
     expect(replayed.some((frame) => frame.data.sessionId === "gap")).toBe(false);
   });
 
+  test("session filtering replaces unrelated payloads with cursor-only frames", async () => {
+    const frames = await collect(
+      "?sessionId=target",
+      () => {
+        __testing.emitForTesting({
+          type: "message.updated",
+          sessionId: "other",
+          data: { message: { content: "large unrelated payload" } },
+        });
+        __testing.emitForTesting({
+          type: "message.updated",
+          sessionId: "target",
+          data: { message: { content: "wanted" } },
+        });
+      },
+      { expected: 2 },
+    );
+
+    const cursor = frames.find((frame) => frame.event === "bridge.cursor");
+    expect(cursor).toBeDefined();
+    expect(cursor!.data).toEqual({});
+    expect(frames.some((frame) => frame.data.sessionId === "other")).toBe(false);
+    expect(
+      frames.some(
+        (frame) =>
+          frame.event === "message.updated"
+          && frame.data.sessionId === "target",
+      ),
+    ).toBe(true);
+  });
+
   test("a caught-up cursor replays nothing", async () => {
     const cursor = __testing.eventRingForTesting().latestRevision;
     const frames = await collect(`?since=${cursor}`, () => undefined);

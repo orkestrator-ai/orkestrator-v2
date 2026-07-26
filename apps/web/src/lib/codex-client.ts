@@ -116,6 +116,7 @@ interface CodexSessionStatusResponse {
   turnId?: string;
   requestId?: string;
   engineGeneration?: number;
+  messageRevision?: number;
   structuredOutputRequestId?: string;
   structuredOutput?: StructuredOutputResult;
 }
@@ -156,6 +157,8 @@ export interface CodexSessionStatus {
   /** The prompt request id this turn is executing, for reconnect reconciliation. */
   requestId?: string;
   engineGeneration?: number;
+  /** Monotonic transcript revision used to avoid unchanged full-message reads. */
+  messageRevision?: number;
   structuredOutputRequestId?: string;
   structuredOutput?: StructuredOutputResult;
 }
@@ -176,6 +179,7 @@ export interface CodexEvent {
   type:
     | "connected"
     | "keepalive"
+    | "bridge.cursor"
     | "session.updated"
     | "session.idle"
     | "session.error"
@@ -668,6 +672,11 @@ export async function lookupSessionStatus(
         ...(typeof data.engineGeneration === "number"
           ? { engineGeneration: data.engineGeneration }
           : {}),
+        ...(typeof data.messageRevision === "number"
+          && Number.isSafeInteger(data.messageRevision)
+          && data.messageRevision >= 0
+          ? { messageRevision: data.messageRevision }
+          : {}),
         ...(typeof data.structuredOutputRequestId === "string"
           ? { structuredOutputRequestId: data.structuredOutputRequestId }
           : {}),
@@ -965,11 +974,16 @@ export async function deleteSession(
  * replay the gap instead of the client refetching everything; if the gap is longer
  * than the bridge retained, it answers with `session.reconcile-required` and the
  * caller must resync. Omit it for a fresh subscription.
+ *
+ * `sessionId` asks the bridge to replace other sessions' large payloads with
+ * lightweight cursor-only frames. The cursor remains bridge-wide, so replay
+ * semantics are unchanged.
  */
 export function subscribeToEvents(
   client: CodexClient,
   signal?: AbortSignal,
   since?: number,
+  sessionId?: string,
 ): AsyncIterable<CodexEvent> {
   return {
     [Symbol.asyncIterator](): AsyncIterator<CodexEvent> {
@@ -1027,11 +1041,15 @@ export function subscribeToEvents(
         if (since !== undefined && Number.isSafeInteger(since) && since >= 0) {
           url.searchParams.set("since", String(since));
         }
+        if (sessionId) {
+          url.searchParams.set("sessionId", sessionId);
+        }
 
         eventSource = new EventSource(url.toString());
         for (const eventType of [
           "connected",
           "keepalive",
+          "bridge.cursor",
           "session.updated",
           "session.idle",
           "session.error",

@@ -13,7 +13,13 @@ const mockCheckHealth = mock(async () => true);
 const mockCreateClient = mock(() => ({ baseUrl: "http://127.0.0.1:9999" }));
 const mockCreateSession = mock(async () => ({ sessionId: "review-session", title: "Review Session" }));
 const mockGetSessionMessages = mock(async (_client?: unknown, _sessionId?: string): Promise<any[]> => []);
-const mockGetSessionStatus = mock(async (): Promise<{ status: "idle" | "running" | "error"; title?: string; error?: string }> => ({ status: "running" }));
+const mockGetSessionStatus = mock(async (): Promise<{
+  status: "idle" | "running" | "error";
+  title?: string;
+  error?: string;
+  messageRevision?: number;
+  engineGeneration?: number;
+}> => ({ status: "running" }));
 /**
  * Returns the historical boolean by default, because most of this suite only
  * cares whether a prompt was sent. Tests that exercise ambiguity resolve the
@@ -634,7 +640,7 @@ describe("CodexBuildChatTab", () => {
 
     mockCreateSession.mockImplementation(async () => ({ sessionId: "review-session", title: "Review Session" }));
     mockGetSessionMessages.mockImplementation(async () => []);
-    mockGetSessionStatus.mockImplementation(async (): Promise<{ status: "idle" | "running" | "error"; title?: string; error?: string }> => ({ status: "running" }));
+    mockGetSessionStatus.mockImplementation(async () => ({ status: "running" }));
     mockSendPrompt.mockImplementation(async () => true);
     mockAbortSession.mockImplementation(async () => true);
     mockDetectPr.mockImplementation(async () => null);
@@ -1169,6 +1175,35 @@ describe("CodexBuildChatTab", () => {
 
     expect(mockGetSessionStatus.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toBe(firstMessages);
+  });
+
+  test("polling skips unchanged transcript reads when the bridge reports a revision", async () => {
+    seedPipeline("building", "running");
+    seedCodexStore(true);
+    mockGetSessionStatus.mockResolvedValue({
+      status: "running",
+      messageRevision: 7,
+      engineGeneration: 2,
+    });
+    mockGetSessionMessages.mockResolvedValue([{
+      id: "revision-message",
+      role: "assistant",
+      content: "Stable result",
+      parts: [{ type: "text", content: "Stable result" }],
+      createdAt: "2026-04-15T00:00:00.000Z",
+    }]);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(mockGetSessionMessages).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1050));
+    });
+
+    expect(mockGetSessionStatus.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(mockGetSessionMessages).toHaveBeenCalledTimes(1);
   });
 
   test("polling records bridge errors and stops the active session", async () => {

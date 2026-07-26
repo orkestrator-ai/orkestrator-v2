@@ -569,6 +569,7 @@ describe("codex-client getSessionStatus", () => {
           turnId: "turn-2",
           requestId: "req-3",
           engineGeneration: 4,
+          messageRevision: 12,
         }),
         { status: 200 },
       ),
@@ -583,6 +584,7 @@ describe("codex-client getSessionStatus", () => {
       turnId: "turn-2",
       requestId: "req-3",
       engineGeneration: 4,
+      messageRevision: 12,
     });
   });
 
@@ -1171,6 +1173,13 @@ describe("codex-client event cursor", () => {
     subscribeToEvents(client, undefined, 0)[Symbol.asyncIterator]().next();
     // Cursor 0 is meaningful ("I have nothing yet"), so it must be sent.
     expect(instances[1]!.url).toContain("since=0");
+  });
+
+  test("requests payload filtering for one session without changing the cursor", () => {
+    subscribeToEvents(client, undefined, 42, "session/a b")[Symbol.asyncIterator]().next();
+    const url = new URL(instances[0]!.url);
+    expect(url.searchParams.get("since")).toBe("42");
+    expect(url.searchParams.get("sessionId")).toBe("session/a b");
   });
 
   test("ignores a nonsensical cursor rather than sending it", () => {

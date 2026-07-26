@@ -264,50 +264,68 @@ export function CodexChatTab({
   const setConfig = useConfigStore((state) => state.setConfig);
   const persistedPreferencesRef = useRef(getPersistedCodexPreferences(config));
 
-  const {
-    models,
-    setModels,
-    setSlashCommands,
-    setServerStatus,
-    setClient,
-    setSession,
-    addMessage,
-    removeMessage,
-    setMessages,
-    upsertMessage,
-    setSessionLoading,
-    setSessionError,
-    setSessionTitle,
-    setSessionPhase,
-    setPendingApprovals,
-    addPendingApproval,
-    removePendingApproval,
-    setSelectedModel,
-    setSelectedMode,
-    setSelectedReasoningEffort,
-    setFastMode,
-    addToQueue,
-    removeFromQueue,
-    clients: clientsMap,
-    sessions: sessionsMap,
-    sessionPhase: sessionPhaseMap,
-    pendingApprovals: pendingApprovalsMap,
-    selectedModel: selectedModelMap,
-    selectedMode: selectedModeMap,
-    selectedReasoningEffort: selectedReasoningEffortMap,
-    slashCommands: slashCommandsMap,
-  } = useCodexStore();
+  const models = useCodexStore((state) => state.models);
+  const setModels = useCodexStore((state) => state.setModels);
+  const setSlashCommands = useCodexStore((state) => state.setSlashCommands);
+  const setServerStatus = useCodexStore((state) => state.setServerStatus);
+  const setClient = useCodexStore((state) => state.setClient);
+  const setSession = useCodexStore((state) => state.setSession);
+  const addMessage = useCodexStore((state) => state.addMessage);
+  const removeMessage = useCodexStore((state) => state.removeMessage);
+  const setMessages = useCodexStore((state) => state.setMessages);
+  const upsertMessage = useCodexStore((state) => state.upsertMessage);
+  const setSessionLoading = useCodexStore((state) => state.setSessionLoading);
+  const setSessionError = useCodexStore((state) => state.setSessionError);
+  const setSessionTitle = useCodexStore((state) => state.setSessionTitle);
+  const setSessionPhase = useCodexStore((state) => state.setSessionPhase);
+  const setPendingApprovals = useCodexStore((state) => state.setPendingApprovals);
+  const addPendingApproval = useCodexStore((state) => state.addPendingApproval);
+  const removePendingApproval = useCodexStore((state) => state.removePendingApproval);
+  const setSelectedModel = useCodexStore((state) => state.setSelectedModel);
+  const setSelectedMode = useCodexStore((state) => state.setSelectedMode);
+  const setSelectedReasoningEffort = useCodexStore((state) => state.setSelectedReasoningEffort);
+  const setFastMode = useCodexStore((state) => state.setFastMode);
+  const addToQueue = useCodexStore((state) => state.addToQueue);
+  const removeFromQueue = useCodexStore((state) => state.removeFromQueue);
+  const client = useCodexStore(
+    useCallback((state) => state.clients.get(environmentId), [environmentId]),
+  );
+  const session = useCodexStore(
+    useCallback((state) => state.sessions.get(sessionKey), [sessionKey]),
+  );
+  const sessionPhase = useCodexStore(
+    useCallback((state) => state.sessionPhase.get(sessionKey), [sessionKey]),
+  );
+  const storedPendingApprovals = useCodexStore(
+    useCallback((state) => state.pendingApprovals.get(sessionKey), [sessionKey]),
+  );
+  const pendingApprovals = storedPendingApprovals ?? [];
+  const selectedModel = useCodexStore(
+    useCallback(
+      (state) => state.selectedModel.get(sessionKey) ?? DEFAULT_CODEX_MODEL,
+      [sessionKey],
+    ),
+  );
+  const selectedMode = useCodexStore(
+    useCallback(
+      (state) => state.selectedMode.get(sessionKey) ?? DEFAULT_CODEX_MODE,
+      [sessionKey],
+    ),
+  );
+  const selectedReasoningEffort = useCodexStore(
+    useCallback(
+      (state) =>
+        state.selectedReasoningEffort.get(sessionKey) ?? DEFAULT_REASONING_EFFORT,
+      [sessionKey],
+    ),
+  );
+  const storedSlashCommands = useCodexStore(
+    useCallback((state) => state.slashCommands.get(environmentId), [environmentId]),
+  );
+  const slashCommands = storedSlashCommands ?? [];
 
   const { clearTabInitialPrompt, updateTabNativeSessionId } = usePaneLayoutStore();
 
-  const client = useMemo(
-    () => clientsMap.get(environmentId),
-    [clientsMap, environmentId],
-  );
-  const pendingApprovals = useMemo(
-    () => pendingApprovalsMap.get(sessionKey) ?? [],
-    [pendingApprovalsMap, sessionKey],
-  );
   // Setup completion awareness - block initialization until setup scripts finish
   const setupScriptsRunning = useEnvironmentStore(
     (state) => state.setupScriptsRunning.has(environmentId)
@@ -329,32 +347,12 @@ export function CodexChatTab({
     workspaceReady,
   });
 
-  const session = useMemo(
-    () => sessionsMap.get(sessionKey),
-    [sessionsMap, sessionKey],
-  );
-  /** Undefined until the bridge reports a phase for this session. */
-  const sessionPhase = useMemo(
-    () => sessionPhaseMap.get(sessionKey),
-    [sessionPhaseMap, sessionKey],
-  );
+  /** `sessionPhase` is undefined until the bridge reports one for this session. */
   const showAddressAll = Boolean(
     isReviewTab &&
       session &&
       !session.isLoading &&
       session.messages.length > 0,
-  );
-  const selectedModel = useMemo(
-    () => selectedModelMap.get(sessionKey) ?? DEFAULT_CODEX_MODEL,
-    [selectedModelMap, sessionKey],
-  );
-  const selectedMode = useMemo(
-    () => selectedModeMap.get(sessionKey) ?? DEFAULT_CODEX_MODE,
-    [selectedModeMap, sessionKey],
-  );
-  const selectedReasoningEffort = useMemo(
-    () => selectedReasoningEffortMap.get(sessionKey) ?? DEFAULT_REASONING_EFFORT,
-    [selectedReasoningEffortMap, sessionKey],
   );
   const fastModeEnabled = useCodexStore(
     useCallback((state) => state.fastMode.get(sessionKey) ?? false, [sessionKey]),
@@ -409,10 +407,6 @@ export function CodexChatTab({
       part.type === "text" && part.content.trim().length > 0
     ));
   }, [latestAssistantMessage]);
-  const slashCommands = useMemo(
-    () => slashCommandsMap.get(environmentId) ?? [],
-    [environmentId, slashCommandsMap],
-  );
   const queueLength = useCodexStore(
     useCallback(
       (state) => state.messageQueue.get(sessionKey)?.length ?? 0,
@@ -1721,6 +1715,7 @@ export function CodexChatTab({
             client,
             abortController.signal,
             cursor ?? undefined,
+            session.sessionId,
           )) {
             if (!event || typeof event.type !== "string") {
               console.warn("[CodexChatTab] Received malformed event, skipping");

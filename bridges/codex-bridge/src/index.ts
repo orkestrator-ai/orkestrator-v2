@@ -970,6 +970,7 @@ app.get("/event/subscribe", (c) => {
   // EventSource sends when the browser reconnects on its own. Accept both.
   const cursor =
     parseEventCursor(c.req.query("since")) ?? parseEventCursor(c.req.header("Last-Event-ID"));
+  const sessionFilter = c.req.query("sessionId")?.trim() || null;
 
   return streamSSE(c, async (stream) => {
     let open = true;
@@ -996,16 +997,28 @@ app.get("/event/subscribe", (c) => {
       { onOverflow: () => failSlowSubscriber("write backlog exceeded its cap") },
     );
 
-    const frameFor = (event: SseEvent, revision: number) => ({
-      event: event.type,
-      // The `id:` is what makes replay possible at all — it is the cursor the
-      // client echoes back on its next connection.
-      id: String(revision),
-      data: JSON.stringify({
-        sessionId: event.sessionId,
-        ...(event.data ?? {}),
-      }),
-    });
+    const frameFor = (event: SseEvent, revision: number) => {
+      // A tab only renders its own session. Preserve the bridge-wide cursor for
+      // unrelated events, but do not serialize and transmit their potentially
+      // megabyte-sized message snapshots to every other tab.
+      if (sessionFilter && event.sessionId !== sessionFilter) {
+        return {
+          event: "bridge.cursor",
+          id: String(revision),
+          data: "{}",
+        };
+      }
+      return {
+        event: event.type,
+        // The `id:` is what makes replay possible at all — it is the cursor the
+        // client echoes back on its next connection.
+        id: String(revision),
+        data: JSON.stringify({
+          sessionId: event.sessionId,
+          ...(event.data ?? {}),
+        }),
+      };
+    };
 
     /**
      * Registered *before* the replay is computed, buffering into an array.

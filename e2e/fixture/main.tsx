@@ -23,6 +23,23 @@ declare global {
   }
 }
 
+function assertFixtureArgs(
+  command: string,
+  actual: Record<string, unknown> | undefined,
+  expected: Record<string, unknown>,
+) {
+  const actualEntries = Object.entries(actual ?? {}).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  const expectedEntries = Object.entries(expected).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+
+  if (JSON.stringify(actualEntries) !== JSON.stringify(expectedEntries)) {
+    throw new Error(`Unexpected arguments for fixture command: ${command}`);
+  }
+}
+
 function CreateEnvironmentFixture() {
   const [open, setOpen] = useState(true);
 
@@ -309,17 +326,34 @@ const diffFixtureModified = [
  */
 function DiffViewerFixture() {
   const params = new URLSearchParams(window.location.search);
-  const gitStatus = params.get("status") === "new" ? "A" : "M";
+  const status = params.get("status");
+  const gitStatus = status === "new" ? "A" : status === "deleted" ? "D" : "M";
+  const filePath = "docs/audits/frontend-state-audit.md";
+  const containerId = "fixture-container";
+  const baseBranch =
+    params.get("branch") ?? "63d12576e9198f24bc2271a6a8c3702dfb391eae";
+  const [viewFileCount, setViewFileCount] = useState(0);
 
   window.orkestrator = {
     invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
-      const content =
-        command === "read_file_at_branch" ? diffFixtureOriginal : diffFixtureModified;
-      return {
-        path: String(args?.filePath ?? ""),
-        content,
-        language: "markdown",
-      } as T;
+      switch (command) {
+        case "read_container_file":
+          assertFixtureArgs(command, args, { containerId, filePath });
+          return {
+            path: filePath,
+            content: diffFixtureModified,
+            language: "markdown",
+          } as T;
+        case "read_file_at_branch":
+          assertFixtureArgs(command, args, { containerId, filePath, branch: baseBranch });
+          return {
+            path: filePath,
+            content: diffFixtureOriginal,
+            language: "markdown",
+          } as T;
+        default:
+          throw new Error(`Unexpected fixture command: ${command}`);
+      }
     },
   } as Window["orkestrator"];
 
@@ -327,14 +361,17 @@ function DiffViewerFixture() {
     <main className="h-screen bg-background text-foreground">
       <section data-testid="diff-viewer-pane" className="relative h-full w-full">
         <DiffViewerTab
-          filePath="docs/audits/frontend-state-audit.md"
-          containerId="fixture-container"
-          baseBranch="63d12576e9198f24bc2271a6a8c3702dfb391eae"
+          filePath={filePath}
+          containerId={containerId}
+          baseBranch={baseBranch}
           gitStatus={gitStatus}
           isActive
-          onSwitchToFileView={() => {}}
+          onSwitchToFileView={() => setViewFileCount((count) => count + 1)}
         />
       </section>
+      <output data-testid="view-file-count" className="sr-only">
+        {viewFileCount}
+      </output>
     </main>
   );
 }

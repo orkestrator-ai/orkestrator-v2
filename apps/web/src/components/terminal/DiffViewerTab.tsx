@@ -99,6 +99,7 @@ export function DiffViewerTab({
         ...shared,
         fontSize: terminalAppearance.fontSize,
         enableSplitViewResizing: true,
+        useInlineViewWhenSpaceIsLimited: false,
       };
     }
 
@@ -196,6 +197,8 @@ export function DiffViewerTab({
       setError(null);
 
       try {
+        let nextDetectedLanguage = language || "plaintext";
+
         // Fetch current (modified) file content
         let modified: string | null = null;
         if (!isDeletedFile) {
@@ -207,10 +210,10 @@ export function DiffViewerTab({
           } else {
             throw new Error("No container ID or worktree path available");
           }
+          if (cancelled) return;
           modified = modifiedResult.content;
-          setDetectedLanguage(
-            modifiedResult.language || language || "plaintext"
-          );
+          nextDetectedLanguage =
+            modifiedResult.language || language || "plaintext";
         }
 
         // Fetch original file content from base branch
@@ -225,11 +228,16 @@ export function DiffViewerTab({
             throw new Error("No container ID or worktree path available");
           }
           original = originalResult?.content ?? null;
+          if (isDeletedFile) {
+            nextDetectedLanguage =
+              originalResult?.language || language || "plaintext";
+          }
         }
 
         if (!cancelled) {
           setOriginalContent(original ?? "");
           setModifiedContent(modified ?? "");
+          setDetectedLanguage(nextDetectedLanguage);
         }
       } catch (err) {
         if (!cancelled) {
@@ -319,6 +327,7 @@ export function DiffViewerTab({
         />
         <div className="min-h-0 flex-1">
           <DiffEditor
+            key={isMobile ? "mobile" : "desktop"}
             height="100%"
             language={detectedLanguage}
             original={originalContent ?? ""}
@@ -360,6 +369,7 @@ export function DiffViewerTab({
       />
       <div className="min-h-0 flex-1">
         <DiffEditor
+          key={isMobile ? "mobile" : "desktop"}
           height="100%"
           language={detectedLanguage}
           original={originalContent ?? ""}
@@ -429,22 +439,28 @@ function DiffHeader({
             </span>
           </span>
         </span>
-        <span className="shrink-0 text-xs opacity-60" title={`vs ${baseBranch}`}>
+        <span
+          className={cn(
+            "min-w-0 truncate text-xs opacity-60",
+            isMobile ? "max-w-[35vw] shrink" : "shrink-0",
+          )}
+          title={`vs ${baseBranch}`}
+        >
           vs {baseRef}
         </span>
-        {/* The status is already colour-coded by the icon, so the badge is desktop-only. */}
-        {!isMobile && (
-          <span
-            className={cn(
-              "shrink-0 rounded px-1.5 py-0.5 text-xs",
-              statusText === "New file" && "bg-green-500/20 text-green-400",
-              statusText === "Modified" && "bg-yellow-500/20 text-yellow-400",
-              statusText === "Deleted" && "bg-red-500/20 text-red-400"
-            )}
-          >
-            {statusText}
-          </span>
-        )}
+        {/* Keep the status in the accessibility tree when the visual badge is hidden. */}
+        <span
+          className={cn(
+            isMobile
+              ? "sr-only"
+              : "shrink-0 rounded px-1.5 py-0.5 text-xs",
+            !isMobile && statusText === "New file" && "bg-green-500/20 text-green-400",
+            !isMobile && statusText === "Modified" && "bg-yellow-500/20 text-yellow-400",
+            !isMobile && statusText === "Deleted" && "bg-red-500/20 text-red-400"
+          )}
+        >
+          {statusText}
+        </span>
       </div>
       <div className="flex shrink-0 items-center gap-1">
         {/* Diff mode toggle - inline is forced on mobile, so the toggle is hidden there */}

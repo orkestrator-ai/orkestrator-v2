@@ -1483,6 +1483,7 @@ function MessagePart({
             toolArgs={part.toolArgs}
             toolOutput={part.toolOutput}
             toolError={part.toolError}
+            taskSnapshot={part.taskSnapshot}
           />
         );
       }

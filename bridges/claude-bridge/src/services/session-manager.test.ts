@@ -1114,6 +1114,172 @@ describe("sendPrompt", () => {
     });
   });
 
+  test("stamps each task tool call with the resulting task list state", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        uuid: "task-message",
+        message: {
+          id: "task-message",
+          content: [
+            {
+              type: "tool_use",
+              id: "create-1",
+              name: "TaskCreate",
+              input: { subject: "Cache threadId", description: "..." },
+            },
+            {
+              type: "tool_use",
+              id: "create-2",
+              name: "TaskCreate",
+              input: { subject: "Fix cache thrash", description: "..." },
+            },
+            {
+              type: "tool_use",
+              id: "update-1",
+              name: "TaskUpdate",
+              input: { taskId: "1", status: "in_progress" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "create-1",
+              content: "Task #1 created successfully: Cache threadId",
+            },
+            {
+              type: "tool_result",
+              tool_use_id: "create-2",
+              content: "Task #2 created successfully: Fix cache thrash",
+            },
+            { type: "tool_result", tool_use_id: "update-1", content: "Updated task #1 status" },
+          ],
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    const tools = session.messages
+      .find((message) => message.role === "assistant")
+      ?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+
+    // Each call carries the list as it stood after that call, so the renderer
+    // never has to reconstruct it from neighbouring parts.
+    expect(tools[0]?.taskSnapshot).toEqual([
+      { id: "1", subject: "Cache threadId", status: "pending" },
+    ]);
+    expect(tools[1]?.taskSnapshot).toEqual([
+      { id: "1", subject: "Cache threadId", status: "pending" },
+      { id: "2", subject: "Fix cache thrash", status: "pending" },
+    ]);
+    // The update carries only {taskId, status}; the subject comes from the registry.
+    expect(tools[2]?.taskSnapshot).toEqual([
+      { id: "1", subject: "Cache threadId", status: "in_progress" },
+      { id: "2", subject: "Fix cache thrash", status: "pending" },
+    ]);
+  });
+
+  test("carries the task list across turns and ignores failed task calls", async () => {
+    const session = createSession("multi-turn tasks");
+    track(session.id);
+
+    const runTurn = async (messages: unknown[]) => {
+      const promptPromise = sendPrompt(session.id, "go");
+      const call = await nextQueryCall();
+      for (const message of messages) call.push(message);
+      call.finish();
+      await promptPromise;
+    };
+
+    await runTurn([
+      {
+        type: "assistant",
+        uuid: "turn-1",
+        message: {
+          id: "turn-1",
+          content: [
+            {
+              type: "tool_use",
+              id: "create-1",
+              name: "TaskCreate",
+              input: { subject: "Survives the turn", description: "..." },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "create-1",
+              content: "Task #1 created successfully: Survives the turn",
+            },
+          ],
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    await runTurn([
+      {
+        type: "assistant",
+        uuid: "turn-2",
+        message: {
+          id: "turn-2",
+          content: [
+            {
+              type: "tool_use",
+              id: "update-fail",
+              name: "TaskUpdate",
+              input: { taskId: "1", status: "completed" },
+            },
+            {
+              type: "tool_use",
+              id: "update-ok",
+              name: "TaskUpdate",
+              input: { taskId: "1", status: "in_progress" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "update-fail",
+              content: "Task #1 not found",
+              is_error: true,
+            },
+            { type: "tool_result", tool_use_id: "update-ok", content: "Updated task #1 status" },
+          ],
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    const secondTurn = getSessionMessages(session.id)
+      .filter((message) => message.role === "assistant")
+      .at(-1);
+    const tools = secondTurn?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+
+    // The failed call left the list alone and got no snapshot at all.
+    expect(tools[0]?.toolState).toBe("failure");
+    expect(tools[0]?.taskSnapshot).toBeUndefined();
+    // The successful one still resolves a task created in the *previous* turn.
+    expect(tools[1]?.taskSnapshot).toEqual([
+      { id: "1", subject: "Survives the turn", status: "in_progress" },
+    ]);
+  });
+
   test("uses explicit Task parents across concurrent tasks and longest MCP server prefixes", async () => {
     mockGetMcpServerNames.mockImplementationOnce(async () =>
       new Set(["team", "team_tools"]),

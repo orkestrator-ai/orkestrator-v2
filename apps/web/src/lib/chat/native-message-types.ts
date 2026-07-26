@@ -17,6 +17,21 @@ export interface NativeToolDiffMetadata {
 
 export type NativeToolState = "success" | "failure" | "pending";
 
+export type NativeTaskStatus = "pending" | "in_progress" | "completed";
+
+/**
+ * One task in a point-in-time view of the agent's task list.
+ *
+ * Providers whose task tools mutate a single task per call (Claude's
+ * TaskCreate/TaskUpdate) supply the resulting list here, so the renderer does
+ * not have to reconstruct it from the surrounding parts.
+ */
+export interface NativeTaskSnapshotItem {
+  id: string;
+  subject: string;
+  status: NativeTaskStatus;
+}
+
 export interface NativeBasePart {
   content: string;
   sourcePartId?: string;
@@ -38,6 +53,8 @@ export interface NativeBasePart {
   parentTaskUseId?: string;
   isMcpTool?: boolean;
   mcpServerName?: string;
+  /** Task list state immediately after this tool call, for task tools. */
+  taskSnapshot?: NativeTaskSnapshotItem[];
   subagentId?: string;
   subagentName?: string;
   subagentRole?: string;

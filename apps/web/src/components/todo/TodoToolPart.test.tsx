@@ -236,4 +236,133 @@ describe("TodoToolPart", () => {
     expect(trigger).not.toBeNull();
     expect(trigger!.hasAttribute("disabled")).toBe(true);
   });
+
+  describe("task snapshots", () => {
+    const snapshot = [
+      { id: "1", subject: "Cache threadId", status: "completed" as const },
+      { id: "2", subject: "Fix cache thrash", status: "in_progress" as const },
+      { id: "3", subject: "Throttle transcript probe", status: "pending" as const },
+    ];
+
+    test("renders the whole list for a single-task create", () => {
+      const { container } = render(
+        <TodoToolPart
+          toolName="TaskCreate"
+          toolState="success"
+          toolArgs={{ subject: "Throttle transcript probe", description: "..." }}
+          toolOutput="Task #3 created successfully: Throttle transcript probe"
+          taskSnapshot={snapshot}
+        />,
+      );
+
+      // The count reflects the list, not this one call.
+      expect(container.textContent).toContain("1/3 complete");
+
+      fireEvent.click(container.querySelector("button")!);
+      expect(container.textContent).toContain("Cache threadId");
+      expect(container.textContent).toContain("Fix cache thrash");
+      expect(container.textContent).toContain("Throttle transcript probe");
+    });
+
+    test("shows the real subject for a status-only update", () => {
+      const { container } = render(
+        <TodoToolPart
+          toolName="TaskUpdate"
+          toolState="success"
+          toolArgs={{ taskId: "2", status: "in_progress" }}
+          toolOutput="Updated task #2 status"
+          taskSnapshot={snapshot}
+        />,
+      );
+
+      fireEvent.click(container.querySelector("button")!);
+
+      expect(container.textContent).toContain("Fix cache thrash");
+      expect(container.textContent).not.toContain("Task #2");
+    });
+
+    test("highlights the task the call acted on", () => {
+      const { container } = render(
+        <TodoToolPart
+          toolName="TaskUpdate"
+          toolState="success"
+          toolArgs={{ taskId: "2", status: "in_progress" }}
+          toolOutput="Updated task #2 status"
+          taskSnapshot={snapshot}
+        />,
+      );
+
+      fireEvent.click(container.querySelector("button")!);
+
+      const rows = Array.from(container.querySelectorAll("div")).filter((row) =>
+        row.className.includes("bg-muted/50"),
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.textContent).toContain("Fix cache thrash");
+    });
+
+    test("highlights nothing for a TaskList read", () => {
+      const { container } = render(
+        <TodoToolPart
+          toolName="TaskList"
+          toolState="success"
+          toolOutput="#1 [completed] Cache threadId"
+          taskSnapshot={snapshot}
+        />,
+      );
+
+      fireEvent.click(container.querySelector("button")!);
+
+      const highlighted = Array.from(container.querySelectorAll("div")).filter((row) =>
+        row.className.includes("bg-muted/50"),
+      );
+      expect(highlighted).toHaveLength(0);
+    });
+
+    test("prefers the snapshot over per-call args", () => {
+      const { container } = render(
+        <TodoToolPart
+          toolName="TaskCreate"
+          toolState="success"
+          toolArgs={{ subject: "Only this one", description: "..." }}
+          taskSnapshot={snapshot}
+        />,
+      );
+
+      expect(container.textContent).toContain("1/3 complete");
+    });
+
+    test("renders an empty snapshot as an empty list, not raw output", () => {
+      const { container } = render(
+        <TodoToolPart
+          toolName="TaskList"
+          toolState="success"
+          toolOutput="unparsed blob"
+          taskSnapshot={[]}
+        />,
+      );
+
+      expect(container.textContent).toContain("no tasks");
+
+      fireEvent.click(container.querySelector("button")!);
+      expect(container.textContent).toContain("Task list is empty.");
+      expect(container.textContent).not.toContain("unparsed blob");
+    });
+
+    test("falls back to per-call parsing when no snapshot is supplied", () => {
+      // Messages recorded before the bridge tracked task state.
+      const { container } = render(
+        <TodoToolPart
+          toolName="TaskCreate"
+          toolState="success"
+          toolArgs={{ subject: "Legacy task", description: "..." }}
+        />,
+      );
+
+      expect(container.textContent).toContain("0/1 complete");
+
+      fireEvent.click(container.querySelector("button")!);
+      expect(container.textContent).toContain("Legacy task");
+    });
+  });
 });

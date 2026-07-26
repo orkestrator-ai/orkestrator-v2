@@ -40,6 +40,16 @@ export interface ToolDiffMetadata {
   diff?: string;
 }
 
+/** Display status of a task in the session task list */
+export type TaskSnapshotStatus = "pending" | "in_progress" | "completed";
+
+/** One task in a point-in-time view of the session task list */
+export interface TaskSnapshotItem {
+  id: string;
+  subject: string;
+  status: TaskSnapshotStatus;
+}
+
 /** Part types for Claude messages */
 export interface ClaudeMessagePart {
   type: "text" | "thinking" | "tool-invocation" | "tool-result" | "file";
@@ -69,6 +79,12 @@ export interface ClaudeMessagePart {
   isMcpTool?: boolean;
   /** The MCP server name if this is an MCP tool */
   mcpServerName?: string;
+  /**
+   * State of the whole session task list immediately after this tool call, for
+   * task tools. Supplied by the bridge, which replays the calls; absent for
+   * TodoWrite and for messages recorded before the bridge tracked this.
+   */
+  taskSnapshot?: TaskSnapshotItem[];
 }
 
 /** MCP server info from the bridge server */

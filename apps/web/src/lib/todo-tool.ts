@@ -239,6 +239,36 @@ export function isTodoTool(toolName?: string): boolean {
   );
 }
 
+/** `Task #12 created successfully: Wire up the parser` */
+const CREATE_OUTPUT_ID = /^Task #(\d+) created successfully:/;
+/** `Updated task #12 subject, status` */
+const UPDATE_OUTPUT_ID = /^Updated task #(\d+)\s/;
+
+/**
+ * The id of the single task a task tool call acted on, when there is one.
+ *
+ * Used to highlight the affected row inside the full list snapshot. TaskList
+ * touches no single task, so it returns undefined.
+ */
+export function getChangedTaskId(
+  toolArgs?: Record<string, unknown>,
+  toolOutput?: string,
+  toolName?: string,
+): string | undefined {
+  const normalized = normalizeToolName(toolName);
+  if (normalized === "tasklist" || normalized === "task_list") return undefined;
+
+  const fromArgs = readString(toolArgs?.taskId, toolArgs?.taskID, toolArgs?.task_id);
+  if (fromArgs) return fromArgs;
+
+  const output = toolOutput?.trim();
+  if (!output) return undefined;
+
+  return (
+    output.match(CREATE_OUTPUT_ID)?.[1] ?? output.match(UPDATE_OUTPUT_ID)?.[1] ?? undefined
+  );
+}
+
 export function getTodoToolLabel(toolName?: string): string {
   const normalized = normalizeToolName(toolName);
 

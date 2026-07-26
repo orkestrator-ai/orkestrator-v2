@@ -1,3 +1,4 @@
+import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 const closeLocalTerminalSession = mock(async (_sessionId: string) => {});
@@ -78,10 +79,10 @@ afterEach(() => {
 });
 
 const { getAllLeaves, usePaneLayoutStore } = await import("./paneLayoutStore");
-const { useTerminalSessionStore, createSessionKey } = await import("./terminalSessionStore");
-const { useClaudeStore, createClaudeSessionKey } = await import("./claudeStore");
-const { useCodexStore, createCodexSessionKey } = await import("./codexStore");
-const { useOpenCodeStore, createOpenCodeSessionKey } = await import("./openCodeStore");
+const { useTerminalSessionStore, createSessionKey: createTerminalSessionKey } = await import("./terminalSessionStore");
+const { useClaudeStore } = await import("./claudeStore");
+const { useCodexStore } = await import("./codexStore");
+const { useOpenCodeStore } = await import("./openCodeStore");
 const { useEnvironmentStore } = await import("./environmentStore");
 
 function resetStores() {
@@ -172,7 +173,7 @@ describe("paneLayoutStore tab cleanup", () => {
 
   test("closing a local terminal tab calls the local PTY close command", () => {
     seedSingleTabEnvironment("env-local", null, { id: "tab-terminal", type: "plain" });
-    const sessionKey = createSessionKey(null, "tab-terminal", "env-local");
+    const sessionKey = createTerminalSessionKey(null, "tab-terminal", "env-local");
     useTerminalSessionStore.getState().setSession(sessionKey, { sessionId: "pty-local" });
 
     usePaneLayoutStore.getState().removeTab("default", "tab-terminal");
@@ -184,7 +185,7 @@ describe("paneLayoutStore tab cleanup", () => {
 
   test("closing a terminal tab marks its persistent session disconnected", () => {
     seedSingleTabEnvironment("env-local", null, { id: "tab-terminal", type: "plain" });
-    const sessionKey = createSessionKey(null, "tab-terminal", "env-local");
+    const sessionKey = createTerminalSessionKey(null, "tab-terminal", "env-local");
     useTerminalSessionStore.getState().setSession(sessionKey, {
       sessionId: "pty-local",
       persistentSessionId: "persistent-1",
@@ -197,7 +198,7 @@ describe("paneLayoutStore tab cleanup", () => {
 
   test("closing a container terminal tab calls the Docker detach command", () => {
     seedSingleTabEnvironment("env-container", "container-1", { id: "tab-terminal", type: "plain" });
-    const sessionKey = createSessionKey("container-1", "tab-terminal", "env-container");
+    const sessionKey = createTerminalSessionKey("container-1", "tab-terminal", "env-container");
     useTerminalSessionStore.getState().setSession(sessionKey, { sessionId: "pty-container" });
 
     usePaneLayoutStore.getState().removeTab("default", "tab-terminal");
@@ -267,7 +268,7 @@ describe("paneLayoutStore tab cleanup", () => {
       ]),
     });
 
-    const claudeKey = createClaudeSessionKey("env-native", "claude-tab");
+    const claudeKey = createSessionKey("env-native", "claude-tab");
     useClaudeStore.getState().setClient("env-native", {} as any);
     useClaudeStore.getState().setSession(claudeKey, {
       sessionId: "claude-session",
@@ -275,7 +276,7 @@ describe("paneLayoutStore tab cleanup", () => {
       isLoading: true,
     });
 
-    const codexKey = createCodexSessionKey("env-native", "codex-tab");
+    const codexKey = createSessionKey("env-native", "codex-tab");
     useCodexStore.getState().setClient("env-native", {} as any);
     useCodexStore.getState().setSession(codexKey, {
       sessionId: "codex-session",
@@ -283,7 +284,7 @@ describe("paneLayoutStore tab cleanup", () => {
       isLoading: true,
     });
 
-    const openCodeKey = createOpenCodeSessionKey("env-native", "opencode-tab");
+    const openCodeKey = createSessionKey("env-native", "opencode-tab");
     useOpenCodeStore.getState().setClient("env-native", {} as any);
     useOpenCodeStore.getState().setSession(openCodeKey, {
       sessionId: "opencode-session",
@@ -329,9 +330,9 @@ describe("paneLayoutStore tab cleanup", () => {
         ],
       ]),
     });
-    const terminalKey = createSessionKey(null, "terminal-tab", "env-reset");
+    const terminalKey = createTerminalSessionKey(null, "terminal-tab", "env-reset");
     useTerminalSessionStore.getState().setSession(terminalKey, { sessionId: "pty-reset" });
-    const codexKey = createCodexSessionKey("env-reset", "codex-tab");
+    const codexKey = createSessionKey("env-reset", "codex-tab");
     useCodexStore.getState().setClient("env-reset", {} as any);
     useCodexStore.getState().setSession(codexKey, {
       sessionId: "codex-session",
@@ -375,7 +376,7 @@ describe("paneLayoutStore tab cleanup", () => {
         },
       ],
     }, "closing-pane", "env-close-pane");
-    const terminalKey = createSessionKey(null, "terminal-tab", "env-close-pane");
+    const terminalKey = createTerminalSessionKey(null, "terminal-tab", "env-close-pane");
     useTerminalSessionStore.getState().setSession(terminalKey, { sessionId: "pty-close-pane" });
 
     usePaneLayoutStore.getState().closePane("closing-pane", "env-close-pane");
@@ -421,13 +422,13 @@ describe("paneLayoutStore tab cleanup", () => {
       activeTabId: "terminal-tab",
     }, "default", "env-cleanup-errors");
 
-    const terminalKey = createSessionKey(null, "terminal-tab", "env-cleanup-errors");
+    const terminalKey = createTerminalSessionKey(null, "terminal-tab", "env-cleanup-errors");
     useTerminalSessionStore.getState().setSession(terminalKey, {
       sessionId: "pty-cleanup-errors",
       persistentSessionId: "persistent-cleanup-errors",
     });
 
-    const claudeKey = createClaudeSessionKey("env-cleanup-errors", "claude-tab");
+    const claudeKey = createSessionKey("env-cleanup-errors", "claude-tab");
     useClaudeStore.getState().setClient("env-cleanup-errors", {} as any);
     useClaudeStore.getState().setSession(claudeKey, {
       sessionId: "claude-cleanup-errors",
@@ -435,7 +436,7 @@ describe("paneLayoutStore tab cleanup", () => {
       isLoading: true,
     });
 
-    const codexKey = createCodexSessionKey("env-cleanup-errors", "codex-tab");
+    const codexKey = createSessionKey("env-cleanup-errors", "codex-tab");
     useCodexStore.getState().setClient("env-cleanup-errors", {} as any);
     useCodexStore.getState().setSession(codexKey, {
       sessionId: "codex-cleanup-errors",
@@ -443,7 +444,7 @@ describe("paneLayoutStore tab cleanup", () => {
       isLoading: true,
     });
 
-    const openCodeKey = createOpenCodeSessionKey("env-cleanup-errors", "opencode-tab");
+    const openCodeKey = createSessionKey("env-cleanup-errors", "opencode-tab");
     useOpenCodeStore.getState().setClient("env-cleanup-errors", {} as any);
     useOpenCodeStore.getState().setSession(openCodeKey, {
       sessionId: "opencode-cleanup-errors",

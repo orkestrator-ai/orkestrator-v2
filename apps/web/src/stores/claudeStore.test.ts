@@ -1,7 +1,8 @@
+import { createSessionKey } from "@/lib/utils";
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { createClaudeSessionKey, useClaudeStore } from "./claudeStore";
+import { useClaudeStore } from "./claudeStore";
 
-const SESSION_KEY = createClaudeSessionKey("env-1", "tab-1");
+const SESSION_KEY = createSessionKey("env-1", "tab-1");
 
 function resetClaudeStore() {
   useClaudeStore.setState({
@@ -113,8 +114,8 @@ describe("claudeStore cleanup and queue helpers", () => {
   });
 
   test("clearEnvironment removes session-scoped state and pending requests for the target environment only", () => {
-    const sessionKeyA = createClaudeSessionKey("env-1", "tab-1");
-    const sessionKeyB = createClaudeSessionKey("env-2", "tab-1");
+    const sessionKeyA = createSessionKey("env-1", "tab-1");
+    const sessionKeyB = createSessionKey("env-2", "tab-1");
     const store = useClaudeStore.getState();
 
     store.setSession(sessionKeyA, {
@@ -200,8 +201,8 @@ describe("claudeStore cleanup and queue helpers", () => {
   });
 
   test("queues prompts in FIFO order and clears only the targeted session queue", () => {
-    const queueA = createClaudeSessionKey("env-1", "tab-1");
-    const queueB = createClaudeSessionKey("env-1", "tab-2");
+    const queueA = createSessionKey("env-1", "tab-1");
+    const queueB = createSessionKey("env-1", "tab-2");
     const store = useClaudeStore.getState();
 
     store.addToQueue(queueA, {
@@ -381,7 +382,7 @@ describe("claudeStore message patching", () => {
     expect(
       useClaudeStore
         .getState()
-        .patchMessage(createClaudeSessionKey("env-1", "other-tab"), patch()),
+        .patchMessage(createSessionKey("env-1", "other-tab"), patch()),
     ).toBe(false);
   });
 

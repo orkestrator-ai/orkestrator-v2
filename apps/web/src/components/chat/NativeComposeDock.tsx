@@ -5,7 +5,17 @@ interface NativeComposeDockProps {
   centered: boolean;
   children: ReactNode;
   actions?: ReactNode;
+  /** Hidden while centered — for affordances that only make sense in a scrolled transcript. */
   topAccessory?: ReactNode;
+  /**
+   * Always visible, in both centered and docked layouts.
+   *
+   * For content the turn is blocked on: an approval can arrive before the
+   * transcript has any messages, which is exactly when the composer is
+   * centered, so gating it on `!centered` would hide the prompt the user has
+   * to answer.
+   */
+  pinnedContent?: ReactNode;
   title?: string;
 }
 
@@ -14,6 +24,7 @@ export function NativeComposeDock({
   children,
   actions,
   topAccessory,
+  pinnedContent,
   title = "Ready to build!",
 }: NativeComposeDockProps) {
   return (
@@ -35,6 +46,12 @@ export function NativeComposeDock({
         >
           <h2 className="text-xl font-bold text-white sm:text-2xl">{title}</h2>
         </div>
+
+        {pinnedContent ? (
+          <div className="pointer-events-auto mx-auto mb-1 flex w-full max-w-[56rem] flex-col gap-2 sm:w-[min(calc(100%_-_2rem),56rem)]">
+            {pinnedContent}
+          </div>
+        ) : null}
 
         {topAccessory && !centered ? (
           <div className="pointer-events-auto mx-auto mb-1 flex w-full max-w-[56rem] justify-end sm:w-[min(calc(100%_-_2rem),56rem)]">

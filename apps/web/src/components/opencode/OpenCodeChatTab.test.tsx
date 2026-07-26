@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createOpenCodeSessionKey, useOpenCodeStore } from "@/stores/openCodeStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { createSessionKey as createOpenCodeSessionKey } from "@/lib/utils";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
@@ -210,7 +211,7 @@ mock.module("./OpenCodePermissionCard", () => ({
   }) => (
     <div
       data-testid={`opencode-permission-card-${permission.id}`}
-      data-session-id={permission.sessionID}
+      data-session-id={permission.sessionId}
       data-client-url={client.baseUrl}
     >
       {permission.permission}
@@ -228,7 +229,7 @@ mock.module("./OpenCodeQuestionCard", () => ({
   }) => (
     <div
       data-testid={`opencode-question-card-${question.id}`}
-      data-session-id={question.sessionID}
+      data-session-id={question.sessionId}
       data-client-url={client.baseUrl}
     >
       {question.questions[0]?.question}
@@ -356,7 +357,7 @@ function resetStores(name = "20260415-123456") {
     clients: new Map([[ENVIRONMENT_ID, MOCK_CLIENT as any]]),
     models: new Map(),
     slashCommands: new Map(),
-    selectedModel: new Map([[ENVIRONMENT_ID, "openai/gpt-5"]]),
+    selectedModel: new Map([[SESSION_KEY, "openai/gpt-5"]]),
     selectedVariant: new Map(),
     selectedMode: new Map([[SESSION_KEY, "build"]]),
     attachments: new Map(),
@@ -579,12 +580,12 @@ describe("OpenCodeChatTab", () => {
     mockGetSessionMessages.mockResolvedValue([serverMessage]);
     mockGetSessionStatus.mockResolvedValue("busy");
     mockGetPendingQuestions.mockResolvedValue([
-      { id: "question-1", sessionID: "session-1", questions: [] },
+      { id: "question-1", sessionId: "session-1", questions: [] },
     ]);
     mockGetPendingPermissions.mockResolvedValue([
       {
         id: "permission-1",
-        sessionID: "session-1",
+        sessionId: "session-1",
         permission: "edit",
         patterns: [],
         metadata: {},
@@ -594,14 +595,14 @@ describe("OpenCodeChatTab", () => {
     useOpenCodeStore.setState((state) => ({
       ...state,
       pendingQuestions: new Map([
-        ["stale-question", { id: "stale-question", sessionID: "session-1", questions: [] }],
+        ["stale-question", { id: "stale-question", sessionId: "session-1", questions: [] }],
       ]),
       pendingPermissions: new Map([
         [
           "stale-permission",
           {
             id: "stale-permission",
-            sessionID: "session-1",
+            sessionId: "session-1",
             permission: "edit",
             patterns: [],
             metadata: {},
@@ -1139,7 +1140,7 @@ describe("OpenCodeChatTab", () => {
   test("renders pending permission and question cards for the active session", async () => {
     const permission: PermissionRequest = {
       id: "permission-visible",
-      sessionID: "session-1",
+      sessionId: "session-1",
       permission: "edit",
       patterns: ["src/**"],
       metadata: {},
@@ -1147,7 +1148,7 @@ describe("OpenCodeChatTab", () => {
     };
     const question: QuestionRequest = {
       id: "question-visible",
-      sessionID: "session-1",
+      sessionId: "session-1",
       questions: [{ question: "Continue with the edit?", header: "Confirm", options: [] }],
     };
     mockGetPendingPermissions.mockResolvedValue([permission]);
@@ -1158,14 +1159,14 @@ describe("OpenCodeChatTab", () => {
         [permission.id, permission],
         [
           "permission-other-session",
-          { ...permission, id: "permission-other-session", sessionID: "session-other" },
+          { ...permission, id: "permission-other-session", sessionId: "session-other" },
         ],
       ]),
       pendingQuestions: new Map([
         [question.id, question],
         [
           "question-other-session",
-          { ...question, id: "question-other-session", sessionID: "session-other" },
+          { ...question, id: "question-other-session", sessionId: "session-other" },
         ],
       ]),
     }));
@@ -1783,8 +1784,8 @@ describe("OpenCodeChatTab", () => {
         "Second queued OpenCode prompt",
       ]);
       expect(state.attachments.get(SESSION_KEY)).toEqual([queuedAttachment]);
-      expect(state.selectedModel.get(ENVIRONMENT_ID)).toBe("openai/gpt-5");
-      expect(state.selectedVariant.get(ENVIRONMENT_ID)).toBe("fast");
+      expect(state.selectedModel.get(SESSION_KEY)).toBe("openai/gpt-5");
+      expect(state.selectedVariant.get(SESSION_KEY)).toBe("fast");
       expect(state.selectedMode.get(SESSION_KEY)).toBe("build");
     });
     expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
@@ -1865,7 +1866,7 @@ describe("OpenCodeChatTab", () => {
     useOpenCodeStore.setState((state) => ({
       ...state,
       models: new Map(),
-      selectedModel: new Map([[ENVIRONMENT_ID, "default"]]),
+      selectedModel: new Map([[SESSION_KEY, "default"]]),
     }));
 
     render(
@@ -1914,11 +1915,11 @@ describe("OpenCodeChatTab", () => {
     );
 
     await waitFor(() => {
-      expect(useOpenCodeStore.getState().getSelectedModel(ENVIRONMENT_ID)).toBe("openai/review-model");
-      expect(useOpenCodeStore.getState().getSelectedVariant(ENVIRONMENT_ID)).toBe("deep");
+      expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe("openai/review-model");
+      expect(useOpenCodeStore.getState().getSelectedVariant(SESSION_KEY)).toBe("deep");
     });
-    useOpenCodeStore.getState().setSelectedModel(ENVIRONMENT_ID, "openai/user-model");
-    useOpenCodeStore.getState().setSelectedVariant(ENVIRONMENT_ID, "fast");
+    useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "openai/user-model");
+    useOpenCodeStore.getState().setSelectedVariant(SESSION_KEY, "fast");
     firstMount.unmount();
 
     render(
@@ -1930,8 +1931,8 @@ describe("OpenCodeChatTab", () => {
     );
 
     await waitFor(() => {
-      expect(useOpenCodeStore.getState().getSelectedModel(ENVIRONMENT_ID)).toBe("openai/user-model");
-      expect(useOpenCodeStore.getState().getSelectedVariant(ENVIRONMENT_ID)).toBe("fast");
+      expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe("openai/user-model");
+      expect(useOpenCodeStore.getState().getSelectedVariant(SESSION_KEY)).toBe("fast");
     });
   });
 
@@ -2162,8 +2163,10 @@ describe("OpenCodeChatTab", () => {
         },
       });
       await waitFor(() => {
+        // The wire payload carries `sessionID`; the store normalizes it to
+        // `sessionId` so all three agents agree on the spelling.
         expect(useOpenCodeStore.getState().pendingPermissions.get("permission-sse")).toMatchObject({
-          sessionID: "session-1",
+          sessionId: "session-1",
           permission: "edit",
           patterns: ["src/**"],
         });
@@ -2179,7 +2182,7 @@ describe("OpenCodeChatTab", () => {
 
       useOpenCodeStore.getState().addPendingQuestion({
         id: "question-rejected",
-        sessionID: "session-1",
+        sessionId: "session-1",
         questions: [],
       });
       channel.push({ type: "question.rejected", properties: { requestID: "question-rejected" } });
@@ -2455,7 +2458,7 @@ describe("OpenCodeChatTab", () => {
     });
 
     test("falls back to the first available model when the selected one is gone", async () => {
-      useOpenCodeStore.getState().setSelectedModel(ENVIRONMENT_ID, "openai/gpt-5");
+      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "openai/gpt-5");
       const refreshedModels = [
         { id: "anthropic/claude-sonnet", name: "Claude Sonnet", provider: "anthropic" },
       ];
@@ -2474,13 +2477,13 @@ describe("OpenCodeChatTab", () => {
 
       await waitFor(() => {
         expect(
-          useOpenCodeStore.getState().getSelectedModel(ENVIRONMENT_ID),
+          useOpenCodeStore.getState().getSelectedModel(SESSION_KEY),
         ).toBe("anthropic/claude-sonnet");
       });
     });
 
     test("prefers the recent model from preferences when current is invalid", async () => {
-      useOpenCodeStore.getState().setSelectedModel(ENVIRONMENT_ID, "openai/gpt-5");
+      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "openai/gpt-5");
       const refreshedModels = [
         { id: "anthropic/claude-sonnet", name: "Claude Sonnet", provider: "anthropic" },
         { id: "openai/gpt-4", name: "GPT-4", provider: "openai" },
@@ -2505,14 +2508,14 @@ describe("OpenCodeChatTab", () => {
 
       await waitFor(() => {
         expect(
-          useOpenCodeStore.getState().getSelectedModel(ENVIRONMENT_ID),
+          useOpenCodeStore.getState().getSelectedModel(SESSION_KEY),
         ).toBe("anthropic/claude-sonnet");
       });
     });
 
     test("clears the variant when it is no longer available on the selected model", async () => {
-      useOpenCodeStore.getState().setSelectedModel(ENVIRONMENT_ID, "openai/gpt-5");
-      useOpenCodeStore.getState().setSelectedVariant(ENVIRONMENT_ID, "high");
+      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "openai/gpt-5");
+      useOpenCodeStore.getState().setSelectedVariant(SESSION_KEY, "high");
       mockGetModelsWithDefaults.mockImplementation(async () => ({
         models: [
           { id: "openai/gpt-5", name: "GPT-5", provider: "openai", variants: ["low"] },
@@ -2530,7 +2533,7 @@ describe("OpenCodeChatTab", () => {
 
       await waitFor(() => {
         expect(
-          useOpenCodeStore.getState().getSelectedVariant(ENVIRONMENT_ID),
+          useOpenCodeStore.getState().getSelectedVariant(SESSION_KEY),
         ).toBeUndefined();
       });
     });
@@ -2599,12 +2602,20 @@ describe("OpenCodeChatTab", () => {
 
 function installTimerHarness(startTime: number) {
   mockedNow = startTime;
-  intervalCallback = null;
   clearIntervalCalls = 0;
   Date.now = () => mockedNow;
+
+  // The tab registers more than one interval (the elapsed timer and the
+  // stalled-turn watchdog), so keep them all and tick them together rather
+  // than letting the last registration win.
+  const callbacks: Array<() => void> = [];
+  intervalCallback = () => {
+    for (const callback of [...callbacks]) callback();
+  };
+
   globalThis.setInterval = (((callback: TimerHandler) => {
-    intervalCallback = callback as () => void;
-    return 1 as unknown as ReturnType<typeof setInterval>;
+    callbacks.push(callback as () => void);
+    return callbacks.length as unknown as ReturnType<typeof setInterval>;
   }) as unknown) as typeof setInterval;
   globalThis.clearInterval = (() => {
     clearIntervalCalls += 1;

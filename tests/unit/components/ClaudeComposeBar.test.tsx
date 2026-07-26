@@ -29,7 +29,7 @@ let mockFileMentionMenuOpen = false;
 // can restore it for other test files (e.g. ClaudeTmuxChatTab.test.tsx
 // renders the real SlashCommandMenu and would otherwise see this file's
 // null-component stub via Bun's module cache).
-import * as realSlashCommandMenu from "@/components/claude/SlashCommandMenu";
+import * as realSlashCommandMenu from "@/components/chat/SlashCommandMenu";
 import * as realMentionableInput from "@/components/chat/MentionableInput";
 import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
 import * as realUseFileMentions from "@/hooks/useFileMentions";
@@ -42,7 +42,7 @@ const realUseFileSearchSnapshot = { ...realUseFileSearch };
 
 afterAll(() => {
   mock.module(
-    "@/components/claude/SlashCommandMenu",
+    "@/components/chat/SlashCommandMenu",
     () => realSlashCommandMenuSnapshot,
   );
   mock.module("@/components/chat/MentionableInput", () => realMentionableInputSnapshot);
@@ -98,13 +98,8 @@ mock.module("@/components/chat/MentionableInput", () => ({
   }),
 }));
 
-mock.module("@/components/claude/SlashCommandMenu", () => ({
+mock.module("@/components/chat/SlashCommandMenu", () => ({
   SlashCommandMenu: () => null,
-  parseSlashCommands: (cmds: string[]) =>
-    cmds.map((c) => {
-      const parts = c.split(" - ");
-      return { name: parts[0] ?? c, description: parts[1] ?? "" };
-    }),
 }));
 
 mock.module("@/components/chat/FileMentionMenu", () => ({

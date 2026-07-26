@@ -1,3 +1,4 @@
+import { createSessionKey } from "@/lib/utils";
 import {
   afterEach,
   beforeEach,
@@ -16,18 +17,15 @@ import {
   useGlobalActivityMonitor,
 } from "./useGlobalActivityMonitor";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
-import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
+import {useClaudeStore} from "@/stores/claudeStore";
 import {
   createClaudeTmuxStateKey,
   useClaudeTmuxStore,
 } from "@/stores/claudeTmuxStore";
-import { createCodexSessionKey, useCodexStore } from "@/stores/codexStore";
+import {useCodexStore} from "@/stores/codexStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores/uiStore";
-import {
-  createOpenCodeSessionKey,
-  useOpenCodeStore,
-} from "@/stores/openCodeStore";
+import {useOpenCodeStore} from "@/stores/openCodeStore";
 import type { Environment } from "@/types";
 
 const mockListen = listen as ReturnType<typeof mock>;
@@ -909,7 +907,7 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("derives Claude native working, waiting, and disconnected states", async () => {
-    const sessionKey = createClaudeSessionKey("env-claude", "tab-1");
+    const sessionKey = createSessionKey("env-claude", "tab-1");
     render(<MonitorHarness />);
 
     act(() => {
@@ -978,7 +976,7 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("treats a Claude plan approval as waiting for user input", async () => {
-    const sessionKey = createClaudeSessionKey("env-claude", "tab-plan");
+    const sessionKey = createSessionKey("env-claude", "tab-plan");
     render(<MonitorHarness />);
 
     act(() => {
@@ -999,22 +997,57 @@ describe("useGlobalActivityMonitor native agent activity", () => {
     });
   });
 
+  test("treats a pending Codex approval as waiting for user input", async () => {
+    // Codex derived activity from `isLoading` alone, so an environment blocked
+    // on a command approval reported idle — the sidebar showed green while the
+    // turn sat waiting for the user.
+    const sessionKey = createSessionKey("env-codex", "tab-approval");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useCodexStore.setState({
+        clients: new Map([["env-codex", {} as any]]),
+        sessions: new Map([
+          [sessionKey, { sessionId: "codex-thread", isLoading: false } as any],
+        ]),
+        pendingApprovals: new Map([
+          [sessionKey, [{ approvalId: "approval-1" } as any]],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("waiting");
+    });
+
+    // Answering the approval releases it back to idle.
+    act(() => {
+      useCodexStore.setState({ pendingApprovals: new Map() });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("idle");
+    });
+  });
+
   test("keeps each native environment working while any tab is still loading", async () => {
-    const claudeWorkingKey = createClaudeSessionKey(
+    const claudeWorkingKey = createSessionKey(
       "env-claude",
       "tab-working",
     );
-    const claudeIdleKey = createClaudeSessionKey("env-claude", "tab-idle");
-    const openCodeWorkingKey = createOpenCodeSessionKey(
+    const claudeIdleKey = createSessionKey("env-claude", "tab-idle");
+    const openCodeWorkingKey = createSessionKey(
       "env-opencode",
       "tab-working",
     );
-    const openCodeIdleKey = createOpenCodeSessionKey(
+    const openCodeIdleKey = createSessionKey(
       "env-opencode",
       "tab-idle",
     );
-    const codexWorkingKey = createCodexSessionKey("env-codex", "tab-working");
-    const codexIdleKey = createCodexSessionKey("env-codex", "tab-idle");
+    const codexWorkingKey = createSessionKey("env-codex", "tab-working");
+    const codexIdleKey = createSessionKey("env-codex", "tab-idle");
     render(<MonitorHarness />);
 
     act(() => {
@@ -1130,12 +1163,12 @@ describe("useGlobalActivityMonitor native agent activity", () => {
       return Promise.resolve({ ...environment, lastActivityAt: args?.occurredAt });
     });
 
-    const claudeA = createClaudeSessionKey("env-claude", "tab-a");
-    const claudeB = createClaudeSessionKey("env-claude", "tab-b");
-    const openCodeA = createOpenCodeSessionKey("env-opencode", "tab-a");
-    const openCodeB = createOpenCodeSessionKey("env-opencode", "tab-b");
-    const codexA = createCodexSessionKey("env-codex", "tab-a");
-    const codexB = createCodexSessionKey("env-codex", "tab-b");
+    const claudeA = createSessionKey("env-claude", "tab-a");
+    const claudeB = createSessionKey("env-claude", "tab-b");
+    const openCodeA = createSessionKey("env-opencode", "tab-a");
+    const openCodeB = createSessionKey("env-opencode", "tab-b");
+    const codexA = createSessionKey("env-codex", "tab-a");
+    const codexB = createSessionKey("env-codex", "tab-b");
     useClaudeStore.setState({
       clients: new Map([["env-claude", {} as any]]),
       sessions: new Map([[claudeA, { sessionId: "claude-a", isLoading: true } as any]]),
@@ -1249,8 +1282,8 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("does not let an idle agent type overwrite another working agent type", async () => {
-    const claudeKey = createClaudeSessionKey("env-shared", "tab-claude");
-    const codexKey = createCodexSessionKey("env-shared", "tab-codex");
+    const claudeKey = createSessionKey("env-shared", "tab-claude");
+    const codexKey = createSessionKey("env-shared", "tab-codex");
     render(<MonitorHarness />);
 
     act(() => {
@@ -1275,9 +1308,9 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("rehydrates existing native session activity when the monitor mounts", async () => {
-    const claudeKey = createClaudeSessionKey("env-claude", "tab-1");
-    const openCodeKey = createOpenCodeSessionKey("env-opencode", "tab-1");
-    const codexKey = createCodexSessionKey("env-codex", "tab-1");
+    const claudeKey = createSessionKey("env-claude", "tab-1");
+    const openCodeKey = createSessionKey("env-opencode", "tab-1");
+    const codexKey = createSessionKey("env-codex", "tab-1");
     useClaudeStore.setState({
       clients: new Map([["env-claude", {} as any]]),
       sessions: new Map([
@@ -1290,7 +1323,7 @@ describe("useGlobalActivityMonitor native agent activity", () => {
         [openCodeKey, { sessionId: "opencode-session", isLoading: false } as any],
       ]),
       pendingQuestions: new Map([
-        ["question-1", { sessionID: "opencode-session" } as any],
+        ["question-1", { sessionId: "opencode-session" } as any],
       ]),
     });
     useCodexStore.setState({
@@ -1313,9 +1346,9 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("derives native activity when clients reconnect without a session update", async () => {
-    const claudeKey = createClaudeSessionKey("env-claude", "tab-1");
-    const openCodeKey = createOpenCodeSessionKey("env-opencode", "tab-1");
-    const codexKey = createCodexSessionKey("env-codex", "tab-1");
+    const claudeKey = createSessionKey("env-claude", "tab-1");
+    const openCodeKey = createSessionKey("env-opencode", "tab-1");
+    const codexKey = createSessionKey("env-codex", "tab-1");
     useClaudeStore.setState({
       sessions: new Map([
         [claudeKey, { sessionId: "claude-session", isLoading: true } as any],
@@ -1356,9 +1389,9 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("clears native source activity when disconnected sessions are removed", async () => {
-    const claudeKey = createClaudeSessionKey("env-claude", "tab-1");
-    const openCodeKey = createOpenCodeSessionKey("env-opencode", "tab-1");
-    const codexKey = createCodexSessionKey("env-codex", "tab-1");
+    const claudeKey = createSessionKey("env-claude", "tab-1");
+    const openCodeKey = createSessionKey("env-opencode", "tab-1");
+    const codexKey = createSessionKey("env-codex", "tab-1");
     useClaudeStore.setState({
       clients: new Map([["env-claude", {} as any]]),
       sessions: new Map([
@@ -1405,8 +1438,8 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("keeps working above waiting across native agent types and restores waiting afterward", async () => {
-    const openCodeKey = createOpenCodeSessionKey("env-shared", "tab-opencode");
-    const codexKey = createCodexSessionKey("env-shared", "tab-codex");
+    const openCodeKey = createSessionKey("env-shared", "tab-opencode");
+    const codexKey = createSessionKey("env-shared", "tab-codex");
     render(<MonitorHarness />);
 
     act(() => {
@@ -1416,7 +1449,7 @@ describe("useGlobalActivityMonitor native agent activity", () => {
           [openCodeKey, { sessionId: "opencode-session", isLoading: false } as any],
         ]),
         pendingPermissions: new Map([
-          ["permission-1", { sessionID: "opencode-session" } as any],
+          ["permission-1", { sessionId: "opencode-session" } as any],
         ]),
       });
       useCodexStore.setState({
@@ -1447,10 +1480,10 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("ignores store updates that do not affect activity", async () => {
-    const claudeKey = createClaudeSessionKey("env-shared", "tab-claude");
+    const claudeKey = createSessionKey("env-shared", "tab-claude");
     const tmuxKey = createClaudeTmuxStateKey("env-shared", "tab-tmux");
-    const openCodeKey = createOpenCodeSessionKey("env-shared", "tab-opencode");
-    const codexKey = createCodexSessionKey("env-shared", "tab-codex");
+    const openCodeKey = createSessionKey("env-shared", "tab-opencode");
+    const codexKey = createSessionKey("env-shared", "tab-codex");
     useClaudeStore.setState({
       clients: new Map([["env-shared", {} as any]]),
       sessions: new Map([
@@ -1493,8 +1526,8 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("derives OpenCode waiting from pending permissions and Codex working from loading", async () => {
-    const openCodeSessionKey = createOpenCodeSessionKey("env-opencode", "tab-1");
-    const codexSessionKey = createCodexSessionKey("env-codex", "tab-1");
+    const openCodeSessionKey = createSessionKey("env-opencode", "tab-1");
+    const codexSessionKey = createSessionKey("env-codex", "tab-1");
     render(<MonitorHarness />);
 
     act(() => {
@@ -1511,7 +1544,7 @@ describe("useGlobalActivityMonitor native agent activity", () => {
           ],
         ]),
         pendingPermissions: new Map([
-          ["permission-1", { sessionID: "opencode-session" } as any],
+          ["permission-1", { sessionId: "opencode-session" } as any],
         ]),
       });
       useCodexStore.setState({

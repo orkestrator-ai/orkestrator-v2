@@ -3,7 +3,7 @@ import { Loader2, AlertCircle, RefreshCw, ArrowDown, Hammer, StopCircle, ArrowUp
 import { useScrollLock } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
+import {useClaudeStore} from "@/stores/claudeStore";
 import { useConfigStore, useEnvironmentStore } from "@/stores";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import type { BuildPhase, PipelineSession } from "@/stores/buildPipelineStore";
@@ -33,7 +33,7 @@ import {
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import type { BuildTabData } from "@/types/paneLayout";
 import { extractContextUsage } from "@/lib/context-usage";
-import { cn } from "@/lib/utils";
+import {cn, createSessionKey} from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
 import {
   createPRPrompt,
@@ -854,7 +854,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         }
 
         const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
-        const sessionKey = createClaudeSessionKey(environmentId, tabIdForSession);
+        const sessionKey = createSessionKey(environmentId, tabIdForSession);
 
         setSession(sessionKey, {
           sessionId: newSession.sessionId,

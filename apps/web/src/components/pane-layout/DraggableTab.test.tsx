@@ -1,10 +1,11 @@
+import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realSortable from "@dnd-kit/sortable";
 import * as realUtilities from "@dnd-kit/utilities";
 import type { TabInfo } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
-import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
+import {useClaudeStore} from "@/stores/claudeStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
@@ -89,7 +90,7 @@ describe("DraggableTab title precedence", () => {
     });
     useClaudeStore.setState({
       sessions: new Map([
-        [createClaudeSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
+        [createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
       ]),
     });
 
@@ -108,7 +109,7 @@ describe("DraggableTab title precedence", () => {
 
     useClaudeStore.setState({
       sessions: new Map([
-        [createClaudeSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
+        [createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
       ]),
     });
 

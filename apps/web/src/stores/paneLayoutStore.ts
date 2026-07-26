@@ -1,3 +1,4 @@
+import { createSessionKey } from "@/lib/utils";
 import { create } from "zustand";
 import type {
   PaneNode,
@@ -10,14 +11,19 @@ import {
   isPaneLeaf,
   MAX_SPLIT_DEPTH,
 } from "@/types/paneLayout";
-import { useTerminalSessionStore, createSessionKey } from "./terminalSessionStore";
+import {
+  useTerminalSessionStore,
+  // Distinct from the native `createSessionKey`: terminal keys also carry the
+  // container id.
+  createSessionKey as createTerminalSessionKey,
+} from "./terminalSessionStore";
 import { useSessionStore } from "./sessionStore";
 import { useTerminalPortalStore } from "./terminalPortalStore";
 import { useEnvironmentStore } from "./environmentStore";
-import { useClaudeStore, createClaudeSessionKey } from "./claudeStore";
+import { useClaudeStore } from "./claudeStore";
 import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "./claudeTmuxStore";
-import { useCodexStore, createCodexSessionKey } from "./codexStore";
-import { useOpenCodeStore, createOpenCodeSessionKey } from "./openCodeStore";
+import { useCodexStore } from "./codexStore";
+import { useOpenCodeStore } from "./openCodeStore";
 import * as backend from "@/lib/backend";
 import { deleteSession as deleteClaudeSession } from "@/lib/claude-client";
 import { stopSession as stopClaudeTmuxSession } from "@/lib/claude-tmux-client";
@@ -215,7 +221,7 @@ const TERMINAL_TAB_TYPES = new Set(["plain", "claude", "opencode", "codex", "roo
 
 function cleanupTerminalTab(envId: string, containerId: string | null, tabId: string) {
   const sessionStore = useTerminalSessionStore.getState();
-  const sessionKey = createSessionKey(containerId, tabId, envId);
+  const sessionKey = createTerminalSessionKey(containerId, tabId, envId);
   const sessionData = sessionStore.sessions.get(sessionKey);
   if (!sessionData) return;
 
@@ -243,7 +249,7 @@ function cleanupTerminalTab(envId: string, containerId: string | null, tabId: st
 
 function cleanupClaudeNativeTab(envId: string, tabId: string) {
   const store = useClaudeStore.getState();
-  const sessionKey = createClaudeSessionKey(envId, tabId);
+  const sessionKey = createSessionKey(envId, tabId);
   const client = store.clients.get(envId);
   const session = store.sessions.get(sessionKey);
   store.clearQueue(sessionKey);
@@ -257,7 +263,7 @@ function cleanupClaudeNativeTab(envId: string, tabId: string) {
 
 function cleanupOpenCodeNativeTab(envId: string, tabId: string) {
   const store = useOpenCodeStore.getState();
-  const sessionKey = createOpenCodeSessionKey(envId, tabId);
+  const sessionKey = createSessionKey(envId, tabId);
   const client = store.clients.get(envId);
   const session = store.sessions.get(sessionKey);
   store.clearQueue(sessionKey);
@@ -271,7 +277,7 @@ function cleanupOpenCodeNativeTab(envId: string, tabId: string) {
 
 function cleanupCodexNativeTab(envId: string, tabId: string) {
   const store = useCodexStore.getState();
-  const sessionKey = createCodexSessionKey(envId, tabId);
+  const sessionKey = createSessionKey(envId, tabId);
   const client = store.clients.get(envId);
   const session = store.sessions.get(sessionKey);
   store.clearQueue(sessionKey);

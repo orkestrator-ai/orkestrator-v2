@@ -10,7 +10,6 @@ import {
   X,
   FileText,
   ChevronDown,
-  ChevronUp,
   ArrowUp,
   Square,
   RefreshCw,
@@ -26,21 +25,14 @@ import {
   DropdownMenuSubContent,
   DropdownMenuPortal,
 } from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn } from "@/lib/utils";
+import {cn, createSessionKey} from "@/lib/utils";
 import { toast } from "sonner";
 import { readContainerFileBase64, readFileBase64 } from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useOpenCodeStore, createOpenCodeSessionKey, type OpenCodeAttachment, type OpenCodeQueuedMessage } from "@/stores/openCodeStore";
+import {useOpenCodeStore, type OpenCodeAttachment, type OpenCodeQueuedMessage} from "@/stores/openCodeStore";
 import { ContextUsageWheel } from "@/components/chat/ContextUsageWheel";
+import { persistAgentModelDefault } from "@/lib/chat/agent-model-preferences";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
@@ -49,7 +41,14 @@ import {
   NativeAttachmentMenu,
 } from "@/components/chat/NativeAttachmentMenu";
 import { useFileMentions, useFileSearch, useNativeComposeBarPaste } from "@/hooks";
-import { OpenCodeSlashCommandMenu } from "./OpenCodeSlashCommandMenu";
+import { useSlashCommandMenu } from "@/hooks/useSlashCommandMenu";
+import { useNativeComposeSubmit } from "@/hooks/useNativeComposeSubmit";
+import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
+import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
+import {
+  COMPOSE_MAX_INPUT_HEIGHT,
+  COMPOSE_MIN_INPUT_HEIGHT,
+} from "@/components/chat/compose-metrics";
 import type {
   OpenCodeModel,
   OpenCodeConversationMode,
@@ -83,27 +82,10 @@ interface OpenCodeComposeBarProps {
   layout?: "bottom" | "centered";
 }
 
-const MAX_LINES = 12;
-const LINE_HEIGHT = 20;
-const MIN_INPUT_HEIGHT = LINE_HEIGHT + 8;
-const MAX_INPUT_HEIGHT = MAX_LINES * LINE_HEIGHT + 16;
 const MAX_DATA_BACKED_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 /** Stable empty array to avoid infinite re-render loops in useSyncExternalStore */
 const EMPTY_QUEUE: OpenCodeQueuedMessage[] = [];
-
-function fileMentionsEqual(
-  left: readonly FileMention[],
-  right: readonly FileMention[],
-): boolean {
-  return left.length === right.length && left.every((mention, index) => {
-    const other = right[index];
-    return other !== undefined
-      && mention.id === other.id
-      && mention.filename === other.filename
-      && mention.relativePath === other.relativePath;
-  });
-}
 
 function attachmentMimeType(attachment: OpenCodeAttachment): string {
   const lastDot = attachment.name.lastIndexOf(".");
@@ -163,31 +145,15 @@ export function OpenCodeComposeBar({
   showAddressAll = false,
   layout = "bottom",
 }: OpenCodeComposeBarProps) {
-  const [isSending, setIsSending] = useState(false);
   const [pendingAttachmentSnapshots, setPendingAttachmentSnapshots] = useState(0);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const prevFileMentionMenuOpen = useRef(false);
-  const attachmentSelectionBlockedRef = useRef(disabled || isSending);
+  const attachmentSelectionBlockedRef = useRef(disabled);
   const attachmentSelectionGenerationRef = useRef(0);
   const pendingAttachmentSnapshotsRef = useRef(0);
   const mountedRef = useRef(true);
-  const attachmentSelectionBlocked = disabled || isSending;
-  if (attachmentSelectionBlocked && !attachmentSelectionBlockedRef.current) {
-    attachmentSelectionGenerationRef.current += 1;
-  }
-  attachmentSelectionBlockedRef.current = attachmentSelectionBlocked;
-
-  useEffect(() => {
-    mountedRef.current = true;
-    attachmentSelectionBlockedRef.current = disabled || isSending;
-    return () => {
-      mountedRef.current = false;
-      attachmentSelectionBlockedRef.current = true;
-      attachmentSelectionGenerationRef.current += 1;
-    };
-  }, []);
 
   const {
     getAttachments,
@@ -208,7 +174,7 @@ export function OpenCodeComposeBar({
   } = useOpenCodeStore();
 
   // Use session key so tab-scoped state (draft, attachments, mode) is isolated per tab
-  const sessionKey = createOpenCodeSessionKey(environmentId, tabId);
+  const sessionKey = createSessionKey(environmentId, tabId);
 
   const contextUsage = useOpenCodeStore(
     useCallback((state) => state.contextUsage.get(sessionKey), [sessionKey])
@@ -224,13 +190,10 @@ export function OpenCodeComposeBar({
   const attachments = getAttachments(sessionKey);
   const text = getDraftText(sessionKey);
   const mentions = getDraftMentions(sessionKey);
-  const selectedModel = getSelectedModel(environmentId);
-  const selectedVariant = getSelectedVariant(environmentId);
+  const selectedModel = getSelectedModel(sessionKey);
+  const selectedVariant = getSelectedVariant(sessionKey);
   const selectedMode = getSelectedMode(sessionKey);
 
-  const [slashMenuOpen, setSlashMenuOpen] = useState(false);
-  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
-  const [slashFilter, setSlashFilter] = useState("");
   const [modelSearch, setModelSearch] = useState("");
 
   // Get worktree path for local environments
@@ -274,40 +237,64 @@ export function OpenCodeComposeBar({
     inputRef.current?.focus();
   }, []);
 
-  useEffect(() => {
-    if (text.startsWith("/") && slashCommands.length > 0) {
-      const spaceIndex = text.indexOf(" ");
-      const currentCommand = spaceIndex === -1 ? text.slice(1) : "";
-
-      if (spaceIndex === -1) {
-        setSlashFilter(currentCommand);
-        setSlashMenuOpen(true);
-        setSlashSelectedIndex(0);
-      } else {
-        setSlashMenuOpen(false);
-      }
-    } else {
-      setSlashMenuOpen(false);
-      setSlashFilter("");
-    }
-  }, [text, slashCommands.length]);
-
-  const filteredSlashCommands = useMemo(
-    () =>
-      slashCommands.filter((command) =>
-        command.name.toLowerCase().includes(slashFilter.toLowerCase()),
-      ),
-    [slashCommands, slashFilter],
-  );
-
-  const handleSlashCommandSelect = useCallback(
-    (command: OpenCodeSlashCommand) => {
-      setDraftText(sessionKey, `${command.name} `);
-      setSlashMenuOpen(false);
-      inputRef.current?.focus();
-    },
+  const setText = useCallback(
+    (newText: string) => setDraftText(sessionKey, newText),
     [sessionKey, setDraftText],
   );
+
+  const focusInput = useCallback(() => inputRef.current?.focus(), []);
+
+  const {
+    isOpen: slashMenuOpen,
+    selectedIndex: slashSelectedIndex,
+    filteredCommands: filteredSlashCommands,
+    selectCommand: handleSlashCommandSelect,
+    closeMenu: closeSlashMenu,
+    handleKeyDown: handleSlashKeyDown,
+  } = useSlashCommandMenu({
+    commands: slashCommands,
+    text,
+    setText,
+    focusInput,
+  });
+
+  const { isSending, submit: handleSend, submitPrompt } = useNativeComposeSubmit({
+    agentLabel: "OpenCode",
+    sessionKey,
+    store: useOpenCodeStore,
+    text,
+    mentions,
+    attachments,
+    serializeForLLM,
+    onSend,
+    onQueue,
+    isLoading,
+    disabled,
+    // Attachment bytes are still being read off disk; sending now would
+    // dispatch a prompt referencing a snapshot that does not exist yet.
+    canSubmit: () => pendingAttachmentSnapshotsRef.current === 0,
+  });
+
+  // Attachment selections started before the composer locked belong to a
+  // previous generation and must be discarded when they resolve.
+  const attachmentSelectionBlocked = disabled || isSending;
+  if (attachmentSelectionBlocked && !attachmentSelectionBlockedRef.current) {
+    attachmentSelectionGenerationRef.current += 1;
+  }
+  attachmentSelectionBlockedRef.current = attachmentSelectionBlocked;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    attachmentSelectionBlockedRef.current = attachmentSelectionBlocked;
+    return () => {
+      mountedRef.current = false;
+      attachmentSelectionBlockedRef.current = true;
+      attachmentSelectionGenerationRef.current += 1;
+    };
+    // Mount/unmount bookkeeping only — the value is refreshed above on every
+    // render, so this must not re-run when it changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleTextAndMentionsChange = useCallback(
     (newText: string, newMentions: FileMention[]) => {
@@ -419,32 +406,7 @@ export function OpenCodeComposeBar({
       if (handled) return;
     }
 
-    if (slashMenuOpen && filteredSlashCommands.length > 0) {
-      switch (event.key) {
-        case "ArrowDown":
-          event.preventDefault();
-          setSlashSelectedIndex((prev) =>
-            prev < filteredSlashCommands.length - 1 ? prev + 1 : prev,
-          );
-          return;
-        case "ArrowUp":
-          event.preventDefault();
-          setSlashSelectedIndex((prev) => (prev > 0 ? prev - 1 : prev));
-          return;
-        case "Tab":
-        case "Enter":
-          if (filteredSlashCommands[slashSelectedIndex]) {
-            event.preventDefault();
-            handleSlashCommandSelect(filteredSlashCommands[slashSelectedIndex]);
-            return;
-          }
-          break;
-        case "Escape":
-          event.preventDefault();
-          setSlashMenuOpen(false);
-          return;
-      }
-    }
+    if (handleSlashKeyDown(event)) return;
 
     if (event.key === "Tab" && event.shiftKey) {
       event.preventDefault();
@@ -455,64 +417,11 @@ export function OpenCodeComposeBar({
 
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      handleSend();
+      void handleSend();
     }
   };
 
-  const handleSend = async () => {
-    if (isSending || disabled || pendingAttachmentSnapshotsRef.current > 0) return;
-    if (attachments.length === 0 && !text.trim()) return;
-
-    const submittedText = text;
-    const submittedMentions = mentions;
-    const submittedAttachments = attachments;
-    setIsSending(true);
-    const isQueueing = isLoading && Boolean(onQueue);
-    try {
-      const serializedText = serializeForLLM(text.trim(), mentions);
-      if (isQueueing) {
-        await onQueue!(serializedText, attachments);
-      } else {
-        await onSend(serializedText, attachments);
-      }
-      const store = useOpenCodeStore.getState();
-      if (
-        store.getDraftText(sessionKey) === submittedText
-        && fileMentionsEqual(
-          store.getDraftMentions(sessionKey),
-          submittedMentions,
-        )
-      ) {
-        store.setDraftText(sessionKey, "");
-        store.setDraftMentions(sessionKey, []);
-      }
-      for (const attachment of submittedAttachments) {
-        store.removeAttachment(sessionKey, attachment.id);
-      }
-    } catch (error) {
-      console.error(
-        `[OpenCodeComposeBar] Failed to ${isQueueing ? "queue" : "send"} prompt:`,
-        error,
-      );
-      toast.error(isQueueing ? "Failed to queue prompt" : "Failed to send prompt");
-    } finally {
-      setIsSending(false);
-    }
-  };
-
-  const handleAddressAll = async () => {
-    if (isSending || disabled || isLoading) return;
-
-    setIsSending(true);
-    try {
-      await onSend(ADDRESS_ALL_REVIEW_PROMPT, []);
-    } catch (error) {
-      console.error("[OpenCodeComposeBar] Failed to send review follow-up:", error);
-      toast.error("Failed to send prompt");
-    } finally {
-      setIsSending(false);
-    }
-  };
+  const handleAddressAll = () => submitPrompt(ADDRESS_ALL_REVIEW_PROMPT);
 
   const handleStop = () => {
     if (onStop) {
@@ -532,27 +441,53 @@ export function OpenCodeComposeBar({
     moveQueueItem(sessionKey, fromIndex, toIndex);
   };
 
+  /**
+   * Pull a queued prompt back into the composer for editing, restoring the
+   * options it was queued with.
+   */
+  const handleQueuedMessageClick = useCallback(
+    (message: OpenCodeQueuedMessage) => {
+      const store = useOpenCodeStore.getState();
+      store.setDraftText(sessionKey, message.text);
+      store.setDraftMentions(sessionKey, []);
+      store.clearAttachments(sessionKey);
+      for (const attachment of message.attachments) {
+        store.addAttachment(sessionKey, attachment);
+      }
+      if (message.model) {
+        store.setSelectedModel(sessionKey, message.model);
+      }
+      store.setSelectedVariant(sessionKey, message.variant);
+      store.setSelectedMode(sessionKey, message.mode);
+      store.removeQueueItem(sessionKey, message.id);
+      setQueueDialogOpen(false);
+      inputRef.current?.focus();
+    },
+    [sessionKey],
+  );
+
   const handleModeChange = (mode: string) => {
     setSelectedMode(sessionKey, mode as OpenCodeConversationMode);
   };
 
   const handleModelChange = (modelId: string) => {
-    setSelectedModel(environmentId, modelId);
+    setSelectedModel(sessionKey, modelId);
+    void persistAgentModelDefault("opencodeModel", modelId, "OpenCode");
 
     // Clear variant if the newly selected model doesn't support it
     const nextModel = models.find((m) => m.id === modelId);
     if (!nextModel?.variants || nextModel.variants.length === 0) {
-      setSelectedVariant(environmentId, undefined);
+      setSelectedVariant(sessionKey, undefined);
       return;
     }
 
     if (selectedVariant && !nextModel.variants.includes(selectedVariant)) {
-      setSelectedVariant(environmentId, undefined);
+      setSelectedVariant(sessionKey, undefined);
     }
   };
 
   const handleVariantChange = (variant: string | undefined) => {
-    setSelectedVariant(environmentId, variant);
+    setSelectedVariant(sessionKey, variant);
   };
 
   // Get display name for selected model
@@ -685,11 +620,11 @@ export function OpenCodeComposeBar({
         {/* Text input area - on top */}
         <div className="relative" data-mentionable-input ref={inputContainerRef}>
           {slashMenuOpen && filteredSlashCommands.length > 0 && (
-            <OpenCodeSlashCommandMenu
+            <SlashCommandMenu
               commands={filteredSlashCommands}
               selectedIndex={slashSelectedIndex}
               onSelect={handleSlashCommandSelect}
-              onClose={() => setSlashMenuOpen(false)}
+              onClose={closeSlashMenu}
             />
           )}
 
@@ -711,8 +646,8 @@ export function OpenCodeComposeBar({
             onKeyDown={handleKeyDown}
             placeholder="Ask anything (⌘L), @ to mention, / for workflows"
             disabled={disabled || isSending}
-            minHeight={MIN_INPUT_HEIGHT}
-            maxHeight={MAX_INPUT_HEIGHT}
+            minHeight={COMPOSE_MIN_INPUT_HEIGHT}
+            maxHeight={COMPOSE_MAX_INPUT_HEIGHT}
           />
         </div>
 
@@ -973,93 +908,31 @@ export function OpenCodeComposeBar({
         </div>
       </div>
 
-      <Dialog open={queueDialogOpen} onOpenChange={setQueueDialogOpen}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Queued Prompts</DialogTitle>
-            <DialogDescription>
-              Review pending prompts, remove items, or reorder what sends next.
-            </DialogDescription>
-          </DialogHeader>
-
-          {queuedMessages.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">
-              Queue is empty.
-            </div>
-          ) : (
-            <ScrollArea className="max-h-[380px] pr-3">
-              <div className="space-y-2">
-                {queuedMessages.map((message, index) => {
-                  const modelLabel = message.model
-                    ? modelNameById.get(message.model) || message.model
-                    : "Default model";
-                  const modeLabel = message.mode === "plan" ? "Planning" : "Build";
-                  const attachmentCount = message.attachments.length;
-
-                  return (
-                    <div
-                      key={message.id}
-                      className="rounded-md border border-border bg-muted/20 p-3"
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="mt-0.5 shrink-0 text-xs font-medium text-muted-foreground">
-                          #{index + 1}
-                        </div>
-
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm whitespace-pre-wrap break-words line-clamp-4">
-                            {message.text}
-                          </p>
-                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                            <span>{modeLabel}</span>
-                            <span>{modelLabel}</span>
-                            {message.variant && <span>{message.variant}</span>}
-                            {attachmentCount > 0 && (
-                              <span>
-                                {attachmentCount} attachment
-                                {attachmentCount === 1 ? "" : "s"}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="flex shrink-0 flex-col gap-1">
-                          <button
-                            type="button"
-                            onClick={() => handleMoveQueuedMessage(index, index - 1)}
-                            disabled={index === 0}
-                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-                            title="Move up"
-                          >
-                            <ChevronUp className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleMoveQueuedMessage(index, index + 1)}
-                            disabled={index === queuedMessages.length - 1}
-                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-                            title="Move down"
-                          >
-                            <ChevronDown className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveQueuedMessage(message.id)}
-                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive"
-                            title="Remove queued prompt"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </ScrollArea>
-          )}
-        </DialogContent>
-      </Dialog>
+      <QueuedPromptsDialog
+        open={queueDialogOpen}
+        onOpenChange={setQueueDialogOpen}
+        messages={queuedMessages}
+        onEdit={handleQueuedMessageClick}
+        onMove={handleMoveQueuedMessage}
+        onRemove={handleRemoveQueuedMessage}
+        renderMeta={(message) => (
+          <>
+            <span>{message.mode === "plan" ? "Planning" : "Build"}</span>
+            <span>
+              {message.model
+                ? modelNameById.get(message.model) || message.model
+                : "Default model"}
+            </span>
+            {message.variant && <span>{message.variant}</span>}
+            {message.attachments.length > 0 && (
+              <span>
+                {message.attachments.length} attachment
+                {message.attachments.length === 1 ? "" : "s"}
+              </span>
+            )}
+          </>
+        )}
+      />
     </>
   );
 }

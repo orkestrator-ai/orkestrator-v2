@@ -1,16 +1,15 @@
+import { createSessionKey } from "@/lib/utils";
 import { useEffect, useRef, useCallback, useState, useMemo } from "react";
-import { Loader2, AlertCircle, RefreshCw, ArrowDown, History } from "lucide-react";
-import { toast } from "sonner";
 import { useVirtuosoScrollState, clearPersistedVirtuosoState, useElapsedTimer } from "@/hooks";
-import { formatElapsed } from "@/lib/format-elapsed";
+import { useEscapeToStop } from "@/hooks/useEscapeToStop";
+import { useManualSessionRefresh } from "@/hooks/useManualSessionRefresh";
+import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
+import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
-import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
-import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
-import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
-import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
+import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { TURN_STOPPED_BY_USER } from "@/lib/chat/client-only-messages";
+import {useClaudeStore} from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
@@ -49,7 +48,6 @@ import {
   getClaudeModelCatalog,
   renameEnvironmentFromPrompt,
 } from "@/lib/backend";
-import { NativeMessage } from "@/components/chat/NativeMessage";
 import { ClaudeComposeBar } from "./ClaudeComposeBar";
 import { ClaudeQuestionCard } from "./ClaudeQuestionCard";
 import { ClaudePlanApprovalCard } from "./ClaudePlanApprovalCard";
@@ -122,21 +120,18 @@ export function ClaudeChatTab({
   // This avoids even a single frame of spinner when switching back to an already-connected env.
   const [connectionState, setConnectionState] = useState<ConnectionState>(() => {
     const hasClient = useClaudeStore.getState().clients.has(environmentId);
-    const hasSession = useClaudeStore.getState().sessions.has(createClaudeSessionKey(environmentId, tabId));
+    const hasSession = useClaudeStore.getState().sessions.has(createSessionKey(environmentId, tabId));
     return hasClient && hasSession ? "connected" : "connecting";
   });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
-  const [showLog, setShowLog] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
 
   const tabSessionIdRef = useRef<string | null>(null);
   const isInitializedRef = useRef(false);
   const initialPromptSentRef = useRef(false);
-  const isProcessingQueueRef = useRef(false);
   const slashCmdCleanupRef = useRef<(() => void) | null>(null);
-  const lastHandledRefreshRequestIdRef = useRef(0);
   const manualRefreshSequenceRef = useRef(0);
   const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => Promise<void>) | null>(null);
 
@@ -172,7 +167,6 @@ export function ClaudeChatTab({
     isFastMode,
     getSessionKeyBySdkSessionId,
     addToQueue,
-    removeFromQueue,
     clients: clientsMap,
     sessions: sessionsMap,
     pendingQuestions: pendingQuestionsMap,
@@ -210,7 +204,7 @@ export function ClaudeChatTab({
 
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
-  const sessionKey = useMemo(() => createClaudeSessionKey(environmentId, tabId), [environmentId, tabId]);
+  const sessionKey = useMemo(() => createSessionKey(environmentId, tabId), [environmentId, tabId]);
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
@@ -388,30 +382,21 @@ export function ClaudeChatTab({
     setSessionTitle,
   ]);
 
-  useEffect(() => {
-    if (
-      refreshRequestId <= lastHandledRefreshRequestIdRef.current ||
-      connectionState !== "connected" ||
-      !client ||
-      !session?.sessionId
-    ) {
-      return;
-    }
-
-    lastHandledRefreshRequestIdRef.current = refreshRequestId;
-    void refreshSessionFromServer().catch((error) => {
-      console.error("[ClaudeChatTab] Manual refresh failed:", error);
-      toast.error("Failed to refresh Claude tab", {
-        description: error instanceof Error ? error.message : String(error),
-      });
-    });
-  }, [
-    client,
-    connectionState,
+  useManualSessionRefresh({
     refreshRequestId,
-    refreshSessionFromServer,
-    session?.sessionId,
-  ]);
+    isReady:
+      connectionState === "connected" && !!client && !!session?.sessionId,
+    agentLabel: "Claude",
+    refresh: refreshSessionFromServer,
+  });
+
+  useStalledTurnWatchdog({
+    agentLabel: "Claude",
+    isLoading: session?.isLoading ?? false,
+    isReady:
+      connectionState === "connected" && !!client && !!session?.sessionId,
+    reconcile: refreshSessionFromServer,
+  });
 
   // Memoize messages separately to provide stable reference for child components
   // This prevents unnecessary recalculations when other session properties change
@@ -1419,12 +1404,13 @@ export function ClaudeChatTab({
 
     const success = await abortSession(client, session.sessionId);
     if (success) {
-      // Add a system message to indicate the query was stopped
+      // Leave a marker in the transcript. Without it an interrupted turn is
+      // indistinguishable from one that simply produced nothing.
       const systemMessage: ClaudeMessageType = {
         id: `${SYSTEM_MESSAGE_PREFIX}${createUuid()}`,
         role: "system",
-        content: "Query stopped by user.",
-        parts: [{ type: "text", content: "Query stopped by user." }],
+        content: TURN_STOPPED_BY_USER,
+        parts: [{ type: "text", content: TURN_STOPPED_BY_USER }],
         timestamp: new Date().toISOString(),
       };
       addMessage(sessionKey, systemMessage);
@@ -1433,33 +1419,11 @@ export function ClaudeChatTab({
     }
   }, [client, session, sessionKey, promoteNextQueuedPromptToDraft, setSessionLoading, addMessage]);
 
-  useEffect(() => {
-    if (!isActive || !session?.isLoading) {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.key !== "Escape"
-        || event.defaultPrevented
-        || event.repeat
-        || event.metaKey
-        || event.ctrlKey
-        || event.altKey
-        || event.isComposing
-      ) {
-        return;
-      }
-
-      event.preventDefault();
-      void handleStop();
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [handleStop, isActive, session?.isLoading]);
+  useEscapeToStop({
+    isActive,
+    isLoading: session?.isLoading ?? false,
+    onStop: handleStop,
+  });
 
   // Compute effort and plan mode values outside useEffect to avoid function reference dependencies
   const effortValue = getEffort(sessionKey);
@@ -1491,65 +1455,37 @@ export function ClaudeChatTab({
     }
   }, [connectionState, client, session, initialPrompt, setupPending, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
 
-  // Process queued messages when session becomes idle
-  useEffect(() => {
-    // Only process queue when:
-    // 1. Connected and have client/session
-    // 2. Session is not loading (just became idle)
-    // 3. There are messages in the queue
-    // 4. Not already processing a queued message (prevents race conditions)
-    if (
-      connectionState === "connected" &&
-      client &&
-      session &&
-      !session.isLoading &&
-      queueLength > 0 &&
-      !isQueueBlockedByDraft &&
-      !setupPending &&
-      !isProcessingQueueRef.current
-    ) {
-      const nextMessage = removeFromQueue(sessionKey);
-      if (nextMessage) {
-        // Set flag to prevent double-processing during state transitions
-        isProcessingQueueRef.current = true;
-
-        // Send the queued message using handleSend
-        const sendPromise = handleSendRef.current?.(
-          nextMessage.text,
-          nextMessage.attachments,
-          nextMessage.effort,
-          nextMessage.planModeEnabled,
-          nextMessage.fastModeEnabled
-        );
-
-        // Handle completion/errors and reset the processing flag
-        if (sendPromise) {
-          sendPromise
-            .catch((error) => {
-              console.error("[ClaudeChatTab] Failed to send queued message:", error);
-              // Add error message to inform user which queued message failed
-              const errorMessage: ClaudeMessageType = {
-                id: `${ERROR_MESSAGE_PREFIX}${createUuid()}`,
-                role: "assistant",
-                content: `Failed to send queued message: ${error instanceof Error ? error.message : "Unknown error"}`,
-                parts: [{ type: "text", content: `Failed to send queued message: ${error instanceof Error ? error.message : "Unknown error"}` }],
-                timestamp: new Date().toISOString(),
-              };
-              addMessage(sessionKey, errorMessage);
-              setSessionLoading(sessionKey, false);
-            })
-            .finally(() => {
-              // Reset processing flag after a short delay to allow state to settle
-              setTimeout(() => {
-                isProcessingQueueRef.current = false;
-              }, 100);
-            });
-        } else {
-          isProcessingQueueRef.current = false;
-        }
-      }
-    }
-  }, [connectionState, client, session, session?.isLoading, queueLength, isQueueBlockedByDraft, setupPending, sessionKey, removeFromQueue, addMessage, setSessionLoading]);
+  useNativeMessageQueue({
+    agentLabel: "Claude",
+    sessionKey,
+    store: useClaudeStore,
+    canDrain: !setupPending && connectionState === "connected" && !!client,
+    queueLength,
+    isLoading: session?.isLoading ?? false,
+    blockedByDraft: isQueueBlockedByDraft,
+    send: (entry) =>
+      handleSendRef.current?.(
+        entry.text,
+        entry.attachments,
+        entry.effort,
+        entry.planModeEnabled,
+        entry.fastModeEnabled,
+      ),
+    onError: (error) => {
+      const errorText = `Failed to send queued message: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`;
+      const errorMessage: ClaudeMessageType = {
+        id: `${ERROR_MESSAGE_PREFIX}${createUuid()}`,
+        role: "assistant",
+        content: errorText,
+        parts: [{ type: "text", content: errorText }],
+        timestamp: new Date().toISOString(),
+      };
+      addMessage(sessionKey, errorMessage);
+      setSessionLoading(sessionKey, false);
+    },
+  });
 
   const handleRetry = useCallback(() => {
     setConnectionState("connecting");
@@ -1613,173 +1549,48 @@ export function ClaudeChatTab({
     );
   }
 
-  if (connectionState === "connecting") {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
-        <Loader2 className="w-8 h-8 animate-spin" />
-        <p className="text-sm">Connecting to Claude bridge server...</p>
-      </div>
-    );
-  }
-
-  if (connectionState === "error") {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground p-4">
-        <AlertCircle className="w-10 h-10 text-destructive" />
-        <div className="text-center">
-          <p className="text-sm font-medium text-foreground">Connection Failed</p>
-          <p className="text-xs mt-1">{errorMessage || "Unable to connect to Claude bridge server"}</p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleRetry} className="gap-2">
-            <RefreshCw className="w-4 h-4" />
-            Retry
-          </Button>
-          {serverLog && (
-            <Button variant="ghost" size="sm" onClick={() => setShowLog(!showLog)}>
-              {showLog ? "Hide Log" : "Show Log"}
-            </Button>
-          )}
-        </div>
-        {showLog && serverLog && (
-          <div className="w-full max-w-lg mt-2">
-            <pre className="text-xs bg-muted p-3 rounded-md overflow-auto max-h-48 text-left whitespace-pre-wrap">
-              {serverLog || "(empty log)"}
-            </pre>
-          </div>
-        )}
-      </div>
-    );
-  }
-
   return (
-    <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <div
-        className={cn(
-          "flex min-h-0 flex-1 flex-col transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
-          centerCompose && "pointer-events-none scale-[0.995] opacity-0",
-        )}
-      >
-        {/* Virtualized messages area */}
-        <VirtualizedMessageList
-          messages={displayMessages}
-          computeItemKey={(_index, msg) => msg.id}
-          renderMessage={(_index, message, prev) => (
-            <NativeMessage
-              message={message}
-              previousMessage={prev}
-              assistantLabel="Claude"
-              containerId={containerId}
-            />
-          )}
-          emptyState={
-            !centerCompose ? (
-              <div className="flex flex-col items-center justify-center h-full min-h-[200px] text-muted-foreground gap-3">
-                <p className="text-sm">No messages yet. Start a conversation with Claude!</p>
-                {client && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setResumeDialogOpen(true)}
-                  >
-                    <History className="w-4 h-4 mr-2" />
-                    Resume Session
-                  </Button>
-                )}
-              </div>
-            ) : undefined
-          }
-          footer={
+    <NativeChatShell
+      agentLabel="Claude"
+      containerId={containerId}
+      connectionState={connectionState}
+      errorMessage={errorMessage}
+      serverLog={serverLog}
+      onRetry={handleRetry}
+      messages={displayMessages}
+      isLoading={session?.isLoading ?? false}
+      elapsedSeconds={elapsedSeconds}
+      finalElapsedSeconds={finalElapsedSeconds}
+      centerCompose={centerCompose}
+      isAtBottom={isAtBottom}
+      scrollToBottom={scrollToBottom}
+      scrollProps={scrollProps}
+      virtuosoRef={virtuosoRef}
+      onResumeClick={client ? () => setResumeDialogOpen(true) : undefined}
+      blockingCards={
+        session && client && (pendingQuestions.length > 0 || pendingPlanApprovals.length > 0) ? (
           <>
-            {session?.isLoading && (
-              <div className="px-2 @sm:px-4">
-                <div className="chat-status-row max-w-3xl mx-auto min-w-0">
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <AgentThinkingIndicator agentName="Claude" />
-                    {elapsedSeconds !== null && elapsedSeconds > 0 && (
-                      <span className="text-xs text-muted-foreground/50">{formatElapsed(elapsedSeconds)}</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {session && client && pendingQuestions.length > 0 && (
-              <div className="max-w-3xl mx-auto min-w-0">
-                {pendingQuestions.map((question) => (
-                  <ClaudeQuestionCard
-                    key={question.id}
-                    question={question}
-                    client={client}
-                    sessionId={session.sessionId}
-                  />
-                ))}
-              </div>
-            )}
-
-            {session && client && pendingPlanApprovals.length > 0 && (
-              <div className="max-w-3xl mx-auto min-w-0">
-                {pendingPlanApprovals.map((approval) => (
-                  <ClaudePlanApprovalCard
-                    key={approval.id}
-                    approval={approval}
-                    client={client}
-                    sessionId={session.sessionId}
-                    messages={sessionMessages}
-                  />
-                ))}
-              </div>
-            )}
-
-            {!session?.isLoading && finalElapsedSeconds !== null && (
-              <div className="px-2 @sm:px-4">
-                <div className="chat-status-row max-w-3xl mx-auto min-w-0">
-                  <span className="text-[10px] text-muted-foreground/40">
-                    Completed in {formatElapsed(finalElapsedSeconds)}
-                  </span>
-                </div>
-              </div>
-            )}
-              <div className="h-32" aria-hidden="true" />
-            </>
-          }
-          scrollProps={scrollProps}
-          virtuosoRef={virtuosoRef}
-        />
-
-      </div>
-
-      <NativeComposeDock
-        centered={centerCompose}
-        topAccessory={
-          !isAtBottom ? (
-            <button
-              type="button"
-              onClick={scrollToBottom}
-              className="flex items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
-              aria-label="Scroll to bottom of conversation"
-            >
-              <ArrowDown className="h-3.5 w-3.5" />
-              <span>Scroll down</span>
-            </button>
-          ) : null
-        }
-        actions={
-          client ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setResumeDialogOpen(true)}
-              className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
-              aria-hidden={!centerCompose}
-              tabIndex={centerCompose ? 0 : -1}
-            >
-              <History className="mr-2 h-4 w-4" />
-              Resume Session
-            </Button>
-          ) : null
-        }
-      >
+            {pendingQuestions.map((question) => (
+              <ClaudeQuestionCard
+                key={question.id}
+                question={question}
+                client={client}
+                sessionId={session.sessionId}
+              />
+            ))}
+            {pendingPlanApprovals.map((approval) => (
+              <ClaudePlanApprovalCard
+                key={approval.id}
+                approval={approval}
+                client={client}
+                sessionId={session.sessionId}
+                messages={sessionMessages}
+              />
+            ))}
+          </>
+        ) : null
+      }
+      composer={
         <ClaudeComposeBar
           environmentId={environmentId}
           tabId={tabId}
@@ -1794,17 +1605,19 @@ export function ClaudeChatTab({
           showAddressAll={showAddressAll}
           layout={centerCompose ? "centered" : "bottom"}
         />
-      </NativeComposeDock>
-
-      {client && (
-        <ResumeSessionDialog
-          open={resumeDialogOpen}
-          onOpenChange={setResumeDialogOpen}
-          client={client}
-          onResume={handleResumeSession}
-          currentSessionId={session?.sessionId}
-        />
-      )}
-    </div>
+      }
+      resumeDialog={
+        client ? (
+          <ResumeSessionDialog
+            open={resumeDialogOpen}
+            onOpenChange={setResumeDialogOpen}
+            client={client}
+            onResume={handleResumeSession}
+            currentSessionId={session?.sessionId}
+          />
+        ) : null
+      }
+    />
   );
 }
+

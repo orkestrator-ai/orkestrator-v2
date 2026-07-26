@@ -1,6 +1,7 @@
+import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createCodexSessionKey, useCodexStore } from "@/stores/codexStore";
+import {useCodexStore} from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -385,7 +386,7 @@ const ENVIRONMENT_ID = "env-1";
 const CONTAINER_ID = "container-1";
 const TAB_ID = "tab-1";
 const SESSION_ID = "session-1";
-const SESSION_KEY = createCodexSessionKey(ENVIRONMENT_ID, TAB_ID);
+const SESSION_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
 const MOCK_CLIENT = { baseUrl: "http://127.0.0.1:9999" } as const;
 const ORIGINAL_DATE_NOW = Date.now;
 const ORIGINAL_SET_INTERVAL = globalThis.setInterval;
@@ -984,8 +985,12 @@ describe("CodexChatTab", () => {
     render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
 
     expect(await screen.findByText("container bridge unavailable")).toBeTruthy();
-    expect(screen.getByText("sanitized bridge diagnostics")).toBeTruthy();
     expect(mockGetCodexServerLog).toHaveBeenCalledWith(CONTAINER_ID);
+
+    // The log sits behind a toggle, as it does for Claude and OpenCode, rather
+    // than being dumped into the error screen unconditionally.
+    fireEvent.click(screen.getByRole("button", { name: "Show Log" }));
+    expect(screen.getByText("sanitized bridge diagnostics")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
     await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
@@ -1006,7 +1011,6 @@ describe("CodexChatTab", () => {
     render(<CodexChatTab tabId={TAB_ID} data={createData({ isLocal: true })} isActive />);
 
     expect(await screen.findByText("local bridge offline")).toBeTruthy();
-    expect(screen.getByText("Local Codex bridge error: local bridge offline")).toBeTruthy();
     expect(mockGetCodexServerLog).not.toHaveBeenCalled();
   });
 
@@ -3224,7 +3228,7 @@ describe("CodexChatTab", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
 
-      expect(screen.getByText("Connecting Codex")).toBeTruthy();
+      expect(screen.getByText("Connecting to Codex...")).toBeTruthy();
       expect(mockSendPrompt).not.toHaveBeenCalled();
       expect(useCodexStore.getState().messageQueue.get(SESSION_KEY)).toHaveLength(1);
     });

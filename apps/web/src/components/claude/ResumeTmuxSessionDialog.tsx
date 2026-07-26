@@ -19,6 +19,7 @@ import {
   listPreviousSessions,
   type PreviousSession,
 } from "@/lib/claude-tmux-client";
+import { formatRelativeTimeFromUnixSeconds } from "@/lib/format-relative-time";
 
 interface ResumeTmuxSessionDialogProps {
   open: boolean;
@@ -26,19 +27,6 @@ interface ResumeTmuxSessionDialogProps {
   environmentId: string;
   /** Called with the picked session_id when the user chooses one. */
   onResume: (sessionId: string) => void;
-}
-
-function formatRelativeTime(unixSeconds: number): string {
-  if (!unixSeconds) return "unknown";
-  const ageSec = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
-  if (ageSec < 60) return "just now";
-  const mins = Math.floor(ageSec / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(unixSeconds * 1000).toLocaleDateString();
 }
 
 export function ResumeTmuxSessionDialog({
@@ -118,7 +106,9 @@ export function ResumeTmuxSessionDialog({
                         <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
                           <span className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
-                            {formatRelativeTime(s.last_activity_unix)}
+                            {formatRelativeTimeFromUnixSeconds(
+                              s.last_activity_unix,
+                            )}
                           </span>
                           <span className="opacity-60">·</span>
                           <span>

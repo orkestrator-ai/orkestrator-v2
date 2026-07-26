@@ -49,11 +49,11 @@ import { ResumeTmuxSessionDialog } from "@/components/claude/ResumeTmuxSessionDi
 import { formatElapsed } from "@/lib/format-elapsed";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
+import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
 import {
   parseSlashCommands,
-  SlashCommandMenu,
   type SlashCommand,
-} from "@/components/claude/SlashCommandMenu";
+} from "@/lib/chat/slash-commands";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import { useFileMentions } from "@/hooks/useFileMentions";
 import { useFileSearch } from "@/hooks/useFileSearch";

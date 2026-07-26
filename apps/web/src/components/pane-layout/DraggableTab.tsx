@@ -15,7 +15,10 @@ import { cn } from "@/lib/utils";
 import type { TabInfo } from "@/types/paneLayout";
 import { createDraggableTabId } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
-import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { useCodexStore } from "@/stores/codexStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { createSessionKey } from "@/lib/utils";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useFileDirtyStore } from "@/stores";
@@ -93,15 +96,30 @@ export function DraggableTab({
   const sessions = useSessionStore((state) => state.sessions);
   const session = Array.from(sessions.values()).find((s) => s.tabId === tab.id);
 
-  // Get Claude session title for claude-native tabs
+  // Agent-assigned session titles. All three native agents populate these, so
+  // all three label their tab with the session name once the agent picks one.
   const claudeSessionTitle = useClaudeStore((state) => {
     if (tab.type !== "claude-native" || !tab.claudeNativeData) return undefined;
-    const key = createClaudeSessionKey(
-      tab.claudeNativeData.environmentId,
-      tab.id,
-    );
-    return state.sessions.get(key)?.title;
+    return state.sessions.get(
+      createSessionKey(tab.claudeNativeData.environmentId, tab.id),
+    )?.title;
   });
+  const codexSessionTitle = useCodexStore((state) => {
+    if (tab.type !== "codex-native" || !tab.codexNativeData) return undefined;
+    return state.sessions.get(
+      createSessionKey(tab.codexNativeData.environmentId, tab.id),
+    )?.title;
+  });
+  const openCodeSessionTitle = useOpenCodeStore((state) => {
+    if (tab.type !== "opencode-native" || !tab.openCodeNativeData) {
+      return undefined;
+    }
+    return state.sessions.get(
+      createSessionKey(tab.openCodeNativeData.environmentId, tab.id),
+    )?.title;
+  });
+  const nativeSessionTitle =
+    claudeSessionTitle ?? codexSessionTitle ?? openCodeSessionTitle;
 
   // Get build pipeline title for claude-build tabs
   const buildPipelineTitle = useBuildPipelineStore((state) => {
@@ -139,10 +157,10 @@ export function DraggableTab({
       return `${session.name} ${tabNumber}`;
     }
 
-    // Auto-generated title from Claude native session takes precedence over
-    // the workflow-supplied displayTitle once the agent has named the session.
-    if (claudeSessionTitle) {
-      return claudeSessionTitle;
+    // Auto-generated title from the native session takes precedence over the
+    // workflow-supplied displayTitle once the agent has named the session.
+    if (nativeSessionTitle) {
+      return nativeSessionTitle;
     }
 
     if (tab.displayTitle) {

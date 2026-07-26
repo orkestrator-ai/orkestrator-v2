@@ -1,10 +1,11 @@
+import { createSessionKey } from "@/lib/utils";
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, screen } from "@testing-library/react";
 import { ClaudeComposeBar } from "@/components/claude/ClaudeComposeBar";
 import { CodexComposeBar } from "@/components/codex/CodexComposeBar";
 import { OpenCodeComposeBar } from "@/components/opencode/OpenCodeComposeBar";
-import { createOpenCodeSessionKey, useOpenCodeStore } from "@/stores/openCodeStore";
-import { useCodexStore } from "@/stores/codexStore";
+import {useOpenCodeStore} from "@/stores/openCodeStore";
+import {useCodexStore} from "@/stores/codexStore";
 
 const noop = () => {};
 const noopAsync = async () => {};
@@ -73,7 +74,7 @@ describe("native compose bar controls", () => {
     useCodexStore.getState().setDraftText("codex-session", "");
     useOpenCodeStore
       .getState()
-      .setDraftText(createOpenCodeSessionKey("opencode-environment", "opencode-tab"), "");
+      .setDraftText(createSessionKey("opencode-environment", "opencode-tab"), "");
   });
 
   test("uses two full-width control rows at mobile widths", () => {
@@ -125,7 +126,10 @@ describe("native compose bar controls", () => {
     });
     useOpenCodeStore
       .getState()
-      .setSelectedModel("opencode-environment", "long-opencode-model");
+      .setSelectedModel(
+        createSessionKey("opencode-environment", "opencode-tab"),
+        "long-opencode-model",
+      );
     const { container: openCode } = renderOpenCodeComposeBar(false, {
       models: [{
         id: "long-opencode-model",
@@ -188,7 +192,7 @@ describe("native compose bar controls", () => {
     expect(screen.getByTitle("Add to queue")).toBeTruthy();
 
     cleanup();
-    const openCodeSessionKey = createOpenCodeSessionKey(
+    const openCodeSessionKey = createSessionKey(
       "opencode-environment",
       "opencode-tab",
     );
@@ -205,7 +209,7 @@ describe("native compose bar controls", () => {
     expect(screen.queryByTitle("Add to queue")).toBeNull();
 
     cleanup();
-    const openCodeSessionKey = createOpenCodeSessionKey(
+    const openCodeSessionKey = createSessionKey(
       "opencode-environment",
       "opencode-tab",
     );

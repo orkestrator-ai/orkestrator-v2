@@ -1,3 +1,4 @@
+import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { useState, useCallback, useMemo } from "react";
 import { FileText, Check, X, ChevronRight } from "lucide-react";
 import Markdown from "react-markdown";
@@ -169,7 +170,7 @@ export function ClaudePlanApprovalCard({
   }, [client, sessionId, approval.id, removePendingPlanApproval]);
 
   return (
-    <div className="mx-4 my-3 rounded-lg border border-border bg-card shadow-sm overflow-hidden">
+    <BlockingPromptCard>
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-2.5 bg-amber-500/10 border-b border-border">
         <FileText className="w-4 h-4 text-amber-500" />
@@ -265,6 +266,6 @@ export function ClaudePlanApprovalCard({
           </Button>
         </div>
       </div>
-    </div>
+    </BlockingPromptCard>
   );
 }

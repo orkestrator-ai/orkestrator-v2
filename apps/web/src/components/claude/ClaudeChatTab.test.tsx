@@ -1,6 +1,7 @@
+import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
+import {useClaudeStore} from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -161,7 +162,7 @@ import type { ClaudeNativeData } from "@/types/paneLayout";
 
 const ENVIRONMENT_ID = "env-1";
 const TAB_ID = "tab-1";
-const SESSION_KEY = createClaudeSessionKey(ENVIRONMENT_ID, TAB_ID);
+const SESSION_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
 const MOCK_CLIENT = { baseUrl: "http://127.0.0.1:9999" } as const;
 const ORIGINAL_DATE_NOW = Date.now;
 const ORIGINAL_SET_INTERVAL = globalThis.setInterval;

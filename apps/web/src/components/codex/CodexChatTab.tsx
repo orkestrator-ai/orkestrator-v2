@@ -1,18 +1,23 @@
+import { createSessionKey } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowDown, History, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
-import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
-import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
-import { useElapsedTimer, useVirtuosoScrollState } from "@/hooks";
+import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import {
+  clearPersistedVirtuosoState,
+  useElapsedTimer,
+  useVirtuosoScrollState,
+} from "@/hooks";
+import { useEscapeToStop } from "@/hooks/useEscapeToStop";
+import { useManualSessionRefresh } from "@/hooks/useManualSessionRefresh";
+import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
+import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useCodexStore, createCodexSessionKey, useConfigStore } from "@/stores";
+import { useCodexStore, useConfigStore } from "@/stores";
 import {
   OPTIMISTIC_MESSAGE_PREFIX,
+  TURN_STOPPED_BY_USER,
   createOptimisticNativeMessage,
 } from "@/lib/chat/client-only-messages";
-import { formatElapsed } from "@/lib/format-elapsed";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
@@ -50,8 +55,10 @@ import {
   startLocalCodexServer,
   updateGlobalConfig,
 } from "@/lib/backend";
-import { SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
-import { NativeMessage } from "@/components/chat/NativeMessage";
+import {
+  ERROR_MESSAGE_PREFIX,
+  SYSTEM_MESSAGE_PREFIX,
+} from "@/lib/opencode-client";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { CodexComposeBar } from "./CodexComposeBar";
 import { CodexApprovalCard } from "./CodexApprovalCard";
@@ -68,7 +75,6 @@ import {
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
-import { cn } from "@/lib/utils";
 import type { CodexNativeData } from "@/types/paneLayout";
 import type { CodexAttachment } from "@/stores/codexStore";
 
@@ -160,7 +166,7 @@ export function CodexChatTab({
   // This avoids even a single frame of spinner when switching back to an already-connected env.
   const [connectionState, setConnectionState] = useState<ConnectionState>(() => {
     const hasClient = useCodexStore.getState().clients.has(environmentId);
-    const hasSession = useCodexStore.getState().sessions.has(createCodexSessionKey(environmentId, tabId));
+    const hasSession = useCodexStore.getState().sessions.has(createSessionKey(environmentId, tabId));
     return hasClient && hasSession ? "connected" : "connecting";
   });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -172,9 +178,8 @@ export function CodexChatTab({
   const [isPlanTransitionPending, setIsPlanTransitionPending] = useState(false);
   const lastInitTimeRef = useRef(0);
   const isInitializedRef = useRef(false);
-  const isProcessingQueueRef = useRef(false);
-  const isWatchdogRefreshInFlightRef = useRef(false);
-  const lastHandledRefreshRequestIdRef = useRef(0);
+  /** Set when an interrupt is accepted; cleared when the turn actually ends. */
+  const awaitingStopMarkerRef = useRef(false);
   const reconcileSequenceRef = useRef(0);
   const manualReconcileSequenceRef = useRef(0);
   /**
@@ -213,7 +218,7 @@ export function CodexChatTab({
    */
   const eventCursorRef = useRef<number | null>(null);
   const sessionKey = useMemo(
-    () => createCodexSessionKey(environmentId, tabId),
+    () => createSessionKey(environmentId, tabId),
     [environmentId, tabId],
   );
   const initialLaunchOptionsRef = useRef({
@@ -286,7 +291,6 @@ export function CodexChatTab({
   const setSelectedReasoningEffort = useCodexStore((state) => state.setSelectedReasoningEffort);
   const setFastMode = useCodexStore((state) => state.setFastMode);
   const addToQueue = useCodexStore((state) => state.addToQueue);
-  const removeFromQueue = useCodexStore((state) => state.removeFromQueue);
   const client = useCodexStore(
     useCallback((state) => state.clients.get(environmentId), [environmentId]),
   );
@@ -423,7 +427,6 @@ export function CodexChatTab({
   );
   const handleSendRef = useRef<CodexSendHandler | null>(null);
   /** Lets a finished drain start the next one without re-declaring the callback. */
-  const processQueueRef = useRef<() => void>(() => {});
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
     session?.isLoading,
     session?.sessionId,
@@ -723,81 +726,37 @@ export function CodexChatTab({
     [addToQueue, fastModeEnabled, selectedMode, selectedModel, selectedReasoningEffort, sessionKey],
   );
 
-  const processQueue = useCallback(() => {
-    if (isProcessingQueueRef.current) return;
-    if (setupPending) return;
-    if (connectionState !== "connected" || !client) return;
-
-    const codexState = useCodexStore.getState();
-    if (
-      (codexState.draftText.get(sessionKey)?.trim().length ?? 0) > 0 ||
-      (codexState.attachments.get(sessionKey)?.length ?? 0) > 0
-    ) {
-      return;
-    }
-
-    const latestSession = codexState.sessions.get(sessionKey);
-    if (!latestSession || latestSession.isLoading) return;
-
-    const nextMessage = removeFromQueue(sessionKey);
-    if (!nextMessage) return;
-
-    isProcessingQueueRef.current = true;
-
-    const sendPromise = handleSendRef.current?.(
-      nextMessage.text,
-      nextMessage.attachments,
-      nextMessage.requestId ?? nextMessage.id,
-    );
-
-    if (!sendPromise) {
-      isProcessingQueueRef.current = false;
-      return;
-    }
-
-    sendPromise
-      .catch((error) => {
-        console.error("[CodexChatTab] Failed to send queued prompt:", error);
-        setSessionLoading(sessionKey, false);
-        setSessionError(
-          sessionKey,
-          `Failed to send queued prompt: ${
-            error instanceof Error ? error.message : "Unknown error"
-          }`,
-        );
-      })
-      .finally(() => {
-        isProcessingQueueRef.current = false;
-        /**
-         * Normally the effect watching isLoading/queueLength drives the next
-         * drain, so this does not recurse. But that effect can fire *while* this
-         * send is still in flight — the re-entrancy guard above turns that into a
-         * no-op — and if the turn settled in the same pass there is no later
-         * dependency change to retry on, stranding the rest of the queue. Only
-         * re-enter when the queue is genuinely idle with work left; each pass
-         * dequeues one entry, so this cannot spin.
-         */
-        const settled = useCodexStore.getState();
-        if (
-          (settled.messageQueue.get(sessionKey)?.length ?? 0) > 0
-          && settled.sessions.get(sessionKey)?.isLoading !== true
-        ) {
-          processQueueRef.current();
-        }
-      });
-  }, [
-    client,
-    connectionState,
-    removeFromQueue,
+  useNativeMessageQueue({
+    agentLabel: "Codex",
     sessionKey,
-    setupPending,
-    setSessionError,
-    setSessionLoading,
-  ]);
-
-  useEffect(() => {
-    processQueueRef.current = processQueue;
-  }, [processQueue]);
+    store: useCodexStore,
+    canDrain: !setupPending && connectionState === "connected" && !!client,
+    queueLength,
+    isLoading: session?.isLoading ?? false,
+    blockedByDraft: isQueueBlockedByDraft,
+    send: (entry) =>
+      handleSendRef.current?.(
+        entry.text,
+        entry.attachments,
+        entry.requestId ?? entry.id,
+      ),
+    onError: (error) => {
+      const errorText = `Failed to send queued prompt: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`;
+      setSessionLoading(sessionKey, false);
+      setSessionError(sessionKey, errorText);
+      // Also recorded in the transcript, as Claude and OpenCode do — the error
+      // banner is transient, and which queued prompt failed is worth keeping.
+      addMessage(sessionKey, {
+        id: `${ERROR_MESSAGE_PREFIX}${createUuid()}`,
+        role: "assistant",
+        content: errorText,
+        parts: [{ type: "text", content: errorText }],
+        createdAt: new Date().toISOString(),
+      });
+    },
+  });
 
   const promoteNextQueuedPromptToDraft = useCallback(() => {
     const store = useCodexStore.getState();
@@ -840,6 +799,9 @@ export function CodexChatTab({
 
     const outcome = await abortSession(client, session.sessionId);
     if (outcome.status === "accepted") {
+      // The marker is written when the turn actually ends, not here — the
+      // interrupt is asynchronous and the turn may still produce output.
+      awaitingStopMarkerRef.current = true;
       return;
     }
 
@@ -870,33 +832,60 @@ export function CodexChatTab({
     setSessionPhase,
   ]);
 
+  /**
+   * Write the "stopped" marker once the interrupted turn has actually settled.
+   *
+   * Codex cannot emit it from `handleStop` the way Claude and OpenCode do:
+   * `turn/interrupt` is asynchronous, so at request time the turn may still be
+   * producing output and the marker would land mid-transcript.
+   */
   useEffect(() => {
-    if (!isActive || !session?.isLoading) {
-      return;
-    }
+    if (!awaitingStopMarkerRef.current) return;
+    if (session?.isLoading !== false) return;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.key !== "Escape"
-        || event.defaultPrevented
-        || event.repeat
-        || event.metaKey
-        || event.ctrlKey
-        || event.altKey
-        || event.isComposing
-      ) {
-        return;
-      }
+    awaitingStopMarkerRef.current = false;
+    addMessage(sessionKey, {
+      id: `${SYSTEM_MESSAGE_PREFIX}${createUuid()}`,
+      role: "system",
+      content: TURN_STOPPED_BY_USER,
+      parts: [{ type: "text", content: TURN_STOPPED_BY_USER }],
+      createdAt: new Date().toISOString(),
+    });
+  }, [addMessage, session?.isLoading, sessionKey]);
 
-      event.preventDefault();
-      void handleStop();
-    };
+  useEscapeToStop({
+    isActive,
+    isLoading: session?.isLoading ?? false,
+    onStop: handleStop,
+  });
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [handleStop, isActive, session?.isLoading]);
+  /**
+   * Reset everything a failed connection may have left behind, then re-init.
+   *
+   * This used to only flip the local flags, so a retry reconnected on top of a
+   * stale client and session — matching Claude and OpenCode means dropping the
+   * cached client, session and server status too.
+   */
+  const handleRetry = useCallback(() => {
+    isInitializedRef.current = false;
+    lastInitTimeRef.current = 0;
+    setConnectionState("connecting");
+    setErrorMessage(null);
+    updateTabNativeSessionId(tabId, undefined, environmentId);
+    clearPersistedVirtuosoState(sessionKey);
+    setClient(environmentId, null);
+    setSession(sessionKey, null);
+    setServerStatus(environmentId, { running: false, hostPort: null });
+    setInitAttempt((value) => value + 1);
+  }, [
+    environmentId,
+    sessionKey,
+    setClient,
+    setServerStatus,
+    setSession,
+    tabId,
+    updateTabNativeSessionId,
+  ]);
 
   const handleResumeSession = useCallback(
     async (threadId: string) => {
@@ -1623,41 +1612,27 @@ export function CodexChatTab({
     reconcileSessionStateRef.current = reconcileSessionState;
   }, [reconcileSessionState]);
 
-  useEffect(() => {
-    if (
-      refreshRequestId <= lastHandledRefreshRequestIdRef.current ||
-      connectionState !== "connected" ||
-      !client ||
-      !session?.sessionId
-    ) {
-      return;
-    }
-
-    lastHandledRefreshRequestIdRef.current = refreshRequestId;
-    void reconcileSessionState({
+  const refreshManually = useCallback(async () => {
+    const result = await reconcileSessionState({
       forceRefreshMessages: true,
       throwOnError: true,
       manual: true,
-    }).then((result) => {
-      if (result === "stale") {
-        // Only a newer manual refresh can get here, and that request owns the
-        // outcome. Logged rather than swallowed so a refresh that legitimately
-        // did nothing is still traceable.
-        console.debug("[CodexChatTab] Manual refresh superseded by a newer refresh");
-      }
-    }).catch((error) => {
-      console.error("[CodexChatTab] Manual refresh failed:", error);
-      toast.error("Failed to refresh Codex tab", {
-        description: error instanceof Error ? error.message : String(error),
-      });
     });
-  }, [
-    client,
-    connectionState,
-    reconcileSessionState,
+    if (result === "stale") {
+      // Only a newer manual refresh can get here, and that request owns the
+      // outcome. Logged rather than swallowed so a refresh that legitimately
+      // did nothing is still traceable.
+      console.debug("[CodexChatTab] Manual refresh superseded by a newer refresh");
+    }
+  }, [reconcileSessionState]);
+
+  useManualSessionRefresh({
     refreshRequestId,
-    session?.sessionId,
-  ]);
+    isReady:
+      connectionState === "connected" && !!client && !!session?.sessionId,
+    agentLabel: "Codex",
+    refresh: refreshManually,
+  });
 
   useEffect(() => {
     if (
@@ -1905,57 +1880,14 @@ export function CodexChatTab({
 
   // Watchdog poll for stalled turns. Mirrors the SSE gate above so it also
   // runs for hidden background mounts during a turn.
-  useEffect(() => {
-    if (
-      !session?.isLoading
-      || connectionState !== "connected"
-      || !client
-      || !session?.sessionId
-    ) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const pollSessionState = async () => {
-      if (
-        cancelled
-        || isWatchdogRefreshInFlightRef.current
-        || !refreshControllerRef.current.shouldRefresh()
-      ) {
-        return;
-      }
-
-      isWatchdogRefreshInFlightRef.current = true;
-      try {
-        await reconcileSessionState({ forceRefreshMessages: true });
-      } finally {
-        isWatchdogRefreshInFlightRef.current = false;
-      }
-    };
-
-    const intervalId = window.setInterval(() => {
-      void pollSessionState();
-    }, 1000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [
-    client,
-    connectionState,
-    reconcileSessionState,
-    session?.isLoading,
-    session?.sessionId,
-    sessionKey,
-  ]);
-
-  useEffect(() => {
-    if (queueLength > 0 && !isQueueBlockedByDraft && !setupPending) {
-      processQueue();
-    }
-  }, [processQueue, queueLength, isQueueBlockedByDraft, setupPending, session?.isLoading]);
+  useStalledTurnWatchdog({
+    agentLabel: "Codex",
+    isLoading: session?.isLoading ?? false,
+    isReady:
+      connectionState === "connected" && !!client && !!session?.sessionId,
+    reconcile: () => reconcileSessionState({ forceRefreshMessages: true }),
+    shouldReconcile: () => refreshControllerRef.current.shouldRefresh(),
+  });
 
   useEffect(() => {
     if (
@@ -1993,178 +1925,65 @@ export function CodexChatTab({
     );
   }
 
-  if (connectionState === "connecting") {
-    return (
-      <div className="flex h-full items-center justify-center gap-3 text-sm text-muted-foreground">
-        <Loader2 className="h-5 w-5 animate-spin" />
-        Connecting Codex
-      </div>
-    );
-  }
-
-  if (connectionState === "error") {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
-        <AlertCircle className="h-10 w-10 text-destructive" />
-        <div className="space-y-1">
-          <div className="font-medium">Codex failed to start</div>
-          <div className="text-sm text-muted-foreground">
-            {errorMessage ?? "Unknown error"}
-          </div>
-          {serverLog ? (
-            <pre className="mt-3 max-w-3xl overflow-auto rounded-md bg-muted p-3 text-left text-xs text-muted-foreground">
-              {serverLog}
-            </pre>
-          ) : null}
-        </div>
-        <Button
-          variant="outline"
-          onClick={() => {
-            isInitializedRef.current = false;
-            lastInitTimeRef.current = 0;
-            setConnectionState("connecting");
-            setErrorMessage(null);
-            setInitAttempt((value) => value + 1);
-          }}
-        >
-          <RefreshCw className="mr-2 h-4 w-4" />
-          Retry
-        </Button>
-      </div>
-    );
-  }
-
   return (
-    <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <div
-        className={cn(
-          "flex min-h-0 flex-1 flex-col transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
-          centerCompose && "pointer-events-none scale-[0.995] opacity-0",
-        )}
-      >
-        {/* Virtualized messages area */}
-        <VirtualizedMessageList
-          messages={displayMessages}
-          computeItemKey={(_index, msg) => msg.id}
-          renderMessage={(_index, message, prev) => (
-            <NativeMessage
-              message={message}
-              previousMessage={prev}
-              assistantLabel="Codex"
-            />
-          )}
-          footer={
-            <>
-              {session?.isLoading && (
-                <div className="px-2 @sm:px-4">
-                  <div className="chat-status-row mx-auto max-w-3xl min-w-0">
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      {/*
-                        Distinguish the transient app-server phases. Both are
-                        still "loading" — the turn may be executing — but they mean
-                        something different to the user than ordinary thinking.
-                      */}
-                      {sessionPhase === "cancelling" ? (
-                        <span role="status" className="text-xs">Stopping…</span>
-                      ) : sessionPhase === "recovering" ? (
-                        <span role="status" className="text-xs">
-                          Reconnecting to Codex…
-                        </span>
-                      ) : (
-                        <AgentThinkingIndicator agentName="Codex" />
-                      )}
-                      {elapsedSeconds !== null && elapsedSeconds > 0 && (
-                        <span className="text-xs text-muted-foreground/50">
-                          {formatElapsed(elapsedSeconds)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {!session?.isLoading && finalElapsedSeconds !== null && (
-                <div className="px-2 @sm:px-4">
-                  <div className="chat-status-row mx-auto max-w-3xl min-w-0">
-                    <span className="text-[10px] text-muted-foreground/40">
-                      Completed in {formatElapsed(finalElapsedSeconds)}
-                    </span>
-                  </div>
-                </div>
-              )}
-              {/* h-32 ≈ compose bar; h-80 adds room for the plan card (~230px) above it */}
-              <div className={showPlanModeCard ? "h-80" : "h-32"} aria-hidden="true" />
-            </>
-          }
-          scrollProps={scrollProps}
-          virtuosoRef={virtuosoRef}
-        />
-
-      </div>
-
-      <NativeComposeDock
-        centered={centerCompose}
-        topAccessory={
-          !isAtBottom || showPlanModeCard || showApprovals ? (
-            <div className="flex w-full flex-col gap-2">
-              {/*
-                * Pinned directly above the composer rather than placed in the
-                * message list: the turn is *blocked* on these, so they must be
-                * visible without scrolling, and they must not move as new
-                * messages stream in.
-                */}
-              {showApprovals
-                ? pendingApprovals.map((approval) => (
-                    <CodexApprovalCard
-                      key={approval.approvalId}
-                      approval={approval}
-                      client={client!}
-                      sessionId={session!.sessionId!}
-                      sessionKey={sessionKey}
-                    />
-                  ))
-                : null}
-
-              {!isAtBottom ? (
-                <button
-                  type="button"
-                  onClick={scrollToBottom}
-                  className="flex items-center gap-1.5 self-end rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
-                  aria-label="Scroll to bottom of conversation"
-                >
-                  <ArrowDown className="h-3.5 w-3.5" />
-                  <span>Scroll down</span>
-                </button>
-              ) : null}
-
-              {showPlanModeCard ? (
-                <CodexPlanModeCard
-                  className="mx-0 my-0"
-                  isSubmitting={isPlanTransitionPending}
-                  onApproveAndBuild={handleApprovePlan}
-                  onSwitchToBuild={handleSwitchPlanToBuild}
-                  onDismiss={() => setDismissedPlanReviewMessageId(latestAssistantMessage?.id ?? null)}
-                />
-              ) : null}
-            </div>
-          ) : null
-        }
-        actions={
-          client ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setResumeDialogOpen(true)}
-              className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
-              aria-hidden={!centerCompose}
-              tabIndex={centerCompose ? 0 : -1}
-            >
-              <History className="mr-2 h-4 w-4" />
-              Resume Session
-            </Button>
-          ) : null
-        }
-      >
+    <NativeChatShell
+      agentLabel="Codex"
+      containerId={containerId}
+      connectionState={connectionState}
+      errorMessage={errorMessage}
+      serverLog={serverLog}
+      onRetry={handleRetry}
+      messages={displayMessages}
+      isLoading={session?.isLoading ?? false}
+      statusLabel={
+        /*
+         * Distinguish the transient app-server phases. Both are still
+         * "loading" — the turn may be executing — but they mean something
+         * different to the user than ordinary thinking.
+         */
+        sessionPhase === "cancelling" ? (
+          <span role="status" className="text-xs">Stopping…</span>
+        ) : sessionPhase === "recovering" ? (
+          <span role="status" className="text-xs">Reconnecting to Codex…</span>
+        ) : undefined
+      }
+      elapsedSeconds={elapsedSeconds}
+      finalElapsedSeconds={finalElapsedSeconds}
+      centerCompose={centerCompose}
+      isAtBottom={isAtBottom}
+      scrollToBottom={scrollToBottom}
+      scrollProps={scrollProps}
+      virtuosoRef={virtuosoRef}
+      onResumeClick={client ? () => setResumeDialogOpen(true) : undefined}
+      // h-32 ≈ compose bar; h-80 adds room for the plan card (~230px) above it
+      bottomSpacerClassName={showPlanModeCard ? "h-80" : "h-32"}
+      blockingCards={
+        showApprovals
+          ? pendingApprovals.map((approval) => (
+              <CodexApprovalCard
+                key={approval.approvalId}
+                approval={approval}
+                client={client!}
+                sessionId={session!.sessionId!}
+                sessionKey={sessionKey}
+              />
+            ))
+          : null
+      }
+      pinnedAccessory={
+        showPlanModeCard ? (
+          <CodexPlanModeCard
+            className="mx-0 my-0"
+            isSubmitting={isPlanTransitionPending}
+            onApproveAndBuild={handleApprovePlan}
+            onSwitchToBuild={handleSwitchPlanToBuild}
+            onDismiss={() =>
+              setDismissedPlanReviewMessageId(latestAssistantMessage?.id ?? null)
+            }
+          />
+        ) : null
+      }
+      composer={
         <CodexComposeBar
           environmentId={environmentId}
           containerId={containerId}
@@ -2189,17 +2008,19 @@ export function CodexChatTab({
           showAddressAll={showAddressAll}
           layout={centerCompose ? "centered" : "bottom"}
         />
-      </NativeComposeDock>
-
-      {client ? (
-        <CodexResumeSessionDialog
-          open={resumeDialogOpen}
-          onOpenChange={setResumeDialogOpen}
-          client={client}
-          onResume={handleResumeSession}
-          currentSessionId={session?.sessionId}
-        />
-      ) : null}
-    </div>
+      }
+      resumeDialog={
+        client ? (
+          <CodexResumeSessionDialog
+            open={resumeDialogOpen}
+            onOpenChange={setResumeDialogOpen}
+            client={client}
+            onResume={handleResumeSession}
+            currentSessionId={session?.sessionId}
+          />
+        ) : null
+      }
+    />
   );
 }
+

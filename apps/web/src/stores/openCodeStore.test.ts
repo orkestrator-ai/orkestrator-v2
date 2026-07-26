@@ -452,7 +452,7 @@ describe("openCodeStore pending permissions", () => {
 
     const permission: PermissionRequest = {
       id: "perm-1",
-      sessionID: "session-1",
+      sessionId: "session-1",
       permission: "read",
       patterns: ["/workspace/**"],
       metadata: {},
@@ -490,7 +490,7 @@ describe("openCodeStore pending permissions", () => {
 
     store.addPendingPermission({
       id: "perm-a",
-      sessionID: "session-1",
+      sessionId: "session-1",
       permission: "read",
       patterns: ["/workspace/a/**"],
       metadata: {},
@@ -498,7 +498,7 @@ describe("openCodeStore pending permissions", () => {
     });
     store.addPendingPermission({
       id: "perm-b",
-      sessionID: "session-2",
+      sessionId: "session-2",
       permission: "bash",
       patterns: ["*"],
       metadata: {},
@@ -506,7 +506,7 @@ describe("openCodeStore pending permissions", () => {
     });
     store.addPendingPermission({
       id: "perm-c",
-      sessionID: "session-3",
+      sessionId: "session-3",
       permission: "read",
       patterns: ["/workspace/c/**"],
       metadata: {},
@@ -744,7 +744,7 @@ describe("openCodeStore questions and event subscriptions", () => {
 
     store.addPendingQuestion({
       id: "question-1",
-      sessionID: "session-1",
+      sessionId: "session-1",
       messageID: "msg-1",
       question: {
         header: "Confirm",
@@ -846,10 +846,10 @@ describe("openCodeStore questions and event subscriptions", () => {
       messages: [],
       isLoading: false,
     });
-    store.addPendingQuestion({ id: "question-a", sessionID: "session-a" } as any);
-    store.addPendingQuestion({ id: "question-b", sessionID: "session-b" } as any);
-    store.addPendingPermission({ id: "permission-a", sessionID: "session-a" } as any);
-    store.addPendingPermission({ id: "permission-b", sessionID: "session-b" } as any);
+    store.addPendingQuestion({ id: "question-a", sessionId: "session-a" } as any);
+    store.addPendingQuestion({ id: "question-b", sessionId: "session-b" } as any);
+    store.addPendingPermission({ id: "permission-a", sessionId: "session-a" } as any);
+    store.addPendingPermission({ id: "permission-b", sessionId: "session-b" } as any);
     store.setSelectedMode(sessionKeyA, "plan");
     store.setSelectedMode(sessionKeyB, "build");
     useOpenCodeStore.setState((state) => {

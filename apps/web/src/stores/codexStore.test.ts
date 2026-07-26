@@ -1,12 +1,10 @@
+import { createSessionKey } from "@/lib/utils";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createOptimisticNativeMessage } from "@/lib/chat/client-only-messages";
 import { CODEX_MODELS, DEFAULT_CODEX_MODEL, type CodexApproval } from "@/lib/codex-client";
-import {
-  createCodexSessionKey,
-  useCodexStore,
-} from "./codexStore";
+import { useCodexStore } from "./codexStore";
 
-const SESSION_KEY = createCodexSessionKey("env-1", "tab-1");
+const SESSION_KEY = createSessionKey("env-1", "tab-1");
 
 function resetCodexStore() {
   useCodexStore.setState({
@@ -197,8 +195,8 @@ describe("codexStore cleanup and queue helpers", () => {
   });
 
   test("clearEnvironment removes only the targeted environment's tab-scoped state", () => {
-    const sessionKeyA = createCodexSessionKey("env-1", "tab-1");
-    const sessionKeyB = createCodexSessionKey("env-2", "tab-1");
+    const sessionKeyA = createSessionKey("env-1", "tab-1");
+    const sessionKeyB = createSessionKey("env-2", "tab-1");
     const store = useCodexStore.getState();
 
     store.setSession(sessionKeyA, {
@@ -254,8 +252,8 @@ describe("codexStore cleanup and queue helpers", () => {
   });
 
   test("queue helpers remove items in FIFO order and preserve unrelated queues", () => {
-    const queueA = createCodexSessionKey("env-1", "tab-1");
-    const queueB = createCodexSessionKey("env-1", "tab-2");
+    const queueA = createSessionKey("env-1", "tab-1");
+    const queueB = createSessionKey("env-1", "tab-2");
     const store = useCodexStore.getState();
 
     store.addToQueue(queueA, {
@@ -331,7 +329,7 @@ describe("codexStore cleanup and queue helpers", () => {
       "request-2",
     ]);
 
-    const survivingKey = createCodexSessionKey("env-2", "tab-1");
+    const survivingKey = createSessionKey("env-2", "tab-1");
     store.addToQueue(survivingKey, {
       id: "entry-3",
       requestId: "request-3",
@@ -402,7 +400,7 @@ describe("codexStore session phases", () => {
 });
 
 describe("codexStore pending approvals", () => {
-  const OTHER_KEY = createCodexSessionKey("env-1", "tab-2");
+  const OTHER_KEY = createSessionKey("env-1", "tab-2");
 
   beforeEach(resetCodexStore);
 
@@ -520,7 +518,7 @@ describe("codexStore pending approvals", () => {
 
   test("clearEnvironment drops approvals for that environment only", () => {
     const store = useCodexStore.getState();
-    const otherEnvKey = createCodexSessionKey("env-2", "tab-1");
+    const otherEnvKey = createSessionKey("env-2", "tab-1");
     store.addPendingApproval(SESSION_KEY, approval("apr-1"));
     store.addPendingApproval(otherEnvKey, approval("apr-2"));
 

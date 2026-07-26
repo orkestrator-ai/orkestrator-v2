@@ -411,3 +411,179 @@ export function pruneSessionKeyedMap<V>(
   }
   return next;
 }
+
+/** The session-key prefix owned by one environment. */
+export function sessionKeyPrefixFor(environmentId: string): string {
+  return `env-${environmentId}:`;
+}
+
+/**
+ * Build the state patch that drops every trace of one environment.
+ *
+ * Each store used to hand-maintain this list, which made adding a new Map a
+ * silent leak waiting to happen — and the three had already drifted apart on
+ * what they cleaned up. Naming the maps declaratively keeps the sweep honest:
+ * a new Map is added to one of these two arrays or it is obviously missing.
+ *
+ * `environmentKeyed` maps are keyed by environmentId; `sessionKeyed` maps are
+ * keyed by sessionKey and pruned by prefix.
+ */
+export function buildClearEnvironmentPatch<TState extends object>(
+  state: TState,
+  environmentId: string,
+  keys: {
+    environmentKeyed: ReadonlyArray<KeysOfMaps<TState>>;
+    sessionKeyed: ReadonlyArray<KeysOfMaps<TState>>;
+  },
+): Partial<TState> {
+  const prefix = sessionKeyPrefixFor(environmentId);
+  const patch: Record<string, unknown> = {};
+
+  for (const key of keys.environmentKeyed) {
+    const map = state[key] as unknown as Map<string, unknown>;
+    const next = new Map(map);
+    next.delete(environmentId);
+    patch[key as string] = next;
+  }
+
+  for (const key of keys.sessionKeyed) {
+    const map = state[key] as unknown as Map<string, unknown>;
+    const next = pruneSessionKeyedMap(map, prefix);
+    // Older builds scoped some of these by environmentId. Drop that key too so
+    // a stale entry cannot outlive the environment it belonged to.
+    next.delete(environmentId);
+    patch[key as string] = next;
+  }
+
+  return patch as Partial<TState>;
+}
+
+/** Keys of `TState` whose value is a string-keyed Map. */
+type KeysOfMaps<TState> = {
+  [K in keyof TState]: TState[K] extends Map<string, unknown> ? K : never;
+}[keyof TState];
+
+/**
+ * Per-environment SSE subscription state.
+ *
+ * The subscription deliberately outlives the React component: the tab may be
+ * unmounted while a turn is still running, and the store must keep receiving
+ * updates so the sidebar and a later remount both see the truth.
+ */
+export interface NativeEventSubscriptionState<TEvent> {
+  abortController: AbortController;
+  stream: AsyncIterable<TEvent> | null;
+  isActive: boolean;
+}
+
+export interface NativeEventSubscriptionSlice<TEvent> {
+  eventSubscriptions: Map<string, NativeEventSubscriptionState<TEvent>>;
+  getOrCreateEventSubscription: (
+    environmentId: string,
+  ) => NativeEventSubscriptionState<TEvent> | null;
+  setEventStream: (
+    environmentId: string,
+    stream: AsyncIterable<TEvent> | null,
+  ) => void;
+  closeEventSubscription: (environmentId: string) => void;
+  hasActiveEventSubscription: (environmentId: string) => boolean;
+}
+
+/**
+ * Abort a subscription and drain its iterator.
+ *
+ * Exported because `clearEnvironment` has to do this too, before it drops the
+ * map entry — aborting without returning the iterator leaks the generator.
+ */
+export function teardownEventSubscription<TEvent>(
+  subscription: NativeEventSubscriptionState<TEvent> | undefined,
+): void {
+  if (!subscription) return;
+  subscription.abortController.abort();
+  if (subscription.stream && Symbol.asyncIterator in subscription.stream) {
+    const iterator = subscription.stream[Symbol.asyncIterator]();
+    if (iterator.return) {
+      iterator.return().catch(() => {});
+    }
+  }
+}
+
+/**
+ * Builds the shared event-subscription slice.
+ *
+ * Claude and OpenCode had byte-identical copies of these four actions; Codex
+ * drives its SSE through the bridge client instead and does not use this.
+ */
+export function createEventSubscriptionSlice<TEvent>(
+  logPrefix: string,
+): StateCreator<
+  NativeEventSubscriptionSlice<TEvent>,
+  [],
+  [],
+  NativeEventSubscriptionSlice<TEvent>
+> {
+  return (set, get) => ({
+    eventSubscriptions: new Map(),
+
+    getOrCreateEventSubscription: (environmentId) => {
+      const state = get();
+      const existing = state.eventSubscriptions.get(environmentId);
+
+      if (existing && existing.isActive) {
+        console.log(
+          `[${logPrefix}] Reusing existing event subscription for environment:`,
+          environmentId,
+        );
+        return existing;
+      }
+
+      console.log(
+        `[${logPrefix}] Creating new event subscription for environment:`,
+        environmentId,
+      );
+      const newSubscription: NativeEventSubscriptionState<TEvent> = {
+        abortController: new AbortController(),
+        stream: null,
+        isActive: true,
+      };
+
+      const next = new Map(state.eventSubscriptions);
+      next.set(environmentId, newSubscription);
+      set({ eventSubscriptions: next });
+
+      return newSubscription;
+    },
+
+    setEventStream: (environmentId, stream) =>
+      set((state) => {
+        const subscription = state.eventSubscriptions.get(environmentId);
+        if (!subscription) return state;
+        const next = new Map(state.eventSubscriptions);
+        next.set(environmentId, {
+          ...subscription,
+          stream,
+          isActive: stream !== null,
+        });
+        return { eventSubscriptions: next };
+      }),
+
+    closeEventSubscription: (environmentId) => {
+      const state = get();
+      const subscription = state.eventSubscriptions.get(environmentId);
+      if (!subscription) return;
+
+      console.log(
+        `[${logPrefix}] Closing event subscription for environment:`,
+        environmentId,
+      );
+      teardownEventSubscription(subscription);
+
+      const next = new Map(state.eventSubscriptions);
+      next.delete(environmentId);
+      set({ eventSubscriptions: next });
+    },
+
+    hasActiveEventSubscription: (environmentId) =>
+      get().eventSubscriptions.get(environmentId)?.isActive ?? false,
+  });
+}

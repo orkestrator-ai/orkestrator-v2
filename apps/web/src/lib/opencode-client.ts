@@ -122,6 +122,14 @@ export interface OpenCodeSession {
   id: string;
   title?: string;
   createdAt: string;
+  /**
+   * When the session was last touched.
+   *
+   * The resume picker orders on this. It used to order on `createdAt`, which
+   * buried the session the user had most recently worked in. Falls back to
+   * `createdAt` when the server does not report an update time.
+   */
+  updatedAt: string;
 }
 
 /** OpenCode conversation mode */
@@ -153,8 +161,13 @@ export interface QuestionInfo {
 export interface QuestionRequest {
   /** Request ID */
   id: string;
-  /** Session ID */
-  sessionID: string;
+  /**
+   * Session ID.
+   *
+   * Spelled `sessionId` to match Claude and Codex; the SDK's own wire field is
+   * `sessionID` and is normalized at the boundary.
+   */
+  sessionId: string;
   /** Questions to ask */
   questions: QuestionInfo[];
   /** Associated tool info */
@@ -168,8 +181,8 @@ export interface QuestionRequest {
 export interface PermissionRequest {
   /** Request ID */
   id: string;
-  /** Session ID */
-  sessionID: string;
+  /** Session ID. See `QuestionRequest.sessionId` on the spelling. */
+  sessionId: string;
   /** Permission type (e.g. read, edit, bash) */
   permission: string;
   /** Requested path patterns */
@@ -183,6 +196,35 @@ export interface PermissionRequest {
     messageID: string;
     callID: string;
   };
+}
+
+/**
+ * Normalize the SDK's wire shape onto our request types.
+ *
+ * The only real difference is the session-id spelling: the SDK sends
+ * `sessionID`, we store `sessionId` so all three agents agree. These used to be
+ * blind casts, which is how the mismatch went unnoticed.
+ */
+function normalizeQuestionRequest(raw: unknown): QuestionRequest {
+  const record = isRecord(raw) ? raw : {};
+  return {
+    ...(record as Omit<QuestionRequest, "sessionId">),
+    sessionId: readSessionId(record),
+  };
+}
+
+function normalizePermissionRequest(raw: unknown): PermissionRequest {
+  const record = isRecord(raw) ? raw : {};
+  return {
+    ...(record as Omit<PermissionRequest, "sessionId">),
+    sessionId: readSessionId(record),
+  };
+}
+
+/** Accepts either spelling; the SDK has used both across versions. */
+function readSessionId(record: Record<string, unknown>): string {
+  const value = record.sessionID ?? record.sessionId;
+  return typeof value === "string" ? value : "";
 }
 
 /** Answer to a question (array of selected labels or typed text) */
@@ -1190,15 +1232,15 @@ export async function createSession(
     throw new Error("OpenCode returned an empty session response");
   }
 
-  const createdTime = response.data.time?.created;
-  const createdAt = typeof createdTime === "number"
-    ? new Date(createdTime).toISOString()
-    : createdTime || new Date().toISOString();
+  const createdAt = toIsoTimestamp(response.data.time?.created)
+    ?? new Date().toISOString();
 
   return {
     id: response.data.id,
     title: response.data.title,
     createdAt,
+    // A session that has just been created has not been touched since.
+    updatedAt: toIsoTimestamp(response.data.time?.updated) ?? createdAt,
   };
 }
 
@@ -1873,21 +1915,36 @@ export async function subscribeToEvents(client: OpencodeClient): Promise<AsyncIt
 /**
  * Get list of existing sessions
  */
+/**
+ * Normalize the SDK's timestamps, which may arrive as epoch millis or as an
+ * ISO string depending on server version.
+ */
+function toIsoTimestamp(value: unknown): string | null {
+  if (typeof value === "number") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+  if (typeof value === "string" && value.length > 0) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+  return null;
+}
+
 export async function listSessions(client: OpencodeClient): Promise<OpenCodeSession[]> {
   try {
     const response = await client.session.list();
     if (!response.data) return [];
 
     return response.data.map((session): OpenCodeSession => {
-      const createdTime = session.time?.created;
-      const createdAt: string = typeof createdTime === "number"
-        ? new Date(createdTime).toISOString()
-        : createdTime || new Date().toISOString();
+      const createdAt = toIsoTimestamp(session.time?.created)
+        ?? new Date().toISOString();
 
       return {
         id: session.id,
         title: session.title,
         createdAt,
+        updatedAt: toIsoTimestamp(session.time?.updated) ?? createdAt,
       };
     });
   } catch (error) {
@@ -1948,7 +2005,7 @@ export async function getPendingQuestions(
       }
       return [];
     }
-    return response.data as QuestionRequest[];
+    return response.data.map(normalizeQuestionRequest);
   } catch (error) {
     console.error("[opencode-client] Failed to get pending questions:", error);
     if (options.throwOnError) {
@@ -1980,7 +2037,7 @@ export async function getPendingPermissions(
       }
       return [];
     }
-    return response.data as PermissionRequest[];
+    return response.data.map(normalizePermissionRequest);
   } catch (error) {
     console.error("[opencode-client] Failed to get pending permissions:", error);
     if (options.throwOnError) {

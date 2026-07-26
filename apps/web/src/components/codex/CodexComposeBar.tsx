@@ -1,31 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, ChevronDown, ChevronUp, FileText, Square, X, Zap } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, FileText, Square, X, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useCodexStore } from "@/stores";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
-import { OpenCodeSlashCommandMenu } from "@/components/opencode/OpenCodeSlashCommandMenu";
+import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
+import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
+import {
+  COMPOSE_MAX_INPUT_HEIGHT,
+  COMPOSE_MIN_INPUT_HEIGHT,
+} from "@/components/chat/compose-metrics";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useFileMentions, useFileSearch, useNativeComposeBarPaste } from "@/hooks";
 import { toast } from "sonner";
-import type { OpenCodeSlashCommand } from "@/lib/opencode-client";
+import { useSlashCommandMenu } from "@/hooks/useSlashCommandMenu";
+import { useNativeComposeSubmit } from "@/hooks/useNativeComposeSubmit";
 import type {
   CodexConversationMode,
   CodexModel,
@@ -36,24 +34,9 @@ import type {
 import type { CodexAttachment, CodexQueuedMessage } from "@/stores/codexStore";
 import type { FileCandidate, FileMention } from "@/types";
 
-const MIN_HEIGHT_PX = 28;
-const MAX_HEIGHT_PX = 160;
 const EMPTY_ATTACHMENTS: CodexAttachment[] = [];
 const EMPTY_MENTIONS: FileMention[] = [];
 const EMPTY_QUEUE: CodexQueuedMessage[] = [];
-
-function fileMentionsEqual(
-  left: readonly FileMention[],
-  right: readonly FileMention[],
-): boolean {
-  return left.length === right.length && left.every((mention, index) => {
-    const other = right[index];
-    return other !== undefined
-      && mention.id === other.id
-      && mention.filename === other.filename
-      && mention.relativePath === other.relativePath;
-  });
-}
 
 const REASONING_LABELS: Record<CodexReasoningEffort, string> = {
   minimal: "Minimal",
@@ -124,7 +107,6 @@ export function CodexComposeBar({
   showAddressAll = false,
   layout = "bottom",
 }: CodexComposeBarProps) {
-  const [isSending, setIsSending] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const prevFileMentionMenuOpen = useRef(false);
@@ -149,9 +131,6 @@ export function CodexComposeBar({
   const clearAttachments = useCodexStore((state) => state.clearAttachments);
   const removeQueueItem = useCodexStore((state) => state.removeQueueItem);
   const moveQueueItem = useCodexStore((state) => state.moveQueueItem);
-  const [slashMenuOpen, setSlashMenuOpen] = useState(false);
-  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
-  const [slashFilter, setSlashFilter] = useState("");
 
   const worktreePath = useEnvironmentStore(
     (state) => state.getEnvironmentById(environmentId)?.worktreePath,
@@ -193,103 +172,47 @@ export function CodexComposeBar({
     }
   }, [fileMentionMenuOpen, refreshFileTree]);
 
-  useEffect(() => {
-    if (text.startsWith("/") && slashCommands.length > 0) {
-      const spaceIndex = text.indexOf(" ");
-      const currentCommand = spaceIndex === -1 ? text.slice(1) : "";
+  const setText = useCallback(
+    (newText: string) => setDraftText(sessionKey, newText),
+    [sessionKey, setDraftText],
+  );
 
-      if (spaceIndex === -1) {
-        setSlashFilter(currentCommand);
-        setSlashMenuOpen(true);
-        setSlashSelectedIndex(0);
-      } else {
-        setSlashMenuOpen(false);
-      }
-    } else {
-      setSlashMenuOpen(false);
-      setSlashFilter("");
-    }
-  }, [slashCommands.length, text]);
+  const focusInput = useCallback(() => inputRef.current?.focus(), []);
 
-  const handleSubmit = useCallback(async () => {
-    const trimmed = text.trim();
-    if (
-      (trimmed.length === 0 && attachments.length === 0)
-      || disabled
-      || isSending
-    ) {
-      return;
-    }
-
-    const isQueueing = isLoading && Boolean(onQueue);
-    if (isLoading && !onQueue) {
-      return;
-    }
-
-    const submittedText = text;
-    const submittedMentions = mentions;
-    const submittedAttachments = attachments;
-    setIsSending(true);
-    try {
-      if (isQueueing) {
-        await onQueue!(serializeForLLM(trimmed, mentions), attachments);
-      } else {
-        await onSend(serializeForLLM(trimmed, mentions), attachments);
-      }
-      const store = useCodexStore.getState();
-      if (
-        store.getDraftText(sessionKey) === submittedText
-        && fileMentionsEqual(
-          store.getDraftMentions(sessionKey),
-          submittedMentions,
-        )
-      ) {
-        store.setDraftText(sessionKey, "");
-        store.setDraftMentions(sessionKey, []);
-      }
-      for (const attachment of submittedAttachments) {
-        store.removeAttachment(sessionKey, attachment.id);
-      }
-    } catch (error) {
-      console.error(
-        `[CodexComposeBar] Failed to ${isQueueing ? "queue" : "send"} prompt:`,
-        error,
-      );
-      toast.error(isQueueing ? "Failed to queue prompt" : "Failed to send prompt");
-    } finally {
-      setIsSending(false);
-    }
-  }, [
-    attachments,
-    clearAttachments,
-    disabled,
-    isLoading,
-    isSending,
-    mentions,
-    onQueue,
-    onSend,
-    sessionKey,
-    setDraftMentions,
-    setDraftText,
+  const {
+    isOpen: slashMenuOpen,
+    selectedIndex: slashSelectedIndex,
+    filteredCommands: filteredSlashCommands,
+    selectCommand: handleSlashCommandSelect,
+    closeMenu: closeSlashMenu,
+    handleKeyDown: handleSlashKeyDown,
+  } = useSlashCommandMenu({
+    commands: slashCommands,
     text,
+    setText,
+    focusInput,
+  });
+
+  const { isSending, submit: handleSubmit, submitPrompt } = useNativeComposeSubmit({
+    agentLabel: "Codex",
+    sessionKey,
+    store: useCodexStore,
+    text,
+    mentions,
+    attachments,
     serializeForLLM,
-  ]);
+    onSend,
+    onQueue,
+    isLoading,
+    disabled,
+    // app-server rejects a second concurrent prompt with a 409.
+    refuseWhenBusyWithoutQueue: true,
+  });
 
-  const handleAddressAll = useCallback(async () => {
-    if (disabled || isSending || isLoading) {
-      return;
-    }
-
-    setIsSending(true);
-    try {
-      await onSend(ADDRESS_ALL_REVIEW_PROMPT, []);
-    } catch (error) {
-      console.error("[CodexComposeBar] Failed to send review follow-up:", error);
-      toast.error("Failed to send prompt");
-    } finally {
-      setIsSending(false);
-    }
-  }, [disabled, isLoading, isSending, onSend]);
+  const handleAddressAll = useCallback(
+    () => submitPrompt(ADDRESS_ALL_REVIEW_PROMPT),
+    [submitPrompt],
+  );
 
   const selectedModelObj = useMemo(
     () => models.find((model) => model.id === selectedModel),
@@ -327,22 +250,6 @@ export function CodexComposeBar({
   const reasoningDisplayLabel =
     currentReasoningOption?.label ?? REASONING_LABELS[effectiveReasoningEffort];
   const modeDisplayLabel = selectedMode === "plan" ? "Plan" : "Build";
-  const filteredSlashCommands = useMemo(
-    () =>
-      slashCommands.filter((command) =>
-        command.name.toLowerCase().includes(slashFilter.toLowerCase()),
-      ),
-    [slashCommands, slashFilter],
-  );
-
-  const handleSlashCommandSelect = useCallback(
-    (command: Pick<OpenCodeSlashCommand, "name">) => {
-      setDraftText(sessionKey, `${command.name} `);
-      setSlashMenuOpen(false);
-      inputRef.current?.focus();
-    },
-    [sessionKey, setDraftText],
-  );
 
   const handleTextAndMentionsChange = useCallback(
     (newText: string, newMentions: FileMention[]) => {
@@ -479,11 +386,11 @@ export function CodexComposeBar({
 
       <div className="relative" data-mentionable-input ref={inputContainerRef}>
         {slashMenuOpen && filteredSlashCommands.length > 0 ? (
-          <OpenCodeSlashCommandMenu
+          <SlashCommandMenu
             commands={filteredSlashCommands}
             selectedIndex={slashSelectedIndex}
             onSelect={handleSlashCommandSelect}
-            onClose={() => setSlashMenuOpen(false)}
+            onClose={closeSlashMenu}
           />
         ) : null}
 
@@ -510,36 +417,7 @@ export function CodexComposeBar({
               }
             }
 
-            if (slashMenuOpen && filteredSlashCommands.length > 0) {
-              if (event.key === "ArrowDown") {
-                event.preventDefault();
-                setSlashSelectedIndex((index) => (index + 1) % filteredSlashCommands.length);
-                return;
-              }
-
-              if (event.key === "ArrowUp") {
-                event.preventDefault();
-                setSlashSelectedIndex((index) =>
-                  index === 0 ? filteredSlashCommands.length - 1 : index - 1,
-                );
-                return;
-              }
-
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setSlashMenuOpen(false);
-                return;
-              }
-
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                const command = filteredSlashCommands[slashSelectedIndex];
-                if (command) {
-                  handleSlashCommandSelect(command);
-                }
-                return;
-              }
-            }
+            if (handleSlashKeyDown(event)) return;
 
             if (event.key === "Tab" && event.shiftKey) {
               event.preventDefault();
@@ -554,8 +432,8 @@ export function CodexComposeBar({
           }}
           placeholder="Ask Codex anything..."
           disabled={disabled || isSending}
-          minHeight={MIN_HEIGHT_PX}
-          maxHeight={MAX_HEIGHT_PX}
+          minHeight={COMPOSE_MIN_INPUT_HEIGHT}
+          maxHeight={COMPOSE_MAX_INPUT_HEIGHT}
           className={cn((disabled || isSending) && "opacity-60")}
         />
       </div>
@@ -787,90 +665,28 @@ export function CodexComposeBar({
         </div>
       </div>
 
-      <Dialog open={queueDialogOpen} onOpenChange={setQueueDialogOpen}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Queued Prompts</DialogTitle>
-            <DialogDescription>
-              Review pending prompts. Click one to edit it, or reorder and remove items.
-            </DialogDescription>
-          </DialogHeader>
-
-          {queuedMessages.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">
-              Queue is empty.
-            </div>
-          ) : (
-            <ScrollArea className="max-h-[380px] pr-3">
-              <div className="space-y-2">
-                {queuedMessages.map((message, index) => (
-                  <div
-                    key={message.id}
-                    className="rounded-md border border-border bg-muted/20 p-3"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5 shrink-0 text-xs font-medium text-muted-foreground">
-                        #{index + 1}
-                      </div>
-
-                      <div className="min-w-0 flex-1">
-                        <p
-                          className="-mx-1 cursor-pointer rounded px-1 text-sm whitespace-pre-wrap break-words line-clamp-4 transition-colors hover:bg-muted/50"
-                          onClick={() => handleQueuedMessageClick(message)}
-                          title="Click to edit this message"
-                        >
-                          {message.text}
-                        </p>
-                        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                          <span>{message.mode === "plan" ? "Plan" : "Build"}</span>
-                          <span>{message.model}</span>
-                          <span>{REASONING_LABELS[message.reasoningEffort]}</span>
-                          {message.fastMode && <span>Fast mode</span>}
-                          {message.attachments.length > 0 && (
-                            <span>
-                              {message.attachments.length} attachment
-                              {message.attachments.length === 1 ? "" : "s"}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex shrink-0 flex-col gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handleMoveQueuedMessage(index, index - 1)}
-                          disabled={index === 0}
-                          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                          title="Move up"
-                        >
-                          <ChevronUp className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleMoveQueuedMessage(index, index + 1)}
-                          disabled={index === queuedMessages.length - 1}
-                          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                          title="Move down"
-                        >
-                          <ChevronDown className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveQueuedMessage(message.id)}
-                          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive"
-                          title="Remove queued prompt"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
-          )}
-        </DialogContent>
-      </Dialog>
+      <QueuedPromptsDialog
+        open={queueDialogOpen}
+        onOpenChange={setQueueDialogOpen}
+        messages={queuedMessages}
+        onEdit={handleQueuedMessageClick}
+        onMove={handleMoveQueuedMessage}
+        onRemove={handleRemoveQueuedMessage}
+        renderMeta={(message) => (
+          <>
+            <span>{message.mode === "plan" ? "Plan" : "Build"}</span>
+            <span>{message.model}</span>
+            <span>{REASONING_LABELS[message.reasoningEffort]}</span>
+            {message.fastMode && <span>Fast mode</span>}
+            {message.attachments.length > 0 && (
+              <span>
+                {message.attachments.length} attachment
+                {message.attachments.length === 1 ? "" : "s"}
+              </span>
+            )}
+          </>
+        )}
+      />
     </div>
   );
 }

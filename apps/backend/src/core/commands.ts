@@ -4459,6 +4459,59 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     return { updated, failed };
   });
 
+  /**
+   * The `stop`/`status`/`log` commands are identical across the three agents
+   * apart from the port, the pkill pattern and the log path, so they are
+   * registered from one table. A new agent gets the full quartet or is
+   * obviously missing from this list — previously each triple was hand-written
+   * and could silently drift.
+   *
+   * `start_*` stays per-agent: each builds a different container script.
+   */
+  const NATIVE_SERVERS = [
+    {
+      agent: "opencode",
+      port: OPENCODE_SERVER_PORT,
+      pkillPattern: "opencode serve",
+      logPath: "/tmp/opencode-serve.log",
+    },
+    {
+      agent: "claude",
+      port: CLAUDE_BRIDGE_PORT,
+      pkillPattern: "claude-bridge",
+      logPath: "/tmp/claude-bridge.log",
+    },
+    {
+      agent: "codex",
+      port: CODEX_BRIDGE_PORT,
+      pkillPattern: "codex-bridge",
+      logPath: "/tmp/codex-bridge.log",
+    },
+  ] as const;
+
+  for (const { agent, port, pkillPattern, logPath } of NATIVE_SERVERS) {
+    register(`stop_${agent}_server`, ({ containerId }) =>
+      dockerExec(
+        asString(containerId, "containerId"),
+        `pkill -f '${pkillPattern}' || true`,
+      ).then(() => undefined),
+    );
+    register(`get_${agent}_server_status`, async ({ containerId }) => {
+      const id = asString(containerId, "containerId");
+      const hostPort = await getHostPort(id, port);
+      return {
+        running: hostPort ? await checkHttpHealth(hostPort) : false,
+        hostPort,
+      };
+    });
+    register(`get_${agent}_server_log`, ({ containerId }) =>
+      dockerExec(
+        asString(containerId, "containerId"),
+        `cat ${logPath} 2>/dev/null || true`,
+      ),
+    );
+  }
+
   register("start_opencode_server", ({ containerId }) =>
     startContainerServer(asString(containerId, "containerId"), OPENCODE_SERVER_PORT, "opencode", `
       cd /workspace
@@ -4468,13 +4521,6 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       setsid opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0 > /tmp/opencode-serve.log 2>&1 &
     `),
   );
-  register("stop_opencode_server", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "pkill -f 'opencode serve' || true").then(() => undefined));
-  register("get_opencode_server_status", async ({ containerId }) => {
-    const id = asString(containerId, "containerId");
-    const hostPort = await getHostPort(id, OPENCODE_SERVER_PORT);
-    return { running: hostPort ? await checkHttpHealth(hostPort) : false, hostPort };
-  });
-  register("get_opencode_server_log", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "cat /tmp/opencode-serve.log 2>/dev/null || true"));
   register("get_opencode_model_preferences", async () => {
     const modelPath = homePath(".local", "state", "opencode", "model.json");
     if (!await pathExists(modelPath)) return { recent: [], favorite: [], variant: {} };
@@ -4488,13 +4534,6 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       CLAUDE_BRIDGE_CONTAINER_START_COMMAND,
     ),
   );
-  register("stop_claude_server", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "pkill -f 'claude-bridge' || true").then(() => undefined));
-  register("get_claude_server_status", async ({ containerId }) => {
-    const id = asString(containerId, "containerId");
-    const hostPort = await getHostPort(id, CLAUDE_BRIDGE_PORT);
-    return { running: hostPort ? await checkHttpHealth(hostPort) : false, hostPort };
-  });
-  register("get_claude_server_log", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "cat /tmp/claude-bridge.log 2>/dev/null || true"));
   register("get_claude_model_catalog", async ({ environmentId, forceRefresh }, context) => {
     const id = asString(environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(id);
@@ -4559,14 +4598,6 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       setsid bun /opt/codex-bridge/dist/index.js > /tmp/codex-bridge.log 2>&1 &
     `);
   });
-  register("stop_codex_server", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "pkill -f 'codex-bridge' || true").then(() => undefined));
-  register("get_codex_server_status", async ({ containerId }) => {
-    const id = asString(containerId, "containerId");
-    const hostPort = await getHostPort(id, CODEX_BRIDGE_PORT);
-    return { running: hostPort ? await checkHttpHealth(hostPort) : false, hostPort };
-  });
-  register("get_codex_server_log", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "cat /tmp/codex-bridge.log 2>/dev/null || true"));
-
   register("has_claude_credentials", () => pathExists(homePath(".claude", ".credentials.json")).then(async (exists) => exists || pathExists(homePath(".claude.json"))));
   register("get_credential_status", async () => ({ available: await commands.get("has_claude_credentials")?.({}, { storage: null as never, emit: () => undefined, appRoot: "", resourceRoot: "" }), expiresAt: null }));
   register("check_claude_cli", (_args, context) => hasPackagedOrPathBinary(context, "claude"));

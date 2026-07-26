@@ -116,8 +116,8 @@ mock.module("@/components/chat/MentionableInput", () => ({
   }),
 }));
 
-mock.module("@/components/opencode/OpenCodeSlashCommandMenu", () => ({
-  OpenCodeSlashCommandMenu: (props: {
+mock.module("@/components/chat/SlashCommandMenu", () => ({
+  SlashCommandMenu: (props: {
     commands: Array<{ name: string; description?: string }>;
     selectedIndex: number;
     onSelect: (command: { name: string; description?: string }) => void;
@@ -362,7 +362,7 @@ describe("OpenCodeComposeBar", () => {
   });
 
   test("renders selected model name when one is set in the store", () => {
-    useOpenCodeStore.getState().setSelectedModel(ENV_ID, "claude-sonnet");
+    useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "claude-sonnet");
     renderComposeBar();
     expect(screen.getByText("Claude Sonnet")).toBeTruthy();
   });
@@ -373,14 +373,14 @@ describe("OpenCodeComposeBar", () => {
   });
 
   test("renders variant dropdown only when selected model has variants", () => {
-    useOpenCodeStore.getState().setSelectedModel(ENV_ID, "gpt-5");
+    useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "gpt-5");
     renderComposeBar();
     // "Default" is the variant-dropdown label when no variant is selected
     expect(screen.getByText("Default")).toBeTruthy();
   });
 
   test("does not render variant dropdown when selected model has no variants", () => {
-    useOpenCodeStore.getState().setSelectedModel(ENV_ID, "claude-sonnet");
+    useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "claude-sonnet");
     renderComposeBar();
     expect(screen.queryByText("Default")).toBeNull();
   });
@@ -1484,8 +1484,8 @@ describe("OpenCodeComposeBar", () => {
   });
 
   test("clears an incompatible variant when switching to a model without variants", async () => {
-    useOpenCodeStore.getState().setSelectedModel(ENV_ID, "gpt-5");
-    useOpenCodeStore.getState().setSelectedVariant(ENV_ID, "high");
+    useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "gpt-5");
+    useOpenCodeStore.getState().setSelectedVariant(SESSION_KEY, "high");
     renderComposeBar({ favoriteModelIds: ["claude-sonnet"] });
 
     fireEvent.pointerDown(screen.getByRole("button", { name: /GPT-5/i }));
@@ -1493,33 +1493,33 @@ describe("OpenCodeComposeBar", () => {
     fireEvent.click(screen.getByText("Claude Sonnet"));
 
     await waitFor(() => {
-      expect(useOpenCodeStore.getState().getSelectedModel(ENV_ID)).toBe("claude-sonnet");
+      expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe("claude-sonnet");
     });
-    expect(useOpenCodeStore.getState().getSelectedVariant(ENV_ID)).toBeUndefined();
+    expect(useOpenCodeStore.getState().getSelectedVariant(SESSION_KEY)).toBeUndefined();
   });
 
   test("selects a model variant from the variant menu", async () => {
-    useOpenCodeStore.getState().setSelectedModel(ENV_ID, "gpt-5");
+    useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "gpt-5");
     renderComposeBar();
 
     fireEvent.pointerDown(screen.getByText("Default").closest("button")!);
     fireEvent.click(await screen.findByText("high"));
 
     await waitFor(() => {
-      expect(useOpenCodeStore.getState().getSelectedVariant(ENV_ID)).toBe("high");
+      expect(useOpenCodeStore.getState().getSelectedVariant(SESSION_KEY)).toBe("high");
     });
   });
 
   test("selects the Default model variant", async () => {
-    useOpenCodeStore.getState().setSelectedModel(ENV_ID, "gpt-5");
-    useOpenCodeStore.getState().setSelectedVariant(ENV_ID, "high");
+    useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "gpt-5");
+    useOpenCodeStore.getState().setSelectedVariant(SESSION_KEY, "high");
     renderComposeBar();
 
     fireEvent.pointerDown(screen.getByText("high").closest("button")!);
     fireEvent.click(await screen.findByRole("menuitem", { name: /Default/ }));
 
     await waitFor(() => {
-      expect(useOpenCodeStore.getState().getSelectedVariant(ENV_ID)).toBeUndefined();
+      expect(useOpenCodeStore.getState().getSelectedVariant(SESSION_KEY)).toBeUndefined();
     });
   });
 
@@ -1528,8 +1528,8 @@ describe("OpenCodeComposeBar", () => {
       { id: "gpt-5", name: "GPT-5", provider: "openai", variants: ["low", "high"] },
       { id: "gpt-next", name: "GPT Next", provider: "openai", variants: ["high", "xhigh"] },
     ];
-    useOpenCodeStore.getState().setSelectedModel(ENV_ID, "gpt-5");
-    useOpenCodeStore.getState().setSelectedVariant(ENV_ID, "high");
+    useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "gpt-5");
+    useOpenCodeStore.getState().setSelectedVariant(SESSION_KEY, "high");
     renderComposeBar({ models, favoriteModelIds: ["gpt-next"] });
 
     fireEvent.pointerDown(screen.getByRole("button", { name: /GPT-5/i }));
@@ -1537,9 +1537,9 @@ describe("OpenCodeComposeBar", () => {
     fireEvent.click(screen.getByText("GPT Next"));
 
     await waitFor(() => {
-      expect(useOpenCodeStore.getState().getSelectedModel(ENV_ID)).toBe("gpt-next");
+      expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe("gpt-next");
     });
-    expect(useOpenCodeStore.getState().getSelectedVariant(ENV_ID)).toBe("high");
+    expect(useOpenCodeStore.getState().getSelectedVariant(SESSION_KEY)).toBe("high");
   });
 
   test("clears a variant that the next variant-capable model does not support", async () => {
@@ -1547,8 +1547,8 @@ describe("OpenCodeComposeBar", () => {
       { id: "gpt-5", name: "GPT-5", provider: "openai", variants: ["low", "high"] },
       { id: "gpt-next", name: "GPT Next", provider: "openai", variants: ["xhigh"] },
     ];
-    useOpenCodeStore.getState().setSelectedModel(ENV_ID, "gpt-5");
-    useOpenCodeStore.getState().setSelectedVariant(ENV_ID, "high");
+    useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "gpt-5");
+    useOpenCodeStore.getState().setSelectedVariant(SESSION_KEY, "high");
     renderComposeBar({ models, favoriteModelIds: ["gpt-next"] });
 
     fireEvent.pointerDown(screen.getByRole("button", { name: /GPT-5/i }));
@@ -1556,7 +1556,7 @@ describe("OpenCodeComposeBar", () => {
     fireEvent.click(screen.getByText("GPT Next"));
 
     await waitFor(() => {
-      expect(useOpenCodeStore.getState().getSelectedVariant(ENV_ID)).toBeUndefined();
+      expect(useOpenCodeStore.getState().getSelectedVariant(SESSION_KEY)).toBeUndefined();
     });
   });
 
@@ -1821,7 +1821,7 @@ describe("OpenCodeComposeBar", () => {
     });
     fireEvent.click(screen.getByText("GPT-5"));
     await waitFor(() => {
-      expect(useOpenCodeStore.getState().getSelectedModel(ENV_ID)).toBe("gpt-5");
+      expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe("gpt-5");
     });
   });
 });

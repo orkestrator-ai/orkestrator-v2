@@ -12,17 +12,14 @@ import {
   type CodexSlashCommand,
 } from "@/lib/codex-client";
 import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-messages";
-import { createSessionKey } from "@/lib/utils";
 import type { FileMention } from "@/types";
 import {
+  buildClearEnvironmentPatch,
   createNativeChatStoreSlice,
-  pruneSessionKeyedMap,
   type NativeChatStoreSlice,
   type NativeServerStatus,
   type NativeSessionState,
 } from "./createNativeChatStore";
-
-export const createCodexSessionKey = createSessionKey;
 
 export type CodexServerStatus = NativeServerStatus;
 export type CodexSessionState = NativeSessionState<CodexMessage>;
@@ -250,39 +247,24 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
   isFastMode: (sessionKey) => get().fastMode.get(sessionKey) ?? false,
 
   clearEnvironment: (environmentId) =>
-    set((state) => {
-      const nextServerStatus = new Map(state.serverStatus);
-      nextServerStatus.delete(environmentId);
-
-      const nextClients = new Map(state.clients);
-      nextClients.delete(environmentId);
-
-      const nextSlashCommands = new Map(state.slashCommands);
-      nextSlashCommands.delete(environmentId);
-
-      const prefix = `env-${environmentId}:`;
-
-      return {
-        models: state.models,
-        serverStatus: nextServerStatus,
-        clients: nextClients,
-        slashCommands: nextSlashCommands,
-        sessions: pruneSessionKeyedMap(state.sessions, prefix),
-        attachments: pruneSessionKeyedMap(state.attachments, prefix),
-        draftText: pruneSessionKeyedMap(state.draftText, prefix),
-        draftMentions: pruneSessionKeyedMap(state.draftMentions, prefix),
-        messageQueue: pruneSessionKeyedMap(state.messageQueue, prefix),
-        selectedModel: pruneSessionKeyedMap(state.selectedModel, prefix),
-        selectedMode: pruneSessionKeyedMap(state.selectedMode, prefix),
-        sessionPhase: pruneSessionKeyedMap(state.sessionPhase, prefix),
-        pendingApprovals: pruneSessionKeyedMap(state.pendingApprovals, prefix),
-        selectedReasoningEffort: pruneSessionKeyedMap(
-          state.selectedReasoningEffort,
-          prefix,
-        ),
-        fastMode: pruneSessionKeyedMap(state.fastMode, prefix),
-      };
-    }),
+    set((state) =>
+      buildClearEnvironmentPatch(state, environmentId, {
+        environmentKeyed: ["serverStatus", "clients", "slashCommands"],
+        sessionKeyed: [
+          "sessions",
+          "attachments",
+          "draftText",
+          "draftMentions",
+          "messageQueue",
+          "selectedModel",
+          "selectedMode",
+          "selectedReasoningEffort",
+          "fastMode",
+          "sessionPhase",
+          "pendingApprovals",
+        ],
+      }),
+    ),
 }));
 
 // Re-export for callers that still import types/helpers from here

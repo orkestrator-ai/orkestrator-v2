@@ -1,3 +1,4 @@
+import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
@@ -113,7 +114,7 @@ mock.module("@/lib/backend", () => ({
   updateKanbanTask: mockUpdateKanbanTask,
 }));
 
-import { createCodexSessionKey, useCodexStore } from "@/stores/codexStore";
+import {useCodexStore} from "@/stores/codexStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import type {
   PipelineFailureContext,
@@ -137,7 +138,7 @@ const ENV_ID = "env-1";
 const PIPELINE_ID = "pipeline-1";
 const TASK_ID = "task-1";
 const SESSION_ID = "session-1";
-const SESSION_KEY = createCodexSessionKey(ENV_ID, "build-tab");
+const SESSION_KEY = createSessionKey(ENV_ID, "build-tab");
 const originalWindowSetInterval = window.setInterval;
 
 function capturePollingInterval() {

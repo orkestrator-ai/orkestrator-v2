@@ -92,6 +92,8 @@ describe("opencode-client listSessions", () => {
         id: "session-1",
         title: "My Session",
         createdAt: new Date(createdMs).toISOString(),
+        // No `time.updated` reported, so it falls back to the creation time.
+        updatedAt: new Date(createdMs).toISOString(),
       },
     ]);
   });
@@ -2228,6 +2230,7 @@ describe("opencode-client session lifecycle", () => {
       id: "session-numeric",
       title: "numeric",
       createdAt: new Date(1_700_000_000_000).toISOString(),
+      updatedAt: new Date(1_700_000_000_000).toISOString(),
     });
     expect((await createSession(client, "string")).createdAt).toBe("2026-01-02T03:04:05.000Z");
   });

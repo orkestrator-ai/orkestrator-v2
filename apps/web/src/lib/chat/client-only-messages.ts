@@ -6,6 +6,15 @@ import type { NativeMessage, NativeMessagePart } from "./native-message-types";
 
 export const OPTIMISTIC_MESSAGE_PREFIX = "optimistic-";
 
+/**
+ * Transcript marker written when the user interrupts a turn.
+ *
+ * Shared so every agent says the same thing — OpenCode used to leave no trace
+ * at all, which made an interrupted turn look like one that simply produced
+ * nothing.
+ */
+export const TURN_STOPPED_BY_USER = "Query stopped by user.";
+
 interface OptimisticNativeAttachment {
   path: string;
   previewUrl?: string;

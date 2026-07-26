@@ -11,6 +11,7 @@ import {
   readFileBase64,
   readTextFile,
   runCommand,
+  spawnCommand,
   writeFileBase64,
 } from "../../../apps/backend/src/core/shell";
 
@@ -159,6 +160,22 @@ describe("runCommand", () => {
 
   test("rejects when the command does not exist", async () => {
     await expect(runCommand("orkestrator-no-such-binary-xyz", [])).rejects.toThrow();
+  });
+
+  test("can launch a child in an owned process group", async () => {
+    const child = spawnCommand(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1_000)"],
+      { detached: true },
+    );
+    expect(child.pid).toBeGreaterThan(0);
+    try {
+      process.kill(-(child.pid ?? 0), "SIGTERM");
+    } catch {
+      child.kill("SIGTERM");
+    }
+    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    expect(child.signalCode).toBe("SIGTERM");
   });
 });
 

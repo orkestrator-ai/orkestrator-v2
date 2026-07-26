@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { execFile } from "node:child_process";
+import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, promises as fs } from "node:fs";
 import http from "node:http";
@@ -70,7 +70,12 @@ const ptySpawn = mock((command: string, args: string[], options: Record<string, 
 
 mock.module("../../../apps/backend/src/core/pty", () => ({ spawnPty: ptySpawn }));
 
-const { createCommandRegistry, resolveBrowserOpenCommand } = await import("../../../apps/backend/src/core/commands");
+const {
+  __testing: commandTesting,
+  createCommandRegistry,
+  resolveBrowserOpenCommand,
+  shutdownLocalServers,
+} = await import("../../../apps/backend/src/core/commands");
 
 const tempDirs: string[] = [];
 const SETUP_DONE_OSC = "\u001b]9999;setup_done\u0007";
@@ -603,6 +608,24 @@ async function waitForCondition(condition: () => boolean, description: string): 
   throw new Error(`Timed out waiting for ${description}`);
 }
 
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function createFakeChild(pid: number): ChildProcessWithoutNullStreams {
+  return {
+    pid,
+    exitCode: null,
+    signalCode: null,
+    kill: mock(() => true),
+  } as unknown as ChildProcessWithoutNullStreams;
+}
+
 // Fake `docker` that reports the container as running and succeeds on exec,
 // returning a deterministic HEAD commit for `git rev-parse`.
 const RUNNING_CONTAINER_DOCKER_SCRIPT = `#!/bin/sh
@@ -624,10 +647,15 @@ exit 0
 `;
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-  showOpenDialog.mockClear();
-  ptySpawn.mockClear();
-  ptyProcesses.splice(0);
+  try {
+    await shutdownLocalServers();
+  } finally {
+    commandTesting.resetLocalServerLifecycle();
+    await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    showOpenDialog.mockClear();
+    ptySpawn.mockClear();
+    ptyProcesses.splice(0);
+  }
 });
 
 afterAll(async () => {
@@ -4460,6 +4488,445 @@ exit 0
     }
   });
 
+  test("drains a local Codex bridge and its descendants before deleting the environment", async () => {
+    const appRoot = await createTempDir("ork-electron-app-delete-codex-");
+    const worktreePath = await createTempDir("ork-electron-worktree-delete-codex-");
+    const pidMarkerPath = path.join(appRoot, "codex-processes.json");
+    const shutdownMarkerPath = path.join(appRoot, "codex-shutdown.txt");
+    await writeBridgeEntrypoint(
+      appRoot,
+      "codex-bridge",
+      `
+        const fs = require("node:fs");
+        const http = require("node:http");
+        const { spawn } = require("node:child_process");
+        const descendant = spawn(
+          process.execPath,
+          ["-e", "setInterval(() => {}, 1_000)"],
+          { stdio: "ignore" },
+        );
+        fs.writeFileSync(
+          ${JSON.stringify(pidMarkerPath)},
+          JSON.stringify({ bridgePid: process.pid, descendantPid: descendant.pid }),
+        );
+        const server = http.createServer((req, res) => {
+          if (req.url === "/global/health") {
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ ok: true }));
+            return;
+          }
+          res.writeHead(404);
+          res.end();
+        });
+        server.listen(Number(process.env.PORT), "127.0.0.1");
+        process.on("SIGTERM", () => {
+          fs.writeFileSync(
+            ${JSON.stringify(shutdownMarkerPath)},
+            String(fs.existsSync(process.env.CWD)),
+          );
+          server.close(() => process.exit(0));
+        });
+      `,
+    );
+
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+    const started = await commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as { port: number; pid: number };
+    await waitForCondition(() => existsSync(pidMarkerPath), "Codex process marker");
+    const processes = JSON.parse(await fs.readFile(pidMarkerPath, "utf8")) as {
+      bridgePid: number;
+      descendantPid: number;
+    };
+
+    expect(processes.bridgePid).toBe(started.pid);
+    expect(isProcessRunning(processes.bridgePid)).toBe(true);
+    expect(isProcessRunning(processes.descendantPid)).toBe(true);
+
+    await commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    );
+
+    expect(await fs.readFile(shutdownMarkerPath, "utf8")).toBe("true");
+    expect(isProcessRunning(processes.bridgePid)).toBe(false);
+    await waitForCondition(
+      () => !isProcessRunning(processes.descendantPid),
+      "Codex descendant to exit",
+    );
+    await expect(
+      commands.get("get_environment")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ).resolves.toBeNull();
+  });
+
+  test("serializes simultaneous starts so one local server owns the key", async () => {
+    const appRoot = await createTempDir("ork-electron-app-concurrent-start-");
+    const worktreePath = await createTempDir("ork-electron-worktree-concurrent-start-");
+    await writeBridgeServer(appRoot, "codex-bridge");
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    const [first, second] = await Promise.all([
+      commands.get("start_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<{ port: number; pid: number; wasRunning: boolean }>,
+      commands.get("start_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<{ port: number; pid: number; wasRunning: boolean }>,
+    ]);
+
+    try {
+      expect(first.pid).toBe(second.pid);
+      expect(first.port).toBe(second.port);
+      expect([first.wasRunning, second.wasRunning].sort()).toEqual([false, true]);
+      expect(isProcessRunning(first.pid)).toBe(true);
+    } finally {
+      await commands.get("stop_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
+    }
+  });
+
+  test("serializes a stop queued behind startup and leaves metadata cleared", async () => {
+    const appRoot = await createTempDir("ork-electron-app-start-stop-");
+    const worktreePath = await createTempDir("ork-electron-worktree-start-stop-");
+    await writeBridgeServer(appRoot, "codex-bridge");
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    const startPromise = commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<{ port: number; pid: number }>;
+    const stopPromise = commands.get("stop_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<void>;
+
+    const started = await startPromise;
+    await stopPromise;
+
+    expect(isProcessRunning(started.pid)).toBe(false);
+    expect(environment.localCodexPort).toBeNull();
+    expect(environment.codexBridgePid).toBeNull();
+  });
+
+  test("drains a start already in flight and rejects later starts once deletion begins", async () => {
+    const appRoot = await createTempDir("ork-electron-app-start-delete-");
+    const worktreePath = await createTempDir("ork-electron-worktree-start-delete-");
+    const startedMarkerPath = path.join(appRoot, "bridge-started.txt");
+    await writeBridgeEntrypoint(
+      appRoot,
+      "codex-bridge",
+      `
+        const fs = require("node:fs");
+        const http = require("node:http");
+        fs.writeFileSync(${JSON.stringify(startedMarkerPath)}, "started");
+        setTimeout(() => {
+          http.createServer((req, res) => {
+            res.writeHead(req.url === "/global/health" ? 200 : 404);
+            res.end();
+          }).listen(Number(process.env.PORT), "127.0.0.1");
+        }, 100);
+      `,
+    );
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    const startPromise = commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<{ pid: number }>;
+    await waitForCondition(() => existsSync(startedMarkerPath), "in-flight bridge startup");
+    const deletePromise = commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<void>;
+
+    await expect(commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow("Environment is already being deleted");
+    expect(() => commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    )).toThrow("Environment is being deleted");
+
+    const started = await startPromise;
+    await deletePromise;
+    expect(isProcessRunning(started.pid)).toBe(false);
+    await expect(
+      commands.get("get_environment")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ).resolves.toBeNull();
+  });
+
+  test("waits for an in-flight start before global shutdown and rejects future starts", async () => {
+    const appRoot = await createTempDir("ork-electron-app-start-shutdown-");
+    const worktreePath = await createTempDir("ork-electron-worktree-start-shutdown-");
+    const startedMarkerPath = path.join(appRoot, "bridge-started.txt");
+    await writeBridgeEntrypoint(
+      appRoot,
+      "codex-bridge",
+      `
+        const fs = require("node:fs");
+        const http = require("node:http");
+        fs.writeFileSync(${JSON.stringify(startedMarkerPath)}, "started");
+        setTimeout(() => {
+          http.createServer((req, res) => {
+            res.writeHead(req.url === "/global/health" ? 200 : 404);
+            res.end();
+          }).listen(Number(process.env.PORT), "127.0.0.1");
+        }, 100);
+      `,
+    );
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    const startPromise = commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<{ pid: number }>;
+    const queuedStartPromise = commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<{ pid: number }>;
+    await waitForCondition(() => existsSync(startedMarkerPath), "bridge startup before shutdown");
+    const shutdownPromise = shutdownLocalServers();
+    const started = await startPromise;
+    await expect(queuedStartPromise).rejects.toThrow("Backend is shutting down");
+    await shutdownPromise;
+
+    expect(isProcessRunning(started.pid)).toBe(false);
+    expect(() => commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    )).toThrow("Backend is shutting down");
+    await expect(commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow("Backend is shutting down");
+  });
+
+  test("deletes an environment only after all three local server kinds exit", async () => {
+    const appRoot = await createTempDir("ork-electron-app-delete-all-servers-");
+    const toolchainBinDir = await createTempDir("ork-electron-tools-delete-all-servers-");
+    const worktreePath = await createTempDir("ork-electron-worktree-delete-all-servers-");
+    await writeBridgeServer(appRoot, "claude-bridge");
+    await writeBridgeServer(appRoot, "codex-bridge");
+    const opencodePath = path.join(toolchainBinDir, "opencode");
+    await fs.writeFile(
+      opencodePath,
+      `#!/bin/sh
+PORT=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--port" ]; then shift; PORT="$1"; fi
+  shift
+done
+exec node -e 'const http=require("node:http");http.createServer((req,res)=>{res.writeHead(req.url==="/global/health"?200:404);res.end();}).listen(Number(process.env.PORT_ARG),"127.0.0.1");' \
+  </dev/null
+`,
+    );
+    // The wrapper receives the port as argv, so preserve it for the Node server.
+    await fs.writeFile(
+      opencodePath,
+      (await fs.readFile(opencodePath, "utf8")).replace(
+        "exec node",
+        "export PORT_ARG=\"$PORT\"\nexec node",
+      ),
+    );
+    await fs.chmod(opencodePath, 0o755);
+
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    context.toolchainBinDir = toolchainBinDir;
+    const commands = createCommandRegistry();
+
+    const started = await Promise.all([
+      commands.get("start_local_opencode_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+      commands.get("start_local_claude_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+      commands.get("start_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ]) as Array<{ pid: number }>;
+
+    await commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    );
+
+    expect(started).toHaveLength(3);
+    for (const server of started) expect(isProcessRunning(server.pid)).toBe(false);
+    await expect(
+      commands.get("get_environment")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ).resolves.toBeNull();
+  });
+
+  test("reports and stops every local server kind through its public handlers", async () => {
+    const environment = createEnvironment({
+      id: "env-all-local-server-handlers",
+      localOpencodePort: 40101,
+      opencodePid: 94001,
+      localClaudePort: 40102,
+      claudeBridgePid: 94002,
+      localCodexPort: 40103,
+      codexBridgePid: 94003,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const children = {
+      opencode: createFakeChild(94001),
+      claude: createFakeChild(94002),
+      codex: createFakeChild(94003),
+    };
+    for (const [kind, child] of Object.entries(children)) {
+      commandTesting.setLocalServerProcess(`${kind}:${environment.id}`, child);
+    }
+    commandTesting.setTerminateProcessTree(async () => true);
+
+    await expect(Promise.all([
+      commands.get("get_local_opencode_server_status")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+      commands.get("get_local_claude_server_status")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+      commands.get("get_local_codex_server_status")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ])).resolves.toEqual([
+      { running: true, port: 40101, pid: 94001 },
+      { running: true, port: 40102, pid: 94002 },
+      { running: true, port: 40103, pid: 94003 },
+    ]);
+
+    await expect(Promise.all([
+      commands.get("stop_local_opencode_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+      commands.get("stop_local_claude_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+      commands.get("stop_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ])).resolves.toEqual([undefined, undefined, undefined]);
+
+    expect(environment).toMatchObject({
+      localOpencodePort: null,
+      opencodePid: null,
+      localClaudePort: null,
+      claudeBridgePid: null,
+      localCodexPort: null,
+      codexBridgePid: null,
+    });
+    for (const kind of Object.keys(children)) {
+      expect(commandTesting.getLocalServerProcess(`${kind}:${environment.id}`)).toBeUndefined();
+    }
+  });
+
+  test("waits for every shutdown attempt, reports failures, and supports retry", async () => {
+    const failedChild = createFakeChild(91001);
+    const successfulChild = createFakeChild(91002);
+    commandTesting.setLocalServerProcess("codex:env-failure", failedChild);
+    commandTesting.setLocalServerProcess("claude:env-success", successfulChild);
+    const attempted: number[] = [];
+    commandTesting.setTerminateProcessTree(async (child) => {
+      attempted.push(child.pid ?? 0);
+      return child !== failedChild;
+    });
+
+    await expect(shutdownLocalServers()).rejects.toThrow(
+      "Failed to shut down all local servers",
+    );
+    expect(attempted.sort()).toEqual([91001, 91002]);
+    expect(commandTesting.getLocalServerProcess("codex:env-failure")).toBe(failedChild);
+    expect(commandTesting.getLocalServerProcess("claude:env-success")).toBeUndefined();
+
+    commandTesting.setTerminateProcessTree(async () => true);
+    await expect(shutdownLocalServers()).resolves.toBeUndefined();
+    expect(commandTesting.getLocalServerProcess("codex:env-failure")).toBeUndefined();
+  });
+
+  test("retains the environment and process ownership when deletion cannot reap a server", async () => {
+    const worktreePath = await createTempDir("ork-electron-delete-failure-");
+    const environment = createEnvironment({ id: "env-delete-failure", worktreePath });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const child = createFakeChild(92001);
+    commandTesting.setLocalServerProcess(`codex:${environment.id}`, child);
+    commandTesting.setTerminateProcessTree(async () => false);
+
+    await expect(commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow("Failed to stop all local servers");
+    expect(await context.storage.getEnvironment(environment.id)).toBe(environment);
+    expect(existsSync(worktreePath)).toBe(true);
+    expect(commandTesting.getLocalServerProcess(`codex:${environment.id}`)).toBe(child);
+
+    commandTesting.setTerminateProcessTree(async () => true);
+    await expect(commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).resolves.toBeUndefined();
+  });
+
+  test("does not let a stale child release replacement ownership", () => {
+    const stale = createFakeChild(93001);
+    const replacement = createFakeChild(93002);
+    commandTesting.setLocalServerProcess("codex:env-owner", replacement);
+
+    commandTesting.releaseLocalServerOwnership("codex:env-owner", stale);
+    expect(commandTesting.getLocalServerProcess("codex:env-owner")).toBe(replacement);
+
+    commandTesting.releaseLocalServerOwnership("codex:env-owner", replacement);
+    expect(commandTesting.getLocalServerProcess("codex:env-owner")).toBeUndefined();
+  });
+
   test("launches the local claude bridge through the bundled bun binary in resources", async () => {
     // The bridges run on bun, not node. resolveBunBinary prefers the bun shipped
     // in app resources (resourceRoot/bin/bun) over a host PATH lookup; this proves
@@ -5090,6 +5557,37 @@ exit 0
     });
     expect(environment.localCodexPort).toBeNull();
     expect(environment.codexBridgePid).toBeNull();
+  });
+
+  test("reports both startup and cleanup failures while clearing persisted state", async () => {
+    const appRoot = await createTempDir("ork-electron-app-failed-bridge-cleanup-");
+    const worktreePath = await createTempDir("ork-electron-worktree-failed-bridge-cleanup-");
+    await writeBridgeEntrypoint(
+      appRoot,
+      "codex-bridge",
+      `process.exitCode = 23;`,
+    );
+
+    const environment = createEnvironment({ worktreePath });
+    const { context, updates } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+    commandTesting.setTerminateProcessTree(async () => false);
+
+    await expect(
+      commands.get("start_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ).rejects.toThrow("Failed to start and clean up local server");
+    expect(updates).toContainEqual({
+      localCodexPort: null,
+      codexBridgePid: null,
+    });
+    expect(environment.localCodexPort).toBeNull();
+    expect(environment.codexBridgePid).toBeNull();
+    commandTesting.setTerminateProcessTree(async () => true);
   });
 
   test("starts local terminal sessions through a PTY and forwards byte payloads", async () => {
@@ -6543,6 +7041,96 @@ describe("storage-backed command delegation", () => {
       prState: "merged",
       prMergeCommented: false,
     });
+  });
+
+  test("delegates remaining environment, Kanban, notes, and feature-plan handlers", async () => {
+    const task = { id: "task-1" };
+    const feature = { id: "feature-1", projectId: "project-1" };
+    const storage = {
+      getLogDirectory: mock(() => "/data/logs"),
+      reorderEnvironments: mock(async () => [{ id: "env-2" }, { id: "env-1" }]),
+      deleteKanbanTask: mock(async () => undefined),
+      addKanbanComment: mock(async () => ({ ...task, comments: [{ id: "comment-1" }] })),
+      deleteKanbanComment: mock(async () => ({ ...task, comments: [] })),
+      addKanbanImage: mock(async () => ({ ...task, images: [{ id: "image-1" }] })),
+      deleteKanbanImage: mock(async () => ({ ...task, images: [] })),
+      getKanbanImageData: mock(async () => "encoded-image"),
+      getProjectNotes: mock(async () => ({ projectId: "project-1", content: "notes" })),
+      saveProjectNotes: mock(async () => ({ projectId: "project-1", content: "updated" })),
+      getFeaturePlans: mock(async () => [feature]),
+      createFeaturePlan: mock(async () => feature),
+      updateFeaturePlan: mock(async () => ({ ...feature, title: "Updated" })),
+    };
+    const context = { storage } as unknown as CommandContext;
+    const commands = createCommandRegistry();
+
+    expect(commands.get("get_log_directory")?.({}, context)).toBe("/data/logs");
+    await expect(commands.get("reorder_environments")?.({
+      projectId: "project-1",
+      environmentIds: ["env-2", "env-1"],
+    }, context)).resolves.toEqual([{ id: "env-2" }, { id: "env-1" }]);
+    expect(storage.reorderEnvironments).toHaveBeenCalledWith(
+      "project-1",
+      ["env-2", "env-1"],
+    );
+
+    await commands.get("delete_kanban_task")?.({ taskId: "task-1" }, context);
+    await commands.get("add_kanban_comment")?.(
+      { taskId: "task-1", text: "Looks good" },
+      context,
+    );
+    await commands.get("delete_kanban_comment")?.(
+      { taskId: "task-1", commentId: "comment-1" },
+      context,
+    );
+    await commands.get("add_kanban_image")?.(
+      { taskId: "task-1", filename: "image.png", data: "encoded" },
+      context,
+    );
+    await commands.get("delete_kanban_image")?.(
+      { taskId: "task-1", imageId: "image-1" },
+      context,
+    );
+    await expect(commands.get("get_kanban_image_data")?.(
+      { imageId: "image-1" },
+      context,
+    )).resolves.toBe("encoded-image");
+    expect(storage.deleteKanbanTask).toHaveBeenCalledWith("task-1");
+    expect(storage.addKanbanComment).toHaveBeenCalledWith("task-1", "Looks good");
+    expect(storage.deleteKanbanComment).toHaveBeenCalledWith("task-1", "comment-1");
+    expect(storage.addKanbanImage).toHaveBeenCalledWith("task-1", "image.png", "encoded");
+    expect(storage.deleteKanbanImage).toHaveBeenCalledWith("task-1", "image-1");
+
+    await expect(commands.get("get_project_notes")?.(
+      { projectId: "project-1" },
+      context,
+    )).resolves.toEqual({ projectId: "project-1", content: "notes" });
+    await expect(commands.get("save_project_notes")?.(
+      { projectId: "project-1", content: "updated" },
+      context,
+    )).resolves.toEqual({ projectId: "project-1", content: "updated" });
+    expect(storage.saveProjectNotes).toHaveBeenCalledWith("project-1", "updated");
+
+    await expect(commands.get("get_feature_plans")?.(
+      { projectId: "project-1" },
+      context,
+    )).resolves.toEqual([feature]);
+    await expect(commands.get("create_feature_plan")?.(
+      { projectId: "project-1" },
+      context,
+    )).resolves.toEqual(feature);
+    await expect(commands.get("update_feature_plan")?.(
+      { featureId: "feature-1", updates: { title: "Updated" } },
+      context,
+    )).resolves.toEqual({ ...feature, title: "Updated" });
+    expect(storage.updateFeaturePlan).toHaveBeenCalledWith(
+      "feature-1",
+      { title: "Updated" },
+    );
+    expect(() => commands.get("update_feature_plan")?.(
+      { featureId: 1, updates: {} },
+      context,
+    )).toThrow("Expected featureId to be a string");
   });
 });
 

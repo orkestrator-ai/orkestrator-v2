@@ -15,17 +15,20 @@ afterAll(async () => {
 async function startBackend(
   extraArgs: string[] = [],
   extraEnv: Record<string, string> = {},
+  prepare?: (paths: { dataDir: string; rendererRoot: string }) => Promise<void>,
 ): Promise<{
   url: string;
   token: string;
   readyMessage: Record<string, unknown>;
   child: Bun.Subprocess;
+  dataDir: string;
 }> {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-standalone-test-"));
   temporaryDirectories.push(dataDir);
   const rendererRoot = path.join(dataDir, "renderer");
   await mkdir(rendererRoot);
   await writeFile(path.join(rendererRoot, "index.html"), "<!doctype html><title>Orkestrator</title>");
+  await prepare?.({ dataDir, rendererRoot });
   const child = Bun.spawn([
     process.execPath,
     path.join(root, "apps/backend/dist/main.js"),
@@ -64,7 +67,7 @@ async function startBackend(
         ) {
           const auth = JSON.parse(await readFile(message.authFile, "utf8")) as { token?: unknown };
           if (typeof auth.token !== "string") throw new Error("Backend auth file is missing its token");
-          return { url: message.url, token: auth.token, readyMessage: message, child };
+          return { url: message.url, token: auth.token, readyMessage: message, child, dataDir };
         }
       } catch {
         // Human-readable gateway logs precede the machine-readable ready line.
@@ -73,6 +76,42 @@ async function startBackend(
   }
   child.kill();
   throw new Error("Timed out waiting for standalone backend");
+}
+
+async function invokeBackend(
+  url: string,
+  token: string,
+  command: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const response = await Bun.fetch(new URL("/__orkestrator/invoke", url), {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ command, args }),
+  });
+  const payload = await response.json() as { result?: unknown; error?: string };
+  if (!response.ok) throw new Error(payload.error ?? `Backend command failed: ${response.status}`);
+  return payload.result;
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (isProcessRunning(pid) && Date.now() < deadline) {
+    await Bun.sleep(10);
+  }
+  if (isProcessRunning(pid)) throw new Error(`Process did not exit: ${pid}`);
 }
 
 describe("standalone backend service", () => {
@@ -100,6 +139,96 @@ describe("standalone backend service", () => {
     const { child } = await startBackend();
     child.kill("SIGTERM");
     await expect(child.exited).resolves.toBe(0);
+  });
+
+  test("returns the shell-compatible SIGINT exit code", async () => {
+    const { child } = await startBackend();
+    child.kill("SIGINT");
+    await expect(child.exited).resolves.toBe(130);
+  });
+
+  test("drains an active local server process tree before exiting", async () => {
+    const worktreePath = await mkdtemp(path.join(os.tmpdir(), "orkestrator-standalone-worktree-"));
+    temporaryDirectories.push(worktreePath);
+    let processMarkerPath = "";
+    const started = await startBackend([], {}, async ({ dataDir }) => {
+      processMarkerPath = path.join(dataDir, "fake-opencode-processes.json");
+      const toolchainBinDir = path.join(dataDir, "toolchains", "bin");
+      await mkdir(toolchainBinDir, { recursive: true });
+      const executable = path.join(toolchainBinDir, "opencode");
+      const fakeServerPath = path.join(dataDir, "fake-opencode-server.cjs");
+      const fakeServerSource = `
+        const fs = require("node:fs");
+        const http = require("node:http");
+        const { spawn } = require("node:child_process");
+        const descendant = spawn(
+          process.execPath,
+          ["-e", "setInterval(() => {}, 1_000)"],
+          { stdio: "ignore" },
+        );
+        fs.writeFileSync(
+          ${JSON.stringify(processMarkerPath)},
+          JSON.stringify({ serverPid: process.pid, descendantPid: descendant.pid }),
+        );
+        http.createServer((request, response) => {
+          response.writeHead(request.url === "/global/health" ? 200 : 404);
+          response.end();
+        }).listen(Number(process.argv[2]), "127.0.0.1");
+      `;
+      await writeFile(fakeServerPath, fakeServerSource);
+      await writeFile(
+        executable,
+        `#!/bin/sh
+PORT=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--port" ]; then shift; PORT="$1"; fi
+  shift
+done
+exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeServerPath)} "$PORT"
+`,
+      );
+      await chmod(executable, 0o755);
+      await writeFile(
+        path.join(dataDir, "environments.json"),
+        `${JSON.stringify([{
+          id: "env-local-server",
+          projectId: "project-1",
+          name: "Local",
+          branch: "feature/local",
+          containerId: null,
+          status: "running",
+          prUrl: null,
+          prState: null,
+          hasMergeConflicts: null,
+          createdAt: new Date(0).toISOString(),
+          networkAccessMode: "restricted",
+          order: 0,
+          environmentType: "local",
+          worktreePath,
+        }], null, 2)}\n`,
+      );
+    });
+
+    const result = await invokeBackend(
+      started.url,
+      started.token,
+      "start_local_opencode_server_cmd",
+      { environmentId: "env-local-server" },
+    ) as { pid: number };
+    const processIds = JSON.parse(await readFile(processMarkerPath, "utf8")) as {
+      serverPid: number;
+      descendantPid: number;
+    };
+    expect(result.pid).toBe(processIds.serverPid);
+    expect(isProcessRunning(processIds.serverPid)).toBe(true);
+    expect(isProcessRunning(processIds.descendantPid)).toBe(true);
+
+    started.child.kill("SIGTERM");
+    await expect(started.child.exited).resolves.toBe(0);
+    await Promise.all([
+      waitForProcessExit(processIds.serverPid),
+      waitForProcessExit(processIds.descendantPid),
+    ]);
   });
 
   test("can own a Tailscale Serve listener and publish its HTTPS URL", async () => {

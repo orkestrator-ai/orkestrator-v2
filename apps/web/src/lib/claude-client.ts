@@ -13,8 +13,14 @@ import {
   type StructuredOutputResult,
   StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
+import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 
 export type { ClaudeModelCatalogSnapshot };
+export type {
+  TaskListSnapshot,
+  TaskSnapshotItem,
+  TaskSnapshotStatus,
+} from "@orkestrator/protocol/task-list";
 
 /**
  * Session key used as the Map key in the Zustand store.
@@ -38,16 +44,6 @@ export interface ToolDiffMetadata {
   before?: string;
   after?: string;
   diff?: string;
-}
-
-/** Display status of a task in the session task list */
-export type TaskSnapshotStatus = "pending" | "in_progress" | "completed";
-
-/** One task in a point-in-time view of the session task list */
-export interface TaskSnapshotItem {
-  id: string;
-  subject: string;
-  status: TaskSnapshotStatus;
 }
 
 /** Part types for Claude messages */
@@ -80,11 +76,13 @@ export interface ClaudeMessagePart {
   /** The MCP server name if this is an MCP tool */
   mcpServerName?: string;
   /**
-   * State of the whole session task list immediately after this tool call, for
-   * task tools. Supplied by the bridge, which replays the calls; absent for
-   * TodoWrite and for messages recorded before the bridge tracked this.
+   * State of the whole task list immediately after this tool call, for task
+   * tools. Always supplied by a backend that saw the call — the bridge in
+   * Native Mode, the tmux session's transcript reader in tmux mode — never
+   * derived here. Absent for TodoWrite, for output the registry could not
+   * parse, and for messages recorded before this was tracked.
    */
-  taskSnapshot?: TaskSnapshotItem[];
+  taskSnapshot?: TaskListSnapshot;
 }
 
 /** MCP server info from the bridge server */

@@ -125,6 +125,23 @@ session.get("/:id/structured-output", (c) => {
   });
 });
 
+// Get the authoritative task list for a session.
+//
+// The bridge owns this state, so a tab that was unmounted while tasks changed
+// rehydrates from here rather than replaying the transcript and hoping the last
+// task tool part is still present.
+session.get("/:id/tasks", (c) => {
+  const id = c.req.param("id");
+  const sessionData = getSession(id);
+
+  if (!sessionData) {
+    return c.json({ error: "Session not found" }, 404);
+  }
+
+  // A session that has never run a task tool has an empty, and complete, list.
+  return c.json(sessionData.taskRegistry?.snapshot() ?? { items: [], complete: true });
+});
+
 // Get session messages
 session.get("/:id/messages", (c) => {
   const id = c.req.param("id");

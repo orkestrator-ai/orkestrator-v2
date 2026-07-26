@@ -20,10 +20,10 @@ import type {
   SdkCompactBoundaryMessage,
   SdkResultMessage,
   SdkSystemMessage,
-  TaskSnapshotItem,
+  TaskListSnapshot,
 } from "../types/index.js";
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
-import { TaskRegistry } from "./task-registry.js";
+import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import {
   structuredOutputFailure,
   type StructuredOutputResult,
@@ -561,7 +561,7 @@ class ToolTracker {
       output?: string;
       error?: string;
       state: "success" | "failure";
-      taskSnapshot?: TaskSnapshotItem[];
+      taskSnapshot?: TaskListSnapshot;
     },
   ): void {
     const existing = this.tools.get(toolUseId);
@@ -804,13 +804,16 @@ function parseMessageContent(
       if (typeof block.tool_use_id === "string" && block.tool_use_id.length > 0) {
         const resultContent = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
 
-        // Replay successful Task tool calls into the session task list so this
+        // Replay successful task tool calls into the session task list so this
         // part can carry the resulting list state. A failed call changed
-        // nothing, so it must not mutate the registry.
+        // nothing, so it must not mutate the registry, and a call whose output
+        // the registry cannot parse yields no snapshot at all — the renderer
+        // then shows the raw call instead of a list nothing vouches for.
         const pendingTool = toolTracker.getTool(block.tool_use_id);
-        const taskSnapshot = block.is_error
-          ? undefined
-          : taskRegistry?.apply(pendingTool?.toolName, pendingTool?.toolArgs, resultContent);
+        const taskSnapshot =
+          block.is_error || !isTaskListTool(pendingTool?.toolName)
+            ? undefined
+            : taskRegistry?.apply(pendingTool?.toolName, pendingTool?.toolArgs, resultContent);
 
         toolTracker.updateToolResult(block.tool_use_id, {
           output: block.is_error ? undefined : resultContent,

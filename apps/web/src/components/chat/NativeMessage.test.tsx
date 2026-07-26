@@ -1259,6 +1259,38 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     expect(container.textContent).toContain("#2 Add tests");
   });
 
+  test("forwards the backend task snapshot to TodoToolPart", () => {
+    // Without this the part renders from its own args and the whole snapshot
+    // path is silently dead.
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "TaskUpdate",
+        toolState: "success",
+        toolArgs: { taskId: "2", status: "in_progress" },
+        toolOutput: "Updated task #2 status",
+        taskSnapshot: {
+          items: [
+            { id: "1", subject: "From the snapshot", status: "completed" },
+            { id: "2", subject: "Also from the snapshot", status: "in_progress" },
+          ],
+          complete: true,
+          changedTaskId: "2",
+        },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    // The list, not the single task the call named.
+    expect(container.textContent).toContain("1/2 complete");
+
+    fireEvent.click(screen.getByRole("button", { name: /Task Update/i }));
+    expect(container.textContent).toContain("From the snapshot");
+    expect(container.textContent).toContain("Also from the snapshot");
+  });
+
   test("does not route non-todo tools to TodoToolPart", () => {
     const message = makeMessage([
       {

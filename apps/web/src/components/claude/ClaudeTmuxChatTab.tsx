@@ -97,7 +97,6 @@ import {
   type TmuxAttachment,
   type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
-import { collapseTaskToolUpdates } from "@/lib/task-tool-snapshots";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import {
@@ -427,7 +426,7 @@ export function ClaudeTmuxChatTab({
   const transcriptMessages = useMemo(
     () =>
       applyTmuxAgentUsageSummaries(
-        collapseTaskToolUpdates(compactConsecutiveAssistantMessages(messages)),
+        compactConsecutiveAssistantMessages(messages),
         agentUsageSummaries,
       ),
     [messages, agentUsageSummaries],

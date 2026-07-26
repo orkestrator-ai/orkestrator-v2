@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, screen, fireEvent } from "@testing-library/react";
 import { TodoToolPart } from "./TodoToolPart";
+import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 
 describe("TodoToolPart", () => {
   afterEach(() => {
@@ -238,11 +239,18 @@ describe("TodoToolPart", () => {
   });
 
   describe("task snapshots", () => {
-    const snapshot = [
+    const items = [
       { id: "1", subject: "Cache threadId", status: "completed" as const },
       { id: "2", subject: "Fix cache thrash", status: "in_progress" as const },
       { id: "3", subject: "Throttle transcript probe", status: "pending" as const },
     ];
+    /** As the backend ships it: the list, plus which task the call changed. */
+    const snapshotOf = (changedTaskId?: string): TaskListSnapshot => ({
+      items,
+      complete: true,
+      ...(changedTaskId ? { changedTaskId } : {}),
+    });
+    const snapshot = snapshotOf();
 
     test("renders the whole list for a single-task create", () => {
       const { container } = render(
@@ -251,7 +259,7 @@ describe("TodoToolPart", () => {
           toolState="success"
           toolArgs={{ subject: "Throttle transcript probe", description: "..." }}
           toolOutput="Task #3 created successfully: Throttle transcript probe"
-          taskSnapshot={snapshot}
+          taskSnapshot={snapshotOf("3")}
         />,
       );
 
@@ -281,14 +289,16 @@ describe("TodoToolPart", () => {
       expect(container.textContent).not.toContain("Task #2");
     });
 
-    test("highlights the task the call acted on", () => {
+    test("highlights the task the backend says the call changed", () => {
       const { container } = render(
         <TodoToolPart
           toolName="TaskUpdate"
           toolState="success"
-          toolArgs={{ taskId: "2", status: "in_progress" }}
-          toolOutput="Updated task #2 status"
-          taskSnapshot={snapshot}
+          // Deliberately inconsistent args: the highlight follows the backend's
+          // changedTaskId, never anything re-parsed here.
+          toolArgs={{ taskId: "1", status: "in_progress" }}
+          toolOutput="Updated task #1 status"
+          taskSnapshot={snapshotOf("2")}
         />,
       );
 
@@ -301,7 +311,9 @@ describe("TodoToolPart", () => {
       expect(rows[0]?.textContent).toContain("Fix cache thrash");
     });
 
-    test("highlights nothing for a TaskList read", () => {
+    test("highlights nothing when the snapshot reports no changed task", () => {
+      // TaskList and TaskGet read without mutating, so the backend sends no
+      // changedTaskId and no row is singled out.
       const { container } = render(
         <TodoToolPart
           toolName="TaskList"
@@ -319,6 +331,56 @@ describe("TodoToolPart", () => {
       expect(highlighted).toHaveLength(0);
     });
 
+    test("does not claim a total for a list known to be incomplete", () => {
+      const { container } = render(
+        <TodoToolPart
+          toolName="TaskUpdate"
+          toolState="success"
+          toolArgs={{ taskId: "7", status: "in_progress" }}
+          toolOutput="Updated task #7 status"
+          taskSnapshot={{
+            items: [{ id: "7", subject: "Task #7", status: "in_progress" }],
+            complete: false,
+            changedTaskId: "7",
+          }}
+        />,
+      );
+
+      // "0/1 complete" would assert this is the whole list, which it is not.
+      expect(container.textContent).not.toContain("0/1 complete");
+      expect(container.textContent).toContain("1 task tracked");
+
+      fireEvent.click(container.querySelector("button")!);
+      expect(container.textContent).toContain("not shown");
+    });
+
+    test("pluralizes the tracked count for an incomplete list", () => {
+      const { container } = render(
+        <TodoToolPart
+          toolName="TaskUpdate"
+          toolState="success"
+          taskSnapshot={{ items, complete: false }}
+        />,
+      );
+
+      expect(container.textContent).toContain("3 tasks tracked");
+    });
+
+    test("surfaces tasks dropped by the size cap rather than hiding them", () => {
+      const { container } = render(
+        <TodoToolPart
+          toolName="TaskList"
+          toolState="success"
+          taskSnapshot={{ items, complete: true, truncated: 12 }}
+        />,
+      );
+
+      expect(container.textContent).toContain("+12 more");
+
+      fireEvent.click(container.querySelector("button")!);
+      expect(container.textContent).toContain("12 more tasks not shown");
+    });
+
     test("prefers the snapshot over per-call args", () => {
       const { container } = render(
         <TodoToolPart
@@ -332,13 +394,14 @@ describe("TodoToolPart", () => {
       expect(container.textContent).toContain("1/3 complete");
     });
 
-    test("renders an empty snapshot as an empty list, not raw output", () => {
+    test("renders an genuinely empty snapshot as an empty list", () => {
+      // Every task deleted: a real state the backend vouches for.
       const { container } = render(
         <TodoToolPart
           toolName="TaskList"
           toolState="success"
-          toolOutput="unparsed blob"
-          taskSnapshot={[]}
+          toolOutput="No tasks found."
+          taskSnapshot={{ items: [], complete: true }}
         />,
       );
 
@@ -346,11 +409,39 @@ describe("TodoToolPart", () => {
 
       fireEvent.click(container.querySelector("button")!);
       expect(container.textContent).toContain("Task list is empty.");
-      expect(container.textContent).not.toContain("unparsed blob");
+    });
+
+    test("does not assert emptiness for an empty list known to be incomplete", () => {
+      const { container } = render(
+        <TodoToolPart
+          toolName="TaskList"
+          toolState="success"
+          taskSnapshot={{ items: [], complete: false }}
+        />,
+      );
+
+      expect(container.textContent).toContain("no tasks tracked");
+
+      fireEvent.click(container.querySelector("button")!);
+      expect(container.textContent).not.toContain("Task list is empty.");
+    });
+
+    test("shows the raw output when the backend could not parse the call", () => {
+      // No snapshot at all — the backend is saying "I don't know", which must
+      // not render as an empty list.
+      const { container } = render(
+        <TodoToolPart toolName="TaskList" toolState="success" toolOutput="unparsed blob" />,
+      );
+
+      expect(container.textContent).not.toContain("no tasks");
+
+      fireEvent.click(container.querySelector("button")!);
+      expect(container.textContent).not.toContain("Task list is empty.");
+      expect(container.textContent).toContain("unparsed blob");
     });
 
     test("falls back to per-call parsing when no snapshot is supplied", () => {
-      // Messages recorded before the bridge tracked task state.
+      // Messages recorded before the backend tracked task state.
       const { container } = render(
         <TodoToolPart
           toolName="TaskCreate"

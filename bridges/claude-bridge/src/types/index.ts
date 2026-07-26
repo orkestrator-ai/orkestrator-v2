@@ -4,12 +4,20 @@ import type {
   StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
 
+import type { TaskListSnapshot, TaskRegistry } from "@orkestrator/protocol/task-list";
+
 export type {
   JsonSchema,
   StructuredOutputFailure,
   StructuredOutputFailureCode,
   StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
+
+export type {
+  TaskListSnapshot,
+  TaskSnapshotItem,
+  TaskSnapshotStatus,
+} from "@orkestrator/protocol/task-list";
 
 // ============================================================================
 // Claude Agent SDK Message Types
@@ -82,16 +90,6 @@ export interface ToolDiffMetadata {
   diff?: string;
 }
 
-/** Display status of a task in the session task list */
-export type TaskSnapshotStatus = "pending" | "in_progress" | "completed";
-
-/** One task in a point-in-time view of the session task list */
-export interface TaskSnapshotItem {
-  id: string;
-  subject: string;
-  status: TaskSnapshotStatus;
-}
-
 /** Normalized message part */
 export interface NormalizedPart {
   type: "text" | "thinking" | "tool-invocation" | "tool-result" | "file";
@@ -117,9 +115,11 @@ export interface NormalizedPart {
    * State of the whole session task list immediately after this tool call, for
    * task tools (TaskCreate/TaskUpdate/TaskGet/TaskList). Those tools each act on
    * a single task, so their own args and output describe only that task; this is
-   * what lets the renderer show the resulting list.
+   * what lets the renderer show the resulting list. Absent when the call's
+   * output could not be parsed, which tells the renderer to show the raw call
+   * rather than a list it cannot vouch for.
    */
-  taskSnapshot?: TaskSnapshotItem[];
+  taskSnapshot?: TaskListSnapshot;
 }
 
 /** Normalized message format */
@@ -153,18 +153,11 @@ export interface SessionState {
   structuredOutputRequestId?: string;
   /**
    * Session task list state, replayed from Task tool calls. Lives on the session
-   * rather than the turn because the task list outlives an individual turn.
-   * Typed loosely here to keep this module free of service imports.
+   * rather than the turn because the task list outlives an individual turn, and
+   * is the authoritative copy `GET /session/:id/tasks` serves.
    */
-  taskRegistry?: { apply: TaskRegistryApply; snapshot: () => TaskSnapshotItem[] };
+  taskRegistry?: TaskRegistry;
 }
-
-/** Applies a completed task tool call, returning the resulting list state. */
-export type TaskRegistryApply = (
-  toolName: string | undefined,
-  toolArgs: Record<string, unknown> | undefined,
-  toolOutput: string | undefined,
-) => TaskSnapshotItem[] | undefined;
 
 /** Effort level for controlling how much thinking/reasoning Claude applies */
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";

@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { AlertCircle, CheckSquare, ChevronRight, ListTodo, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getChangedTaskId, getTodoItems, getTodoToolLabel } from "@/lib/todo-tool";
+import { getTodoItems, getTodoToolLabel } from "@/lib/todo-tool";
 import type { TodoStatus } from "@/lib/todo-tool";
-import type { NativeTaskSnapshotItem } from "@/lib/chat/native-message-types";
+import type { TaskListSnapshot } from "@/lib/chat/native-message-types";
 import {
   Collapsible,
   CollapsibleContent,
@@ -24,10 +24,12 @@ interface TodoToolPartProps {
   toolError?: string;
   /**
    * State of the whole task list after this call, for providers whose task
-   * tools mutate one task at a time. When present it is what gets rendered, so
-   * every call shows the current list rather than just the task it touched.
+   * tools mutate one task at a time. Computed by the backend that saw the call
+   * — including which task it changed — so nothing here re-parses tool output.
+   * When present it is what gets rendered, so every call shows the current list
+   * rather than just the task it touched.
    */
-  taskSnapshot?: NativeTaskSnapshotItem[];
+  taskSnapshot?: TaskListSnapshot;
 }
 
 interface DisplayTask {
@@ -49,19 +51,23 @@ export function TodoToolPart({
 
   // A snapshot describes the whole list, so it wins over the per-call args and
   // output, which only ever describe a single task. An empty snapshot is a real
-  // state (every task deleted) and is rendered as such.
-  const hasSnapshot = Array.isArray(taskSnapshot);
+  // state (every task deleted) and is rendered as such. A backend that could
+  // not parse the call sends no snapshot at all, which lands on the fallback
+  // below rather than showing an empty list as though it were fact.
+  const hasSnapshot = taskSnapshot !== undefined;
   const todos: DisplayTask[] = hasSnapshot
-    ? taskSnapshot.map((task) => ({
+    ? taskSnapshot.items.map((task) => ({
         id: task.id,
         content: task.subject,
         status: task.status,
       }))
     : getTodoItems(toolArgs, toolOutput, toolName);
 
-  const changedTaskId = hasSnapshot
-    ? getChangedTaskId(toolArgs, toolOutput, toolName)
-    : undefined;
+  const changedTaskId = taskSnapshot?.changedTaskId;
+  const truncatedCount = taskSnapshot?.truncated ?? 0;
+  // The backend knows its view is missing tasks it never saw created, so the
+  // list is shown without any claim to be the whole of it.
+  const isPartialList = hasSnapshot && !taskSnapshot.complete;
 
   const completedCount = todos.filter((todo) => todo.status === "completed").length;
   const cancelledCount = todos.filter((todo) => todo.status === "cancelled").length;
@@ -92,13 +98,18 @@ export function TodoToolPart({
         </span>
         {totalCount > 0 && (
           <span className="flex-1 text-left text-muted-foreground/80 leading-none">
-            {completedCount}/{totalCount} complete
+            {/* A partial list has no denominator worth quoting: the total is
+                whatever this backend happened to see, not the real one. */}
+            {isPartialList
+              ? `${totalCount} task${totalCount === 1 ? "" : "s"} tracked`
+              : `${completedCount}/${totalCount} complete`}
             {cancelledCount > 0 ? ` (${cancelledCount} cancelled)` : ""}
+            {truncatedCount > 0 ? ` +${truncatedCount} more` : ""}
           </span>
         )}
         {totalCount === 0 && hasSnapshot && (
           <span className="flex-1 text-left text-muted-foreground/80 leading-none">
-            no tasks
+            {isPartialList ? "no tasks tracked" : "no tasks"}
           </span>
         )}
         {toolState && (
@@ -169,12 +180,28 @@ export function TodoToolPart({
                     </div>
                   );
                 })}
+
+                {isPartialList && (
+                  <div className="pt-1 text-[10px] text-muted-foreground/60">
+                    Tasks created before this session was being watched are not
+                    shown.
+                  </div>
+                )}
+
+                {truncatedCount > 0 && (
+                  <div className="pt-1 text-[10px] text-muted-foreground/60">
+                    {truncatedCount} more task{truncatedCount === 1 ? "" : "s"} not
+                    shown.
+                  </div>
+                )}
               </div>
             )}
 
             {totalCount === 0 && hasSnapshot && (
               <div className="px-3 py-2 text-xs text-muted-foreground/70">
-                Task list is empty.
+                {isPartialList
+                  ? "No tasks tracked yet for this session."
+                  : "Task list is empty."}
               </div>
             )}
 

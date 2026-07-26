@@ -1170,17 +1170,149 @@ describe("sendPrompt", () => {
 
     // Each call carries the list as it stood after that call, so the renderer
     // never has to reconstruct it from neighbouring parts.
-    expect(tools[0]?.taskSnapshot).toEqual([
-      { id: "1", subject: "Cache threadId", status: "pending" },
-    ]);
-    expect(tools[1]?.taskSnapshot).toEqual([
+    expect(tools[0]?.taskSnapshot).toEqual({
+      items: [{ id: "1", subject: "Cache threadId", status: "pending" }],
+      complete: true,
+      changedTaskId: "1",
+    });
+    expect(tools[1]?.taskSnapshot?.items).toEqual([
       { id: "1", subject: "Cache threadId", status: "pending" },
       { id: "2", subject: "Fix cache thrash", status: "pending" },
     ]);
     // The update carries only {taskId, status}; the subject comes from the registry.
-    expect(tools[2]?.taskSnapshot).toEqual([
+    expect(tools[2]?.taskSnapshot?.items).toEqual([
       { id: "1", subject: "Cache threadId", status: "in_progress" },
       { id: "2", subject: "Fix cache thrash", status: "pending" },
+    ]);
+    // The bridge resolves the changed task, so the renderer never re-parses it.
+    expect(tools[2]?.taskSnapshot?.changedTaskId).toBe("1");
+  });
+
+  test("serves the session task list from its authoritative endpoint", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        uuid: "task-endpoint",
+        message: {
+          id: "task-endpoint",
+          content: [
+            {
+              type: "tool_use",
+              id: "create-1",
+              name: "TaskCreate",
+              input: { subject: "Rehydrated task", description: "..." },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "create-1",
+              content: "Task #1 created successfully: Rehydrated task",
+            },
+          ],
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    // A tab that was unmounted while this ran reads the list from the session,
+    // not by replaying the transcript.
+    expect(getSession(session.id)?.taskRegistry?.snapshot()).toEqual({
+      items: [{ id: "1", subject: "Rehydrated task", status: "pending" }],
+      complete: true,
+    });
+  });
+
+  test("omits the snapshot when a task call's output cannot be parsed", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        uuid: "unparsed",
+        message: {
+          id: "unparsed",
+          content: [
+            {
+              type: "tool_use",
+              id: "create-bad",
+              name: "TaskCreate",
+              input: { subject: "Never assigned an id", description: "..." },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "create-bad",
+              // Succeeded, but in a shape the registry does not recognize.
+              content: "Something the registry has never seen",
+            },
+          ],
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    const tool = session.messages
+      .find((message) => message.role === "assistant")
+      ?.parts.find((part) => part.type === "tool-invocation");
+
+    // No snapshot at all, so the renderer shows the call itself rather than an
+    // empty list it would otherwise present as fact.
+    expect(tool?.toolState).toBe("success");
+    expect(tool?.taskSnapshot).toBeUndefined();
+    expect(getSession(session.id)?.taskRegistry?.snapshot().items).toEqual([]);
+  });
+
+  test("marks the list incomplete when it never saw a task created", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        uuid: "partial",
+        message: {
+          id: "partial",
+          content: [
+            {
+              type: "tool_use",
+              id: "update-unknown",
+              name: "TaskUpdate",
+              input: { taskId: "7", status: "in_progress" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "update-unknown",
+              content: "Updated task #7 status",
+            },
+          ],
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    const tool = session.messages
+      .find((message) => message.role === "assistant")
+      ?.parts.find((part) => part.type === "tool-invocation");
+
+    // The task predates this registry, so its view is missing whatever came
+    // before and must not be shown as the whole list.
+    expect(tool?.taskSnapshot?.complete).toBe(false);
+    expect(tool?.taskSnapshot?.items).toEqual([
+      { id: "7", subject: "Task #7", status: "in_progress" },
     ]);
   });
 
@@ -1274,10 +1406,12 @@ describe("sendPrompt", () => {
     // The failed call left the list alone and got no snapshot at all.
     expect(tools[0]?.toolState).toBe("failure");
     expect(tools[0]?.taskSnapshot).toBeUndefined();
-    // The successful one still resolves a task created in the *previous* turn.
-    expect(tools[1]?.taskSnapshot).toEqual([
+    // The successful one still resolves a task created in the *previous* turn,
+    // and the list is still complete: nothing had to be synthesized.
+    expect(tools[1]?.taskSnapshot?.items).toEqual([
       { id: "1", subject: "Survives the turn", status: "in_progress" },
     ]);
+    expect(tools[1]?.taskSnapshot?.complete).toBe(true);
   });
 
   test("uses explicit Task parents across concurrent tasks and longest MCP server prefixes", async () => {

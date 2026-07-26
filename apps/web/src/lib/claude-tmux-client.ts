@@ -4,6 +4,7 @@
 
 import { invoke } from "@/lib/native/backend";
 import { listen, type UnlistenFn } from "@/lib/native/events";
+import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 
 /** Channel emitted by the Rust `claude_tmux` module. */
 export const CLAUDE_TMUX_EVENT = "claude-tmux:event";
@@ -95,6 +96,13 @@ export interface TranscriptLine {
     content?: Array<TranscriptContent> | string;
   };
   content?: Array<TranscriptContent> | string;
+  /**
+   * Task list state after each task tool call this line completed, keyed by
+   * `tool_use_id`, stamped on by the backend that reads the transcript. Not part
+   * of Claude's JSONL — the renderer must never derive this itself, so that
+   * tmux and Native Mode agree.
+   */
+  taskSnapshots?: Record<string, TaskListSnapshot>;
   [key: string]: unknown;
 }
 
@@ -177,6 +185,18 @@ export async function getStatus(tabId: string, environmentId: string): Promise<T
 
 export async function getTranscript(tabId: string, environmentId: string): Promise<TranscriptLine[]> {
   return invoke<TranscriptLine[]>("claude_tmux_transcript", { tabId, environmentId });
+}
+
+/**
+ * The tab's task list as the backend holds it, without replaying the
+ * transcript. The authoritative rehydration path for a tab that was not mounted
+ * while tasks changed.
+ */
+export async function getTaskList(
+  tabId: string,
+  environmentId: string,
+): Promise<TaskListSnapshot> {
+  return invoke<TaskListSnapshot>("claude_tmux_tasks", { tabId, environmentId });
 }
 
 export async function getPendingHooks(tabId: string, environmentId: string): Promise<TmuxPendingHook[]> {

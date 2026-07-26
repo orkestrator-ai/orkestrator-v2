@@ -588,7 +588,7 @@ function applyLine(state: TmuxTabState, line: TranscriptLine): TmuxTabState {
   const timestamp =
     typeof line.timestamp === "string" ? line.timestamp : new Date().toISOString();
 
-  const parts = contentToParts(content);
+  const parts = contentToParts(content, line.taskSnapshots);
 
   const allToolResults =
     role === "user" &&
@@ -628,6 +628,13 @@ function lineId(line: TranscriptLine): string {
 
 function contentToParts(
   content: TranscriptLine["content"],
+  /**
+   * Task list state for this line's task tool calls, computed by the backend
+   * that read the transcript and keyed by `tool_use_id`. Attached to the task
+   * tool's own result so it lands on the invocation part when results are
+   * merged back, exactly as the bridge does in Native Mode.
+   */
+  taskSnapshots?: TranscriptLine["taskSnapshots"],
 ): ClaudeMessagePart[] {
   if (typeof content === "string") {
     const cleaned = cleanUserText(content);
@@ -672,6 +679,9 @@ function contentToParts(
           toolState: c.is_error ? "failure" : "success",
           toolOutput: c.is_error ? undefined : txt,
           toolError: c.is_error ? txt : undefined,
+          // Only this tool's own snapshot; a line can carry results for
+          // several tools, and an unrelated one must not inherit a task list.
+          taskSnapshot: c.tool_use_id ? taskSnapshots?.[c.tool_use_id] : undefined,
         });
         break;
       }
@@ -852,6 +862,9 @@ function mergeToolResultsIntoPrior(
             toolState: match.toolState,
             toolOutput: match.toolOutput ?? p.toolOutput,
             toolError: match.toolError ?? p.toolError,
+            // The task list state the backend derived for this result belongs
+            // on the invocation, which is what TodoToolPart renders.
+            taskSnapshot: match.taskSnapshot ?? p.taskSnapshot,
           };
           updatedParts.push(match);
         }

@@ -8,6 +8,8 @@ import type { CommandContext } from "./commands.js";
 import type { Environment } from "./models.js";
 import type { JsonRecord } from "./storage.js";
 import { runCommand } from "./shell.js";
+import { TranscriptTaskTracker } from "./claude-transcript-tasks.js";
+import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
 type RegisterCommand = (name: string, handler: CommandHandler) => void;
@@ -926,6 +928,12 @@ class TmuxSession {
   private pollLoopRunning = false;
   private stopRequested = false;
   private transcriptPath: string | undefined;
+  /**
+   * Task list derived from this session's transcript. The backend owns it so
+   * the renderer never re-derives it, and so a tab that was not mounted while
+   * tasks changed can rehydrate rather than replay.
+   */
+  private taskTracker = new TranscriptTaskTracker();
   private busy = false;
   private permissionMode = "bypassPermissions";
   private readonly inputMutex = new AsyncMutex();
@@ -979,20 +987,43 @@ class TmuxSession {
     const transcriptPath = await this.discoverTranscriptPath();
     if (!transcriptPath) return [];
     const content = await this.backend.readFile(transcriptPath) ?? "";
+
+    // Replay task tools from scratch: the file is authoritative for everything
+    // written so far, and each historical line must carry the list as it stood
+    // *then*, not as it stands now. Overlapping with the live tail is safe —
+    // every operation the registry models is idempotent.
+    const tracker = new TranscriptTaskTracker();
     const lines: unknown[] = [];
     for (const raw of content.split("\n")) {
       const trimmed = raw.trim();
       if (!trimmed) continue;
       try {
         const line = JSON.parse(trimmed);
-        lines.push(line);
+        lines.push(this.withTaskSnapshot(line, tracker));
         const permissionMode = permissionModeFromTranscriptLine(line);
         if (permissionMode) this.permissionMode = permissionMode;
       } catch {
         // Continue reading later lines.
       }
     }
+    this.taskTracker = tracker;
     return lines;
+  }
+
+  /** The session's task list, for callers that want it without the transcript. */
+  taskList(): TaskListSnapshot {
+    return this.taskTracker.snapshot();
+  }
+
+  /**
+   * Attach the resulting task list to a line that completed a task tool call,
+   * keyed by `tool_use_id` so it reaches that tool's part and no other, and
+   * leaving every other line untouched.
+   */
+  private withTaskSnapshot(line: unknown, tracker: TranscriptTaskTracker): unknown {
+    const taskSnapshots = tracker.applyLine(line);
+    if (!taskSnapshots || typeof line !== "object" || line === null) return line;
+    return { ...(line as Record<string, unknown>), taskSnapshots };
   }
 
   pendingHooks(): Promise<PendingHookEvent[]> {
@@ -1186,7 +1217,7 @@ class TmuxSession {
                   tab_id: this.tabId,
                   environment_id: this.environmentId,
                   session_id: this.sessionId,
-                  line,
+                  line: this.withTaskSnapshot(line, this.taskTracker),
                 });
               }
             } catch (error) {
@@ -1819,6 +1850,11 @@ export function registerTmuxBackendCommands(register: RegisterCommand): void {
   });
   register("claude_tmux_transcript", ({ tabId, environmentId }) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).transcriptLines(),
+  );
+  // Authoritative task list for a tmux tab, for callers rehydrating without
+  // replaying the whole transcript.
+  register("claude_tmux_tasks", ({ tabId, environmentId }) =>
+    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).taskList(),
   );
   register("claude_tmux_pending_hooks", ({ tabId, environmentId }) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).pendingHooks(),

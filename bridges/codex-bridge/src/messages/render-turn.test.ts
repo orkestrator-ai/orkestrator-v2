@@ -500,6 +500,41 @@ describe("renderTurn", () => {
     expect(rendered).toEqual({ parts: [], content: "" });
   });
 
+  test("throttled probes retain the previous snapshot and always run on a terminal turn", async () => {
+    const accumulator = turn();
+    accumulator.onItemCompleted({ id: "text", type: "agent_message", text: "done" });
+    const state = createTurnRenderState();
+    let loads = 0;
+    const render = () => renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state,
+      subagentProbeIntervalMs: 60_000,
+      loadSubagentParts: async () => {
+        loads += 1;
+        return [{
+          type: "subagent",
+          content: "child",
+          subagentId: "child-1",
+          toolState: "pending",
+        }];
+      },
+    });
+
+    // First render probes (nothing has probed yet)…
+    expect((await render()).parts.map((part) => part.type)).toEqual(["text", "subagent"]);
+    expect(loads).toBe(1);
+
+    // …renders inside the interval skip the probe but keep the snapshot…
+    expect((await render()).parts.map((part) => part.type)).toEqual(["text", "subagent"]);
+    expect(loads).toBe(1);
+
+    // …and a terminal turn probes regardless of the interval.
+    accumulator.complete("completed");
+    await render();
+    expect(loads).toBe(2);
+  });
+
   test("renders item parts and interleaves injected subagent activity", async () => {
     const accumulator = turn();
     accumulator.onItemCompleted({ id: "text", type: "agent_message", text: "done" });

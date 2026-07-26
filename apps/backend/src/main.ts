@@ -118,3 +118,20 @@ const stop = createBackendShutdownHandler({
 });
 process.on("SIGINT", () => void stop("SIGINT"));
 process.on("SIGTERM", () => void stop("SIGTERM"));
+
+// The Electron supervisor cannot deliver SIGTERM if it crashes or is
+// force-killed, and this process would otherwise keep every local bridge (and
+// each bridge's codex app-server tree) alive as orphans. When the parent that
+// spawned us disappears — ppid is reparented — run the same drain a SIGTERM
+// would have. Started under a service manager the ppid is stable, so this
+// never fires there.
+const initialParentPid = process.ppid;
+if (initialParentPid > 1) {
+  const parentWatchdog = setInterval(() => {
+    if (process.ppid === initialParentPid) return;
+    clearInterval(parentWatchdog);
+    console.warn("[Backend] Parent process exited; shutting down local servers");
+    void stop("SIGTERM");
+  }, 15_000);
+  parentWatchdog.unref();
+}

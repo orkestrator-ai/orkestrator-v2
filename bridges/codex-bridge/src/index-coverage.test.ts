@@ -35,8 +35,8 @@ describe("codex bridge private boundary coverage", () => {
         await Promise.resolve();
         return paths;
       },
-      async (threadId: string, transcriptPaths: readonly string[]) => {
-        metadataCalls.push({ threadId, paths: transcriptPaths });
+      async (threadId: string, transcriptPaths: () => Promise<readonly string[]>) => {
+        metadataCalls.push({ threadId, paths: await transcriptPaths() });
         return { id: threadId, updatedAt: "2026-07-17T00:00:00.000Z" };
       },
     );
@@ -48,6 +48,53 @@ describe("codex bridge private boundary coverage", () => {
     expect(metadataCalls.every((call) => call.paths === paths)).toBe(true);
   });
 
+
+  test("serialized SSE writer bounds its backlog and drops frames after overflow", async () => {
+    let releaseFirstWrite!: () => void;
+    const firstWriteGate = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    const written: string[] = [];
+    let overflowed = 0;
+    const write = __testing.createSerializedSseWriterForTesting(
+      async (event: { event: string; data: string }) => {
+        if (written.length === 0) await firstWriteGate;
+        written.push(event.data);
+      },
+      { onOverflow: () => (overflowed += 1), maxPendingFrames: 3 },
+    );
+
+    // First frame starts writing (and stalls); two more queue behind it.
+    const attempts = [
+      write({ event: "a", data: "1" }),
+      write({ event: "a", data: "2" }),
+      write({ event: "a", data: "3" }),
+    ];
+    // The fourth frame exceeds the cap: overflow fires once, frame is dropped.
+    await write({ event: "a", data: "4" });
+    expect(overflowed).toBe(1);
+    // Everything after overflow is dropped too, even after the backlog drains.
+    releaseFirstWrite();
+    await Promise.all(attempts);
+    await write({ event: "a", data: "5" });
+    expect(written).toEqual(["1", "2", "3"]);
+    expect(overflowed).toBe(1);
+  });
+
+  test("serialized SSE writer accepts a single oversized frame when idle", async () => {
+    const written: string[] = [];
+    let overflowed = 0;
+    const write = __testing.createSerializedSseWriterForTesting(
+      async (event: { event: string; data: string }) => {
+        written.push(event.data);
+      },
+      { onOverflow: () => (overflowed += 1), maxPendingBytes: 4 },
+    );
+
+    await write({ event: "a", data: "larger-than-the-byte-cap" });
+    expect(written).toEqual(["larger-than-the-byte-cap"]);
+    expect(overflowed).toBe(0);
+  });
 
   test("contains runtime environment executor failures", async () => {
     const errors: unknown[][] = [];

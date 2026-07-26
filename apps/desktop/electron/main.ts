@@ -28,6 +28,16 @@ const isDev = process.env.ELECTRON_DEV === "1";
 app.setName(PRODUCT_NAME);
 app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));
 
+// Two instances would share this userData dir: each spawns its own backend
+// against the same storage, and the second silently takes a fallback port and
+// starts a duplicate set of bridge processes. Refuse to be the second instance
+// and hand focus to the first instead. The lock is scoped to userData, so a
+// dev build and a packaged build (which share it) exclude each other too.
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) {
+  app.quit();
+}
+
 let mainWindow: BrowserWindow | null = null;
 let backend: BackendHttpClient | null = null;
 let connectionManager: ConnectionManager | null = null;
@@ -227,14 +237,22 @@ async function startApplication(): Promise<void> {
   });
 }
 
-void app.whenReady().then(startApplication).catch((error: unknown) => {
-  console.error("[Desktop] Startup failed:", error);
-  dialog.showErrorBox(
-    `${PRODUCT_NAME} failed to start`,
-    error instanceof Error ? error.message : String(error),
-  );
-  app.quit();
-});
+if (isPrimaryInstance) {
+  app.on("second-instance", () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  });
+
+  void app.whenReady().then(startApplication).catch((error: unknown) => {
+    console.error("[Desktop] Startup failed:", error);
+    dialog.showErrorBox(
+      `${PRODUCT_NAME} failed to start`,
+      error instanceof Error ? error.message : String(error),
+    );
+    app.quit();
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

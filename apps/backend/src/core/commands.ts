@@ -2635,6 +2635,10 @@ async function startLocalServerUnlocked(
     PORT: String(port),
     HOSTNAME: "127.0.0.1",
     CWD: environment.worktreePath,
+    // Bridges are spawned detached, so they outlive a backend that dies
+    // without running its shutdown path. Advertising our PID lets each bridge
+    // watch for that and drain itself instead of orphaning its children.
+    ORKESTRATOR_PARENT_PID: String(process.pid),
   };
 
   if (kind === "opencode") {
@@ -4108,10 +4112,19 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       throw error;
     }
   });
-  register("stop_environment", async ({ environmentId }, { storage }) => {
+  register("stop_environment", async ({ environmentId }, context) => {
+    const { storage } = context;
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    if (environment.containerId) await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
+    if (environment.containerId) {
+      await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
+    } else if (environment.worktreePath) {
+      // A stopped local environment must not keep its bridge processes (and
+      // the codex app-server tree behind them) running; they restart on demand.
+      await enqueueLocalServerEnvironmentOperation(environment.id, () =>
+        stopLocalServersForEnvironmentUnlocked(environment.id, context),
+      );
+    }
     await storage.updateEnvironment(environment.id, { status: "stopped" });
   });
   register("recreate_environment", async ({ environmentId }, context) => {

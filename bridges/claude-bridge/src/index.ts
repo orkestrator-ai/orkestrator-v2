@@ -53,6 +53,28 @@ app.get("/", (c) => {
   });
 });
 
+import {
+  PARENT_PID_ENV,
+  parseParentPid,
+  startParentWatchdog,
+} from "./parent-watchdog.js";
+
+// A dead backend can no longer terminate this process tree. Exiting is enough
+// cleanup here: SDK-spawned Claude CLI children read stdio pipes from this
+// process and exit on EOF when it goes away.
+const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
+if (parentPid !== null) {
+  startParentWatchdog({
+    parentPid,
+    onParentExit: () => {
+      console.error(
+        `[claude-bridge] Backend process ${parentPid} is gone; shutting down`,
+      );
+      process.exit(0);
+    },
+  });
+}
+
 // Get port from environment or use default
 const port = parseInt(process.env.PORT || "4097", 10);
 const hostname = process.env.HOSTNAME || "0.0.0.0";

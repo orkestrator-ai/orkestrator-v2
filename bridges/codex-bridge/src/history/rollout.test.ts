@@ -92,7 +92,7 @@ describe("rollout public helpers", () => {
     });
   });
 
-  test("shared metadata loader scans once and reuses the same path snapshot", async () => {
+  test("shared metadata loader scans lazily, once, and reuses the same path snapshot", async () => {
     let scans = 0;
     const seen: Array<{ id: string; paths: readonly string[] }> = [];
     const loader = createSharedTranscriptMetaLoader(
@@ -101,7 +101,7 @@ describe("rollout public helpers", () => {
         return ["/one.jsonl"];
       },
       async (id, paths) => {
-        seen.push({ id, paths });
+        seen.push({ id, paths: await paths() });
         return null;
       },
     );
@@ -109,6 +109,19 @@ describe("rollout public helpers", () => {
     expect(scans).toBe(1);
     expect(seen.map((entry) => entry.id).sort()).toEqual(["a", "b"]);
     expect(seen[0]!.paths).toBe(seen[1]!.paths);
+  });
+
+  test("shared metadata loader never walks when metadata resolves without paths", async () => {
+    let scans = 0;
+    const loader = createSharedTranscriptMetaLoader(
+      async () => {
+        scans += 1;
+        return [];
+      },
+      async (id) => ({ id, updatedAt: "2026-07-25T12:00:00.000Z" }),
+    );
+    await Promise.all([loader("a"), loader("b")]);
+    expect(scans).toBe(0);
   });
 
   test("metadata merge inserts copies and advances only the timestamp", () => {

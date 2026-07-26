@@ -173,9 +173,25 @@ function messageContentText(value: unknown): string | undefined {
   return text.length > 0 ? text : undefined;
 }
 
+/**
+ * Cap for a single sub-agent action's serialized output. Mirrors the parent
+ * items' `DEFAULT_MAX_COMMAND_OUTPUT_CHARS`: these parts are re-derived on
+ * every transcript probe and retained in the thread's messages, so an
+ * unbounded tool result here multiplies across renders and sub-agents.
+ */
+export const MAX_SUBAGENT_ACTION_OUTPUT_CHARS = 256 * 1024;
+const SUBAGENT_OUTPUT_TRUNCATION_NOTICE = "\n… output truncated";
+
+function capActionOutput(text: string): string {
+  if (text.length <= MAX_SUBAGENT_ACTION_OUTPUT_CHARS) return text;
+  return (
+    text.slice(0, MAX_SUBAGENT_ACTION_OUTPUT_CHARS) + SUBAGENT_OUTPUT_TRUNCATION_NOTICE
+  );
+}
+
 function stringifyOutput(value: unknown): string | undefined {
   if (typeof value === "string") {
-    return value;
+    return capActionOutput(value);
   }
 
   if (value === undefined) {
@@ -183,9 +199,9 @@ function stringifyOutput(value: unknown): string | undefined {
   }
 
   try {
-    return JSON.stringify(value, null, 2);
+    return capActionOutput(JSON.stringify(value, null, 2));
   } catch {
-    return String(value);
+    return capActionOutput(String(value));
   }
 }
 

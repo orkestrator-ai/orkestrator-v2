@@ -1190,6 +1190,31 @@ export async function updateEnvironmentAgentSettings(
   });
 }
 
+export type AgentExtensionId = "claude" | "codex" | "opencode";
+
+export interface AgentExtensionItem {
+  name: string;
+  status: "connected" | "configured" | "disabled" | "failed" | "pending";
+  source?: string;
+}
+
+export interface AgentExtensionCatalog {
+  agent: AgentExtensionId;
+  mcpServers: AgentExtensionItem[];
+  plugins: AgentExtensionItem[];
+  mcpError?: string;
+  pluginError?: string;
+}
+
+/** Read the effective MCP and plugin configuration for every supported agent. */
+export async function getEnvironmentExtensions(
+  environmentId: string,
+): Promise<AgentExtensionCatalog[]> {
+  return invoke<AgentExtensionCatalog[]>("get_environment_extensions", {
+    environmentId,
+  });
+}
+
 // --- Session Commands (Persistent Session Tracking) ---
 
 /** Create a new persistent session for tracking */

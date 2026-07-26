@@ -22,10 +22,28 @@ const mockUpdateEnvironmentAgentSettings = mock(async (
   opencodeMode: opencodeMode ?? undefined,
   codexMode: codexMode ?? undefined,
 }));
+const mockGetEnvironmentExtensions = mock(async () => [
+  {
+    agent: "claude" as const,
+    mcpServers: [{ name: "claude-docs", status: "connected" as const }],
+    plugins: [{ name: "claude-review", status: "configured" as const, source: "user" }],
+  },
+  {
+    agent: "codex" as const,
+    mcpServers: [{ name: "codex-github", status: "configured" as const }],
+    plugins: [{ name: "codex-browser", status: "configured" as const, source: "bundled" }],
+  },
+  {
+    agent: "opencode" as const,
+    mcpServers: [{ name: "opencode-linear", status: "disabled" as const }],
+    plugins: [{ name: "@team/opencode-review", status: "configured" as const }],
+  },
+]);
 const actualBackend = await import("../../../apps/web/src/lib/backend");
 
 mock.module("@/lib/backend", () => ({
   ...actualBackend,
+  getEnvironmentExtensions: mockGetEnvironmentExtensions,
   updateEnvironmentAgentSettings: mockUpdateEnvironmentAgentSettings,
   renameEnvironment: mock(async (_id: string, name: string) => ({ ...makeEnvironment(), name })),
   updateEnvironmentAllowedDomains: mock(async () => makeEnvironment()),
@@ -83,6 +101,7 @@ describe("EnvironmentSettingsDialog", () => {
     cleanup();
     mockSection = "agent";
     mockUpdateEnvironmentAgentSettings.mockClear();
+    mockGetEnvironmentExtensions.mockClear();
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
 
@@ -161,5 +180,36 @@ describe("EnvironmentSettingsDialog", () => {
         codexMode: "terminal",
       })
     );
+  });
+
+  test("shows MCP servers and plugins for all three agents", async () => {
+    mockSection = "extensions";
+
+    render(
+      <EnvironmentSettingsDialog
+        open={true}
+        onOpenChange={() => {}}
+        environment={makeEnvironment()}
+        onUpdate={() => {}}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("claude-docs")).toBeTruthy();
+    });
+
+    for (const label of ["Claude", "Codex", "OpenCode"]) {
+      expect(screen.getByRole("heading", { name: label })).toBeTruthy();
+    }
+    for (const extension of [
+      "claude-review",
+      "codex-github",
+      "codex-browser",
+      "opencode-linear",
+      "@team/opencode-review",
+    ]) {
+      expect(screen.getByText(extension)).toBeTruthy();
+    }
+    expect(mockGetEnvironmentExtensions).toHaveBeenCalledWith("env-1");
   });
 });

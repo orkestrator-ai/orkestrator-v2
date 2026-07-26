@@ -57,6 +57,11 @@ import {
   writeFileBase64,
 } from "./shell.js";
 import {
+  discoverAgentExtensions,
+  type AgentExtensionId,
+  type ExtensionCommandRunner,
+} from "./extension-discovery.js";
+import {
   assertBase64PayloadWithinLimit,
   MAX_BINARY_FILE_BYTES,
   validateRelativeFilePath,
@@ -556,6 +561,62 @@ function resolveOpenCodeBinary(context: CommandContext): string {
 
 function resolveClaudeBinary(context: CommandContext): string {
   return resolveManagedBinary(context, "claude") ?? "claude";
+}
+
+function resolveAgentBinary(
+  context: CommandContext,
+  agent: AgentExtensionId,
+): string {
+  if (agent === "claude") return resolveClaudeBinary(context);
+  if (agent === "codex") return resolveCodexBinary(context);
+  return resolveOpenCodeBinary(context);
+}
+
+function createExtensionCommandRunner(
+  environment: Environment,
+  context: CommandContext,
+): ExtensionCommandRunner {
+  if (environment.environmentType === "local" && environment.worktreePath) {
+    return async (agent, args) => {
+      const { stdout } = await runCommand(
+        resolveAgentBinary(context, agent),
+        args,
+        {
+          cwd: environment.worktreePath,
+          env: {
+            ...envWithManagedBinaries(context),
+            NO_COLOR: "1",
+          },
+          timeoutMs: 20_000,
+        },
+      );
+      return stdout;
+    };
+  }
+
+  if (environment.containerId) {
+    return async (agent, args) => {
+      const { stdout } = await runCommand(
+        "docker",
+        [
+          "exec",
+          "-e",
+          "NO_COLOR=1",
+          "-w",
+          "/workspace",
+          environment.containerId!,
+          agent,
+          ...args,
+        ],
+        { timeoutMs: 20_000 },
+      );
+      return stdout;
+    };
+  }
+
+  return async () => {
+    throw new Error("The environment is not available");
+  };
 }
 
 function hasPackagedOrPathBinary(context: CommandContext, name: string): Promise<boolean> {
@@ -4215,6 +4276,12 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("update_environment_agent_settings", ({ environmentId, defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode }, { storage }) =>
     storage.updateEnvironment(asString(environmentId, "environmentId"), { defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode }),
   );
+  register("get_environment_extensions", async ({ environmentId }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await context.storage.getEnvironment(id);
+    if (!environment) throw new Error(`Environment not found: ${id}`);
+    return discoverAgentExtensions(createExtensionCommandRunner(environment, context));
+  });
   register("update_environment_allowed_domains", ({ environmentId, domains }, { storage }) =>
     storage.updateEnvironment(asString(environmentId, "environmentId"), { allowedDomains: asStringArray(domains) }),
   );

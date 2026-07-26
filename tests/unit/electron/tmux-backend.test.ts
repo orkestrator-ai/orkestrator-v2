@@ -10,6 +10,7 @@ import {
   parseFreshJsonlFindOutput,
   probeThinkingDisplaySupport,
   registerTmuxBackendCommands,
+  RUNTIME_ROOT_PREFIX,
   thinkingDisplayProbeArgs,
   thinkingDisplayProbeIndicatesSupport,
   transcriptContainsSessionId,
@@ -19,6 +20,8 @@ import {
 import type { Environment } from "../../../apps/backend/src/core/models";
 
 const tempDirs: string[] = [];
+/** mkdtemp prefix for the fake tmux runtime; also the guard for its cleanup path. */
+const RUNTIME_TEMP_PREFIX = "ork-tmux-runtime-";
 
 async function createTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -55,8 +58,10 @@ async function withFakeTmuxRuntime(run: (runtime: {
   log: string;
   alive: string;
   environment: Environment;
+  /** `${RUNTIME_ROOT_PREFIX}/<environment id>` — where the backend keeps hook state. */
+  runtimeRoot: string;
 }) => Promise<void>): Promise<void> {
-  const root = await createTempDir("ork-tmux-runtime-");
+  const root = await createTempDir(RUNTIME_TEMP_PREFIX);
   const binDir = path.join(root, "bin");
   const worktree = path.join(root, "worktree");
   const home = path.join(root, "home");
@@ -221,24 +226,29 @@ exit 0
   process.env.CLAUDE_CONFIG_DIR = path.join(home, ".claude");
   process.env.FAKE_TMUX_LOG = log;
   process.env.FAKE_TMUX_ALIVE = alive;
-  const environment = createEnvironment(worktree, `env-${path.basename(root)}`);
+  // Each invocation gets its own environment id, derived from the unique mkdtemp
+  // suffix. Stopping a session calls uninstallWorkspaceHooks, which removes the
+  // *entire* `${RUNTIME_ROOT_PREFIX}/<id>` root rather than just its own session
+  // directory — so with a fixed id one Bun worker finishing would delete a
+  // concurrent worker's live session state. That root lives outside the temp dirs
+  // the fake runtime owns, hence the explicit cleanup below.
+  const environmentId = `env-${path.basename(root)}`;
+  // Checked before anything runs, not in the finally: an unexpected id would make
+  // the recursive cleanup below collapse onto the shared root, which holds real
+  // user environments. Failing here also avoids masking a test's own error and
+  // skipping the env-var restoration.
+  if (!environmentId.startsWith(`env-${RUNTIME_TEMP_PREFIX}`)) {
+    throw new Error(`unexpected tmux runtime environment id: ${environmentId}`);
+  }
+  const environment = createEnvironment(worktree, environmentId);
+  const runtimeRoot = path.join(RUNTIME_ROOT_PREFIX, environmentId);
 
   try {
-    await run({
-      worktree,
-      home,
-      log,
-      alive,
-      // Session metadata lives below a process-external temp root keyed by
-      // environment id. A fixed id lets concurrent Bun invocations remove each
-      // other's session directories even though their fake runtimes are unique.
-      environment,
-    });
+    await run({ worktree, home, log, alive, environment, runtimeRoot });
   } finally {
-    await fs.rm(
-      path.join("/tmp", "orkestrator-v2-claude-tmux", environment.id),
-      { recursive: true, force: true },
-    );
+    // The happy path already removes this via claude_tmux_stop; this is the guard
+    // for a test that throws before reaching it.
+    await fs.rm(runtimeRoot, { recursive: true, force: true });
     if (originalPath === undefined) delete process.env.PATH;
     else process.env.PATH = originalPath;
     if (originalHome === undefined) delete process.env.HOME;
@@ -399,6 +409,49 @@ describe("Electron tmux backend command registration", () => {
         { tabId: "tab-1782973296000-2", environmentId: environment.id },
         context,
       );
+    });
+  });
+
+  // Pins the runtime root against production. The cleanup in withFakeTmuxRuntime
+  // uses `force: true`, so it silently succeeds against a wrong path — without
+  // this test a change to RUNTIME_ROOT_PREFIX would leave every run leaking hook
+  // state into /tmp with nothing failing.
+  test("keeps per-environment hook state under the shared runtime root and removes it on stop", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      expect(runtimeRoot).toBe(path.join(RUNTIME_ROOT_PREFIX, environment.id));
+      await expect(fs.stat(runtimeRoot)).rejects.toThrow();
+
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-runtime-root", environmentId: environment.id },
+        context,
+      ) as { session_id: string };
+
+      expect((await fs.stat(runtimeRoot)).isDirectory()).toBe(true);
+      expect(
+        (await fs.stat(path.join(runtimeRoot, "sessions", status.session_id))).isDirectory(),
+      ).toBe(true);
+
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-runtime-root", environmentId: environment.id },
+        context,
+      );
+
+      // Stopping the last session tears the whole root down. That is exactly why
+      // two concurrent runs must not share an environment id.
+      await expect(fs.stat(runtimeRoot)).rejects.toThrow();
     });
   });
 
@@ -591,7 +644,7 @@ exit 0
   test("sends text and keys, captures, resizes, rejects blank switches, and answers PreToolUse", async () => {
     const handlers = createHandlers();
 
-    await withFakeTmuxRuntime(async ({ environment, log, alive }) => {
+    await withFakeTmuxRuntime(async ({ environment, log, alive, runtimeRoot }) => {
       const context = {
         storage: { getEnvironment: async () => environment },
         emit: () => undefined,
@@ -647,7 +700,7 @@ exit 0
       )).rejects.toThrow("effort level cannot be empty");
       expect(await fs.readFile(log, "utf8")).toBe(beforeRejected);
 
-      const sessionRoot = path.join("/tmp", "orkestrator-v2-claude-tmux", environment.id, "sessions", status.session_id);
+      const sessionRoot = path.join(runtimeRoot, "sessions", status.session_id);
       await fs.mkdir(path.join(sessionRoot, "pending"), { recursive: true });
       await fs.writeFile(
         path.join(sessionRoot, "pending", "PreToolUse-event-9.json"),
@@ -706,7 +759,7 @@ exit 0
   test("starts with installed hooks, reads transcripts, replies to hooks, and maps interactive input", async () => {
     const handlers = createHandlers();
 
-    await withFakeTmuxRuntime(async ({ worktree, home, log, environment }) => {
+    await withFakeTmuxRuntime(async ({ worktree, home, log, environment, runtimeRoot }) => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: {
@@ -770,7 +823,7 @@ exit 0
       expect(switchedLog).toContain("send-keys -t");
       expect(switchedLog).toContain("-- BTab");
 
-      const sessionRoot = path.join("/tmp", "orkestrator-v2-claude-tmux", environment.id, "sessions", status.session_id);
+      const sessionRoot = path.join(runtimeRoot, "sessions", status.session_id);
       const pendingDir = path.join(sessionRoot, "pending");
       const responseDir = path.join(sessionRoot, "response");
       await fs.mkdir(pendingDir, { recursive: true });

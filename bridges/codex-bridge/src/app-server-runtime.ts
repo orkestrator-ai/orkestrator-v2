@@ -42,6 +42,7 @@ import {
   createTurnRenderState,
   releaseTurnRenderState,
   renderTurn,
+  SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
   type TurnRenderState,
 } from "./messages/render-turn.js";
 import { UpdateCoalescer } from "./messages/coalescer.js";
@@ -1331,6 +1332,7 @@ export class AppServerRuntime {
       threadId: context.threadId,
       cwd: context.cwd ?? this.options.cwd,
       state: state.render,
+      subagentProbeIntervalMs: SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
     });
     message.parts = rendered.parts;
     message.content = rendered.content;

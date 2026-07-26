@@ -20,6 +20,7 @@ import {
   registerBrowserPreviewWindowCleanup,
 } from "./browser-preview-startup.js";
 import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapters.js";
+import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,6 +28,9 @@ const isDev = process.env.ELECTRON_DEV === "1";
 
 app.setName(PRODUCT_NAME);
 app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));
+
+// Must follow the `userData` override above: the lock is scoped to that path.
+const isPrimaryInstance = claimSingleInstanceLock(app);
 
 let mainWindow: BrowserWindow | null = null;
 let backend: BackendHttpClient | null = null;
@@ -227,14 +231,18 @@ async function startApplication(): Promise<void> {
   });
 }
 
-void app.whenReady().then(startApplication).catch((error: unknown) => {
-  console.error("[Desktop] Startup failed:", error);
-  dialog.showErrorBox(
-    `${PRODUCT_NAME} failed to start`,
-    error instanceof Error ? error.message : String(error),
-  );
-  app.quit();
-});
+if (isPrimaryInstance) {
+  registerSecondInstanceFocus(app, () => mainWindow);
+
+  void app.whenReady().then(startApplication).catch((error: unknown) => {
+    console.error("[Desktop] Startup failed:", error);
+    dialog.showErrorBox(
+      `${PRODUCT_NAME} failed to start`,
+      error instanceof Error ? error.message : String(error),
+    );
+    app.quit();
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

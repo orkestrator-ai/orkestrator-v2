@@ -7,6 +7,7 @@ import { OrkestratorGateway } from "./gateway.js";
 import { createManagedWebClient } from "./managed-web-client.js";
 import { assertSupportedPlatform, parseOptions } from "./options.js";
 import { createBackendShutdownHandler } from "./shutdown.js";
+import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
 import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-serve.js";
 
 assertSupportedPlatform();
@@ -118,3 +119,16 @@ const stop = createBackendShutdownHandler({
 });
 process.on("SIGINT", () => void stop("SIGINT"));
 process.on("SIGTERM", () => void stop("SIGTERM"));
+
+// The Electron supervisor cannot deliver SIGTERM if it crashes or is
+// force-killed, and this process would otherwise keep every local bridge (and
+// each bridge's codex app-server tree) alive as orphans. When the parent that
+// spawned us disappears — ppid is reparented — run the same drain a SIGTERM
+// would have. Started under a service manager the ppid is already 1, so the
+// watchdog declines to start and this never fires there.
+startReparentWatchdog({
+  onReparented: () => {
+    console.warn("[Backend] Parent process exited; shutting down local servers");
+    void stop("SIGTERM");
+  },
+});

@@ -11,7 +11,7 @@
  * disk, so full reads cost ~5.3GB of retained heap against a 1.6GB Codex home.
  * Full reads are reserved for hydrating one specific thread.
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { readCachedTranscript, readTranscriptHead } from "../transcript-cache.js";
@@ -84,16 +84,130 @@ export async function listTranscriptPaths(): Promise<string[]> {
   return (await Promise.all(searchRoots.map((root) => walkJsonlFiles(root)))).flat();
 }
 
-export async function findTranscriptPath(
-  threadId: string,
-  transcriptPaths?: readonly string[],
-): Promise<string | null> {
-  const paths = transcriptPaths ?? await listTranscriptPaths();
-  return paths.find((file) => file.includes(threadId)) ?? null;
+/**
+ * Either an already-materialized path snapshot or a lazy loader for one.
+ *
+ * The lazy form is what lets `findTranscriptPath` answer from its cache without
+ * paying for a directory walk that would then be thrown away: the walk touches
+ * every rollout under the Codex home (thousands of files), and this lookup runs
+ * on every render tick of a streaming turn.
+ */
+export type TranscriptPathSource =
+  | readonly string[]
+  | (() => Promise<readonly string[]>);
+
+interface CachedTranscriptPath {
+  path: string | null;
+  checkedAt: number;
 }
 
+/**
+ * threadId → rollout path, keyed by Codex home so a changed `CODEX_HOME` cannot
+ * serve paths from another store. Positive entries are revalidated with a stat —
+ * a rollout is never renamed while in use, so existence is sufficient. Negative
+ * entries expire quickly: a freshly spawned thread's rollout appears on disk
+ * moments after the miss.
+ */
+const cachedTranscriptPaths = new Map<string, CachedTranscriptPath>();
+export const TRANSCRIPT_PATH_NEGATIVE_TTL_MS = 5_000;
+export const MAX_CACHED_TRANSCRIPT_PATHS = 4_096;
+
+interface TranscriptPathCacheLimits {
+  negativeTtlMs: number;
+  maxEntries: number;
+}
+
+const DEFAULT_PATH_CACHE_LIMITS: TranscriptPathCacheLimits = {
+  negativeTtlMs: TRANSCRIPT_PATH_NEGATIVE_TTL_MS,
+  maxEntries: MAX_CACHED_TRANSCRIPT_PATHS,
+};
+
+let pathCacheLimits: TranscriptPathCacheLimits = DEFAULT_PATH_CACHE_LIMITS;
+
+export function setTranscriptPathCacheLimitsForTesting(
+  overrides?: Partial<TranscriptPathCacheLimits>,
+): void {
+  pathCacheLimits = { ...DEFAULT_PATH_CACHE_LIMITS, ...overrides };
+}
+
+/**
+ * The NUL separator is written as an escape on purpose: a raw NUL byte in the
+ * source makes git classify this file as binary, which costs every future
+ * diff, blame and merge on it.
+ */
+function transcriptPathCacheKey(threadId: string): string {
+  return `${getCodexHomeDir()}\u0000${threadId}`;
+}
+
+function rememberTranscriptPath(threadId: string, path: string | null): void {
+  const key = transcriptPathCacheKey(threadId);
+  cachedTranscriptPaths.delete(key);
+  cachedTranscriptPaths.set(key, { path, checkedAt: Date.now() });
+  while (cachedTranscriptPaths.size > pathCacheLimits.maxEntries) {
+    const oldest = cachedTranscriptPaths.keys().next().value;
+    if (oldest === undefined) break;
+    cachedTranscriptPaths.delete(oldest);
+  }
+}
+
+export function clearTranscriptPathCache(): void {
+  cachedTranscriptPaths.clear();
+}
+
+export function getTranscriptPathCacheStats(): { entries: number } {
+  return { entries: cachedTranscriptPaths.size };
+}
+
+export async function findTranscriptPath(
+  threadId: string,
+  transcriptPaths?: TranscriptPathSource,
+): Promise<string | null> {
+  // An explicit snapshot is authoritative for this call; do not cache results
+  // derived from it, since the caller may have scoped or filtered the listing.
+  if (typeof transcriptPaths === "object") {
+    return transcriptPaths.find((file) => file.includes(threadId)) ?? null;
+  }
+
+  const key = transcriptPathCacheKey(threadId);
+  const cached = cachedTranscriptPaths.get(key);
+  if (cached) {
+    if (cached.path !== null) {
+      try {
+        await stat(cached.path);
+        return cached.path;
+      } catch {
+        cachedTranscriptPaths.delete(key);
+      }
+    } else if (Date.now() - cached.checkedAt < pathCacheLimits.negativeTtlMs) {
+      return null;
+    }
+  }
+
+  const paths = transcriptPaths ? await transcriptPaths() : await listTranscriptPaths();
+  const found = paths.find((file) => file.includes(threadId)) ?? null;
+  rememberTranscriptPath(threadId, found);
+  return found;
+}
+
+/**
+ * Reads a JSONL file's non-empty lines without going through the transcript
+ * cache. The cache retains parsed records only; the one remaining raw-line
+ * consumer is `session_index.jsonl`, a small file where a plain read is
+ * cheaper than caching it alongside multi-MB rollouts.
+ *
+ * Returns `[]` for a missing or unreadable index: an absent session index is
+ * the normal state for a fresh Codex home, not an error.
+ */
 export async function readTranscriptLines(path: string): Promise<string[]> {
-  return (await readCachedTranscript(path)).lines;
+  try {
+    const raw = await readFile(path, "utf8");
+    return raw
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -205,7 +319,7 @@ export async function getPersistedSessionMeta(
   fallbackTitle?: string,
   fallbackUpdatedAt?: string,
   transcriptCatalog?: TranscriptCatalog,
-  transcriptPaths?: readonly string[],
+  transcriptPaths?: TranscriptPathSource,
 ): Promise<PersistedSessionMeta | null> {
   const transcriptPath = transcriptCatalog
     ? transcriptCatalog.transcriptPathByThreadId.get(threadId) ??
@@ -258,7 +372,7 @@ export function createSharedTranscriptMetaLoader(
   loadPaths: () => Promise<string[]> = listTranscriptPaths,
   loadMeta: (
     threadId: string,
-    transcriptPaths: readonly string[],
+    transcriptPaths: () => Promise<readonly string[]>,
   ) => Promise<PersistedSessionMeta | null> = (threadId, transcriptPaths) =>
     getPersistedSessionMeta(
       threadId,
@@ -268,11 +382,12 @@ export function createSharedTranscriptMetaLoader(
       transcriptPaths,
     ),
 ): (threadId: string) => Promise<PersistedSessionMeta | null> {
+  // Lazy on purpose: when every requested thread answers from the path cache,
+  // the directory walk never happens at all. The promise is still shared, so
+  // concurrent misses within one load pay for at most one walk.
   let transcriptPathsPromise: Promise<string[]> | undefined;
-  return async (threadId) => {
-    transcriptPathsPromise ??= loadPaths();
-    return loadMeta(threadId, await transcriptPathsPromise);
-  };
+  const listPathsOnce = () => (transcriptPathsPromise ??= loadPaths());
+  return async (threadId) => loadMeta(threadId, listPathsOnce);
 }
 
 export async function listPersistedSessionsForCwd(cwd: string): Promise<PersistedSessionMeta[]> {
@@ -401,26 +516,10 @@ export async function hydrateMessagesFromPersistedSession(
     return { messages: [], title: meta?.title, titleSource: meta?.titleSource };
   }
 
-  const lines = await readTranscriptLines(meta.transcriptPath);
+  const { records } = await readCachedTranscript(meta.transcriptPath);
   const messages: NormalizedMessage[] = [];
 
-  for (const line of lines) {
-    let record: {
-      timestamp?: unknown;
-      type?: unknown;
-      payload?: {
-        type?: unknown;
-        role?: unknown;
-        content?: unknown;
-      };
-    };
-
-    try {
-      record = JSON.parse(line);
-    } catch {
-      continue;
-    }
-
+  for (const record of records) {
     if (record.type !== "response_item" || record.payload?.type !== "message") {
       continue;
     }

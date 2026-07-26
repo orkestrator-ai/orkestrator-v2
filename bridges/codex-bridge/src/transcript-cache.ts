@@ -9,25 +9,65 @@ interface CachedTranscript {
   size: number;
   modifiedAtNs: string;
   remainder: string;
-  lines: string[];
   records: TranscriptRecord[];
+  lastAccessedAt: number;
 }
 
 /**
  * Full-transcript cache, bounded by retained bytes.
  *
  * Rollouts are large — 30MB+ for a long conversation — and parsing one into
- * `lines` plus `records` costs roughly 4x its size on the heap. Unbounded, this
- * map grew to the size of the entire Codex history: measured at ~5.3GB of heap
- * for a 1.6GB store, retained for the life of the bridge.
+ * `records` costs a multiple of its size on the heap. Unbounded, this map grew
+ * to the size of the entire Codex history: measured at ~5.3GB of heap for a
+ * 1.6GB store, retained for the life of the bridge.
  *
  * `Map` iterates in insertion order, and `readCachedTranscript` re-inserts on
  * every hit, so evicting the first key is an LRU eviction.
+ *
+ * Only the parsed `records` are retained. The raw lines were once kept
+ * alongside them, which roughly doubled the heap cost of every entry for data
+ * that every consumer immediately re-parsed anyway.
  */
 const transcriptCache = new Map<string, CachedTranscript>();
 
-/** Heap cost is ~4x the on-disk bytes, so this is roughly 256MB of heap. */
+/** Soft budget: idle entries are evicted beyond this. */
 export const MAX_TRANSCRIPT_CACHE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Hard ceiling for entries that are all in active use.
+ *
+ * The soft budget alone caused pathological thrash: a working set larger than
+ * the budget — one 70MB rollout, or a multi-agent turn whose parent and child
+ * rollouts together exceed it — was evicted by its own insertion, so every
+ * render tick of a streaming turn re-read and re-parsed tens of megabytes from
+ * scratch. That allocation churn, at ~10 renders/second, is what ballooned the
+ * bridge process to multi-GB RSS. An active working set must stay resident;
+ * the grace window below decides what counts as active.
+ */
+export const HARD_MAX_TRANSCRIPT_CACHE_BYTES = 256 * 1024 * 1024;
+
+/** An entry read this recently is part of the active working set. */
+const ACTIVE_TRANSCRIPT_GRACE_MS = 30_000;
+
+interface TranscriptCacheLimits {
+  softBudgetBytes: number;
+  hardBudgetBytes: number;
+  activeGraceMs: number;
+}
+
+const DEFAULT_LIMITS: TranscriptCacheLimits = {
+  softBudgetBytes: MAX_TRANSCRIPT_CACHE_BYTES,
+  hardBudgetBytes: HARD_MAX_TRANSCRIPT_CACHE_BYTES,
+  activeGraceMs: ACTIVE_TRANSCRIPT_GRACE_MS,
+};
+
+let limits: TranscriptCacheLimits = DEFAULT_LIMITS;
+
+export function setTranscriptCacheLimitsForTesting(
+  overrides?: Partial<TranscriptCacheLimits>,
+): void {
+  limits = { ...DEFAULT_LIMITS, ...overrides };
+}
 
 /**
  * How much of a rollout to read when only its metadata is wanted.
@@ -41,12 +81,20 @@ export const TRANSCRIPT_HEAD_BYTES = 64 * 1024;
 let cachedBytes = 0;
 
 function evictTranscriptCache(): void {
-  while (cachedBytes > MAX_TRANSCRIPT_CACHE_BYTES) {
-    const oldest = transcriptCache.keys().next().value;
-    if (oldest === undefined) break;
-    const evicted = transcriptCache.get(oldest);
-    transcriptCache.delete(oldest);
-    cachedBytes -= evicted?.size ?? 0;
+  const now = Date.now();
+  for (const [path, entry] of transcriptCache) {
+    if (cachedBytes <= limits.softBudgetBytes) break;
+    if (
+      cachedBytes <= limits.hardBudgetBytes &&
+      now - entry.lastAccessedAt < limits.activeGraceMs
+    ) {
+      // Entries iterate least-recently-used first, so if even this one is
+      // active, everything behind it is too. Evicting an active entry would
+      // recreate the re-read-per-tick thrash the hard ceiling exists to stop.
+      break;
+    }
+    transcriptCache.delete(path);
+    cachedBytes -= entry.size;
   }
   if (cachedBytes < 0) cachedBytes = 0;
 }
@@ -54,6 +102,7 @@ function evictTranscriptCache(): void {
 function storeTranscript(path: string, transcript: CachedTranscript): void {
   const previous = transcriptCache.get(path);
   if (previous) cachedBytes -= previous.size;
+  transcript.lastAccessedAt = Date.now();
   // Delete before set so the re-inserted entry moves to the newest position.
   transcriptCache.delete(path);
   transcriptCache.set(path, transcript);
@@ -130,8 +179,8 @@ async function loadTranscriptFromScratch(path: string): Promise<CachedTranscript
     size: Buffer.byteLength(raw, "utf8"),
     modifiedAtNs: stats.mtimeNs.toString(),
     remainder,
-    lines,
     records: parseTranscriptRecords(lines),
+    lastAccessedAt: Date.now(),
   };
 }
 
@@ -171,11 +220,11 @@ export async function readCachedTranscript(path: string): Promise<CachedTranscri
       size,
       modifiedAtNs,
       remainder,
-      lines: appendedLines.length > 0 ? [...cached.lines, ...appendedLines] : cached.lines,
       records:
         appendedLines.length > 0
           ? [...cached.records, ...parseTranscriptRecords(appendedLines)]
           : cached.records,
+      lastAccessedAt: Date.now(),
     };
     storeTranscript(path, next);
     return next;
@@ -189,8 +238,8 @@ export async function readCachedTranscript(path: string): Promise<CachedTranscri
       size: 0,
       modifiedAtNs: "0",
       remainder: "",
-      lines: [],
       records: [],
+      lastAccessedAt: Date.now(),
     };
   }
 }

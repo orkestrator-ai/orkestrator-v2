@@ -4,6 +4,7 @@ import {
   type BackendEmit,
   type CommandContext,
 } from "./commands.js";
+import { reapOrphanedLocalServers } from "./local-server-reaper.js";
 import { StorageService } from "./storage.js";
 
 export class OrkestratorBackend {
@@ -30,6 +31,14 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
+    // Before the gateway can accept a start command: bridges left behind by a
+    // backend that died without draining must be reaped first, or the codex
+    // pidfile they still hold blocks this instance's app-server ownership.
+    await reapOrphanedLocalServers({ storage: this.context.storage }).catch(
+      (error) => {
+        console.warn("[backend] Failed to reap orphaned local servers:", error);
+      },
+    );
   }
 
   async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {

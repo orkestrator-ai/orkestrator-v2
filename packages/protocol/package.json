@@ -7,6 +7,7 @@
     "./browser-preview": "./src/browser-preview.ts",
     "./connections": "./src/connections.ts",
     "./gateway-token": "./src/gateway-token.ts",
+    "./parent-watchdog": "./src/parent-watchdog.ts",
     "./review-instruction": "./src/review-prompt.ts",
     "./review-prompt": "./src/review-prompt.ts",
     "./structured-review": "./src/structured-review.ts",

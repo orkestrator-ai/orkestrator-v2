@@ -36,14 +36,29 @@ export interface TurnRenderState {
   timelineOrder: string[];
   subagentParts: Map<string, NormalizedPart>;
   subagentFingerprints: Map<string, string>;
+  /** When the rollout-transcript probe for sub-agent activity last ran. */
+  subagentProbedAt: number;
   fileChange: FileChangeDiffContext;
 }
+
+/**
+ * How often a streaming render pays for the sub-agent transcript probe.
+ *
+ * The probe reads the parent rollout (and every child rollout) from disk.
+ * Renders happen ~10x/second while a turn streams, and the overwhelming
+ * majority of turns spawn no agents at all, so probing on every render burned
+ * tens of MB/s of file reads and parsing for nothing — the single largest
+ * allocation source in the bridge. Between probes the previous snapshot is
+ * retained, which is the same behavior as a probe that failed.
+ */
+export const SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS = 2_000;
 
 export function createTurnRenderState(): TurnRenderState {
   return {
     timelineOrder: [],
     subagentParts: new Map(),
     subagentFingerprints: new Map(),
+    subagentProbedAt: 0,
     fileChange: { baselines: new Map(), cache: new Map() },
   };
 }
@@ -69,6 +84,7 @@ export function releaseTurnRenderState(state: TurnRenderState): void {
   state.timelineOrder.length = 0;
   state.subagentParts.clear();
   state.subagentFingerprints.clear();
+  state.subagentProbedAt = 0;
   state.fileChange.baselines.clear();
   state.fileChange.cache.clear();
 }
@@ -141,6 +157,13 @@ export interface RenderTurnOptions {
   state: TurnRenderState;
   /** Injected in tests to avoid touching the filesystem. */
   loadSubagentParts?: (options: SubagentPartsLoadOptions) => Promise<NormalizedPart[]>;
+  /**
+   * Minimum time between sub-agent transcript probes. Defaults to 0 (probe on
+   * every render) so injected loaders in tests stay deterministic; the runtime
+   * passes `SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS`. A terminal turn always
+   * probes, so the final published snapshot is never stale.
+   */
+  subagentProbeIntervalMs?: number;
 }
 
 export interface SubagentPartsLoadOptions {
@@ -229,16 +252,24 @@ export async function renderTurn(
 ): Promise<RenderedTurn> {
   const loadSnapshot = collectTurnItems(turn);
   const load = options.loadSubagentParts ?? loadSubagentPartsFromTranscripts;
+  const probeIntervalMs = options.subagentProbeIntervalMs ?? 0;
+  const shouldProbe =
+    probeIntervalMs <= 0 ||
+    turn.isTerminal() ||
+    Date.now() - options.state.subagentProbedAt >= probeIntervalMs;
   let subagentParts: NormalizedPart[] | undefined;
-  try {
-    subagentParts = await load({
-      threadId: options.threadId,
-      turnStartedAt: turn.startedAt,
-      items: loadSnapshot.items,
-    });
-  } catch (error) {
-    // Sub-agent detail is additive; losing it must not blank the transcript.
-    console.error("[codex-bridge] Failed to load sub-agent activity:", error);
+  if (shouldProbe) {
+    options.state.subagentProbedAt = Date.now();
+    try {
+      subagentParts = await load({
+        threadId: options.threadId,
+        turnStartedAt: turn.startedAt,
+        items: loadSnapshot.items,
+      });
+    } catch (error) {
+      // Sub-agent detail is additive; losing it must not blank the transcript.
+      console.error("[codex-bridge] Failed to load sub-agent activity:", error);
+    }
   }
 
   // The loader performs filesystem I/O. Parent events can arrive while it is

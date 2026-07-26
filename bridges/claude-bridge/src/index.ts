@@ -10,6 +10,11 @@ import session from "./routes/session.js";
 import events from "./routes/events.js";
 import mcp from "./routes/mcp.js";
 import plugins from "./routes/plugins.js";
+import {
+  PARENT_PID_ENV,
+  parseParentPid,
+  startParentWatchdog,
+} from "@orkestrator/protocol/parent-watchdog";
 
 const app = new Hono();
 
@@ -52,6 +57,22 @@ app.get("/", (c) => {
     },
   });
 });
+
+// A dead backend can no longer terminate this process tree. Exiting is enough
+// cleanup here: SDK-spawned Claude CLI children read stdio pipes from this
+// process and exit on EOF when it goes away.
+const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
+if (parentPid !== null) {
+  startParentWatchdog({
+    parentPid,
+    onParentExit: () => {
+      console.error(
+        `[claude-bridge] Backend process ${parentPid} is gone; shutting down`,
+      );
+      process.exit(0);
+    },
+  });
+}
 
 // Get port from environment or use default
 const port = parseInt(process.env.PORT || "4097", 10);

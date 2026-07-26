@@ -1255,6 +1255,17 @@ async function buildSdkPrompt(
 }
 
 /**
+ * How often streamed deltas are folded into a published message snapshot.
+ *
+ * Rebuilding every ordered part, every message part, and a full-message SSE
+ * frame per subscriber on **every token** made streaming O(turn size) per
+ * token — the dominant allocation source in a long turn. Deltas still
+ * accumulate immediately; only the rebuild + emit is deferred. Anything that
+ * is not a delta flushes synchronously first, so event ordering is unchanged.
+ */
+const STREAM_EVENT_COALESCE_MS = 100;
+
+/**
  * Send a prompt to a session and process the response
  */
 export async function sendPrompt(
@@ -1374,6 +1385,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   let sdkMessageCount = 0;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let earlyWarningTimeout: ReturnType<typeof setTimeout> | null = null;
+  let streamEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  // Hoisted out of the `try` so the error path can still publish whatever the
+  // coalescing window was holding. Null until the streaming state it closes
+  // over exists, which is everything before the SDK query is created.
+  let flushPendingStreamedDeltas: (() => void) | null = null;
 
   try {
     // Create the query with Claude Agent SDK
@@ -1797,6 +1813,52 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       });
     };
 
+    // Streamed-delta coalescing state. Deltas land in `blocksByApiMessage`
+    // immediately; the expensive snapshot (ordered-part rebuild, part build,
+    // full-message emit) happens at most once per STREAM_EVENT_COALESCE_MS.
+    let streamEventsDirty = false;
+    let lastStreamMessageKey: string | null = null;
+
+    const flushStreamedAssistantMessage = () => {
+      if (streamEventFlushTimer) {
+        clearTimeout(streamEventFlushTimer);
+        streamEventFlushTimer = null;
+      }
+      if (!streamEventsDirty) return;
+      streamEventsDirty = false;
+
+      rebuildAccumulatedOrderedParts();
+      const finalParts = buildMessageParts(accumulatedOrderedParts, toolTracker);
+      const content = getMessageTextFromParts(finalParts);
+
+      if (!currentAssistantMessage) {
+        if (!lastStreamMessageKey) return;
+        currentAssistantMessage = {
+          id: lastStreamMessageKey,
+          role: "assistant",
+          content,
+          parts: finalParts,
+          timestamp: new Date().toISOString(),
+        };
+        session.messages.push(currentAssistantMessage);
+      } else {
+        currentAssistantMessage.content = content;
+        currentAssistantMessage.parts = finalParts;
+      }
+
+      emitCurrentAssistantMessage();
+    };
+
+    flushPendingStreamedDeltas = flushStreamedAssistantMessage;
+
+    const scheduleStreamedAssistantMessageFlush = () => {
+      streamEventsDirty = true;
+      streamEventFlushTimer ??= setTimeout(() => {
+        streamEventFlushTimer = null;
+        flushStreamedAssistantMessage();
+      }, STREAM_EVENT_COALESCE_MS);
+    };
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const applyPartialAssistantMessage = (partialMessage: any): boolean => {
       const streamEvent = partialMessage.event;
@@ -1877,26 +1939,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       }
 
       entriesForMessage.set(blockIndex, entry);
-      rebuildAccumulatedOrderedParts();
-
-      const finalParts = buildMessageParts(accumulatedOrderedParts, toolTracker);
-      const content = getMessageTextFromParts(finalParts);
-
-      if (!currentAssistantMessage) {
-        currentAssistantMessage = {
-          id: messageKey,
-          role: "assistant",
-          content,
-          parts: finalParts,
-          timestamp: new Date().toISOString(),
-        };
-        session.messages.push(currentAssistantMessage);
-      } else {
-        currentAssistantMessage.content = content;
-        currentAssistantMessage.parts = finalParts;
-      }
-
-      emitCurrentAssistantMessage();
+      lastStreamMessageKey = messageKey;
+      scheduleStreamedAssistantMessageFlush();
       return true;
     };
 
@@ -1916,6 +1960,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         subtype,
         sdkMessageCount,
       });
+
+      // Deltas are coalesced; everything else must observe them in order, so
+      // settle the pending snapshot before handling a non-delta message.
+      if (message.type !== "stream_event") flushStreamedAssistantMessage();
 
       // Handle different message types from SDK
       if (message.type === "system" && message.subtype === "init") {
@@ -2225,6 +2273,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       // Note: AskUserQuestion tool handling is done in the canUseTool callback above
     }
 
+    // The stream can end on a delta (abort, SDK hang-up) with a snapshot still
+    // pending; publish it so the transcript holds everything that streamed.
+    flushStreamedAssistantMessage();
+
     if (abortController.signal.aborted) {
       if (options?.outputSchema && structuredRequestId) {
         recordStructuredOutput(
@@ -2342,6 +2394,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       durationMs: Date.now() - startedAt,
     });
   } catch (error) {
+    // The turn died mid-stream with deltas still coalescing. Publish them
+    // before anything else here: the alternative is that the last window of
+    // streamed text is silently dropped from the transcript, and the `finally`
+    // below discards the pending timer, so this is the last chance to emit it.
+    // Ordered before the failure is recorded so the client sees the completed
+    // message first and `session.error` stays terminal.
+    flushPendingStreamedDeltas?.();
+
     if (abortController.signal.aborted) {
       if (options?.outputSchema && structuredRequestId && !session.structuredOutput) {
         recordStructuredOutput(
@@ -2397,6 +2457,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     }
     if (earlyWarningTimeout) {
       clearTimeout(earlyWarningTimeout);
+    }
+    if (streamEventFlushTimer) {
+      // Every exit path has already flushed synchronously (after the loop, or
+      // at the top of the catch), so anything still armed here is a timer with
+      // nothing left to publish. Clearing it stops a late callback emitting a
+      // duplicate snapshot after session.idle/session.error.
+      clearTimeout(streamEventFlushTimer);
+      streamEventFlushTimer = null;
     }
   }
 }

@@ -53,6 +53,11 @@ import {
   type SlashCommandDefinition,
 } from "./prompts/slash-commands.js";
 import {
+  PARENT_PID_ENV,
+  parseParentPid,
+  startParentWatchdog,
+} from "@orkestrator/protocol/parent-watchdog";
+import {
   buildTranscriptCatalog,
   createSharedTranscriptMetaLoader,
   extractPersistedMessageText,
@@ -579,6 +584,7 @@ export const __testing = {
   applyRuntimeEnvironmentOutput,
   BRIDGE_MODEL_CACHE_VERSION,
   createOpenSseWriterForTesting: createOpenSseWriter,
+  createSerializedSseWriterForTesting: createSerializedSseWriter,
   createCodexEngineForTesting: createCodexEngine,
   createSharedTranscriptMetaLoaderForTesting: createSharedTranscriptMetaLoader,
   createShutdownHandlerForTesting: createShutdownHandler,
@@ -643,18 +649,64 @@ function createOpenSseWriter<T>(
 }
 
 /**
+ * A subscriber that cannot drain this backlog is closed instead of queued
+ * further. Every queued entry holds a fully serialized frame — for
+ * `message.updated` that is the entire transcript message — so an unbounded
+ * chain against a stalled consumer (backgrounded tab, dead TCP, slow tunnel)
+ * retains multi-MB strings indefinitely. Closing is safe: the client
+ * reconnects with its cursor and the event ring replays what it missed.
+ */
+const MAX_PENDING_SSE_FRAMES = 1_000;
+const MAX_PENDING_SSE_BYTES = 16 * 1024 * 1024;
+/** Cap for events buffered while a reconnect replay is being written. */
+const MAX_BUFFERED_REPLAY_EVENTS = 10_000;
+
+/**
  * Appends writes to a per-connection promise chain.
  *
  * `emit()` deliberately does not await subscribers, so without this queue two
  * live events can call Hono's stream writer concurrently and complete out of
  * revision order.
+ *
+ * The chain is bounded. Once `onOverflow` fires the writer permanently drops
+ * frames — the connection is being torn down at that point, and continuing to
+ * queue against a consumer that has already proven too slow would recreate the
+ * unbounded retention the bound exists to stop. The first frame is always
+ * accepted so a single oversized frame cannot deadlock an idle connection.
  */
-function createSerializedSseWriter<T>(
+function createSerializedSseWriter<T extends { data?: string }>(
   write: (event: T) => Promise<void>,
+  options: {
+    onOverflow?: () => void;
+    maxPendingFrames?: number;
+    maxPendingBytes?: number;
+  } = {},
 ): (event: T) => Promise<void> {
+  const maxPendingFrames = options.maxPendingFrames ?? MAX_PENDING_SSE_FRAMES;
+  const maxPendingBytes = options.maxPendingBytes ?? MAX_PENDING_SSE_BYTES;
   let tail: Promise<void> = Promise.resolve();
+  let pendingFrames = 0;
+  let pendingBytes = 0;
+  let overflowed = false;
   return (event) => {
+    if (overflowed) return Promise.resolve();
+    const frameBytes = event.data?.length ?? 0;
+    if (
+      pendingFrames > 0 &&
+      (pendingFrames >= maxPendingFrames || pendingBytes + frameBytes > maxPendingBytes)
+    ) {
+      overflowed = true;
+      options.onOverflow?.();
+      return Promise.resolve();
+    }
+    pendingFrames += 1;
+    pendingBytes += frameBytes;
+    const release = () => {
+      pendingFrames -= 1;
+      pendingBytes -= frameBytes;
+    };
     const attempt = tail.then(() => write(event));
+    attempt.then(release, release);
     // Keep later frames flowing after a failed write; the returned attempt still
     // rejects so the endpoint or emit() can report the original failure.
     tail = attempt.catch(() => undefined);
@@ -921,11 +973,27 @@ app.get("/event/subscribe", (c) => {
 
   return streamSSE(c, async (stream) => {
     let open = true;
+    let resolveConnectionClosed!: () => void;
+    const connectionClosed = new Promise<void>((resolve) => {
+      resolveConnectionClosed = resolve;
+    });
+    // Closing is the recovery path for a consumer that cannot keep up: its
+    // EventSource reconnects with the last id it saw and the ring replays the
+    // gap, instead of this connection retaining an ever-growing frame backlog.
+    const failSlowSubscriber = (reason: string) => {
+      if (!open) return;
+      open = false;
+      console.error(
+        `[codex-bridge] Closing SSE subscriber (${reason}); the client will reconnect and replay from its cursor`,
+      );
+      resolveConnectionClosed();
+    };
     const writeWhileOpen = createSerializedSseWriter(
       createOpenSseWriter(
         () => open,
         (event: { event: string; data: string; id?: string }) => stream.writeSSE(event),
       ),
+      { onOverflow: () => failSlowSubscriber("write backlog exceeded its cap") },
     );
 
     const frameFor = (event: SseEvent, revision: number) => ({
@@ -955,6 +1023,10 @@ app.get("/event/subscribe", (c) => {
 
     const listener = async (event: SseEvent, revision: number) => {
       if (buffered) {
+        if (buffered.length >= MAX_BUFFERED_REPLAY_EVENTS) {
+          failSlowSubscriber("replay buffer overflowed");
+          return;
+        }
         buffered.push({ event, revision });
         return;
       }
@@ -1036,9 +1108,12 @@ app.get("/event/subscribe", (c) => {
       }
       buffered = null;
 
-      await new Promise<void>((resolve) => {
-        c.req.raw.signal.addEventListener("abort", () => resolve());
-      });
+      await Promise.race([
+        connectionClosed,
+        new Promise<void>((resolve) => {
+          c.req.raw.signal.addEventListener("abort", () => resolve());
+        }),
+      ]);
     } finally {
       open = false;
       clearInterval(keepalive);
@@ -1067,6 +1142,21 @@ function startBridgeServer(
 const shutdownHandler = createShutdownHandler(cleanupTimer);
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.on(signal, shutdownHandler);
+}
+
+// A dead backend can no longer signal us, so watch for it and run the same
+// graceful drain a SIGTERM would have triggered.
+const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
+if (parentPid !== null) {
+  startParentWatchdog({
+    parentPid,
+    onParentExit: () => {
+      console.error(
+        `[codex-bridge] Backend process ${parentPid} is gone; shutting down`,
+      );
+      shutdownHandler();
+    },
+  });
 }
 
 startBridgeServer();

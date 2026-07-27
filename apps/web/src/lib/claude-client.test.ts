@@ -1004,19 +1004,25 @@ describe("claude-client", () => {
   });
 
   describe("respondToPlanApproval", () => {
-    test("returns true when approved", async () => {
+    test("returns applied when approved", async () => {
       mockFetchJson({ status: "approved" });
-      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe(true);
+      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("applied");
     });
 
-    test("returns true when rejected with feedback", async () => {
+    test("returns applied when rejected with feedback", async () => {
       mockFetchJson({ status: "rejected" });
-      expect(await respondToPlanApproval(client, "s-1", "a-1", false, "needs changes")).toBe(true);
+      expect(await respondToPlanApproval(client, "s-1", "a-1", false, "needs changes")).toBe("applied");
     });
 
-    test("returns false on network error", async () => {
+    test("distinguishes expired requests from retryable HTTP and network failures", async () => {
+      mockFetchStatus(404);
+      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("expired");
+
+      mockFetchStatus(503);
+      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("failed");
+
       mockFetchError();
-      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe(false);
+      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("failed");
     });
   });
 

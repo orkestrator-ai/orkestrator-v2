@@ -17,6 +17,7 @@ import {
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
 import type {
+  AgentModelConfigKey,
   AppConfig,
   ClaudeModelCatalogSnapshot,
   Environment,
@@ -1413,6 +1414,22 @@ export class StorageService {
       const config = await this.loadConfig();
       config.global = validated;
       await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
+  async updateAgentModelDefault(
+    key: AgentModelConfigKey,
+    modelId: string,
+  ): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      config.global[key] = modelId;
+      await this.saveJson(this.configFile(), config);
+      // Same announcement every other config mutation makes: other clients
+      // rehydrate their model defaults from the authoritative snapshot rather
+      // than only learning about the change through the window that made it.
       this.announce("config", "app");
       return config;
     });

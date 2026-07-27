@@ -13,9 +13,9 @@ const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
 const mockGetFileTree = mock(async () => []);
 const mockGetLocalFileTree = mock(async () => []);
-const mockUpdateGlobalConfig = mock(async (global: any) => ({
+const mockUpdateAgentModelDefault = mock(async (key: string, modelId: string) => ({
   version: "1.0",
-  global,
+  global: { [key]: modelId },
   repositories: {},
 }));
 const mockSerializeForLLM = mock((text: string, _mentions?: unknown[]) => text);
@@ -34,7 +34,7 @@ let mockFileMentionMenuOpen = false;
 // can restore it for other test files (e.g. ClaudeTmuxChatTab.test.tsx
 // renders the real SlashCommandMenu and would otherwise see this file's
 // null-component stub via Bun's module cache).
-import * as realSlashCommandMenu from "@/components/claude/SlashCommandMenu";
+import * as realSlashCommandMenu from "@/components/chat/SlashCommandMenu";
 import * as realMentionableInput from "@/components/chat/MentionableInput";
 import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
 import * as realUseFileMentions from "@/hooks/useFileMentions";
@@ -47,7 +47,7 @@ const realUseFileSearchSnapshot = { ...realUseFileSearch };
 
 afterAll(() => {
   mock.module(
-    "@/components/claude/SlashCommandMenu",
+    "@/components/chat/SlashCommandMenu",
     () => realSlashCommandMenuSnapshot,
   );
   mock.module("@/components/chat/MentionableInput", () => realMentionableInputSnapshot);
@@ -64,7 +64,7 @@ mock.module("@/lib/backend", () => ({
   readFileBase64: async () => "",
   writeContainerFile: mockWriteContainerFile,
   writeLocalFile: mockWriteLocalFile,
-  updateGlobalConfig: mockUpdateGlobalConfig,
+  updateAgentModelDefault: mockUpdateAgentModelDefault,
   getFileTree: mockGetFileTree,
   getLocalFileTree: mockGetLocalFileTree,
 }));
@@ -104,13 +104,8 @@ mock.module("@/components/chat/MentionableInput", () => ({
   }),
 }));
 
-mock.module("@/components/claude/SlashCommandMenu", () => ({
+mock.module("@/components/chat/SlashCommandMenu", () => ({
   SlashCommandMenu: () => null,
-  parseSlashCommands: (cmds: string[]) =>
-    cmds.map((c) => {
-      const parts = c.split(" - ");
-      return { name: parts[0] ?? c, description: parts[1] ?? "" };
-    }),
 }));
 
 mock.module("@/components/chat/FileMentionMenu", () => ({
@@ -230,10 +225,10 @@ describe("ClaudeComposeBar", () => {
     mockGetFileTree.mockResolvedValue([]);
     mockGetLocalFileTree.mockReset();
     mockGetLocalFileTree.mockResolvedValue([]);
-    mockUpdateGlobalConfig.mockReset();
-    mockUpdateGlobalConfig.mockImplementation(async (global: any) => ({
+    mockUpdateAgentModelDefault.mockReset();
+    mockUpdateAgentModelDefault.mockImplementation(async (key: string, modelId: string) => ({
       version: "1.0",
-      global,
+      global: { [key]: modelId },
       repositories: {},
     }));
     mockSerializeForLLM.mockReset();
@@ -270,7 +265,9 @@ describe("ClaudeComposeBar", () => {
       effort: new Map(),
       planMode: new Map(),
       fastMode: new Map(),
-      queuedMessages: new Map(),
+      // The shared native-chat slice stores the queue under `messageQueue`;
+      // resetting anything else leaves queued prompts leaking between tests.
+      messageQueue: new Map(),
       sessionInitData: new Map(),
       contextUsage: new Map(),
     });
@@ -327,15 +324,13 @@ describe("ClaudeComposeBar", () => {
     fireEvent.click(await screen.findByText("Sonnet"));
 
     await waitFor(() => {
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ claudeModel: "sonnet" }),
-      );
+      expect(mockUpdateAgentModelDefault).toHaveBeenCalledWith("claudeModel", "sonnet");
     });
     expect(useConfigStore.getState().config.global.claudeModel).toBe("sonnet");
   });
 
   test("rolls back the persisted Claude model default when saving fails", async () => {
-    mockUpdateGlobalConfig.mockImplementationOnce(async () => {
+    mockUpdateAgentModelDefault.mockImplementationOnce(async () => {
       throw new Error("disk full");
     });
 
@@ -347,9 +342,7 @@ describe("ClaudeComposeBar", () => {
     fireEvent.click(await screen.findByText("Sonnet"));
 
     await waitFor(() => {
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ claudeModel: "sonnet" }),
-      );
+      expect(mockUpdateAgentModelDefault).toHaveBeenCalledWith("claudeModel", "sonnet");
       expect(useConfigStore.getState().config.global.claudeModel).toBe("opus");
     });
     expect(useClaudeStore.getState().getSelectedModel(SESSION_KEY)).toBe("sonnet");
@@ -357,19 +350,19 @@ describe("ClaudeComposeBar", () => {
 
   test("keeps the newest selected model when an older persistence request resolves later", async () => {
     let resolveFirstSave: (() => void) | undefined;
-    mockUpdateGlobalConfig.mockImplementationOnce(
-      (global: any) =>
+    mockUpdateAgentModelDefault.mockImplementationOnce(
+      (key: string, modelId: string) =>
         new Promise((resolve) => {
           resolveFirstSave = () => resolve({
             version: "1.0",
-            global,
+            global: { [key]: modelId },
             repositories: {},
           });
         }),
     );
-    mockUpdateGlobalConfig.mockImplementationOnce(async (global: any) => ({
+    mockUpdateAgentModelDefault.mockImplementationOnce(async (key: string, modelId: string) => ({
       version: "1.0",
-      global,
+      global: { [key]: modelId },
       repositories: {},
     }));
 
@@ -407,7 +400,7 @@ describe("ClaudeComposeBar", () => {
     resolveFirstSave?.();
 
     await waitFor(() => {
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(2);
+      expect(mockUpdateAgentModelDefault).toHaveBeenCalledTimes(2);
       expect(useConfigStore.getState().config.global.claudeModel).toBe("haiku");
     });
   });
@@ -717,6 +710,28 @@ describe("ClaudeComposeBar", () => {
     );
   });
 
+  test("falls back to onSend while loading when no queue callback is available", async () => {
+    useClaudeStore.getState().setDraftText(SESSION_KEY, "Send through fallback");
+    const { onSend } = renderComposeBar({ isLoading: true, onQueue: undefined });
+
+    fireEvent.click(screen.getByTitle("Add to queue"));
+
+    // Claude does not refuse a busy submit: without a queue callback the
+    // prompt is dispatched immediately rather than dropped.
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith(
+        "Send through fallback",
+        [],
+        "high",
+        false,
+        false,
+      );
+    });
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("");
+    });
+  });
+
   test("queues the prompt while Claude is loading", async () => {
     const { onQueue } = renderComposeBar({ isLoading: true });
     const input = screen.getByTestId("mentionable-input");
@@ -862,6 +877,18 @@ describe("ClaudeComposeBar", () => {
     await waitFor(() => {
       expect(onSend).toHaveBeenCalledWith("/rev", [], "high", false, false);
     });
+  });
+
+  test("Shift+Enter preserves a multiline draft without submitting", () => {
+    const { onSend, onQueue } = renderComposeBar();
+    const input = screen.getByTestId("mentionable-input");
+
+    fireEvent.change(input, { target: { value: "first line" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onQueue).not.toHaveBeenCalled();
+    expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("first line");
   });
 
   test("toggles plan mode with Shift+Tab without submitting", async () => {
@@ -1056,6 +1083,72 @@ describe("ClaudeComposeBar", () => {
     await waitFor(() => {
       expect(useClaudeStore.getState().getQueueLength(SESSION_KEY)).toBe(0);
     });
+  });
+
+  test("shows an empty queue when the indicator count is stale", () => {
+    // queueLength is supplied by the chat tab; the dialog reads the store, so a
+    // stale indicator must not render phantom rows.
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+
+    expect(screen.getByText("Queue is empty.")).toBeTruthy();
+  });
+
+  test("renders queued prompt metadata and attachment pluralization", () => {
+    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+      id: "metadata-one",
+      text: "Plan carefully",
+      attachments: [{
+        id: "one",
+        type: "image",
+        path: "/workspace/one.png",
+        previewUrl: "data:image/png;base64,abc",
+        name: "one.png",
+      }],
+      effort: "max",
+      planModeEnabled: true,
+      fastModeEnabled: true,
+    });
+    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+      id: "metadata-two",
+      text: "Build carefully",
+      attachments: [
+        {
+          id: "two",
+          type: "image",
+          path: "/workspace/two.png",
+          previewUrl: "data:image/png;base64,abc",
+          name: "two.png",
+        },
+        {
+          id: "three",
+          type: "image",
+          path: "/workspace/three.png",
+          previewUrl: "data:image/png;base64,abc",
+          name: "three.png",
+        },
+      ],
+      effort: "low",
+      planModeEnabled: false,
+      fastModeEnabled: false,
+    });
+
+    const { unmount } = renderComposeBar({ queueLength: 2 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+
+    expect(screen.getByText("#1")).toBeTruthy();
+    expect(screen.getByText("#2")).toBeTruthy();
+    expect(screen.getByText("Effort: Max")).toBeTruthy();
+    expect(screen.getByText("Effort: Low")).toBeTruthy();
+    // Plan and fast mode are only labelled for the prompt that enabled them.
+    expect(screen.getAllByText("Plan mode")).toHaveLength(1);
+    expect(screen.getAllByText("Fast mode")).toHaveLength(1);
+    expect(screen.getByText("1 attachment")).toBeTruthy();
+    expect(screen.getByText("2 attachments")).toBeTruthy();
+
+    // The dialog is portalled outside the render container; unmount explicitly
+    // so its rows cannot leak into the next test's queries.
+    unmount();
   });
 
   test("enforces queue movement boundaries and reorders queued prompts", async () => {

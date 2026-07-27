@@ -26,7 +26,6 @@ import {
 } from "@/lib/opencode-client";
 import { resolveGatewayLoopbackBaseUrl } from "@/lib/gateway-url";
 import { createUuid } from "@/lib/uuid";
-import { createOpenCodeSessionKey } from "@/stores/openCodeStore";
 import type { BuildTabData } from "@/types/paneLayout";
 import type { TaskSnapshotImage } from "@/prompts";
 import {
@@ -43,7 +42,7 @@ import { isSetupPending } from "@/lib/setup-commands";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { extractContextUsage } from "@/lib/context-usage";
-import { cn } from "@/lib/utils";
+import { cn, createSessionKey } from "@/lib/utils";
 import { createPipelineResumePrompt, getPipelineResumePhase, isSessionCompatibleWithResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
 import {
@@ -517,7 +516,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
         }
 
         const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
-        const sessionKey = createOpenCodeSessionKey(environmentId, tabIdForSession);
+        const sessionKey = createSessionKey(environmentId, tabIdForSession);
 
         setSession(sessionKey, {
           sessionId: newSession.id,

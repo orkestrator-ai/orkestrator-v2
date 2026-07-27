@@ -49,11 +49,11 @@ import { ResumeTmuxSessionDialog } from "@/components/claude/ResumeTmuxSessionDi
 import { formatElapsed } from "@/lib/format-elapsed";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
+import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
 import {
   parseSlashCommands,
-  SlashCommandMenu,
   type SlashCommand,
-} from "@/components/claude/SlashCommandMenu";
+} from "@/lib/chat/slash-commands";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import { useFileMentions } from "@/hooks/useFileMentions";
 import { useFileSearch } from "@/hooks/useFileSearch";
@@ -1466,7 +1466,12 @@ export function ClaudeTmuxChatTab({
                 ) : undefined
               }
               footer={
-              <div className="max-w-3xl mx-auto min-w-0 px-2 @sm:px-4 py-3">
+              /*
+                `space-y-3` supplies the gap that the shared BlockingPromptCard
+                deliberately dropped: in the native tabs the compose dock spaces
+                these cards, but this footer stacks them itself.
+              */
+              <div className="max-w-3xl mx-auto min-w-0 px-2 @sm:px-4 py-3 space-y-3">
                 {pendingApprovals.map((a) => (
                   <ApprovalCard
                     key={a.eventId}

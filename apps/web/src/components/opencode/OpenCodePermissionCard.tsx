@@ -1,3 +1,4 @@
+import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { useCallback, useState } from "react";
 import { Loader2, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -43,7 +44,7 @@ export function OpenCodePermissionCard({
   const canAlwaysAllow = permission.always.length > 0;
 
   return (
-    <div className="mx-4 my-3 rounded-lg border border-border bg-card shadow-sm overflow-hidden">
+    <BlockingPromptCard>
       <div className="flex items-center gap-2 px-4 py-2.5 bg-muted/50 border-b border-border">
         <ShieldAlert className="w-4 h-4 text-muted-foreground" />
         <span className="text-sm font-medium text-foreground">Permission Required</span>
@@ -101,6 +102,6 @@ export function OpenCodePermissionCard({
           </Button>
         )}
       </div>
-    </div>
+    </BlockingPromptCard>
   );
 }

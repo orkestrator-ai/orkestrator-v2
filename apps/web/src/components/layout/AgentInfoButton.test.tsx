@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
-import { createCodexSessionKey, useCodexStore } from "@/stores/codexStore";
-import { createOpenCodeSessionKey, useOpenCodeStore } from "@/stores/openCodeStore";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { useCodexStore } from "@/stores/codexStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabInfo } from "@/types/paneLayout";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
@@ -20,6 +20,7 @@ import {
 import * as realClaudeClient from "@/lib/claude-client";
 import * as realOpenCodeClient from "@/lib/opencode-client";
 import * as realCodexClient from "@/lib/codex-client";
+import { createSessionKey } from "@/lib/utils";
 
 const realClaudeClientSnapshot = { ...realClaudeClient };
 const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
@@ -111,9 +112,9 @@ afterAll(() => {
 
 const ENVIRONMENT_ID = "env-1";
 const TAB_ID = "tab-1";
-const CLAUDE_KEY = createClaudeSessionKey(ENVIRONMENT_ID, TAB_ID);
-const CODEX_KEY = createCodexSessionKey(ENVIRONMENT_ID, TAB_ID);
-const OPENCODE_KEY = createOpenCodeSessionKey(ENVIRONMENT_ID, TAB_ID);
+const CLAUDE_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
+const CODEX_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
+const OPENCODE_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
 const CLAUDE_CLIENT = { baseUrl: "http://127.0.0.1:1111" } as never;
 const CODEX_CLIENT = { baseUrl: "http://127.0.0.1:2222" } as never;
 
@@ -1792,11 +1793,11 @@ describe("AgentInfoButton Codex steering", () => {
       clients: new Map([[ENVIRONMENT_ID, CODEX_CLIENT]]),
       sessions: new Map([
         [
-          createCodexSessionKey(ENVIRONMENT_ID, TAB_ID),
+          createSessionKey(ENVIRONMENT_ID, TAB_ID),
           { sessionId: `codex-${TAB_ID}`, messages: [], isLoading: true },
         ],
         [
-          createCodexSessionKey(ENVIRONMENT_ID, tabId),
+          createSessionKey(ENVIRONMENT_ID, tabId),
           { sessionId: `codex-${tabId}`, messages: [], isLoading: true },
         ],
       ]),

@@ -1,3 +1,4 @@
+import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, test, mock } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
@@ -99,7 +100,7 @@ mock.module("@/components/ui/separator", () => ({
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
 
-import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
+import {useClaudeStore} from "@/stores/claudeStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -125,7 +126,7 @@ const PIPELINE_ID = "pipeline-1";
 const TASK_ID = "task-1";
 const CONTAINER_ID = "container-123";
 const SESSION_ID = "session-1";
-const SESSION_KEY = createClaudeSessionKey(ENV_ID, "build-tab");
+const SESSION_KEY = createSessionKey(ENV_ID, "build-tab");
 
 function createContainerBuildData(overrides: Partial<BuildTabData> = {}): BuildTabData {
   return {

@@ -1,16 +1,23 @@
+import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realSortable from "@dnd-kit/sortable";
 import * as realUtilities from "@dnd-kit/utilities";
 import type { TabInfo } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
-import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { useCodexStore } from "@/stores/codexStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 
 const realSortableSnapshot = { ...realSortable };
 const realUtilitiesSnapshot = { ...realUtilities };
+
+// Mutable so a test can exercise the isDragging styling branch. The factory
+// result is cached by Bun, but the hook body re-reads this on every render.
+let sortableIsDragging = false;
 
 mock.module("@dnd-kit/sortable", () => ({
   useSortable: () => ({
@@ -19,7 +26,7 @@ mock.module("@dnd-kit/sortable", () => ({
     setNodeRef: () => {},
     transform: null,
     transition: null,
-    isDragging: false,
+    isDragging: sortableIsDragging,
   }),
 }));
 
@@ -49,11 +56,21 @@ function renderTab(tab: TabInfo, index = 0) {
   );
 }
 
+/** Seed a build pipeline whose only field the tab reads is taskTitle. */
+function seedPipeline(pipelineId: string, taskTitle: string) {
+  useBuildPipelineStore.setState({
+    pipelines: new Map([[pipelineId, { id: pipelineId, taskTitle } as never]]),
+  });
+}
+
 describe("DraggableTab title precedence", () => {
   beforeEach(() => {
     cleanup();
+    sortableIsDragging = false;
     useSessionStore.setState({ sessions: new Map() });
     useClaudeStore.setState({ sessions: new Map() });
+    useCodexStore.setState({ sessions: new Map() });
+    useOpenCodeStore.setState({ sessions: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
     useLoopedReviewStore.setState({ workflows: new Map() });
@@ -89,7 +106,7 @@ describe("DraggableTab title precedence", () => {
     });
     useClaudeStore.setState({
       sessions: new Map([
-        [createClaudeSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
+        [createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
       ]),
     });
 
@@ -108,13 +125,87 @@ describe("DraggableTab title precedence", () => {
 
     useClaudeStore.setState({
       sessions: new Map([
-        [createClaudeSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
+        [createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
       ]),
     });
 
     renderTab(tab, 0);
 
     expect(screen.getByText("Auto Title")).toBeDefined();
+  });
+
+  test("uses the Codex title from this tab's environment-scoped session", () => {
+    const tab: TabInfo = {
+      id: "tab-codex",
+      type: "codex-native",
+      displayTitle: "Review",
+      codexNativeData: { environmentId: "env-1" },
+    };
+    useCodexStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-2", "tab-codex"), { title: "Wrong environment" } as never],
+        [createSessionKey("env-1", "other-tab"), { title: "Wrong tab" } as never],
+        [createSessionKey("env-1", "tab-codex"), { title: "Codex title" } as never],
+      ]),
+    });
+
+    renderTab(tab);
+
+    expect(screen.getByText("Codex title")).toBeDefined();
+    expect(screen.queryByText("Review 1")).toBeNull();
+  });
+
+  test("uses the OpenCode title before the workflow display title", () => {
+    const tab: TabInfo = {
+      id: "tab-opencode",
+      type: "opencode-native",
+      displayTitle: "Implementation",
+      openCodeNativeData: { environmentId: "env-1" },
+    };
+    useOpenCodeStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-opencode"), { title: "OpenCode title" } as never],
+      ]),
+    });
+
+    renderTab(tab);
+
+    expect(screen.getByText("OpenCode title")).toBeDefined();
+    expect(screen.queryByText("Implementation 1")).toBeNull();
+  });
+
+  test("a custom terminal session name beats a Codex session title", () => {
+    const tab: TabInfo = {
+      id: "tab-codex",
+      type: "codex-native",
+      codexNativeData: { environmentId: "env-1" },
+    };
+    useSessionStore.setState({
+      sessions: new Map([
+        ["terminal-session", {
+          id: "terminal-session",
+          environmentId: "env-1",
+          tabId: "tab-codex",
+          name: "Pinned name",
+          status: "connected",
+          sessionType: "codex",
+          containerId: "container-1",
+          createdAt: "2026-07-20T10:00:00.000Z",
+          lastActivityAt: "2026-07-20T10:00:00.000Z",
+          order: 0,
+        }],
+      ]),
+    });
+    useCodexStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-codex"), { title: "Codex title" } as never],
+      ]),
+    });
+
+    renderTab(tab, 2);
+
+    expect(screen.getByText("Pinned name 3")).toBeDefined();
+    expect(screen.queryByText("Codex title")).toBeNull();
   });
 
   test("displayTitle is used when no claude session title exists", () => {
@@ -237,13 +328,268 @@ describe("DraggableTab title precedence", () => {
 
     expect(screen.getByText("Bar.tsx")).toBeDefined();
   });
+
+  test("a Claude-native tab ignores a same-key Codex session title", () => {
+    // The ?? chain is claude ?? codex ?? openCode, and each selector is scoped
+    // to its own tab type. A stale Codex entry under the same key must never
+    // win over — or stand in for — the Claude title on a Claude tab.
+    const tab: TabInfo = {
+      id: "tab-a",
+      type: "claude-native",
+      displayTitle: "Review",
+      claudeNativeData: { environmentId: "env-1" },
+    };
+    useClaudeStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-a"), { title: "Claude title" } as never],
+      ]),
+    });
+    useCodexStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-a"), { title: "Codex title" } as never],
+      ]),
+    });
+    useOpenCodeStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-a"), { title: "OpenCode title" } as never],
+      ]),
+    });
+
+    renderTab(tab, 0);
+
+    expect(screen.getByText("Claude title")).toBeDefined();
+    expect(screen.queryByText("Codex title")).toBeNull();
+    expect(screen.queryByText("OpenCode title")).toBeNull();
+  });
+
+  test("a Claude-native tab with only Codex and OpenCode titles falls back to displayTitle", () => {
+    // Proves the other two selectors are type-scoped rather than key-scoped:
+    // with no Claude entry the chain yields undefined, not the Codex title.
+    const tab: TabInfo = {
+      id: "tab-a",
+      type: "claude-native",
+      displayTitle: "Review",
+      claudeNativeData: { environmentId: "env-1" },
+    };
+    useCodexStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-a"), { title: "Codex title" } as never],
+      ]),
+    });
+    useOpenCodeStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-a"), { title: "OpenCode title" } as never],
+      ]),
+    });
+
+    renderTab(tab, 0);
+
+    expect(screen.getByText("Review 1")).toBeDefined();
+  });
+
+  test("build tabs use the pipeline task title", () => {
+    seedPipeline("pipeline-1", "Add search");
+
+    renderTab({
+      id: "tab-build",
+      type: "claude-build",
+      buildTabData: {
+        environmentId: "env-1",
+        pipelineId: "pipeline-1",
+        taskId: "task-1",
+      },
+    }, 0);
+
+    expect(screen.getByText("Build: Add search")).toBeDefined();
+  });
+
+  test("build tabs fall back to the numbered Build label when the pipeline is unknown", () => {
+    renderTab({
+      id: "tab-build",
+      type: "claude-build",
+      buildTabData: {
+        environmentId: "env-1",
+        pipelineId: "missing-pipeline",
+        taskId: "task-1",
+      },
+    }, 2);
+
+    expect(screen.getByText("Build 3")).toBeDefined();
+  });
+
+  test("build tabs prefer displayTitle over the pipeline task title", () => {
+    seedPipeline("pipeline-1", "Add search");
+
+    renderTab({
+      id: "tab-build",
+      type: "claude-build",
+      displayTitle: "Pipeline",
+      buildTabData: {
+        environmentId: "env-1",
+        pipelineId: "pipeline-1",
+        taskId: "task-1",
+      },
+    }, 0);
+
+    expect(screen.getByText("Pipeline 1")).toBeDefined();
+    expect(screen.queryByText("Build: Add search")).toBeNull();
+  });
+
+  test("root tabs use the ROOT label", () => {
+    renderTab({ id: "tab-root", type: "root" }, 1);
+
+    expect(screen.getByText("ROOT 2")).toBeDefined();
+  });
+
+  test("falls back to a generic Tab label when no branch matches", () => {
+    // A file tab without fileData skips the basename branch and every
+    // type-default branch below it.
+    renderTab({ id: "tab-unknown", type: "file" }, 3);
+
+    expect(screen.getByText("Tab 4")).toBeDefined();
+  });
+});
+
+describe("DraggableTab icons", () => {
+  beforeEach(() => {
+    cleanup();
+    sortableIsDragging = false;
+    useSessionStore.setState({ sessions: new Map() });
+    useClaudeStore.setState({ sessions: new Map() });
+    useCodexStore.setState({ sessions: new Map() });
+    useOpenCodeStore.setState({ sessions: new Map() });
+    useBuildPipelineStore.setState({ pipelines: new Map() });
+    useFileDirtyStore.setState({ dirtyFiles: new Map() });
+    useLoopedReviewStore.setState({ workflows: new Map() });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  const iconCases: Array<{ name: string; tab: TabInfo; selector: string }> = [
+    {
+      name: "file",
+      tab: { id: "t", type: "file", fileData: { filePath: "a/b.ts" } },
+      selector: "svg.lucide-file-code",
+    },
+    {
+      name: "browser",
+      tab: { id: "t", type: "browser", browserData: { url: "" } },
+      selector: "svg.text-sky-400",
+    },
+    {
+      name: "opencode",
+      tab: { id: "t", type: "opencode" },
+      selector: "svg.text-green-500",
+    },
+    {
+      name: "opencode-native",
+      tab: {
+        id: "t",
+        type: "opencode-native",
+        openCodeNativeData: { environmentId: "env-1" },
+      },
+      selector: "svg.text-green-500",
+    },
+    {
+      name: "claude",
+      tab: { id: "t", type: "claude" },
+      selector: "svg.text-orange-400",
+    },
+    {
+      name: "claude-native",
+      tab: {
+        id: "t",
+        type: "claude-native",
+        claudeNativeData: { environmentId: "env-1" },
+      },
+      selector: "svg.text-orange-400",
+    },
+    {
+      name: "claude-tmux",
+      tab: {
+        id: "t",
+        type: "claude-tmux",
+        claudeTmuxData: { environmentId: "env-1" },
+      },
+      selector: "svg.text-orange-400",
+    },
+    {
+      name: "codex",
+      tab: { id: "t", type: "codex" },
+      selector: "svg.text-emerald-400",
+    },
+    {
+      name: "codex-native",
+      tab: {
+        id: "t",
+        type: "codex-native",
+        codexNativeData: { environmentId: "env-1" },
+      },
+      selector: "svg.text-emerald-400",
+    },
+    {
+      name: "claude-build",
+      tab: {
+        id: "t",
+        type: "claude-build",
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+        },
+      },
+      selector: "svg.lucide-hammer.text-yellow-400",
+    },
+    {
+      name: "looped-review",
+      tab: {
+        id: "t",
+        type: "looped-review",
+        loopedReviewTabData: { environmentId: "env-1", workflowId: "w-1" },
+      },
+      selector: "svg.lucide-repeat-2.text-cyan-400",
+    },
+    {
+      name: "plain",
+      tab: { id: "t", type: "plain" },
+      selector: "svg.lucide-terminal",
+    },
+    {
+      name: "root",
+      tab: { id: "t", type: "root" },
+      selector: "svg.lucide-terminal",
+    },
+  ];
+
+  for (const { name, tab, selector } of iconCases) {
+    test(`renders the ${name} icon`, () => {
+      const { container } = renderTab(tab, 0);
+
+      expect(container.querySelector(selector)).toBeTruthy();
+    });
+  }
+
+  test("the browser icon is the globe rather than the default terminal", () => {
+    const { container } = renderTab(
+      { id: "t", type: "browser", browserData: { url: "" } },
+      0,
+    );
+
+    expect(container.querySelector("svg.lucide-earth")).toBeTruthy();
+    expect(container.querySelector("svg.lucide-terminal")).toBeNull();
+  });
 });
 
 describe("DraggableTab tooltip and context menu structure", () => {
   beforeEach(() => {
     cleanup();
+    sortableIsDragging = false;
     useSessionStore.setState({ sessions: new Map() });
     useClaudeStore.setState({ sessions: new Map() });
+    useCodexStore.setState({ sessions: new Map() });
+    useOpenCodeStore.setState({ sessions: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
   });
@@ -388,5 +734,219 @@ describe("DraggableTab tooltip and context menu structure", () => {
     fireEvent.click(screen.getByText("Refresh"));
 
     expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  test("hides the file tooltip again on mouse leave", async () => {
+    renderTab({
+      id: "tab-file",
+      type: "file",
+      fileData: { filePath: "src/components/Foo/Bar.tsx" },
+    }, 0);
+
+    const trigger = screen.getByText("Bar.tsx").closest("div")!;
+    fireEvent.mouseEnter(trigger);
+    await waitFor(() => {
+      expect(screen.getByText("src/components/Foo/Bar.tsx")).toBeTruthy();
+    });
+
+    fireEvent.mouseLeave(trigger);
+
+    await waitFor(() => {
+      expect(screen.queryByText("src/components/Foo/Bar.tsx")).toBeNull();
+    });
+  });
+
+  test("shows the file tooltip on focus and hides it on blur", async () => {
+    renderTab({
+      id: "tab-file",
+      type: "file",
+      fileData: { filePath: "src/lib/util.ts" },
+    }, 0);
+
+    const trigger = screen.getByText("util.ts").closest("div")!;
+    fireEvent.focus(trigger);
+    await waitFor(() => {
+      expect(screen.getByText("src/lib/util.ts")).toBeTruthy();
+    });
+
+    fireEvent.blur(trigger);
+
+    await waitFor(() => {
+      expect(screen.queryByText("src/lib/util.ts")).toBeNull();
+    });
+  });
+
+  test("marks a focused active tab with a full-opacity accent", () => {
+    const { container } = render(
+      <DraggableTab
+        tab={{ id: "tab-terminal", type: "plain" }}
+        paneId="pane-1"
+        index={0}
+        isActive
+        isFocused
+        canClose={false}
+        onSelect={() => {}}
+      />,
+    );
+
+    const indicator = container.querySelector("[aria-hidden='true'].bg-primary");
+    expect(indicator).toBeTruthy();
+    expect(indicator?.className).not.toContain("opacity-60");
+  });
+
+  test("dims and raises the tab while it is being dragged", () => {
+    sortableIsDragging = true;
+
+    renderTab({ id: "tab-terminal", type: "plain" }, 0);
+
+    const tab = screen.getByText("Terminal 1").closest("div")!;
+    expect(tab.className).toContain("opacity-50");
+    expect(tab.className).toContain("z-50");
+  });
+
+  test("does not dim the tab when it is not being dragged", () => {
+    renderTab({ id: "tab-terminal", type: "plain" }, 0);
+
+    const tab = screen.getByText("Terminal 1").closest("div")!;
+    expect(tab.className).not.toContain("opacity-50");
+    expect(tab.className).not.toContain("z-50");
+  });
+
+  test("renders an unsaved-changes dot for a dirty file tab", () => {
+    useFileDirtyStore.setState({
+      dirtyFiles: new Map([
+        ["tab-file", { content: "edited", originalContent: "on disk" }],
+      ]),
+    });
+
+    const { container } = renderTab({
+      id: "tab-file",
+      type: "file",
+      fileData: { filePath: "src/lib/util.ts" },
+    }, 0);
+
+    expect(container.querySelector("[title='Unsaved changes']")).toBeTruthy();
+  });
+
+  test("renders no dot when the file tab content matches disk", () => {
+    useFileDirtyStore.setState({
+      dirtyFiles: new Map([
+        ["tab-file", { content: "same", originalContent: "same" }],
+      ]),
+    });
+
+    const { container } = renderTab({
+      id: "tab-file",
+      type: "file",
+      fileData: { filePath: "src/lib/util.ts" },
+    }, 0);
+
+    expect(container.querySelector("[title='Unsaved changes']")).toBeNull();
+  });
+
+  test("never renders the dot for a non-file tab sharing the dirty tab id", () => {
+    useFileDirtyStore.setState({
+      dirtyFiles: new Map([
+        ["tab-terminal", { content: "edited", originalContent: "on disk" }],
+      ]),
+    });
+
+    const { container } = renderTab({ id: "tab-terminal", type: "plain" }, 0);
+
+    expect(container.querySelector("[title='Unsaved changes']")).toBeNull();
+  });
+
+  test("invokes the bulk close handlers from the context menu", () => {
+    const onCloseAll = mock(() => {});
+    const onCloseOthers = mock(() => {});
+    const onCloseToRight = mock(() => {});
+
+    render(
+      <DraggableTab
+        tab={{ id: "tab-terminal", type: "plain" }}
+        paneId="pane-1"
+        index={0}
+        isActive={false}
+        canClose
+        onSelect={() => {}}
+        onClose={() => {}}
+        onCloseAll={onCloseAll}
+        onCloseOthers={onCloseOthers}
+        onCloseToRight={onCloseToRight}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByText("Terminal 1"));
+
+    fireEvent.click(screen.getByText("Close all"));
+    expect(onCloseAll).toHaveBeenCalledTimes(1);
+
+    fireEvent.contextMenu(screen.getByText("Terminal 1"));
+    fireEvent.click(screen.getByText("Close others"));
+    expect(onCloseOthers).toHaveBeenCalledTimes(1);
+
+    fireEvent.contextMenu(screen.getByText("Terminal 1"));
+    fireEvent.click(screen.getByText("Close to the right"));
+    expect(onCloseToRight).toHaveBeenCalledTimes(1);
+  });
+
+  test("disables the bulk close items when the pane says they are unavailable", () => {
+    render(
+      <DraggableTab
+        tab={{ id: "tab-terminal", type: "plain" }}
+        paneId="pane-1"
+        index={0}
+        isActive={false}
+        canClose
+        canCloseAll={false}
+        canCloseOthers={false}
+        canCloseToRight={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByText("Terminal 1"));
+
+    for (const label of ["Close all", "Close others", "Close to the right"]) {
+      expect(screen.getByText(label).getAttribute("aria-disabled")).toBe("true");
+    }
+    // Close itself stays available: canClose is true and onClose was provided.
+    expect(screen.getByText("Close").getAttribute("aria-disabled")).toBeNull();
+  });
+
+  test("disables Close when the tab cannot be closed", () => {
+    render(
+      <DraggableTab
+        tab={{ id: "tab-terminal", type: "plain" }}
+        paneId="pane-1"
+        index={0}
+        isActive={false}
+        canClose={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByText("Terminal 1"));
+
+    expect(screen.getByText("Close").getAttribute("aria-disabled")).toBe("true");
+  });
+
+  test("disables Close when no onClose handler was supplied", () => {
+    render(
+      <DraggableTab
+        tab={{ id: "tab-terminal", type: "plain" }}
+        paneId="pane-1"
+        index={0}
+        isActive={false}
+        canClose
+        onSelect={() => {}}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByText("Terminal 1"));
+
+    expect(screen.getByText("Close").getAttribute("aria-disabled")).toBe("true");
   });
 });

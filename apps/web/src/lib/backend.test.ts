@@ -57,6 +57,7 @@ const {
   setEnvironmentUnread,
   setEnvironmentPendingAgentLaunch,
   setEnvironmentInitialPrompt,
+  updateAgentModelDefault,
   updateEnvironmentAgentSettings,
 } = backendWrappers;
 
@@ -486,6 +487,29 @@ describe("backend setup wrappers", () => {
     expect(invokeMock.mock.calls).toEqual([
       ["set_github_token", { token: "ghp_replacement" }],
       ["set_github_token", { token: null }],
+    ]);
+  });
+
+  test("forwards each agent model default under the single-key command", async () => {
+    const updated = {
+      version: "1.0",
+      global: { codexModel: "gpt-5.4-codex" },
+      repositories: {},
+    } as AppConfig;
+    invokeMock.mockResolvedValue(updated);
+
+    await expect(updateAgentModelDefault("codexModel", "gpt-5.4-codex")).resolves.toBe(updated);
+    expect(invokeMock).toHaveBeenCalledWith("update_agent_model_default", {
+      key: "codexModel",
+      modelId: "gpt-5.4-codex",
+    });
+
+    await updateAgentModelDefault("claudeModel", "claude-opus-4");
+    await updateAgentModelDefault("opencodeModel", "opencode/gpt-5.4");
+    expect(invokeMock.mock.calls).toEqual([
+      ["update_agent_model_default", { key: "codexModel", modelId: "gpt-5.4-codex" }],
+      ["update_agent_model_default", { key: "claudeModel", modelId: "claude-opus-4" }],
+      ["update_agent_model_default", { key: "opencodeModel", modelId: "opencode/gpt-5.4" }],
     ]);
   });
 });

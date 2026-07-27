@@ -1,3 +1,4 @@
+import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, FileDiff, Globe, ShieldAlert, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -123,8 +124,8 @@ export function CodexApprovalCard({
   const expired = remaining === null;
 
   return (
-    <div
-      className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm"
+    <BlockingPromptCard
+      className="p-3 text-sm"
       role="group"
       aria-label={approvalTitle(approval)}
     >
@@ -262,6 +263,6 @@ export function CodexApprovalCard({
           )}
         </div>
       </div>
-    </div>
+    </BlockingPromptCard>
   );
 }

@@ -1,7 +1,13 @@
+import {
+  ERROR_MESSAGE_PREFIX,
+  SYSTEM_MESSAGE_PREFIX,
+  type ClaudeMessage,
+} from "@/lib/claude-client";
+import { createSessionKey } from "@/lib/utils";
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { createClaudeSessionKey, useClaudeStore } from "./claudeStore";
+import { useClaudeStore } from "./claudeStore";
 
-const SESSION_KEY = createClaudeSessionKey("env-1", "tab-1");
+const SESSION_KEY = createSessionKey("env-1", "tab-1");
 
 function resetClaudeStore() {
   useClaudeStore.setState({
@@ -15,6 +21,7 @@ function resetClaudeStore() {
     isComposing: new Map(),
     effort: new Map(),
     planMode: new Map(),
+    fastMode: new Map(),
     selectedModel: new Map(),
     messageQueue: new Map(),
     sessionInitData: new Map(),
@@ -26,7 +33,6 @@ function resetClaudeStore() {
     // Every map the store owns has to be reset here. A map left out is a map
     // that carries state between test files, which makes the first test anyone
     // writes for that action order-dependent.
-    fastMode: new Map(),
     selectedAgent: new Map(),
     includeLocalSettings: new Map(),
     promptSuggestionOptIn: new Map(),
@@ -123,8 +129,8 @@ describe("claudeStore cleanup and queue helpers", () => {
   });
 
   test("clearEnvironment removes session-scoped state and pending requests for the target environment only", () => {
-    const sessionKeyA = createClaudeSessionKey("env-1", "tab-1");
-    const sessionKeyB = createClaudeSessionKey("env-2", "tab-1");
+    const sessionKeyA = createSessionKey("env-1", "tab-1");
+    const sessionKeyB = createSessionKey("env-2", "tab-1");
     const store = useClaudeStore.getState();
 
     store.setSession(sessionKeyA, {
@@ -191,6 +197,102 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(store.getPendingPlanApproval("approval-b")).toBeDefined();
   });
 
+  test("clearSession exhaustively removes every session-keyed map and only its pending requests", () => {
+    const targetKey = createSessionKey("env-1", "tab-target");
+    const otherKey = createSessionKey("env-1", "tab-other");
+    const targetSession = {
+      sessionId: "sdk-target",
+      messages: [],
+      isLoading: false,
+    };
+    const otherSession = {
+      sessionId: "sdk-other",
+      messages: [],
+      isLoading: false,
+    };
+
+    useClaudeStore.setState({
+      sessions: new Map([
+        [targetKey, targetSession],
+        [otherKey, otherSession],
+      ]),
+      attachments: new Map([[targetKey, []], [otherKey, []]]),
+      draftText: new Map([[targetKey, "target"], [otherKey, "other"]]),
+      draftMentions: new Map([[targetKey, []], [otherKey, []]]),
+      messageQueue: new Map([[targetKey, []], [otherKey, []]]),
+      selectedModel: new Map([[targetKey, "sonnet"], [otherKey, "opus"]]),
+      isComposing: new Map([[targetKey, true], [otherKey, true]]),
+      effort: new Map([[targetKey, "high"], [otherKey, "max"]]),
+      planMode: new Map([[targetKey, true], [otherKey, true]]),
+      fastMode: new Map([[targetKey, true], [otherKey, true]]),
+      contextUsage: new Map([
+        [targetKey, { usedTokens: 1, totalTokens: 10, percentUsed: 10 }],
+        [otherKey, { usedTokens: 2, totalTokens: 10, percentUsed: 20 }],
+      ]),
+      pendingQuestions: new Map([
+        ["question-target", { id: "question-target", sessionId: "sdk-target", questions: [] }],
+        ["question-other", { id: "question-other", sessionId: "sdk-other", questions: [] }],
+      ]),
+      pendingPlanApprovals: new Map([
+        ["approval-target", { id: "approval-target", sessionId: "sdk-target" }],
+        ["approval-other", { id: "approval-other", sessionId: "sdk-other" }],
+      ]),
+    });
+
+    useClaudeStore.getState().clearSession(targetKey);
+
+    const state = useClaudeStore.getState();
+    const sessionKeyedMaps = [
+      "sessions",
+      "attachments",
+      "draftText",
+      "draftMentions",
+      "messageQueue",
+      "selectedModel",
+      "isComposing",
+      "effort",
+      "planMode",
+      "fastMode",
+      "contextUsage",
+    ] as const;
+    for (const field of sessionKeyedMaps) {
+      expect(state[field].has(targetKey), `${field} should remove target`).toBe(false);
+      expect(state[field].has(otherKey), `${field} should preserve other tab`).toBe(true);
+    }
+    expect(state.pendingQuestions.has("question-target")).toBe(false);
+    expect(state.pendingQuestions.has("question-other")).toBe(true);
+    expect(state.pendingPlanApprovals.has("approval-target")).toBe(false);
+    expect(state.pendingPlanApprovals.has("approval-other")).toBe(true);
+  });
+
+  test("clearSession leaves pending requests alone when the tab never got a session id", () => {
+    const targetKey = createSessionKey("env-1", "tab-unstarted");
+
+    useClaudeStore.setState({
+      // A tab whose session was created optimistically: the SDK has not
+      // returned a session id yet, so there is nothing to sweep pending
+      // requests by and the store must not guess.
+      sessions: new Map([
+        [targetKey, { sessionId: "", messages: [], isLoading: false }],
+      ]),
+      draftText: new Map([[targetKey, "half-typed"]]),
+      pendingQuestions: new Map([
+        ["question-orphan", { id: "question-orphan", sessionId: "", questions: [] }],
+      ]),
+      pendingPlanApprovals: new Map([
+        ["approval-orphan", { id: "approval-orphan", sessionId: "" }],
+      ]),
+    });
+
+    useClaudeStore.getState().clearSession(targetKey);
+
+    const state = useClaudeStore.getState();
+    expect(state.sessions.has(targetKey)).toBe(false);
+    expect(state.draftText.has(targetKey)).toBe(false);
+    expect(state.pendingQuestions.has("question-orphan")).toBe(true);
+    expect(state.pendingPlanApprovals.has("approval-orphan")).toBe(true);
+  });
+
   test("keeps authoritative model catalogs scoped to their environment", () => {
     const store = useClaudeStore.getState();
     store.setModels([{ id: "legacy", name: "Legacy" }]);
@@ -254,8 +356,8 @@ describe("claudeStore cleanup and queue helpers", () => {
   });
 
   test("queues prompts in FIFO order and clears only the targeted session queue", () => {
-    const queueA = createClaudeSessionKey("env-1", "tab-1");
-    const queueB = createClaudeSessionKey("env-1", "tab-2");
+    const queueA = createSessionKey("env-1", "tab-1");
+    const queueB = createSessionKey("env-1", "tab-2");
     const store = useClaudeStore.getState();
 
     store.addToQueue(queueA, {
@@ -435,7 +537,7 @@ describe("claudeStore message patching", () => {
     expect(
       useClaudeStore
         .getState()
-        .patchMessage(createClaudeSessionKey("env-1", "other-tab"), patch()),
+        .patchMessage(createSessionKey("env-1", "other-tab"), patch()),
     ).toBe(false);
   });
 
@@ -489,13 +591,320 @@ describe("claudeStore message patching", () => {
   });
 });
 
+describe("claudeStore client-only message merge", () => {
+  const message = (id: string, timestamp: string): ClaudeMessage => ({
+    id,
+    role: id.startsWith(ERROR_MESSAGE_PREFIX) ? "system" : "assistant",
+    content: id,
+    parts: [{ type: "text", content: id }],
+    timestamp,
+  });
+
+  const seed = (messages: ClaudeMessage[]) => {
+    useClaudeStore.getState().setSession(SESSION_KEY, {
+      sessionId: "session-1",
+      messages,
+      isLoading: false,
+    });
+  };
+
+  const mergedIds = () =>
+    useClaudeStore
+      .getState()
+      .getSession(SESSION_KEY)
+      ?.messages.map((item) => item.id);
+
+  beforeEach(() => {
+    resetClaudeStore();
+  });
+
+  test("replaces the transcript wholesale when nothing client-only is held", () => {
+    seed([message("assistant-1", "2026-07-20T12:00:00.000Z")]);
+    const incoming = [message("assistant-2", "2026-07-20T12:00:02.000Z")];
+
+    useClaudeStore.getState().setMessages(SESSION_KEY, incoming);
+
+    // The server fetch is authoritative here, so the array is adopted as-is.
+    expect(useClaudeStore.getState().getSession(SESSION_KEY)?.messages).toEqual(
+      incoming,
+    );
+  });
+
+  test("appends a client-only message newer than every fetched message", () => {
+    seed([
+      message("assistant-1", "2026-07-20T12:00:00.000Z"),
+      message(`${ERROR_MESSAGE_PREFIX}late`, "2026-07-20T12:00:09.000Z"),
+    ]);
+
+    useClaudeStore.getState().setMessages(SESSION_KEY, [
+      message("assistant-1", "2026-07-20T12:00:00.000Z"),
+      message("assistant-2", "2026-07-20T12:00:02.000Z"),
+    ]);
+
+    expect(mergedIds()).toEqual([
+      "assistant-1",
+      "assistant-2",
+      `${ERROR_MESSAGE_PREFIX}late`,
+    ]);
+  });
+
+  test("appends a client-only message when the fetched transcript is empty", () => {
+    seed([message(`${SYSTEM_MESSAGE_PREFIX}compact`, "2026-07-20T12:00:05.000Z")]);
+
+    useClaudeStore.getState().setMessages(SESSION_KEY, []);
+
+    expect(mergedIds()).toEqual([`${SYSTEM_MESSAGE_PREFIX}compact`]);
+  });
+
+  test("inserts a client-only message between the fetched messages it sits between", () => {
+    seed([message(`${SYSTEM_MESSAGE_PREFIX}compact`, "2026-07-20T12:00:03.000Z")]);
+
+    useClaudeStore.getState().setMessages(SESSION_KEY, [
+      message("assistant-1", "2026-07-20T12:00:00.000Z"),
+      message("assistant-2", "2026-07-20T12:00:02.000Z"),
+      message("assistant-3", "2026-07-20T12:00:10.000Z"),
+    ]);
+
+    expect(mergedIds()).toEqual([
+      "assistant-1",
+      "assistant-2",
+      `${SYSTEM_MESSAGE_PREFIX}compact`,
+      "assistant-3",
+    ]);
+  });
+
+  test("inserts a client-only message older than every fetched message at the front", () => {
+    seed([message(`${ERROR_MESSAGE_PREFIX}early`, "2026-07-20T11:59:00.000Z")]);
+
+    useClaudeStore.getState().setMessages(SESSION_KEY, [
+      message("assistant-1", "2026-07-20T12:00:00.000Z"),
+      message("assistant-2", "2026-07-20T12:00:02.000Z"),
+    ]);
+
+    expect(mergedIds()).toEqual([
+      `${ERROR_MESSAGE_PREFIX}early`,
+      "assistant-1",
+      "assistant-2",
+    ]);
+  });
+
+  test("keeps several client-only messages, each at its own point in the history", () => {
+    seed([
+      message(`${ERROR_MESSAGE_PREFIX}early`, "2026-07-20T11:59:00.000Z"),
+      message(`${SYSTEM_MESSAGE_PREFIX}compact`, "2026-07-20T12:00:03.000Z"),
+      message(`${ERROR_MESSAGE_PREFIX}late`, "2026-07-20T12:00:30.000Z"),
+    ]);
+
+    useClaudeStore.getState().setMessages(SESSION_KEY, [
+      message("assistant-1", "2026-07-20T12:00:00.000Z"),
+      message("assistant-2", "2026-07-20T12:00:10.000Z"),
+    ]);
+
+    expect(mergedIds()).toEqual([
+      `${ERROR_MESSAGE_PREFIX}early`,
+      "assistant-1",
+      `${SYSTEM_MESSAGE_PREFIX}compact`,
+      "assistant-2",
+      `${ERROR_MESSAGE_PREFIX}late`,
+    ]);
+  });
+
+  test("treats a client-only message with no timestamp as the oldest message", () => {
+    // `timestamp || 0` makes an empty timestamp the epoch, so the message is
+    // kept rather than dropped — it just sorts to the front.
+    seed([message(`${ERROR_MESSAGE_PREFIX}undated`, "")]);
+
+    useClaudeStore.getState().setMessages(SESSION_KEY, [
+      message("assistant-1", "2026-07-20T12:00:00.000Z"),
+    ]);
+
+    expect(mergedIds()).toEqual([
+      `${ERROR_MESSAGE_PREFIX}undated`,
+      "assistant-1",
+    ]);
+  });
+
+  test("keeps a fetched message with no timestamp ahead of a later client-only message", () => {
+    seed([message(`${SYSTEM_MESSAGE_PREFIX}compact`, "2026-07-20T12:00:05.000Z")]);
+
+    useClaudeStore
+      .getState()
+      .setMessages(SESSION_KEY, [message("assistant-1", "")]);
+
+    expect(mergedIds()).toEqual([
+      "assistant-1",
+      `${SYSTEM_MESSAGE_PREFIX}compact`,
+    ]);
+  });
+
+  test("falls back to appending when a timestamp cannot be parsed", () => {
+    // Every comparison against NaN is false, so neither insertion branch fires
+    // and the client-only message lands at the end rather than being lost.
+    seed([message(`${ERROR_MESSAGE_PREFIX}unparseable`, "not-a-timestamp")]);
+
+    useClaudeStore.getState().setMessages(SESSION_KEY, [
+      message("assistant-1", "2026-07-20T12:00:00.000Z"),
+      message("assistant-2", "2026-07-20T12:00:02.000Z"),
+    ]);
+
+    expect(mergedIds()).toEqual([
+      "assistant-1",
+      "assistant-2",
+      `${ERROR_MESSAGE_PREFIX}unparseable`,
+    ]);
+  });
+
+  test("falls back to appending when a fetched timestamp cannot be parsed", () => {
+    seed([message(`${ERROR_MESSAGE_PREFIX}boom`, "2026-07-20T12:00:05.000Z")]);
+
+    useClaudeStore.getState().setMessages(SESSION_KEY, [
+      message("assistant-1", "not-a-timestamp"),
+      message("assistant-2", "2026-07-20T12:00:10.000Z"),
+    ]);
+
+    expect(mergedIds()).toEqual([
+      "assistant-1",
+      "assistant-2",
+      `${ERROR_MESSAGE_PREFIX}boom`,
+    ]);
+  });
+});
+
+describe("claudeStore session selectors and pending requests", () => {
+  beforeEach(() => {
+    resetClaudeStore();
+  });
+
+  test("resolves a session key from the SDK session id and returns null with no match", () => {
+    const keyA = createSessionKey("env-1", "tab-1");
+    const keyB = createSessionKey("env-2", "tab-1");
+    const store = useClaudeStore.getState();
+
+    store.setSession(keyA, {
+      sessionId: "sdk-a",
+      messages: [],
+      isLoading: false,
+    });
+    store.setSession(keyB, {
+      sessionId: "sdk-b",
+      messages: [],
+      isLoading: false,
+    });
+
+    expect(store.getSessionKeyBySdkSessionId("sdk-b")).toBe(keyB);
+    // SSE events for a session this window never opened must not be attributed
+    // to whichever tab happens to be first in the map.
+    expect(store.getSessionKeyBySdkSessionId("sdk-unknown")).toBeNull();
+  });
+
+  test("groups pending questions and plan approvals by SDK session id", () => {
+    const store = useClaudeStore.getState();
+
+    store.addPendingQuestion({
+      id: "question-1",
+      sessionId: "sdk-a",
+      questions: [],
+    });
+    store.addPendingQuestion({
+      id: "question-2",
+      sessionId: "sdk-a",
+      questions: [],
+    });
+    store.addPendingQuestion({
+      id: "question-3",
+      sessionId: "sdk-b",
+      questions: [],
+    });
+    store.addPendingPlanApproval({ id: "approval-1", sessionId: "sdk-a" });
+    store.addPendingPlanApproval({ id: "approval-2", sessionId: "sdk-b" });
+
+    expect(
+      store.getPendingQuestionsForSession("sdk-a").map((item) => item.id),
+    ).toEqual(["question-1", "question-2"]);
+    expect(
+      store.getPendingQuestionsForSession("sdk-b").map((item) => item.id),
+    ).toEqual(["question-3"]);
+    expect(store.getPendingQuestionsForSession("sdk-missing")).toEqual([]);
+
+    expect(
+      store.getPendingPlanApprovalsForSession("sdk-a").map((item) => item.id),
+    ).toEqual(["approval-1"]);
+    expect(
+      store.getPendingPlanApprovalsForSession("sdk-b").map((item) => item.id),
+    ).toEqual(["approval-2"]);
+    expect(store.getPendingPlanApprovalsForSession("sdk-missing")).toEqual([]);
+  });
+
+  test("removes an answered question or approval without disturbing the others", () => {
+    const store = useClaudeStore.getState();
+
+    store.addPendingQuestion({
+      id: "question-1",
+      sessionId: "sdk-a",
+      questions: [],
+    });
+    store.addPendingQuestion({
+      id: "question-2",
+      sessionId: "sdk-a",
+      questions: [],
+    });
+    store.addPendingPlanApproval({ id: "approval-1", sessionId: "sdk-a" });
+    store.addPendingPlanApproval({ id: "approval-2", sessionId: "sdk-a" });
+
+    store.removePendingQuestion("question-1");
+    store.removePendingPlanApproval("approval-1");
+
+    expect(store.getPendingQuestion("question-1")).toBeUndefined();
+    expect(store.getPendingQuestion("question-2")).toBeDefined();
+    expect(store.getPendingPlanApproval("approval-1")).toBeUndefined();
+    expect(store.getPendingPlanApproval("approval-2")).toBeDefined();
+
+    // A late duplicate response (the card answered in another window) is a
+    // no-op rather than a throw.
+    store.removePendingQuestion("question-1");
+    store.removePendingPlanApproval("approval-1");
+
+    expect(
+      store.getPendingQuestionsForSession("sdk-a").map((item) => item.id),
+    ).toEqual(["question-2"]);
+    expect(
+      store.getPendingPlanApprovalsForSession("sdk-a").map((item) => item.id),
+    ).toEqual(["approval-2"]);
+  });
+
+  test("defaults effort to high, plan mode to off, and fast mode to off", () => {
+    const store = useClaudeStore.getState();
+    const untouched = createSessionKey("env-1", "tab-fresh");
+
+    expect(store.getEffort(untouched)).toBe("high");
+    expect(store.isPlanMode(untouched)).toBe(false);
+    expect(store.isFastMode(untouched)).toBe(false);
+  });
+
+  test("tracks fast mode per session and toggles it back off", () => {
+    const keyA = createSessionKey("env-1", "tab-1");
+    const keyB = createSessionKey("env-1", "tab-2");
+    const store = useClaudeStore.getState();
+
+    store.setFastMode(keyA, true);
+
+    expect(store.isFastMode(keyA)).toBe(true);
+    expect(store.isFastMode(keyB)).toBe(false);
+
+    store.setFastMode(keyA, false);
+
+    expect(store.isFastMode(keyA)).toBe(false);
+    expect(useClaudeStore.getState().fastMode.get(keyA)).toBe(false);
+  });
+});
+
 describe("claudeStore per-session turn options", () => {
   beforeEach(resetClaudeStore);
 
   describe("selectedAgent", () => {
     test("stores and reads an agent per session", () => {
       const store = useClaudeStore.getState();
-      const otherKey = createClaudeSessionKey("env-1", "tab-2");
+      const otherKey = createSessionKey("env-1", "tab-2");
 
       store.setSelectedAgent(SESSION_KEY, "reviewer");
 
@@ -540,7 +949,7 @@ describe("claudeStore per-session turn options", () => {
 
     test("is scoped per session", () => {
       const store = useClaudeStore.getState();
-      const otherKey = createClaudeSessionKey("env-1", "tab-2");
+      const otherKey = createSessionKey("env-1", "tab-2");
 
       store.setIncludeLocalSettings(SESSION_KEY, true);
 
@@ -607,7 +1016,7 @@ describe("claudeStore per-session turn options", () => {
 
     test("is scoped per session and independent of the live suggestion", () => {
       const store = useClaudeStore.getState();
-      const otherKey = createClaudeSessionKey("env-1", "tab-2");
+      const otherKey = createSessionKey("env-1", "tab-2");
 
       store.setPromptSuggestion(SESSION_KEY, "Run the tests");
       store.setDismissedPromptSuggestion(SESSION_KEY, "Run the tests");
@@ -659,7 +1068,7 @@ describe("claudeStore per-session turn options", () => {
 
     test("is scoped per session", () => {
       const store = useClaudeStore.getState();
-      const otherKey = createClaudeSessionKey("env-1", "tab-2");
+      const otherKey = createSessionKey("env-1", "tab-2");
 
       store.setBackgroundTasks(SESSION_KEY, { "task-1": task });
 
@@ -716,7 +1125,7 @@ describe("claudeStore per-session turn options", () => {
 
   test("clearEnvironment prunes every session-scoped map for that environment only", () => {
     const store = useClaudeStore.getState();
-    const otherEnvKey = createClaudeSessionKey("env-2", "tab-1");
+    const otherEnvKey = createSessionKey("env-2", "tab-1");
 
     for (const key of [SESSION_KEY, otherEnvKey]) {
       store.setSelectedAgent(key, "reviewer");

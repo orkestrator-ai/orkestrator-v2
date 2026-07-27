@@ -13,27 +13,22 @@ import {
 } from "@/lib/opencode-client";
 import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-messages";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
-import { createSessionKey } from "@/lib/utils";
 import {
+  buildClearEnvironmentPatch,
+  buildClearSessionPatch,
+  createEventSubscriptionSlice,
   createNativeChatStoreSlice,
-  pruneSessionKeyedMap,
+  sessionKeyPrefixFor,
+  teardownEventSubscription,
   type NativeChatStoreSlice,
+  type NativeEventSubscriptionSlice,
+  type NativeEventSubscriptionState,
   type NativeServerStatus,
   type NativeSessionState,
 } from "./createNativeChatStore";
 
-/**
- * Creates a unique session key for OpenCode sessions.
- * Re-exported from utils for backwards compatibility.
- */
-export const createOpenCodeSessionKey = createSessionKey;
-
 /** Shared event subscription state per environment */
-export interface EventSubscriptionState {
-  abortController: AbortController;
-  stream: AsyncIterable<OpenCodeEvent> | null;
-  isActive: boolean;
-}
+export type EventSubscriptionState = NativeEventSubscriptionState<OpenCodeEvent>;
 
 export type OpenCodeServerStatus = NativeServerStatus;
 export type OpenCodeSessionState = NativeSessionState<OpenCodeMessage>;
@@ -62,16 +57,23 @@ type OpenCodeChatSlice = NativeChatStoreSlice<
   OpenCodeQueuedMessage
 >;
 
-interface OpenCodeState extends OpenCodeChatSlice {
+interface OpenCodeState
+  extends OpenCodeChatSlice,
+    NativeEventSubscriptionSlice<OpenCodeEvent> {
   // Agent-specific state (per-environment)
   models: Map<string, OpenCodeModel[]>;
   slashCommands: Map<string, OpenCodeSlashCommand[]>;
+
+  /**
+   * Agent-specific state (per-session).
+   *
+   * Model, variant and composing state are keyed by sessionKey, matching
+   * Claude and Codex. They used to be environment-scoped, which silently tied
+   * two OpenCode tabs in the same environment to one model selection.
+   */
   selectedModel: Map<string, string>;
   selectedVariant: Map<string, string>;
   isComposing: Map<string, boolean>;
-  eventSubscriptions: Map<string, EventSubscriptionState>;
-
-  // Agent-specific state (per-session)
   selectedMode: Map<string, OpenCodeConversationMode>;
   contextUsage: Map<string, ContextUsageSnapshot>;
   runtimeHealth: Map<string, OpenCodeRuntimeHealth>;
@@ -87,12 +89,12 @@ interface OpenCodeState extends OpenCodeChatSlice {
     environmentId: string,
     commands: OpenCodeSlashCommand[],
   ) => void;
-  setSelectedModel: (environmentId: string, modelId: string) => void;
+  setSelectedModel: (sessionKey: string, modelId: string) => void;
   setSelectedVariant: (
-    environmentId: string,
+    sessionKey: string,
     variant: string | undefined,
   ) => void;
-  setComposing: (environmentId: string, isComposing: boolean) => void;
+  setComposing: (sessionKey: string, isComposing: boolean) => void;
 
   // Agent-specific actions (per-session)
   setSelectedMode: (
@@ -115,26 +117,17 @@ interface OpenCodeState extends OpenCodeChatSlice {
   addPendingPermission: (permission: PermissionRequest) => void;
   removePendingPermission: (requestId: string) => void;
 
-  // Event subscription actions
-  getOrCreateEventSubscription: (
-    environmentId: string,
-  ) => EventSubscriptionState | null;
-  setEventStream: (
-    environmentId: string,
-    stream: AsyncIterable<OpenCodeEvent> | null,
-  ) => void;
-  closeEventSubscription: (environmentId: string) => void;
-  hasActiveEventSubscription: (environmentId: string) => boolean;
-
   clearEnvironment: (environmentId: string) => void;
+  /** Drop every session-keyed entry for one closed tab. */
+  clearSession: (sessionKey: string) => void;
 
   // Selectors
-  getSelectedModel: (environmentId: string) => string | undefined;
+  getSelectedModel: (sessionKey: string) => string | undefined;
   getModels: (environmentId: string) => OpenCodeModel[];
   getSlashCommands: (environmentId: string) => OpenCodeSlashCommand[];
-  getSelectedVariant: (environmentId: string) => string | undefined;
+  getSelectedVariant: (sessionKey: string) => string | undefined;
   getSelectedMode: (sessionKey: string) => OpenCodeConversationMode;
-  isComposingFor: (environmentId: string) => boolean;
+  isComposingFor: (sessionKey: string) => boolean;
   getPendingQuestionsForSession: (sessionId: string) => QuestionRequest[];
   getPendingQuestion: (requestId: string) => QuestionRequest | undefined;
   getPendingPermissionsForSession: (sessionId: string) => PermissionRequest[];
@@ -153,6 +146,31 @@ const EMPTY_QUESTIONS: QuestionRequest[] = [];
 const EMPTY_PERMISSIONS: PermissionRequest[] = [];
 const EMPTY_AGENTS: OpenCodeAgent[] = [];
 
+/**
+ * Every map keyed by sessionKey, shared by the environment and tab sweeps so
+ * the two cannot drift. A new session-keyed map goes here or it leaks.
+ */
+const OPENCODE_SESSION_KEYED_MAPS = [
+  "sessions",
+  "attachments",
+  "draftText",
+  "draftMentions",
+  "messageQueue",
+  "selectedModel",
+  "selectedVariant",
+  "selectedMode",
+  "isComposing",
+  "contextUsage",
+  "selectedAgent",
+  /*
+   * Written under both the environment id and a session key (the chat tab
+   * records health for its own session as well as the environment), and the
+   * session-keyed sweep drops the environment id too — so one entry here
+   * clears both.
+   */
+  "runtimeHealth",
+] as const satisfies ReadonlyArray<keyof OpenCodeState>;
+
 export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   ...createNativeChatStoreSlice<
     OpencodeClient,
@@ -161,13 +179,14 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
     OpenCodeQueuedMessage
   >({ mergeMessages: mergeNativeMessagesPreservingClientOnly })(set, get, api),
 
+  ...createEventSubscriptionSlice<OpenCodeEvent>("openCodeStore")(set, get, api),
+
   // Agent-specific state
   models: new Map(),
   slashCommands: new Map(),
   selectedModel: new Map(),
   selectedVariant: new Map(),
   isComposing: new Map(),
-  eventSubscriptions: new Map(),
   selectedMode: new Map(),
   contextUsage: new Map(),
   runtimeHealth: new Map(),
@@ -190,20 +209,20 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       return { slashCommands: next };
     }),
 
-  setSelectedModel: (environmentId, modelId) =>
+  setSelectedModel: (sessionKey, modelId) =>
     set((state) => {
       const next = new Map(state.selectedModel);
-      next.set(environmentId, modelId);
+      next.set(sessionKey, modelId);
       return { selectedModel: next };
     }),
 
-  setSelectedVariant: (environmentId, variant) =>
+  setSelectedVariant: (sessionKey, variant) =>
     set((state) => {
       const next = new Map(state.selectedVariant);
       if (variant && variant.trim().length > 0) {
-        next.set(environmentId, variant);
+        next.set(sessionKey, variant);
       } else {
-        next.delete(environmentId);
+        next.delete(sessionKey);
       }
       return { selectedVariant: next };
     }),
@@ -215,10 +234,10 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       return { selectedMode: next };
     }),
 
-  setComposing: (environmentId, isComposing) =>
+  setComposing: (sessionKey, isComposing) =>
     set((state) => {
       const next = new Map(state.isComposing);
-      next.set(environmentId, isComposing);
+      next.set(sessionKey, isComposing);
       return { isComposing: next };
     }),
 
@@ -249,48 +268,50 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       return { selectedAgent: next };
     }),
 
+  clearSession: (sessionKey) => {
+    set((state) => {
+      const session = state.sessions.get(sessionKey);
+      const patch = buildClearSessionPatch(
+        state,
+        sessionKey,
+        OPENCODE_SESSION_KEYED_MAPS,
+      );
+      if (!session?.sessionId) return patch;
+
+      // Pending requests are keyed by requestId, so they need a sweep by the
+      // session id this tab owned rather than by its session key.
+      const pendingQuestions = new Map(state.pendingQuestions);
+      for (const [requestId, question] of pendingQuestions) {
+        if (question.sessionId === session.sessionId) {
+          pendingQuestions.delete(requestId);
+        }
+      }
+      const pendingPermissions = new Map(state.pendingPermissions);
+      for (const [requestId, permission] of pendingPermissions) {
+        if (permission.sessionId === session.sessionId) {
+          pendingPermissions.delete(requestId);
+        }
+      }
+      return { ...patch, pendingQuestions, pendingPermissions };
+    });
+  },
+
   clearEnvironment: (environmentId) => {
+    // Abort before dropping the map entry — losing the reference without
+    // returning the iterator leaks the generator.
     const subscription = get().eventSubscriptions.get(environmentId);
     if (subscription) {
       console.log(
         "[openCodeStore] Closing event subscription during environment cleanup:",
         environmentId,
       );
-      subscription.abortController.abort();
-      if (
-        subscription.stream &&
-        Symbol.asyncIterator in subscription.stream
-      ) {
-        const iterator = subscription.stream[Symbol.asyncIterator]();
-        if (iterator.return) {
-          iterator.return().catch(() => {});
-        }
-      }
+      teardownEventSubscription(subscription);
     }
 
     set((state) => {
-      const newServerStatus = new Map(state.serverStatus);
-      const newClients = new Map(state.clients);
-      const newModels = new Map(state.models);
-      const newSelectedModel = new Map(state.selectedModel);
-      const newSlashCommands = new Map(state.slashCommands);
-      const newSelectedVariant = new Map(state.selectedVariant);
-      const newIsComposing = new Map(state.isComposing);
-      const newEventSubscriptions = new Map(state.eventSubscriptions);
+      const prefix = sessionKeyPrefixFor(environmentId);
 
-      newServerStatus.delete(environmentId);
-      newClients.delete(environmentId);
-      newModels.delete(environmentId);
-      newSelectedModel.delete(environmentId);
-      newSlashCommands.delete(environmentId);
-      newSelectedVariant.delete(environmentId);
-      newIsComposing.delete(environmentId);
-      newEventSubscriptions.delete(environmentId);
-      const prefix = `env-${environmentId}:`;
-      const newRuntimeHealth = pruneSessionKeyedMap(state.runtimeHealth, prefix);
-      newRuntimeHealth.delete(environmentId);
-
-      // Collect session IDs before pruning so we can clean up pending requests
+      // Collect session IDs before pruning so pending requests can be swept.
       const environmentSessionIds = new Set<string>();
       for (const [key, session] of state.sessions) {
         if (key.startsWith(prefix)) {
@@ -298,44 +319,34 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
         }
       }
 
-      const newSelectedMode = pruneSessionKeyedMap(state.selectedMode, prefix);
-      // Also remove any legacy environment-scoped mode key (backward compat)
-      newSelectedMode.delete(environmentId);
-
       const newPendingQuestions = new Map(state.pendingQuestions);
       for (const [requestId, question] of newPendingQuestions) {
-        if (environmentSessionIds.has(question.sessionID)) {
+        if (environmentSessionIds.has(question.sessionId)) {
           newPendingQuestions.delete(requestId);
         }
       }
 
       const newPendingPermissions = new Map(state.pendingPermissions);
       for (const [requestId, permission] of newPendingPermissions) {
-        if (environmentSessionIds.has(permission.sessionID)) {
+        if (environmentSessionIds.has(permission.sessionId)) {
           newPendingPermissions.delete(requestId);
         }
       }
 
       return {
-        serverStatus: newServerStatus,
-        sessions: pruneSessionKeyedMap(state.sessions, prefix),
-        clients: newClients,
-        models: newModels,
-        selectedModel: newSelectedModel,
-        slashCommands: newSlashCommands,
-        selectedVariant: newSelectedVariant,
-        selectedMode: newSelectedMode,
-        attachments: pruneSessionKeyedMap(state.attachments, prefix),
-        draftText: pruneSessionKeyedMap(state.draftText, prefix),
-        draftMentions: pruneSessionKeyedMap(state.draftMentions, prefix),
-        messageQueue: pruneSessionKeyedMap(state.messageQueue, prefix),
-        isComposing: newIsComposing,
+        ...buildClearEnvironmentPatch(state, environmentId, {
+          environmentKeyed: [
+            "serverStatus",
+            "clients",
+            "models",
+            "slashCommands",
+            "eventSubscriptions",
+          ],
+          sessionKeyed: OPENCODE_SESSION_KEYED_MAPS,
+        }),
+        // Keyed by requestId, so they need the session-id sweep above.
         pendingQuestions: newPendingQuestions,
         pendingPermissions: newPendingPermissions,
-        eventSubscriptions: newEventSubscriptions,
-        contextUsage: pruneSessionKeyedMap(state.contextUsage, prefix),
-        runtimeHealth: newRuntimeHealth,
-        selectedAgent: pruneSessionKeyedMap(state.selectedAgent, prefix),
       };
     });
   },
@@ -368,91 +379,21 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       return { pendingPermissions: next };
     }),
 
-  getOrCreateEventSubscription: (environmentId) => {
-    const state = get();
-    const existing = state.eventSubscriptions.get(environmentId);
-
-    if (existing && existing.isActive) {
-      console.log(
-        "[openCodeStore] Reusing existing event subscription for environment:",
-        environmentId,
-      );
-      return existing;
-    }
-
-    console.log(
-      "[openCodeStore] Creating new event subscription for environment:",
-      environmentId,
-    );
-    const newSubscription: EventSubscriptionState = {
-      abortController: new AbortController(),
-      stream: null,
-      isActive: true,
-    };
-
-    const next = new Map(state.eventSubscriptions);
-    next.set(environmentId, newSubscription);
-    set({ eventSubscriptions: next });
-
-    return newSubscription;
-  },
-
-  setEventStream: (environmentId, stream) =>
-    set((state) => {
-      const subscription = state.eventSubscriptions.get(environmentId);
-      if (!subscription) return state;
-      const next = new Map(state.eventSubscriptions);
-      const isActive = stream !== null;
-      next.set(environmentId, { ...subscription, stream, isActive });
-      return { eventSubscriptions: next };
-    }),
-
-  closeEventSubscription: (environmentId) => {
-    const state = get();
-    const subscription = state.eventSubscriptions.get(environmentId);
-    if (!subscription) return;
-
-    console.log(
-      "[openCodeStore] Closing event subscription for environment:",
-      environmentId,
-    );
-
-    subscription.abortController.abort();
-
-    if (subscription.stream && Symbol.asyncIterator in subscription.stream) {
-      const iterator = subscription.stream[Symbol.asyncIterator]();
-      if (iterator.return) {
-        iterator.return().catch(() => {});
-      }
-    }
-
-    const next = new Map(state.eventSubscriptions);
-    next.delete(environmentId);
-    set({ eventSubscriptions: next });
-  },
-
-  hasActiveEventSubscription: (environmentId) => {
-    const subscription = get().eventSubscriptions.get(environmentId);
-    return subscription?.isActive ?? false;
-  },
-
   // Selectors
-  getSelectedModel: (environmentId) => get().selectedModel.get(environmentId),
+  getSelectedModel: (sessionKey) => get().selectedModel.get(sessionKey),
   getModels: (environmentId) =>
     get().models.get(environmentId) ?? EMPTY_MODELS,
   getSlashCommands: (environmentId) =>
     get().slashCommands.get(environmentId) ?? EMPTY_COMMANDS,
-  getSelectedVariant: (environmentId) =>
-    get().selectedVariant.get(environmentId),
+  getSelectedVariant: (sessionKey) => get().selectedVariant.get(sessionKey),
   getSelectedMode: (sessionKey) =>
     get().selectedMode.get(sessionKey) || "build",
-  isComposingFor: (environmentId) =>
-    get().isComposing.get(environmentId) || false,
+  isComposingFor: (sessionKey) => get().isComposing.get(sessionKey) || false,
 
   getPendingQuestionsForSession: (sessionId) => {
     const questions: QuestionRequest[] = [];
     for (const question of get().pendingQuestions.values()) {
-      if (question.sessionID === sessionId) {
+      if (question.sessionId === sessionId) {
         questions.push(question);
       }
     }
@@ -464,7 +405,7 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   getPendingPermissionsForSession: (sessionId) => {
     const permissions: PermissionRequest[] = [];
     for (const permission of get().pendingPermissions.values()) {
-      if (permission.sessionID === sessionId) {
+      if (permission.sessionId === sessionId) {
         permissions.push(permission);
       }
     }

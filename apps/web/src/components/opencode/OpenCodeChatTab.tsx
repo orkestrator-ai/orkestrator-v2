@@ -1,31 +1,26 @@
-import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { toast } from "sonner";
-import {
-  Loader2,
-  AlertCircle,
-  RefreshCw,
-  ArrowDown,
-  History,
-} from "lucide-react";
+import { createSessionKey } from "@/lib/utils";
+import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { useVirtuosoScrollState, clearPersistedVirtuosoState, useElapsedTimer } from "@/hooks";
+import { useEscapeToStop } from "@/hooks/useEscapeToStop";
+import {
+  useManualSessionRefresh,
+  type RefreshSessionOptions,
+} from "@/hooks/useManualSessionRefresh";
+import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
+import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
+import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import {
   OPTIMISTIC_MESSAGE_PREFIX,
+  TURN_STOPPED_BY_USER,
   createOptimisticNativeMessage,
 } from "@/lib/chat/client-only-messages";
-import { formatElapsed } from "@/lib/format-elapsed";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
-import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
-import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
-import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
-import {
-  useOpenCodeStore,
-  createOpenCodeSessionKey,
-} from "@/stores/openCodeStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useConfigStore } from "@/stores/configStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
@@ -73,7 +68,6 @@ import {
   type OpenCodeModelRef,
   type OpenCodeModelPreferences,
 } from "@/lib/backend";
-import { NativeMessage } from "@/components/chat/NativeMessage";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
 import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
@@ -189,13 +183,12 @@ export function OpenCodeChatTab({
   // This avoids even a single frame of spinner when switching back to an already-connected env.
   const [connectionState, setConnectionState] = useState<ConnectionState>(() => {
     const hasClient = useOpenCodeStore.getState().clients.has(environmentId);
-    const hasSession = useOpenCodeStore.getState().sessions.has(createOpenCodeSessionKey(environmentId, tabId));
+    const hasSession = useOpenCodeStore.getState().sessions.has(createSessionKey(environmentId, tabId));
     return hasClient && hasSession ? "connected" : "connecting";
   });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
-  const [showLog, setShowLog] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [modelPreferences, setModelPreferences] =
     useState<OpenCodeModelPreferences>(EMPTY_MODEL_PREFERENCES);
@@ -214,9 +207,15 @@ export function OpenCodeChatTab({
     Boolean(initialAgentModel || initialReasoningEffort),
   );
   // Track when we are currently draining queued prompts
-  const isProcessingQueueRef = useRef(false);
-  const lastHandledRefreshRequestIdRef = useRef(0);
   const manualRefreshSequenceRef = useRef(0);
+  /**
+   * Bumped by *every* refresh, manual or watchdog-driven.
+   *
+   * A background reconcile is invalidated by anything newer; a manual one is
+   * only invalidated by a newer *manual* refresh. Sharing one counter made an
+   * overlapping watchdog tick turn the user's refresh into a silent no-op.
+   */
+  const backgroundRefreshSequenceRef = useRef(0);
   // Ref to store handleSend for use in effects without causing re-runs
   const handleSendRef = useRef<
     ((
@@ -233,7 +232,6 @@ export function OpenCodeChatTab({
   const {
     setClient,
     setModels,
-    getSession,
     setSession,
     addMessage,
     removeMessage,
@@ -248,6 +246,7 @@ export function OpenCodeChatTab({
     getSelectedVariant,
     getSelectedMode,
     setContextUsage,
+    setSessionTitle,
     setRuntimeHealth,
     addToQueue,
     addPendingPermission,
@@ -274,7 +273,7 @@ export function OpenCodeChatTab({
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
   const sessionKey = useMemo(
-    () => createOpenCodeSessionKey(environmentId, tabId),
+    () => createSessionKey(environmentId, tabId),
     [environmentId, tabId],
   );
 
@@ -327,7 +326,7 @@ export function OpenCodeChatTab({
     if (!session?.sessionId) return [];
     const questions: QuestionRequest[] = [];
     for (const question of pendingQuestionsMap.values()) {
-      if (question.sessionID === session.sessionId) {
+      if (question.sessionId === session.sessionId) {
         questions.push(question);
       }
     }
@@ -339,7 +338,7 @@ export function OpenCodeChatTab({
     if (!session?.sessionId) return [];
     const permissions: PermissionRequest[] = [];
     for (const permission of pendingPermissionsMap.values()) {
-      if (permission.sessionID === session.sessionId) {
+      if (permission.sessionId === session.sessionId) {
         permissions.push(permission);
       }
     }
@@ -489,6 +488,14 @@ export function OpenCodeChatTab({
       sessionId: string,
       options: {
         throwOnError?: boolean;
+        /**
+         * Whether a live frame landing mid-sync is an error.
+         *
+         * Separate from `throwOnError` so a background reconcile can still let
+         * *fetch* failures propagate (its caller logs them) while treating a
+         * raced snapshot as "try again later" rather than a user-facing error.
+         */
+        throwOnStale?: boolean;
         shouldApply?: () => boolean;
       } = {},
     ): Promise<boolean> => {
@@ -499,13 +506,13 @@ export function OpenCodeChatTab({
       const existingPermissionIds = new Set<string>();
 
       for (const existingQuestion of questionsBeforeSync.values()) {
-        if (existingQuestion.sessionID === sessionId) {
+        if (existingQuestion.sessionId === sessionId) {
           existingQuestionIds.add(existingQuestion.id);
         }
       }
 
       for (const existingPermission of permissionsBeforeSync.values()) {
-        if (existingPermission.sessionID === sessionId) {
+        if (existingPermission.sessionId === sessionId) {
           existingPermissionIds.add(existingPermission.id);
         }
       }
@@ -521,7 +528,7 @@ export function OpenCodeChatTab({
         stateAfterSync.pendingQuestions !== questionsBeforeSync ||
         stateAfterSync.pendingPermissions !== permissionsBeforeSync;
       if (pendingStateChanged) {
-        if (options.throwOnError) {
+        if (options.throwOnStale ?? options.throwOnError) {
           throw new Error(
             "OpenCode pending requests changed while refreshing; try again",
           );
@@ -531,14 +538,14 @@ export function OpenCodeChatTab({
 
       const questionIds = new Set<string>();
       for (const question of questions) {
-        if (question.sessionID !== sessionId) continue;
+        if (question.sessionId !== sessionId) continue;
         questionIds.add(question.id);
         addPendingQuestion(question);
       }
 
       const permissionIds = new Set<string>();
       for (const permission of permissions) {
-        if (permission.sessionID !== sessionId) continue;
+        if (permission.sessionId !== sessionId) continue;
         permissionIds.add(permission.id);
         addPendingPermission(permission);
       }
@@ -565,15 +572,23 @@ export function OpenCodeChatTab({
     ],
   );
 
-  const refreshSessionFromServer = useCallback(async () => {
+  const refreshSessionFromServer = useCallback(async (
+    { manual = false }: RefreshSessionOptions = {},
+  ) => {
     const stateBeforeRefresh = useOpenCodeStore.getState();
     const activeClient = stateBeforeRefresh.clients.get(environmentId);
     const activeSession = stateBeforeRefresh.sessions.get(sessionKey);
     if (!activeClient || !activeSession?.sessionId) return;
 
     const sessionId = activeSession.sessionId;
-    const requestSequence = ++manualRefreshSequenceRef.current;
-    const shouldApply = () => requestSequence === manualRefreshSequenceRef.current;
+    const backgroundSequence = ++backgroundRefreshSequenceRef.current;
+    const manualSequence = manual
+      ? ++manualRefreshSequenceRef.current
+      : manualRefreshSequenceRef.current;
+    const shouldApply = manual
+      ? () => manualSequence === manualRefreshSequenceRef.current
+      : () => backgroundSequence === backgroundRefreshSequenceRef.current;
+
     const stateBeforeAttempt = useOpenCodeStore.getState();
     const sessionBeforeAttempt = stateBeforeAttempt.sessions.get(sessionKey);
     if (
@@ -598,7 +613,16 @@ export function OpenCodeChatTab({
       return;
     }
     if (sessionAfterAttempt !== sessionBeforeAttempt) {
-      throw new Error("OpenCode session changed while refreshing; try again");
+      /**
+       * The snapshot is older than a frame that already landed; applying it
+       * would let a stale `busy` status re-lock a session that just went idle.
+       * A manual refresh reports this so the user can retry; the watchdog
+       * stays silent and re-checks once activity goes stale again.
+       */
+      if (manual) {
+        throw new Error("OpenCode session changed while refreshing; try again");
+      }
+      return;
     }
 
     setMessages(sessionKey, messages);
@@ -607,6 +631,7 @@ export function OpenCodeChatTab({
     }
     await syncPendingRequests(activeClient, sessionId, {
       throwOnError: true,
+      throwOnStale: manual,
       shouldApply,
     });
   }, [
@@ -617,30 +642,29 @@ export function OpenCodeChatTab({
     syncPendingRequests,
   ]);
 
-  useEffect(() => {
-    if (
-      refreshRequestId <= lastHandledRefreshRequestIdRef.current ||
-      connectionState !== "connected" ||
-      !client ||
-      !session?.sessionId
-    ) {
-      return;
-    }
-
-    lastHandledRefreshRequestIdRef.current = refreshRequestId;
-    void refreshSessionFromServer().catch((error) => {
-      console.error("[OpenCodeChatTab] Manual refresh failed:", error);
-      toast.error("Failed to refresh OpenCode tab", {
-        description: error instanceof Error ? error.message : String(error),
-      });
-    });
-  }, [
-    client,
-    connectionState,
+  useManualSessionRefresh({
     refreshRequestId,
-    refreshSessionFromServer,
-    session?.sessionId,
-  ]);
+    isReady:
+      connectionState === "connected" && !!client && !!session?.sessionId,
+    agentLabel: "OpenCode",
+    refresh: refreshSessionFromServer,
+  });
+
+  useStalledTurnWatchdog({
+    agentLabel: "OpenCode",
+    isLoading: session?.isLoading ?? false,
+    isReady:
+      connectionState === "connected" && !!client && !!session?.sessionId,
+    // Every SSE frame replaces the session object, so a session reference that
+    // stops changing is exactly the stall this watchdog exists to catch. An
+    // applied reconcile replaces it too, so the staleness clock alone cannot
+    // bound the poll rate — `minReconcileIntervalMs` (defaulted in the hook) is
+    // what keeps a quiet turn from becoming a sustained poll loop.
+    activitySignal: session,
+    // Explicitly background: superseded by any newer refresh rather than
+    // superseding the user's own.
+    reconcile: () => refreshSessionFromServer({ manual: false }),
+  });
 
   // Initialize connection on mount.
   // Active tabs always initialize; inactive tabs initialize too when an
@@ -672,19 +696,42 @@ export function OpenCodeChatTab({
         // reconnect instantly. This makes environment switching near-instant.
         const existingClient = useOpenCodeStore.getState().clients.get(environmentId);
         const existingSession = useOpenCodeStore.getState().sessions.get(sessionKey);
-        if (existingClient && initialLaunchOptionsPendingRef.current) {
+        /**
+         * Seed this sessionKey's model/variant before either warm path returns.
+         *
+         * Only the cold path below fetches the model catalogue, so a tab that
+         * finds a warm client — a second tab in the environment, or one
+         * reopened after `clearSession` — would otherwise never seed its own
+         * sessionKey-keyed selection: the compose bar shows "Select model" and
+         * `handleSend` sends `model: undefined`, silently falling back to
+         * whatever the server happens to default to.
+         */
+        const pendingLaunchOptions = initialLaunchOptionsPendingRef.current;
+        if (
+          existingClient &&
+          (pendingLaunchOptions || !getSelectedModel(sessionKey))
+        ) {
           const availableModels = useOpenCodeStore.getState().getModels(environmentId);
           if (availableModels.length > 0) {
             const { model: resolvedModel, variant: resolvedVariant } =
               resolveModelSelection({
                 availableModels,
                 defaults: {},
-                preferences: EMPTY_MODEL_PREFERENCES,
-                currentModel: initialLaunchOptionsRef.current.model,
-                currentVariant: initialLaunchOptionsRef.current.reasoningEffort,
+                preferences: pendingLaunchOptions
+                  ? EMPTY_MODEL_PREFERENCES
+                  : modelPreferences,
+                currentModel: pendingLaunchOptions
+                  ? initialLaunchOptionsRef.current.model
+                  : // No launch option to honour, so fall back to the user's
+                    // global OpenCode default — the same value the compose bar
+                    // persists whenever a model is picked.
+                    useConfigStore.getState().config.global.opencodeModel,
+                currentVariant: pendingLaunchOptions
+                  ? initialLaunchOptionsRef.current.reasoningEffort
+                  : getSelectedVariant(sessionKey),
               });
-            if (resolvedModel) setSelectedModel(environmentId, resolvedModel);
-            setSelectedVariant(environmentId, resolvedVariant);
+            if (resolvedModel) setSelectedModel(sessionKey, resolvedModel);
+            setSelectedVariant(sessionKey, resolvedVariant);
           }
           // A warm client cannot safely send an unvalidated modal value. If its
           // model snapshot is empty, retain the store's existing selection.
@@ -711,7 +758,10 @@ export function OpenCodeChatTab({
           // The subscription may have progressed while this React tree was
           // inactive. Rehydrate from the authoritative parent and child
           // session transcripts without delaying the fast reconnect UI.
+          // A reconnect resets the session, so every refresh already in flight
+          // is stale — invalidate both sequences, not just the manual one.
           const reconnectSequence = ++manualRefreshSequenceRef.current;
+          backgroundRefreshSequenceRef.current += 1;
           void Promise.all([
             getSessionMessages(existingClient, existingSession.sessionId, {
               throwOnError: true,
@@ -889,8 +939,8 @@ export function OpenCodeChatTab({
         const pendingInitialOptions = initialLaunchOptionsPendingRef.current
           ? initialLaunchOptionsRef.current
           : undefined;
-        const currentModel = pendingInitialOptions?.model ?? getSelectedModel(environmentId);
-        const currentVariant = pendingInitialOptions?.reasoningEffort ?? getSelectedVariant(environmentId);
+        const currentModel = pendingInitialOptions?.model ?? getSelectedModel(sessionKey);
+        const currentVariant = pendingInitialOptions?.reasoningEffort ?? getSelectedVariant(sessionKey);
         const { model: resolvedModel, variant: resolvedVariant } =
           resolveModelSelection({
             availableModels,
@@ -901,12 +951,12 @@ export function OpenCodeChatTab({
           });
         initialLaunchOptionsPendingRef.current = false;
 
-        if (resolvedModel && resolvedModel !== getSelectedModel(environmentId)) {
-          setSelectedModel(environmentId, resolvedModel);
+        if (resolvedModel && resolvedModel !== getSelectedModel(sessionKey)) {
+          setSelectedModel(sessionKey, resolvedModel);
         }
 
-        if (resolvedVariant !== getSelectedVariant(environmentId)) {
-          setSelectedVariant(environmentId, resolvedVariant);
+        if (resolvedVariant !== getSelectedVariant(sessionKey)) {
+          setSelectedVariant(sessionKey, resolvedVariant);
         }
 
         // Check for existing session - first from component ref, then from Zustand store
@@ -1379,10 +1429,22 @@ export function OpenCodeChatTab({
               );
             }
 
+            // Carry the server-assigned title into the store so the tab chrome
+            // can label the session, as Claude and Codex tabs already do.
+            if (eventType === "session.updated") {
+              const updatedTitle = props?.info?.title;
+              if (typeof updatedTitle === "string" && updatedTitle.length > 0) {
+                setSessionTitle(sessionTabId, updatedTitle);
+              }
+            }
+
             if (usageFromEvent) {
+              // Keyed by the session the event belongs to, not this tab's — the
+              // subscription is environment-wide and model selection is now
+              // per-session.
               const fallbackModel = useOpenCodeStore
                 .getState()
-                .selectedModel.get(environmentId);
+                .selectedModel.get(sessionTabId);
               setContextUsage(sessionTabId, {
                 ...usageFromEvent,
                 modelId: usageFromEvent.modelId ?? fallbackModel,
@@ -1483,7 +1545,7 @@ export function OpenCodeChatTab({
             if (permissionProps?.id && permissionProps?.permission) {
               const permissionRequest: PermissionRequest = {
                 id: permissionProps.id,
-                sessionID:
+                sessionId:
                   permissionProps.sessionID ||
                   permissionProps.sessionId ||
                   eventSessionId ||
@@ -1517,7 +1579,7 @@ export function OpenCodeChatTab({
             if (questionProps?.id && questionProps?.questions) {
               const questionRequest: QuestionRequest = {
                 id: questionProps.id,
-                sessionID:
+                sessionId:
                   questionProps.sessionID ||
                   questionProps.sessionId ||
                   eventSessionId ||
@@ -1614,7 +1676,7 @@ export function OpenCodeChatTab({
         : false;
       const selectedModelValue = hasModelOverride
         ? options?.model
-        : getSelectedModel(environmentId);
+        : getSelectedModel(sessionKey);
       const selectedModel = selectedModelValue === "default"
         ? undefined
         : selectedModelValue;
@@ -1623,7 +1685,7 @@ export function OpenCodeChatTab({
         : false;
       const selectedVariant = hasVariantOverride
         ? options?.variant
-        : getSelectedVariant(environmentId);
+        : getSelectedVariant(sessionKey);
       const selectedMode = options?.mode ?? getSelectedMode(sessionKey);
       const selectedAgent = useOpenCodeStore
         .getState()
@@ -1738,11 +1800,12 @@ export function OpenCodeChatTab({
         id: createUuid(),
         text,
         attachments,
-        model: getSelectedModel(environmentId),
-        variant:
-          initialLaunchOptionsRef.current.model === "default"
-            ? undefined
-            : getSelectedVariant(environmentId),
+        model: getSelectedModel(sessionKey),
+        // Queue what is selected *now*, exactly as `handleSend` would read it.
+        // Gating on the tab's launch-time model dropped the variant for the
+        // rest of the tab's life once it had launched on "default", even after
+        // the user switched to a variant-capable model.
+        variant: getSelectedVariant(sessionKey),
         mode: getSelectedMode(sessionKey),
       });
     },
@@ -1752,80 +1815,39 @@ export function OpenCodeChatTab({
       getSelectedModel,
       getSelectedVariant,
       getSelectedMode,
-      environmentId,
     ],
   );
 
-  const processQueue = useCallback(() => {
-    if (isProcessingQueueRef.current) return;
-    if (setupPending) return;
-    if (connectionState !== "connected" || !client) return;
-
-    const openCodeState = useOpenCodeStore.getState();
-    if (
-      (openCodeState.draftText.get(sessionKey)?.trim().length ?? 0) > 0 ||
-      (openCodeState.attachments.get(sessionKey)?.length ?? 0) > 0
-    ) {
-      return;
-    }
-
-    const latestSession = getSession(sessionKey);
-    if (!latestSession || latestSession.isLoading) return;
-
-    isProcessingQueueRef.current = true;
-    let claimedQueueEntry = false;
-    void claimAgentPromptQueueHead<OpenCodeQueuedMessage>("opencode", sessionKey)
-      .then((nextMessage) => {
-        if (!nextMessage) return;
-        claimedQueueEntry = true;
-        return handleSendRef.current?.(
-          nextMessage.text,
-          nextMessage.attachments,
-          {
-            model: nextMessage.model,
-            variant: nextMessage.variant,
-            mode: nextMessage.mode,
-          },
-        );
-      })
-      .catch((error) => {
-        console.error("[OpenCodeChatTab] Failed to send queued prompt:", error);
-        const errorText = `Failed to send queued prompt: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`;
-        addMessage(sessionKey, {
-          id: `${ERROR_MESSAGE_PREFIX}${createUuid()}`,
-          role: "assistant",
-          content: errorText,
-          parts: [{ type: "text", content: errorText }],
-          createdAt: new Date().toISOString(),
-        });
-        setSessionLoading(sessionKey, false);
-      })
-      .finally(() => {
-        isProcessingQueueRef.current = false;
-        if (claimedQueueEntry) {
-          queueMicrotask(() => {
-            processQueue();
-          });
-        }
-      });
-  }, [
-    connectionState,
-    client,
-    getSession,
+  useNativeMessageQueue({
+    agentLabel: "OpenCode",
     sessionKey,
-    setupPending,
-    addMessage,
-    setSessionLoading,
-  ]);
-
-  // Process queued prompts whenever there is queued work and the session can accept input.
-  useEffect(() => {
-    if (queueLength > 0 && !isQueueBlockedByDraft && !setupPending) {
-      processQueue();
-    }
-  }, [queueLength, isQueueBlockedByDraft, setupPending, session?.isLoading, processQueue]);
+    store: useOpenCodeStore,
+    canDrain: !setupPending && connectionState === "connected" && !!client,
+    queueLength,
+    isLoading: session?.isLoading ?? false,
+    blockedByDraft: isQueueBlockedByDraft,
+    claimHead: () =>
+      claimAgentPromptQueueHead<OpenCodeQueuedMessage>("opencode", sessionKey),
+    send: (entry) =>
+      handleSendRef.current?.(entry.text, entry.attachments, {
+        model: entry.model,
+        variant: entry.variant,
+        mode: entry.mode,
+      }),
+    onError: (error) => {
+      const errorText = `Failed to send queued prompt: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`;
+      addMessage(sessionKey, {
+        id: `${ERROR_MESSAGE_PREFIX}${createUuid()}`,
+        role: "assistant",
+        content: errorText,
+        parts: [{ type: "text", content: errorText }],
+        createdAt: new Date().toISOString(),
+      });
+      setSessionLoading(sessionKey, false);
+    },
+  });
 
   // Send initial prompt after session is ready (for code review, PR creation, etc.)
   useEffect(() => {
@@ -1845,13 +1867,13 @@ export function OpenCodeChatTab({
       clearTabInitialPrompt(tabId, environmentId);
       console.debug("[OpenCodeChatTab] Sending initial prompt for tab:", tabId);
       // Use ref to avoid effect re-running when handleSend changes
-      const resolvedModel = getSelectedModel(environmentId);
+      const resolvedModel = getSelectedModel(sessionKey);
       handleSendRef.current?.(initialPrompt, [], {
         model:
           initialLaunchOptionsRef.current.model === "default" || resolvedModel === "default"
             ? undefined
             : resolvedModel,
-        variant: getSelectedVariant(environmentId),
+        variant: getSelectedVariant(sessionKey),
       });
     }
   }, [
@@ -1863,6 +1885,7 @@ export function OpenCodeChatTab({
     tabId,
     clearTabInitialPrompt,
     environmentId,
+    sessionKey,
     getSelectedModel,
     getSelectedVariant,
   ]);
@@ -1910,9 +1933,9 @@ export function OpenCodeChatTab({
       store.addAttachment(sessionKey, attachment);
     }
     if (nextMessage.model) {
-      store.setSelectedModel(environmentId, nextMessage.model);
+      store.setSelectedModel(sessionKey, nextMessage.model);
     }
-    store.setSelectedVariant(environmentId, nextMessage.variant);
+    store.setSelectedVariant(sessionKey, nextMessage.variant);
     store.setSelectedMode(sessionKey, nextMessage.mode);
   }, [environmentId, sessionKey]);
 
@@ -1924,38 +1947,33 @@ export function OpenCodeChatTab({
     setSessionLoading(sessionKey, false);
 
     const success = await abortSession(client, session.sessionId);
-    if (!success) {
+    if (success) {
+      // Leave a marker in the transcript. Without it an interrupted turn is
+      // indistinguishable from one that simply produced nothing.
+      addMessage(sessionKey, {
+        id: `${SYSTEM_MESSAGE_PREFIX}${createUuid()}`,
+        role: "system",
+        content: TURN_STOPPED_BY_USER,
+        parts: [{ type: "text", content: TURN_STOPPED_BY_USER }],
+        createdAt: new Date().toISOString(),
+      });
+    } else {
       console.error("[OpenCodeChatTab] Failed to abort session");
     }
-  }, [client, session, sessionKey, promoteNextQueuedPromptToDraft, setSessionLoading]);
+  }, [
+    addMessage,
+    client,
+    session,
+    sessionKey,
+    promoteNextQueuedPromptToDraft,
+    setSessionLoading,
+  ]);
 
-  useEffect(() => {
-    if (!isActive || !session?.isLoading) {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.key !== "Escape"
-        || event.defaultPrevented
-        || event.repeat
-        || event.metaKey
-        || event.ctrlKey
-        || event.altKey
-        || event.isComposing
-      ) {
-        return;
-      }
-
-      event.preventDefault();
-      void handleStop();
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [handleStop, isActive, session?.isLoading]);
+  useEscapeToStop({
+    isActive,
+    isLoading: session?.isLoading ?? false,
+    onStop: handleStop,
+  });
 
   const handleResumeSession = useCallback(
     async (sessionId: string) => {
@@ -2052,8 +2070,8 @@ export function OpenCodeChatTab({
       });
       setModelPreferences(preferences);
 
-      const currentModel = getSelectedModel(environmentId);
-      const currentVariant = getSelectedVariant(environmentId);
+      const currentModel = getSelectedModel(sessionKey);
+      const currentVariant = getSelectedVariant(sessionKey);
       const { model: resolvedModel, variant: resolvedVariant } =
         resolveModelSelection({
           availableModels,
@@ -2063,11 +2081,11 @@ export function OpenCodeChatTab({
           currentVariant,
         });
 
-      if (resolvedModel && resolvedModel !== getSelectedModel(environmentId)) {
-        setSelectedModel(environmentId, resolvedModel);
+      if (resolvedModel && resolvedModel !== getSelectedModel(sessionKey)) {
+        setSelectedModel(sessionKey, resolvedModel);
       }
-      if (resolvedVariant !== getSelectedVariant(environmentId)) {
-        setSelectedVariant(environmentId, resolvedVariant);
+      if (resolvedVariant !== getSelectedVariant(sessionKey)) {
+        setSelectedVariant(sessionKey, resolvedVariant);
       }
     } catch (error) {
       console.error("[OpenCodeChatTab] Failed to refresh models:", error);
@@ -2075,6 +2093,7 @@ export function OpenCodeChatTab({
   }, [
     client,
     environmentId,
+    sessionKey,
     setModels,
     getSelectedModel,
     getSelectedVariant,
@@ -2092,184 +2111,49 @@ export function OpenCodeChatTab({
     );
   }
 
-  if (connectionState === "connecting") {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
-        <Loader2 className="w-8 h-8 animate-spin" />
-        <p className="text-sm">Connecting to OpenCode server...</p>
-      </div>
-    );
-  }
-
-  // Render error state
-  if (connectionState === "error") {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground p-4">
-        <AlertCircle className="w-10 h-10 text-destructive" />
-        <div className="text-center">
-          <p className="text-sm font-medium text-foreground">
-            Connection Failed
-          </p>
-          <p className="text-xs mt-1 whitespace-pre-wrap break-words text-left max-w-lg">
-            {errorMessage || "Unable to connect to OpenCode server"}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRetry}
-            className="gap-2"
-          >
-            <RefreshCw className="w-4 h-4" />
-            Retry
-          </Button>
-          {serverLog && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowLog(!showLog)}
-            >
-              {showLog ? "Hide Log" : "Show Log"}
-            </Button>
-          )}
-        </div>
-        {showLog && serverLog && (
-          <div className="w-full max-w-lg mt-2">
-            <pre className="text-xs bg-muted p-3 rounded-md overflow-auto max-h-48 text-left whitespace-pre-wrap">
-              {serverLog || "(empty log)"}
-            </pre>
-          </div>
-        )}
-      </div>
-    );
-  }
-
   return (
-    <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <div
-        className={cn(
-          "flex min-h-0 flex-1 flex-col transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
-          centerCompose && "pointer-events-none scale-[0.995] opacity-0",
-        )}
-      >
-        {/* Virtualized messages area */}
-        <VirtualizedMessageList
-          messages={displayMessages}
-          computeItemKey={(_index, msg) => msg.id}
-          renderMessage={(_index, message, prev) => (
-            <NativeMessage
-              message={message}
-              previousMessage={prev}
-              assistantLabel="OpenCode"
-              actions={message.role === "user" ? forkAction(message.id) : undefined}
-            />
-          )}
-          emptyState={
-            !centerCompose ? (
-              <div className="flex flex-col items-center justify-center h-full min-h-[200px] text-muted-foreground gap-3">
-                <p className="text-sm">No messages yet. Start a conversation!</p>
-                {client && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setResumeDialogOpen(true)}
-                  >
-                    <History className="w-4 h-4 mr-2" />
-                    Resume Session
-                  </Button>
-                )}
-              </div>
-            ) : undefined
-          }
-          footer={
+    <NativeChatShell
+      agentLabel="OpenCode"
+      containerId={containerId}
+      connectionState={connectionState}
+      errorMessage={errorMessage}
+      serverLog={serverLog}
+      onRetry={handleRetry}
+      messages={displayMessages}
+      isLoading={session?.isLoading ?? false}
+      elapsedSeconds={elapsedSeconds}
+      finalElapsedSeconds={finalElapsedSeconds}
+      centerCompose={centerCompose}
+      isAtBottom={isAtBottom}
+      scrollToBottom={scrollToBottom}
+      scrollProps={scrollProps}
+      virtuosoRef={virtuosoRef}
+      onResumeClick={client ? () => setResumeDialogOpen(true) : undefined}
+      emptyStateMessage="No messages yet. Start a conversation!"
+      messageActions={(message) =>
+        message.role === "user" ? forkAction(message.id) : undefined
+      }
+      blockingCards={
+        session && client && (pendingPermissions.length > 0 || pendingQuestions.length > 0) ? (
           <>
-            {session?.isLoading && (
-              <div className="px-2 @sm:px-4">
-                <div className="chat-status-row max-w-3xl mx-auto min-w-0">
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <AgentThinkingIndicator agentName="OpenCode" />
-                    {elapsedSeconds !== null && elapsedSeconds > 0 && (
-                      <span className="text-xs text-muted-foreground/50">{formatElapsed(elapsedSeconds)}</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {session && client && pendingPermissions.length > 0 && (
-              <div className="max-w-3xl mx-auto min-w-0">
-                {pendingPermissions.map((permission) => (
-                  <OpenCodePermissionCard
-                    key={permission.id}
-                    permission={permission}
-                    client={client}
-                  />
-                ))}
-              </div>
-            )}
-
-            {session && client && pendingQuestions.length > 0 && (
-              <div className="max-w-3xl mx-auto min-w-0">
-                {pendingQuestions.map((question) => (
-                  <OpenCodeQuestionCard
-                    key={question.id}
-                    question={question}
-                    client={client}
-                  />
-                ))}
-              </div>
-            )}
-
-            {!session?.isLoading && finalElapsedSeconds !== null && (
-              <div className="px-2 @sm:px-4">
-                <div className="chat-status-row max-w-3xl mx-auto min-w-0">
-                  <span className="text-[10px] text-muted-foreground/40">
-                    Completed in {formatElapsed(finalElapsedSeconds)}
-                  </span>
-                </div>
-              </div>
-            )}
-              <div className="h-32" aria-hidden="true" />
-            </>
-          }
-          scrollProps={scrollProps}
-          virtuosoRef={virtuosoRef}
-        />
-
-      </div>
-
-      <NativeComposeDock
-        centered={centerCompose}
-        topAccessory={
-          !isAtBottom ? (
-            <button
-              type="button"
-              onClick={scrollToBottom}
-              className="flex items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
-              aria-label="Scroll to bottom of conversation"
-            >
-              <ArrowDown className="h-3.5 w-3.5" />
-              <span>Scroll down</span>
-            </button>
-          ) : null
-        }
-        actions={
-          client ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setResumeDialogOpen(true)}
-              className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
-              aria-hidden={!centerCompose}
-              tabIndex={centerCompose ? 0 : -1}
-            >
-              <History className="mr-2 h-4 w-4" />
-              Resume Session
-            </Button>
-          ) : null
-        }
-      >
+            {pendingPermissions.map((permission) => (
+              <OpenCodePermissionCard
+                key={permission.id}
+                permission={permission}
+                client={client}
+              />
+            ))}
+            {pendingQuestions.map((question) => (
+              <OpenCodeQuestionCard
+                key={question.id}
+                question={question}
+                client={client}
+              />
+            ))}
+          </>
+        ) : null
+      }
+      composer={
         <OpenCodeComposeBar
           environmentId={environmentId}
           tabId={tabId}
@@ -2289,17 +2173,18 @@ export function OpenCodeChatTab({
           showAddressAll={showAddressAll}
           layout={centerCompose ? "centered" : "bottom"}
         />
-      </NativeComposeDock>
-
-      {client && (
-        <OpenCodeResumeSessionDialog
-          open={resumeDialogOpen}
-          onOpenChange={setResumeDialogOpen}
-          client={client}
-          onResume={handleResumeSession}
-          currentSessionId={session?.sessionId}
-        />
-      )}
-    </div>
+      }
+      resumeDialog={
+        client ? (
+          <OpenCodeResumeSessionDialog
+            open={resumeDialogOpen}
+            onOpenChange={setResumeDialogOpen}
+            client={client}
+            onResume={handleResumeSession}
+            currentSessionId={session?.sessionId}
+          />
+        ) : null
+      }
+    />
   );
 }

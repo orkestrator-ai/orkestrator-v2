@@ -118,7 +118,11 @@ describe("Electron StorageService", () => {
     await Promise.all([first.init(), second.init()]);
     await first.saveConfig(defaultConfig());
 
-    const global = { ...defaultConfig().global, defaultAgent: "codex" as const };
+    const global = {
+      ...defaultConfig().global,
+      defaultAgent: "codex" as const,
+      claudeModel: "claude-opus-4",
+    };
     const desktopConnections = {
       activeConnectionId: "remote-1",
       connections: [{
@@ -132,13 +136,92 @@ describe("Electron StorageService", () => {
     await Promise.all([
       first.saveDesktopConnections(desktopConnections),
       second.updateGlobalConfig(global),
+      first.updateAgentModelDefault("claudeModel", "claude-opus-4"),
       first.updateRepositoryConfig("project-1", { defaultBranch: "develop", prBaseBranch: "develop" }),
     ]);
 
     const config = await second.loadConfig();
     expect(config.desktopConnections).toEqual(desktopConnections);
     expect(config.global.defaultAgent).toBe("codex");
+    expect(config.global.claudeModel).toBe("claude-opus-4");
     expect(config.repositories["project-1"]).toMatchObject({ defaultBranch: "develop", prBaseBranch: "develop" });
+  });
+
+  test("updates one agent model default at a time and leaves its siblings alone", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-model-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.saveConfig(defaultConfig());
+    const defaults = defaultConfig().global;
+
+    for (const [key, modelId] of [
+      ["claudeModel", "claude-opus-4"],
+      ["codexModel", "gpt-5.4-codex"],
+      ["opencodeModel", "opencode/gpt-5.4"],
+    ] as const) {
+      // Reset so each key is proven in isolation rather than riding on the
+      // previous iteration's write.
+      await storage.saveConfig(defaultConfig());
+      const returned = await storage.updateAgentModelDefault(key, modelId);
+      const persisted = (await storage.loadConfig()).global;
+
+      expect(returned.global[key]).toBe(modelId);
+      expect(persisted[key]).toBe(modelId);
+      for (const sibling of ["claudeModel", "codexModel", "opencodeModel"] as const) {
+        if (sibling === key) continue;
+        expect(persisted[sibling]).toBe(defaults[sibling]);
+      }
+      // Nothing outside the model defaults may move.
+      expect(persisted.defaultAgent).toBe(defaults.defaultAgent);
+      expect(persisted.allowedDomains).toEqual(defaults.allowedDomains);
+    }
+  });
+
+  test("keeps concurrent unrelated global mutations that a whole-config write would clobber", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-model-merge-");
+    const first = new StorageService(dataDir);
+    const second = new StorageService(dataDir);
+    await Promise.all([first.init(), second.init()]);
+    await first.saveConfig(defaultConfig());
+
+    // A caller holding a global snapshot taken before someone else's change...
+    const stale = { ...(await first.loadConfig()).global };
+
+    // ...loses that change when it writes the whole object back.
+    await first.setGitHubToken("token-written-after-the-snapshot");
+    await second.updateGlobalConfig({ ...stale, defaultAgent: "claude" });
+    expect((await first.loadConfig()).global.githubToken).toBeUndefined();
+
+    // updateAgentModelDefault exists so a model default does not have to take
+    // that risk: it re-reads under the config lock and writes a single key, so
+    // an unrelated concurrent global mutation survives in either interleaving.
+    await Promise.all([
+      first.updateAgentModelDefault("codexModel", "gpt-5.4-codex"),
+      second.setGitHubToken("token-written-concurrently"),
+      first.updateAgentModelDefault("opencodeModel", "opencode/gpt-5.4"),
+    ]);
+
+    const merged = (await second.loadConfig()).global;
+    expect(merged.codexModel).toBe("gpt-5.4-codex");
+    expect(merged.opencodeModel).toBe("opencode/gpt-5.4");
+    expect(merged.githubToken).toBe("token-written-concurrently");
+    expect(merged.defaultAgent).toBe("claude");
+  });
+
+  test("persists an agent model default for a StorageService instance created later", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-model-reload-");
+    const writer = new StorageService(dataDir);
+    await writer.init();
+
+    // Driven by this method alone: no saveConfig/updateGlobalConfig write follows
+    // it, so a no-op implementation could not be masked by another writer.
+    await writer.updateAgentModelDefault("claudeModel", "claude-opus-4");
+
+    const reader = new StorageService(dataDir);
+    await reader.init();
+    const reloaded = (await reader.loadConfig()).global;
+    expect(reloaded.claudeModel).toBe("claude-opus-4");
+    expect(reloaded.codexModel).toBe(defaultConfig().global.codexModel);
   });
 
   test("sanitizes names, extracts repository names, and rejects non-record updates", () => {

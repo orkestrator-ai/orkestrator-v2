@@ -1,3 +1,4 @@
+import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 const closeLocalTerminalSession = mock(async (_sessionId: string) => {});
@@ -78,10 +79,10 @@ afterEach(() => {
 });
 
 const { getAllLeaves, usePaneLayoutStore } = await import("./paneLayoutStore");
-const { useTerminalSessionStore, createSessionKey } = await import("./terminalSessionStore");
-const { useClaudeStore, createClaudeSessionKey } = await import("./claudeStore");
-const { useCodexStore, createCodexSessionKey } = await import("./codexStore");
-const { useOpenCodeStore, createOpenCodeSessionKey } = await import("./openCodeStore");
+const { useTerminalSessionStore, createSessionKey: createTerminalSessionKey } = await import("./terminalSessionStore");
+const { useClaudeStore } = await import("./claudeStore");
+const { useCodexStore } = await import("./codexStore");
+const { useOpenCodeStore } = await import("./openCodeStore");
 const { useEnvironmentStore } = await import("./environmentStore");
 
 function resetStores() {
@@ -172,7 +173,7 @@ describe("paneLayoutStore tab cleanup", () => {
 
   test("closing a local terminal tab calls the local PTY close command", () => {
     seedSingleTabEnvironment("env-local", null, { id: "tab-terminal", type: "plain" });
-    const sessionKey = createSessionKey(null, "tab-terminal", "env-local");
+    const sessionKey = createTerminalSessionKey(null, "tab-terminal", "env-local");
     useTerminalSessionStore.getState().setSession(sessionKey, { sessionId: "pty-local" });
 
     usePaneLayoutStore.getState().removeTab("default", "tab-terminal");
@@ -184,7 +185,7 @@ describe("paneLayoutStore tab cleanup", () => {
 
   test("closing a terminal tab marks its persistent session disconnected", () => {
     seedSingleTabEnvironment("env-local", null, { id: "tab-terminal", type: "plain" });
-    const sessionKey = createSessionKey(null, "tab-terminal", "env-local");
+    const sessionKey = createTerminalSessionKey(null, "tab-terminal", "env-local");
     useTerminalSessionStore.getState().setSession(sessionKey, {
       sessionId: "pty-local",
       persistentSessionId: "persistent-1",
@@ -197,7 +198,7 @@ describe("paneLayoutStore tab cleanup", () => {
 
   test("closing a container terminal tab calls the Docker detach command", () => {
     seedSingleTabEnvironment("env-container", "container-1", { id: "tab-terminal", type: "plain" });
-    const sessionKey = createSessionKey("container-1", "tab-terminal", "env-container");
+    const sessionKey = createTerminalSessionKey("container-1", "tab-terminal", "env-container");
     useTerminalSessionStore.getState().setSession(sessionKey, { sessionId: "pty-container" });
 
     usePaneLayoutStore.getState().removeTab("default", "tab-terminal");
@@ -267,7 +268,7 @@ describe("paneLayoutStore tab cleanup", () => {
       ]),
     });
 
-    const claudeKey = createClaudeSessionKey("env-native", "claude-tab");
+    const claudeKey = createSessionKey("env-native", "claude-tab");
     useClaudeStore.getState().setClient("env-native", {} as any);
     useClaudeStore.getState().setSession(claudeKey, {
       sessionId: "claude-session",
@@ -275,7 +276,7 @@ describe("paneLayoutStore tab cleanup", () => {
       isLoading: true,
     });
 
-    const codexKey = createCodexSessionKey("env-native", "codex-tab");
+    const codexKey = createSessionKey("env-native", "codex-tab");
     useCodexStore.getState().setClient("env-native", {} as any);
     useCodexStore.getState().setSession(codexKey, {
       sessionId: "codex-session",
@@ -283,7 +284,7 @@ describe("paneLayoutStore tab cleanup", () => {
       isLoading: true,
     });
 
-    const openCodeKey = createOpenCodeSessionKey("env-native", "opencode-tab");
+    const openCodeKey = createSessionKey("env-native", "opencode-tab");
     useOpenCodeStore.getState().setClient("env-native", {} as any);
     useOpenCodeStore.getState().setSession(openCodeKey, {
       sessionId: "opencode-session",
@@ -329,9 +330,9 @@ describe("paneLayoutStore tab cleanup", () => {
         ],
       ]),
     });
-    const terminalKey = createSessionKey(null, "terminal-tab", "env-reset");
+    const terminalKey = createTerminalSessionKey(null, "terminal-tab", "env-reset");
     useTerminalSessionStore.getState().setSession(terminalKey, { sessionId: "pty-reset" });
-    const codexKey = createCodexSessionKey("env-reset", "codex-tab");
+    const codexKey = createSessionKey("env-reset", "codex-tab");
     useCodexStore.getState().setClient("env-reset", {} as any);
     useCodexStore.getState().setSession(codexKey, {
       sessionId: "codex-session",
@@ -375,7 +376,7 @@ describe("paneLayoutStore tab cleanup", () => {
         },
       ],
     }, "closing-pane", "env-close-pane");
-    const terminalKey = createSessionKey(null, "terminal-tab", "env-close-pane");
+    const terminalKey = createTerminalSessionKey(null, "terminal-tab", "env-close-pane");
     useTerminalSessionStore.getState().setSession(terminalKey, { sessionId: "pty-close-pane" });
 
     usePaneLayoutStore.getState().closePane("closing-pane", "env-close-pane");
@@ -421,13 +422,13 @@ describe("paneLayoutStore tab cleanup", () => {
       activeTabId: "terminal-tab",
     }, "default", "env-cleanup-errors");
 
-    const terminalKey = createSessionKey(null, "terminal-tab", "env-cleanup-errors");
+    const terminalKey = createTerminalSessionKey(null, "terminal-tab", "env-cleanup-errors");
     useTerminalSessionStore.getState().setSession(terminalKey, {
       sessionId: "pty-cleanup-errors",
       persistentSessionId: "persistent-cleanup-errors",
     });
 
-    const claudeKey = createClaudeSessionKey("env-cleanup-errors", "claude-tab");
+    const claudeKey = createSessionKey("env-cleanup-errors", "claude-tab");
     useClaudeStore.getState().setClient("env-cleanup-errors", {} as any);
     useClaudeStore.getState().setSession(claudeKey, {
       sessionId: "claude-cleanup-errors",
@@ -435,7 +436,7 @@ describe("paneLayoutStore tab cleanup", () => {
       isLoading: true,
     });
 
-    const codexKey = createCodexSessionKey("env-cleanup-errors", "codex-tab");
+    const codexKey = createSessionKey("env-cleanup-errors", "codex-tab");
     useCodexStore.getState().setClient("env-cleanup-errors", {} as any);
     useCodexStore.getState().setSession(codexKey, {
       sessionId: "codex-cleanup-errors",
@@ -443,7 +444,7 @@ describe("paneLayoutStore tab cleanup", () => {
       isLoading: true,
     });
 
-    const openCodeKey = createOpenCodeSessionKey("env-cleanup-errors", "opencode-tab");
+    const openCodeKey = createSessionKey("env-cleanup-errors", "opencode-tab");
     useOpenCodeStore.getState().setClient("env-cleanup-errors", {} as any);
     useOpenCodeStore.getState().setSession(openCodeKey, {
       sessionId: "opencode-cleanup-errors",
@@ -471,6 +472,47 @@ describe("paneLayoutStore tab cleanup", () => {
     expect(useOpenCodeStore.getState().sessions.has(openCodeKey)).toBe(false);
     expect(consoleDebugSpy).toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalled();
+  });
+
+  test("closing a native tab drops its drafts and selections, not just its session", () => {
+    /**
+     * Cleanup used to call `clearQueue` + `setSession(null)` only, leaving the
+     * draft, model and attachments behind. Tab ids are UUIDs, so those entries
+     * were never reclaimed for the life of the process.
+     */
+    const tabs = [
+      { id: "claude-tab", type: "claude-native" },
+      { id: "codex-tab", type: "codex-native" },
+      { id: "opencode-tab", type: "opencode-native" },
+    ];
+    seedPaneTree(
+      { kind: "leaf", id: "default", tabs, activeTabId: "claude-tab" },
+      "default",
+      "env-leak",
+    );
+
+    const claudeKey = createSessionKey("env-leak", "claude-tab");
+    const codexKey = createSessionKey("env-leak", "codex-tab");
+    const openCodeKey = createSessionKey("env-leak", "opencode-tab");
+
+    useClaudeStore.getState().setDraftText(claudeKey, "claude draft");
+    useClaudeStore.getState().setSelectedModel(claudeKey, "opus");
+    useCodexStore.getState().setDraftText(codexKey, "codex draft");
+    useCodexStore.getState().setSelectedModel(codexKey, "gpt-5");
+    useOpenCodeStore.getState().setDraftText(openCodeKey, "opencode draft");
+    useOpenCodeStore.getState().setSelectedModel(openCodeKey, "gpt-5");
+
+    const store = usePaneLayoutStore.getState();
+    for (const tab of tabs) {
+      store.removeTab("default", tab.id, "env-leak");
+    }
+
+    expect(useClaudeStore.getState().getDraftText(claudeKey)).toBe("");
+    expect(useClaudeStore.getState().selectedModel.has(claudeKey)).toBe(false);
+    expect(useCodexStore.getState().getDraftText(codexKey)).toBe("");
+    expect(useCodexStore.getState().selectedModel.has(codexKey)).toBe(false);
+    expect(useOpenCodeStore.getState().getDraftText(openCodeKey)).toBe("");
+    expect(useOpenCodeStore.getState().selectedModel.has(openCodeKey)).toBe(false);
   });
 
   test("clears setup state and closes a child pane when its last tab is removed", () => {
@@ -1394,5 +1436,268 @@ describe("paneLayoutStore pane and tab actions", () => {
     expect(singlePaneRoot).toMatchObject({ kind: "leaf", id: "right" });
     store.closePane("right", "env-nested");
     expect(store.getRoot("env-nested")).toBe(singlePaneRoot);
+  });
+});
+
+describe("paneLayoutStore guard branches", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  test("setActiveTab does nothing without an environment or for an unknown one", () => {
+    const before = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.getState().setActiveTab("default", "tab-one");
+    expect(usePaneLayoutStore.getState().environments).toBe(before);
+
+    seedSingleTabEnvironment("env-active-tab", null, { id: "tab-one", type: "plain" });
+    const seeded = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.getState().setActiveTab("default", "tab-one", "missing-env");
+    expect(usePaneLayoutStore.getState().environments).toBe(seeded);
+  });
+
+  test("setActiveTab on an unknown pane leaves the tree untouched", () => {
+    seedSingleTabEnvironment("env-active-tab", null, { id: "tab-one", type: "plain" });
+    const originalRoot = usePaneLayoutStore.getState().getRoot("env-active-tab");
+
+    usePaneLayoutStore.getState().setActiveTab("missing-pane", "tab-one", "env-active-tab");
+
+    const store = usePaneLayoutStore.getState();
+    // No leaf matches, so updateLeaf returns the same tree; only the focused
+    // pane id moves (the store does not validate the pane exists).
+    expect(store.getRoot("env-active-tab")).toBe(originalRoot);
+    expect(store.getPane("default", "env-active-tab")?.activeTabId).toBe("tab-one");
+    expect(store.getActivePaneId("env-active-tab")).toBe("missing-pane");
+  });
+
+  test("setActiveTab accepts a tab id that is not in the pane", () => {
+    seedSingleTabEnvironment("env-ghost-tab", null, { id: "tab-one", type: "plain" });
+
+    usePaneLayoutStore.getState().setActiveTab("default", "ghost-tab", "env-ghost-tab");
+
+    const pane = usePaneLayoutStore.getState().getPane("default", "env-ghost-tab");
+    // Documented behaviour: the id is stored unvalidated and the tab list is
+    // untouched, so the pane ends up with an activeTabId it does not contain.
+    expect(pane?.tabs.map((tab) => tab.id)).toEqual(["tab-one"]);
+    expect(pane?.activeTabId).toBe("ghost-tab");
+  });
+
+  test("getOpenFilePaths collects paths from every pane, duplicates included", () => {
+    seedPaneTree({
+      kind: "split",
+      id: "root-split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "left",
+          tabs: [
+            { id: "file-a", type: "file", fileData: { filePath: "/repo/a.ts" } },
+            { id: "plain-a", type: "plain" },
+            { id: "file-empty", type: "file", fileData: { filePath: "" } },
+          ],
+          activeTabId: "file-a",
+        },
+        {
+          kind: "leaf",
+          id: "right",
+          tabs: [
+            // The same file opened in a second pane must still be reported so
+            // callers can see it is open, hence duplicates are preserved.
+            { id: "file-a-copy", type: "file", fileData: { filePath: "/repo/a.ts" } },
+            { id: "file-b", type: "file", fileData: { filePath: "/repo/b.ts" } },
+            { id: "file-no-data", type: "file" },
+          ],
+          activeTabId: "file-b",
+        },
+      ],
+    }, "left", "env-open-files");
+
+    expect(usePaneLayoutStore.getState().getOpenFilePaths("env-open-files")).toEqual([
+      "/repo/a.ts",
+      "/repo/a.ts",
+      "/repo/b.ts",
+    ]);
+  });
+
+  test("getOpenFilePaths returns nothing for an environment with no file tabs", () => {
+    seedSingleTabEnvironment("env-no-files", null, { id: "tab-one", type: "plain" });
+
+    expect(usePaneLayoutStore.getState().getOpenFilePaths("env-no-files")).toEqual([]);
+  });
+
+  test("splitPane leaves state unchanged for missing environments, panes, and tabs", () => {
+    const storeWithoutEnvironment = usePaneLayoutStore.getState();
+    const before = storeWithoutEnvironment.environments;
+    storeWithoutEnvironment.splitPane("default", "horizontal", "tab-one");
+    expect(usePaneLayoutStore.getState().environments).toBe(before);
+
+    storeWithoutEnvironment.splitPane("default", "horizontal", "tab-one", "missing-env");
+
+    seedSingleTabEnvironment("env-invalid-split", null, { id: "tab-one", type: "plain" });
+    const store = usePaneLayoutStore.getState();
+    const originalRoot = store.getRoot("env-invalid-split");
+    const seededEnvironments = store.environments;
+
+    store.splitPane("missing-pane", "horizontal", "tab-one", "env-invalid-split");
+    store.splitPane("default", "horizontal", "missing-tab", "env-invalid-split");
+
+    expect(usePaneLayoutStore.getState().getRoot("env-invalid-split")).toBe(originalRoot);
+    expect(usePaneLayoutStore.getState().environments).toBe(seededEnvironments);
+  });
+
+  test("splitPane refuses to split once the tree is at the maximum depth", () => {
+    let root: any = {
+      kind: "leaf",
+      id: "deep-target",
+      tabs: [
+        { id: "tab-one", type: "plain" },
+        { id: "tab-two", type: "plain" },
+      ],
+      activeTabId: "tab-two",
+    };
+    // MAX_SPLIT_DEPTH is 9, so nine nested splits sit exactly at the limit.
+    for (let depth = 1; depth <= 9; depth += 1) {
+      root = {
+        kind: "split",
+        id: `split-${depth}`,
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth,
+        children: [
+          root,
+          { kind: "leaf", id: `filler-${depth}`, tabs: [], activeTabId: null },
+        ],
+      };
+    }
+    seedPaneTree(root, "deep-target", "env-split-depth");
+
+    usePaneLayoutStore.getState().splitPane(
+      "deep-target",
+      "horizontal",
+      "tab-two",
+      "env-split-depth",
+    );
+
+    expect(usePaneLayoutStore.getState().getRoot("env-split-depth")).toBe(root);
+  });
+
+  test("finishHydration with nothing restored only marks hydration done", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-fresh");
+    store.beginHydration("env-fresh");
+    const existing = usePaneLayoutStore.getState().environments.get("env-fresh");
+    expect(usePaneLayoutStore.getState().hydration.get("env-fresh")).toBe("pending");
+
+    usePaneLayoutStore.getState().finishHydration("env-fresh");
+
+    expect(usePaneLayoutStore.getState().hydration.get("env-fresh")).toBe("done");
+    // The freshly initialized layout survives: nothing is installed over it.
+    expect(usePaneLayoutStore.getState().environments.get("env-fresh")).toBe(existing);
+  });
+
+  test("finishHydration marks an environment done even if hydration never began", () => {
+    usePaneLayoutStore.getState().finishHydration("env-never-began");
+
+    expect(usePaneLayoutStore.getState().hydration.get("env-never-began")).toBe("done");
+    expect(usePaneLayoutStore.getState().environments.has("env-never-began")).toBe(false);
+  });
+
+  test("updateSizes ignores unknown environments and unknown split ids", () => {
+    const before = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.getState().updateSizes("split-1", [30, 70]);
+    expect(usePaneLayoutStore.getState().environments).toBe(before);
+
+    seedPaneTree({
+      kind: "split",
+      id: "outer",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "left",
+          tabs: [{ id: "left-tab", type: "plain" }],
+          activeTabId: "left-tab",
+        },
+        {
+          kind: "leaf",
+          id: "right",
+          tabs: [{ id: "right-tab", type: "plain" }],
+          activeTabId: "right-tab",
+        },
+      ],
+    }, "left", "env-sizes");
+    const seeded = usePaneLayoutStore.getState().environments;
+
+    usePaneLayoutStore.getState().updateSizes("outer", [30, 70], "missing-env");
+    expect(usePaneLayoutStore.getState().environments).toBe(seeded);
+
+    usePaneLayoutStore.getState().updateSizes("missing-split", [30, 70], "env-sizes");
+    expect(usePaneLayoutStore.getState().getRoot("env-sizes")).toMatchObject({
+      id: "outer",
+      sizes: [50, 50],
+    });
+  });
+
+  test("updateSizes on a leaf-only layout leaves the tree alone", () => {
+    seedSingleTabEnvironment("env-leaf-sizes", null, { id: "tab-one", type: "plain" });
+    const originalRoot = usePaneLayoutStore.getState().getRoot("env-leaf-sizes");
+
+    usePaneLayoutStore.getState().updateSizes("default", [30, 70], "env-leaf-sizes");
+
+    // A leaf carries no sizes, so the recursive update returns it untouched.
+    expect(usePaneLayoutStore.getState().getRoot("env-leaf-sizes")).toBe(originalRoot);
+  });
+
+  test("clearTabInitialPrompt is a no-op for unknown environments and tabs", () => {
+    const before = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.getState().clearTabInitialPrompt("tab-one");
+    expect(usePaneLayoutStore.getState().environments).toBe(before);
+
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [{ id: "prompt-tab", type: "plain", initialPrompt: "Run the checks" }],
+      activeTabId: "prompt-tab",
+    }, "default", "env-clear-prompt");
+    const seeded = usePaneLayoutStore.getState().environments;
+
+    usePaneLayoutStore.getState().clearTabInitialPrompt("prompt-tab", "missing-env");
+    usePaneLayoutStore.getState().clearTabInitialPrompt("missing-tab", "env-clear-prompt");
+
+    expect(usePaneLayoutStore.getState().environments).toBe(seeded);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-clear-prompt")[0]?.initialPrompt)
+      .toBe("Run the checks");
+  });
+
+  test("clearTabInitialAgentOptions is a no-op for unknown environments and tabs", () => {
+    const before = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.getState().clearTabInitialAgentOptions("tab-one");
+    expect(usePaneLayoutStore.getState().environments).toBe(before);
+
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [{
+        id: "review-tab",
+        type: "codex-native",
+        initialAgentModel: "gpt-5.6-sol",
+        initialReasoningEffort: "xhigh",
+      }],
+      activeTabId: "review-tab",
+    }, "default", "env-clear-options");
+    const seeded = usePaneLayoutStore.getState().environments;
+
+    usePaneLayoutStore.getState().clearTabInitialAgentOptions("review-tab", "missing-env");
+    usePaneLayoutStore.getState().clearTabInitialAgentOptions("missing-tab", "env-clear-options");
+
+    expect(usePaneLayoutStore.getState().environments).toBe(seeded);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-clear-options")[0]).toMatchObject({
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "xhigh",
+    });
   });
 });

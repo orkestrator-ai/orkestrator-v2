@@ -1,30 +1,27 @@
-import { useRef, useState, useEffect, useCallback, type KeyboardEvent } from "react";
-import { X, FileText, ChevronDown, ChevronUp, ArrowUp, Check, Square, Zap } from "lucide-react";
+import { useRef, useEffect, useCallback, useMemo, useState, type KeyboardEvent } from "react";
+import { X, FileText, ChevronDown, ArrowUp, Check, Square, Zap } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn } from "@/lib/utils";
+import {cn, createSessionKey} from "@/lib/utils";
 import { toast } from "sonner";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useClaudeStore, createClaudeSessionKey, type ClaudeAttachment, type QueuedMessage, type ClaudeEffortLevel } from "@/stores/claudeStore";
-import { useConfigStore } from "@/stores/configStore";
+import {useClaudeStore, type ClaudeAttachment, type QueuedMessage, type ClaudeEffortLevel} from "@/stores/claudeStore";
 import { ContextUsageWheel } from "@/components/chat/ContextUsageWheel";
-import { updateGlobalConfig as persistGlobalConfig } from "@/lib/backend";
+import { persistAgentModelDefault } from "@/lib/chat/agent-model-preferences";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import type { ClaudeModel } from "@/lib/claude-client";
-import { SlashCommandMenu, parseSlashCommands } from "./SlashCommandMenu";
+import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
+import { parseSlashCommands } from "@/lib/chat/slash-commands";
+import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
+import {
+  COMPOSE_MAX_INPUT_HEIGHT,
+  COMPOSE_MIN_INPUT_HEIGHT,
+} from "@/components/chat/compose-metrics";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
 import {
@@ -34,6 +31,8 @@ import {
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useFileMentions } from "@/hooks/useFileMentions";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
+import { useSlashCommandMenu } from "@/hooks/useSlashCommandMenu";
+import { useNativeComposeSubmit } from "@/hooks/useNativeComposeSubmit";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { FileMention, FileCandidate } from "@/types";
 
@@ -74,22 +73,6 @@ interface ClaudeComposeBarProps {
   layout?: "bottom" | "centered";
 }
 
-const MAX_LINES = 12;
-const LINE_HEIGHT = 20;
-
-function fileMentionsEqual(
-  left: readonly FileMention[],
-  right: readonly FileMention[],
-): boolean {
-  return left.length === right.length && left.every((mention, index) => {
-    const other = right[index];
-    return other !== undefined
-      && mention.id === other.id
-      && mention.filename === other.filename
-      && mention.relativePath === other.relativePath;
-  });
-}
-
 export function ClaudeComposeBar({
   environmentId,
   tabId,
@@ -104,7 +87,6 @@ export function ClaudeComposeBar({
   showAddressAll = false,
   layout = "bottom",
 }: ClaudeComposeBarProps) {
-  const [isSending, setIsSending] = useState(false);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
@@ -114,7 +96,7 @@ export function ClaudeComposeBar({
   const autoFocusOnMountRef = useRef(!isMobile);
 
   // Create sessionKey for store lookups (format: "env-{environmentId}:{tabId}")
-  const sessionKey = createClaudeSessionKey(environmentId, tabId);
+  const sessionKey = createSessionKey(environmentId, tabId);
 
   const {
     getAttachments,
@@ -187,6 +169,51 @@ export function ClaudeComposeBar({
     createMention,
   } = useFileMentions({ searchFiles });
 
+  // Read the send options from the store at dispatch time rather than closing
+  // over this render's values — the user can flip effort, plan mode or fast
+  // mode between typing and the send resolving.
+  const sendWithOptions = useCallback(
+    (serializedText: string, attachmentsToSend: ClaudeAttachment[]) => {
+      const store = useClaudeStore.getState();
+      return onSend(
+        serializedText,
+        attachmentsToSend,
+        store.getEffort(sessionKey),
+        store.isPlanMode(sessionKey),
+        store.isFastMode(sessionKey),
+      );
+    },
+    [onSend, sessionKey],
+  );
+
+  const queueWithOptions = useCallback(
+    (serializedText: string, attachmentsToSend: ClaudeAttachment[]) => {
+      const store = useClaudeStore.getState();
+      return onQueue?.(
+        serializedText,
+        attachmentsToSend,
+        store.getEffort(sessionKey),
+        store.isPlanMode(sessionKey),
+        store.isFastMode(sessionKey),
+      );
+    },
+    [onQueue, sessionKey],
+  );
+
+  const { isSending, submit, submitPrompt } = useNativeComposeSubmit({
+    agentLabel: "Claude",
+    sessionKey,
+    store: useClaudeStore,
+    text,
+    mentions,
+    attachments,
+    serializeForLLM,
+    onSend: sendWithOptions,
+    onQueue: onQueue ? queueWithOptions : undefined,
+    isLoading,
+    disabled,
+  });
+
   // Track previous menu state to detect opening transition
   const prevFileMentionMenuOpen = useRef(false);
 
@@ -201,13 +228,8 @@ export function ClaudeComposeBar({
     }
   }, [fileMentionMenuOpen, refreshFileTree]);
 
-  // Slash command menu state
-  const [slashMenuOpen, setSlashMenuOpen] = useState(false);
-  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
-  const [slashFilter, setSlashFilter] = useState("");
-
   // Default built-in slash commands (always available)
-  const defaultSlashCommands = [
+  const defaultSlashCommands = useMemo(() => [
     "/clear - Clear conversation history",
     "/compact - Compact conversation to reduce tokens",
     "/context - Show current context",
@@ -223,11 +245,17 @@ export function ClaudeComposeBar({
     "/review - Review recent changes",
     "/status - Show session status",
     "/vim - Toggle vim mode",
-  ];
+  ], []);
 
   // Parse slash commands - use session init data if available, otherwise use defaults
-  const slashCommands = parseSlashCommands(
-    sessionInitData?.slashCommands?.length ? sessionInitData.slashCommands : defaultSlashCommands
+  const slashCommands = useMemo(
+    () =>
+      parseSlashCommands(
+        sessionInitData?.slashCommands?.length
+          ? sessionInitData.slashCommands
+          : defaultSlashCommands,
+      ),
+    [sessionInitData?.slashCommands, defaultSlashCommands],
   );
 
   const setText = useCallback(
@@ -296,42 +324,21 @@ export function ClaudeComposeBar({
     }
   }, []);
 
-  // Detect "/" being typed to show slash command menu
-  useEffect(() => {
-    if (text.startsWith("/") && slashCommands.length > 0) {
-      // Extract the command being typed (everything after /)
-      const spaceIndex = text.indexOf(" ");
-      const currentCommand = spaceIndex === -1 ? text.slice(1) : "";
+  const focusInput = useCallback(() => inputRef.current?.focus(), []);
 
-      // Only show menu if we haven't completed typing a command yet (no space)
-      if (spaceIndex === -1) {
-        setSlashFilter(currentCommand);
-        setSlashMenuOpen(true);
-        setSlashSelectedIndex(0);
-      } else {
-        setSlashMenuOpen(false);
-      }
-    } else {
-      setSlashMenuOpen(false);
-      setSlashFilter("");
-    }
-  }, [text, slashCommands.length]);
-
-  // Filter slash commands based on current input
-  const filteredSlashCommands = slashCommands.filter((cmd) =>
-    cmd.name.toLowerCase().includes(slashFilter.toLowerCase())
-  );
-
-  // Handle slash command selection
-  const handleSlashCommandSelect = useCallback(
-    (command: { name: string }) => {
-      // Replace the current "/" + filter with the selected command + space
-      setText(command.name + " ");
-      setSlashMenuOpen(false);
-      inputRef.current?.focus();
-    },
-    [setText]
-  );
+  const {
+    isOpen: slashMenuOpen,
+    selectedIndex: slashSelectedIndex,
+    filteredCommands: filteredSlashCommands,
+    selectCommand: handleSlashCommandSelect,
+    closeMenu: closeSlashMenu,
+    handleKeyDown: handleSlashKeyDown,
+  } = useSlashCommandMenu({
+    commands: slashCommands,
+    text,
+    setText,
+    focusInput,
+  });
 
   useNativeComposeBarPaste({
     inputContainerRef,
@@ -351,105 +358,19 @@ export function ClaudeComposeBar({
       if (handled) return;
     }
 
-    // Handle slash command menu navigation
-    if (slashMenuOpen && filteredSlashCommands.length > 0) {
-      switch (event.key) {
-        case "ArrowDown":
-          event.preventDefault();
-          setSlashSelectedIndex((prev) =>
-            prev < filteredSlashCommands.length - 1 ? prev + 1 : prev
-          );
-          return;
-        case "ArrowUp":
-          event.preventDefault();
-          setSlashSelectedIndex((prev) => (prev > 0 ? prev - 1 : prev));
-          return;
-        case "Tab":
-        case "Enter":
-          if (filteredSlashCommands[slashSelectedIndex]) {
-            event.preventDefault();
-            handleSlashCommandSelect(filteredSlashCommands[slashSelectedIndex]);
-            return;
-          }
-          break;
-        case "Escape":
-          event.preventDefault();
-          setSlashMenuOpen(false);
-          return;
-      }
-    }
+    if (handleSlashKeyDown(event)) return;
 
     // Shift+Tab toggles between plan mode and edit mode (bypassPermissions)
     if (event.key === "Tab" && event.shiftKey) {
       event.preventDefault();
       setPlanMode(sessionKey, !planModeEnabled);
+      return;
     }
 
     // Enter to send (handled by MentionableInput for regular Enter)
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      handleSend();
-    }
-  };
-
-  const handleSend = async () => {
-    if (isSending || disabled) return;
-    if (attachments.length === 0 && !text.trim()) return;
-
-    const submittedText = text;
-    const submittedMentions = mentions;
-    const submittedAttachments = attachments;
-    setIsSending(true);
-    const isQueueing = isLoading && Boolean(onQueue);
-    try {
-      // Read current values directly from store to avoid stale closures
-      const currentEffort = getEffort(sessionKey);
-      const currentPlanModeEnabled = isPlanMode(sessionKey);
-      const currentFastModeEnabled = isFastMode(sessionKey);
-
-      // Serialize mentions: replace @filename with full relative path
-      const serializedText = serializeForLLM(text.trim(), mentions);
-
-      // If loading and onQueue is provided, add to queue instead of sending immediately
-      if (isQueueing) {
-        await onQueue!(
-          serializedText,
-          attachments,
-          currentEffort,
-          currentPlanModeEnabled,
-          currentFastModeEnabled,
-        );
-      } else {
-        await onSend(
-          serializedText,
-          attachments,
-          currentEffort,
-          currentPlanModeEnabled,
-          currentFastModeEnabled,
-        );
-      }
-      const store = useClaudeStore.getState();
-      if (
-        store.getDraftText(sessionKey) === submittedText
-        && fileMentionsEqual(
-          store.getDraftMentions(sessionKey),
-          submittedMentions,
-        )
-      ) {
-        store.setDraftText(sessionKey, "");
-        store.setDraftMentions(sessionKey, []);
-      }
-      for (const attachment of submittedAttachments) {
-        store.removeAttachment(sessionKey, attachment.id);
-      }
-    } catch (error) {
-      console.error(
-        `[ClaudeComposeBar] Failed to ${isQueueing ? "queue" : "send"} prompt:`,
-        error,
-      );
-      toast.error(isQueueing ? "Failed to queue prompt" : "Failed to send prompt");
-    } finally {
-      setIsSending(false);
+      void submit();
     }
   };
 
@@ -501,57 +422,16 @@ export function ClaudeComposeBar({
   const selectedModelName = selectedModelObj?.name ?? (models.length > 0 ? models[0]?.name : "No models");
   const selectedModelSupportsFastMode = selectedModelObj?.supportsFastMode !== false;
 
-  const persistClaudeModelDefault = useCallback(async (modelId: string) => {
-    const currentConfig = useConfigStore.getState().config;
-    if (currentConfig.global.claudeModel === modelId) return;
-
-    const nextGlobal = { ...currentConfig.global, claudeModel: modelId };
-    useConfigStore.getState().setConfig({
-      ...currentConfig,
-      global: nextGlobal,
-    });
-
-    try {
-      const updatedConfig = await persistGlobalConfig(nextGlobal);
-      if (useConfigStore.getState().config.global.claudeModel === modelId) {
-        useConfigStore.getState().setConfig(updatedConfig);
-      }
-    } catch (error) {
-      if (useConfigStore.getState().config.global.claudeModel === modelId) {
-        useConfigStore.getState().setConfig(currentConfig);
-      }
-      console.error("[ClaudeComposeBar] Failed to persist Claude model default:", error);
-      toast.error("Failed to save Claude model default");
-    }
-  }, []);
-
   const handleModelChange = (modelId: string) => {
     setSelectedModel(sessionKey, modelId);
-    void persistClaudeModelDefault(modelId);
+    void persistAgentModelDefault("claudeModel", modelId, "Claude");
     const nextModel = models.find((m) => m.id === modelId);
     if (nextModel?.supportsFastMode === false && isFastMode(sessionKey)) {
       setFastMode(sessionKey, false);
     }
   };
 
-  const handleAddressAll = async () => {
-    if (disabled || isSending || isLoading) return;
-    setIsSending(true);
-    try {
-      await onSend(
-        ADDRESS_ALL_REVIEW_PROMPT,
-        [],
-        effort,
-        planModeEnabled,
-        fastModeEnabled,
-      );
-    } catch (error) {
-      console.error("[ClaudeComposeBar] Failed to send review follow-up:", error);
-      toast.error("Failed to send prompt");
-    } finally {
-      setIsSending(false);
-    }
-  };
+  const handleAddressAll = () => submitPrompt(ADDRESS_ALL_REVIEW_PROMPT);
 
   // Defensively reset fast mode if the selected model doesn't support it
   // (e.g. model catalog loaded after a stale preference, or bundled defaults changed).
@@ -607,7 +487,7 @@ export function ClaudeComposeBar({
             commands={filteredSlashCommands}
             selectedIndex={slashSelectedIndex}
             onSelect={handleSlashCommandSelect}
-            onClose={() => setSlashMenuOpen(false)}
+            onClose={closeSlashMenu}
           />
         )}
 
@@ -631,8 +511,8 @@ export function ClaudeComposeBar({
           onKeyDown={handleKeyDown}
           placeholder="Ask Claude anything..."
           disabled={disabled || isSending}
-          minHeight={LINE_HEIGHT + 8}
-          maxHeight={MAX_LINES * LINE_HEIGHT + 16}
+          minHeight={COMPOSE_MIN_INPUT_HEIGHT}
+          maxHeight={COMPOSE_MAX_INPUT_HEIGHT}
         />
       </div>
 
@@ -836,7 +716,7 @@ export function ClaudeComposeBar({
         ) : (
           // Send button (immediate send or queue)
           <button
-            onClick={handleSend}
+            onClick={() => void submit()}
             disabled={disabled || isSending || (attachments.length === 0 && !text.trim())}
             className={cn(
               "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
@@ -853,89 +733,27 @@ export function ClaudeComposeBar({
         </div>
       </div>
 
-      <Dialog open={queueDialogOpen} onOpenChange={setQueueDialogOpen}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Queued Prompts</DialogTitle>
-            <DialogDescription>
-              Review pending prompts. Click a message to edit it, or reorder and remove items.
-            </DialogDescription>
-          </DialogHeader>
-
-          {queuedMessages.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">
-              Queue is empty.
-            </div>
-          ) : (
-            <ScrollArea className="max-h-[380px] pr-3">
-              <div className="space-y-2">
-                {queuedMessages.map((message, index) => (
-                  <div
-                    key={message.id}
-                    className="rounded-md border border-border bg-muted/20 p-3"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5 shrink-0 text-xs font-medium text-muted-foreground">
-                        #{index + 1}
-                      </div>
-
-                      <div className="min-w-0 flex-1">
-                        <p
-                          className="cursor-pointer rounded px-1 -mx-1 text-sm whitespace-pre-wrap break-words line-clamp-4 hover:bg-muted/50 transition-colors"
-                          onClick={() => handleQueuedMessageClick(message)}
-                          title="Click to edit this message"
-                        >
-                          {message.text}
-                        </p>
-                        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                          <span>Effort: {EFFORT_LABELS[message.effort]}</span>
-                          {message.planModeEnabled && <span>Plan mode</span>}
-                          {message.fastModeEnabled && <span>Fast mode</span>}
-                          {message.attachments.length > 0 && (
-                            <span>
-                              {message.attachments.length} attachment
-                              {message.attachments.length === 1 ? "" : "s"}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex shrink-0 flex-col gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handleMoveQueuedMessage(index, index - 1)}
-                          disabled={index === 0}
-                          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-                          title="Move up"
-                        >
-                          <ChevronUp className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleMoveQueuedMessage(index, index + 1)}
-                          disabled={index === queuedMessages.length - 1}
-                          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-                          title="Move down"
-                        >
-                          <ChevronDown className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveQueuedMessage(message.id)}
-                          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive"
-                          title="Remove queued prompt"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
-          )}
-        </DialogContent>
-      </Dialog>
+      <QueuedPromptsDialog
+        open={queueDialogOpen}
+        onOpenChange={setQueueDialogOpen}
+        messages={queuedMessages}
+        onEdit={handleQueuedMessageClick}
+        onMove={handleMoveQueuedMessage}
+        onRemove={handleRemoveQueuedMessage}
+        renderMeta={(message) => (
+          <>
+            <span>Effort: {EFFORT_LABELS[message.effort]}</span>
+            {message.planModeEnabled && <span>Plan mode</span>}
+            {message.fastModeEnabled && <span>Fast mode</span>}
+            {message.attachments.length > 0 && (
+              <span>
+                {message.attachments.length} attachment
+                {message.attachments.length === 1 ? "" : "s"}
+              </span>
+            )}
+          </>
+        )}
+      />
     </div>
   );
 }

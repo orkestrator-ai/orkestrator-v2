@@ -111,6 +111,7 @@ describe("structured review phase permissions", () => {
         createSession: mock(async () => ({
           id: `opencode-${++nextId}`,
           createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
         })),
         sendStructuredPrompt: mock(async (
           _client,

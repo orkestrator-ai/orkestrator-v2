@@ -6,6 +6,15 @@ import type { NativeMessage, NativeMessagePart } from "./native-message-types";
 
 export const OPTIMISTIC_MESSAGE_PREFIX = "optimistic-";
 
+/**
+ * Transcript marker written when the user interrupts a turn.
+ *
+ * Shared so every agent says the same thing — OpenCode used to leave no trace
+ * at all, which made an interrupted turn look like one that simply produced
+ * nothing.
+ */
+export const TURN_STOPPED_BY_USER = "Query stopped by user.";
+
 interface OptimisticNativeAttachment {
   path: string;
   previewUrl?: string;
@@ -25,7 +34,16 @@ function toOptimisticFileUrl(path: string, previewUrl?: string): string | undefi
     return undefined;
   }
 
-  return `file://${encodeURI(path)}`;
+  /**
+   * `encodeURI` leaves `#` and `?` intact because they are legal URI
+   * delimiters, so a real filename containing either — `error #1.png` — parses
+   * as a fragment or query and the image resolves to the wrong (or no) file.
+   * Every other character `encodeURI` escapes stays escaped.
+   */
+  const encodedPath = encodeURI(path)
+    .replace(/#/g, "%23")
+    .replace(/\?/g, "%3F");
+  return `file://${encodedPath}`;
 }
 
 function getPartFingerprint(part: NativeMessagePart): string {

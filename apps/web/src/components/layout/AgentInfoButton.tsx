@@ -18,22 +18,13 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { cn } from "@/lib/utils";
+import { cn, createSessionKey } from "@/lib/utils";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import { formatTokenCount } from "@/lib/context-usage";
 import type { TabInfo } from "@/types/paneLayout";
-import {
-  createClaudeSessionKey,
-  useClaudeStore,
-} from "@/stores/claudeStore";
-import {
-  createCodexSessionKey,
-  useCodexStore,
-} from "@/stores/codexStore";
-import {
-  createOpenCodeSessionKey,
-  useOpenCodeStore,
-} from "@/stores/openCodeStore";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { useCodexStore } from "@/stores/codexStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import {
   compactClaudeSession,
   forkClaudeSession,
@@ -91,7 +82,7 @@ function resolveActiveNativeSession(tab: TabInfo | null): ActiveNativeSession | 
       provider: "claude",
       providerLabel: "Claude Native",
       environmentId,
-      sessionKey: createClaudeSessionKey(environmentId, tab.id),
+      sessionKey: createSessionKey(environmentId, tab.id),
     };
   }
   if (tab?.type === "opencode-native" && tab.openCodeNativeData) {
@@ -100,7 +91,7 @@ function resolveActiveNativeSession(tab: TabInfo | null): ActiveNativeSession | 
       provider: "opencode",
       providerLabel: "OpenCode",
       environmentId,
-      sessionKey: createOpenCodeSessionKey(environmentId, tab.id),
+      sessionKey: createSessionKey(environmentId, tab.id),
     };
   }
   if (tab?.type === "codex-native" && tab.codexNativeData) {
@@ -109,7 +100,7 @@ function resolveActiveNativeSession(tab: TabInfo | null): ActiveNativeSession | 
       provider: "codex",
       providerLabel: "Codex Native",
       environmentId,
-      sessionKey: createCodexSessionKey(environmentId, tab.id),
+      sessionKey: createSessionKey(environmentId, tab.id),
     };
   }
   return null;

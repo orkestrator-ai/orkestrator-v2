@@ -1,15 +1,16 @@
+import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { listen } from "@/lib/native/events";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
-import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
+import {useClaudeStore} from "@/stores/claudeStore";
 import {
   createClaudeTmuxStateKey,
   useClaudeTmuxStore,
 } from "@/stores/claudeTmuxStore";
-import { useCodexStore, createCodexSessionKey } from "@/stores/codexStore";
-import { useOpenCodeStore, createOpenCodeSessionKey } from "@/stores/openCodeStore";
+import {useCodexStore} from "@/stores/codexStore";
+import {useOpenCodeStore} from "@/stores/openCodeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -1012,10 +1013,10 @@ describe("App background processing mounts", () => {
       selectedEnvironmentId: "env-visible",
     });
 
-    const claudeSessionKey = createClaudeSessionKey("env-queued-claude", "tab-1");
+    const claudeSessionKey = createSessionKey("env-queued-claude", "tab-1");
     const tmuxStateKey = createClaudeTmuxStateKey("env-queued-tmux", "tab-1");
-    const codexSessionKey = createCodexSessionKey("env-queued-codex", "tab-1");
-    const openCodeSessionKey = createOpenCodeSessionKey("env-queued-opencode", "tab-1");
+    const codexSessionKey = createSessionKey("env-queued-codex", "tab-1");
+    const openCodeSessionKey = createSessionKey("env-queued-opencode", "tab-1");
     useClaudeStore.setState({
       messageQueue: new Map([
         [
@@ -1120,7 +1121,7 @@ describe("App background processing mounts", () => {
       selectedEnvironmentId: "env-visible",
     });
 
-    const sessionKey = createCodexSessionKey("env-loading-codex", "tab-1");
+    const sessionKey = createSessionKey("env-loading-codex", "tab-1");
     useCodexStore.setState({
       sessions: new Map([
         [

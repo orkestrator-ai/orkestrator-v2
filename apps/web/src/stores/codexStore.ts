@@ -14,17 +14,15 @@ import {
 } from "@/lib/codex-client";
 import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-messages";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
-import { createSessionKey } from "@/lib/utils";
 import type { FileMention } from "@/types";
 import {
+  buildClearEnvironmentPatch,
+  buildClearSessionPatch,
   createNativeChatStoreSlice,
-  pruneSessionKeyedMap,
   type NativeChatStoreSlice,
   type NativeServerStatus,
   type NativeSessionState,
 } from "./createNativeChatStore";
-
-export const createCodexSessionKey = createSessionKey;
 
 export type CodexServerStatus = NativeServerStatus;
 export type CodexSessionState = NativeSessionState<CodexMessage>;
@@ -123,6 +121,8 @@ interface CodexState extends CodexChatSlice {
   getContextUsage: (sessionKey: string) => ContextUsageSnapshot | undefined;
   isFastMode: (sessionKey: string) => boolean;
   clearEnvironment: (environmentId: string) => void;
+  /** Drop every session-keyed entry for one closed tab. */
+  clearSession: (sessionKey: string) => void;
 }
 
 /**
@@ -149,6 +149,9 @@ function isSameApproval(a: CodexApproval, b: CodexApproval | undefined): boolean
     && a.reason === b.reason
     && a.grantRoot === b.grantRoot
     && a.networkHost === b.networkHost
+    // `actionable` gates the Approve buttons and must fail closed, so a
+    // re-report that only flips it has to reach the card rather than being
+    // discarded as an interchangeable snapshot.
     && a.actionable === b.actionable
     && a.supportsApproveForSession === b.supportsApproveForSession
     && a.permissions?.network === b.permissions?.network
@@ -159,6 +162,26 @@ function isSameApproval(a: CodexApproval, b: CodexApproval | undefined): boolean
         change.path === b.changes?.[index]?.path && change.kind === b.changes?.[index]?.kind,
     );
 }
+
+/**
+ * Every map keyed by sessionKey, shared by the environment and tab sweeps so
+ * the two cannot drift. A new session-keyed map goes here or it leaks.
+ */
+const CODEX_SESSION_KEYED_MAPS = [
+  "sessions",
+  "attachments",
+  "draftText",
+  "draftMentions",
+  "messageQueue",
+  "selectedModel",
+  "selectedMode",
+  "selectedReasoningEffort",
+  "fastMode",
+  "sessionPhase",
+  "pendingApprovals",
+  "pendingInteractions",
+  "contextUsage",
+] as const satisfies ReadonlyArray<keyof CodexState>;
 
 export const useCodexStore = create<CodexState>()((set, get, api) => ({
   ...createNativeChatStoreSlice<
@@ -331,44 +354,17 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
   isFastMode: (sessionKey) => get().fastMode.get(sessionKey) ?? false,
 
   clearEnvironment: (environmentId) =>
-    set((state) => {
-      const nextServerStatus = new Map(state.serverStatus);
-      nextServerStatus.delete(environmentId);
+    set((state) =>
+      buildClearEnvironmentPatch(state, environmentId, {
+        environmentKeyed: ["serverStatus", "clients", "slashCommands"],
+        sessionKeyed: CODEX_SESSION_KEYED_MAPS,
+      }),
+    ),
 
-      const nextClients = new Map(state.clients);
-      nextClients.delete(environmentId);
-
-      const nextSlashCommands = new Map(state.slashCommands);
-      nextSlashCommands.delete(environmentId);
-
-      const prefix = `env-${environmentId}:`;
-
-      return {
-        models: state.models,
-        serverStatus: nextServerStatus,
-        clients: nextClients,
-        slashCommands: nextSlashCommands,
-        sessions: pruneSessionKeyedMap(state.sessions, prefix),
-        attachments: pruneSessionKeyedMap(state.attachments, prefix),
-        draftText: pruneSessionKeyedMap(state.draftText, prefix),
-        draftMentions: pruneSessionKeyedMap(state.draftMentions, prefix),
-        messageQueue: pruneSessionKeyedMap(state.messageQueue, prefix),
-        selectedModel: pruneSessionKeyedMap(state.selectedModel, prefix),
-        selectedMode: pruneSessionKeyedMap(state.selectedMode, prefix),
-        sessionPhase: pruneSessionKeyedMap(state.sessionPhase, prefix),
-        pendingApprovals: pruneSessionKeyedMap(state.pendingApprovals, prefix),
-        pendingInteractions: pruneSessionKeyedMap(
-          state.pendingInteractions,
-          prefix,
-        ),
-        contextUsage: pruneSessionKeyedMap(state.contextUsage, prefix),
-        selectedReasoningEffort: pruneSessionKeyedMap(
-          state.selectedReasoningEffort,
-          prefix,
-        ),
-        fastMode: pruneSessionKeyedMap(state.fastMode, prefix),
-      };
-    }),
+  clearSession: (sessionKey) =>
+    set((state) =>
+      buildClearSessionPatch(state, sessionKey, CODEX_SESSION_KEYED_MAPS),
+    ),
 }));
 
 // Re-export for callers that still import types/helpers from here

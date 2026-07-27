@@ -10,6 +10,7 @@ import {
 } from "@orkestrator/protocol/review-artifacts";
 import {
   PANE_LAYOUT_VERSION,
+  type AgentModelConfigKey,
   type Environment,
   type AppConfig,
   type ClaudeEffortLevel,
@@ -317,6 +318,20 @@ type RendererGlobalConfig = Omit<AppConfig["global"], "githubToken"> & {
 type RendererAppConfig = Omit<AppConfig, "global"> & {
   global: RendererGlobalConfig;
 };
+
+const AGENT_MODEL_CONFIG_KEYS = new Set<AgentModelConfigKey>([
+  "claudeModel",
+  "codexModel",
+  "opencodeModel",
+]);
+
+function asAgentModelConfigKey(value: unknown): AgentModelConfigKey {
+  const key = asString(value, "key") as AgentModelConfigKey;
+  if (!AGENT_MODEL_CONFIG_KEYS.has(key)) {
+    throw new Error("Expected key to identify an agent model default");
+  }
+  return key;
+}
 
 function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalConfig {
   const { githubToken, ...safeGlobal } = global;
@@ -3921,6 +3936,16 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     );
     return redactAppConfig(updated);
   });
+  register("update_agent_model_default", async ({ key, modelId }, { storage }) => {
+    // The key is validated against a closed set, so the model id must be held to
+    // the same bar: storage writes it verbatim into a required config field and a
+    // renderer bug must not be able to persist an empty default.
+    const id = asString(modelId, "modelId").trim();
+    if (!id) throw new Error("Expected modelId to be non-empty");
+    return redactAppConfig(
+      await storage.updateAgentModelDefault(asAgentModelConfigKey(key), id),
+    );
+  });
   register("set_github_token", async ({ token }, { storage }) => {
     const nextToken = token === null ? null : asString(token, "token").trim();
     if (nextToken !== null && !nextToken) {
@@ -4624,6 +4649,56 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     return { updated, failed };
   });
 
+  /**
+   * The `stop`/`status`/`log` commands are identical across the three agents
+   * apart from the port, the pkill pattern and the log path, so they are
+   * registered from one table. A new agent gets the full quartet or is
+   * obviously missing from this list — previously each triple was hand-written
+   * and could silently drift.
+   *
+   * `start_*` stays per-agent: each builds a different container script. Codex
+   * is absent entirely: its bridge carries a per-process auth token, so its
+   * stop/status pair has to clear and report that token and is hand-written
+   * below alongside `start_codex_server`.
+   */
+  const NATIVE_SERVERS = [
+    {
+      agent: "opencode",
+      port: OPENCODE_SERVER_PORT,
+      pkillPattern: "opencode serve",
+      logPath: "/tmp/opencode-serve.log",
+    },
+    {
+      agent: "claude",
+      port: CLAUDE_BRIDGE_PORT,
+      pkillPattern: "claude-bridge",
+      logPath: "/tmp/claude-bridge.log",
+    },
+  ] as const;
+
+  for (const { agent, port, pkillPattern, logPath } of NATIVE_SERVERS) {
+    register(`stop_${agent}_server`, ({ containerId }) =>
+      dockerExec(
+        asString(containerId, "containerId"),
+        `pkill -f '${pkillPattern}' || true`,
+      ).then(() => undefined),
+    );
+    register(`get_${agent}_server_status`, async ({ containerId }) => {
+      const id = asString(containerId, "containerId");
+      const hostPort = await getHostPort(id, port);
+      return {
+        running: hostPort ? await checkHttpHealth(hostPort) : false,
+        hostPort,
+      };
+    });
+    register(`get_${agent}_server_log`, ({ containerId }) =>
+      dockerExec(
+        asString(containerId, "containerId"),
+        `cat ${logPath} 2>/dev/null || true`,
+      ),
+    );
+  }
+
   register("start_opencode_server", ({ containerId }) =>
     startContainerServer(asString(containerId, "containerId"), OPENCODE_SERVER_PORT, "opencode", `
       cd /workspace
@@ -4633,13 +4708,6 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       setsid opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0 > /tmp/opencode-serve.log 2>&1 &
     `),
   );
-  register("stop_opencode_server", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "pkill -f 'opencode serve' || true").then(() => undefined));
-  register("get_opencode_server_status", async ({ containerId }) => {
-    const id = asString(containerId, "containerId");
-    const hostPort = await getHostPort(id, OPENCODE_SERVER_PORT);
-    return { running: hostPort ? await checkHttpHealth(hostPort) : false, hostPort };
-  });
-  register("get_opencode_server_log", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "cat /tmp/opencode-serve.log 2>/dev/null || true"));
   register("get_opencode_model_preferences", async () => {
     const modelPath = homePath(".local", "state", "opencode", "model.json");
     if (!await pathExists(modelPath)) return { recent: [], favorite: [], variant: {} };
@@ -4653,13 +4721,6 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       CLAUDE_BRIDGE_CONTAINER_START_COMMAND,
     ),
   );
-  register("stop_claude_server", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "pkill -f 'claude-bridge' || true").then(() => undefined));
-  register("get_claude_server_status", async ({ containerId }) => {
-    const id = asString(containerId, "containerId");
-    const hostPort = await getHostPort(id, CLAUDE_BRIDGE_PORT);
-    return { running: hostPort ? await checkHttpHealth(hostPort) : false, hostPort };
-  });
-  register("get_claude_server_log", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "cat /tmp/claude-bridge.log 2>/dev/null || true"));
   register("get_claude_model_catalog", async ({ environmentId, forceRefresh }, context) => {
     const id = asString(environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(id);

@@ -1,24 +1,41 @@
 import { useEffect, useRef } from "react";
 import { Command } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { OpenCodeSlashCommand } from "@/lib/opencode-client";
 
-interface OpenCodeSlashCommandMenuProps {
-  commands: OpenCodeSlashCommand[];
+/**
+ * Minimal shape the menu renders. Every agent's command type structurally
+ * satisfies this — Claude parses it from SDK strings, OpenCode and Codex get it
+ * from their bridges — so the menu stays agent-neutral.
+ */
+export interface SlashCommandOption {
+  name: string;
+  description?: string;
+}
+
+interface SlashCommandMenuProps<TCommand extends SlashCommandOption> {
+  /** Already-filtered commands to display. */
+  commands: TCommand[];
   selectedIndex: number;
-  onSelect: (command: OpenCodeSlashCommand) => void;
+  onSelect: (command: TCommand) => void;
   onClose: () => void;
 }
 
-export function OpenCodeSlashCommandMenu({
+/**
+ * Dropdown shown when the user types "/" in a compose bar.
+ *
+ * Commands are pre-filtered by the caller; keyboard navigation lives in
+ * `useSlashCommandMenu` so all three agents share one set of key bindings.
+ */
+export function SlashCommandMenu<TCommand extends SlashCommandOption>({
   commands,
   selectedIndex,
   onSelect,
   onClose,
-}: OpenCodeSlashCommandMenuProps) {
+}: SlashCommandMenuProps<TCommand>) {
   const menuRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<HTMLButtonElement>(null);
 
+  // Keep the highlighted row visible as the selection moves.
   useEffect(() => {
     if (selectedRef.current) {
       selectedRef.current.scrollIntoView({
@@ -39,6 +56,8 @@ export function OpenCodeSlashCommandMenu({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [onClose]);
 
+  // Escape is handled by `useSlashCommandMenu` alongside the other keys.
+
   if (commands.length === 0) {
     return null;
   }
@@ -48,7 +67,8 @@ export function OpenCodeSlashCommandMenu({
       ref={menuRef}
       className={cn(
         "absolute z-50 max-h-64 w-full max-w-[36rem] overflow-y-auto",
-        "animate-in fade-in-0 zoom-in-95 rounded-xl border border-zinc-700/70 bg-zinc-900/95 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm",
+        "rounded-xl border border-zinc-700/70 bg-zinc-900/95 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm",
+        "animate-in fade-in-0 zoom-in-95",
       )}
       style={{ bottom: "100%", left: 0, marginBottom: "4px" }}
     >
@@ -72,7 +92,9 @@ export function OpenCodeSlashCommandMenu({
               )}
             >
               <Command className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="shrink-0 font-medium whitespace-nowrap">{command.name}</span>
+              <span className="shrink-0 font-medium whitespace-nowrap">
+                {command.name}
+              </span>
               {command.description && (
                 <span className="min-w-0 flex-1 truncate text-right text-xs text-muted-foreground">
                   {command.description}

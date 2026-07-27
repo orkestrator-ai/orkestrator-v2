@@ -215,6 +215,8 @@ export interface RepositoryConfig {
   claudeNativeBackend?: ClaudeNativeBackend;
 }
 
+export type AgentModelConfigKey = "claudeModel" | "codexModel" | "opencodeModel";
+
 export interface AppConfig {
   version: string;
   desktopConnections?: import("@orkestrator/protocol/connections").StoredDesktopConnections;

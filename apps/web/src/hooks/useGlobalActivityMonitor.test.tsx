@@ -1,3 +1,4 @@
+import { createSessionKey } from "@/lib/utils";
 import {
   afterEach,
   beforeEach,
@@ -16,18 +17,15 @@ import {
   useGlobalActivityMonitor,
 } from "./useGlobalActivityMonitor";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
-import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
+import {useClaudeStore} from "@/stores/claudeStore";
 import {
   createClaudeTmuxStateKey,
   useClaudeTmuxStore,
 } from "@/stores/claudeTmuxStore";
-import { createCodexSessionKey, useCodexStore } from "@/stores/codexStore";
+import {useCodexStore} from "@/stores/codexStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores/uiStore";
-import {
-  createOpenCodeSessionKey,
-  useOpenCodeStore,
-} from "@/stores/openCodeStore";
+import {useOpenCodeStore} from "@/stores/openCodeStore";
 import type { Environment } from "@/types";
 
 const mockListen = listen as ReturnType<typeof mock>;
@@ -602,6 +600,58 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     });
   });
 
+  test("treats resetting a working tmux tab as teardown, not completion", async () => {
+    const environment = makeEnvironment("env-tmux", "container-tmux");
+    useEnvironmentStore.getState().setEnvironments([environment]);
+    mockInvoke.mockImplementation((command: string, args?: Record<string, unknown>) =>
+      command === "record_environment_activity"
+        ? Promise.resolve({ ...environment, lastActivityAt: args?.occurredAt })
+        : Promise.resolve(),
+    );
+    const stateKey = createClaudeTmuxStateKey(environment.id, "tab-1");
+    render(<MonitorHarness />);
+
+    act(() => {
+      const store = useClaudeTmuxStore.getState();
+      store.setRunning(stateKey, true, {
+        environmentId: environment.id,
+        sessionId: "session-1",
+      });
+      store.setBusy(stateKey, true);
+    });
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState(environment.id))
+        .toBe("working");
+      expect(mockInvoke.mock.calls.some(
+        ([command]) => command === "record_environment_activity",
+      )).toBe(true);
+    });
+    const activityCallsBeforeReset = mockInvoke.mock.calls.filter(
+      ([command]) => command === "record_environment_activity",
+    ).length;
+    const activityAtBeforeReset = useEnvironmentStore
+      .getState()
+      .getEnvironmentById(environment.id)?.lastActivityAt;
+
+    act(() => {
+      useClaudeTmuxStore.getState().resetTab(stateKey);
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState(environment.id))
+        .toBe("idle");
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockInvoke.mock.calls.filter(
+      ([command]) => command === "record_environment_activity",
+    )).toHaveLength(activityCallsBeforeReset);
+    expect(useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt)
+      .toBe(activityAtBeforeReset);
+    expect(unreadEnvironmentIds()).toEqual([]);
+  });
+
   test("uses a tab environmentId when the tmux key is legacy unscoped", async () => {
     render(<MonitorHarness />);
 
@@ -618,6 +668,46 @@ describe("useGlobalActivityMonitor tmux activity", () => {
       expect(useAgentActivityStore.getState().getContainerState("env-legacy"))
         .toBe("working");
     });
+  });
+
+  test("does not persist activity for an environment the store does not know", async () => {
+    // The environment store is empty, so persistActivity bails before issuing
+    // any backend write — an unknown id has no row to update.
+    const stateKey = createClaudeTmuxStateKey("env-unknown", "tab-1");
+    render(<MonitorHarness />);
+
+    act(() => {
+      const store = useClaudeTmuxStore.getState();
+      store.setRunning(stateKey, true, {
+        environmentId: "env-unknown",
+        sessionId: "session-1",
+      });
+      store.setBusy(stateKey, true);
+    });
+
+    // The in-memory activity state still updates; only persistence is skipped.
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-unknown"))
+        .toBe("working");
+    });
+
+    act(() => {
+      useClaudeTmuxStore.getState().setBusy(stateKey, false);
+    });
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-unknown"))
+        .toBe("idle");
+    });
+
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "record_environment_activity",
+      expect.anything(),
+    );
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "record_environment_completion",
+      expect.anything(),
+    );
+    expect(unreadEnvironmentIds()).toEqual([]);
   });
 });
 
@@ -982,6 +1072,66 @@ describe("useGlobalActivityMonitor terminal activity", () => {
     );
   });
 
+  test("disposes a stale listener when the container restarts mid-registration", async () => {
+    // The container stops and comes back while the first listen() is still in
+    // flight. The superseded registration must drop its listener instead of
+    // installing it, otherwise the restarted container would end up with two
+    // subscriptions and the stale one would outlive the next stop.
+    let resolveFirstListen: ((unlisten: () => void) => void) | undefined;
+    const staleUnlisten = mock(() => {});
+    mockListen.mockImplementationOnce(
+      () =>
+        new Promise<() => void>((resolve) => {
+          resolveFirstListen = resolve;
+        }),
+    );
+
+    useEnvironmentStore.setState({
+      environments: [makeEnvironment("env-container", "container-1")],
+    });
+    render(<MonitorHarness />);
+
+    await waitFor(() => expect(resolveFirstListen).toBeDefined());
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "start_claude_state_polling",
+      { containerId: "container-1" },
+    );
+
+    // Container stops, then the same container id starts again. The second
+    // pass allocates a fresh registration symbol for the same key.
+    await act(async () => {
+      useEnvironmentStore.setState({ environments: [] });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      useEnvironmentStore.setState({
+        environments: [makeEnvironment("env-container", "container-1")],
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "start_claude_state_polling",
+        { containerId: "container-1" },
+      );
+    });
+    const startCallsAfterRestart = mockInvoke.mock.calls.filter(
+      ([command]) => command === "start_claude_state_polling",
+    ).length;
+
+    await act(async () => {
+      resolveFirstListen?.(staleUnlisten);
+      await Promise.resolve();
+    });
+
+    // The superseded registration unsubscribes and does not start a second poll.
+    expect(staleUnlisten).toHaveBeenCalledTimes(1);
+    expect(mockInvoke.mock.calls.filter(
+      ([command]) => command === "start_claude_state_polling",
+    )).toHaveLength(startCallsAfterRestart);
+  });
+
   test("disposes a listener that resolves after the monitor unmounts", async () => {
     let resolveListen: ((unlisten: () => void) => void) | undefined;
     mockListen.mockImplementationOnce(
@@ -1019,7 +1169,7 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("derives Claude native working, waiting, and disconnected states", async () => {
-    const sessionKey = createClaudeSessionKey("env-claude", "tab-1");
+    const sessionKey = createSessionKey("env-claude", "tab-1");
     render(<MonitorHarness />);
 
     act(() => {
@@ -1088,7 +1238,7 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("treats a Claude plan approval as waiting for user input", async () => {
-    const sessionKey = createClaudeSessionKey("env-claude", "tab-plan");
+    const sessionKey = createSessionKey("env-claude", "tab-plan");
     render(<MonitorHarness />);
 
     act(() => {
@@ -1109,22 +1259,97 @@ describe("useGlobalActivityMonitor native agent activity", () => {
     });
   });
 
+  test("treats a pending Codex approval as waiting for user input", async () => {
+    // Codex derived activity from `isLoading` alone, so an environment blocked
+    // on a command approval reported idle — the sidebar showed green while the
+    // turn sat waiting for the user.
+    const sessionKey = createSessionKey("env-codex", "tab-approval");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useCodexStore.setState({
+        clients: new Map([["env-codex", {} as any]]),
+        sessions: new Map([
+          [sessionKey, { sessionId: "codex-thread", isLoading: false } as any],
+        ]),
+        pendingApprovals: new Map([
+          [sessionKey, [{ approvalId: "approval-1" } as any]],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("waiting");
+    });
+
+    // Answering the approval releases it back to idle.
+    act(() => {
+      useCodexStore.setState({ pendingApprovals: new Map() });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("idle");
+    });
+  });
+
+  test("reports waiting for an approval raised mid-turn, while still loading", async () => {
+    /**
+     * Codex holds `isLoading` for every non-terminal phase, so a turn parked on
+     * an approval is *also* loading. Checking `isLoading` first showed the
+     * environment as merely busy and gave the user no signal that it was their
+     * input the turn was blocked on — which is the whole point of the amber
+     * state.
+     */
+    const sessionKey = createSessionKey("env-codex", "tab-midturn");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useCodexStore.setState({
+        clients: new Map([["env-codex", {} as any]]),
+        sessions: new Map([
+          [sessionKey, { sessionId: "codex-thread", isLoading: true } as any],
+        ]),
+        pendingApprovals: new Map([
+          [sessionKey, [{ approvalId: "approval-1" } as any]],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("waiting");
+    });
+
+    // Answering it returns the environment to plain "working" — the turn is
+    // still running, it is just no longer blocked on the user.
+    act(() => {
+      useCodexStore.setState({ pendingApprovals: new Map() });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("working");
+    });
+  });
+
   test("keeps each native environment working while any tab is still loading", async () => {
-    const claudeWorkingKey = createClaudeSessionKey(
+    const claudeWorkingKey = createSessionKey(
       "env-claude",
       "tab-working",
     );
-    const claudeIdleKey = createClaudeSessionKey("env-claude", "tab-idle");
-    const openCodeWorkingKey = createOpenCodeSessionKey(
+    const claudeIdleKey = createSessionKey("env-claude", "tab-idle");
+    const openCodeWorkingKey = createSessionKey(
       "env-opencode",
       "tab-working",
     );
-    const openCodeIdleKey = createOpenCodeSessionKey(
+    const openCodeIdleKey = createSessionKey(
       "env-opencode",
       "tab-idle",
     );
-    const codexWorkingKey = createCodexSessionKey("env-codex", "tab-working");
-    const codexIdleKey = createCodexSessionKey("env-codex", "tab-idle");
+    const codexWorkingKey = createSessionKey("env-codex", "tab-working");
+    const codexIdleKey = createSessionKey("env-codex", "tab-idle");
     render(<MonitorHarness />);
 
     act(() => {
@@ -1247,12 +1472,12 @@ describe("useGlobalActivityMonitor native agent activity", () => {
       });
     });
 
-    const claudeA = createClaudeSessionKey("env-claude", "tab-a");
-    const claudeB = createClaudeSessionKey("env-claude", "tab-b");
-    const openCodeA = createOpenCodeSessionKey("env-opencode", "tab-a");
-    const openCodeB = createOpenCodeSessionKey("env-opencode", "tab-b");
-    const codexA = createCodexSessionKey("env-codex", "tab-a");
-    const codexB = createCodexSessionKey("env-codex", "tab-b");
+    const claudeA = createSessionKey("env-claude", "tab-a");
+    const claudeB = createSessionKey("env-claude", "tab-b");
+    const openCodeA = createSessionKey("env-opencode", "tab-a");
+    const openCodeB = createSessionKey("env-opencode", "tab-b");
+    const codexA = createSessionKey("env-codex", "tab-a");
+    const codexB = createSessionKey("env-codex", "tab-b");
     useClaudeStore.setState({
       clients: new Map([["env-claude", {} as any]]),
       sessions: new Map([[claudeA, { sessionId: "claude-a", isLoading: true } as any]]),
@@ -1372,8 +1597,8 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("does not let an idle agent type overwrite another working agent type", async () => {
-    const claudeKey = createClaudeSessionKey("env-shared", "tab-claude");
-    const codexKey = createCodexSessionKey("env-shared", "tab-codex");
+    const claudeKey = createSessionKey("env-shared", "tab-claude");
+    const codexKey = createSessionKey("env-shared", "tab-codex");
     render(<MonitorHarness />);
 
     act(() => {
@@ -1398,9 +1623,9 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("rehydrates existing native session activity when the monitor mounts", async () => {
-    const claudeKey = createClaudeSessionKey("env-claude", "tab-1");
-    const openCodeKey = createOpenCodeSessionKey("env-opencode", "tab-1");
-    const codexKey = createCodexSessionKey("env-codex", "tab-1");
+    const claudeKey = createSessionKey("env-claude", "tab-1");
+    const openCodeKey = createSessionKey("env-opencode", "tab-1");
+    const codexKey = createSessionKey("env-codex", "tab-1");
     useClaudeStore.setState({
       clients: new Map([["env-claude", {} as any]]),
       sessions: new Map([
@@ -1413,7 +1638,7 @@ describe("useGlobalActivityMonitor native agent activity", () => {
         [openCodeKey, { sessionId: "opencode-session", isLoading: false } as any],
       ]),
       pendingQuestions: new Map([
-        ["question-1", { sessionID: "opencode-session" } as any],
+        ["question-1", { sessionId: "opencode-session" } as any],
       ]),
     });
     useCodexStore.setState({
@@ -1436,9 +1661,9 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("derives native activity when clients reconnect without a session update", async () => {
-    const claudeKey = createClaudeSessionKey("env-claude", "tab-1");
-    const openCodeKey = createOpenCodeSessionKey("env-opencode", "tab-1");
-    const codexKey = createCodexSessionKey("env-codex", "tab-1");
+    const claudeKey = createSessionKey("env-claude", "tab-1");
+    const openCodeKey = createSessionKey("env-opencode", "tab-1");
+    const codexKey = createSessionKey("env-codex", "tab-1");
     useClaudeStore.setState({
       sessions: new Map([
         [claudeKey, { sessionId: "claude-session", isLoading: true } as any],
@@ -1479,9 +1704,9 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("clears native source activity when disconnected sessions are removed", async () => {
-    const claudeKey = createClaudeSessionKey("env-claude", "tab-1");
-    const openCodeKey = createOpenCodeSessionKey("env-opencode", "tab-1");
-    const codexKey = createCodexSessionKey("env-codex", "tab-1");
+    const claudeKey = createSessionKey("env-claude", "tab-1");
+    const openCodeKey = createSessionKey("env-opencode", "tab-1");
+    const codexKey = createSessionKey("env-codex", "tab-1");
     useClaudeStore.setState({
       clients: new Map([["env-claude", {} as any]]),
       sessions: new Map([
@@ -1527,9 +1752,85 @@ describe("useGlobalActivityMonitor native agent activity", () => {
     });
   });
 
+  test("treats clearing working native sessions as teardown, not completion", async () => {
+    const environments = ["env-claude", "env-opencode", "env-codex"].map((id) => ({
+      ...makeEnvironment(id),
+      environmentType: "local" as const,
+      containerId: null,
+    }));
+    useEnvironmentStore.getState().setEnvironments(environments);
+    mockInvoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command !== "record_environment_activity") return Promise.resolve();
+      const environment = environments.find(
+        (candidate) => candidate.id === args?.environmentId,
+      )!;
+      return Promise.resolve({ ...environment, lastActivityAt: args?.occurredAt });
+    });
+    const claudeKey = createSessionKey("env-claude", "tab-1");
+    const openCodeKey = createSessionKey("env-opencode", "tab-1");
+    const codexKey = createSessionKey("env-codex", "tab-1");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useClaudeStore.setState({
+        clients: new Map([["env-claude", {} as any]]),
+        sessions: new Map([
+          [claudeKey, { sessionId: "claude-session", isLoading: true } as any],
+        ]),
+      });
+      useOpenCodeStore.setState({
+        clients: new Map([["env-opencode", {} as any]]),
+        sessions: new Map([
+          [openCodeKey, { sessionId: "opencode-session", isLoading: true } as any],
+        ]),
+      });
+      useCodexStore.setState({
+        clients: new Map([["env-codex", {} as any]]),
+        sessions: new Map([
+          [codexKey, { sessionId: "codex-session", isLoading: true } as any],
+        ]),
+      });
+    });
+    await waitFor(() => {
+      expect(mockInvoke.mock.calls.filter(
+        ([command]) => command === "record_environment_activity",
+      )).toHaveLength(3);
+    });
+    const activityTimesBeforeClear = new Map(
+      environments.map((environment) => [
+        environment.id,
+        useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt,
+      ]),
+    );
+
+    act(() => {
+      useClaudeStore.setState({ sessions: new Map() });
+      useOpenCodeStore.setState({ sessions: new Map() });
+      useCodexStore.setState({ sessions: new Map() });
+    });
+
+    await waitFor(() => {
+      for (const environment of environments) {
+        expect(useAgentActivityStore.getState().getContainerState(environment.id))
+          .toBe("idle");
+      }
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockInvoke.mock.calls.filter(
+      ([command]) => command === "record_environment_activity",
+    )).toHaveLength(3);
+    for (const environment of environments) {
+      expect(useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt)
+        .toBe(activityTimesBeforeClear.get(environment.id));
+    }
+    expect(unreadEnvironmentIds()).toEqual([]);
+  });
+
   test("keeps working above waiting across native agent types and restores waiting afterward", async () => {
-    const openCodeKey = createOpenCodeSessionKey("env-shared", "tab-opencode");
-    const codexKey = createCodexSessionKey("env-shared", "tab-codex");
+    const openCodeKey = createSessionKey("env-shared", "tab-opencode");
+    const codexKey = createSessionKey("env-shared", "tab-codex");
     render(<MonitorHarness />);
 
     act(() => {
@@ -1539,7 +1840,7 @@ describe("useGlobalActivityMonitor native agent activity", () => {
           [openCodeKey, { sessionId: "opencode-session", isLoading: false } as any],
         ]),
         pendingPermissions: new Map([
-          ["permission-1", { sessionID: "opencode-session" } as any],
+          ["permission-1", { sessionId: "opencode-session" } as any],
         ]),
       });
       useCodexStore.setState({
@@ -1570,10 +1871,10 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("ignores store updates that do not affect activity", async () => {
-    const claudeKey = createClaudeSessionKey("env-shared", "tab-claude");
+    const claudeKey = createSessionKey("env-shared", "tab-claude");
     const tmuxKey = createClaudeTmuxStateKey("env-shared", "tab-tmux");
-    const openCodeKey = createOpenCodeSessionKey("env-shared", "tab-opencode");
-    const codexKey = createCodexSessionKey("env-shared", "tab-codex");
+    const openCodeKey = createSessionKey("env-shared", "tab-opencode");
+    const codexKey = createSessionKey("env-shared", "tab-codex");
     useClaudeStore.setState({
       clients: new Map([["env-shared", {} as any]]),
       sessions: new Map([
@@ -1616,8 +1917,8 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   });
 
   test("derives OpenCode waiting from pending permissions and Codex working from loading", async () => {
-    const openCodeSessionKey = createOpenCodeSessionKey("env-opencode", "tab-1");
-    const codexSessionKey = createCodexSessionKey("env-codex", "tab-1");
+    const openCodeSessionKey = createSessionKey("env-opencode", "tab-1");
+    const codexSessionKey = createSessionKey("env-codex", "tab-1");
     render(<MonitorHarness />);
 
     act(() => {
@@ -1634,7 +1935,7 @@ describe("useGlobalActivityMonitor native agent activity", () => {
           ],
         ]),
         pendingPermissions: new Map([
-          ["permission-1", { sessionID: "opencode-session" } as any],
+          ["permission-1", { sessionId: "opencode-session" } as any],
         ]),
       });
       useCodexStore.setState({
@@ -1676,6 +1977,149 @@ describe("useGlobalActivityMonitor native agent activity", () => {
 
     await waitFor(() => {
       expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("idle");
+    });
+  });
+
+  test("derives OpenCode waiting from a pending question", async () => {
+    // pendingQuestions is the second arm of OpenCode's isWaiting; a question
+    // blocks the turn on the user exactly like a permission prompt does.
+    const sessionKey = createSessionKey("env-opencode", "tab-1");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useOpenCodeStore.setState({
+        clients: new Map([["env-opencode", {} as any]]),
+        sessions: new Map([
+          [
+            sessionKey,
+            {
+              sessionId: "opencode-session",
+              messages: [],
+              isLoading: false,
+            } as any,
+          ],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("idle");
+    });
+
+    act(() => {
+      useOpenCodeStore.setState({
+        pendingQuestions: new Map([
+          ["question-1", { sessionId: "opencode-session" } as any],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("waiting");
+    });
+
+    act(() => {
+      useOpenCodeStore.setState({ pendingQuestions: new Map() });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("idle");
+    });
+  });
+
+  test("ignores an OpenCode question raised against another session", async () => {
+    const sessionKey = createSessionKey("env-opencode", "tab-1");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useOpenCodeStore.setState({
+        clients: new Map([["env-opencode", {} as any]]),
+        sessions: new Map([
+          [
+            sessionKey,
+            {
+              sessionId: "opencode-session",
+              messages: [],
+              isLoading: true,
+            } as any,
+          ],
+        ]),
+        pendingQuestions: new Map([
+          ["question-1", { sessionId: "some-other-session" } as any],
+        ]),
+      });
+    });
+
+    // The question belongs to a session this environment does not own, so the
+    // running turn stays blue rather than flipping to amber.
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("working");
+    });
+  });
+
+  test("merges sibling sessions of one agent so working outranks waiting", async () => {
+    // Within a single store the per-session states are folded together: a
+    // waiting tab must not mask a sibling tab that is still running.
+    const waitingKey = createSessionKey("env-opencode", "tab-waiting");
+    const workingKey = createSessionKey("env-opencode", "tab-working");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useOpenCodeStore.setState({
+        clients: new Map([["env-opencode", {} as any]]),
+        sessions: new Map([
+          [
+            waitingKey,
+            { sessionId: "waiting-session", messages: [], isLoading: false } as any,
+          ],
+          [
+            workingKey,
+            { sessionId: "working-session", messages: [], isLoading: true } as any,
+          ],
+        ]),
+        pendingQuestions: new Map([
+          ["question-1", { sessionId: "waiting-session" } as any],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("working");
+    });
+
+    act(() => {
+      useOpenCodeStore.setState({
+        sessions: new Map([
+          [
+            waitingKey,
+            { sessionId: "waiting-session", messages: [], isLoading: false } as any,
+          ],
+          [
+            workingKey,
+            { sessionId: "working-session", messages: [], isLoading: false } as any,
+          ],
+        ]),
+      });
+    });
+
+    // With nothing running the unanswered question surfaces as amber.
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("waiting");
+    });
+
+    act(() => {
+      useOpenCodeStore.setState({ pendingQuestions: new Map() });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
         .toBe("idle");
     });
   });

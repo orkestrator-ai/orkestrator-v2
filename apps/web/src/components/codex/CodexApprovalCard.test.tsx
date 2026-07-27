@@ -4,9 +4,10 @@
  * button actually sends, that a card which can no longer act disappears, and that
  * a transport failure keeps the card so the user can retry.
  */
+import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createCodexSessionKey, useCodexStore } from "@/stores/codexStore";
+import {useCodexStore} from "@/stores/codexStore";
 import type { CodexApproval, CodexApprovalResponseResult } from "@/lib/codex-client";
 
 /**
@@ -35,7 +36,7 @@ afterAll(() => {
 
 const { CodexApprovalCard } = await import("./CodexApprovalCard");
 
-const SESSION_KEY = createCodexSessionKey("env-1", "tab-1");
+const SESSION_KEY = createSessionKey("env-1", "tab-1");
 const CLIENT = { baseUrl: "http://127.0.0.1:4000" };
 
 function makeApproval(overrides: Partial<CodexApproval> = {}): CodexApproval {

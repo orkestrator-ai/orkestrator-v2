@@ -1,6 +1,7 @@
+import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
+import {useClaudeStore} from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -12,6 +13,7 @@ import type {
   ClaudeQuestionRequest,
 } from "@/lib/claude-client";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -78,6 +80,22 @@ const mockSubscribeToEvents = mock(
   (_client: unknown, _signal?: AbortSignal): AsyncIterable<ClaudeEvent> =>
     abortableEmptyEventStream(_signal),
 );
+const mockStartClaudeServer = mock(async () => ({ hostPort: 9999 as number }));
+const mockGetClaudeServerStatus = mock(async () => ({
+  running: true,
+  hostPort: 9999 as number | null,
+}));
+const mockGetClaudeServerLog = mock(async () => "");
+const mockStartLocalClaudeServer = mock(async () => ({
+  running: true,
+  port: 9999 as number,
+  pid: 1234,
+}));
+const mockGetLocalClaudeServerStatus = mock(async () => ({
+  running: true,
+  port: 9999 as number | null,
+  pid: 1234 as number | null,
+}));
 const mockReadFileBase64 = mock(async () => "chat-local-base64");
 const mockReadContainerFileBase64 = mock(async () => "chat-container-base64");
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
@@ -152,11 +170,11 @@ mock.module("@/lib/backend", () => ({
       revision: 1,
     },
   })),
-  startClaudeServer: mock(async () => ({ hostPort: 9999 })),
-  getClaudeServerStatus: mock(async () => ({ running: true, hostPort: 9999 })),
-  getClaudeServerLog: mock(async () => ""),
-  startLocalClaudeServer: mock(async () => ({ running: true, port: 9999, pid: 1234 })),
-  getLocalClaudeServerStatus: mock(async () => ({ running: true, port: 9999, pid: 1234 })),
+  startClaudeServer: mockStartClaudeServer,
+  getClaudeServerStatus: mockGetClaudeServerStatus,
+  getClaudeServerLog: mockGetClaudeServerLog,
+  startLocalClaudeServer: mockStartLocalClaudeServer,
+  getLocalClaudeServerStatus: mockGetLocalClaudeServerStatus,
   getClaudeModelCatalog: mockGetClaudeModelCatalog,
   renameEnvironmentFromPrompt: mockRenameEnvironmentFromPrompt,
   readFileBase64: mockReadFileBase64,
@@ -191,7 +209,7 @@ import type { ClaudeNativeData } from "@/types/paneLayout";
 
 const ENVIRONMENT_ID = "env-1";
 const TAB_ID = "tab-1";
-const SESSION_KEY = createClaudeSessionKey(ENVIRONMENT_ID, TAB_ID);
+const SESSION_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
 const MOCK_CLIENT = { baseUrl: "http://127.0.0.1:9999" } as const;
 const ORIGINAL_DATE_NOW = Date.now;
 const ORIGINAL_SET_INTERVAL = globalThis.setInterval;
@@ -199,6 +217,7 @@ const ORIGINAL_CLEAR_INTERVAL = globalThis.clearInterval;
 
 let mockedNow = 0;
 let intervalCallback: (() => void) | null = null;
+let intervalCallbacks: Array<() => void> = [];
 let clearIntervalCalls = 0;
 
 function createData(overrides: Partial<ClaudeNativeData> = {}): ClaudeNativeData {
@@ -318,6 +337,18 @@ function resetStores(environmentName = "review-table") {
   seedPaneLayout();
 }
 
+/**
+ * Let queued promise work settle. Used instead of `waitFor` in tests that stub
+ * `setInterval`, where the library's own polling never fires.
+ */
+async function flushAsyncWork(rounds = 3) {
+  for (let round = 0; round < rounds; round += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -412,6 +443,27 @@ describe("ClaudeChatTab", () => {
     );
     mockRenameEnvironmentFromPrompt.mockClear();
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
+    mockStartClaudeServer.mockReset();
+    mockStartClaudeServer.mockImplementation(async () => ({ hostPort: 9999 }));
+    mockGetClaudeServerStatus.mockReset();
+    mockGetClaudeServerStatus.mockImplementation(async () => ({
+      running: true,
+      hostPort: 9999,
+    }));
+    mockGetClaudeServerLog.mockReset();
+    mockGetClaudeServerLog.mockImplementation(async () => "");
+    mockStartLocalClaudeServer.mockReset();
+    mockStartLocalClaudeServer.mockImplementation(async () => ({
+      running: true,
+      port: 9999,
+      pid: 1234,
+    }));
+    mockGetLocalClaudeServerStatus.mockReset();
+    mockGetLocalClaudeServerStatus.mockImplementation(async () => ({
+      running: true,
+      port: 9999,
+      pid: 1234,
+    }));
     mockForkClaudeSession.mockClear();
     mockForkClaudeSession.mockImplementation(async () => ({
       sessionId: "claude-fork",
@@ -421,6 +473,7 @@ describe("ClaudeChatTab", () => {
     mockReadContainerFileBase64.mockImplementation(async () => "chat-container-base64");
     mockReadFileBase64.mockReset();
     mockReadFileBase64.mockImplementation(async () => "chat-local-base64");
+    mockToastError.mockClear();
     lastVirtualizedMessages = [];
   });
 
@@ -2553,6 +2606,250 @@ describe("ClaudeChatTab", () => {
     });
   });
 
+  test("parks the stalled-turn watchdog while the user's own refresh is running", async () => {
+    /**
+     * A manual refresh forces the model catalog, which makes the bridge respawn
+     * model discovery plus a synchronous `claude --version`. A background
+     * reconcile landing inside that window mutates the store under the manual
+     * pass, which then fails with "Claude session changed while refreshing" and
+     * toasts — and retrying reproduces it, because the watchdog keeps ticking
+     * for as long as the turn is stalled.
+     */
+    installTimerHarness(1_000_000);
+    const catalogGate = deferred<Awaited<ReturnType<typeof mockGetClaudeModelCatalog>>>();
+    const serverMessage: ClaudeMessageType = {
+      id: "server-message",
+      role: "assistant",
+      content: "Recovered by the refresh",
+      parts: [{ type: "text", content: "Recovered by the refresh" }],
+      timestamp: "2026-07-26T12:00:00.000Z",
+    };
+    mockGetSession.mockResolvedValue({ status: "running" });
+    act(() => useClaudeStore.getState().setSessionLoading(SESSION_KEY, true));
+
+    const { rerender } = render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={0} />,
+    );
+    await flushAsyncWork();
+
+    mockGetSessionMessages.mockResolvedValue([serverMessage]);
+    mockGetSession.mockClear();
+    mockGetClaudeModelCatalog.mockImplementation(() => catalogGate.promise);
+    mockToastError.mockClear();
+
+    rerender(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={1} />,
+    );
+    await flushAsyncWork();
+    const sessionReadsForManualRefresh = mockGetSession.mock.calls.length;
+    expect(sessionReadsForManualRefresh).toBe(1);
+
+    // Tick well past the staleness threshold while the manual pass is still
+    // parked on the forced catalog reload.
+    for (let tick = 0; tick < 4; tick += 1) {
+      mockedNow += 5_000;
+      await act(async () => {
+        intervalCallback?.();
+        await Promise.resolve();
+      });
+      await flushAsyncWork();
+    }
+    expect(mockGetSession.mock.calls.length).toBe(sessionReadsForManualRefresh);
+
+    await act(async () => {
+      catalogGate.resolve({
+        environmentId: ENVIRONMENT_ID,
+        models: [],
+        source: "sdk" as const,
+        fetchedAt: "2026-07-26T12:00:00.000Z",
+        stale: false,
+      });
+      await catalogGate.promise;
+    });
+    await flushAsyncWork();
+
+    expect(mockToastError).not.toHaveBeenCalled();
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+      serverMessage,
+    ]);
+
+    // ...and the watchdog is genuinely armed again once the user's pass is done,
+    // so the gate above throttled it rather than disabling it.
+    mockedNow += 5_000;
+    await act(async () => {
+      intervalCallback?.();
+      await Promise.resolve();
+    });
+    await flushAsyncWork();
+    expect(mockGetSession.mock.calls.length).toBeGreaterThan(sessionReadsForManualRefresh);
+  });
+
+  describe("cold start server bring-up", () => {
+    beforeEach(() => {
+      useClaudeStore.setState((state) => ({
+        ...state,
+        clients: new Map(),
+        sessions: new Map(),
+      }));
+      seedPaneLayout();
+    });
+
+    test("starts a stopped local server and connects to its port", async () => {
+      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      mockGetLocalClaudeServerStatus.mockResolvedValue({
+        running: false,
+        port: null,
+        pid: null,
+      });
+      mockStartLocalClaudeServer.mockResolvedValue({ running: true, port: 5432, pid: 99 });
+
+      render(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData({ isLocal: true, containerId: undefined })}
+          isActive
+        />,
+      );
+
+      await waitFor(() =>
+        expect(useClaudeStore.getState().serverStatus.get(ENVIRONMENT_ID)).toEqual({
+          running: true,
+          hostPort: 5432,
+        }),
+      );
+      expect(mockGetLocalClaudeServerStatus).toHaveBeenCalledWith(ENVIRONMENT_ID);
+      expect(mockStartLocalClaudeServer).toHaveBeenCalledWith(ENVIRONMENT_ID);
+      expect(mockGetClaudeServerStatus).not.toHaveBeenCalled();
+      expect(mockCreateSession).toHaveBeenCalled();
+    });
+
+    test("reuses an already running local server without restarting it", async () => {
+      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      mockGetLocalClaudeServerStatus.mockResolvedValue({
+        running: true,
+        port: 6543,
+        pid: 42,
+      });
+
+      render(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData({ isLocal: true, containerId: undefined })}
+          isActive
+        />,
+      );
+
+      await waitFor(() =>
+        expect(useClaudeStore.getState().serverStatus.get(ENVIRONMENT_ID)).toEqual({
+          running: true,
+          hostPort: 6543,
+        }),
+      );
+      expect(mockStartLocalClaudeServer).not.toHaveBeenCalled();
+    });
+
+    test("reports a local server that starts without a port", async () => {
+      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      mockGetLocalClaudeServerStatus.mockResolvedValue({
+        running: false,
+        port: null,
+        pid: null,
+      });
+      mockStartLocalClaudeServer.mockResolvedValue({ running: true, port: 0, pid: 99 });
+
+      render(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData({ isLocal: true, containerId: undefined })}
+          isActive
+        />,
+      );
+
+      expect(await screen.findByText("Local server started but no port available")).toBeTruthy();
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    test("reports a container server that starts without a port", async () => {
+      mockGetClaudeServerStatus.mockResolvedValue({ running: false, hostPort: null });
+      mockStartClaudeServer.mockResolvedValue({ hostPort: 0 });
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      expect(await screen.findByText("Server started but no port available")).toBeTruthy();
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    test("rejects a containerized environment without a container id", async () => {
+      render(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData({ containerId: undefined })}
+          isActive
+        />,
+      );
+
+      expect(
+        await screen.findByText("Container ID is required for containerized environments"),
+      ).toBeTruthy();
+      expect(mockGetClaudeServerStatus).not.toHaveBeenCalled();
+    });
+
+    test("loads and reveals the container log for a timeout failure", async () => {
+      mockGetClaudeServerStatus.mockRejectedValue(new Error("timeout waiting for Claude"));
+      mockGetClaudeServerLog.mockResolvedValue("bridge diagnostics");
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await screen.findByText("timeout waiting for Claude");
+      fireEvent.click(await screen.findByRole("button", { name: "Show Log" }));
+      expect(screen.getByText("bridge diagnostics")).toBeTruthy();
+      expect(mockGetClaudeServerLog).toHaveBeenCalledWith("container-1");
+    });
+
+    test("keeps the timeout error visible when the container log cannot be read", async () => {
+      const originalError = console.error;
+      const consoleError = mock(() => {});
+      console.error = consoleError as unknown as typeof console.error;
+      mockGetClaudeServerStatus.mockRejectedValue(new Error("timeout waiting for Claude"));
+      mockGetClaudeServerLog.mockRejectedValue(new Error("log unavailable"));
+
+      try {
+        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+        expect(await screen.findByText("timeout waiting for Claude")).toBeTruthy();
+        await waitFor(() =>
+          expect(consoleError).toHaveBeenCalledWith(
+            "[ClaudeChatTab] Failed to fetch server log:",
+            expect.any(Error),
+          ),
+        );
+        expect(screen.queryByRole("button", { name: "Show Log" })).toBeNull();
+      } finally {
+        console.error = originalError;
+      }
+    });
+
+    test("does not read a container log for a local timeout failure", async () => {
+      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      mockGetLocalClaudeServerStatus.mockRejectedValue(
+        new Error("timeout waiting for the local Claude server"),
+      );
+
+      render(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData({ isLocal: true, containerId: undefined })}
+          isActive
+        />,
+      );
+
+      expect(
+        await screen.findByText("timeout waiting for the local Claude server"),
+      ).toBeTruthy();
+      expect(mockGetClaudeServerLog).not.toHaveBeenCalled();
+    });
+  });
+
   test("stop logs a failed abort without adding a stopped system message", async () => {
     const originalError = console.error;
     const consoleError = mock(() => {});
@@ -3193,12 +3490,19 @@ describe("ClaudeChatTab", () => {
 
 function installTimerHarness(startTime: number) {
   mockedNow = startTime;
-  intervalCallback = null;
+  intervalCallbacks = [];
+  // The component registers several intervals (elapsed timer, stalled-turn
+  // watchdog). Keeping only the last one silently dropped whichever registered
+  // first, so fire them all — the same shape Codex's harness uses.
+  intervalCallback = () => {
+    for (const callback of [...intervalCallbacks]) callback();
+  };
   clearIntervalCalls = 0;
   Date.now = () => mockedNow;
+  let nextHandle = 1;
   globalThis.setInterval = (((callback: TimerHandler) => {
-    intervalCallback = callback as () => void;
-    return 1 as unknown as ReturnType<typeof setInterval>;
+    intervalCallbacks.push(callback as () => void);
+    return nextHandle++ as unknown as ReturnType<typeof setInterval>;
   }) as unknown) as typeof setInterval;
   globalThis.clearInterval = (() => {
     clearIntervalCalls += 1;

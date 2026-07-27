@@ -88,8 +88,8 @@ mock.module("@/components/chat/MentionableInput", () => ({
   }),
 }));
 
-mock.module("@/components/opencode/OpenCodeSlashCommandMenu", () => ({
-  OpenCodeSlashCommandMenu: () => null,
+mock.module("@/components/chat/SlashCommandMenu", () => ({
+  SlashCommandMenu: () => null,
 }));
 
 mock.module("@/components/chat/FileMentionMenu", () => ({
@@ -1030,7 +1030,9 @@ describe("CodexComposeBar", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  test("wraps slash-command selection upward and downward", async () => {
+  test("clamps slash-command selection at both ends of the list", async () => {
+    // Codex used to wrap around; it now clamps, matching Claude and OpenCode.
+    // Wrapping made it easy to shoot past the command you wanted on a long list.
     const slashCommands = [
       { name: "/one", source: "prompt" as const },
       { name: "/two", source: "prompt" as const },
@@ -1042,7 +1044,8 @@ describe("CodexComposeBar", () => {
     fireEvent.keyDown(input, { key: "ArrowUp" });
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => {
-      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("/three ");
+      // ArrowUp at the top stays on the first entry.
+      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("/one ");
     });
     expect(first.onSend).not.toHaveBeenCalled();
 
@@ -1056,7 +1059,8 @@ describe("CodexComposeBar", () => {
     fireEvent.keyDown(secondInput, { key: "ArrowDown" });
     fireEvent.keyDown(secondInput, { key: "Enter" });
     await waitFor(() => {
-      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("/one ");
+      // Three ArrowDowns past a three-entry list stays on the last entry.
+      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("/three ");
     });
     expect(second.onSend).not.toHaveBeenCalled();
   });

@@ -139,8 +139,16 @@ function getEnvironmentTransitionIds<T>(
     currentItem: T | undefined,
     previousItem: T | undefined,
   ) => string | null | undefined,
-  getCurrentState: (item: T | undefined) => AgentActivityState,
-  getPreviousState: (item: T | undefined) => AgentActivityState,
+  // The key is passed through because "waiting" can live in a map keyed by
+  // sessionKey rather than on the session object itself, as Codex's approvals
+  // are.
+  getCurrentState: (item: T | undefined, key: string) => AgentActivityState,
+  getPreviousState: (item: T | undefined, key: string) => AgentActivityState,
+  isTeardown: (
+    currentItem: T | undefined,
+    previousItem: T | undefined,
+  ) => boolean = (currentItem, previousItem) =>
+    previousItem !== undefined && currentItem === undefined,
 ): {
   activityEnvironmentIds: Set<string>;
   completedEnvironmentIds: Set<string>;
@@ -153,8 +161,15 @@ function getEnvironmentTransitionIds<T>(
     const currentItem = currentItems.get(key);
     const environmentId = getEnvironmentId(key, currentItem, previousItem);
     if (!environmentId) continue;
-    const previousState = getPreviousState(previousItem);
-    const currentState = getCurrentState(currentItem);
+
+    // Removing a session/tab is teardown, not a completed turn. The aggregate
+    // source state still needs to fall back to idle below, but recording
+    // activity or unread here would make closing a working tab look like a
+    // successful agent completion.
+    if (isTeardown(currentItem, previousItem)) continue;
+
+    const previousState = getPreviousState(previousItem, key);
+    const currentState = getCurrentState(currentItem, key);
     if (isEnvironmentActivityTransition(previousState, currentState)) {
       activityEnvironmentIds.add(environmentId);
     }
@@ -165,6 +180,12 @@ function getEnvironmentTransitionIds<T>(
   return { activityEnvironmentIds, completedEnvironmentIds };
 }
 
+/**
+ * Route one batch of transitions to the persistence callbacks. An environment
+ * that both worked and completed in the same batch persists as a completion —
+ * the completion write records the activity timestamp too, and issuing both
+ * would race two backend mutations for one event.
+ */
 function persistEnvironmentTransitions(
   transitions: ReturnType<typeof getEnvironmentTransitionIds>,
   recordActivity: (environmentId: string) => void,
@@ -177,6 +198,149 @@ function persistEnvironmentTransitions(
       recordActivity(environmentId);
     }
   }
+}
+
+/** Minimal session shape the shared derivation needs. */
+interface ActivitySession {
+  sessionId: string;
+  isLoading: boolean;
+}
+
+/** Minimal store shape the shared derivation needs. */
+interface NativeActivityState {
+  sessions: Map<string, ActivitySession>;
+  clients: Map<string, unknown>;
+}
+
+interface NativeActivityStore<TState extends NativeActivityState> {
+  getState: () => TState;
+  subscribe: (listener: (state: TState, prevState: TState) => void) => () => void;
+}
+
+interface NativeActivityConfig<TState extends NativeActivityState> {
+  source: ActivitySource;
+  /**
+   * Everything the derivation reads. If every entry is reference-equal to the
+   * previous state the sync bails out — this is the hot path, it runs on every
+   * store write.
+   *
+   * Anything `isWaiting` consults MUST be listed here, or a change to it will
+   * be silently skipped.
+   */
+  watched: (state: TState) => readonly unknown[];
+  /**
+   * True when this session is blocked on the user, which shows amber rather
+   * than green in the sidebar.
+   */
+  isWaiting: (state: TState, sessionKey: string, session: ActivitySession) => boolean;
+}
+
+/**
+ * Derive one agent's sidebar activity from its session store.
+ *
+ * Claude, OpenCode and Codex each had their own ~110-line copy of this
+ * algorithm, and they had drifted: Codex never consulted its pending approvals,
+ * so an environment blocked on a command approval showed idle/green — exactly
+ * the state the amber icon exists to signal. Sharing the derivation makes that
+ * class of omission a missing config field instead of missing code.
+ *
+ * Returns the store unsubscribe function.
+ */
+function subscribeNativeActivity<TState extends NativeActivityState>(
+  store: NativeActivityStore<TState>,
+  config: NativeActivityConfig<TState>,
+  activitySources: MutableRefObject<ActivitySourcesByEnvironment>,
+  setContainerState: SetContainerState,
+  recordActivity: (environmentId: string) => void,
+  markCompleted: (environmentId: string) => void,
+): () => void {
+  const activityStateFor = (
+    state: TState,
+    sessionKey: string,
+    session: ActivitySession | undefined,
+  ): AgentActivityState => {
+    if (!session) return "idle";
+    /**
+     * Blocked-on-the-user beats still-running. A turn parked on an approval is
+     * *also* loading — Codex holds `isLoading` for every non-terminal phase — so
+     * checking `isLoading` first showed the environment as busy and left the
+     * user with no signal that it was their input the turn was waiting on.
+     * Amber exists for exactly this state, so it wins.
+     */
+    if (config.isWaiting(state, sessionKey, session)) return "waiting";
+    return session.isLoading ? "working" : "idle";
+  };
+
+  const syncActivity = (state: TState, prevState?: TState) => {
+    if (prevState) {
+      const current = config.watched(state);
+      const previous = config.watched(prevState);
+      if (current.every((value, index) => value === previous[index])) {
+        return;
+      }
+    }
+
+    const environmentIds = getSessionEnvironmentIds(
+      state.sessions,
+      prevState?.sessions,
+    );
+
+    if (prevState) {
+      const transitions = getEnvironmentTransitionIds(
+        state.sessions,
+        prevState.sessions,
+        (sessionKey) => {
+          const envId = extractEnvironmentId(sessionKey);
+          return envId && state.clients.has(envId) ? envId : undefined;
+        },
+        (session, key) => activityStateFor(state, key, session),
+        (session, key) => activityStateFor(prevState, key, session),
+      );
+      persistEnvironmentTransitions(transitions, recordActivity, markCompleted);
+    }
+
+    for (const envId of environmentIds) {
+      const hasCurrentSessions = Array.from(state.sessions.keys()).some(
+        (sessionKey) => extractEnvironmentId(sessionKey) === envId,
+      );
+
+      // Only derive state while connected. With no client the SSE connection is
+      // down, so preserve the last-known activity rather than flashing idle. A
+      // removed session is authoritative, though, so clear that source.
+      if (!state.clients.has(envId)) {
+        if (!hasCurrentSessions) {
+          setEnvironmentSourceActivity(
+            activitySources,
+            envId,
+            config.source,
+            "idle",
+            setContainerState,
+          );
+        }
+        continue;
+      }
+
+      let desiredState: AgentActivityState = "idle";
+      for (const [sessionKey, session] of state.sessions) {
+        if (extractEnvironmentId(sessionKey) !== envId) continue;
+        desiredState = mergeActivityState(
+          desiredState,
+          activityStateFor(state, sessionKey, session),
+        );
+      }
+
+      setEnvironmentSourceActivity(
+        activitySources,
+        envId,
+        config.source,
+        desiredState,
+        setContainerState,
+      );
+    }
+  };
+
+  syncActivity(store.getState());
+  return store.subscribe(syncActivity);
 }
 
 function getClaudeTmuxTabEnvironmentId(
@@ -223,6 +387,16 @@ function syncClaudeTmuxActivityState(
           : null,
       (tab) => tab ? getClaudeTmuxTabActivityState(tab) : "idle",
       (tab) => tab ? getClaudeTmuxTabActivityState(tab) : "idle",
+      (currentTab, previousTab) =>
+        previousTab !== undefined
+        && (
+          currentTab === undefined
+          || (
+            currentTab.environmentId === null
+            && currentTab.sessionId === null
+            && !currentTab.running
+          )
+        ),
     );
     if (markCompleted) {
       persistEnvironmentTransitions(transitions, recordActivity, markCompleted);
@@ -510,121 +684,33 @@ export function useGlobalActivityMonitor(): void {
   // The SSE subscriptions persist when components unmount, so the session
   // store keeps receiving updates. We subscribe here to reactively derive
   // the activity state for the sidebar.
-  // Only update when a client exists for the environment (i.e. connected).
-  // When disconnected, preserve the last-known state to avoid flashing
-  // the sidebar icon to idle during transient SSE reconnections.
-  useEffect(() => {
-    const syncActivity = (
-      state: ReturnType<typeof useClaudeStore.getState>,
-      prevState?: ReturnType<typeof useClaudeStore.getState>,
-    ) => {
-      // Quick bailout: skip if nothing relevant changed
-      if (
-        prevState &&
-        state.sessions === prevState.sessions &&
-        state.pendingQuestions === prevState.pendingQuestions &&
-        state.pendingPlanApprovals === prevState.pendingPlanApprovals &&
-        state.clients === prevState.clients
-      ) {
-        return;
-      }
-
-      const environmentIds = getSessionEnvironmentIds(
-        state.sessions,
-        prevState?.sessions,
-      );
-
-      if (prevState) {
-        const transitions = getEnvironmentTransitionIds(
-          state.sessions,
-          prevState.sessions,
-          (sessionKey) => {
-            const envId = extractEnvironmentId(sessionKey);
-            return envId && state.clients.has(envId) ? envId : undefined;
-          },
-          (session) => {
-            if (!session) return "idle";
-            if (session.isLoading) return "working";
-            const waitingForQuestion = Array.from(state.pendingQuestions.values()).some(
+  useEffect(
+    () =>
+      subscribeNativeActivity(
+        useClaudeStore,
+        {
+          source: "claude",
+          watched: (state) => [
+            state.sessions,
+            state.clients,
+            state.pendingQuestions,
+            state.pendingPlanApprovals,
+          ],
+          isWaiting: (state, _sessionKey, session) =>
+            Array.from(state.pendingQuestions.values()).some(
               (question) => question.sessionId === session.sessionId,
-            );
-            const waitingForPlanApproval = Array.from(
-              state.pendingPlanApprovals.values(),
-            ).some((approval) => approval.sessionId === session.sessionId);
-            return waitingForQuestion || waitingForPlanApproval ? "waiting" : "idle";
-          },
-          (session) => {
-            if (!session) return "idle";
-            if (session.isLoading) return "working";
-            const waitingForQuestion = Array.from(
-              prevState.pendingQuestions.values(),
-            ).some(
-              (question) => question.sessionId === session.sessionId,
-            );
-            const waitingForPlanApproval = Array.from(
-              prevState.pendingPlanApprovals.values(),
-            ).some((approval) => approval.sessionId === session.sessionId);
-            return waitingForQuestion || waitingForPlanApproval ? "waiting" : "idle";
-          },
-        );
-        persistEnvironmentTransitions(transitions, recordActivity, markCompleted);
-      }
-
-      for (const envId of environmentIds) {
-        const hasCurrentSessions = Array.from(state.sessions.keys()).some(
-          (sessionKey) => extractEnvironmentId(sessionKey) === envId,
-        );
-        // Only derive state when connected (client exists). When the
-        // client is absent the SSE connection is down — preserve the
-        // last-known activity state to avoid flashing idle. A removed
-        // session is authoritative, though, so clear that source.
-        if (!state.clients.has(envId)) {
-          if (!hasCurrentSessions) {
-            setEnvironmentSourceActivity(
-              activitySources,
-              envId,
-              "claude",
-              "idle",
-              setContainerState,
-            );
-          }
-          continue;
-        }
-
-        let desiredState: AgentActivityState = "idle";
-        for (const [sessionKey, session] of state.sessions) {
-          if (extractEnvironmentId(sessionKey) !== envId) continue;
-
-          // Check for pending questions for this specific session
-          const hasPendingQuestions = Array.from(
-            state.pendingQuestions.values()
-          ).some((q) => q.sessionId === session.sessionId);
-          const hasPendingPlanApprovals = Array.from(
-            state.pendingPlanApprovals.values()
-          ).some((approval) => approval.sessionId === session.sessionId);
-          const sessionState: AgentActivityState = session.isLoading
-            ? "working"
-            : hasPendingQuestions || hasPendingPlanApprovals
-              ? "waiting"
-              : "idle";
-          desiredState = mergeActivityState(desiredState, sessionState);
-        }
-
-        setEnvironmentSourceActivity(
-          activitySources,
-          envId,
-          "claude",
-          desiredState,
-          setContainerState,
-        );
-      }
-    };
-
-    syncActivity(useClaudeStore.getState());
-    const unsubscribe = useClaudeStore.subscribe(syncActivity);
-
-    return unsubscribe;
-  }, [markCompleted, recordActivity, setContainerState]);
+            )
+            || Array.from(state.pendingPlanApprovals.values()).some(
+              (approval) => approval.sessionId === session.sessionId,
+            ),
+        },
+        activitySources,
+        setContainerState,
+        recordActivity,
+        markCompleted,
+      ),
+    [markCompleted, recordActivity, setContainerState],
+  );
 
   // ── Claude tmux mode: derive activity from hydrated tmux tab state ──
   // Tmux mode has its own backend lifecycle (`running`) and turn lifecycle
@@ -657,191 +743,60 @@ export function useGlobalActivityMonitor(): void {
   }, [markCompleted, recordActivity, setContainerState]);
 
   // ── Native OpenCode mode: derive activity from session store ───────
-  useEffect(() => {
-    const syncActivity = (
-      state: ReturnType<typeof useOpenCodeStore.getState>,
-      prevState?: ReturnType<typeof useOpenCodeStore.getState>,
-    ) => {
-      if (
-        prevState &&
-        state.sessions === prevState.sessions &&
-        state.pendingQuestions === prevState.pendingQuestions &&
-        state.pendingPermissions === prevState.pendingPermissions &&
-        state.clients === prevState.clients
-      ) {
-        return;
-      }
-
-      const environmentIds = getSessionEnvironmentIds(
-        state.sessions,
-        prevState?.sessions,
-      );
-
-      if (prevState) {
-        const getOpenCodeState = (
-          session: (typeof state.sessions extends Map<string, infer Session> ? Session : never) | undefined,
-          pendingQuestions: typeof state.pendingQuestions,
-          pendingPermissions: typeof state.pendingPermissions,
-        ): AgentActivityState => {
-          if (!session) return "idle";
-          if (session.isLoading) return "working";
-          const waiting = Array.from(pendingQuestions.values()).some(
-            (question) => question.sessionID === session.sessionId,
-          ) || Array.from(pendingPermissions.values()).some(
-            (permission) => permission.sessionID === session.sessionId,
-          );
-          return waiting ? "waiting" : "idle";
-        };
-        const transitions = getEnvironmentTransitionIds(
-          state.sessions,
-          prevState.sessions,
-          (sessionKey) => {
-            const envId = extractEnvironmentId(sessionKey);
-            return envId && state.clients.has(envId) ? envId : undefined;
-          },
-          (session) => getOpenCodeState(
-            session,
+  useEffect(
+    () =>
+      subscribeNativeActivity(
+        useOpenCodeStore,
+        {
+          source: "opencode",
+          watched: (state) => [
+            state.sessions,
+            state.clients,
             state.pendingQuestions,
             state.pendingPermissions,
-          ),
-          (session) => getOpenCodeState(
-            session,
-            prevState.pendingQuestions,
-            prevState.pendingPermissions,
-          ),
-        );
-        persistEnvironmentTransitions(transitions, recordActivity, markCompleted);
-      }
-
-      for (const envId of environmentIds) {
-        const hasCurrentSessions = Array.from(state.sessions.keys()).some(
-          (sessionKey) => extractEnvironmentId(sessionKey) === envId,
-        );
-        if (!state.clients.has(envId)) {
-          if (!hasCurrentSessions) {
-            setEnvironmentSourceActivity(
-              activitySources,
-              envId,
-              "opencode",
-              "idle",
-              setContainerState,
-            );
-          }
-          continue;
-        }
-
-        let desiredState: AgentActivityState = "idle";
-        for (const [sessionKey, session] of state.sessions) {
-          if (extractEnvironmentId(sessionKey) !== envId) continue;
-
-          const hasPendingQuestions = Array.from(
-            state.pendingQuestions.values()
-          ).some((q) => q.sessionID === session.sessionId);
-          const hasPendingPermissions = Array.from(
-            state.pendingPermissions.values()
-          ).some((p) => p.sessionID === session.sessionId);
-          const sessionState: AgentActivityState = session.isLoading
-            ? "working"
-            : hasPendingQuestions || hasPendingPermissions
-              ? "waiting"
-              : "idle";
-          desiredState = mergeActivityState(desiredState, sessionState);
-        }
-
-        setEnvironmentSourceActivity(
-          activitySources,
-          envId,
-          "opencode",
-          desiredState,
-          setContainerState,
-        );
-      }
-    };
-
-    syncActivity(useOpenCodeStore.getState());
-    const unsubscribe = useOpenCodeStore.subscribe(syncActivity);
-
-    return unsubscribe;
-  }, [markCompleted, recordActivity, setContainerState]);
-
+          ],
+          isWaiting: (state, _sessionKey, session) =>
+            Array.from(state.pendingQuestions.values()).some(
+              (question) => question.sessionId === session.sessionId,
+            )
+            || Array.from(state.pendingPermissions.values()).some(
+              (permission) => permission.sessionId === session.sessionId,
+            ),
+        },
+        activitySources,
+        setContainerState,
+        recordActivity,
+        markCompleted,
+      ),
+    [markCompleted, recordActivity, setContainerState],
+  );
   // ── Native Codex mode: derive activity from session store ──────────
-  // Codex SSE streams close on unmount, so state may go stale for
-  // background environments. The last-known state is preserved until
-  // the component remounts and reconnects.
-  useEffect(() => {
-    const syncActivity = (
-      state: ReturnType<typeof useCodexStore.getState>,
-      prevState?: ReturnType<typeof useCodexStore.getState>,
-    ) => {
-      if (
-        prevState &&
-        state.sessions === prevState.sessions &&
-        state.clients === prevState.clients
-      ) {
-        return;
-      }
-
-      const environmentIds = getSessionEnvironmentIds(
-        state.sessions,
-        prevState?.sessions,
-      );
-
-      if (prevState) {
-        const transitions = getEnvironmentTransitionIds(
-          state.sessions,
-          prevState.sessions,
-          (sessionKey) => {
-            const envId = extractEnvironmentId(sessionKey);
-            return envId && state.clients.has(envId) ? envId : undefined;
-          },
-          (session) => session?.isLoading ? "working" : "idle",
-          (session) => session?.isLoading ? "working" : "idle",
-        );
-        persistEnvironmentTransitions(transitions, recordActivity, markCompleted);
-      }
-
-      for (const envId of environmentIds) {
-        const hasCurrentSessions = Array.from(state.sessions.keys()).some(
-          (sessionKey) => extractEnvironmentId(sessionKey) === envId,
-        );
-        if (!state.clients.has(envId)) {
-          if (!hasCurrentSessions) {
-            setEnvironmentSourceActivity(
-              activitySources,
-              envId,
-              "codex",
-              "idle",
-              setContainerState,
-            );
-          }
-          continue;
-        }
-
-        let desiredState: AgentActivityState = "idle";
-        for (const [sessionKey, session] of state.sessions) {
-          if (extractEnvironmentId(sessionKey) !== envId) continue;
-          desiredState = mergeActivityState(
-            desiredState,
-            session.isLoading ? "working" : "idle",
-          );
-        }
-
-        setEnvironmentSourceActivity(
-          activitySources,
-          envId,
-          "codex",
-          desiredState,
-          setContainerState,
-        );
-      }
-    };
-
-    syncActivity(useCodexStore.getState());
-    const unsubscribe = useCodexStore.subscribe(syncActivity);
-
-    return unsubscribe;
-  }, [markCompleted, recordActivity, setContainerState]);
-
+  // Codex SSE streams close on unmount, so state may go stale for background
+  // environments. The last-known state is preserved until the component
+  // remounts and reconnects.
+  useEffect(
+    () =>
+      subscribeNativeActivity(
+        useCodexStore,
+        {
+          source: "codex",
+          watched: (state) => [
+            state.sessions,
+            state.clients,
+            state.pendingApprovals,
+          ],
+          // Approvals are keyed by sessionKey rather than looked up by session
+          // id, so this reads the key rather than the session.
+          isWaiting: (state, sessionKey) =>
+            (state.pendingApprovals.get(sessionKey)?.length ?? 0) > 0,
+        },
+        activitySources,
+        setContainerState,
+        recordActivity,
+        markCompleted,
+      ),
+    [markCompleted, recordActivity, setContainerState],
+  );
   // Terminal-mode activity is detected by the backend PTY so it continues to
   // work while an environment's React tree is inactive. Apply the persisted
   // timestamp event as an incremental update; environment snapshots remain the

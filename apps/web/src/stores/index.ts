@@ -13,7 +13,7 @@ export { usePaneLayoutStore, getAllLeaves } from "./paneLayoutStore";
 export { useTerminalSessionStore, createSessionKey } from "./terminalSessionStore";
 export { useTerminalPortalStore } from "./terminalPortalStore";
 export type { PersistentTerminalData, CreateTerminalOptions } from "./terminalPortalStore";
-export { useCodexStore, createCodexSessionKey } from "./codexStore";
+export { useCodexStore } from "./codexStore";
 export { useErrorDialogStore } from "./errorDialogStore";
 export type { ErrorDetails } from "./errorDialogStore";
 export { useFileDirtyStore } from "./fileDirtyStore";

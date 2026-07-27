@@ -497,6 +497,58 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     });
   });
 
+  test("treats resetting a working tmux tab as teardown, not completion", async () => {
+    const environment = makeEnvironment("env-tmux", "container-tmux");
+    useEnvironmentStore.getState().setEnvironments([environment]);
+    mockInvoke.mockImplementation((command: string, args?: Record<string, unknown>) =>
+      command === "record_environment_activity"
+        ? Promise.resolve({ ...environment, lastActivityAt: args?.occurredAt })
+        : Promise.resolve(),
+    );
+    const stateKey = createClaudeTmuxStateKey(environment.id, "tab-1");
+    render(<MonitorHarness />);
+
+    act(() => {
+      const store = useClaudeTmuxStore.getState();
+      store.setRunning(stateKey, true, {
+        environmentId: environment.id,
+        sessionId: "session-1",
+      });
+      store.setBusy(stateKey, true);
+    });
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState(environment.id))
+        .toBe("working");
+      expect(mockInvoke.mock.calls.some(
+        ([command]) => command === "record_environment_activity",
+      )).toBe(true);
+    });
+    const activityCallsBeforeReset = mockInvoke.mock.calls.filter(
+      ([command]) => command === "record_environment_activity",
+    ).length;
+    const activityAtBeforeReset = useEnvironmentStore
+      .getState()
+      .getEnvironmentById(environment.id)?.lastActivityAt;
+
+    act(() => {
+      useClaudeTmuxStore.getState().resetTab(stateKey);
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState(environment.id))
+        .toBe("idle");
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockInvoke.mock.calls.filter(
+      ([command]) => command === "record_environment_activity",
+    )).toHaveLength(activityCallsBeforeReset);
+    expect(useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt)
+      .toBe(activityAtBeforeReset);
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual([]);
+  });
+
   test("uses a tab environmentId when the tmux key is legacy unscoped", async () => {
     render(<MonitorHarness />);
 
@@ -1475,6 +1527,82 @@ describe("useGlobalActivityMonitor native agent activity", () => {
       expect(useAgentActivityStore.getState().getContainerState("env-codex"))
         .toBe("idle");
     });
+  });
+
+  test("treats clearing working native sessions as teardown, not completion", async () => {
+    const environments = ["env-claude", "env-opencode", "env-codex"].map((id) => ({
+      ...makeEnvironment(id),
+      environmentType: "local" as const,
+      containerId: null,
+    }));
+    useEnvironmentStore.getState().setEnvironments(environments);
+    mockInvoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command !== "record_environment_activity") return Promise.resolve();
+      const environment = environments.find(
+        (candidate) => candidate.id === args?.environmentId,
+      )!;
+      return Promise.resolve({ ...environment, lastActivityAt: args?.occurredAt });
+    });
+    const claudeKey = createSessionKey("env-claude", "tab-1");
+    const openCodeKey = createSessionKey("env-opencode", "tab-1");
+    const codexKey = createSessionKey("env-codex", "tab-1");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useClaudeStore.setState({
+        clients: new Map([["env-claude", {} as any]]),
+        sessions: new Map([
+          [claudeKey, { sessionId: "claude-session", isLoading: true } as any],
+        ]),
+      });
+      useOpenCodeStore.setState({
+        clients: new Map([["env-opencode", {} as any]]),
+        sessions: new Map([
+          [openCodeKey, { sessionId: "opencode-session", isLoading: true } as any],
+        ]),
+      });
+      useCodexStore.setState({
+        clients: new Map([["env-codex", {} as any]]),
+        sessions: new Map([
+          [codexKey, { sessionId: "codex-session", isLoading: true } as any],
+        ]),
+      });
+    });
+    await waitFor(() => {
+      expect(mockInvoke.mock.calls.filter(
+        ([command]) => command === "record_environment_activity",
+      )).toHaveLength(3);
+    });
+    const activityTimesBeforeClear = new Map(
+      environments.map((environment) => [
+        environment.id,
+        useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt,
+      ]),
+    );
+
+    act(() => {
+      useClaudeStore.setState({ sessions: new Map() });
+      useOpenCodeStore.setState({ sessions: new Map() });
+      useCodexStore.setState({ sessions: new Map() });
+    });
+
+    await waitFor(() => {
+      for (const environment of environments) {
+        expect(useAgentActivityStore.getState().getContainerState(environment.id))
+          .toBe("idle");
+      }
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockInvoke.mock.calls.filter(
+      ([command]) => command === "record_environment_activity",
+    )).toHaveLength(3);
+    for (const environment of environments) {
+      expect(useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt)
+        .toBe(activityTimesBeforeClear.get(environment.id));
+    }
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual([]);
   });
 
   test("keeps working above waiting across native agent types and restores waiting afterward", async () => {

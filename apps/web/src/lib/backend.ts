@@ -274,6 +274,13 @@ export async function updateGlobalConfig(global: GlobalConfig): Promise<AppConfi
   return invoke<AppConfig>("update_global_config", { global });
 }
 
+export async function updateAgentModelDefault(
+  key: "claudeModel" | "codexModel" | "opencodeModel",
+  modelId: string,
+): Promise<AppConfig> {
+  return invoke<AppConfig>("update_agent_model_default", { key, modelId });
+}
+
 export async function setGitHubToken(token: string | null): Promise<AppConfig> {
   return invoke<AppConfig>("set_github_token", { token });
 }

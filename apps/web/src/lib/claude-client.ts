@@ -878,13 +878,18 @@ export async function dismissQuestion(
 /**
  * Respond to a plan approval request (approve or reject)
  */
+export type ClaudePlanApprovalResponseResult =
+  | "applied"
+  | "expired"
+  | "failed";
+
 export async function respondToPlanApproval(
   client: ClaudeClient,
   sessionId: string,
   approvalId: string,
   approved: boolean,
   feedback?: string
-): Promise<boolean> {
+): Promise<ClaudePlanApprovalResponseResult> {
   try {
     const response = await fetch(
       `${client.baseUrl}/session/${sessionId}/plan-approvals/${approvalId}/respond`,
@@ -894,10 +899,12 @@ export async function respondToPlanApproval(
         body: JSON.stringify({ approved, feedback }),
       }
     );
-    return response.ok;
+    if (response.ok) return "applied";
+    if (response.status === 404) return "expired";
+    return "failed";
   } catch (error) {
     console.error("[claude-client] Failed to respond to plan approval:", error);
-    return false;
+    return "failed";
   }
 }
 

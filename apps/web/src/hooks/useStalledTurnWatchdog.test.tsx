@@ -106,6 +106,33 @@ describe("useStalledTurnWatchdog", () => {
     expect(reconcile).not.toHaveBeenCalled();
   });
 
+  test("uses the latest callbacks after a rerender", async () => {
+    const staleReconcile = mock(async () => {});
+    const latestReconcile = mock(async () => {});
+    const staleGate = mock(() => false);
+    const latestGate = mock(() => true);
+    const view = render(
+      <Harness
+        {...BASE}
+        reconcile={staleReconcile}
+        shouldReconcile={staleGate}
+      />,
+    );
+
+    view.rerender(
+      <Harness
+        {...BASE}
+        reconcile={latestReconcile}
+        shouldReconcile={latestGate}
+      />,
+    );
+
+    await waitFor(() => expect(latestReconcile).toHaveBeenCalled());
+    expect(staleReconcile).not.toHaveBeenCalled();
+    expect(staleGate).not.toHaveBeenCalled();
+    expect(latestGate).toHaveBeenCalled();
+  });
+
   test("keeps polling after a failed reconcile", async () => {
     // A failed poll is not actionable, but it must not disarm the watchdog —
     // the stall it exists to catch is still there.

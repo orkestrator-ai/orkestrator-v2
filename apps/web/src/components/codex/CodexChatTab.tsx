@@ -88,7 +88,6 @@ interface CodexChatTabProps {
   initialReasoningEffort?: string;
   refreshRequestId?: number;
 }
-
 type ConnectionState = "connecting" | "connected" | "error";
 
 const DEFAULT_CODEX_MODE: CodexConversationMode = "build";
@@ -2023,4 +2022,3 @@ export function CodexChatTab({
     />
   );
 }
-

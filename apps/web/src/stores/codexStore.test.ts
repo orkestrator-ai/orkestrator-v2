@@ -189,6 +189,57 @@ describe("codexStore message helpers", () => {
   });
 });
 
+describe("codexStore session cleanup", () => {
+  beforeEach(() => {
+    resetCodexStore();
+  });
+
+  test("clearSession exhaustively removes every session-keyed map for only the target tab", () => {
+    const targetKey = createSessionKey("env-1", "tab-target");
+    const otherKey = createSessionKey("env-1", "tab-other");
+    useCodexStore.setState({
+      sessions: new Map([
+        [targetKey, { sessionId: "bridge-target", messages: [], isLoading: false }],
+        [otherKey, { sessionId: "bridge-other", messages: [], isLoading: false }],
+      ]),
+      attachments: new Map([[targetKey, []], [otherKey, []]]),
+      draftText: new Map([[targetKey, "target"], [otherKey, "other"]]),
+      draftMentions: new Map([[targetKey, []], [otherKey, []]]),
+      messageQueue: new Map([[targetKey, []], [otherKey, []]]),
+      selectedModel: new Map([[targetKey, "gpt-5.4"], [otherKey, "gpt-5.3"]]),
+      selectedMode: new Map([[targetKey, "build"], [otherKey, "plan"]]),
+      selectedReasoningEffort: new Map([[targetKey, "high"], [otherKey, "medium"]]),
+      fastMode: new Map([[targetKey, true], [otherKey, false]]),
+      sessionPhase: new Map([[targetKey, "running"], [otherKey, "idle"]]),
+      pendingApprovals: new Map([
+        [targetKey, [approval("approval-target")]],
+        [otherKey, [approval("approval-other")]],
+      ]),
+    });
+
+    useCodexStore.getState().clearSession(targetKey);
+
+    const state = useCodexStore.getState();
+    const sessionKeyedMaps = [
+      "sessions",
+      "attachments",
+      "draftText",
+      "draftMentions",
+      "messageQueue",
+      "selectedModel",
+      "selectedMode",
+      "selectedReasoningEffort",
+      "fastMode",
+      "sessionPhase",
+      "pendingApprovals",
+    ] as const;
+    for (const field of sessionKeyedMaps) {
+      expect(state[field].has(targetKey), `${field} should remove target`).toBe(false);
+      expect(state[field].has(otherKey), `${field} should preserve other tab`).toBe(true);
+    }
+  });
+});
+
 describe("codexStore cleanup and queue helpers", () => {
   beforeEach(() => {
     resetCodexStore();

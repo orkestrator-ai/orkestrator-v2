@@ -1,5 +1,9 @@
 import { useCallback } from "react";
-import { listSessions, type CodexClient } from "@/lib/codex-client";
+import {
+  listSessions,
+  lookupSessionStatus,
+  type CodexClient,
+} from "@/lib/codex-client";
 import {
   NativeResumeSessionDialog,
   type ResumableSession,
@@ -21,13 +25,23 @@ export function CodexResumeSessionDialog({
   currentSessionId,
 }: CodexResumeSessionDialogProps) {
   const fetchSessions = useCallback(async (): Promise<ResumableSession[]> => {
-    const sessions = await listSessions(client);
-    return sessions.map((session) => ({
-      id: session.id,
-      title: session.title,
-      activityAt: session.updatedAt,
-    }));
-  }, [client]);
+    const [sessions, currentStatus] = await Promise.all([
+      listSessions(client),
+      currentSessionId
+        ? lookupSessionStatus(client, currentSessionId).catch(() => undefined)
+        : Promise.resolve(undefined),
+    ]);
+    const currentThreadId =
+      currentStatus?.kind === "found" ? currentStatus.session.threadId : undefined;
+
+    return sessions
+      .filter((session) => session.id !== currentThreadId)
+      .map((session) => ({
+        id: session.id,
+        title: session.title,
+        activityAt: session.updatedAt,
+      }));
+  }, [client, currentSessionId]);
 
   return (
     <NativeResumeSessionDialog
@@ -36,7 +50,6 @@ export function CodexResumeSessionDialog({
       agentLabel="Codex"
       fetchSessions={fetchSessions}
       onResume={onResume}
-      currentSessionId={currentSessionId}
     />
   );
 }

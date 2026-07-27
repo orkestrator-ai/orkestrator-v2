@@ -134,6 +134,28 @@ describe("QuestionCard single-select exclusivity", () => {
       expect(onSubmit).toHaveBeenCalledWith([["Option B"]]);
     });
   });
+
+  test("deselects a selected option when deselection is allowed", () => {
+    renderCard(QUESTION);
+
+    const option = screen.getByRole("button", { name: "Option A" });
+    fireEvent.click(option);
+    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(option);
+    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  test("keeps a selected option when deselection is disabled", async () => {
+    const { onSubmit } = renderCard(QUESTION, { allowOptionDeselect: false });
+
+    const option = screen.getByRole("button", { name: "Option A" });
+    fireEvent.click(option);
+    fireEvent.click(option);
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["Option A"]]));
+  });
 });
 
 describe("QuestionCard option values", () => {
@@ -179,5 +201,52 @@ describe("QuestionCard custom-answer overrides", () => {
       />,
     );
     expect(container.firstChild).toBeNull();
+  });
+
+  test("ignores blank custom answers", () => {
+    renderCard([{ question: "Answer?", options: [] }]);
+    const input = screen.getByPlaceholderText("Type your answer");
+
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
+    expect((input as HTMLInputElement).value).toBe("   ");
+  });
+
+  test("does not add a duplicate custom-answer chip", async () => {
+    const { onSubmit } = renderCard([
+      { question: "Answer?", options: [], multiSelect: true },
+    ]);
+    const input = screen.getByPlaceholderText("Type your answer");
+
+    fireEvent.change(input, { target: { value: "same answer" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(input, { target: { value: "same answer" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["same answer"]]));
+    expect(screen.getAllByText("same answer")).toHaveLength(1);
+  });
+});
+
+describe("QuestionCard dismiss recovery", () => {
+  test("unlocks the card after a rejected dismiss so the user can retry", async () => {
+    const onDismiss = mock(async () => {
+      throw new Error("bridge unavailable");
+    });
+    renderCard([{ question: "Continue?", options: [{ label: "Yes" }] }], {
+      onDismiss,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Dismiss" }).hasAttribute("disabled")).toBe(false),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(2));
   });
 });

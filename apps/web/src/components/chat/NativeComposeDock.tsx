@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import { cn } from "@/lib/utils";
 
 interface NativeComposeDockProps {
@@ -17,6 +17,8 @@ interface NativeComposeDockProps {
    */
   pinnedContent?: ReactNode;
   title?: string;
+  /** Root element, used by the chat shell to reserve the dock's rendered height. */
+  rootRef?: Ref<HTMLDivElement>;
 }
 
 export function NativeComposeDock({
@@ -26,9 +28,11 @@ export function NativeComposeDock({
   topAccessory,
   pinnedContent,
   title = "Ready to build!",
+  rootRef,
 }: NativeComposeDockProps) {
   return (
     <div
+      ref={rootRef}
       data-testid="compose-dock"
       className={cn(
         "absolute inset-x-0 z-20 px-2 transition-[top,transform] duration-300 ease-out motion-reduce:transition-none sm:px-4",

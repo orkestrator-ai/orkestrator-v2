@@ -1,7 +1,6 @@
 import { toast } from "sonner";
-import { updateGlobalConfig } from "@/lib/backend";
+import { updateAgentModelDefault } from "@/lib/backend";
 import { useConfigStore } from "@/stores/configStore";
-import type { GlobalConfig } from "@/types";
 
 /** Global-config keys holding each agent's default model. */
 export type AgentModelConfigKey = "claudeModel" | "codexModel" | "opencodeModel";
@@ -10,9 +9,9 @@ export type AgentModelConfigKey = "claudeModel" | "codexModel" | "opencodeModel"
  * Persist the composer's model choice as the agent's global default.
  *
  * Applied optimistically so the dropdown does not flicker, then rolled back if
- * the write fails. The guards compare against the value we wrote: a second
- * change made while the request was in flight wins, and neither the commit nor
- * the rollback may stomp it.
+ * the write fails. Persistence updates only this model key on both sides of the
+ * IPC boundary: unrelated config changes made while the request is in flight
+ * therefore cannot be replaced by a stale whole-config snapshot.
  *
  * Claude and Codex already did this; OpenCode's selection was previously
  * session-only, so a new environment always reverted to the settings default.
@@ -29,17 +28,14 @@ export async function persistAgentModelDefault(
   if (!currentConfig?.global) return;
   if (currentConfig.global[key] === modelId) return;
 
-  const nextGlobal: GlobalConfig = { ...currentConfig.global, [key]: modelId };
-  useConfigStore.getState().setConfig({ ...currentConfig, global: nextGlobal });
+  const previousModelId = currentConfig.global[key];
+  useConfigStore.getState().updateGlobalConfig({ [key]: modelId });
 
   try {
-    const updatedConfig = await updateGlobalConfig(nextGlobal);
-    if (useConfigStore.getState().config.global[key] === modelId) {
-      useConfigStore.getState().setConfig(updatedConfig);
-    }
+    await updateAgentModelDefault(key, modelId);
   } catch (error) {
     if (useConfigStore.getState().config.global[key] === modelId) {
-      useConfigStore.getState().setConfig(currentConfig);
+      useConfigStore.getState().updateGlobalConfig({ [key]: previousModelId });
     }
     console.error(
       `[${agentLabel}ComposeBar] Failed to persist ${agentLabel} model default:`,

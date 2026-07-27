@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Clock, Loader2, MessageSquare } from "lucide-react";
 import {
   Dialog,
@@ -62,25 +62,33 @@ export function NativeResumeSessionDialog({
   const [sessions, setSessions] = useState<ResumableSession[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestGenerationRef = useRef(0);
 
   const loadSessions = useCallback(async () => {
+    const requestGeneration = ++requestGenerationRef.current;
     setIsLoading(true);
     setError(null);
 
     try {
       const all = await fetchSessions();
+      if (requestGeneration !== requestGenerationRef.current) return;
+
       const filtered = all
         .filter((session) => session.id !== currentSessionId)
         .sort((a, b) => activityTimestamp(b) - activityTimestamp(a));
       setSessions(filtered);
     } catch (err) {
+      if (requestGeneration !== requestGenerationRef.current) return;
+
       console.error(
         `[${agentLabel}ResumeSessionDialog] Failed to fetch sessions:`,
         err,
       );
       setError("Failed to load sessions");
     } finally {
-      setIsLoading(false);
+      if (requestGeneration === requestGenerationRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [agentLabel, currentSessionId, fetchSessions]);
 
@@ -88,6 +96,12 @@ export function NativeResumeSessionDialog({
     if (open) {
       void loadSessions();
     }
+
+    return () => {
+      // Ignore a request started for a previous open cycle, dependency set, or
+      // component instance. It may still settle, but it no longer owns state.
+      requestGenerationRef.current += 1;
+    };
   }, [open, loadSessions]);
 
   return (

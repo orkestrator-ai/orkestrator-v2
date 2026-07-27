@@ -118,7 +118,11 @@ describe("Electron StorageService", () => {
     await Promise.all([first.init(), second.init()]);
     await first.saveConfig(defaultConfig());
 
-    const global = { ...defaultConfig().global, defaultAgent: "codex" as const };
+    const global = {
+      ...defaultConfig().global,
+      defaultAgent: "codex" as const,
+      claudeModel: "claude-opus-4",
+    };
     const desktopConnections = {
       activeConnectionId: "remote-1",
       connections: [{
@@ -132,12 +136,14 @@ describe("Electron StorageService", () => {
     await Promise.all([
       first.saveDesktopConnections(desktopConnections),
       second.updateGlobalConfig(global),
+      first.updateAgentModelDefault("claudeModel", "claude-opus-4"),
       first.updateRepositoryConfig("project-1", { defaultBranch: "develop", prBaseBranch: "develop" }),
     ]);
 
     const config = await second.loadConfig();
     expect(config.desktopConnections).toEqual(desktopConnections);
     expect(config.global.defaultAgent).toBe("codex");
+    expect(config.global.claudeModel).toBe("claude-opus-4");
     expect(config.repositories["project-1"]).toMatchObject({ defaultBranch: "develop", prBaseBranch: "develop" });
   });
 

@@ -1,5 +1,13 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { forwardRef, useImperativeHandle, useState } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
 import { mockToastError } from "../../mocks/sonner";
@@ -13,6 +21,13 @@ const mockUpdateGlobalConfig = mock(async (global: Record<string, unknown>) => (
   global,
   repositories: {},
 }));
+const mockUpdateAgentModelDefault = mock(
+  async (key: string, modelId: string) => ({
+    version: "1.0",
+    global: { [key]: modelId },
+    repositories: {},
+  }),
+);
 const mockSerializeForLLM = mock((text: string, _mentions?: unknown[]) => text);
 const mockHandleFileMentionCursorChange = mock(() => {});
 const mockHandleFileMentionKeyDown = mock(() => false);
@@ -85,6 +100,7 @@ mock.module("@/lib/backend", () => ({
   readContainerFileBase64: mockReadContainerFileBase64,
   readFileBase64: mockReadFileBase64,
   updateGlobalConfig: mockUpdateGlobalConfig,
+  updateAgentModelDefault: mockUpdateAgentModelDefault,
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
 }));
@@ -271,6 +287,14 @@ describe("OpenCodeComposeBar", () => {
       global,
       repositories: {},
     }));
+    mockUpdateAgentModelDefault.mockReset();
+    mockUpdateAgentModelDefault.mockImplementation(
+      async (key: string, modelId: string) => ({
+        version: "1.0",
+        global: { [key]: modelId },
+        repositories: {},
+      }),
+    );
     mockSerializeForLLM.mockReset();
     mockSerializeForLLM.mockImplementation((text: string) => text);
     mockHandleFileMentionCursorChange.mockReset();
@@ -362,6 +386,142 @@ describe("OpenCodeComposeBar", () => {
     expect(container.firstElementChild?.className).toContain("my-0");
     expect(container.firstElementChild?.className).not.toContain("mb-4");
     expect(screen.getByTestId("context-usage").textContent).toBe("25");
+  });
+
+  test("keeps same-environment tab drafts, model controls, context, and queued edits isolated", async () => {
+    const tabA = `env-${ENV_ID}:tab-a`;
+    const tabB = `env-${ENV_ID}:tab-b`;
+    const store = useOpenCodeStore.getState();
+    const attachmentA = {
+      id: "queued-attachment-a",
+      type: "file" as const,
+      path: "/workspace/a.md",
+      name: "a.md",
+    };
+    const attachmentB = {
+      id: "queued-attachment-b",
+      type: "file" as const,
+      path: "/workspace/b.md",
+      name: "b.md",
+    };
+    const stagedAttachmentB = {
+      id: "staged-attachment-b",
+      type: "file" as const,
+      path: "/workspace/staged-b.md",
+      name: "staged-b.md",
+    };
+
+    store.setDraftText(tabA, "Draft for A");
+    store.setDraftText(tabB, "Draft for B");
+    store.setSelectedModel(tabA, "gpt-5");
+    store.setSelectedModel(tabB, "claude-sonnet");
+    store.setSelectedVariant(tabA, "high");
+    store.setSelectedMode(tabA, "plan");
+    store.setSelectedMode(tabB, "build");
+    store.setContextUsage(tabA, {
+      usedTokens: 10,
+      totalTokens: 100,
+      percentUsed: 10,
+    });
+    store.setContextUsage(tabB, {
+      usedTokens: 80,
+      totalTokens: 100,
+      percentUsed: 80,
+    });
+    store.addAttachment(tabB, stagedAttachmentB);
+    store.addToQueue(tabA, {
+      id: "queue-a",
+      text: "Queued for A",
+      attachments: [attachmentA],
+      model: "claude-sonnet",
+      mode: "build",
+    });
+    store.addToQueue(tabB, {
+      id: "queue-b",
+      text: "Queued for B",
+      attachments: [attachmentB],
+      model: "gpt-5",
+      variant: "low",
+      mode: "plan",
+    });
+
+    render(
+      <>
+        <div data-testid="compose-tab-a">
+          <OpenCodeComposeBar
+            environmentId={ENV_ID}
+            tabId="tab-a"
+            models={defaultModels}
+            queueLength={1}
+            onSend={() => {}}
+          />
+        </div>
+        <div data-testid="compose-tab-b">
+          <OpenCodeComposeBar
+            environmentId={ENV_ID}
+            tabId="tab-b"
+            models={defaultModels}
+            queueLength={1}
+            onSend={() => {}}
+          />
+        </div>
+      </>,
+    );
+
+    const tabAView = within(screen.getByTestId("compose-tab-a"));
+    const tabBView = within(screen.getByTestId("compose-tab-b"));
+    expect((tabAView.getByTestId("mentionable-input") as HTMLTextAreaElement).value).toBe(
+      "Draft for A",
+    );
+    expect((tabBView.getByTestId("mentionable-input") as HTMLTextAreaElement).value).toBe(
+      "Draft for B",
+    );
+    expect(tabAView.getByText("GPT-5")).toBeTruthy();
+    expect(tabAView.getByText("high")).toBeTruthy();
+    expect(tabAView.getByText("Planning")).toBeTruthy();
+    expect(tabAView.getByTestId("context-usage").textContent).toBe("10");
+    expect(tabAView.getByText("+1 queued")).toBeTruthy();
+    expect(tabBView.getByText("Claude Sonnet")).toBeTruthy();
+    expect(tabBView.queryByText("high")).toBeNull();
+    expect(tabBView.getByText("Build")).toBeTruthy();
+    expect(tabBView.getByTestId("context-usage").textContent).toBe("80");
+    expect(tabBView.getByText("+1 queued")).toBeTruthy();
+
+    fireEvent.change(tabAView.getByTestId("mentionable-input"), {
+      target: { value: "Updated A" },
+    });
+    expect(useOpenCodeStore.getState().getDraftText(tabA)).toBe("Updated A");
+    expect(useOpenCodeStore.getState().getDraftText(tabB)).toBe("Draft for B");
+    expect(useOpenCodeStore.getState().getQueueLength(tabA)).toBe(1);
+    expect(useOpenCodeStore.getState().getQueueLength(tabB)).toBe(1);
+
+    fireEvent.click(tabAView.getByText("+1 queued"));
+    fireEvent.click(await screen.findByTitle("Click to edit this message"));
+
+    await waitFor(() => {
+      const next = useOpenCodeStore.getState();
+      expect(next.getDraftText(tabA)).toBe("Queued for A");
+      expect(next.getQueueLength(tabA)).toBe(0);
+      expect(next.getSelectedModel(tabA)).toBe("claude-sonnet");
+      expect(next.getSelectedVariant(tabA)).toBeUndefined();
+      expect(next.getSelectedMode(tabA)).toBe("build");
+      expect(next.getAttachments(tabA)).toEqual([attachmentA]);
+    });
+
+    const sibling = useOpenCodeStore.getState();
+    expect(sibling.getDraftText(tabB)).toBe("Draft for B");
+    expect(sibling.getSelectedModel(tabB)).toBe("claude-sonnet");
+    expect(sibling.getSelectedMode(tabB)).toBe("build");
+    expect(sibling.getAttachments(tabB)).toEqual([stagedAttachmentB]);
+    expect(sibling.messageQueue.get(tabB)).toEqual([
+      expect.objectContaining({
+        id: "queue-b",
+        model: "gpt-5",
+        variant: "low",
+        mode: "plan",
+        attachments: [attachmentB],
+      }),
+    ]);
   });
 
   test("renders Build mode label by default", () => {
@@ -1846,8 +2006,9 @@ describe("OpenCodeComposeBar", () => {
     fireEvent.click(await screen.findByText("GPT-5"));
 
     await waitFor(() => {
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ opencodeModel: "gpt-5" }),
+      expect(mockUpdateAgentModelDefault).toHaveBeenCalledWith(
+        "opencodeModel",
+        "gpt-5",
       );
     });
     expect(useConfigStore.getState().config.global.opencodeModel).toBe("gpt-5");

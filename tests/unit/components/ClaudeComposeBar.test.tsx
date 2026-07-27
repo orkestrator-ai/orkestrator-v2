@@ -8,9 +8,9 @@ const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
 const mockGetFileTree = mock(async () => []);
 const mockGetLocalFileTree = mock(async () => []);
-const mockUpdateGlobalConfig = mock(async (global: any) => ({
+const mockUpdateAgentModelDefault = mock(async (key: string, modelId: string) => ({
   version: "1.0",
-  global,
+  global: { [key]: modelId },
   repositories: {},
 }));
 const mockSerializeForLLM = mock((text: string, _mentions?: unknown[]) => text);
@@ -58,7 +58,7 @@ mock.module("@/lib/backend", () => ({
   readFileBase64: async () => "",
   writeContainerFile: mockWriteContainerFile,
   writeLocalFile: mockWriteLocalFile,
-  updateGlobalConfig: mockUpdateGlobalConfig,
+  updateAgentModelDefault: mockUpdateAgentModelDefault,
   getFileTree: mockGetFileTree,
   getLocalFileTree: mockGetLocalFileTree,
 }));
@@ -218,10 +218,10 @@ describe("ClaudeComposeBar", () => {
     mockGetFileTree.mockResolvedValue([]);
     mockGetLocalFileTree.mockReset();
     mockGetLocalFileTree.mockResolvedValue([]);
-    mockUpdateGlobalConfig.mockReset();
-    mockUpdateGlobalConfig.mockImplementation(async (global: any) => ({
+    mockUpdateAgentModelDefault.mockReset();
+    mockUpdateAgentModelDefault.mockImplementation(async (key: string, modelId: string) => ({
       version: "1.0",
-      global,
+      global: { [key]: modelId },
       repositories: {},
     }));
     mockSerializeForLLM.mockReset();
@@ -292,15 +292,13 @@ describe("ClaudeComposeBar", () => {
     fireEvent.click(await screen.findByText("Sonnet"));
 
     await waitFor(() => {
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ claudeModel: "sonnet" }),
-      );
+      expect(mockUpdateAgentModelDefault).toHaveBeenCalledWith("claudeModel", "sonnet");
     });
     expect(useConfigStore.getState().config.global.claudeModel).toBe("sonnet");
   });
 
   test("rolls back the persisted Claude model default when saving fails", async () => {
-    mockUpdateGlobalConfig.mockImplementationOnce(async () => {
+    mockUpdateAgentModelDefault.mockImplementationOnce(async () => {
       throw new Error("disk full");
     });
 
@@ -312,9 +310,7 @@ describe("ClaudeComposeBar", () => {
     fireEvent.click(await screen.findByText("Sonnet"));
 
     await waitFor(() => {
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ claudeModel: "sonnet" }),
-      );
+      expect(mockUpdateAgentModelDefault).toHaveBeenCalledWith("claudeModel", "sonnet");
       expect(useConfigStore.getState().config.global.claudeModel).toBe("opus");
     });
     expect(useClaudeStore.getState().getSelectedModel(SESSION_KEY)).toBe("sonnet");
@@ -322,19 +318,19 @@ describe("ClaudeComposeBar", () => {
 
   test("keeps the newest selected model when an older persistence request resolves later", async () => {
     let resolveFirstSave: (() => void) | undefined;
-    mockUpdateGlobalConfig.mockImplementationOnce(
-      (global: any) =>
+    mockUpdateAgentModelDefault.mockImplementationOnce(
+      (key: string, modelId: string) =>
         new Promise((resolve) => {
           resolveFirstSave = () => resolve({
             version: "1.0",
-            global,
+            global: { [key]: modelId },
             repositories: {},
           });
         }),
     );
-    mockUpdateGlobalConfig.mockImplementationOnce(async (global: any) => ({
+    mockUpdateAgentModelDefault.mockImplementationOnce(async (key: string, modelId: string) => ({
       version: "1.0",
-      global,
+      global: { [key]: modelId },
       repositories: {},
     }));
 
@@ -372,7 +368,7 @@ describe("ClaudeComposeBar", () => {
     resolveFirstSave?.();
 
     await waitFor(() => {
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(2);
+      expect(mockUpdateAgentModelDefault).toHaveBeenCalledTimes(2);
       expect(useConfigStore.getState().config.global.claudeModel).toBe("haiku");
     });
   });

@@ -96,19 +96,17 @@ export function ClaudePlanApprovalCard({
   const handleApprove = useCallback(async () => {
     setIsSubmitting(true);
     try {
-      const success = await respondToPlanApproval(client, sessionId, approval.id, true);
-      if (success) {
+      const result = await respondToPlanApproval(client, sessionId, approval.id, true);
+      if (result === "applied") {
         removePendingPlanApproval(approval.id);
         // Plan mode will be disabled via the plan.exit-requested event from the server
-      } else {
+      } else if (result === "expired") {
         // Request expired - remove the card since it's no longer actionable
         console.warn("[ClaudePlanApprovalCard] Plan approval request expired, removing card");
         removePendingPlanApproval(approval.id);
       }
     } catch (err) {
       console.error("[ClaudePlanApprovalCard] Failed to approve plan:", err);
-      // On error, also remove the card - it's likely no longer valid
-      removePendingPlanApproval(approval.id);
     } finally {
       setIsSubmitting(false);
     }
@@ -123,26 +121,24 @@ export function ClaudePlanApprovalCard({
 
     setIsSubmitting(true);
     try {
-      const success = await respondToPlanApproval(
+      const result = await respondToPlanApproval(
         client,
         sessionId,
         approval.id,
         false,
         feedback.trim() || undefined
       );
-      if (success) {
+      if (result === "applied") {
         removePendingPlanApproval(approval.id);
         // Keep plan mode enabled so Claude can revise the plan
         // The plan.exit-requested event will NOT be sent on rejection
-      } else {
+      } else if (result === "expired") {
         // Request expired - remove the card since it's no longer actionable
         console.warn("[ClaudePlanApprovalCard] Plan rejection request expired, removing card");
         removePendingPlanApproval(approval.id);
       }
     } catch (err) {
       console.error("[ClaudePlanApprovalCard] Failed to reject plan:", err);
-      // On error, also remove the card - it's likely no longer valid
-      removePendingPlanApproval(approval.id);
     } finally {
       setIsSubmitting(false);
     }
@@ -152,17 +148,16 @@ export function ClaudePlanApprovalCard({
     // Dismissing is treated as rejection without feedback
     setIsSubmitting(true);
     respondToPlanApproval(client, sessionId, approval.id, false)
-      .then((success) => {
-        // Always remove the card on dismiss - either it succeeded or it expired
-        removePendingPlanApproval(approval.id);
-        if (!success) {
+      .then((result) => {
+        if (result === "applied" || result === "expired") {
+          removePendingPlanApproval(approval.id);
+        }
+        if (result === "expired") {
           console.warn("[ClaudePlanApprovalCard] Plan dismiss request expired, card removed anyway");
         }
       })
       .catch((err) => {
         console.error("[ClaudePlanApprovalCard] Failed to dismiss plan:", err);
-        // On error, also remove the card - user explicitly wanted to dismiss
-        removePendingPlanApproval(approval.id);
       })
       .finally(() => {
         setIsSubmitting(false);

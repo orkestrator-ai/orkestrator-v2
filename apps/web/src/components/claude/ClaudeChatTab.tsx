@@ -95,7 +95,6 @@ interface ClaudeChatTabProps {
   initialReasoningEffort?: string;
   refreshRequestId?: number;
 }
-
 type ConnectionState = "connecting" | "connected" | "error";
 
 function resolvePreferredClaudeModel(
@@ -1661,4 +1660,3 @@ export function ClaudeChatTab({
     />
   );
 }
-

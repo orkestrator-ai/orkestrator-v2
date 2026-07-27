@@ -10,6 +10,7 @@ import {
 } from "@orkestrator/protocol/review-artifacts";
 import {
   PANE_LAYOUT_VERSION,
+  type AgentModelConfigKey,
   type Environment,
   type AppConfig,
   type ClaudeEffortLevel,
@@ -311,6 +312,20 @@ type RendererGlobalConfig = Omit<AppConfig["global"], "githubToken"> & {
 type RendererAppConfig = Omit<AppConfig, "global"> & {
   global: RendererGlobalConfig;
 };
+
+const AGENT_MODEL_CONFIG_KEYS = new Set<AgentModelConfigKey>([
+  "claudeModel",
+  "codexModel",
+  "opencodeModel",
+]);
+
+function asAgentModelConfigKey(value: unknown): AgentModelConfigKey {
+  const key = asString(value, "key") as AgentModelConfigKey;
+  if (!AGENT_MODEL_CONFIG_KEYS.has(key)) {
+    throw new Error("Expected key to identify an agent model default");
+  }
+  return key;
+}
 
 function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalConfig {
   const { githubToken, ...safeGlobal } = global;
@@ -3790,6 +3805,14 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     );
     return redactAppConfig(updated);
   });
+  register("update_agent_model_default", async ({ key, modelId }, { storage }) =>
+    redactAppConfig(
+      await storage.updateAgentModelDefault(
+        asAgentModelConfigKey(key),
+        asString(modelId, "modelId"),
+      ),
+    )
+  );
   register("set_github_token", async ({ token }, { storage }) => {
     const nextToken = token === null ? null : asString(token, "token").trim();
     if (nextToken !== null && !nextToken) {

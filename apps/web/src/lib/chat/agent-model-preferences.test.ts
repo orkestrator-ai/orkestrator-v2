@@ -1,12 +1,16 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { useConfigStore } from "@/stores/configStore";
+import type { AppConfig } from "@/types";
 
-const mockUpdateGlobalConfig = mock(async (global: unknown) => ({
-  version: "1.0",
-  global,
-  repositories: {},
-}));
+const mockUpdateAgentModelDefault = mock(
+  async (key: string, modelId: string): Promise<AppConfig> =>
+    ({
+      version: "1.0",
+      global: { [key]: modelId },
+      repositories: {},
+    }) as unknown as AppConfig,
+);
 
 /**
  * `@/lib/backend` is deliberately real in `tests/setup.ts`, so snapshot it
@@ -17,13 +21,23 @@ import * as realBackend from "@/lib/backend";
 const realBackendSnapshot = { ...realBackend };
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
-  updateGlobalConfig: mockUpdateGlobalConfig,
+  updateAgentModelDefault: mockUpdateAgentModelDefault,
 }));
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
 const { persistAgentModelDefault } = await import("./agent-model-preferences");
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 function seedConfig(global: Record<string, unknown>) {
   useConfigStore.getState().setConfig({
@@ -35,12 +49,15 @@ function seedConfig(global: Record<string, unknown>) {
 
 beforeEach(() => {
   mockToastError.mockClear();
-  mockUpdateGlobalConfig.mockReset();
-  mockUpdateGlobalConfig.mockImplementation(async (global: unknown) => ({
-    version: "1.0",
-    global,
-    repositories: {},
-  }));
+  mockUpdateAgentModelDefault.mockReset();
+  mockUpdateAgentModelDefault.mockImplementation(
+    async (key: string, modelId: string): Promise<AppConfig> =>
+      ({
+        version: "1.0",
+        global: { [key]: modelId },
+        repositories: {},
+      }) as unknown as AppConfig,
+  );
   seedConfig({ claudeModel: "opus", opencodeModel: "opencode/gpt-4" });
 });
 
@@ -56,9 +73,7 @@ describe("persistAgentModelDefault", () => {
   test("applies the choice optimistically and commits the server response", async () => {
     await persistAgentModelDefault("claudeModel", "sonnet", "Claude");
 
-    expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ claudeModel: "sonnet" }),
-    );
+    expect(mockUpdateAgentModelDefault).toHaveBeenCalledWith("claudeModel", "sonnet");
     expect(useConfigStore.getState().config.global.claudeModel).toBe("sonnet");
   });
 
@@ -74,7 +89,7 @@ describe("persistAgentModelDefault", () => {
 
   test("does nothing when the value is already the default", async () => {
     await persistAgentModelDefault("claudeModel", "opus", "Claude");
-    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+    expect(mockUpdateAgentModelDefault).not.toHaveBeenCalled();
   });
 
   test("skips persistence when the config has not loaded yet", async () => {
@@ -83,12 +98,12 @@ describe("persistAgentModelDefault", () => {
     useConfigStore.setState({ config: undefined as never });
 
     await persistAgentModelDefault("claudeModel", "sonnet", "Claude");
-    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+    expect(mockUpdateAgentModelDefault).not.toHaveBeenCalled();
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
   test("rolls back and reports when the write fails", async () => {
-    mockUpdateGlobalConfig.mockImplementation(async () => {
+    mockUpdateAgentModelDefault.mockImplementation(async () => {
       throw new Error("backend down");
     });
 
@@ -100,6 +115,25 @@ describe("persistAgentModelDefault", () => {
     );
   });
 
+  test("a failed write rolls back only its model key", async () => {
+    const write = deferred<never>();
+    mockUpdateAgentModelDefault.mockImplementationOnce(() => write.promise);
+
+    const inFlight = persistAgentModelDefault("claudeModel", "sonnet", "Claude");
+    useConfigStore.getState().updateGlobalConfig({
+      allowedDomains: ["example.test"],
+      opencodeModel: "opencode/gpt-5",
+    } as never);
+    write.reject(new Error("backend down"));
+    await inFlight;
+
+    expect(useConfigStore.getState().config.global).toMatchObject({
+      claudeModel: "opus",
+      opencodeModel: "opencode/gpt-5",
+      allowedDomains: ["example.test"],
+    });
+  });
+
   test("a failed write does not clobber a newer selection", async () => {
     /**
      * The rollback compares against the value it wrote. Without that guard a
@@ -107,7 +141,7 @@ describe("persistAgentModelDefault", () => {
      * undoing their most recent choice.
      */
     let failSlowly!: () => void;
-    mockUpdateGlobalConfig.mockImplementationOnce(
+    mockUpdateAgentModelDefault.mockImplementationOnce(
       () =>
         new Promise((_resolve, reject) => {
           failSlowly = () => reject(new Error("backend down"));
@@ -124,14 +158,12 @@ describe("persistAgentModelDefault", () => {
   });
 
   test("a slow success does not clobber a newer selection", async () => {
-    let resolveSlowly!: (value: { version: string; global: unknown; repositories: object }) => void;
-    mockUpdateGlobalConfig.mockImplementationOnce(
+    let resolveSlowly!: (value: AppConfig) => void;
+    mockUpdateAgentModelDefault.mockImplementationOnce(
       () =>
-        new Promise<{ version: string; global: unknown; repositories: object }>(
-          (resolve) => {
-            resolveSlowly = resolve;
-          },
-        ),
+        new Promise<AppConfig>((resolve) => {
+          resolveSlowly = resolve;
+        }),
     );
 
     const inFlight = persistAgentModelDefault("claudeModel", "sonnet", "Claude");
@@ -140,9 +172,113 @@ describe("persistAgentModelDefault", () => {
       version: "1.0",
       global: { claudeModel: "sonnet" },
       repositories: {},
-    });
+    } as AppConfig);
     await inFlight;
 
     expect(useConfigStore.getState().config.global.claudeModel).toBe("haiku");
+  });
+
+  test("a stale success response does not replace unrelated config changes", async () => {
+    const write = deferred<AppConfig>();
+    mockUpdateAgentModelDefault.mockImplementationOnce(() => write.promise);
+
+    const inFlight = persistAgentModelDefault("claudeModel", "sonnet", "Claude");
+    useConfigStore.getState().updateGlobalConfig({
+      allowedDomains: ["new.example"],
+      webClientEnabled: false,
+    } as never);
+    useConfigStore.getState().setRepositoryConfig("repo-1", {
+      defaultBranch: "develop",
+      prBaseBranch: "main",
+    });
+
+    write.resolve({
+      version: "1.0",
+      global: {
+        claudeModel: "sonnet",
+        allowedDomains: ["stale.example"],
+        webClientEnabled: true,
+      },
+      repositories: {},
+    } as AppConfig);
+    await inFlight;
+
+    const config = useConfigStore.getState().config;
+    expect(config.global).toMatchObject({
+      claudeModel: "sonnet",
+      allowedDomains: ["new.example"],
+      webClientEnabled: false,
+    });
+    expect(config.repositories["repo-1"]).toEqual({
+      defaultBranch: "develop",
+      prBaseBranch: "main",
+    });
+  });
+
+  test("concurrent cross-agent success and failure settle independently", async () => {
+    const claudeWrite = deferred<AppConfig>();
+    const opencodeWrite = deferred<never>();
+    mockUpdateAgentModelDefault.mockImplementation((key: string) =>
+      key === "claudeModel" ? claudeWrite.promise : opencodeWrite.promise,
+    );
+
+    const claudeInFlight = persistAgentModelDefault("claudeModel", "sonnet", "Claude");
+    const opencodeInFlight = persistAgentModelDefault(
+      "opencodeModel",
+      "opencode/gpt-5",
+      "OpenCode",
+    );
+    useConfigStore.getState().updateGlobalConfig({ webClientEnabled: false });
+
+    claudeWrite.resolve({
+      version: "1.0",
+      global: {
+        claudeModel: "sonnet",
+        opencodeModel: "stale/opencode",
+        webClientEnabled: true,
+      },
+      repositories: {},
+    } as AppConfig);
+    await claudeInFlight;
+    opencodeWrite.reject(new Error("OpenCode write failed"));
+    await opencodeInFlight;
+
+    expect(useConfigStore.getState().config.global).toMatchObject({
+      claudeModel: "sonnet",
+      opencodeModel: "opencode/gpt-4",
+      webClientEnabled: false,
+    });
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to save OpenCode model default",
+    );
+  });
+
+  test("a cross-agent failure cannot roll back a later successful key", async () => {
+    const claudeWrite = deferred<never>();
+    const opencodeWrite = deferred<AppConfig>();
+    mockUpdateAgentModelDefault.mockImplementation((key: string) =>
+      key === "claudeModel" ? claudeWrite.promise : opencodeWrite.promise,
+    );
+
+    const claudeInFlight = persistAgentModelDefault("claudeModel", "sonnet", "Claude");
+    const opencodeInFlight = persistAgentModelDefault(
+      "opencodeModel",
+      "opencode/gpt-5",
+      "OpenCode",
+    );
+
+    opencodeWrite.resolve({
+      version: "1.0",
+      global: { claudeModel: "stale-claude", opencodeModel: "opencode/gpt-5" },
+      repositories: {},
+    } as AppConfig);
+    await opencodeInFlight;
+    claudeWrite.reject(new Error("Claude write failed"));
+    await claudeInFlight;
+
+    expect(useConfigStore.getState().config.global).toMatchObject({
+      claudeModel: "opus",
+      opencodeModel: "opencode/gpt-5",
+    });
   });
 });

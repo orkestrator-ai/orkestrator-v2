@@ -110,6 +110,44 @@ describe("opencode-client listSessions", () => {
 
     await expect(listSessions(client)).rejects.toThrow("network unavailable");
   });
+
+  test("keeps distinct created and updated times and falls back from invalid timestamps", async () => {
+    const createdMs = 1_739_232_000_000;
+    const updated = "2026-04-05T06:07:08.000Z";
+    const client = {
+      session: {
+        list: async () => ({
+          data: [
+            {
+              id: "distinct",
+              time: { created: createdMs, updated },
+            },
+            {
+              id: "invalid-update",
+              time: { created: "2026-01-02T03:04:05.000Z", updated: "not-a-date" },
+            },
+            {
+              id: "invalid-created",
+              time: { created: "not-a-date", updated: undefined },
+            },
+          ],
+        }),
+      },
+    } as unknown as OpencodeClient;
+
+    const sessions = await listSessions(client);
+
+    expect(sessions[0]).toMatchObject({
+      createdAt: new Date(createdMs).toISOString(),
+      updatedAt: updated,
+    });
+    expect(sessions[1]).toMatchObject({
+      createdAt: "2026-01-02T03:04:05.000Z",
+      updatedAt: "2026-01-02T03:04:05.000Z",
+    });
+    expect(Number.isNaN(Date.parse(sessions[2]?.createdAt ?? ""))).toBe(false);
+    expect(sessions[2]?.updatedAt).toBe(sessions[2]?.createdAt);
+  });
 });
 
 const noProviderCatalog = {
@@ -2354,6 +2392,88 @@ describe("opencode-client events and pending requests", () => {
     await expect(
       getPendingPermissions(resolvedFailure, { throwOnError: true }),
     ).rejects.toThrow("permission endpoint unavailable");
+  });
+
+  test("normalizes both session-id spellings and rejects malformed or missing ids", async () => {
+    const client = {
+      question: {
+        list: async () => ({
+          data: [
+            { id: "question-sdk", sessionID: "session-sdk", questions: [] },
+            { id: "question-legacy", sessionId: "session-legacy", questions: [] },
+            {
+              id: "question-fallback",
+              sessionID: 42,
+              sessionId: "session-valid-fallback",
+              questions: [],
+            },
+            { id: "question-malformed", sessionID: { id: "nested" }, questions: [] },
+            { id: "question-missing", questions: [] },
+          ],
+        }),
+      },
+      permission: {
+        list: async () => ({
+          data: [
+            {
+              id: "permission-sdk",
+              sessionID: "session-sdk",
+              permission: "edit",
+              patterns: [],
+              metadata: {},
+              always: [],
+            },
+            {
+              id: "permission-legacy",
+              sessionId: "session-legacy",
+              permission: "read",
+              patterns: [],
+              metadata: {},
+              always: [],
+            },
+            {
+              id: "permission-fallback",
+              sessionID: "",
+              sessionId: "session-valid-fallback",
+              permission: "bash",
+              patterns: [],
+              metadata: {},
+              always: [],
+            },
+            {
+              id: "permission-malformed",
+              sessionId: false,
+              permission: "read",
+              patterns: [],
+              metadata: {},
+              always: [],
+            },
+            {
+              id: "permission-missing",
+              permission: "read",
+              patterns: [],
+              metadata: {},
+              always: [],
+            },
+          ],
+        }),
+      },
+    } as unknown as OpencodeClient;
+
+    expect((await getPendingQuestions(client)).map((request) => request.sessionId)).toEqual([
+      "session-sdk",
+      "session-legacy",
+      "session-valid-fallback",
+      "",
+      "",
+    ]);
+    expect((await getPendingPermissions(client)).map((request) => request.sessionId)).toEqual([
+      "session-sdk",
+      "session-legacy",
+      "session-valid-fallback",
+      "",
+      "",
+    ]);
   });
 
   test("replies to and rejects requests with the v2 SDK shape", async () => {

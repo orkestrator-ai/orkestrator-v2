@@ -7336,6 +7336,13 @@ describe("storage-backed command delegation", () => {
         config = { ...config, global: value };
         return config;
       }),
+      updateAgentModelDefault: mock(async (
+        key: "claudeModel" | "codexModel" | "opencodeModel",
+        modelId: string,
+      ) => {
+        config = { ...config, global: { ...config.global, [key]: modelId } };
+        return config;
+      }),
       setGitHubToken: mock(async (token: string | null) => {
         const { githubToken: _removed, ...global } = config.global;
         config = {
@@ -7424,6 +7431,25 @@ describe("storage-backed command delegation", () => {
       allowedDomains: ["github.com"],
       githubToken: "github_secret_token",
     });
+
+    await expect(commands.get("update_agent_model_default")?.({
+      key: "codexModel",
+      modelId: "gpt-5.4",
+    }, context)).resolves.toMatchObject({
+      global: {
+        allowedDomains: ["github.com"],
+        codexModel: "gpt-5.4",
+        githubTokenConfigured: true,
+      },
+    });
+    expect(storage.updateAgentModelDefault).toHaveBeenLastCalledWith(
+      "codexModel",
+      "gpt-5.4",
+    );
+    await expect(commands.get("update_agent_model_default")?.({
+      key: "reviewInstruction",
+      modelId: "unsafe",
+    }, context)).rejects.toThrow("Expected key to identify an agent model default");
 
     await expect(commands.get("set_github_token")?.({ token: " replacement_token " }, context))
       .resolves.toMatchObject({

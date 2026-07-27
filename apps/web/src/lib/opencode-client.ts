@@ -223,8 +223,12 @@ function normalizePermissionRequest(raw: unknown): PermissionRequest {
 
 /** Accepts either spelling; the SDK has used both across versions. */
 function readSessionId(record: Record<string, unknown>): string {
-  const value = record.sessionID ?? record.sessionId;
-  return typeof value === "string" ? value : "";
+  for (const value of [record.sessionID, record.sessionId]) {
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+  return "";
 }
 
 /** Answer to a question (array of selected labels or typed text) */

@@ -144,6 +144,11 @@ function getEnvironmentTransitionIds<T>(
   // are.
   getCurrentState: (item: T | undefined, key: string) => AgentActivityState,
   getPreviousState: (item: T | undefined, key: string) => AgentActivityState,
+  isTeardown: (
+    currentItem: T | undefined,
+    previousItem: T | undefined,
+  ) => boolean = (currentItem, previousItem) =>
+    previousItem !== undefined && currentItem === undefined,
 ): {
   activityEnvironmentIds: Set<string>;
   completedEnvironmentIds: Set<string>;
@@ -156,6 +161,13 @@ function getEnvironmentTransitionIds<T>(
     const currentItem = currentItems.get(key);
     const environmentId = getEnvironmentId(key, currentItem, previousItem);
     if (!environmentId) continue;
+
+    // Removing a session/tab is teardown, not a completed turn. The aggregate
+    // source state still needs to fall back to idle below, but recording
+    // activity or unread here would make closing a working tab look like a
+    // successful agent completion.
+    if (isTeardown(currentItem, previousItem)) continue;
+
     const previousState = getPreviousState(previousItem, key);
     const currentState = getCurrentState(currentItem, key);
     if (isEnvironmentActivityTransition(previousState, currentState)) {
@@ -356,6 +368,16 @@ function syncClaudeTmuxActivityState(
           : null,
       (tab) => tab ? getClaudeTmuxTabActivityState(tab) : "idle",
       (tab) => tab ? getClaudeTmuxTabActivityState(tab) : "idle",
+      (currentTab, previousTab) =>
+        previousTab !== undefined
+        && (
+          currentTab === undefined
+          || (
+            currentTab.environmentId === null
+            && currentTab.sessionId === null
+            && !currentTab.running
+          )
+        ),
     );
     for (const environmentId of transitions.activityEnvironmentIds) {
       recordActivity(environmentId);

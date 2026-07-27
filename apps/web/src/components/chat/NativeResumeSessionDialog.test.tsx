@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import {
   NativeResumeSessionDialog,
   type ResumableSession,
@@ -33,6 +40,16 @@ function renderDialog(
 }
 
 afterEach(() => cleanup());
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
 
 describe("NativeResumeSessionDialog", () => {
   test("orders most-recently-active first, not by creation", async () => {
@@ -151,5 +168,129 @@ describe("NativeResumeSessionDialog", () => {
     );
 
     await waitFor(() => expect(fetchSessions).toHaveBeenCalledTimes(1));
+  });
+
+  test("ignores an older request when fetch dependencies change", async () => {
+    const first = deferred<ResumableSession[]>();
+    const second = deferred<ResumableSession[]>();
+    const onOpenChange = () => {};
+    const onResume = () => {};
+    const { rerender } = render(
+      <NativeResumeSessionDialog
+        open
+        onOpenChange={onOpenChange}
+        agentLabel="Test"
+        fetchSessions={() => first.promise}
+        onResume={onResume}
+      />,
+    );
+
+    rerender(
+      <NativeResumeSessionDialog
+        open
+        onOpenChange={onOpenChange}
+        agentLabel="Test"
+        fetchSessions={() => second.promise}
+        onResume={onResume}
+      />,
+    );
+
+    await act(async () => {
+      second.resolve([{ id: "new", title: "New result" }]);
+      await second.promise;
+    });
+    expect(await screen.findByText("New result")).toBeTruthy();
+
+    await act(async () => {
+      first.resolve([{ id: "old", title: "Stale result" }]);
+      await first.promise;
+    });
+    expect(screen.getByText("New result")).toBeTruthy();
+    expect(screen.queryByText("Stale result")).toBeNull();
+  });
+
+  test("ignores a request from a previous open cycle", async () => {
+    const first = deferred<ResumableSession[]>();
+    const second = deferred<ResumableSession[]>();
+    const fetchSessions = mock()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const onOpenChange = () => {};
+    const onResume = () => {};
+    const { rerender } = render(
+      <NativeResumeSessionDialog
+        open
+        onOpenChange={onOpenChange}
+        agentLabel="Test"
+        fetchSessions={fetchSessions}
+        onResume={onResume}
+      />,
+    );
+
+    rerender(
+      <NativeResumeSessionDialog
+        open={false}
+        onOpenChange={onOpenChange}
+        agentLabel="Test"
+        fetchSessions={fetchSessions}
+        onResume={onResume}
+      />,
+    );
+    rerender(
+      <NativeResumeSessionDialog
+        open
+        onOpenChange={onOpenChange}
+        agentLabel="Test"
+        fetchSessions={fetchSessions}
+        onResume={onResume}
+      />,
+    );
+
+    await waitFor(() => expect(fetchSessions).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      second.resolve([{ id: "new", title: "Reopened result" }]);
+      await second.promise;
+    });
+    expect(await screen.findByText("Reopened result")).toBeTruthy();
+
+    await act(async () => {
+      first.resolve([{ id: "old", title: "Closed result" }]);
+      await first.promise;
+    });
+    expect(screen.getByText("Reopened result")).toBeTruthy();
+    expect(screen.queryByText("Closed result")).toBeNull();
+  });
+
+  test("does not report a request failure after unmount", async () => {
+    const pending = deferred<ResumableSession[]>();
+    const consoleError = console.error;
+    const errorSpy = mock(() => {});
+    console.error = errorSpy;
+
+    try {
+      const { unmount } = render(
+        <NativeResumeSessionDialog
+          open
+          onOpenChange={() => {}}
+          agentLabel="Test"
+          fetchSessions={() => pending.promise}
+          onResume={() => {}}
+        />,
+      );
+      unmount();
+
+      await act(async () => {
+        pending.reject(new Error("late failure"));
+        try {
+          await pending.promise;
+        } catch {
+          // The dialog owns the rejection; this await only flushes its handler.
+        }
+      });
+
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      console.error = consoleError;
+    }
   });
 });

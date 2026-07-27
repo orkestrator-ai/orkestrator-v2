@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
+import {
+  ERROR_MESSAGE_PREFIX,
+  SYSTEM_MESSAGE_PREFIX,
+} from "@/lib/opencode-client";
 import {
   createOptimisticNativeMessage,
+  isClientOnlyNativeMessage,
+  isOptimisticNativeMessage,
   mergeNativeMessagesPreservingClientOnly,
 } from "./client-only-messages";
 import type { NativeMessage } from "./native-message-types";
@@ -31,6 +36,16 @@ function createServerMessage(
 }
 
 describe("client-only optimistic messages", () => {
+  test("classifies optimistic, error, and system ids as client-only", () => {
+    expect(isOptimisticNativeMessage({ id: "optimistic-123" })).toBe(true);
+    expect(isOptimisticNativeMessage({ id: "server-123" })).toBe(false);
+
+    expect(isClientOnlyNativeMessage({ id: "optimistic-123" })).toBe(true);
+    expect(isClientOnlyNativeMessage({ id: `${ERROR_MESSAGE_PREFIX}123` })).toBe(true);
+    expect(isClientOnlyNativeMessage({ id: `${SYSTEM_MESSAGE_PREFIX}123` })).toBe(true);
+    expect(isClientOnlyNativeMessage({ id: "server-123" })).toBe(false);
+  });
+
   test("includes file parts for optimistic attachments", () => {
     const message = createOptimisticNativeMessage("optimistic-1", "Review this", [
       {

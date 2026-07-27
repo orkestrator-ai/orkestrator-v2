@@ -5,7 +5,9 @@ import * as realSortable from "@dnd-kit/sortable";
 import * as realUtilities from "@dnd-kit/utilities";
 import type { TabInfo } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
-import {useClaudeStore} from "@/stores/claudeStore";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { useCodexStore } from "@/stores/codexStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
@@ -55,6 +57,8 @@ describe("DraggableTab title precedence", () => {
     cleanup();
     useSessionStore.setState({ sessions: new Map() });
     useClaudeStore.setState({ sessions: new Map() });
+    useCodexStore.setState({ sessions: new Map() });
+    useOpenCodeStore.setState({ sessions: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
     useLoopedReviewStore.setState({ workflows: new Map() });
@@ -116,6 +120,80 @@ describe("DraggableTab title precedence", () => {
     renderTab(tab, 0);
 
     expect(screen.getByText("Auto Title")).toBeDefined();
+  });
+
+  test("uses the Codex title from this tab's environment-scoped session", () => {
+    const tab: TabInfo = {
+      id: "tab-codex",
+      type: "codex-native",
+      displayTitle: "Review",
+      codexNativeData: { environmentId: "env-1" },
+    };
+    useCodexStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-2", "tab-codex"), { title: "Wrong environment" } as never],
+        [createSessionKey("env-1", "other-tab"), { title: "Wrong tab" } as never],
+        [createSessionKey("env-1", "tab-codex"), { title: "Codex title" } as never],
+      ]),
+    });
+
+    renderTab(tab);
+
+    expect(screen.getByText("Codex title")).toBeDefined();
+    expect(screen.queryByText("Review 1")).toBeNull();
+  });
+
+  test("uses the OpenCode title before the workflow display title", () => {
+    const tab: TabInfo = {
+      id: "tab-opencode",
+      type: "opencode-native",
+      displayTitle: "Implementation",
+      openCodeNativeData: { environmentId: "env-1" },
+    };
+    useOpenCodeStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-opencode"), { title: "OpenCode title" } as never],
+      ]),
+    });
+
+    renderTab(tab);
+
+    expect(screen.getByText("OpenCode title")).toBeDefined();
+    expect(screen.queryByText("Implementation 1")).toBeNull();
+  });
+
+  test("a custom terminal session name beats a Codex session title", () => {
+    const tab: TabInfo = {
+      id: "tab-codex",
+      type: "codex-native",
+      codexNativeData: { environmentId: "env-1" },
+    };
+    useSessionStore.setState({
+      sessions: new Map([
+        ["terminal-session", {
+          id: "terminal-session",
+          environmentId: "env-1",
+          tabId: "tab-codex",
+          name: "Pinned name",
+          status: "connected",
+          sessionType: "codex",
+          containerId: "container-1",
+          createdAt: "2026-07-20T10:00:00.000Z",
+          lastActivityAt: "2026-07-20T10:00:00.000Z",
+          order: 0,
+        }],
+      ]),
+    });
+    useCodexStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-codex"), { title: "Codex title" } as never],
+      ]),
+    });
+
+    renderTab(tab, 2);
+
+    expect(screen.getByText("Pinned name 3")).toBeDefined();
+    expect(screen.queryByText("Codex title")).toBeNull();
   });
 
   test("displayTitle is used when no claude session title exists", () => {
@@ -245,6 +323,8 @@ describe("DraggableTab tooltip and context menu structure", () => {
     cleanup();
     useSessionStore.setState({ sessions: new Map() });
     useClaudeStore.setState({ sessions: new Map() });
+    useCodexStore.setState({ sessions: new Map() });
+    useOpenCodeStore.setState({ sessions: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
   });

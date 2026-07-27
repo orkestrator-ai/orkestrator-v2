@@ -181,9 +181,9 @@ async function waitFor(predicate: () => boolean, description: string): Promise<v
   throw new Error(`Timed out waiting for ${description}`);
 }
 
-async function startHealthyServer(): Promise<{ port: number; close: () => Promise<void> }> {
+async function startHealthServer(status = 200): Promise<{ port: number; close: () => Promise<void> }> {
   const server = http.createServer((_request, response) => {
-    response.writeHead(200);
+    response.writeHead(status);
     response.end("ok");
   });
   await new Promise<void>((resolve, reject) => {
@@ -196,6 +196,8 @@ async function startHealthyServer(): Promise<{ port: number; close: () => Promis
     close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
   };
 }
+
+const startHealthyServer = () => startHealthServer(200);
 
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-process-command-coverage-"));
@@ -347,6 +349,30 @@ describe("process and platform command behavior", () => {
     expect(await invoke("get_claude_server_status", { containerId: "container-a" })).toEqual({ running: false, hostPort: null });
     expect(await invoke("get_codex_server_status", { containerId: "container-a" })).toEqual({ running: false, hostPort: null });
     delete process.env.FAKE_DOCKER_NO_PORT;
+
+    const healthyStatus = await startHealthServer(200);
+    process.env.FAKE_DOCKER_PORT = String(healthyStatus.port);
+    try {
+      for (const agent of ["opencode", "claude", "codex"]) {
+        expect(
+          await invoke(`get_${agent}_server_status`, { containerId: "container-a" }),
+        ).toEqual({ running: true, hostPort: healthyStatus.port });
+      }
+    } finally {
+      await healthyStatus.close();
+    }
+
+    const unhealthyStatus = await startHealthServer(503);
+    process.env.FAKE_DOCKER_PORT = String(unhealthyStatus.port);
+    try {
+      for (const agent of ["opencode", "claude", "codex"]) {
+        expect(
+          await invoke(`get_${agent}_server_status`, { containerId: "container-a" }),
+        ).toEqual({ running: false, hostPort: unhealthyStatus.port });
+      }
+    } finally {
+      await unhealthyStatus.close();
+    }
 
     expect(await invoke("get_opencode_model_preferences")).toEqual({ recent: [], favorite: [], variant: {} });
     const preferencePath = path.join(fakeHome, ".local", "state", "opencode", "model.json");

@@ -16,6 +16,7 @@ import {
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
 import type {
+  AgentModelConfigKey,
   AppConfig,
   ClaudeModelCatalogSnapshot,
   Environment,
@@ -1187,6 +1188,18 @@ export class StorageService {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
       config.global = validated;
+      await this.saveJson(this.configFile(), config);
+      return config;
+    });
+  }
+
+  async updateAgentModelDefault(
+    key: AgentModelConfigKey,
+    modelId: string,
+  ): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      config.global[key] = modelId;
       await this.saveJson(this.configFile(), config);
       return config;
     });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { create } from "zustand";
 import { useNativeMessageQueue } from "./useNativeMessageQueue";
 
@@ -41,10 +41,14 @@ function Harness({
   store,
   send,
   onError = () => {},
+  canDrain = true,
+  blockedByDraft = false,
 }: {
   store: ReturnType<typeof createStore>;
   send: (entry: Queued) => Promise<unknown> | undefined;
   onError?: (error: unknown, entry: Queued) => void;
+  canDrain?: boolean;
+  blockedByDraft?: boolean;
 }) {
   const queueLength = store((s) => s.messageQueue.get(SESSION_KEY)?.length ?? 0);
   const isLoading = store((s) => s.sessions.get(SESSION_KEY)?.isLoading ?? false);
@@ -53,10 +57,10 @@ function Harness({
     agentLabel: "Test",
     sessionKey: SESSION_KEY,
     store,
-    canDrain: true,
+    canDrain,
     queueLength,
     isLoading,
-    blockedByDraft: false,
+    blockedByDraft,
     send,
     onError,
   });
@@ -163,5 +167,72 @@ describe("useNativeMessageQueue", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(send).not.toHaveBeenCalled();
+  });
+
+  test("does not drain while dispatch is unavailable", async () => {
+    const store = createStore([{ id: "q-1", text: "first" }]);
+    const send = mock(async () => {});
+    const view = render(
+      <Harness store={store} send={send} canDrain={false} />,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(send).not.toHaveBeenCalled();
+    expect(store.getState().messageQueue.get(SESSION_KEY)).toHaveLength(1);
+
+    view.rerender(<Harness store={store} send={send} canDrain />);
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+  });
+
+  test("does not drain while the composer holds only attachments", async () => {
+    const store = createStore([{ id: "q-1", text: "first" }]);
+    store.setState({ attachments: new Map([[SESSION_KEY, [{ id: "a-1" }]]]) });
+    const send = mock(async () => {});
+
+    render(<Harness store={store} send={send} />);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  test("drains after blockedByDraft changes from true to false", async () => {
+    const store = createStore([{ id: "q-1", text: "first" }]);
+    const send = mock(async () => {});
+    const view = render(
+      <Harness store={store} send={send} blockedByDraft />,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(send).not.toHaveBeenCalled();
+
+    view.rerender(
+      <Harness store={store} send={send} blockedByDraft={false} />,
+    );
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+  });
+
+  test("does not remove queued work when the session is missing", async () => {
+    const store = createStore([{ id: "q-1", text: "first" }]);
+    store.setState({ sessions: new Map() });
+    const send = mock(async () => {});
+
+    render(<Harness store={store} send={send} />);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(send).not.toHaveBeenCalled();
+    expect(store.getState().messageQueue.get(SESSION_KEY)).toHaveLength(1);
+  });
+
+  test("does nothing for an empty queue", async () => {
+    const store = createStore([]);
+    const send = mock(async () => {});
+
+    render(<Harness store={store} send={send} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([]);
   });
 });

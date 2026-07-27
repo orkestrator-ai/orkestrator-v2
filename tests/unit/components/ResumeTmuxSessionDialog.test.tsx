@@ -81,6 +81,35 @@ describe("ResumeTmuxSessionDialog", () => {
     expect(listPreviousSessionsMock.mock.calls[0]).toEqual(["env-1"]);
   });
 
+  test("shows a loading indicator until the session request settles", async () => {
+    let resolveSessions!: (sessions: PreviousSession[]) => void;
+    listPreviousSessionsMock.mockImplementation(
+      () => new Promise<PreviousSession[]>((resolve) => {
+        resolveSessions = resolve;
+      }),
+    );
+
+    render(
+      <ResumeTmuxSessionDialog
+        open
+        onOpenChange={() => {}}
+        environmentId="env-1"
+        onResume={() => {}}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(document.querySelector(".animate-spin")).toBeTruthy(),
+    );
+    expect(screen.queryByText(/No previous sessions recorded/i)).toBeNull();
+
+    resolveSessions([]);
+    expect(
+      await screen.findByText(/No previous sessions recorded/i),
+    ).toBeTruthy();
+    expect(document.querySelector(".animate-spin")).toBeNull();
+  });
+
   test("renders an error message when listing fails", async () => {
     listPreviousSessionsMock.mockImplementation(async () => {
       throw new Error("backend unavailable");
@@ -108,7 +137,7 @@ describe("ResumeTmuxSessionDialog", () => {
         session_id: "sess-older",
         title: "Older session title",
         last_activity_unix: Math.floor(Date.now() / 1000) - 3600,
-        message_count: 12,
+        message_count: 1,
       }),
     ]);
 
@@ -128,7 +157,7 @@ describe("ResumeTmuxSessionDialog", () => {
 
     // Counts pluralize correctly.
     expect(screen.getByText("4 messages")).toBeTruthy();
-    expect(screen.getByText("12 messages")).toBeTruthy();
+    expect(screen.getByText("1 message")).toBeTruthy();
 
     fireEvent.click(newer);
     await waitFor(() => expect(onResume).toHaveBeenCalledTimes(1));

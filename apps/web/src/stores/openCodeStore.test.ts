@@ -199,10 +199,24 @@ describe("openCodeStore clearSession", () => {
     const kept = "env-env-123:tab-2";
 
     for (const key of [closed, kept]) {
+      store.setSession(key, {
+        sessionId: key === closed ? "session-closed" : "session-kept",
+        messages: [],
+        isLoading: false,
+      });
       store.setDraftText(key, "draft");
+      store.setDraftMentions(key, [
+        { path: `/workspace/${key}.ts`, name: `${key}.ts` },
+      ] as never);
       store.setSelectedModel(key, "gpt-5");
       store.setSelectedVariant(key, "fast");
+      store.setSelectedMode(key, "plan");
       store.setComposing(key, true);
+      store.setContextUsage(key, {
+        usedTokens: 100,
+        totalTokens: 1_000,
+        percentUsed: 10,
+      });
       store.addToQueue(key, { id: `q-${key}`, text: "queued" } as never);
       store.addAttachment(key, {
         id: `att-${key}`,
@@ -211,21 +225,60 @@ describe("openCodeStore clearSession", () => {
         name: "a.png",
       } as never);
     }
+    store.addPendingQuestion({
+      id: "question-closed",
+      sessionId: "session-closed",
+      questions: [],
+    });
+    store.addPendingPermission({
+      id: "permission-closed",
+      sessionId: "session-closed",
+      permission: "edit",
+      patterns: [],
+      metadata: {},
+      always: [],
+    });
+    store.addPendingQuestion({
+      id: "question-kept",
+      sessionId: "session-kept",
+      questions: [],
+    });
+    store.addPendingPermission({
+      id: "permission-kept",
+      sessionId: "session-kept",
+      permission: "read",
+      patterns: [],
+      metadata: {},
+      always: [],
+    });
 
     store.clearSession(closed);
 
     const next = useOpenCodeStore.getState();
+    expect(next.getSession(closed)).toBeUndefined();
     expect(next.getDraftText(closed)).toBe("");
+    expect(next.getDraftMentions(closed)).toEqual([]);
     expect(next.getSelectedModel(closed)).toBeUndefined();
     expect(next.getSelectedVariant(closed)).toBeUndefined();
+    expect(next.getSelectedMode(closed)).toBe("build");
     expect(next.isComposingFor(closed)).toBe(false);
+    expect(next.getContextUsage(closed)).toBeUndefined();
     expect(next.getQueueLength(closed)).toBe(0);
     expect(next.getAttachments(closed)).toHaveLength(0);
+    expect(next.getPendingQuestion("question-closed")).toBeUndefined();
+    expect(next.getPendingPermission("permission-closed")).toBeUndefined();
 
     // The sibling tab in the same environment is untouched.
     expect(next.getDraftText(kept)).toBe("draft");
+    expect(next.getDraftMentions(kept)).toHaveLength(1);
     expect(next.getSelectedModel(kept)).toBe("gpt-5");
+    expect(next.getSelectedVariant(kept)).toBe("fast");
+    expect(next.getSelectedMode(kept)).toBe("plan");
+    expect(next.isComposingFor(kept)).toBe(true);
+    expect(next.getContextUsage(kept)?.percentUsed).toBe(10);
     expect(next.getAttachments(kept)).toHaveLength(1);
+    expect(next.getPendingQuestion("question-kept")).toBeTruthy();
+    expect(next.getPendingPermission("permission-kept")).toBeTruthy();
   });
 
   test("sweeps pending requests belonging to the closed tab's session", () => {
@@ -255,6 +308,103 @@ describe("openCodeStore clearSession", () => {
     const next = useOpenCodeStore.getState();
     expect(next.getPendingQuestion("req-1")).toBeUndefined();
     expect(next.getPendingQuestion("req-2")).toBeTruthy();
+  });
+});
+
+describe("openCodeStore same-environment tab isolation", () => {
+  beforeEach(() => {
+    resetOpenCodeStore();
+  });
+
+  test("keeps model, variant, mode, composing, queue, title, and context state per tab", () => {
+    const store = useOpenCodeStore.getState();
+    const tabA = "env-env-123:tab-a";
+    const tabB = "env-env-123:tab-b";
+
+    store.setSession(tabA, {
+      sessionId: "session-a",
+      messages: [],
+      isLoading: false,
+    });
+    store.setSession(tabB, {
+      sessionId: "session-b",
+      messages: [],
+      isLoading: false,
+    });
+    store.setSelectedModel(tabA, "openai/gpt-5");
+    store.setSelectedModel(tabB, "anthropic/claude-sonnet");
+    store.setSelectedVariant(tabA, "high");
+    store.setSelectedVariant(tabB, "low");
+    store.setSelectedMode(tabA, "plan");
+    store.setSelectedMode(tabB, "build");
+    store.setComposing(tabA, true);
+    store.setComposing(tabB, false);
+    store.addToQueue(tabA, {
+      id: "queued-a",
+      text: "Plan A",
+      attachments: [],
+      model: "openai/gpt-5",
+      variant: "high",
+      mode: "plan",
+    });
+    store.addToQueue(tabB, {
+      id: "queued-b",
+      text: "Build B",
+      attachments: [],
+      model: "anthropic/claude-sonnet",
+      variant: "low",
+      mode: "build",
+    });
+    store.setSessionTitle(tabA, "Planning tab");
+    store.setSessionTitle(tabB, "Build tab");
+    store.setContextUsage(tabA, {
+      usedTokens: 100,
+      totalTokens: 1_000,
+      percentUsed: 10,
+      modelId: "openai/gpt-5",
+    });
+    store.setContextUsage(tabB, {
+      usedTokens: 600,
+      totalTokens: 2_000,
+      percentUsed: 30,
+      modelId: "anthropic/claude-sonnet",
+    });
+
+    const state = useOpenCodeStore.getState();
+    expect(state.getSelectedModel(tabA)).toBe("openai/gpt-5");
+    expect(state.getSelectedModel(tabB)).toBe("anthropic/claude-sonnet");
+    expect(state.getSelectedVariant(tabA)).toBe("high");
+    expect(state.getSelectedVariant(tabB)).toBe("low");
+    expect(state.getSelectedMode(tabA)).toBe("plan");
+    expect(state.getSelectedMode(tabB)).toBe("build");
+    expect(state.isComposingFor(tabA)).toBe(true);
+    expect(state.isComposingFor(tabB)).toBe(false);
+    expect(state.getQueueLength(tabA)).toBe(1);
+    expect(state.getQueueLength(tabB)).toBe(1);
+    expect(state.getSession(tabA)?.title).toBe("Planning tab");
+    expect(state.getSession(tabB)?.title).toBe("Build tab");
+    expect(state.getContextUsage(tabA)?.modelId).toBe("openai/gpt-5");
+    expect(state.getContextUsage(tabB)?.modelId).toBe(
+      "anthropic/claude-sonnet",
+    );
+
+    store.clearSession(tabA);
+
+    const afterClose = useOpenCodeStore.getState();
+    expect(afterClose.getSession(tabA)).toBeUndefined();
+    expect(afterClose.getSelectedModel(tabA)).toBeUndefined();
+    expect(afterClose.getSelectedVariant(tabA)).toBeUndefined();
+    expect(afterClose.getSelectedMode(tabA)).toBe("build");
+    expect(afterClose.isComposingFor(tabA)).toBe(false);
+    expect(afterClose.getQueueLength(tabA)).toBe(0);
+    expect(afterClose.getContextUsage(tabA)).toBeUndefined();
+
+    expect(afterClose.getSession(tabB)?.title).toBe("Build tab");
+    expect(afterClose.getSelectedModel(tabB)).toBe("anthropic/claude-sonnet");
+    expect(afterClose.getSelectedVariant(tabB)).toBe("low");
+    expect(afterClose.getSelectedMode(tabB)).toBe("build");
+    expect(afterClose.getQueueLength(tabB)).toBe(1);
+    expect(afterClose.getContextUsage(tabB)?.percentUsed).toBe(30);
   });
 });
 

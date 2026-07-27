@@ -1,4 +1,10 @@
-import { useState, type ReactNode, type RefObject } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import type { StateSnapshot, VirtuosoHandle } from "react-virtuoso";
 import { AlertCircle, ArrowDown, History, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -107,6 +113,40 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   virtuosoRef,
 }: NativeChatShellProps<TMessage>) {
   const [showLog, setShowLog] = useState(false);
+  const [composeDockElement, setComposeDockElement] =
+    useState<HTMLDivElement | null>(null);
+  const [composeDockHeight, setComposeDockHeight] = useState<number | null>(null);
+  const composeDockRef = useCallback((element: HTMLDivElement | null) => {
+    setComposeDockElement(element);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!composeDockElement) {
+      setComposeDockHeight(null);
+      return;
+    }
+
+    const syncHeight = () => {
+      const nextHeight = Math.ceil(composeDockElement.getBoundingClientRect().height);
+      setComposeDockHeight((currentHeight) =>
+        currentHeight === nextHeight ? currentHeight : nextHeight,
+      );
+    };
+
+    syncHeight();
+    window.addEventListener("resize", syncHeight);
+
+    if (typeof ResizeObserver === "undefined") {
+      return () => window.removeEventListener("resize", syncHeight);
+    }
+
+    const resizeObserver = new ResizeObserver(syncHeight);
+    resizeObserver.observe(composeDockElement);
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", syncHeight);
+    };
+  }, [composeDockElement]);
 
   if (connectionState === "connecting") {
     return (
@@ -224,7 +264,20 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                 the user needs to read in order to answer it.
               */}
               <div
-                className={hasPinnedContent ? "h-80" : bottomSpacerClassName}
+                data-testid="transcript-bottom-spacer"
+                className={cn(
+                  "shrink-0",
+                  hasPinnedContent && composeDockHeight === null
+                    ? "h-80"
+                    : !hasPinnedContent
+                      ? bottomSpacerClassName
+                      : undefined,
+                )}
+                style={
+                  hasPinnedContent && composeDockHeight !== null
+                    ? { height: composeDockHeight }
+                    : undefined
+                }
                 aria-hidden="true"
               />
             </>
@@ -235,6 +288,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
       </div>
 
       <NativeComposeDock
+        rootRef={composeDockRef}
         centered={centerCompose}
         pinnedContent={
           hasPinnedContent ? (

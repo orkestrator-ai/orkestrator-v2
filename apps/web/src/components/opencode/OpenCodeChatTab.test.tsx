@@ -2136,6 +2136,63 @@ describe("OpenCodeChatTab", () => {
       channel.close();
     });
 
+    test("routes session titles and usage to the matching sibling tab in the same environment", async () => {
+      const siblingKey = createOpenCodeSessionKey(ENVIRONMENT_ID, "tab-2");
+      useOpenCodeStore.getState().setSession(siblingKey, {
+        sessionId: "session-2",
+        messages: [],
+        isLoading: true,
+      });
+      useOpenCodeStore.getState().setSelectedModel(
+        siblingKey,
+        "anthropic/claude-sonnet",
+      );
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      channel.push({
+        type: "session.updated",
+        properties: {
+          info: {
+            id: "session-2",
+            title: "Sibling tab title",
+          },
+        },
+      });
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().getSession(siblingKey)?.title).toBe(
+          "Sibling tab title",
+        );
+      });
+      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.title).toBeUndefined();
+
+      channel.push({
+        type: "session.idle",
+        properties: {
+          sessionID: "session-2",
+          usage: { inputTokens: 150, outputTokens: 50 },
+          maxContextTokens: 2_000,
+        },
+      });
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().getContextUsage(siblingKey)).toEqual({
+          usedTokens: 200,
+          totalTokens: 2_000,
+          percentUsed: 10,
+          modelId: "anthropic/claude-sonnet",
+        });
+        expect(
+          useOpenCodeStore.getState().getSession(siblingKey)?.isLoading,
+        ).toBe(false);
+      });
+      expect(useOpenCodeStore.getState().getContextUsage(SESSION_KEY)).toBeUndefined();
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
     test("adds and removes permission and question requests", async () => {
       const channel = eventChannel();
       mockSubscribeToEvents.mockResolvedValue(channel.stream);

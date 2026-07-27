@@ -16,6 +16,7 @@ function resetClaudeStore() {
     isComposing: new Map(),
     effort: new Map(),
     planMode: new Map(),
+    fastMode: new Map(),
     selectedModel: new Map(),
     messageQueue: new Map(),
     sessionInitData: new Map(),
@@ -180,6 +181,74 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(store.getPendingQuestion("question-b")).toBeDefined();
     expect(store.getPendingPlanApproval("approval-a")).toBeUndefined();
     expect(store.getPendingPlanApproval("approval-b")).toBeDefined();
+  });
+
+  test("clearSession exhaustively removes every session-keyed map and only its pending requests", () => {
+    const targetKey = createSessionKey("env-1", "tab-target");
+    const otherKey = createSessionKey("env-1", "tab-other");
+    const targetSession = {
+      sessionId: "sdk-target",
+      messages: [],
+      isLoading: false,
+    };
+    const otherSession = {
+      sessionId: "sdk-other",
+      messages: [],
+      isLoading: false,
+    };
+
+    useClaudeStore.setState({
+      sessions: new Map([
+        [targetKey, targetSession],
+        [otherKey, otherSession],
+      ]),
+      attachments: new Map([[targetKey, []], [otherKey, []]]),
+      draftText: new Map([[targetKey, "target"], [otherKey, "other"]]),
+      draftMentions: new Map([[targetKey, []], [otherKey, []]]),
+      messageQueue: new Map([[targetKey, []], [otherKey, []]]),
+      selectedModel: new Map([[targetKey, "sonnet"], [otherKey, "opus"]]),
+      isComposing: new Map([[targetKey, true], [otherKey, true]]),
+      effort: new Map([[targetKey, "high"], [otherKey, "max"]]),
+      planMode: new Map([[targetKey, true], [otherKey, true]]),
+      fastMode: new Map([[targetKey, true], [otherKey, true]]),
+      contextUsage: new Map([
+        [targetKey, { usedTokens: 1, totalTokens: 10, percentUsed: 10 }],
+        [otherKey, { usedTokens: 2, totalTokens: 10, percentUsed: 20 }],
+      ]),
+      pendingQuestions: new Map([
+        ["question-target", { id: "question-target", sessionId: "sdk-target", questions: [] }],
+        ["question-other", { id: "question-other", sessionId: "sdk-other", questions: [] }],
+      ]),
+      pendingPlanApprovals: new Map([
+        ["approval-target", { id: "approval-target", sessionId: "sdk-target" }],
+        ["approval-other", { id: "approval-other", sessionId: "sdk-other" }],
+      ]),
+    });
+
+    useClaudeStore.getState().clearSession(targetKey);
+
+    const state = useClaudeStore.getState();
+    const sessionKeyedMaps = [
+      "sessions",
+      "attachments",
+      "draftText",
+      "draftMentions",
+      "messageQueue",
+      "selectedModel",
+      "isComposing",
+      "effort",
+      "planMode",
+      "fastMode",
+      "contextUsage",
+    ] as const;
+    for (const field of sessionKeyedMaps) {
+      expect(state[field].has(targetKey), `${field} should remove target`).toBe(false);
+      expect(state[field].has(otherKey), `${field} should preserve other tab`).toBe(true);
+    }
+    expect(state.pendingQuestions.has("question-target")).toBe(false);
+    expect(state.pendingQuestions.has("question-other")).toBe(true);
+    expect(state.pendingPlanApprovals.has("approval-target")).toBe(false);
+    expect(state.pendingPlanApprovals.has("approval-other")).toBe(true);
   });
 
   test("keeps authoritative model catalogs scoped to their environment", () => {

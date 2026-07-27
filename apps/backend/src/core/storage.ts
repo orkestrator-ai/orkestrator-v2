@@ -33,6 +33,8 @@ import type {
   Environment,
   EnvironmentStatus,
   EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  OpenCodeModelCatalogSnapshot,
   PortMapping,
   PrState,
   Project,
@@ -650,6 +652,149 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
+function normalizeOpenCodeModelCatalogEntries(
+  models: OpenCodeModelCatalogEntry[],
+): OpenCodeModelCatalogEntry[] {
+  const byId = new Map<string, OpenCodeModelCatalogEntry[]>();
+
+  for (const candidate of models) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+    const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
+    const provider =
+      typeof candidate.provider === "string" ? candidate.provider.trim() : "";
+    if (!id || !name || !provider) continue;
+
+    const variants = Array.isArray(candidate.variants)
+      ? Array.from(new Set(candidate.variants.filter(
+          (variant): variant is string =>
+            typeof variant === "string" && variant.trim().length > 0,
+        ).map((variant) => variant.trim()))).sort((left, right) =>
+          left.localeCompare(right)
+        )
+      : undefined;
+    const nonNegativeNumber = (value: unknown): number | undefined =>
+      typeof value === "number" && Number.isFinite(value) && value >= 0
+        ? value
+        : undefined;
+    const contextWindow =
+      typeof candidate.contextWindow === "number" &&
+      Number.isSafeInteger(candidate.contextWindow) &&
+      candidate.contextWindow > 0
+        ? candidate.contextWindow
+        : undefined;
+
+    const normalized = {
+      id,
+      name,
+      provider,
+      ...(variants?.length ? { variants } : {}),
+      ...(nonNegativeNumber(candidate.inputCost) !== undefined
+        ? { inputCost: nonNegativeNumber(candidate.inputCost) }
+        : {}),
+      ...(nonNegativeNumber(candidate.outputCost) !== undefined
+        ? { outputCost: nonNegativeNumber(candidate.outputCost) }
+        : {}),
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+    };
+    const duplicates = byId.get(id) ?? [];
+    duplicates.push(normalized);
+    byId.set(id, duplicates);
+  }
+
+  return Array.from(byId.values())
+    .map((duplicates) =>
+      duplicates.reduce((selected, candidate) =>
+        JSON.stringify(candidate).localeCompare(JSON.stringify(selected)) < 0
+          ? candidate
+          : selected
+      )
+    )
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+type PersistedOpenCodeModelCatalogStore = {
+  schemaVersion: 2;
+  catalogs: Record<string, unknown>;
+  legacyUnscoped?: unknown;
+};
+
+function normalizeOpenCodeModelCatalogProjectId(projectId: string): string {
+  const normalized = projectId.trim();
+  if (!normalized) {
+    throw new Error("OpenCode model catalogue projectId must be a non-blank string.");
+  }
+  return normalized;
+}
+
+function parseOpenCodeModelCatalogSnapshot(
+  projectId: string,
+  value: unknown,
+): OpenCodeModelCatalogSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.models)) return null;
+
+  const models = normalizeOpenCodeModelCatalogEntries(
+    record.models as OpenCodeModelCatalogEntry[],
+  );
+  if (models.length === 0) return null;
+
+  const updatedAt =
+    typeof record.updatedAt === "string" && !Number.isNaN(Date.parse(record.updatedAt))
+      ? record.updatedAt
+      : new Date(0).toISOString();
+  const catalogVersion = createHash("sha256")
+    .update(JSON.stringify(models))
+    .digest("hex");
+
+  return {
+    schemaVersion: 2,
+    projectId,
+    catalogVersion,
+    updatedAt,
+    models,
+  };
+}
+
+function parseOpenCodeModelCatalogStore(
+  value: unknown,
+): Record<string, OpenCodeModelCatalogSnapshot> {
+  if (!value || typeof value !== "object") return {};
+  const record = value as Record<string, unknown>;
+  // Schema 1 was one host-global catalogue. It is deliberately left
+  // unassigned: attaching it to whichever project reads first would leak a
+  // project-specific opencode.json catalogue into another project.
+  if (record.schemaVersion !== 2 || !record.catalogs ||
+      typeof record.catalogs !== "object" || Array.isArray(record.catalogs)) {
+    return {};
+  }
+
+  const catalogs = Object.create(null) as Record<
+    string,
+    OpenCodeModelCatalogSnapshot
+  >;
+  for (const [rawProjectId, candidate] of Object.entries(
+    record.catalogs as Record<string, unknown>,
+  )) {
+    const projectId = rawProjectId.trim();
+    if (!projectId || Object.hasOwn(catalogs, projectId)) continue;
+    const snapshot = parseOpenCodeModelCatalogSnapshot(projectId, candidate);
+    if (snapshot) catalogs[projectId] = snapshot;
+  }
+  return catalogs;
+}
+
+function getUnscopedLegacyOpenCodeModelCatalog(value: unknown): unknown {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.schemaVersion === 1) return value;
+  if (record.schemaVersion === 2 && Object.hasOwn(record, "legacyUnscoped")) {
+    return record.legacyUnscoped;
+  }
+  return undefined;
+}
+
 export type ResourceChangeListener = (change: ResourceChange) => void;
 
 export class StorageService {
@@ -657,6 +802,7 @@ export class StorageService {
   private writeQueue = Promise.resolve();
   private environmentMutationQueue: Promise<unknown> = Promise.resolve();
   private configMutationQueue: Promise<unknown> = Promise.resolve();
+  private openCodeModelCatalogMutationQueue: Promise<unknown> = Promise.resolve();
   private githubCompletionCommentMutationQueue: Promise<unknown> = Promise.resolve();
   private featurePlanMutation: Promise<unknown> = Promise.resolve();
   private paneLayoutMutation: Promise<unknown> = Promise.resolve();
@@ -719,6 +865,10 @@ export class StorageService {
 
   private configFile(): string {
     return this.file("config.json");
+  }
+
+  private openCodeModelCatalogFile(): string {
+    return this.file("opencode-model-catalog.json");
   }
 
   private sessionsFile(): string {
@@ -1551,6 +1701,77 @@ export class StorageService {
     const validated = validateConfigReviewInstruction(config);
     await this.enqueueConfigMutation(() => this.saveJson(this.configFile(), validated));
     this.announce("config", "app");
+  }
+
+  async getOpenCodeModelCatalog(
+    projectId: string,
+  ): Promise<OpenCodeModelCatalogSnapshot | null> {
+    const normalizedProjectId = normalizeOpenCodeModelCatalogProjectId(projectId);
+    const store = await this.loadJson<unknown>(
+      this.openCodeModelCatalogFile(),
+      () => null,
+    );
+    return parseOpenCodeModelCatalogStore(store)[normalizedProjectId] ?? null;
+  }
+
+  async cacheOpenCodeModelCatalog(
+    projectId: string,
+    models: OpenCodeModelCatalogEntry[],
+  ): Promise<OpenCodeModelCatalogSnapshot> {
+    const normalizedProjectId = normalizeOpenCodeModelCatalogProjectId(projectId);
+    const normalizedModels = normalizeOpenCodeModelCatalogEntries(models);
+    if (normalizedModels.length === 0) {
+      throw new Error("OpenCode model catalogue must contain at least one model.");
+    }
+
+    const catalogVersion = createHash("sha256")
+      .update(JSON.stringify(normalizedModels))
+      .digest("hex");
+
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.openCodeModelCatalogFile(),
+        "OpenCode model catalogue storage",
+      );
+      try {
+        const persisted = await this.loadJson<unknown>(
+          this.openCodeModelCatalogFile(),
+          () => null,
+        );
+        const catalogs = parseOpenCodeModelCatalogStore(persisted);
+        const current = catalogs[normalizedProjectId];
+        if (current?.catalogVersion === catalogVersion) return current;
+
+        const snapshot: OpenCodeModelCatalogSnapshot = {
+          schemaVersion: 2,
+          projectId: normalizedProjectId,
+          catalogVersion,
+          updatedAt: new Date().toISOString(),
+          models: normalizedModels,
+        };
+        catalogs[normalizedProjectId] = snapshot;
+        const legacyUnscoped =
+          getUnscopedLegacyOpenCodeModelCatalog(persisted);
+        const store: PersistedOpenCodeModelCatalogStore = {
+          schemaVersion: 2,
+          catalogs,
+          ...(legacyUnscoped === undefined
+            ? {}
+            : { legacyUnscoped }),
+        };
+        await this.saveJson(this.openCodeModelCatalogFile(), store);
+        return snapshot;
+      } finally {
+        await release();
+      }
+    };
+
+    const next = this.openCodeModelCatalogMutationQueue.then(run, run);
+    this.openCodeModelCatalogMutationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   async getDesktopConnections(): Promise<StoredDesktopConnections> {

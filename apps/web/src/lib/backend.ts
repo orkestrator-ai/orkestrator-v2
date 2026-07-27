@@ -780,15 +780,35 @@ export interface OpenCodeServerStatus {
   hostPort: number | null;
 }
 
-export interface OpenCodeModelRef {
-  providerID: string;
-  modelID: string;
-}
+export type OpenCodeModelRef =
+  | string
+  | {
+      providerID: string;
+      modelID: string;
+    };
 
 export interface OpenCodeModelPreferences {
   recent: OpenCodeModelRef[];
   favorite: OpenCodeModelRef[];
   variant: Record<string, string>;
+}
+
+export interface CachedOpenCodeModel {
+  id: string;
+  name: string;
+  provider: string;
+  variants?: string[];
+  inputCost?: number;
+  outputCost?: number;
+  contextWindow?: number;
+}
+
+export interface OpenCodeModelCatalogSnapshot {
+  schemaVersion: 2;
+  projectId: string;
+  catalogVersion: string;
+  updatedAt: string;
+  models: CachedOpenCodeModel[];
 }
 
 /** Start the OpenCode server in a container */
@@ -814,6 +834,65 @@ export async function getOpenCodeServerLog(containerId: string): Promise<string>
 /** Get OpenCode model preferences from ~/.local/state/opencode/model.json */
 export async function getOpencodeModelPreferences(): Promise<OpenCodeModelPreferences> {
   return invoke<OpenCodeModelPreferences>("get_opencode_model_preferences");
+}
+
+/** Load the durable project-scoped catalogue before an OpenCode server is ready. */
+export async function getCachedOpenCodeModelCatalog(
+  projectId: string,
+): Promise<OpenCodeModelCatalogSnapshot | null> {
+  return invoke<OpenCodeModelCatalogSnapshot | null>(
+    "get_opencode_model_catalog_cache",
+    { projectId },
+  );
+}
+
+const finiteNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+/**
+ * Project a model onto exactly the fields the cache command accepts.
+ *
+ * The catalogue is assembled from whatever a provider reports, so this drops
+ * `NaN`/`Infinity` costs that `typeof x === "number"` lets through upstream and
+ * makes the wire contract explicit: a field added to `OpenCodeModel` later
+ * cannot start failing the command's strict key check.
+ */
+function toCachedOpenCodeModel(
+  model: CachedOpenCodeModel,
+): CachedOpenCodeModel {
+  const variants = Array.isArray(model.variants)
+    ? model.variants.filter(
+        (variant) => typeof variant === "string" && variant.trim().length > 0,
+      )
+    : undefined;
+  const inputCost = finiteNumber(model.inputCost);
+  const outputCost = finiteNumber(model.outputCost);
+  const contextWindow = finiteNumber(model.contextWindow);
+  return {
+    id: model.id,
+    name: model.name,
+    provider: model.provider,
+    ...(variants?.length ? { variants } : {}),
+    ...(inputCost === undefined ? {} : { inputCost }),
+    ...(outputCost === undefined ? {} : { outputCost }),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+  };
+}
+
+/**
+ * Store a newly-discovered catalogue. The backend hashes normalized model data
+ * and only rewrites the cache when the catalogue version has actually changed.
+ */
+export async function cacheOpenCodeModelCatalog(
+  projectId: string,
+  models: CachedOpenCodeModel[],
+): Promise<OpenCodeModelCatalogSnapshot> {
+  return invoke<OpenCodeModelCatalogSnapshot>("cache_opencode_model_catalog", {
+    projectId,
+    // A non-array is a caller bug; forwarding it lets the command reject it
+    // with a named error instead of throwing a TypeError in the renderer.
+    models: (Array.isArray(models) ? models : []).map(toCachedOpenCodeModel),
+  });
 }
 
 // --- Claude Bridge Server Commands ---

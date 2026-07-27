@@ -403,6 +403,172 @@ describe("process and platform command behavior", () => {
     }
   });
 
+  test("loads and validates the durable OpenCode model catalogue", async () => {
+    const cached = {
+      schemaVersion: 2 as const,
+      projectId: "project-a",
+      catalogVersion: "cached",
+      updatedAt: "2026-07-27T12:00:00.000Z",
+      models: [],
+    };
+    const getOpenCodeModelCatalog = mock(async (_projectId: string) => cached);
+    const cacheOpenCodeModelCatalog = mock(async (
+      _projectId: string,
+      models: unknown[],
+    ) => ({
+      ...cached,
+      catalogVersion: "updated",
+      models,
+    }));
+    const context = {
+      ...fixture.context,
+      storage: {
+        ...fixture.context.storage,
+        getOpenCodeModelCatalog,
+        cacheOpenCodeModelCatalog,
+      },
+    } as CommandContext;
+
+    expect(
+      await invoke(
+        "get_opencode_model_catalog_cache",
+        { projectId: " project-a " },
+        context,
+      ),
+    ).toEqual(cached);
+    expect(getOpenCodeModelCatalog).toHaveBeenCalledWith("project-a");
+
+    const models = [
+      {
+        id: " openrouter/openai/gpt-5 ",
+        name: " GPT-5 ",
+        provider: " openrouter ",
+        variants: [" low ", "high"],
+        inputCost: 0,
+        outputCost: Number.MAX_VALUE,
+        contextWindow: Number.MAX_SAFE_INTEGER,
+      },
+    ];
+    expect(
+      await invoke(
+        "cache_opencode_model_catalog",
+        { projectId: " project-a ", models },
+        context,
+      ),
+    ).toEqual({
+      ...cached,
+      catalogVersion: "updated",
+      models: [{
+        id: "openrouter/openai/gpt-5",
+        name: "GPT-5",
+        provider: "openrouter",
+        variants: ["low", "high"],
+        inputCost: 0,
+        outputCost: Number.MAX_VALUE,
+        contextWindow: Number.MAX_SAFE_INTEGER,
+      }],
+    });
+    expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith("project-a", [{
+      id: "openrouter/openai/gpt-5",
+      name: "GPT-5",
+      provider: "openrouter",
+      variants: ["low", "high"],
+      inputCost: 0,
+      outputCost: Number.MAX_VALUE,
+      contextWindow: Number.MAX_SAFE_INTEGER,
+    }]);
+
+    await expect(
+      invoke(
+        "cache_opencode_model_catalog",
+        { projectId: "project-a", models: [{ id: "missing-fields" }] },
+        context,
+      ),
+    ).rejects.toThrow("models[0].name");
+  });
+
+  test("caches the valid models in a batch instead of rejecting it wholesale", async () => {
+    // The catalogue is best-effort data assembled from whatever a provider
+    // reports and the renderer only logs a rejection, so one rogue model must
+    // not silently disable caching for the whole project.
+    const cacheOpenCodeModelCatalog = mock(async (_projectId: string, models: unknown) => ({
+      schemaVersion: 2,
+      projectId: "project-a",
+      catalogVersion: "v1",
+      updatedAt: "2026-07-27T12:00:00.000Z",
+      models,
+    }));
+    const context = {
+      ...fixture.context,
+      storage: { ...fixture.context.storage, cacheOpenCodeModelCatalog },
+    } as CommandContext;
+
+    await invoke(
+      "cache_opencode_model_catalog",
+      {
+        projectId: "project-a",
+        models: [
+          { id: "openai/good", name: "Good", provider: "openai" },
+          // Every rejection reason, one per entry.
+          { id: "openai/nan-cost", name: "NaN", provider: "openai", inputCost: Number.NaN },
+          { id: "openai/unknown-key", name: "Unknown", provider: "openai", tier: "pro" },
+          { id: " ", name: "Blank id", provider: "openai" },
+          null,
+          { id: "openai/also-good", name: "Also Good", provider: "openai", variants: ["high"] },
+        ],
+      },
+      context,
+    );
+
+    expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith("project-a", [
+      { id: "openai/good", name: "Good", provider: "openai" },
+      { id: "openai/also-good", name: "Also Good", provider: "openai", variants: ["high"] },
+    ]);
+  });
+
+  test("reports why a batch was rejected when no model in it is usable", async () => {
+    await expect(
+      invoke("cache_opencode_model_catalog", {
+        projectId: "project-a",
+        models: [
+          { id: "openai/a", name: "A", provider: "openai", contextWindow: 1.5 },
+          { id: "openai/b", name: "B", provider: "openai", inputCost: -1 },
+        ],
+      }),
+    ).rejects.toThrow(
+      /at least one model.*contextWindow to be a positive safe integer/s,
+    );
+  });
+
+  test.each([
+    ["missing project id", "get_opencode_model_catalog_cache", {}, "projectId"],
+    ["blank project id", "get_opencode_model_catalog_cache", { projectId: " " }, "non-blank"],
+    ["unexpected get argument", "get_opencode_model_catalog_cache", { projectId: "p", extra: true }, "Unexpected arguments field"],
+    ["models is not an array", "cache_opencode_model_catalog", { projectId: "p", models: {} }, "models to be an array"],
+    ["empty models", "cache_opencode_model_catalog", { projectId: "p", models: [] }, "at least one model"],
+    ["model is not an object", "cache_opencode_model_catalog", { projectId: "p", models: [null] }, "models[0] to be an object"],
+    ["unexpected model field", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", extra: true }] }, "Unexpected models[0] field"],
+    ["blank model id", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: " ", name: "A", provider: "p" }] }, "models[0].id to be a non-blank string"],
+    ["blank model name", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: " ", provider: "p" }] }, "models[0].name to be a non-blank string"],
+    ["blank model provider", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: " " }] }, "models[0].provider to be a non-blank string"],
+    ["variants is not an array", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: "fast" }] }, "variants to be an array"],
+    ["non-string variant", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: [1] }] }, "variants[0] to be a string"],
+    ["blank variant", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: [" "] }] }, "variants[0] to be a non-blank string"],
+    ["negative input cost", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", inputCost: -1 }] }, "inputCost to be non-negative"],
+    ["infinite output cost", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", outputCost: Number.POSITIVE_INFINITY }] }, "outputCost to be a number"],
+    ["zero context", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", contextWindow: 0 }] }, "contextWindow to be a positive safe integer"],
+    ["fractional context", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", contextWindow: 1.5 }] }, "contextWindow to be a positive safe integer"],
+    ["unsafe context", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", contextWindow: Number.MAX_SAFE_INTEGER + 1 }] }, "contextWindow to be a positive safe integer"],
+    ["unexpected cache argument", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p" }], extra: true }, "Unexpected arguments field"],
+  ] as const)("rejects malformed OpenCode catalogue command input: %s", async (
+    _label,
+    command,
+    args,
+    message,
+  ) => {
+    await expect(invoke(command, args)).rejects.toThrow(message);
+  });
+
   test("stops the in-container Codex bridge without the pattern matching its own shell", async () => {
     await expect(invoke("stop_codex_server", { containerId: "container-a" })).resolves.toBeUndefined();
 

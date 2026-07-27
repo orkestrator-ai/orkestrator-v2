@@ -15,6 +15,7 @@ function resetOpenCodeStore() {
     sessions: new Map(),
     clients: new Map(),
     models: new Map(),
+    modelSource: new Map(),
     slashCommands: new Map(),
     selectedModel: new Map(),
     selectedVariant: new Map(),
@@ -605,6 +606,59 @@ describe("openCodeStore models", () => {
     expect(store.getModels("env-999")).toEqual([
       { id: "openai/gpt-5", name: "GPT-5", provider: "openai" },
     ]);
+  });
+
+  test("treats a catalogue as live only when a server reported it", () => {
+    const store = useOpenCodeStore.getState();
+    const model = { id: "openai/gpt-5", name: "GPT-5", provider: "openai" };
+
+    // Default source is the live server fetch, which is the common caller.
+    store.setModels("env-live", [model]);
+    store.setModels("env-cached", [model], "cache");
+    store.setModels("env-explicit", [model], "server");
+
+    expect(store.hasLiveModels("env-live")).toBe(true);
+    expect(store.hasLiveModels("env-explicit")).toBe(true);
+    expect(store.hasLiveModels("env-cached")).toBe(false);
+    // Never populated at all.
+    expect(store.hasLiveModels("env-unknown")).toBe(false);
+  });
+
+  test("an empty catalogue is never live, whatever it claims", () => {
+    const store = useOpenCodeStore.getState();
+
+    store.setModels("env-123", [], "server");
+
+    expect(store.hasLiveModels("env-123")).toBe(false);
+  });
+
+  test("provenance is upgraded and downgraded with the catalogue it describes", () => {
+    const store = useOpenCodeStore.getState();
+    const cached = { id: "openai/cached", name: "Cached", provider: "openai" };
+    const live = { id: "openai/live", name: "Live", provider: "openai" };
+
+    store.setModels("env-123", [cached], "cache");
+    expect(store.hasLiveModels("env-123")).toBe(false);
+
+    store.setModels("env-123", [live], "server");
+    expect(store.hasLiveModels("env-123")).toBe(true);
+
+    // A later cache rehydration must not keep claiming to be authoritative.
+    store.setModels("env-123", [cached], "cache");
+    expect(store.hasLiveModels("env-123")).toBe(false);
+  });
+
+  test("clearEnvironment drops provenance with the models", () => {
+    const store = useOpenCodeStore.getState();
+    const model = { id: "openai/gpt-5", name: "GPT-5", provider: "openai" };
+
+    store.setModels("env-123", [model], "server");
+    store.setModels("env-999", [model], "server");
+    store.clearEnvironment("env-123");
+
+    expect(store.hasLiveModels("env-123")).toBe(false);
+    expect(useOpenCodeStore.getState().modelSource.has("env-123")).toBe(false);
+    expect(store.hasLiveModels("env-999")).toBe(true);
   });
 });
 

@@ -18,6 +18,7 @@ import {
   type ClaudeModelCatalogSnapshot,
   type EnvironmentStatus,
   type EnvironmentType,
+  type OpenCodeModelCatalogEntry,
   type PortMapping,
   type PrState,
   type SessionStatus,
@@ -516,6 +517,112 @@ function asTerminalDimension(value: unknown, fallback: number): number {
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function asNonBlankString(value: unknown, name: string): string {
+  const normalized = asString(value, name).trim();
+  if (!normalized) throw new Error(`Expected ${name} to be a non-blank string`);
+  return normalized;
+}
+
+function asOpenCodeModelVariants(value: unknown, name: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`Expected ${name} to be an array`);
+  return value.map((variant, index) =>
+    asNonBlankString(variant, `${name}[${index}]`)
+  );
+}
+
+function asOpenCodeModelCost(value: unknown, name: string): number {
+  const cost = asNumber(value, name);
+  if (cost < 0) throw new Error(`Expected ${name} to be non-negative`);
+  return cost;
+}
+
+function asOpenCodeContextWindow(value: unknown, name: string): number {
+  const contextWindow = asNumber(value, name);
+  if (!Number.isSafeInteger(contextWindow) || contextWindow <= 0) {
+    throw new Error(`Expected ${name} to be a positive safe integer`);
+  }
+  return contextWindow;
+}
+
+function asOpenCodeModelCatalogEntry(
+  candidate: unknown,
+  name: string,
+): OpenCodeModelCatalogEntry {
+  const model = asRecord(candidate, name);
+  assertOnlyKeys(
+    model,
+    [
+      "id",
+      "name",
+      "provider",
+      "variants",
+      "inputCost",
+      "outputCost",
+      "contextWindow",
+    ],
+    name,
+  );
+  return {
+    id: asNonBlankString(model.id, `${name}.id`),
+    name: asNonBlankString(model.name, `${name}.name`),
+    provider: asNonBlankString(model.provider, `${name}.provider`),
+    ...(model.variants === undefined
+      ? {}
+      : { variants: asOpenCodeModelVariants(model.variants, `${name}.variants`) }),
+    ...(model.inputCost === undefined
+      ? {}
+      : { inputCost: asOpenCodeModelCost(model.inputCost, `${name}.inputCost`) }),
+    ...(model.outputCost === undefined
+      ? {}
+      : { outputCost: asOpenCodeModelCost(model.outputCost, `${name}.outputCost`) }),
+    ...(model.contextWindow === undefined
+      ? {}
+      : {
+          contextWindow: asOpenCodeContextWindow(
+            model.contextWindow,
+            `${name}.contextWindow`,
+          ),
+        }),
+  };
+}
+
+/**
+ * Validate a discovered catalogue, dropping entries that fail rather than
+ * rejecting the batch.
+ *
+ * The catalogue is best-effort cached data assembled from whatever a provider
+ * reports, and the renderer only logs a rejection. Failing the whole call over
+ * one rogue model — a `NaN` cost, a field added to `OpenCodeModel` upstream —
+ * would silently disable caching for that project indefinitely. `StorageService`
+ * already normalizes per entry; this matches it. A batch with nothing valid in
+ * it is still an error, because that is a caller bug rather than one bad model.
+ */
+function asOpenCodeModelCatalog(value: unknown): OpenCodeModelCatalogEntry[] {
+  if (!Array.isArray(value)) {
+    throw new Error("Expected models to be an array");
+  }
+  if (value.length === 0) {
+    throw new Error("OpenCode model catalogue must contain at least one model.");
+  }
+
+  const models: OpenCodeModelCatalogEntry[] = [];
+  let firstRejection: string | undefined;
+  value.forEach((candidate, index) => {
+    try {
+      models.push(asOpenCodeModelCatalogEntry(candidate, `models[${index}]`));
+    } catch (error) {
+      firstRejection ??= error instanceof Error ? error.message : String(error);
+    }
+  });
+
+  if (models.length === 0) {
+    throw new Error(
+      `OpenCode model catalogue must contain at least one model. ${firstRejection ?? ""}`.trim(),
+    );
+  }
+  return models;
 }
 
 function asFeaturePlanRole(value: unknown): "user" | "assistant" | "system" {
@@ -5296,6 +5403,19 @@ export function createCommandRegistry(
     const modelPath = homePath(".local", "state", "opencode", "model.json");
     if (!await pathExists(modelPath)) return { recent: [], favorite: [], variant: {} };
     return JSON.parse(await fs.readFile(modelPath, "utf8"));
+  });
+  register("get_opencode_model_catalog_cache", (args, { storage }) => {
+    assertOnlyKeys(args, ["projectId"], "arguments");
+    return storage.getOpenCodeModelCatalog(
+      asNonBlankString(args.projectId, "projectId"),
+    );
+  });
+  register("cache_opencode_model_catalog", (args, { storage }) => {
+    assertOnlyKeys(args, ["projectId", "models"], "arguments");
+    return storage.cacheOpenCodeModelCatalog(
+      asNonBlankString(args.projectId, "projectId"),
+      asOpenCodeModelCatalog(args.models),
+    );
   });
   register("start_claude_server", ({ containerId }) =>
     startContainerServer(

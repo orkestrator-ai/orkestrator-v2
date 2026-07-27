@@ -22,6 +22,10 @@ import type {
   SdkSystemMessage,
   TaskListSnapshot,
   MessagePatchEventData,
+  SessionUsageSnapshot,
+  BackgroundTaskSnapshot,
+  SessionRateLimitWindow,
+  StopBackgroundTaskResult,
 } from "../types/index.js";
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
@@ -91,6 +95,37 @@ const planApprovalResolvers = new Map<
 const QUESTION_TIMEOUT_MS = 5 * 60 * 1000;
 const PLAN_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 
+/**
+ * Reason a session operation refused, carried as a plain string property.
+ *
+ * Deliberately not an `instanceof` check at the HTTP layer: `routes/session.ts`
+ * imports the session manager through a module boundary that tests replace
+ * wholesale, so the class identity is not stable there. A `code` field is.
+ */
+export type SessionOperationCode = "not_found" | "conflict" | "invalid";
+
+export class SessionOperationError extends Error {
+  readonly name = "SessionOperationError";
+
+  constructor(
+    readonly code: SessionOperationCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function sessionOperationError(
+  code: SessionOperationCode,
+  message: string,
+): SessionOperationError {
+  return new SessionOperationError(code, message);
+}
+
+/** Canonical RFC 4122 shape, used to reject ids that cannot be transcript uuids. */
+const TRANSCRIPT_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 class ClaudeStructuredOutputError extends Error {
   constructor(readonly result: StructuredOutputResult<never>) {
     super(result.ok ? "Claude structured output failed" : result.error.message);
@@ -118,6 +153,19 @@ function generateSessionId(): string {
   return `session-${crypto.randomUUID()}`;
 }
 
+function sdkSessionIdFromBridgeId(sessionId: string): string | null {
+  const value = sessionId.startsWith("session-")
+    ? sessionId.slice("session-".length)
+    : sessionId;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    ? value
+    : null;
+}
+
+function bridgeSessionIdFromSdkId(sessionId: string): string {
+  return sessionId.startsWith("session-") ? sessionId : `session-${sessionId}`;
+}
+
 /**
  * Generate a unique message ID using crypto.randomUUID for guaranteed uniqueness
  */
@@ -141,6 +189,31 @@ function parseTokenValue(value: unknown): number | undefined {
     return Math.round(base);
   }
   return undefined;
+}
+
+/**
+ * Largest value `new Date(ms)` can represent; anything beyond it is a RangeError
+ * rather than a timestamp.
+ */
+const MAX_DATE_MS = 8.64e15;
+
+/**
+ * Values above this are already milliseconds — 1e12 ms is 2001, while 1e12
+ * seconds is the year 33658, so no real reset instant is ambiguous.
+ */
+const EPOCH_MILLISECONDS_THRESHOLD = 1e12;
+
+/**
+ * `rate_limit_info.resetsAt` is epoch **seconds**, matching the CLI and the
+ * Codex bridge's `epochSecondsToIso`. Reading it as milliseconds put every
+ * reset instant in 1970, which the UI then rendered as a permanently expired
+ * window. The threshold keeps a future SDK that switches units working.
+ */
+function rateLimitResetToIso(value: unknown): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const ms = Math.abs(value) >= EPOCH_MILLISECONDS_THRESHOLD ? value : value * 1_000;
+  if (!Number.isFinite(ms) || Math.abs(ms) > MAX_DATE_MS) return undefined;
+  return new Date(ms).toISOString();
 }
 
 function extractContextUsageFromUnknown(payload: unknown, fallbackModel?: string): ContextUsagePayload | null {
@@ -213,6 +286,143 @@ function extractContextUsageFromUnknown(payload: unknown, fallbackModel?: string
   }
 
   return null;
+}
+
+async function buildClaudeUsageSnapshot(
+  session: SessionState,
+  result: SdkResultMessage,
+  queryControl: SessionState["queryControl"],
+  fallbackModel?: string,
+): Promise<SessionUsageSnapshot | undefined> {
+  const modelEntries = Object.entries(result.modelUsage ?? {});
+  const modelTotals = modelEntries.reduce(
+    (sum, [, usage]) => ({
+      input: sum.input + (usage.inputTokens ?? 0),
+      output: sum.output + (usage.outputTokens ?? 0),
+      cacheRead: sum.cacheRead + (usage.cacheReadInputTokens ?? 0),
+      cacheWrite: sum.cacheWrite + (usage.cacheCreationInputTokens ?? 0),
+      cost: sum.cost + (usage.costUSD ?? 0),
+    }),
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+  );
+  const rawUsage = result.usage ?? {};
+  const totals = modelEntries.length > 0
+    ? modelTotals
+    : {
+        input:
+          parseTokenValue(rawUsage.inputTokens)
+          ?? parseTokenValue(rawUsage.input_tokens)
+          ?? 0,
+        output:
+          parseTokenValue(rawUsage.outputTokens)
+          ?? parseTokenValue(rawUsage.output_tokens)
+          ?? 0,
+        cacheRead:
+          parseTokenValue(rawUsage.cacheReadInputTokens)
+          ?? parseTokenValue(rawUsage.cache_read_input_tokens)
+          ?? parseTokenValue(rawUsage.cacheReadTokens)
+          ?? parseTokenValue(rawUsage.cache_read_tokens)
+          ?? 0,
+        cacheWrite:
+          parseTokenValue(rawUsage.cacheCreationInputTokens)
+          ?? parseTokenValue(rawUsage.cache_creation_input_tokens)
+          ?? parseTokenValue(rawUsage.cacheWriteTokens)
+          ?? parseTokenValue(rawUsage.cache_write_tokens)
+          ?? 0,
+        cost: 0,
+      };
+
+  let context:
+    | {
+        totalTokens?: number;
+        maxTokens?: number;
+        percentage?: number;
+        model?: string;
+        categories?: Array<{ name: string; tokens: number; color?: string }>;
+      }
+    | undefined;
+  if (queryControl?.getContextUsage) {
+    try {
+      const raw = await queryControl.getContextUsage();
+      if (raw && typeof raw === "object") {
+        const value = raw as Record<string, unknown>;
+        context = {
+          totalTokens: parseTokenValue(value.totalTokens),
+          maxTokens: parseTokenValue(value.maxTokens),
+          percentage:
+            typeof value.percentage === "number" ? value.percentage : undefined,
+          model: typeof value.model === "string" ? value.model : undefined,
+          categories: Array.isArray(value.categories)
+            ? value.categories.flatMap((entry) => {
+                if (!entry || typeof entry !== "object") return [];
+                const item = entry as Record<string, unknown>;
+                const name = typeof item.name === "string" ? item.name : undefined;
+                const tokens = parseTokenValue(item.tokens);
+                if (!name || tokens === undefined) return [];
+                return [{
+                  name,
+                  tokens,
+                  color: typeof item.color === "string" ? item.color : undefined,
+                }];
+              })
+            : undefined,
+        };
+      }
+    } catch (error) {
+      console.debug("[session-manager] Context usage control request failed:", error);
+    }
+  }
+
+  const heuristic = extractContextUsageFromUnknown(result, fallbackModel);
+  // The heuristic BFS walks into `result.modelUsage[model]`, where it can only
+  // reach `inputTokens + outputTokens` — cache reads are invisible to it. On a
+  // resumed turn that is the whole context (120k of cache read reported as
+  // ~205 tokens), so the cache-inclusive sum wins whenever there is one, and
+  // the heuristic is the fallback for shapes this function does not model.
+  const cacheInclusiveTurnTotal =
+    totals.input + totals.cacheRead + totals.cacheWrite + totals.output;
+  const usedTokens =
+    context?.totalTokens
+    ?? (cacheInclusiveTurnTotal > 0 ? cacheInclusiveTurnTotal : undefined)
+    ?? heuristic?.usedTokens
+    ?? 0;
+  const contextWindow =
+    context?.maxTokens
+    ?? heuristic?.totalTokens
+    ?? Math.max(...modelEntries.map(([, usage]) => usage.contextWindow ?? 0), 0);
+  if (usedTokens <= 0 || contextWindow <= 0) return undefined;
+
+  const previous = session.usage;
+  const lastTurnTokens = cacheInclusiveTurnTotal;
+  return {
+    usedTokens,
+    totalTokens: contextWindow,
+    percentUsed:
+      context?.percentage
+      ?? Math.max(0, Math.min(100, (usedTokens / contextWindow) * 100)),
+    modelId: context?.model ?? modelEntries.at(-1)?.[0] ?? fallbackModel,
+    inputTokens: (previous?.inputTokens ?? 0) + totals.input,
+    outputTokens: (previous?.outputTokens ?? 0) + totals.output,
+    cacheReadTokens: (previous?.cacheReadTokens ?? 0) + totals.cacheRead,
+    cacheWriteTokens: (previous?.cacheWriteTokens ?? 0) + totals.cacheWrite,
+    lastTurnTokens,
+    sessionTokens: (previous?.sessionTokens ?? 0) + lastTurnTokens,
+    costUsd:
+      (previous?.costUsd ?? 0)
+      + (result.total_cost_usd ?? totals.cost),
+    durationMs: (previous?.durationMs ?? 0) + (result.duration_ms ?? 0),
+    apiDurationMs: (previous?.apiDurationMs ?? 0) + (result.duration_api_ms ?? 0),
+    permissionDenials:
+      (previous?.permissionDenials ?? 0)
+      + (result.permission_denials?.length ?? 0),
+    contextCategories: context?.categories,
+    estimated: context?.totalTokens === undefined,
+    source: "claude",
+    updatedAt: new Date().toISOString(),
+    // Read from the session, not the previous snapshot: rate-limit events land
+    // mid-turn, so the first turn's windows exist before any snapshot does.
+    rateLimits: session.rateLimits ?? previous?.rateLimits,
+  };
 }
 
 /**
@@ -376,6 +586,15 @@ async function generateAndSetSessionTitle(
     session.title = title;
     console.debug("[session-manager] Generated session title:", { sessionId, title });
 
+    // Written through to the rollout, not just held in memory: without a
+    // durable custom title the next `reconcilePersistedSessions` has nothing to
+    // distinguish this from a placeholder and the SDK summary takes it back.
+    try {
+      await persistSessionTitle(session, title);
+    } catch (error) {
+      console.debug("[session-manager] Failed to persist generated title:", error);
+    }
+
     eventEmitter.emit({
       type: "session.title-updated",
       sessionId,
@@ -502,6 +721,10 @@ export function deleteSession(sessionId: string): boolean {
     if (session.abortController) {
       session.abortController.abort();
     }
+    // The control handle outlives the turn while background tasks are alive
+    // (see `stopBackgroundTask`); deleting the session is the point at which
+    // the user has said that work should stop.
+    releaseQueryControl(session);
     cleanupPendingInteractions(sessionId);
     sessions.delete(sessionId);
     return true;
@@ -526,6 +749,7 @@ export function abortSession(sessionId: string): boolean {
     session.abortController.abort();
     session.status = "idle";
     session.abortController = undefined;
+    releaseQueryControl(session);
 
     cleanupPendingInteractions(sessionId);
 
@@ -886,6 +1110,798 @@ function buildMessageParts(
   }
 
   return result;
+}
+
+function normalizePersistedSessionMessages(
+  persisted: Array<{
+    type: "user" | "assistant" | "system";
+    uuid: string;
+    session_id: string;
+    message: unknown;
+    parent_tool_use_id: string | null;
+  }>,
+): { messages: NormalizedMessage[]; taskRegistry: TaskRegistry } {
+  const toolTracker = new ToolTracker();
+  const taskRegistry = new TaskRegistry();
+  const activeTaskIds = new Set<string>();
+  const parsed: Array<{
+    raw: (typeof persisted)[number];
+    content: string;
+    orderedParts: OrderedPartEntry[];
+  }> = [];
+
+  for (const raw of persisted) {
+    if (raw.type === "system") continue;
+    const result = parseMessageContent(
+      raw,
+      toolTracker,
+      undefined,
+      activeTaskIds,
+      taskRegistry,
+    );
+    for (const taskId of result.newTaskIds) activeTaskIds.add(taskId);
+    for (const taskId of result.completedTaskIds) activeTaskIds.delete(taskId);
+    parsed.push({
+      raw,
+      content: result.content,
+      orderedParts: result.orderedParts,
+    });
+  }
+
+  const now = Date.now();
+  const messages: NormalizedMessage[] = [];
+  for (let index = 0; index < parsed.length; index += 1) {
+    const entry = parsed[index]!;
+    const parts = buildMessageParts(entry.orderedParts, toolTracker);
+    if (entry.raw.type === "user" && !entry.content.trim()) continue;
+    if (entry.raw.type === "assistant" && parts.length === 0 && !entry.content.trim()) {
+      continue;
+    }
+    const rawTimestamp = (entry.raw as unknown as { timestamp?: unknown }).timestamp;
+    const timestamp =
+      typeof rawTimestamp === "string"
+        ? rawTimestamp
+        : new Date(now + index).toISOString();
+    messages.push({
+      id: entry.raw.uuid || generateMessageId(),
+      role: entry.raw.type,
+      content: entry.content,
+      parts,
+      timestamp,
+      // Recorded explicitly rather than inferred from `id`: a record with no
+      // uuid falls back to a generated id, which must never be mistaken for a
+      // transcript uuid by `resolvePersistedMessageId`.
+      ...(entry.raw.uuid ? { sdkUuid: entry.raw.uuid } : {}),
+    });
+  }
+  return { messages, taskRegistry };
+}
+
+async function claudeSdk() {
+  return import("@anthropic-ai/claude-agent-sdk");
+}
+
+function currentWorkingDirectory(): string {
+  return process.env.CWD || process.cwd();
+}
+
+/**
+ * Rename the session on disk when the installed SDK can.
+ *
+ * Feature-detected rather than assumed: an older SDK simply has no rename, and
+ * a title that only ever lived in memory is not worth failing an operation over.
+ */
+async function persistSessionTitle(session: SessionState, title: string): Promise<void> {
+  if (!session.sdkSessionId) return;
+  const sdk = await claudeSdk();
+  if (typeof sdk.renameSession !== "function") return;
+  await sdk.renameSession(session.sdkSessionId, title, {
+    dir: currentWorkingDirectory(),
+  });
+}
+
+/**
+ * Monotonic tick, bumped by every durable deletion.
+ *
+ * Deliberately not `Date.now()`: a delete and the read that has to be ordered
+ * against it routinely land in the same millisecond, and a wall-clock
+ * comparison then has to guess. A counter makes "did this deletion happen after
+ * that read started" exact.
+ */
+let sessionDeletionTick = 0;
+
+/** How many recent deletions are remembered; each only has to outlast one read. */
+const DELETE_TOMBSTONE_LIMIT = 128;
+
+/** SDK session id → the tick at which durable deletion removed its rollout. */
+const deletedSdkSessionTicks = new Map<string, number>();
+
+function recordDeletedSdkSession(sdkSessionId: string): void {
+  sessionDeletionTick += 1;
+  // Insertion-ordered, so the first key is always the oldest tombstone.
+  deletedSdkSessionTicks.delete(sdkSessionId);
+  deletedSdkSessionTicks.set(sdkSessionId, sessionDeletionTick);
+  while (deletedSdkSessionTicks.size > DELETE_TOMBSTONE_LIMIT) {
+    const oldest = deletedSdkSessionTicks.keys().next();
+    if (oldest.done) break;
+    deletedSdkSessionTicks.delete(oldest.value);
+  }
+}
+
+/**
+ * Whether a read that started at `readTick` could be holding a pre-deletion
+ * snapshot of this session. A deletion that landed after the read started means
+ * the rows it returns are stale, so adopting them would resurrect a session the
+ * user deleted — with no code path that ever prunes it again.
+ */
+function deletedSinceTick(sdkSessionId: string, readTick: number): boolean {
+  const deletedAt = deletedSdkSessionTicks.get(sdkSessionId);
+  return deletedAt !== undefined && deletedAt > readTick;
+}
+
+/**
+ * Whether a title is still the id-derived placeholder the bridge assigns, and
+ * so carries no user or generated intent worth preserving.
+ *
+ * Matched exactly against the two forms that can be minted rather than by
+ * prefix: a user-chosen "Session planning notes" is not a default.
+ */
+function isDefaultSessionTitle(
+  title: string | undefined,
+  bridgeId: string,
+  sdkId?: string,
+): boolean {
+  if (title === undefined || title.length === 0) return true;
+  if (title === `Session ${bridgeId.slice(-6)}`) return true;
+  return sdkId !== undefined && title === `Session ${sdkId.slice(-6)}`;
+}
+
+/**
+ * Reconcile lightweight SDK session metadata into the bridge registry.
+ *
+ * Transcript bodies are deliberately loaded only when one session is opened.
+ * Listing must stay bounded even for a large Claude home.
+ */
+export async function reconcilePersistedSessions(): Promise<void> {
+  const sdk = await claudeSdk();
+  if (typeof sdk.listSessions !== "function") return;
+  const cwd = currentWorkingDirectory();
+  // Recorded before the read, so a deletion that lands while it is in flight is
+  // detectable against the snapshot it returns.
+  const listStartedAtTick = sessionDeletionTick;
+  const infos = await sdk.listSessions({
+    dir: cwd,
+    includeProgrammatic: true,
+    // Every Orkestrator environment is a worktree of the same repository, so
+    // the SDK default (`true`) would hand this bridge every *other*
+    // environment's sessions — which rename, delete and fork would then act on.
+    includeWorktrees: false,
+  });
+  for (const info of infos) {
+    // Belt and braces: an SDK that ignores `includeWorktrees` (or a store
+    // backend where it does not apply) must still not leak another
+    // environment's sessions into this registry.
+    if (typeof info.cwd === "string" && info.cwd.length > 0 && !isPathWithin(cwd, info.cwd)) {
+      continue;
+    }
+    // The rollout was deleted while this listing was in flight. Nothing prunes
+    // a re-inserted entry, so adopting it would leave a permanent zombie.
+    if (deletedSinceTick(info.sessionId, listStartedAtTick)) continue;
+    const id = bridgeSessionIdFromSdkId(info.sessionId);
+    const existing = sessions.get(id);
+    if (existing) {
+      // `summary` is effectively always set, so taking it unconditionally
+      // reverted every title generated by `generateAndSetSessionTitle` on the
+      // next `GET /session/list`. Only an explicit on-disk rename outranks the
+      // in-memory title; a summary may only fill a still-default placeholder.
+      if (info.customTitle) {
+        existing.title = info.customTitle;
+      } else if (
+        info.summary
+        && isDefaultSessionTitle(existing.title, id, info.sessionId)
+      ) {
+        existing.title = info.summary;
+      }
+      existing.lastActivity = new Date(info.lastModified);
+      existing.sdkSessionId = info.sessionId;
+      continue;
+    }
+    sessions.set(id, {
+      id,
+      title: info.customTitle || info.summary || `Session ${info.sessionId.slice(-6)}`,
+      messages: [],
+      status: "idle",
+      createdAt: new Date(info.createdAt ?? info.lastModified),
+      lastActivity: new Date(info.lastModified),
+      sdkSessionId: info.sessionId,
+      persistedMessagesLoaded: false,
+    });
+  }
+}
+
+/**
+ * Single in-flight materialization per bridge session id.
+ *
+ * `GET /:id`, `/messages`, `/tasks` and `POST /:id/prompt` all call
+ * {@link ensurePersistedSession}, and a tab mounting fires them together. One
+ * shared promise means one SDK read and, more importantly, one writer.
+ */
+const persistedMaterializations = new Map<string, Promise<SessionState | undefined>>();
+
+async function materializePersistedSessionState(
+  sessionId: string,
+  sdkId: string,
+): Promise<SessionState | undefined> {
+  const startedAtTick = sessionDeletionTick;
+  const sdk = await claudeSdk();
+  // Re-checked after every await. A prompt that claimed this id while the read
+  // was pending owns a running status, a live transcript and a task registry;
+  // overwriting it with a fresh idle record silently discards the turn.
+  const racedDuringImport = sessions.get(sessionId);
+  if (racedDuringImport) return racedDuringImport;
+
+  if (typeof sdk.getSessionInfo !== "function") return undefined;
+  const info = await sdk.getSessionInfo(sdkId, {
+    dir: currentWorkingDirectory(),
+  });
+  const racedDuringRead = sessions.get(sessionId);
+  if (racedDuringRead) return racedDuringRead;
+
+  if (!info) return undefined;
+  // Deleted while this read was in flight: the metadata is a pre-deletion
+  // snapshot and registering it would resurrect the session.
+  if (deletedSinceTick(sdkId, startedAtTick)) return undefined;
+  const state: SessionState = {
+    id: sessionId,
+    title: info.customTitle || info.summary || `Session ${sdkId.slice(-6)}`,
+    messages: [],
+    status: "idle",
+    createdAt: new Date(info.createdAt ?? info.lastModified),
+    lastActivity: new Date(info.lastModified),
+    sdkSessionId: sdkId,
+    persistedMessagesLoaded: false,
+  };
+  sessions.set(sessionId, state);
+  return state;
+}
+
+export async function ensurePersistedSession(
+  sessionId: string,
+): Promise<SessionState | undefined> {
+  const existing = sessions.get(sessionId);
+  if (existing) return existing;
+
+  const inFlight = persistedMaterializations.get(sessionId);
+  if (inFlight) return inFlight;
+
+  const sdkId = sdkSessionIdFromBridgeId(sessionId);
+  if (!sdkId) return undefined;
+
+  const materialization = materializePersistedSessionState(sessionId, sdkId);
+  persistedMaterializations.set(sessionId, materialization);
+  void materialization
+    .finally(() => {
+      if (persistedMaterializations.get(sessionId) === materialization) {
+        persistedMaterializations.delete(sessionId);
+      }
+    })
+    .catch(() => {
+      // The caller observes the original rejection. This branch only handles
+      // the promise returned by `finally`, avoiding an unhandled rejection.
+    });
+  return materialization;
+}
+
+/**
+ * Read and normalize a session's persisted transcript.
+ *
+ * Split out of {@link hydratePersistedSessionMessages} so `sendPrompt` can load
+ * the transcript for a session it has *already* marked running, which the
+ * public entry point deliberately refuses to do.
+ */
+async function readPersistedSessionMessages(
+  session: SessionState,
+): Promise<{ messages: NormalizedMessage[]; taskRegistry: TaskRegistry } | undefined> {
+  if (!session.sdkSessionId) return undefined;
+  const sdk = await claudeSdk();
+  if (typeof sdk.getSessionMessages !== "function") return undefined;
+  const persisted = await sdk.getSessionMessages(session.sdkSessionId, {
+    dir: currentWorkingDirectory(),
+    includeSystemMessages: true,
+  });
+  return normalizePersistedSessionMessages(persisted);
+}
+
+function readPersistedSessionMessagesOnce(
+  session: SessionState,
+): Promise<{ messages: NormalizedMessage[]; taskRegistry: TaskRegistry } | undefined> {
+  if (session.persistedHydration) return session.persistedHydration;
+  const hydration = readPersistedSessionMessages(session);
+  session.persistedHydration = hydration;
+  void hydration.finally(() => {
+    if (session.persistedHydration === hydration) {
+      session.persistedHydration = undefined;
+    }
+  }).catch(() => {
+    // The caller observes the original rejection. This branch only handles the
+    // promise returned by `finally`, avoiding an unhandled rejection.
+  });
+  return hydration;
+}
+
+export async function hydratePersistedSessionMessages(
+  sessionId: string,
+): Promise<NormalizedMessage[]> {
+  const session = await ensurePersistedSession(sessionId);
+  if (!session) return [];
+  // Hydration replaces `messages` and `taskRegistry` wholesale. A turn holds a
+  // direct reference to both (the user message it pushed, the registry it
+  // captured), so doing that mid-turn silently discards live state. The
+  // in-memory transcript is authoritative while a turn runs.
+  if (session.status === "running") return session.messages;
+  if (session.persistedMessagesLoaded !== false) return session.messages;
+
+  const hydrated = await readPersistedSessionMessagesOnce(session);
+  // A prompt or deletion may have claimed the session while the SDK read was
+  // pending. In that case its in-memory state is authoritative; the prompt
+  // shares this same read and applies it before appending its live message.
+  if (
+    sessions.get(sessionId) === session
+    && (session.status as SessionState["status"]) !== "running"
+    && !session.deleting
+    && session.persistedMessagesLoaded === false
+  ) {
+    if (hydrated) {
+      session.messages = hydrated.messages;
+      session.taskRegistry = hydrated.taskRegistry;
+    }
+    session.persistedMessagesLoaded = true;
+  }
+  return session.messages;
+}
+
+export async function deleteSessionDurably(sessionId: string): Promise<boolean> {
+  // Do not introduce an `await` for an already registered session: deletion
+  // must claim it synchronously so a prompt cannot slip in on the next
+  // microtask before `deleting` is visible.
+  const session = sessions.get(sessionId) ?? await ensurePersistedSession(sessionId);
+  if (!session) return false;
+  if (session.deleting) {
+    throw sessionOperationError("conflict", "Session deletion is already in progress");
+  }
+
+  // Claim deletion before the first await. Stop every live writer before
+  // removing its rollout so it cannot recreate or append to the file.
+  session.deleting = true;
+  session.status = "running";
+  session.abortController?.abort();
+  session.abortController = undefined;
+  cleanupPendingInteractions(sessionId);
+  await releaseQueryControls(session);
+  try {
+    if (session.sdkSessionId) {
+      const sdk = await claudeSdk();
+      if (typeof sdk.deleteSession === "function") {
+        await sdk.deleteSession(session.sdkSessionId, {
+          dir: currentWorkingDirectory(),
+        });
+      }
+      // Recorded before the map entry is dropped: a reconcile already holding a
+      // pre-deletion `listSessions` snapshot would otherwise re-insert it.
+      recordDeletedSdkSession(session.sdkSessionId);
+    }
+    sessions.delete(sessionId);
+    return true;
+  } catch (error) {
+    // The rollout still exists when deletion fails. Restore an addressable idle
+    // session, but leave its stopped query stopped.
+    session.deleting = false;
+    session.status = "idle";
+    throw error;
+  }
+}
+
+export async function renameSessionDurably(
+  sessionId: string,
+  title: string,
+): Promise<boolean> {
+  const session = await ensurePersistedSession(sessionId);
+  if (!session) return false;
+  await persistSessionTitle(session, title);
+  session.title = title;
+  session.lastActivity = new Date();
+  eventEmitter.emit({
+    type: "session.title-updated",
+    sessionId,
+    data: { title },
+  });
+  return true;
+}
+
+export async function forkPersistedSession(
+  sessionId: string,
+  options: { upToMessageId?: string; title?: string } = {},
+): Promise<SessionState> {
+  const source = await ensurePersistedSession(sessionId);
+  if (!source?.sdkSessionId) {
+    throw sessionOperationError("not_found", "Session has not been materialized");
+  }
+  if (source.status === "running") {
+    throw sessionOperationError("conflict", "Cannot fork a running session");
+  }
+  const sdk = await claudeSdk();
+  if (typeof sdk.forkSession !== "function") {
+    throw sessionOperationError(
+      "conflict",
+      "Installed Claude Agent SDK does not support session forking",
+    );
+  }
+  const boundaryId = options.upToMessageId
+    ? await resolvePersistedMessageId(source, options.upToMessageId)
+    : undefined;
+  if (options.upToMessageId && !boundaryId) {
+    throw sessionOperationError(
+      "invalid",
+      "The selected Claude message is not a persisted fork boundary",
+    );
+  }
+  const result = await sdk.forkSession(source.sdkSessionId, {
+    dir: currentWorkingDirectory(),
+    upToMessageId: boundaryId,
+    title: options.title,
+  });
+  const id = bridgeSessionIdFromSdkId(result.sessionId);
+  const now = new Date();
+  const forked: SessionState = {
+    id,
+    title: options.title || `${source.title || "Session"} (fork)`,
+    messages: [],
+    status: "idle",
+    createdAt: now,
+    lastActivity: now,
+    sdkSessionId: result.sessionId,
+    persistedMessagesLoaded: false,
+  };
+  sessions.set(id, forked);
+  return forked;
+}
+
+/**
+ * Map a bridge message id onto the transcript uuid it stands for.
+ *
+ * Resolution is by *identity only*. There is no positional fallback: the
+ * normalized transcript drops records the persisted list keeps (every
+ * `tool_result` arrives as an empty `type:"user"` entry), so the two lists are
+ * not index-aligned and an ordinal lookup silently returns a neighbouring
+ * message — which the callers then fork at, or restore files to. Returning
+ * `undefined` makes them fail closed instead.
+ */
+async function resolvePersistedMessageId(
+  session: SessionState,
+  normalizedMessageId: string,
+  allowedTypes: ReadonlySet<"user" | "assistant"> = new Set(["user", "assistant"]),
+): Promise<string | undefined> {
+  if (!session.sdkSessionId) return undefined;
+
+  // A live message's `id` is locally generated (`msg-…`) and exists nowhere on
+  // disk; `sdkUuid` is the uuid the SDK reported for it. A hydrated message has
+  // both, and they agree.
+  const local = session.messages.find((message) => message.id === normalizedMessageId);
+  const candidate = local
+    ? local.sdkUuid
+    : TRANSCRIPT_UUID_PATTERN.test(normalizedMessageId)
+      ? normalizedMessageId
+      : undefined;
+  if (!candidate) return undefined;
+  if (local && !allowedTypes.has(local.role as "user" | "assistant")) return undefined;
+
+  const sdk = await claudeSdk();
+  if (typeof sdk.getSessionMessages !== "function") return candidate;
+  const persisted = await sdk.getSessionMessages(session.sdkSessionId, {
+    dir: currentWorkingDirectory(),
+    includeSystemMessages: false,
+  });
+  const match = persisted.find(
+    (message) =>
+      message.uuid === candidate
+      && allowedTypes.has(message.type as "user" | "assistant"),
+  );
+  return match?.uuid;
+}
+
+/**
+ * How long a transient rewind query may take to produce its first message.
+ *
+ * Without a bound, a CLI that never speaks leaves the HTTP request hanging
+ * forever with the session flagged busy.
+ */
+const REWIND_OPEN_TIMEOUT_MS = 30_000;
+
+async function rewindViaTransientQuery(
+  sdkSessionId: string,
+  persistedMessageId: string,
+  dryRun: boolean,
+): Promise<unknown> {
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), REWIND_OPEN_TIMEOUT_MS);
+  const iterator = query({
+    prompt: "",
+    options: {
+      cwd: currentWorkingDirectory(),
+      ...claudeExecutableOptions(),
+      resume: sdkSessionId,
+      enableFileCheckpointing: true,
+      // This query exists only to obtain a control handle. `maxTurns: 0` keeps
+      // it from running a turn that would append to the very rollout the
+      // checkpoints are indexed against.
+      maxTurns: 0,
+      abortController,
+    },
+  });
+  try {
+    for await (const _message of iterator) {
+      if (typeof iterator.rewindFiles !== "function") {
+        throw sessionOperationError(
+          "conflict",
+          "Installed Claude Agent SDK does not support file rewind",
+        );
+      }
+      return await iterator.rewindFiles(persistedMessageId, { dryRun });
+    }
+    throw sessionOperationError(
+      "conflict",
+      abortController.signal.aborted
+        ? "Timed out opening the Claude session for file rewind"
+        : "Claude session could not be opened for file rewind",
+    );
+  } finally {
+    clearTimeout(timeout);
+    try {
+      await iterator.return?.();
+    } catch (error) {
+      console.debug("[session-manager] Failed to close rewind query:", error);
+    }
+  }
+}
+
+export async function rewindSessionFiles(
+  sessionId: string,
+  userMessageId: string,
+  dryRun = false,
+): Promise<unknown> {
+  const session = await ensurePersistedSession(sessionId);
+  if (!session?.sdkSessionId) {
+    throw sessionOperationError("not_found", "Session has not been materialized");
+  }
+  if (session.status === "running") {
+    throw sessionOperationError("conflict", "Cannot rewind a running session");
+  }
+  if (session.rewindInProgress) {
+    throw sessionOperationError(
+      "conflict",
+      "A file rewind is already in progress for this session",
+    );
+  }
+
+  // Claimed before the first await: a rewind restores the working tree, and
+  // `status` never leaves `idle` while it runs, so nothing else would stop a
+  // prompt accepted a millisecond later from executing against files mid-restore.
+  session.rewindInProgress = true;
+  try {
+    const persistedMessageId = await resolvePersistedMessageId(
+      session,
+      userMessageId,
+      new Set(["user"]),
+    );
+    if (!persistedMessageId) {
+      throw sessionOperationError(
+        "invalid",
+        "The selected Claude message is not a persisted checkpoint",
+      );
+    }
+    // Prefer the handle a live session already holds. Spawning a second CLI
+    // against the same rollout only to ask it to rewind is both slower and a
+    // write to the transcript this operation is indexed against.
+    const liveRewind = session.queryControl?.rewindFiles;
+    let result: unknown;
+    if (typeof liveRewind === "function") {
+      result = await liveRewind.call(session.queryControl, persistedMessageId, { dryRun });
+    } else {
+      result = await rewindViaTransientQuery(
+        session.sdkSessionId,
+        persistedMessageId,
+        dryRun,
+      );
+    }
+    if (
+      !result
+      || typeof result !== "object"
+      || (result as { canRewind?: unknown }).canRewind !== true
+    ) {
+      const providerError =
+        typeof (result as { error?: unknown } | null)?.error === "string"
+          ? (result as { error: string }).error
+          : "Claude cannot rewind files to the selected checkpoint";
+      throw sessionOperationError("conflict", providerError);
+    }
+    return result;
+  } finally {
+    session.rewindInProgress = false;
+  }
+}
+
+/** Statuses from which a background task can still be doing work. */
+const LIVE_BACKGROUND_TASK_STATUSES = new Set<BackgroundTaskSnapshot["status"]>([
+  "pending",
+  "running",
+  "paused",
+]);
+
+const NO_CONTROL_CHANNEL: StopBackgroundTaskResult = {
+  ok: false,
+  reason: "no_control_channel",
+  message: "No live Claude control channel can reach this task",
+};
+
+/**
+ * Move one task to a terminal state and release the handle that owned it.
+ *
+ * Used wherever the bridge learns a task can no longer be running *without*
+ * being told by a `task_notification` — a stop it issued itself, or a provider
+ * process that went away. The snapshot is the only thing `GET /session/:id`
+ * serves, so leaving it at `running` is indistinguishable from live work.
+ */
+function settleBackgroundTask(
+  session: SessionState,
+  taskId: string,
+  status: BackgroundTaskSnapshot["status"],
+  error?: string,
+): boolean {
+  const previous = session.backgroundTasks?.[taskId];
+  if (!previous) return false;
+  session.backgroundTasks = {
+    ...(session.backgroundTasks ?? {}),
+    [taskId]: {
+      ...previous,
+      status,
+      endedAt: previous.endedAt ?? Date.now(),
+      ...(error !== undefined ? { error: previous.error ?? error } : {}),
+    },
+  };
+  const owner = session.backgroundTaskControls?.get(taskId);
+  session.backgroundTaskControls?.delete(taskId);
+  if (session.backgroundTaskControls?.size === 0) {
+    session.backgroundTaskControls = undefined;
+  }
+  closeQueryControlIfUnused(session, owner);
+  return true;
+}
+
+/**
+ * Settle every live task that `control` owned, plus any live task no handle
+ * owns at all.
+ *
+ * Called when a turn's iterator is finished with. The `for await` loop is the
+ * only consumer of the stream and it ends either exhausted or through an
+ * abrupt exit — and an abrupt exit invokes the iterator's `return()`, which the
+ * SDK implements as `cleanup()` → `transport.close()`. So by the time this
+ * runs the provider process behind `control` is gone: no further
+ * `task_notification` can arrive and `stopTask` has nothing to talk to. A task
+ * left at `running` here wedges there for the lifetime of the bridge.
+ */
+function settleTasksOwnedByClosedControl(
+  session: SessionState,
+  control: NonNullable<SessionState["queryControl"]>,
+  reason: string,
+): boolean {
+  let changed = false;
+  for (const task of Object.values(session.backgroundTasks ?? {})) {
+    if (!LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) continue;
+    const owner = session.backgroundTaskControls?.get(task.id);
+    // An owner that is some *other* live control keeps the task addressable.
+    if (owner !== undefined && owner !== control) continue;
+    changed = settleBackgroundTask(session, task.id, "killed", reason) || changed;
+  }
+  return changed;
+}
+
+export async function stopBackgroundTask(
+  sessionId: string,
+  taskId: string,
+): Promise<StopBackgroundTaskResult> {
+  const session = sessions.get(sessionId);
+  if (!session) {
+    return { ok: false, reason: "session_not_found", message: "Session not found" };
+  }
+  const task = session.backgroundTasks?.[taskId];
+  if (!task) {
+    return { ok: false, reason: "task_not_found", message: "Task not found" };
+  }
+  // Strictly the handle that owns this task. Falling back to whatever control
+  // is current asked a *later* turn's provider process to stop a task it never
+  // started — it answers `ok` for a task id it has never heard of, so the user
+  // was told the work had stopped when nothing had been reached at all.
+  const control = session.backgroundTaskControls?.get(taskId);
+  const stopTask = control?.stopTask;
+  if (typeof stopTask !== "function") {
+    return NO_CONTROL_CHANNEL;
+  }
+  try {
+    await stopTask.call(control, taskId);
+  } catch (error) {
+    // The handle outlived its transport (the CLI exited, the query was closed).
+    // That is a conflict the user can understand, not a bridge fault, and it
+    // must not surface as a 500 on `POST /:id/tasks/:taskId/stop`.
+    console.error(
+      "[session-manager] Background task stop failed on a closed control channel:",
+      error instanceof Error ? error.message : String(error),
+    );
+    if (
+      settleBackgroundTask(
+        session,
+        taskId,
+        "killed",
+        "The Claude control channel for this task is no longer available",
+      )
+    ) {
+      emitBackgroundTaskSnapshot(session);
+    }
+    return NO_CONTROL_CHANNEL;
+  }
+  // The SDK answers a stop with a `task_notification` of status `stopped`, but
+  // only the turn's `for await` loop reads that — a stop issued after the turn
+  // has no reader, so the snapshot is patched here rather than waited for. The
+  // notification, if one does arrive, lands on the same terminal state.
+  if (settleBackgroundTask(session, taskId, "killed")) {
+    emitBackgroundTaskSnapshot(session);
+  }
+  return { ok: true };
+}
+
+function emitBackgroundTaskSnapshot(session: SessionState): void {
+  eventEmitter.emit({
+    type: "session.updated",
+    sessionId: session.id,
+    data: { backgroundTasks: session.backgroundTasks },
+  });
+}
+
+/**
+ * Release a session's control handle, closing the underlying query if the SDK
+ * exposes a way to. Called when the session is deleted or explicitly aborted —
+ * the two points at which the user has said the background work should stop.
+ */
+function releaseQueryControl(session: SessionState): void {
+  void releaseQueryControls(session);
+}
+
+async function closeQueryControl(control: NonNullable<SessionState["queryControl"]>): Promise<void> {
+  if (typeof control.close !== "function") return;
+  try {
+    await control.close();
+  } catch (error) {
+    console.debug("[session-manager] Failed to close query control:", error);
+  }
+}
+
+async function releaseQueryControls(session: SessionState): Promise<void> {
+  const controls = new Set<NonNullable<SessionState["queryControl"]>>();
+  if (session.queryControl) controls.add(session.queryControl);
+  for (const control of session.backgroundTaskControls?.values() ?? []) {
+    controls.add(control);
+  }
+  session.queryControl = undefined;
+  session.backgroundTaskControls = undefined;
+  await Promise.all(Array.from(controls, closeQueryControl));
+}
+
+function closeQueryControlIfUnused(
+  session: SessionState,
+  control: NonNullable<SessionState["queryControl"]> | undefined,
+): void {
+  if (!control || session.queryControl === control) return;
+  if (Array.from(session.backgroundTaskControls?.values() ?? []).includes(control)) return;
+  void closeQueryControl(control);
 }
 
 /**
@@ -1329,8 +2345,19 @@ export async function sendPrompt(
     return;
   }
 
+  if (session.deleting) {
+    throw sessionOperationError("conflict", "Session is being deleted");
+  }
+
   if (session.status === "running") {
     throw new Error("Session is already processing a prompt");
+  }
+
+  if (session.rewindInProgress) {
+    throw sessionOperationError(
+      "conflict",
+      "Session is restoring files from a checkpoint",
+    );
   }
 
   if (structuredRequestId) {
@@ -1338,12 +2365,53 @@ export async function sendPrompt(
     session.structuredOutputRequestId = structuredRequestId;
   }
 
+  // Claim the transcript before any await. A session materialized from disk by
+  // `reconcilePersistedSessions` still reports `persistedMessagesLoaded ===
+  // false`; leaving it false would let a concurrent `GET /:id/messages` replace
+  // `session.messages` (and `taskRegistry`) out from under this turn.
+  const needsTranscriptHydration = session.persistedMessagesLoaded === false;
+  session.persistedMessagesLoaded = true;
+  // Set when the pre-turn read fails. The claim above is still correct for the
+  // duration of the turn, but leaving it set afterwards would hide the on-disk
+  // history until the bridge restarted, so the turn's `finally` clears it.
+  let transcriptHydrationFailed = false;
+
   // Create abort controller for this query
   const abortController = new AbortController();
   session.abortController = abortController;
   session.status = "running";
   session.error = undefined;
   session.lastActivity = new Date();
+
+  // A suggestion belongs to the turn that produced it. Nothing else clears it,
+  // and `GET /session/:id` replays it on every mount, restore and reconnect, so
+  // without this the user is handed a stale follow-up turns later.
+  if (session.promptSuggestion !== undefined) {
+    session.promptSuggestion = undefined;
+    eventEmitter.emit({
+      type: "session.updated",
+      sessionId,
+      data: { promptSuggestion: undefined },
+    });
+  }
+
+  if (needsTranscriptHydration) {
+    try {
+      const hydrated = await readPersistedSessionMessagesOnce(session);
+      if (hydrated) {
+        session.messages = hydrated.messages;
+        session.taskRegistry = hydrated.taskRegistry;
+      }
+    } catch (error) {
+      // A turn that cannot read its own history is not a debug-level event: the
+      // transcript the user is looking at is incomplete until the retry lands.
+      transcriptHydrationFailed = true;
+      console.error(
+        "[session-manager] Failed to hydrate transcript before prompt:",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
 
   // Build the display prompt (what the user sees) - includes all attachment references
   let displayPrompt = prompt;
@@ -1421,6 +2489,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let earlyWarningTimeout: ReturnType<typeof setTimeout> | null = null;
   let streamEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  let queryIteratorControl: SessionState["queryControl"];
   // Hoisted out of the `try` so the error path can still publish whatever the
   // coalescing window was holding. Null until the streaming state it closes
   // over exists, which is everything before the SDK query is created.
@@ -1479,6 +2548,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         cwd,
         ...claudeExecutableOptions(),
         model: options?.model,
+        agent: options?.agent,
         ...(options?.outputSchema
           ? {
               outputFormat: {
@@ -1511,8 +2581,17 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           "mcp:*",
         ],
         abortController,
-        // Resume session if we have a previous SDK session ID
-        resume: session.sdkSessionId,
+        // A deterministic UUID makes the bridge id recoverable from the SDK's
+        // persisted session store after a bridge restart.
+        ...(session.sdkSessionId
+          ? { resume: session.sdkSessionId }
+          : {
+              sessionId:
+                sdkSessionIdFromBridgeId(session.id) ?? crypto.randomUUID(),
+            }),
+        enableFileCheckpointing: true,
+        promptSuggestions: options?.promptSuggestions === true,
+        agentProgressSummaries: true,
         // Use Claude Code system prompt with additional instructions
         systemPrompt: {
           type: "preset",
@@ -1522,7 +2601,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         },
         // Load user settings (from ~/.claude.json including MCP servers) and project settings (CLAUDE.md files)
         // Using "user" lets the SDK handle MCP server loading natively, which supports all transport types
-        settingSources: ["user", "project"],
+        settingSources: options?.includeLocalSettings
+          ? ["user", "project", "local"]
+          : ["user", "project"],
         // Fast mode is a Claude Code setting (Opus 4.6 priority service tier).
         // Pass it through the flag-layer settings so the user can opt in per prompt.
         ...(fastMode && { settings: { fastMode: true } }),
@@ -1719,6 +2800,20 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         },
       },
     });
+    session.queryControl = queryIterator;
+    queryIteratorControl = queryIterator;
+    let supportedAgents: NonNullable<SessionInitData["agents"]> = [];
+    if (typeof queryIterator.supportedAgents === "function") {
+      try {
+        supportedAgents = (await queryIterator.supportedAgents()).map((agent) => ({
+          name: agent.name,
+          description: agent.description,
+          model: agent.model,
+        }));
+      } catch (error) {
+        console.debug("[session-manager] Agent discovery unavailable:", error);
+      }
+    }
 
     // Log an early warning if SDK doesn't respond within 5 seconds
     earlyWarningTimeout = setTimeout(() => {
@@ -2111,6 +3206,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           mcpServers: mcpServerStatuses,
           plugins: pluginStatuses,
           slashCommands: initMsg.slash_commands,
+          agents: supportedAgents,
         };
 
         console.log("[session-manager] Session init data captured", {
@@ -2147,6 +3243,60 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             trigger: compactMetadata.trigger,
           },
         });
+      } else if (message.type === "prompt_suggestion") {
+        const suggestion =
+          typeof (message as { suggestion?: unknown }).suggestion === "string"
+            ? (message as { suggestion: string }).suggestion.trim()
+            : "";
+        if (suggestion) {
+          session.promptSuggestion = suggestion;
+          eventEmitter.emit({
+            type: "session.updated",
+            sessionId,
+            data: { promptSuggestion: suggestion },
+          });
+        }
+      } else if (message.type === "rate_limit_event") {
+        const info = (message as {
+          rate_limit_info?: {
+            rateLimitType?: string;
+            utilization?: number;
+            resetsAt?: number;
+          };
+        }).rate_limit_info;
+        if (info) {
+          const label = (info.rateLimitType ?? "usage")
+            .replaceAll("_", " ")
+            .replace(/\b\w/g, (letter) => letter.toUpperCase());
+          const nextWindow: SessionRateLimitWindow = {
+            label,
+            usedPercent: info.utilization,
+            resetsAt: rateLimitResetToIso(info.resetsAt),
+          };
+          // Held on the session, not inside `usage`. Rate-limit events arrive
+          // mid-turn and `usage` only exists after the first `result`, so
+          // gating on it discarded every window a first turn reported.
+          const existing = session.rateLimits ?? session.usage?.rateLimits ?? [];
+          session.rateLimits = [
+            ...existing.filter((window) => window.label !== label),
+            nextWindow,
+          ];
+          if (session.usage) {
+            session.usage = {
+              ...session.usage,
+              rateLimits: session.rateLimits,
+              updatedAt: new Date().toISOString(),
+            };
+          }
+          eventEmitter.emit({
+            type: "session.updated",
+            sessionId,
+            data: {
+              rateLimits: session.rateLimits,
+              ...(session.usage ? { contextUsage: session.usage } : {}),
+            },
+          });
+        }
       } else if (message.type === "system") {
         // Handle other system messages (log for debugging)
         const sysMsg = message as SdkSystemMessage;
@@ -2154,6 +3304,144 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           sessionId,
           subtype: sysMsg.subtype,
         });
+
+        const taskMessage = message as {
+          subtype?: string;
+          task_id?: string;
+          description?: string;
+          summary?: string;
+          /** Only on `task_notification`; the terminal edge of a task. */
+          status?: "completed" | "failed" | "stopped";
+          /** Only on `background_tasks_changed`; the full live set. */
+          tasks?: Array<{
+            task_id?: string;
+            task_type?: string;
+            description?: string;
+          }>;
+          patch?: {
+            status?: BackgroundTaskSnapshot["status"];
+            description?: string;
+            end_time?: number;
+            error?: string;
+            is_backgrounded?: boolean;
+          };
+        };
+
+        const emitBackgroundTasks = () => {
+          eventEmitter.emit({
+            type: "session.updated",
+            sessionId,
+            data: { backgroundTasks: session.backgroundTasks },
+          });
+        };
+
+        if (
+          (taskMessage.subtype === "task_started"
+            || taskMessage.subtype === "task_progress"
+            || taskMessage.subtype === "task_updated")
+          && taskMessage.task_id
+        ) {
+          const previous = session.backgroundTasks?.[taskMessage.task_id];
+          const task: BackgroundTaskSnapshot = {
+            id: taskMessage.task_id,
+            description:
+              taskMessage.patch?.description
+              ?? taskMessage.description
+              ?? previous?.description,
+            status:
+              taskMessage.patch?.status
+              ?? previous?.status
+              ?? "running",
+            isBackgrounded:
+              taskMessage.patch?.is_backgrounded
+              ?? previous?.isBackgrounded,
+            startedAt: previous?.startedAt ?? Date.now(),
+            endedAt: taskMessage.patch?.end_time ?? previous?.endedAt,
+            error: taskMessage.patch?.error ?? previous?.error,
+          };
+          session.backgroundTasks = {
+            ...(session.backgroundTasks ?? {}),
+            [task.id]: task,
+          };
+          if (LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) {
+            (session.backgroundTaskControls ??= new Map()).set(task.id, queryIterator);
+          } else {
+            const owner = session.backgroundTaskControls?.get(task.id);
+            session.backgroundTaskControls?.delete(task.id);
+            closeQueryControlIfUnused(session, owner);
+          }
+          emitBackgroundTasks();
+        } else if (taskMessage.subtype === "task_notification" && taskMessage.task_id) {
+          // The terminal edge. Without it nothing ever leaves `running`, so
+          // `GET /session/:id` reported a finished task as live indefinitely.
+          const previous = session.backgroundTasks?.[taskMessage.task_id];
+          const terminalStatus: BackgroundTaskSnapshot["status"] =
+            taskMessage.status === "failed"
+              ? "failed"
+              : taskMessage.status === "stopped"
+                ? "killed"
+                : "completed";
+          const task: BackgroundTaskSnapshot = {
+            id: taskMessage.task_id,
+            description:
+              previous?.description
+              ?? taskMessage.description
+              ?? taskMessage.summary,
+            status: terminalStatus,
+            isBackgrounded: previous?.isBackgrounded,
+            startedAt: previous?.startedAt ?? Date.now(),
+            endedAt: Date.now(),
+            error:
+              terminalStatus === "failed"
+                ? (taskMessage.summary ?? previous?.error)
+                : previous?.error,
+          };
+          session.backgroundTasks = {
+            ...(session.backgroundTasks ?? {}),
+            [task.id]: task,
+          };
+          const owner = session.backgroundTaskControls?.get(task.id);
+          session.backgroundTaskControls?.delete(task.id);
+          closeQueryControlIfUnused(session, owner);
+          emitBackgroundTasks();
+        } else if (
+          taskMessage.subtype === "background_tasks_changed"
+          && Array.isArray(taskMessage.tasks)
+        ) {
+          // A level signal, not an edge: the SDK's own contract is that
+          // consumers REPLACE their set from it, so a bookend lost to a
+          // reconnect cannot wedge a stale running indicator.
+          const replacement: Record<string, BackgroundTaskSnapshot> = {};
+          const previousControls = session.backgroundTaskControls;
+          const previousOwners = new Set(previousControls?.values() ?? []);
+          const replacementControls = new Map<
+            string,
+            NonNullable<SessionState["queryControl"]>
+          >();
+          for (const entry of taskMessage.tasks) {
+            const id = entry?.task_id;
+            if (typeof id !== "string" || id.length === 0) continue;
+            const previous = session.backgroundTasks?.[id];
+            replacement[id] = {
+              id,
+              description: entry.description ?? previous?.description,
+              status: LIVE_BACKGROUND_TASK_STATUSES.has(previous?.status ?? "running")
+                ? (previous?.status ?? "running")
+                : "running",
+              isBackgrounded: previous?.isBackgrounded ?? true,
+              startedAt: previous?.startedAt ?? Date.now(),
+            };
+            const owner = previousControls?.get(id) ?? queryIterator;
+            replacementControls.set(id, owner);
+          }
+          session.backgroundTasks = replacement;
+          session.backgroundTaskControls =
+            replacementControls.size > 0 ? replacementControls : undefined;
+          for (const owner of previousOwners) {
+            closeQueryControlIfUnused(session, owner);
+          }
+          emitBackgroundTasks();
+        }
 
         // Emit generic system event for other subtypes
         if (sysMsg.subtype && sysMsg.subtype !== "init") {
@@ -2221,6 +3509,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // would blank out the turn's text whenever the block is thinking/tool_use.
         const accumulatedContent = getMessageTextFromParts(finalParts);
 
+        // The transcript uuid of the record this block was written to. The SDK
+        // emits one `assistant` message per content block, each its own
+        // transcript record; the latest is the inclusive end of this message,
+        // which is what a fork boundary must point at.
+        const sdkMessageUuid = (message as { uuid?: unknown }).uuid;
         if (!currentAssistantMessage) {
           currentAssistantMessage = {
             id: messageKey,
@@ -2228,6 +3521,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             content: accumulatedContent,
             parts: finalParts,
             timestamp: new Date().toISOString(),
+            ...(typeof sdkMessageUuid === "string" ? { sdkUuid: sdkMessageUuid } : {}),
           };
           session.messages.push(currentAssistantMessage);
           debugLog("[session-manager] Created assistant message", {
@@ -2237,6 +3531,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         } else {
           currentAssistantMessage.content = accumulatedContent;
           currentAssistantMessage.parts = finalParts;
+          if (typeof sdkMessageUuid === "string") {
+            currentAssistantMessage.sdkUuid = sdkMessageUuid;
+          }
           debugLog("[session-manager] Updated assistant message", {
             sessionId,
             messageId: currentAssistantMessage.id,
@@ -2309,13 +3606,36 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           durationMs: resultMsg.duration_ms,
         });
 
-        const contextUsage = extractContextUsageFromUnknown(resultMsg, options?.model);
-        if (contextUsage) {
+        // The only authoritative link between the id this bridge minted for the
+        // prompt and the transcript record it became. Everything destructive
+        // (fork boundary, file rewind) resolves through it, so it is recorded
+        // and republished rather than inferred from message ordering.
+        if (
+          typeof resultMsg.user_message_uuid === "string"
+          && resultMsg.user_message_uuid.length > 0
+          && userMessage.sdkUuid !== resultMsg.user_message_uuid
+        ) {
+          userMessage.sdkUuid = resultMsg.user_message_uuid;
+          eventEmitter.emit({
+            type: "message.updated",
+            sessionId,
+            data: { message: userMessage },
+          });
+        }
+
+        const exactUsage = await buildClaudeUsageSnapshot(
+          session,
+          resultMsg,
+          session.queryControl,
+          options?.model,
+        );
+        if (exactUsage) {
+          session.usage = exactUsage;
           eventEmitter.emit({
             type: "session.updated",
             sessionId,
             data: {
-              contextUsage,
+              contextUsage: exactUsage,
             },
           });
         }
@@ -2546,6 +3866,35 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     }
     throw error;
   } finally {
+    // The loop above is the only consumer of this iterator, and it ends either
+    // exhausted or through an abrupt exit — which invokes `return()`, i.e. the
+    // SDK's `cleanup()` → `transport.close()`. So the handle is dead either
+    // way: nothing more can arrive on it and `stopTask` would answer a stop
+    // request with a transport error. Settle what it owned instead of retaining
+    // a handle that can only fail, and never leave a task at `running`.
+    if (queryIteratorControl) {
+      const settled = settleTasksOwnedByClosedControl(
+        session,
+        queryIteratorControl,
+        "The Claude session that owned this task ended before it reported a result",
+      );
+      if (session.queryControl === queryIteratorControl) {
+        session.queryControl = undefined;
+      }
+      closeQueryControlIfUnused(session, queryIteratorControl);
+      if (settled) emitBackgroundTaskSnapshot(session);
+    }
+    // The pre-turn transcript read failed, so `persistedMessagesLoaded` claims
+    // a hydration that never happened. Clearing it once the turn is over lets
+    // the next transcript request retry; leaving it set hid the on-disk history
+    // until the bridge restarted.
+    if (
+      transcriptHydrationFailed
+      && sessions.get(sessionId) === session
+      && !session.deleting
+    ) {
+      session.persistedMessagesLoaded = false;
+    }
     if (heartbeat) {
       clearInterval(heartbeat);
     }

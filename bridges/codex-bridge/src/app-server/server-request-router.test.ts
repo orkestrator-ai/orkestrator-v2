@@ -11,6 +11,7 @@ import {
   type ApprovalResolution,
 } from "./approvals.js";
 import type { InboundServerRequest } from "./envelope-validation.js";
+import type { InteractionRequest, InteractionResolution } from "./interactions.js";
 
 interface Answer {
   generation: number;
@@ -76,6 +77,28 @@ describe("exhaustiveness", () => {
     expect(h.answers[0]!.error?.code).toBe(-32601);
     expect(unknown).toEqual(["orkestrator/from/the/future"]);
     expect(h.router.getMetrics().unknown).toBe(1);
+  });
+
+  test("the final backstop answers when no routing branch attempts a response", async () => {
+    const h = harness({ responseTimeoutMs: 5 });
+    const internals = h.router as unknown as {
+      route: () => Promise<void>;
+    };
+    internals.route = () => new Promise<void>(() => undefined);
+
+    h.router.handle(request("future/request"), 7);
+    await Bun.sleep(25);
+
+    expect(h.answers).toEqual([{
+      generation: 7,
+      id: "srv-1",
+      error: {
+        code: -32601,
+        message: "Orkestrator did not produce a response in time",
+      },
+    }]);
+    expect(h.router.getMetrics().timedOut).toBe(1);
+    expect(h.router.getPending()).toHaveLength(0);
   });
 });
 
@@ -144,7 +167,20 @@ describe("requests needing UI we do not have", () => {
     await settle();
 
     expect(h.answers[0]!.result).toEqual({ action: "cancel", content: null, _meta: null });
-    expect(h.violations[0]!.detail).toContain("capability opt-out");
+    // We *do* advertise mcpServerOpenaiFormElicitation, so reaching this branch
+    // means the request could not be parked — an ordinary outcome, not protocol
+    // drift. Counting it as a violation inflated the figure operators watch.
+    expect(h.violations).toHaveLength(0);
+    expect(h.transcript[0]!.message).toContain("no Orkestrator tab was attached");
+  });
+
+  test("an unparkable question is cancelled without being called a violation", async () => {
+    const h = harness();
+    h.router.handle(request("item/tool/requestUserInput"), 1);
+    await settle();
+
+    expect(h.answers[0]!.result).toEqual({ answers: {} });
+    expect(h.violations).toHaveLength(0);
   });
 
   test("permission escalation is cancelled instead of fabricating a grant", async () => {
@@ -508,18 +544,433 @@ describe("interactive approvals", () => {
     }
   });
 
-  test("non-approval server requests are never parked", async () => {
+  test("non-approval server requests are never parked as approvals", async () => {
     const nonApprovals = KNOWN_SERVER_REQUEST_METHODS.filter(
       (method) => !INTERACTIVE_APPROVAL_METHODS.includes(method as never),
     );
 
     for (const method of nonApprovals) {
-      const h = approvalHarness({ approvalTimeoutMs: 5_000 });
+      /**
+       * Both handlers are installed on purpose.
+       *
+       * With only `presentApproval` wired up this could not distinguish "the
+       * approval path correctly ignored an interaction method" from "the
+       * interaction path was never reachable", so it silently failed to guard
+       * `item/tool/requestUserInput` and `mcpServer/elicitation/request` at all.
+       */
+      const presentedInteractions: InteractionRequest[] = [];
+      const h = approvalHarness({
+        approvalTimeoutMs: 5_000,
+        presentInteraction: (interaction) => {
+          presentedInteractions.push(interaction);
+          return true;
+        },
+      });
       h.router.handle(request(method), 1);
       await settle();
 
       expect(h.presented).toHaveLength(0);
+      // The two interaction methods reach `describeInteraction`, which rejects
+      // this fixture's params (no questions, no mode) and falls through.
+      expect(presentedInteractions).toHaveLength(0);
       expect(h.answers).toHaveLength(1);
+      expect(h.router.getParkedApprovals()).toHaveLength(0);
+      expect(h.router.getParkedInteractions()).toHaveLength(0);
     }
+  });
+});
+
+describe("interactive questions and MCP elicitation", () => {
+  test("parks a Codex question and maps the user's answers onto the protocol", async () => {
+    const presented: InteractionRequest[] = [];
+    const h = harness({
+      presentInteraction: (interaction) => {
+        presented.push(interaction);
+        return true;
+      },
+      approvalTimeoutMs: 5_000,
+    });
+    h.router.handle({
+      ...request("item/tool/requestUserInput"),
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        questions: [{
+          id: "language",
+          header: "Language",
+          question: "Which language?",
+          isOther: true,
+          isSecret: false,
+          options: [{ label: "TypeScript", description: "Typed JavaScript" }],
+        }],
+        autoResolutionMs: 60_000,
+      },
+    }, 1);
+    await settle();
+
+    expect(h.answers).toHaveLength(0);
+    expect(presented[0]?.kind).toBe("question");
+    expect(h.router.resolveInteraction(presented[0]!.interactionId, {
+      action: "accept",
+      answers: { language: ["TypeScript"] },
+    })).toBe(true);
+    await settle();
+
+    expect(h.answers[0]?.result).toEqual({
+      answers: { language: { answers: ["TypeScript"] } },
+    });
+    expect(h.router.getParkedInteractions()).toHaveLength(0);
+    expect(h.router.getHistory().at(-1)?.resolution).toBe("user-answered");
+  });
+
+  test("parks and accepts an MCP form with structured content", async () => {
+    const presented: InteractionRequest[] = [];
+    const h = harness({
+      presentInteraction: (interaction) => {
+        presented.push(interaction);
+        return true;
+      },
+      approvalTimeoutMs: 5_000,
+    });
+    h.router.handle({
+      ...request("mcpServer/elicitation/request"),
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        serverName: "deploy",
+        mode: "form",
+        message: "Choose a region",
+        requestedSchema: {
+          type: "object",
+          properties: { region: { type: "string" } },
+          required: ["region"],
+        },
+      },
+    }, 2);
+    await settle();
+
+    expect(presented[0]?.kind).toBe("mcp-form");
+    h.router.resolveInteraction(presented[0]!.interactionId, {
+      action: "accept",
+      content: { region: "eu-west-1" },
+    });
+    await settle();
+    expect(h.answers[0]?.result).toEqual({
+      action: "accept",
+      content: { region: "eu-west-1" },
+      _meta: null,
+    });
+  });
+
+  /**
+   * Parity with the approval suite above. Every test guards one half of the same
+   * invariant: an interaction must be answered exactly once, and when in doubt it
+   * must be answered *no*.
+   */
+  function interactionHarness(
+    overrides: Partial<ServerRequestRouterOptions> = {},
+    options: { accept?: boolean } = {},
+  ) {
+    const presented: InteractionRequest[] = [];
+    const resolved: Array<{
+      interactionId: string;
+      action: string;
+      resolution: InteractionResolution;
+    }> = [];
+
+    const h = harness({
+      presentInteraction: (interaction) => {
+        presented.push(interaction);
+        return options.accept !== false;
+      },
+      onInteractionResolved: (interaction, answer, resolution) => {
+        resolved.push({
+          interactionId: interaction.interactionId,
+          action: answer.action,
+          resolution,
+        });
+      },
+      approvalTimeoutMs: 50,
+      ...overrides,
+    });
+
+    return { ...h, presented, resolved };
+  }
+
+  function questionRequest(id: string | number = "srv-1"): InboundServerRequest {
+    return {
+      kind: "server-request",
+      id,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        questions: [{ id: "q", header: "Question", question: "Continue?" }],
+      },
+    };
+  }
+
+  test("an undescribable request falls through and is cancelled, never parked", async () => {
+    // `presentInteraction` is installed, but the params have no questions, so
+    // `describeInteraction` returns null. Parking a card nobody could render
+    // would hang the turn for the full approval window.
+    const h = interactionHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(request("item/tool/requestUserInput"), 1);
+    await settle();
+
+    expect(h.presented).toHaveLength(0);
+    expect(h.router.getParkedInteractions()).toHaveLength(0);
+    expect(h.answers[0]!.result).toEqual({ answers: {} });
+    expect(h.router.getMetrics().interactionsPresented).toBe(0);
+  });
+
+  test("a UI that will not take the interaction gets the automatic cancel", async () => {
+    const h = interactionHarness({ approvalTimeoutMs: 5_000 }, { accept: false });
+    h.router.handle(questionRequest(), 1);
+    await settle();
+
+    expect(h.presented).toHaveLength(1);
+    expect(h.answers).toHaveLength(1);
+    expect(h.answers[0]!.result).toEqual({ answers: {} });
+    expect(h.router.getParkedInteractions()).toHaveLength(0);
+  });
+
+  test("a presentInteraction that throws cancels rather than hanging the turn", async () => {
+    const h = harness({
+      presentInteraction: () => {
+        throw new Error("renderer exploded");
+      },
+      approvalTimeoutMs: 5_000,
+    });
+    h.router.handle(questionRequest(), 1);
+    await settle();
+
+    expect(h.answers).toHaveLength(1);
+    expect(h.answers[0]!.result).toEqual({ answers: {} });
+    expect(h.router.getParkedInteractions()).toHaveLength(0);
+  });
+
+  test("an unanswered interaction auto-cancels and is counted as expired", async () => {
+    const h = interactionHarness();
+    h.router.handle(questionRequest(), 1);
+    await settle();
+    await Bun.sleep(90);
+
+    // Cancel, never accept: an ignored prompt must not answer on the user's behalf.
+    expect(h.answers[0]!.result).toEqual({ answers: {} });
+    expect(h.resolved[0]!.resolution).toBe("timed-out");
+    expect(h.resolved[0]!.action).toBe("cancel");
+    expect(h.router.getMetrics().interactionsExpired).toBe(1);
+    expect(h.router.getHistory().at(-1)).toMatchObject({
+      resolution: "cancelled",
+      timedOut: true,
+    });
+  });
+
+  test("a shorter autoResolutionMs shortens the park, it does not extend it", async () => {
+    const h = interactionHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle({
+      ...questionRequest(),
+      params: { ...questionRequest().params as object, autoResolutionMs: 30 },
+    }, 1);
+    await settle();
+    await Bun.sleep(80);
+
+    expect(h.router.getParkedInteractions()).toHaveLength(0);
+    expect(h.router.getMetrics().interactionsExpired).toBe(1);
+  });
+
+  test("the fast backstop does not fire while a human is deciding", async () => {
+    // AGENTS.md invariant: the 10s backstop exists for a branch that failed to
+    // answer. A parked interaction has legitimately not answered yet, and
+    // answering here would resolve a prompt the user is still reading.
+    const h = interactionHarness({ responseTimeoutMs: 10, approvalTimeoutMs: 5_000 });
+    h.router.handle(questionRequest(), 1);
+    await settle();
+    await Bun.sleep(40);
+
+    expect(h.answers).toHaveLength(0);
+    expect(h.router.getParkedInteractions()).toHaveLength(1);
+    expect(h.router.getMetrics().timedOut).toBe(0);
+  });
+
+  test("answering twice is ignored", async () => {
+    const h = interactionHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(questionRequest(), 1);
+    await settle();
+
+    const id = h.presented[0]!.interactionId;
+    expect(h.router.resolveInteraction(id, { action: "accept", answers: { q: ["Yes"] } }))
+      .toBe(true);
+    // A double click, or a click racing the expiry timer.
+    expect(h.router.resolveInteraction(id, { action: "cancel" })).toBe(false);
+    await settle();
+
+    expect(h.answers).toHaveLength(1);
+    expect(h.answers[0]!.result).toEqual({ answers: { q: { answers: ["Yes"] } } });
+  });
+
+  test("resolving an unknown interaction id reports false", () => {
+    const h = interactionHarness();
+    expect(h.router.resolveInteraction("ask-does-not-exist", { action: "cancel" }))
+      .toBe(false);
+  });
+
+  test.each(["decline", "cancel"] as const)(
+    "a %s resolves as cancelled, not answered",
+    async (action) => {
+      const h = interactionHarness({ approvalTimeoutMs: 5_000 });
+      h.router.handle(questionRequest(), 1);
+      await settle();
+
+      h.router.resolveInteraction(h.presented[0]!.interactionId, { action });
+      await settle();
+
+      expect(h.resolved[0]!.resolution).toBe(action === "decline" ? "declined" : "cancelled");
+      // Both map to the same *record* resolution: only an accept is an answer.
+      expect(h.router.getHistory().at(-1)?.resolution).toBe("cancelled");
+      expect(h.router.getMetrics().interactionsAnswered).toBe(0);
+    },
+  );
+
+  test("abandonThread answers a live child on the way out", async () => {
+    const h = interactionHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(questionRequest(), 1);
+    await settle();
+
+    h.router.abandonThread("thread-1");
+    await settle();
+
+    // The child is still alive, so it *must* be answered — unlike a restart.
+    expect(h.answers[0]!.result).toEqual({ answers: {} });
+    expect(h.resolved[0]!.resolution).toBe("session-closed");
+    expect(h.router.getParkedInteractions()).toHaveLength(0);
+  });
+
+  test("abandonThread ignores interactions on other threads", async () => {
+    const h = interactionHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(questionRequest(), 1);
+    await settle();
+
+    h.router.abandonThread("some-other-thread");
+    await settle();
+
+    expect(h.answers).toHaveLength(0);
+    expect(h.router.getParkedInteractions()).toHaveLength(1);
+  });
+
+  test("a dead generation retires the record without writing to the dead child", async () => {
+    const h = interactionHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(questionRequest(), 4);
+    await settle();
+
+    h.router.abandonGeneration(4);
+    await settle();
+
+    // skipSend: app-server has forgotten the request, so there is nothing to
+    // answer — but the record still has to be retired to the audit trail.
+    expect(h.answers).toHaveLength(0);
+    expect(h.router.getPending()).toHaveLength(0);
+    expect(h.router.getHistory().at(-1)).toMatchObject({
+      method: "item/tool/requestUserInput",
+      resolution: "cancelled",
+    });
+    expect(h.resolved[0]!.resolution).toBe("engine-restarted");
+  });
+
+  test("abandonGeneration leaves another generation's interaction alone", async () => {
+    const h = interactionHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(questionRequest("srv-1"), 1);
+    h.router.handle(questionRequest("srv-2"), 2);
+    await settle();
+
+    h.router.abandonGeneration(1);
+    await settle();
+
+    const remaining = h.router.getParkedInteractions();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.generation).toBe(2);
+  });
+
+  test("interaction ids are unique and generation-scoped", async () => {
+    const h = interactionHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(questionRequest("srv-1"), 1);
+    h.router.handle(questionRequest("srv-1"), 2);
+    await settle();
+
+    const ids = h.presented.map((interaction) => interaction.interactionId);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids[0]).toContain("-1-");
+    expect(ids[1]).toContain("-2-");
+  });
+
+  test("metrics count presented, answered and expired, and awaitingUser sums both maps", async () => {
+    const h = harness({
+      presentApproval: () => true,
+      presentInteraction: () => true,
+      approvalTimeoutMs: 5_000,
+    });
+    h.router.handle(request("item/commandExecution/requestApproval", "srv-a"), 1);
+    h.router.handle(questionRequest("srv-b"), 1);
+    await settle();
+
+    expect(h.router.getMetrics()).toMatchObject({
+      approvalsPresented: 1,
+      interactionsPresented: 1,
+      interactionsAnswered: 0,
+      interactionsExpired: 0,
+      // One approval and one interaction: the figure the UI uses for "waiting on
+      // you" has to cover both maps, not just approvals.
+      awaitingUser: 2,
+    });
+
+    const interactionId = h.router.getParkedInteractions()[0]!.interactionId;
+    h.router.resolveInteraction(interactionId, { action: "accept", answers: { q: ["Yes"] } });
+    await settle();
+
+    expect(h.router.getMetrics()).toMatchObject({
+      interactionsAnswered: 1,
+      awaitingUser: 1,
+    });
+  });
+
+  test("withdraws interactions from a dead generation without answering it", async () => {
+    const presented: InteractionRequest[] = [];
+    const h = harness({
+      presentInteraction: (interaction) => {
+        presented.push(interaction);
+        return true;
+      },
+      approvalTimeoutMs: 5_000,
+    });
+    h.router.handle({
+      ...request("item/tool/requestUserInput"),
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        questions: [{
+          id: "q",
+          header: "Question",
+          question: "Continue?",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Yes", description: "" }],
+        }],
+        autoResolutionMs: null,
+      },
+    }, 7);
+    await settle();
+    h.router.abandonGeneration(7);
+    await settle();
+
+    expect(h.answers).toHaveLength(0);
+    expect(h.router.getParkedInteractions()).toHaveLength(0);
+    expect(h.router.resolveInteraction(
+      presented[0]!.interactionId,
+      { action: "accept", answers: { q: ["Yes"] } },
+    )).toBe(false);
   });
 });

@@ -27,6 +27,7 @@ import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useEnvironments } from "@/hooks/useEnvironments";
 import {
   classifyCodexPromptOutcome,
+  checkHealth,
   createClient,
   createSession,
   getSessionMessages,
@@ -623,21 +624,28 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       if (!environment || environment.status !== "running") return null;
 
       let client = clientsRef.current.get(environment.id);
+      if (client && !await checkHealth(client)) {
+        clientsRef.current.delete(environment.id);
+        client = undefined;
+      }
       if (!client) {
         let port: number | null = null;
+        let authToken: string | undefined;
         if (environment.environmentType === "local") {
           const status = await backend.getLocalCodexServerStatus(environment.id);
           if (!status.running) return null;
           port = status.port ?? null;
+          authToken = status.authToken;
         } else {
           if (!environment.containerId) return null;
           const status = await backend.getCodexServerStatus(environment.containerId);
           if (!status.running) return null;
           port = status.hostPort ?? null;
+          authToken = status.authToken;
         }
 
-        if (!port) return null;
-        client = createClient(`http://127.0.0.1:${port}`);
+        if (!port || !authToken) return null;
+        client = createClient(`http://127.0.0.1:${port}`, authToken);
         clientsRef.current.set(environment.id, client);
       }
 
@@ -688,29 +696,45 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       }
 
       let client = clientsRef.current.get(environment.id);
+      if (client && !await checkHealth(client)) {
+        clientsRef.current.delete(environment.id);
+        client = undefined;
+      }
       if (!client) {
         let port: number | null = null;
+        let authToken: string | undefined;
         if (environment.environmentType === "local") {
           let status = await backend.getLocalCodexServerStatus(environment.id);
-          if (!status.running) {
+          if (!status.running || !status.authToken) {
             const result = await backend.startLocalCodexServer(environment.id);
-            status = { running: true, port: result.port, pid: result.pid };
+            status = {
+              running: true,
+              port: result.port,
+              pid: result.pid,
+              authToken: result.authToken,
+            };
           }
           port = status.port ?? null;
+          authToken = status.authToken;
         } else {
           if (!environment.containerId) {
             throw new Error("Container ID is required for feature planning in a container");
           }
           let status = await backend.getCodexServerStatus(environment.containerId);
-          if (!status.running) {
+          if (!status.running || !status.authToken) {
             const result = await backend.startCodexServer(environment.containerId);
-            status = { running: true, hostPort: result.hostPort };
+            status = {
+              running: true,
+              hostPort: result.hostPort,
+              authToken: result.authToken,
+            };
           }
           port = status.hostPort ?? null;
+          authToken = status.authToken;
         }
 
-        if (!port) throw new Error("Failed to resolve Codex bridge port");
-        client = createClient(`http://127.0.0.1:${port}`);
+        if (!port || !authToken) throw new Error("Failed to resolve authenticated Codex bridge");
+        client = createClient(`http://127.0.0.1:${port}`, authToken);
         clientsRef.current.set(environment.id, client);
       }
 

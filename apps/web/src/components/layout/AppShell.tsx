@@ -12,8 +12,10 @@ import {
   useConfigStore,
   useEnvironmentStore,
   useFilesPanelStore,
+  usePaneLayoutStore,
   useProjectStore,
   useUIStore,
+  getAllLeaves,
 } from "@/stores";
 import { useMediaQuery } from "@/hooks";
 import {
@@ -24,6 +26,7 @@ import { getCurrentWindow } from "@/lib/native/window";
 import { cn } from "@/lib/utils";
 import { MobileAppShellLayout } from "./MobileAppShellLayout";
 import { getApplicationTitle } from "@/lib/application-title";
+import { AgentInfoButton } from "./AgentInfoButton";
 
 interface AppShellProps {
   children?: React.ReactNode;
@@ -34,6 +37,7 @@ export function AppShell({ children }: AppShellProps) {
   const { isOpen: filesPanelOpen } = useFilesPanelStore();
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const paneEnvironments = usePaneLayoutStore((state) => state.environments);
   const activeProjectName = useProjectStore((state) =>
     selectedProjectId
       ? state.projects.find((project) => project.id === selectedProjectId)?.name ?? null
@@ -77,6 +81,16 @@ export function AppShell({ children }: AppShellProps) {
     isMobile,
     activeEnvironmentName,
   );
+  const activeTab = useMemo(() => {
+    if (!selectedEnvironmentId) return null;
+    const environment = paneEnvironments.get(selectedEnvironmentId);
+    if (!environment) return null;
+    const leaves = getAllLeaves(environment.root);
+    const activePane =
+      leaves.find((leaf) => leaf.id === environment.activePaneId) ?? null;
+    if (!activePane?.activeTabId) return null;
+    return activePane.tabs.find((tab) => tab.id === activePane.activeTabId) ?? null;
+  }, [paneEnvironments, selectedEnvironmentId]);
 
   useEffect(() => {
     document.title = windowTitle;
@@ -93,6 +107,7 @@ export function AppShell({ children }: AppShellProps) {
           filesPanelOpen={filesPanelOpen}
           centralPanelStyle={centralPanelThemeVars}
           actionBar={<ActionBar presentation="grid" />}
+          agentInfoButton={<AgentInfoButton activeTab={activeTab} mobile />}
           sidebar={<Sidebar />}
           filesPanel={<FilesPanel />}
           onTitleBarMouseDown={handleTitleBarMouseDown}
@@ -110,6 +125,21 @@ export function AppShell({ children }: AppShellProps) {
             <span className="text-xs font-medium text-muted-foreground" data-backend-drag-region>
               {windowTitle}
             </span>
+            {/*
+              The title bar is a drag region: every left mouse-down on it calls
+              `startDragging()`. A nested control inherits that, so without the
+              `no-drag` app region *and* the mouse-down stop the info button
+              would drag the window instead of opening. `MobileAppShellLayout`
+              wraps the same slot the same way.
+            */}
+            <div
+              className="absolute right-1 top-1"
+              data-testid="desktop-agent-info-slot"
+              style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <AgentInfoButton activeTab={activeTab} />
+            </div>
           </div>
           <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         {/* Sidebar Panel */}

@@ -817,11 +817,13 @@ export interface ClaudeServerStatus {
 export interface CodexServerStartResult {
   hostPort: number;
   wasRunning: boolean;
+  authToken: string;
 }
 
 export interface CodexServerStatus {
   running: boolean;
   hostPort: number | null;
+  authToken?: string;
 }
 
 /** Start the Claude bridge server in a container */
@@ -1554,12 +1556,16 @@ export interface LocalServerStartResult {
   port: number;
   pid: number;
   wasRunning: boolean;
+  /** Present only for the authenticated Codex bridge. */
+  authToken?: string;
 }
 
 export interface LocalServerStatus {
   running: boolean;
   port: number | null;
   pid: number | null;
+  /** Present only for the authenticated Codex bridge. */
+  authToken?: string;
 }
 
 /** Start the local OpenCode server for a local environment */

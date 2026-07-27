@@ -41,10 +41,26 @@ const mockDetectPrLocal = mock(async (): Promise<any> => null);
 const mockGetProjectNotes = mock(async () => ({ content: "" }));
 const mockAddKanbanComment = mock(async () => ({ id: TASK_ID, comments: [] }));
 const mockUpdateKanbanTask = mock(async () => ({ id: TASK_ID }));
-const mockGetCodexServerStatus = mock(async () => ({ running: true, hostPort: 9999 }));
-const mockGetLocalCodexServerStatus = mock(async () => ({ running: true, port: 9999, pid: 1234 }));
-const mockStartCodexServer = mock(async () => ({ hostPort: 9999 }));
-const mockStartLocalCodexServer = mock(async () => ({ port: 9999, pid: 1234 }));
+const mockGetCodexServerStatus = mock(async () => ({
+  running: true,
+  hostPort: 9999,
+  authToken: "container-token",
+}));
+const mockGetLocalCodexServerStatus = mock(async () => ({
+  running: true,
+  port: 9999,
+  pid: 1234,
+  authToken: "local-token",
+}));
+const mockStartCodexServer = mock(async () => ({
+  hostPort: 9999,
+  authToken: "container-token",
+}));
+const mockStartLocalCodexServer = mock(async () => ({
+  port: 9999,
+  pid: 1234,
+  authToken: "local-token",
+}));
 const mockSaveBuildPipeline = mock(async (
   id: string,
   projectId: string,
@@ -677,13 +693,29 @@ describe("CodexBuildChatTab", () => {
       updateTask: mockKanbanUpdateTask,
     });
     mockGetCodexServerStatus.mockReset();
-    mockGetCodexServerStatus.mockResolvedValue({ running: true, hostPort: 9999 });
+    mockGetCodexServerStatus.mockResolvedValue({
+      running: true,
+      hostPort: 9999,
+      authToken: "container-token",
+    });
     mockGetLocalCodexServerStatus.mockReset();
-    mockGetLocalCodexServerStatus.mockResolvedValue({ running: true, port: 9999, pid: 1234 });
+    mockGetLocalCodexServerStatus.mockResolvedValue({
+      running: true,
+      port: 9999,
+      pid: 1234,
+      authToken: "local-token",
+    });
     mockStartCodexServer.mockReset();
-    mockStartCodexServer.mockResolvedValue({ hostPort: 9999 });
+    mockStartCodexServer.mockResolvedValue({
+      hostPort: 9999,
+      authToken: "container-token",
+    });
     mockStartLocalCodexServer.mockReset();
-    mockStartLocalCodexServer.mockResolvedValue({ port: 9999, pid: 1234 });
+    mockStartLocalCodexServer.mockResolvedValue({
+      port: 9999,
+      pid: 1234,
+      authToken: "local-token",
+    });
     mockSaveBuildPipeline.mockReset();
     mockSaveBuildPipeline.mockImplementation(async (
       id,
@@ -908,30 +940,52 @@ describe("CodexBuildChatTab", () => {
       })),
       setupCommandsResolved: new Set([ENV_ID]),
     }));
-    mockGetLocalCodexServerStatus.mockResolvedValue({ running: false, port: 0, pid: 0 });
-    mockStartLocalCodexServer.mockResolvedValue({ port: 7777, pid: 4321 });
+    mockGetLocalCodexServerStatus.mockResolvedValue({
+      running: false,
+      port: 0,
+      pid: 0,
+      authToken: "",
+    });
+    mockStartLocalCodexServer.mockResolvedValue({
+      port: 7777,
+      pid: 4321,
+      authToken: "local-start-token",
+    });
 
     render(<CodexBuildChatTab data={createData({ isLocal: true })} isActive />);
 
     await waitFor(() => {
       expect(mockGetLocalCodexServerStatus).toHaveBeenCalledWith(ENV_ID);
       expect(mockStartLocalCodexServer).toHaveBeenCalledWith(ENV_ID);
-      expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:7777");
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:7777",
+        "local-start-token",
+      );
       expect(mockSendPrompt).toHaveBeenCalled();
     });
   });
 
   test("starts a missing container bridge before beginning the build", async () => {
     seedStartingPipeline();
-    mockGetCodexServerStatus.mockResolvedValue({ running: false, hostPort: 0 });
-    mockStartCodexServer.mockResolvedValue({ hostPort: 8888 });
+    mockGetCodexServerStatus.mockResolvedValue({
+      running: false,
+      hostPort: 0,
+      authToken: "",
+    });
+    mockStartCodexServer.mockResolvedValue({
+      hostPort: 8888,
+      authToken: "container-start-token",
+    });
 
     render(<CodexBuildChatTab data={createData()} isActive />);
 
     await waitFor(() => {
       expect(mockGetCodexServerStatus).toHaveBeenCalledWith("container-1");
       expect(mockStartCodexServer).toHaveBeenCalledWith("container-1");
-      expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:8888");
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:8888",
+        "container-start-token",
+      );
       expect(mockSendPrompt).toHaveBeenCalled();
     });
   });
@@ -950,7 +1004,11 @@ describe("CodexBuildChatTab", () => {
 
   test("shows the server-start failure without attempting to create a session", async () => {
     seedStartingPipeline();
-    mockGetCodexServerStatus.mockResolvedValue({ running: false, hostPort: 0 });
+    mockGetCodexServerStatus.mockResolvedValue({
+      running: false,
+      hostPort: 0,
+      authToken: "",
+    });
     mockStartCodexServer.mockRejectedValue(new Error("bridge launch failed"));
 
     render(<CodexBuildChatTab data={createData()} isActive />);
@@ -971,13 +1029,78 @@ describe("CodexBuildChatTab", () => {
       })),
       setupCommandsResolved: new Set([ENV_ID]),
     }));
-    mockGetLocalCodexServerStatus.mockResolvedValue({ running: true, port: 0, pid: 4321 });
+    mockGetLocalCodexServerStatus.mockResolvedValue({
+      running: true,
+      port: 0,
+      pid: 4321,
+      authToken: "local-token",
+    });
 
     render(<CodexBuildChatTab data={createData({ isLocal: true })} isActive />);
 
     expect(await screen.findByText("Failed to resolve Codex bridge port")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Reconnect now" })).toBeTruthy();
     expect(mockCreateClient).not.toHaveBeenCalled();
+  });
+
+  test("refuses to build a client when a started local bridge returns no auth token", async () => {
+    /*
+     * The port check passes here, so only the token check stands between a
+     * tokenless bridge and `createClient(url, undefined)` — which would build a
+     * client whose every request is answered with 401 and surface as a generic
+     * health failure instead of the real cause.
+     */
+    seedStartingPipeline();
+    useEnvironmentStore.setState((state) => ({
+      environments: state.environments.map((environment) => ({
+        ...environment,
+        containerId: null,
+        environmentType: "local" as const,
+      })),
+      setupCommandsResolved: new Set([ENV_ID]),
+    }));
+    mockGetLocalCodexServerStatus.mockResolvedValue({
+      running: false,
+      port: 0,
+      pid: 0,
+      authToken: "",
+    });
+    mockStartLocalCodexServer.mockResolvedValue({
+      port: 7777,
+      pid: 4321,
+      authToken: "",
+    });
+
+    render(<CodexBuildChatTab data={createData({ isLocal: true })} isActive />);
+
+    expect(await screen.findByText("Codex bridge authentication is unavailable"))
+      .toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reconnect now" })).toBeTruthy();
+    expect(mockCreateClient).not.toHaveBeenCalled();
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+  });
+
+  test("refuses to build a client when a started container bridge returns no auth token", async () => {
+    seedStartingPipeline();
+    mockGetCodexServerStatus.mockResolvedValue({
+      running: false,
+      hostPort: 0,
+      authToken: "",
+    });
+    mockStartCodexServer.mockResolvedValue({
+      hostPort: 8888,
+      authToken: "",
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    expect(await screen.findByText("Codex bridge authentication is unavailable"))
+      .toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reconnect now" })).toBeTruthy();
+    expect(mockCreateClient).not.toHaveBeenCalled();
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockSendPrompt).not.toHaveBeenCalled();
   });
 
   test("sends task images and falls back to an empty note when project notes fail", async () => {
@@ -2048,7 +2171,10 @@ describe("CodexBuildChatTab", () => {
     fireEvent.click(reconnectButton);
 
     await waitFor(() => {
-      expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:9999");
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        "container-token",
+      );
     });
   });
 

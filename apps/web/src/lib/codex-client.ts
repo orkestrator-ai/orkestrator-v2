@@ -1,4 +1,5 @@
 import type { NativeMessage, NativeMessagePart } from "./chat/native-message-types";
+import type { ContextUsageSnapshot } from "./context-usage";
 import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
 import {
   isStructuredOutputResult,
@@ -119,10 +120,12 @@ interface CodexSessionStatusResponse {
   messageRevision?: number;
   structuredOutputRequestId?: string;
   structuredOutput?: StructuredOutputResult;
+  contextUsage?: ContextUsageSnapshot;
 }
 
 export interface CodexClient {
   baseUrl: string;
+  authToken?: string;
 }
 
 export interface CodexMessage {
@@ -132,6 +135,7 @@ export interface CodexMessage {
   parts: NativeMessagePart[];
   createdAt: string;
   planReview?: boolean;
+  turnId?: string;
 }
 
 
@@ -161,6 +165,7 @@ export interface CodexSessionStatus {
   messageRevision?: number;
   structuredOutputRequestId?: string;
   structuredOutput?: StructuredOutputResult;
+  contextUsage?: ContextUsageSnapshot;
 }
 
 export type CodexSessionStatusLookupResult =
@@ -188,6 +193,8 @@ export interface CodexEvent {
     | "message.updated"
     | "session.approval-requested"
     | "session.approval-resolved"
+    | "session.interaction-requested"
+    | "session.interaction-resolved"
     /** The bridge could not replay our gap; refetch state from scratch. */
     | "session.reconcile-required";
   sessionId?: string;
@@ -251,6 +258,124 @@ export interface CodexApproval {
  * user is deciding, and a restart withdraws the request outright.
  */
 export type CodexApprovalResponseResult = "applied" | "stale" | "forbidden" | "error";
+
+export interface CodexInteractionOption {
+  label: string;
+  description?: string;
+}
+
+export interface CodexInteractionQuestion {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options?: CodexInteractionOption[];
+}
+
+export interface CodexInteraction {
+  interactionId: string;
+  kind: "question" | "mcp-form" | "mcp-url";
+  method: string;
+  threadId: string;
+  turnId: string | null;
+  itemId: string | null;
+  requestedAt: number;
+  expiresAt: number;
+  autoResolutionMs?: number;
+  questions?: CodexInteractionQuestion[];
+  serverName?: string;
+  message?: string;
+  schema?: unknown;
+  url?: string;
+  elicitationId?: string;
+}
+
+export type CodexInteractionAnswer =
+  | { action: "accept"; answers?: Record<string, string[]>; content?: unknown }
+  | { action: "decline" | "cancel" };
+
+function parseInteractionQuestion(value: unknown): CodexInteractionQuestion | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (
+    typeof raw.id !== "string"
+    || typeof raw.question !== "string"
+    || typeof raw.header !== "string"
+  ) {
+    return null;
+  }
+  const options = Array.isArray(raw.options)
+    ? raw.options.flatMap((option) => {
+        if (!option || typeof option !== "object" || Array.isArray(option)) return [];
+        const parsed = option as Record<string, unknown>;
+        return typeof parsed.label === "string"
+          ? [{
+              label: parsed.label,
+              ...(typeof parsed.description === "string"
+                ? { description: parsed.description }
+                : {}),
+            }]
+          : [];
+      })
+    : undefined;
+  return {
+    id: raw.id,
+    header: raw.header,
+    question: raw.question,
+    isOther: raw.isOther === true,
+    isSecret: raw.isSecret === true,
+    ...(options && options.length > 0 ? { options } : {}),
+  };
+}
+
+export function parseInteraction(value: unknown): CodexInteraction | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (
+    // An empty id cannot be routed back to the bridge — it would POST to
+    // `/session/:id/interactions/`, which matches no route — so the card would
+    // render but never be answerable and the turn would stay blocked.
+    typeof raw.interactionId !== "string"
+    || raw.interactionId.length === 0
+    || (raw.kind !== "question" && raw.kind !== "mcp-form" && raw.kind !== "mcp-url")
+    || typeof raw.method !== "string"
+    || typeof raw.threadId !== "string"
+    || typeof raw.requestedAt !== "number"
+    || !Number.isFinite(raw.requestedAt)
+    || typeof raw.expiresAt !== "number"
+    || !Number.isFinite(raw.expiresAt)
+  ) {
+    return null;
+  }
+  const questions = Array.isArray(raw.questions)
+    ? raw.questions
+        .map(parseInteractionQuestion)
+        .filter((question): question is CodexInteractionQuestion => question !== null)
+    : undefined;
+  if (raw.kind === "question" && !questions?.length) return null;
+  return {
+    interactionId: raw.interactionId,
+    kind: raw.kind,
+    method: raw.method,
+    threadId: raw.threadId,
+    turnId: typeof raw.turnId === "string" ? raw.turnId : null,
+    itemId: typeof raw.itemId === "string" ? raw.itemId : null,
+    requestedAt: raw.requestedAt,
+    expiresAt: raw.expiresAt,
+    ...(typeof raw.autoResolutionMs === "number"
+      ? { autoResolutionMs: raw.autoResolutionMs }
+      : {}),
+    ...(questions ? { questions } : {}),
+    ...(typeof raw.serverName === "string" ? { serverName: raw.serverName } : {}),
+    ...(typeof raw.message === "string" ? { message: raw.message } : {}),
+    ...("schema" in raw ? { schema: raw.schema } : {}),
+    ...(typeof raw.url === "string" ? { url: raw.url } : {}),
+    ...(typeof raw.elicitationId === "string"
+      ? { elicitationId: raw.elicitationId }
+      : {}),
+  };
+}
 
 /**
  * Reports an approval we refuse to render, and drops it.
@@ -378,13 +503,33 @@ async function fetchWithTimeout(
   }
 }
 
-export function createClient(baseUrl: string): CodexClient {
-  return { baseUrl: resolveGatewayLoopbackBaseUrl(baseUrl) };
+function fetchCodex(
+  client: CodexClient,
+  path: string,
+  options: RequestInit = {},
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<Response> {
+  const headers = new Headers(options.headers);
+  // The desktop gateway consumes its own Authorization header before proxying.
+  // Keep bridge authentication in a dedicated header so it survives that hop.
+  if (client.authToken) headers.set("X-Orkestrator-Codex-Token", client.authToken);
+  return fetchWithTimeout(
+    `${client.baseUrl}${path}`,
+    { ...options, headers },
+    timeoutMs,
+  );
+}
+
+export function createClient(baseUrl: string, authToken?: string): CodexClient {
+  return {
+    baseUrl: resolveGatewayLoopbackBaseUrl(baseUrl),
+    ...(authToken ? { authToken } : {}),
+  };
 }
 
 export async function checkHealth(client: CodexClient): Promise<boolean> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/global/health`);
+    const response = await fetchCodex(client, "/global/auth-check");
     return response.ok;
   } catch {
     return false;
@@ -416,7 +561,7 @@ export interface CodexBridgeHealth {
  */
 export async function getBridgeHealth(client: CodexClient): Promise<CodexBridgeHealth | null> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/global/health`);
+    const response = await fetchCodex(client, "/global/health");
     if (!response.ok) return null;
     return (await response.json()) as CodexBridgeHealth;
   } catch {
@@ -426,7 +571,7 @@ export async function getBridgeHealth(client: CodexClient): Promise<CodexBridgeH
 
 export async function getModels(client: CodexClient): Promise<CodexModelsResponse> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/global/models`);
+    const response = await fetchCodex(client, "/global/models");
     if (!response.ok) {
       return { models: CODEX_MODELS, source: "fallback" };
     }
@@ -449,7 +594,7 @@ export async function getModels(client: CodexClient): Promise<CodexModelsRespons
 
 export async function getSlashCommands(client: CodexClient): Promise<CodexSlashCommand[]> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/global/slash-commands`);
+    const response = await fetchCodex(client, "/global/slash-commands");
     if (!response.ok) {
       return [];
     }
@@ -472,7 +617,7 @@ export async function createSession(
     fastMode?: boolean;
   },
 ): Promise<CodexSession> {
-  const response = await fetchWithTimeout(`${client.baseUrl}/session/create`, {
+  const response = await fetchCodex(client, "/session/create", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -496,7 +641,7 @@ export async function createSession(
 
 export async function listSessions(client: CodexClient): Promise<CodexStoredSession[]> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/session/list`);
+    const response = await fetchCodex(client, "/session/list");
     if (!response.ok) return [];
     const data = (await response.json()) as Partial<CodexSessionListResponse>;
     return Array.isArray(data.sessions) ? data.sessions : [];
@@ -517,7 +662,7 @@ export async function resumeSession(
   },
 ): Promise<{ session: CodexSession; messages: CodexMessage[] } | null> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/session/resume`, {
+    const response = await fetchCodex(client, "/session/resume", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(options),
@@ -548,8 +693,9 @@ export async function updateSessionConfig(
   },
 ): Promise<CodexSessionConfigUpdateOutcome> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/config`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/config`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -574,8 +720,9 @@ export async function updateSessionConfig(
     // A timeout or reset after the bridge handled the request is ambiguous.
     // Re-read the authoritative bridge config before asking the UI to roll back.
     try {
-      const reconciliation = await fetchWithTimeout(
-        `${client.baseUrl}/session/${sessionId}/config`,
+      const reconciliation = await fetchCodex(
+        client,
+        `/session/${sessionId}/config`,
       );
       if (reconciliation.ok) {
         const current = (await reconciliation.json()) as {
@@ -618,8 +765,9 @@ export async function getSessionMessages(
   options: { throwOnError?: boolean } = {},
 ): Promise<CodexMessage[]> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/messages`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/messages`,
     );
     if (!response.ok) {
       throw new Error(`Failed to get Codex session messages: HTTP ${response.status}`);
@@ -637,13 +785,163 @@ export async function getSessionMessages(
   }
 }
 
+const CONTEXT_USAGE_SOURCES: ReadonlySet<string> = new Set([
+  "claude",
+  "opencode",
+  "codex",
+  "heuristic",
+  "provider",
+]);
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** Copies `keys` across only where the source holds a finite number. */
+function pickFiniteNumbers(
+  raw: Record<string, unknown>,
+  keys: readonly (keyof ContextUsageSnapshot)[],
+): Partial<ContextUsageSnapshot> {
+  const picked: Record<string, number> = {};
+  for (const key of keys) {
+    const value = finiteNumber(raw[key as string]);
+    if (value !== undefined) picked[key as string] = value;
+  }
+  return picked as Partial<ContextUsageSnapshot>;
+}
+
+const OPTIONAL_USAGE_NUMBERS = [
+  "inputTokens",
+  "outputTokens",
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "reasoningTokens",
+  "lastTurnTokens",
+  "sessionTokens",
+  "costUsd",
+  "durationMs",
+  "apiDurationMs",
+  "permissionDenials",
+  "linesAdded",
+  "linesRemoved",
+] as const satisfies readonly (keyof ContextUsageSnapshot)[];
+
+/**
+ * Validates a context-usage snapshot arriving from the bridge.
+ *
+ * Exported so the SSE frame and the `/status` snapshot agree on what a usable
+ * reading is. The UI formats `percentUsed` with `toFixed`, so a frame carrying a
+ * string (or nothing at all) where a number belongs throws inside render — the
+ * whole tab, not just the meter. Anything that fails the numeric triple is
+ * dropped; every optional field is kept only when it is the right shape, so one
+ * malformed extra never costs the reading itself.
+ */
+export function parseContextUsage(value: unknown): ContextUsageSnapshot | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+
+  const usedTokens = finiteNumber(raw.usedTokens);
+  const totalTokens = finiteNumber(raw.totalTokens);
+  const percentUsed = finiteNumber(raw.percentUsed);
+  if (
+    usedTokens === undefined
+    || totalTokens === undefined
+    || percentUsed === undefined
+  ) {
+    return null;
+  }
+
+  const rateLimits = Array.isArray(raw.rateLimits)
+    ? raw.rateLimits.flatMap((window) => {
+        if (!window || typeof window !== "object" || Array.isArray(window)) return [];
+        const entry = window as Record<string, unknown>;
+        const label = nonEmptyString(entry.label);
+        if (label === undefined) return [];
+        return [{
+          label,
+          ...(finiteNumber(entry.usedPercent) !== undefined
+            ? { usedPercent: finiteNumber(entry.usedPercent) }
+            : {}),
+          ...(nonEmptyString(entry.resetsAt) !== undefined
+            ? { resetsAt: entry.resetsAt as string }
+            : {}),
+          ...(finiteNumber(entry.windowMinutes) !== undefined
+            ? { windowMinutes: finiteNumber(entry.windowMinutes) }
+            : {}),
+        }];
+      })
+    : undefined;
+
+  const contextCategories = Array.isArray(raw.contextCategories)
+    ? raw.contextCategories.flatMap((category) => {
+        if (!category || typeof category !== "object" || Array.isArray(category)) return [];
+        const entry = category as Record<string, unknown>;
+        const name = nonEmptyString(entry.name);
+        const tokens = finiteNumber(entry.tokens);
+        if (name === undefined || tokens === undefined) return [];
+        return [{
+          name,
+          tokens,
+          ...(nonEmptyString(entry.color) !== undefined
+            ? { color: entry.color as string }
+            : {}),
+        }];
+      })
+    : undefined;
+
+  const rawCredits =
+    raw.credits && typeof raw.credits === "object" && !Array.isArray(raw.credits)
+      ? (raw.credits as Record<string, unknown>)
+      : undefined;
+  const credits = rawCredits
+    ? {
+        ...(typeof rawCredits.hasCredits === "boolean"
+          ? { hasCredits: rawCredits.hasCredits }
+          : {}),
+        ...(typeof rawCredits.unlimited === "boolean"
+          ? { unlimited: rawCredits.unlimited }
+          : {}),
+        ...(nonEmptyString(rawCredits.balance) !== undefined
+          ? { balance: rawCredits.balance as string }
+          : {}),
+      }
+    : undefined;
+
+  return {
+    usedTokens,
+    totalTokens,
+    percentUsed,
+    ...pickFiniteNumbers(raw, OPTIONAL_USAGE_NUMBERS),
+    ...(nonEmptyString(raw.modelId) !== undefined
+      ? { modelId: raw.modelId as string }
+      : {}),
+    ...(nonEmptyString(raw.updatedAt) !== undefined
+      ? { updatedAt: raw.updatedAt as string }
+      : {}),
+    ...(typeof raw.estimated === "boolean" ? { estimated: raw.estimated } : {}),
+    ...(typeof raw.source === "string" && CONTEXT_USAGE_SOURCES.has(raw.source)
+      ? { source: raw.source as ContextUsageSnapshot["source"] }
+      : {}),
+    ...(rateLimits && rateLimits.length > 0 ? { rateLimits } : {}),
+    ...(contextCategories && contextCategories.length > 0
+      ? { contextCategories }
+      : {}),
+    ...(credits && Object.keys(credits).length > 0 ? { credits } : {}),
+  };
+}
+
 export async function lookupSessionStatus(
   client: CodexClient,
   sessionId: string,
 ): Promise<CodexSessionStatusLookupResult> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/status`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/status`,
     );
     if (response.status === 404) return { kind: "missing" };
     if (!response.ok) {
@@ -657,6 +955,7 @@ export async function lookupSessionStatus(
     ) {
       throw new Error("Codex session status response was malformed");
     }
+    const contextUsage = parseContextUsage(data.contextUsage);
     // Spread in only when present, so the response shape is unchanged for a
     // bridge that does not report them.
     return {
@@ -683,6 +982,7 @@ export async function lookupSessionStatus(
         ...(isStructuredOutputResult(data.structuredOutput)
           ? { structuredOutput: data.structuredOutput }
           : {}),
+        ...(contextUsage ? { contextUsage } : {}),
       },
     };
   } catch (error) {
@@ -776,8 +1076,9 @@ export async function sendPrompt(
 ): Promise<CodexPromptSendOutcome> {
   const requestId = options?.requestId ?? crypto.randomUUID();
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/prompt`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/prompt`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -820,8 +1121,9 @@ export async function getStructuredOutput<T = unknown>(
   let response: Response;
   try {
     const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
-    response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/structured-output${query}`,
+    response = await fetchCodex(
+      client,
+      `/session/${sessionId}/structured-output${query}`,
     );
   } catch (error) {
     throw new StructuredOutputReadUnavailableError(
@@ -878,8 +1180,9 @@ export async function abortSession(
   sessionId: string,
 ): Promise<CodexAbortOutcome> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/abort`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/abort`,
       { method: "POST" },
     );
     return response.ok
@@ -905,8 +1208,9 @@ export async function fetchPendingApprovals(
   client: CodexClient,
   sessionId: string,
 ): Promise<CodexApproval[]> {
-  const response = await fetchWithTimeout(
-    `${client.baseUrl}/session/${sessionId}/approvals`,
+  const response = await fetchCodex(
+    client,
+    `/session/${sessionId}/approvals`,
   );
   if (!response.ok) {
     throw new Error(`Failed to fetch pending Codex approvals: HTTP ${response.status}`);
@@ -933,8 +1237,9 @@ export async function respondToApproval(
   decision: CodexApprovalDecision,
 ): Promise<CodexApprovalResponseResult> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/approvals/${encodeURIComponent(approvalId)}`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/approvals/${encodeURIComponent(approvalId)}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -951,13 +1256,217 @@ export async function respondToApproval(
   }
 }
 
+export async function fetchPendingInteractions(
+  client: CodexClient,
+  sessionId: string,
+): Promise<CodexInteraction[]> {
+  const response = await fetchCodex(
+    client,
+    `/session/${sessionId}/interactions`,
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to fetch pending Codex interactions: HTTP ${response.status}`);
+  }
+  const body = (await response.json()) as { interactions?: unknown };
+  if (!Array.isArray(body.interactions)) {
+    throw new Error("Pending Codex interactions response was malformed");
+  }
+  return body.interactions
+    .map(parseInteraction)
+    .filter((interaction): interaction is CodexInteraction => interaction !== null);
+}
+
+export async function respondToInteraction(
+  client: CodexClient,
+  sessionId: string,
+  interactionId: string,
+  answer: CodexInteractionAnswer,
+): Promise<CodexApprovalResponseResult> {
+  try {
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/interactions/${encodeURIComponent(interactionId)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(answer),
+      },
+    );
+    if (response.ok) return "applied";
+    if (response.status === 409) return "stale";
+    if (response.status === 403) return "forbidden";
+    return "error";
+  } catch (error) {
+    console.error("[codex-client] Failed to respond to interaction:", error);
+    return "error";
+  }
+}
+
+/**
+ * A fork request the bridge refused, carrying the HTTP status it answered with.
+ *
+ * The fork route reports four differentiated failures (404 not found, 409
+ * running, 422 not a usable fork point, 503 engine unavailable), each with its
+ * own `error` body. Collapsing them to null made the UI blame a running turn
+ * that was not there, so every non-OK answer now surfaces as this error.
+ * `status` is 0 when the request itself failed in transport, i.e. no HTTP
+ * answer was received at all.
+ */
+export class CodexForkError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "CodexForkError";
+    this.status = status;
+  }
+}
+
+/** Fallbacks mirroring the bridge's own reasons, for bodies without `error`. */
+const CODEX_FORK_ERROR_FALLBACKS: Record<number, string> = {
+  404: "Codex session or fork point was not found",
+  409: "Codex session cannot be forked while it is running",
+  422: "That message is not a usable fork point",
+  503: "Codex did not return a forked thread",
+};
+
+export async function forkCodexSession(
+  client: CodexClient,
+  sessionId: string,
+  lastMessageId?: string,
+): Promise<CodexSession> {
+  let response: Response;
+  try {
+    response = await fetchCodex(
+      client,
+      `/session/${sessionId}/fork`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lastMessageId }),
+      },
+    );
+  } catch (error) {
+    throw new CodexForkError(
+      0,
+      error instanceof Error ? error.message : "Codex fork request failed",
+    );
+  }
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as
+      | { error?: unknown }
+      | null;
+    const message =
+      body && typeof body.error === "string" && body.error.length > 0
+        ? body.error
+        : CODEX_FORK_ERROR_FALLBACKS[response.status]
+          ?? `Codex fork failed: HTTP ${response.status}`;
+    throw new CodexForkError(response.status, message);
+  }
+  const body = (await response.json().catch(() => ({}))) as {
+    sessionId?: unknown;
+    title?: unknown;
+  };
+  // A `200 {}` would otherwise bind the new tab to `sessionId: undefined`,
+  // which every subsequent request then addresses as the literal "undefined".
+  if (typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+    throw new CodexForkError(
+      response.status,
+      "Codex fork response did not include a session id",
+    );
+  }
+  return {
+    sessionId: body.sessionId,
+    ...(typeof body.title === "string" ? { title: body.title } : {}),
+  };
+}
+
+export async function compactCodexSession(
+  client: CodexClient,
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/compact`,
+      { method: "POST" },
+    );
+    return response.ok;
+  } catch (error) {
+    console.error("[codex-client] Failed to compact session:", error);
+    return false;
+  }
+}
+
+export async function steerCodexSession(
+  client: CodexClient,
+  sessionId: string,
+  input: string,
+  requestId: string,
+): Promise<boolean> {
+  try {
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/steer`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input, requestId }),
+      },
+    );
+    return response.ok;
+  } catch (error) {
+    console.error("[codex-client] Failed to steer session:", error);
+    return false;
+  }
+}
+
+export async function startCodexNativeReview(
+  client: CodexClient,
+  sessionId: string,
+  target:
+    | { type: "uncommittedChanges" }
+    | { type: "baseBranch"; branch: string }
+    | { type: "commit"; sha: string; title?: string }
+    | { type: "custom"; instructions: string } = { type: "uncommittedChanges" },
+): Promise<boolean> {
+  try {
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/review`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(target),
+      },
+    );
+    return response.ok;
+  } catch (error) {
+    console.error("[codex-client] Failed to start native review:", error);
+    return false;
+  }
+}
+
+export async function getCodexRuntimeHealth(
+  client: CodexClient,
+  sessionId: string,
+): Promise<unknown> {
+  const response = await fetchCodex(
+    client,
+    `/session/${sessionId}/runtime-health`,
+  );
+  if (!response.ok) throw new Error(`Codex runtime health failed: HTTP ${response.status}`);
+  return response.json();
+}
+
 export async function deleteSession(
   client: CodexClient,
   sessionId: string,
 ): Promise<boolean> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}`,
       { method: "DELETE" },
     );
     return response.ok;
@@ -1044,6 +1553,11 @@ export function subscribeToEvents(
         if (sessionId) {
           url.searchParams.set("sessionId", sessionId);
         }
+        // Native EventSource cannot set Authorization headers. The bridge
+        // accepts its per-process bearer token only on this SSE query path.
+        if (client.authToken) {
+          url.searchParams.set("token", client.authToken);
+        }
 
         eventSource = new EventSource(url.toString());
         for (const eventType of [
@@ -1058,6 +1572,11 @@ export function subscribeToEvents(
           "message.updated",
           "session.approval-requested",
           "session.approval-resolved",
+          // Named SSE events are only delivered to an explicit listener, so a
+          // missing entry here silently drops every interaction frame the bridge
+          // emits — the card never appears and the turn blocks until auto-deny.
+          "session.interaction-requested",
+          "session.interaction-resolved",
           "session.reconcile-required",
         ]) {
           eventSource.addEventListener(eventType, handleEvent);

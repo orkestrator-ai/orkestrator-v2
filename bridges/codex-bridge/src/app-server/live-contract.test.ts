@@ -120,7 +120,7 @@ const CLIENT_INFO = { name: "orkestrator", title: "Orkestrator", version: "2.4.9
 const CAPABILITIES = {
   experimentalApi: false,
   requestAttestation: false,
-  mcpServerOpenaiFormElicitation: false,
+  mcpServerOpenaiFormElicitation: true,
 };
 
 async function handshake(session: LiveSession): Promise<Record<string, unknown>> {

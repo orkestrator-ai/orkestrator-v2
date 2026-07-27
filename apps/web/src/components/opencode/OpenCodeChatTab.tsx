@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { createSessionKey } from "@/lib/utils";
 import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { useVirtuosoScrollState, clearPersistedVirtuosoState, useElapsedTimer } from "@/hooks";
@@ -33,6 +34,9 @@ import {
   getPendingPermissions,
   getPendingQuestions,
   getAvailableSlashCommands,
+  getOpenCodeRuntimeHealth,
+  forkOpenCodeSession,
+  summarizeOpenCodeUsage,
   sendPrompt,
   formatOpenCodeError,
   abortSession,
@@ -64,6 +68,7 @@ import {
   type OpenCodeModelRef,
   type OpenCodeModelPreferences,
 } from "@/lib/backend";
+import { useMessageForkAction } from "@/components/chat/MessageForkAction";
 import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { OpenCodeComposeBar } from "./OpenCodeComposeBar";
@@ -242,6 +247,7 @@ export function OpenCodeChatTab({
     getSelectedMode,
     setContextUsage,
     setSessionTitle,
+    setRuntimeHealth,
     addToQueue,
     addPendingPermission,
     addPendingQuestion,
@@ -287,6 +293,9 @@ export function OpenCodeChatTab({
     () => sessionsMap.get(sessionKey),
     [sessionsMap, sessionKey],
   );
+
+  const forkInFlightRef = useRef(false);
+  const [forkInFlight, setForkInFlight] = useState(false);
 
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
   const displayMessages = useMemo(
@@ -420,6 +429,45 @@ export function OpenCodeChatTab({
       [environmentId],
     ),
   );
+
+  useEffect(() => {
+    const usage = summarizeOpenCodeUsage(sessionMessages, models);
+    if (usage) setContextUsage(sessionKey, usage);
+  }, [models, sessionKey, sessionMessages, setContextUsage]);
+
+  useEffect(() => {
+    if (!client) return;
+    let cancelled = false;
+    void getOpenCodeRuntimeHealth(
+      client,
+      slashCommandDirectory,
+      session?.sessionId,
+    )
+      .then((health) => {
+        if (cancelled) return;
+        // The inventory half (agents/MCP/skills/LSP/formatters) is environment
+        // wide, so it stays on the environment key. `todos` and `diffs` are
+        // scoped to `session?.sessionId`, and every OpenCode tab in this
+        // environment writes to that same environment key — last write wins.
+        // Mirroring the snapshot onto the session key gives the agent-info
+        // popover a per-session read that a sibling tab cannot clobber.
+        setRuntimeHealth(environmentId, health);
+        if (session?.sessionId) setRuntimeHealth(sessionKey, health);
+      })
+      .catch((error) => {
+        console.warn("[OpenCodeChatTab] Failed to load runtime health:", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    client,
+    environmentId,
+    session?.sessionId,
+    sessionKey,
+    setRuntimeHealth,
+    slashCommandDirectory,
+  ]);
 
   // Activity state tracking is handled globally by useGlobalActivityMonitor
   // (in App.tsx), which derives state from this store's session data.
@@ -1457,6 +1505,40 @@ export function OpenCodeChatTab({
             }
           }
 
+          if (
+            (eventType === "todo.updated" || eventType === "session.diff")
+            && eventSessionId
+          ) {
+            const state = useOpenCodeStore.getState();
+            /*
+             * The subscription is shared by the entire environment and only
+             * the component that created it consumes the stream. Route the
+             * update through the authoritative session map rather than the
+             * owner's captured session key so sibling tabs stay current too.
+             * A provider session may intentionally be visible in more than one
+             * tab, so update every matching key.
+             */
+            for (const [matchingSessionKey, matchingSession] of state.sessions) {
+              if (matchingSession.sessionId !== eventSessionId) continue;
+              const current = state.runtimeHealth.get(matchingSessionKey)
+                ?? state.runtimeHealth.get(environmentId);
+              if (current) {
+                state.setRuntimeHealth(matchingSessionKey, {
+                  ...current,
+                  ...(eventType === "todo.updated"
+                    && Array.isArray(event.properties?.todos)
+                    ? { todos: event.properties.todos }
+                    : {}),
+                  ...(eventType === "session.diff"
+                    && Array.isArray(event.properties?.diff)
+                    ? { diffs: event.properties.diff }
+                    : {}),
+                  fetchedAt: new Date().toISOString(),
+                });
+              }
+            }
+          }
+
           // Handle permission events (not session-specific, need to match by sessionID in the event)
           if (eventType === "permission.asked") {
             const permissionProps = event.properties;
@@ -1605,6 +1687,9 @@ export function OpenCodeChatTab({
         ? options?.variant
         : getSelectedVariant(sessionKey);
       const selectedMode = options?.mode ?? getSelectedMode(sessionKey);
+      const selectedAgent = useOpenCodeStore
+        .getState()
+        .getSelectedAgent(sessionKey);
 
       // Add user message optimistically
       const userMessage = createOptimisticNativeMessage(
@@ -1647,10 +1732,30 @@ export function OpenCodeChatTab({
       }));
 
       // Send prompt
+      const trimmedText = text.trim();
+      const commandName = trimmedText.split(/\s+/)[0];
+      const nativeCommand = commandName && slashCommands.some(
+        (command) => command.name === commandName,
+      )
+        ? {
+            name: commandName,
+            /*
+             * Sliced from the original text rather than rebuilt from the split
+             * tokens: `split(/\s+/).join(" ")` collapsed every newline, tab and
+             * run of spaces, so a command invoked with a pasted diff or a
+             * multi-line spec reached the server as one flattened line.
+             */
+            arguments:
+              trimmedText.slice(commandName.length).trimStart() || undefined,
+          }
+        : undefined;
       const sendResult = await sendPrompt(client, session.sessionId, text, {
         model: selectedModel,
         variant: selectedVariant,
         mode: selectedMode,
+        agent: selectedAgent,
+        directory: slashCommandDirectory,
+        command: nativeCommand,
         attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
       });
 
@@ -1681,6 +1786,8 @@ export function OpenCodeChatTab({
       addMessage,
       removeMessage,
       setSessionLoading,
+      slashCommands,
+      slashCommandDirectory,
     ],
   );
 
@@ -1879,10 +1986,26 @@ export function OpenCodeChatTab({
         updateTabNativeSessionId(tabId, sessionId, environmentId);
         isInitializedRef.current = true;
 
-        setSession(sessionKey, {
-          sessionId,
-          messages,
-          isLoading: false,
+        /*
+         * The tab key survives a resume, so every session-scoped snapshot has
+         * to be replaced with the new session's in the same update — exactly
+         * what the Claude and Codex tabs do. The usage effect only ever writes
+         * a *truthy* summary, so a resumed session whose transcript reports no
+         * usage yet used to keep displaying the previous session's context
+         * meter. The session-keyed runtime health (todos and diffs) is dropped
+         * for the same reason: the health refetch that follows can fail, and a
+         * stale todo list is worse than none.
+         */
+        const resumedUsage = summarizeOpenCodeUsage(messages, models);
+        useOpenCodeStore.setState((state) => {
+          const sessions = new Map(state.sessions);
+          sessions.set(sessionKey, { sessionId, messages, isLoading: false });
+          const contextUsage = new Map(state.contextUsage);
+          if (resumedUsage) contextUsage.set(sessionKey, resumedUsage);
+          else contextUsage.delete(sessionKey);
+          const runtimeHealth = new Map(state.runtimeHealth);
+          runtimeHealth.delete(sessionKey);
+          return { sessions, contextUsage, runtimeHealth };
         });
 
         await syncPendingRequests(client, sessionId);
@@ -1892,8 +2015,45 @@ export function OpenCodeChatTab({
         console.error("[OpenCodeChatTab] Failed to resume session:", error);
       }
     },
-    [client, environmentId, sessionKey, setSession, syncPendingRequests, tabId, updateTabNativeSessionId],
+    [client, environmentId, models, sessionKey, syncPendingRequests, tabId, updateTabNativeSessionId],
   );
+
+  const handleForkFromMessage = useCallback(async (messageId: string) => {
+    if (!client || !session?.sessionId) return;
+    // Each call forks server-side and then adds a tab with a freshly generated
+    // id, so the pane store cannot dedupe a double click. The ref latches
+    // synchronously; the state drives the disabled attribute.
+    if (forkInFlightRef.current) return;
+    forkInFlightRef.current = true;
+    setForkInFlight(true);
+    try {
+      const fork = await forkOpenCodeSession(client, session.sessionId, messageId);
+      const paneStore = usePaneLayoutStore.getState();
+      paneStore.addTab(
+        paneStore.getActivePaneId(environmentId),
+        {
+          id: createUuid(),
+          type: "opencode-native",
+          displayTitle: fork.title ?? "OpenCode fork",
+          openCodeNativeData: { ...data, sessionId: fork.id },
+        },
+        environmentId,
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to fork OpenCode session");
+    } finally {
+      forkInFlightRef.current = false;
+      setForkInFlight(false);
+    }
+  }, [client, data, environmentId, session?.sessionId]);
+
+  // Referentially stable per message id, so `memo(NativeMessage)` still holds
+  // for every visible message while an answer streams in.
+  const forkAction = useMessageForkAction({
+    label: "Fork OpenCode session from this message",
+    disabled: forkInFlight,
+    onFork: handleForkFromMessage,
+  });
 
   // Refresh models by re-fetching from the SDK client
   const refreshModels = useCallback(async () => {
@@ -1970,6 +2130,9 @@ export function OpenCodeChatTab({
       virtuosoRef={virtuosoRef}
       onResumeClick={client ? () => setResumeDialogOpen(true) : undefined}
       emptyStateMessage="No messages yet. Start a conversation!"
+      messageActions={(message) =>
+        message.role === "user" ? forkAction(message.id) : undefined
+      }
       blockingCards={
         session && client && (pendingPermissions.length > 0 || pendingQuestions.length > 0) ? (
           <>

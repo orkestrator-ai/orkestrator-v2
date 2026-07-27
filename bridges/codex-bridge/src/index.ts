@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
@@ -6,8 +7,6 @@ import { promisify } from "node:util";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { isJsonSchema } from "@orkestrator/protocol/structured-output";
-import { cors } from "hono/cors";
-import { logger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
 import { readCachedTranscript } from "./transcript-cache.js";
 import {
@@ -34,6 +33,10 @@ import {
 } from "./engine/app-server-engine.js";
 import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
+import {
+  parseInteractionAnswer,
+  type InteractionAnswer,
+} from "./app-server/interactions.js";
 import { EventRing, parseEventCursor } from "./event-ring.js";
 import {
   BUILTIN_SLASH_COMMANDS,
@@ -116,6 +119,8 @@ interface SseEvent {
     | "message.updated"
     | "session.approval-requested"
     | "session.approval-resolved"
+    | "session.interaction-requested"
+    | "session.interaction-resolved"
     /** Emitted when a reconnecting client's cursor has aged out of the ring. */
     | "session.reconcile-required";
   sessionId?: string;
@@ -131,6 +136,11 @@ interface PromptAttachmentInput {
 
 
 export const app = new Hono();
+const BRIDGE_TOKEN_ENV = "CODEX_BRIDGE_TOKEN";
+const BRIDGE_ALLOWED_ORIGINS_ENV = "CODEX_BRIDGE_ALLOWED_ORIGINS";
+let bridgeAuthToken =
+  process.env[BRIDGE_TOKEN_ENV]?.trim() || randomBytes(32).toString("base64url");
+let bridgeAuthEnabledOverrideForTesting: boolean | null = null;
 /** Overridden in tests so title generation does not spawn a real `codex exec`. */
 type SessionTitleGenerator = (prompt: string) => Promise<string>;
 let sessionTitleGeneratorForTesting: SessionTitleGenerator | null = null;
@@ -138,6 +148,7 @@ interface SseRouteTestHooks {
   afterSubscriberRegistered?: () => Promise<void> | void;
   beforeBufferedDrain?: () => Promise<void> | void;
   beforeBufferedWrite?: (revision: number) => Promise<void> | void;
+  maxBufferedReplayEvents?: number;
 }
 let sseRouteTestHooks: SseRouteTestHooks | null = null;
 function setSessionTitleGeneratorForTesting(generator: SessionTitleGenerator | null): void {
@@ -178,6 +189,59 @@ const RUNTIME_ENV_VARIABLES = new Set([
 function normalizeOptionalEnvPath(name: string): string | null {
   const value = process.env[name]?.trim();
   return value ? value : null;
+}
+
+function isBridgeAuthEnabled(): boolean {
+  if (bridgeAuthEnabledOverrideForTesting !== null) {
+    return bridgeAuthEnabledOverrideForTesting;
+  }
+  // Route tests explicitly opt out because they exercise route mapping rather
+  // than process authentication. This escape hatch is inert for a real server.
+  return !(
+    process.env.CODEX_BRIDGE_NO_SERVER === "1"
+    && process.env.CODEX_BRIDGE_AUTH_DISABLED_FOR_TESTING === "1"
+  );
+}
+
+function tokenMatches(candidate: string | undefined): boolean {
+  if (!candidate) return false;
+  const expected = Buffer.from(bridgeAuthToken);
+  const actual = Buffer.from(candidate);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function bearerToken(header: string | undefined): string | undefined {
+  if (!header) return undefined;
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  return match?.[1]?.trim() || undefined;
+}
+
+function isTrustedBridgeOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+  // Electron's packaged file renderer can be represented as a null origin.
+  // Authentication is still mandatory, so allowing it does not grant access.
+  if (origin === "null" || origin === "file://") return true;
+  const configured = (process.env[BRIDGE_ALLOWED_ORIGINS_ENV] ?? "")
+    .split(",")
+    .map((entry) => entry.trim().replace(/\/$/, ""))
+    .filter(Boolean);
+  if (configured.includes(origin.replace(/\/$/, ""))) return true;
+  try {
+    const parsed = new URL(origin);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:")
+      && (parsed.hostname === "127.0.0.1"
+        || parsed.hostname === "localhost"
+        || parsed.hostname === "::1"
+        || parsed.hostname === "[::1]")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isPublicHealthRequest(method: string, path: string): boolean {
+  return method === "GET" && path === "/global/health";
 }
 
 function getRuntimeEnvironmentScriptPath(): string {
@@ -605,6 +669,15 @@ export const __testing = {
   refreshRuntimeEnvironment,
   runInlinePromptCommand,
   runtimeForTesting: () => appServerRuntime,
+  setBridgeAuthForTesting: (token?: string) => {
+    if (token === undefined) {
+      bridgeAuthEnabledOverrideForTesting = null;
+      return;
+    }
+    bridgeAuthToken = token;
+    bridgeAuthEnabledOverrideForTesting = true;
+  },
+  isTrustedBridgeOriginForTesting: isTrustedBridgeOrigin,
   sanitizeLogFileComponentForTesting: sanitizeLogFileComponent,
   setSessionTitleGeneratorForTesting,
   setSseRouteTestHooksForTesting: (hooks: SseRouteTestHooks | null) => {
@@ -714,20 +787,45 @@ function createSerializedSseWriter<T extends { data?: string }>(
   };
 }
 
-app.use(
-  "*",
-  cors({
-    origin: "*",
-    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
-  }),
-);
-app.use("*", logger());
 app.use("*", async (c, next) => {
+  const origin = c.req.raw.headers.get("origin") ?? undefined;
+  if (!isTrustedBridgeOrigin(origin)) {
+    return c.json({ error: "Origin is not allowed" }, 403);
+  }
+  if (origin) {
+    c.header("Access-Control-Allow-Origin", origin);
+    c.header("Vary", "Origin");
+  }
+  if (c.req.method === "OPTIONS") {
+    c.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    c.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Orkestrator-Codex-Token",
+    );
+    c.header("Access-Control-Allow-Private-Network", "true");
+    return c.body(null, 204);
+  }
+  if (
+    isBridgeAuthEnabled()
+    && !isPublicHealthRequest(c.req.method, c.req.path)
+  ) {
+    const dedicatedHeaderToken =
+      c.req.raw.headers.get("x-orkestrator-codex-token")?.trim();
+    const headerToken = bearerToken(
+      c.req.raw.headers.get("authorization") ?? undefined,
+    );
+    const eventToken =
+      c.req.path === "/event/subscribe" ? c.req.query("token")?.trim() : undefined;
+    if (
+      !tokenMatches(dedicatedHeaderToken)
+      && !tokenMatches(headerToken)
+      && !tokenMatches(eventToken)
+    ) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+  }
   await next();
-  c.header("Access-Control-Allow-Private-Network", "true");
 });
-app.options("*", (c) => c.body(null, 204));
 
 app.get("/global/health", (c) => {
   const health = appServerRuntime.getHealth();
@@ -744,12 +842,9 @@ app.get("/global/health", (c) => {
       appServer: {
         state: health.state,
         generation: health.generation,
-        pid: health.pid,
         codexVersion: health.codexVersion,
         restartCount: health.restartCount,
         circuitOpen: health.circuitOpen,
-        environmentFingerprint: health.environmentFingerprint,
-        lastError: health.lastError,
       },
       activeThreads: health.activeThreads,
       activeTurns: health.activeTurns,
@@ -763,15 +858,21 @@ app.get("/global/health", (c) => {
       // A rising `dropped` with clients still reconnecting means the ring is too
       // small for this workload and reconnects are falling back to full resyncs.
       events: { ...eventRing.getStats(), subscribers: subscribers.size },
-      protocol: {
-        unknownNotifications: health.unknownNotifications,
-        unsupportedItems: health.unsupportedItems,
-        serverRequests: health.serverRequests,
-      },
-      rpc: health.rpc,
     },
     terminal ? 503 : 200,
   );
+});
+
+/**
+ * Lightweight authenticated probe used to reject a cached client after token
+ * rotation. Mirrors `/global/health`'s engine-state semantics: the web client's
+ * health gate calls this route, so an unconditional 200 would let a terminally
+ * failed engine pass every renderer health check.
+ */
+app.get("/global/auth-check", (c) => {
+  const health = appServerRuntime.getHealth();
+  const terminal = health.state === "failed" || health.circuitOpen;
+  return c.json({ status: terminal ? "error" : "ok" }, terminal ? 503 : 200);
 });
 
 app.get("/global/models", async (c) => {
@@ -950,6 +1051,178 @@ app.post("/session/:id/approvals/:approvalId", async (c) => {
   return c.json({ status: "applied", decision: body.decision });
 });
 
+app.get("/session/:id/interactions", (c) => {
+  return c.json({
+    interactions: appServerRuntime.listInteractions(c.req.param("id")),
+  });
+});
+
+app.post("/session/:id/interactions/:interactionId", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  if (
+    body.action !== "accept"
+    && body.action !== "decline"
+    && body.action !== "cancel"
+  ) {
+    return c.json({ error: "action must be accept, decline, or cancel" }, 400);
+  }
+  /**
+   * Shape-checked here so the runtime only ever receives a typed answer.
+   * `typeof body.answers === "object"` was not enough: `{"q":"TypeScript"}` is an
+   * object, and the per-question validation downstream calls `.some()` on each
+   * value, so a string there threw a `TypeError` and Hono answered 500 while the
+   * interaction stayed parked until its auto-cancel.
+   */
+  const answer: InteractionAnswer | null = parseInteractionAnswer(body);
+  if (!answer) {
+    return c.json(
+      { error: "answers must map each question id to a non-empty array of non-empty strings" },
+      400,
+    );
+  }
+  const outcome = appServerRuntime.respondToInteraction(
+    c.req.param("id"),
+    c.req.param("interactionId"),
+    answer,
+  );
+  if (outcome === "wrong-session") {
+    return c.json({ error: "Interaction does not belong to this session" }, 403);
+  }
+  if (outcome === "invalid") {
+    return c.json({ error: "Interaction answer is malformed" }, 400);
+  }
+  if (outcome === "unknown") {
+    return c.json({ error: "Interaction is no longer pending", status: "stale" }, 409);
+  }
+  return c.json({ status: "applied", action: answer.action });
+});
+
+app.post("/session/:id/fork", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const result = await appServerRuntime.forkSession(
+    c.req.param("id"),
+    typeof body.lastMessageId === "string" ? body.lastMessageId : undefined,
+  );
+  // Each failure has its own cause. Reporting them all as "running or before its
+  // first turn" sent users looking for a running turn that was not there.
+  switch (result.outcome) {
+    case "created": {
+      const { outcome: _outcome, ...payload } = result;
+      return c.json(payload, 201);
+    }
+    case "not-found":
+      return c.json({ error: "Session not found" }, 404);
+    case "running":
+      return c.json({ error: "Session cannot be forked while it is running" }, 409);
+    case "unknown-message":
+      return c.json({ error: "lastMessageId is not a message in this session" }, 404);
+    case "no-fork-point":
+      return c.json(
+        { error: "That message is not a usable fork point: it belongs to no Codex turn" },
+        422,
+      );
+    default:
+      return c.json({ error: "Codex did not return a forked thread" }, 503);
+  }
+});
+
+app.post("/session/:id/compact", async (c) => {
+  const outcome = await appServerRuntime.compactSession(c.req.param("id"));
+  if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
+  if (outcome === "running") return c.json({ error: "Session is running" }, 409);
+  if (outcome === "unavailable") return c.json({ error: "Compaction could not be started" }, 503);
+  // 202: `thread/compact/start` returns before the rewrite has happened. The
+  // session stays busy until the bridge sees `thread/compacted`.
+  return c.json({ status: "accepted" }, 202);
+});
+
+app.post("/session/:id/steer", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  if (typeof body.input !== "string" || !body.input.trim()) {
+    return c.json({ error: "input is required" }, 400);
+  }
+  const outcome = await appServerRuntime.steerSession(
+    c.req.param("id"),
+    body.input.trim(),
+    typeof body.requestId === "string" ? body.requestId : undefined,
+  );
+  if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
+  if (outcome === "idle") return c.json({ error: "There is no active turn" }, 409);
+  if (outcome === "mismatch") {
+    return c.json({ error: "The active turn changed; the text was not sent" }, 409);
+  }
+  return c.json({ status: "accepted" }, 202);
+});
+
+app.post("/session/:id/review", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  /**
+   * A named target with a missing or blank field is a client bug, not a request
+   * to review the working tree. Silently degrading it to `uncommittedChanges`
+   * started a *different* review from the one asked for — spending a turn and
+   * tokens — and answered 202 as if it had succeeded.
+   */
+  const trimmed = (value: unknown): string =>
+    typeof value === "string" ? value.trim() : "";
+  let target:
+    | { type: "uncommittedChanges" }
+    | { type: "baseBranch"; branch: string }
+    | { type: "commit"; sha: string; title: string | null }
+    | { type: "custom"; instructions: string };
+
+  switch (body.type) {
+    case "baseBranch": {
+      const branch = trimmed(body.branch);
+      if (!branch) return c.json({ error: "branch is required for a baseBranch review" }, 400);
+      target = { type: "baseBranch", branch };
+      break;
+    }
+    case "commit": {
+      const sha = trimmed(body.sha);
+      if (!sha) return c.json({ error: "sha is required for a commit review" }, 400);
+      target = {
+        type: "commit",
+        sha,
+        title: typeof body.title === "string" ? body.title : null,
+      };
+      break;
+    }
+    case "custom": {
+      const instructions = trimmed(body.instructions);
+      if (!instructions) {
+        return c.json({ error: "instructions are required for a custom review" }, 400);
+      }
+      target = { type: "custom", instructions };
+      break;
+    }
+    case undefined:
+    case null:
+    case "uncommittedChanges":
+      // Only an *absent* type defaults; this is the documented default target.
+      target = { type: "uncommittedChanges" };
+      break;
+    default:
+      return c.json(
+        { error: "type must be uncommittedChanges, baseBranch, commit, or custom" },
+        400,
+      );
+  }
+
+  const result = await appServerRuntime.startNativeReview(c.req.param("id"), target);
+  if (result.outcome === "not-found") return c.json({ error: "Session not found" }, 404);
+  if (result.outcome === "running") return c.json({ error: "Session is running" }, 409);
+  if (result.outcome === "unavailable") return c.json({ error: "Native review failed" }, 503);
+  return c.json({ status: "processing", turnId: result.turnId }, 202);
+});
+
+/** Authenticated, allowlisted runtime inventory for one known bridge session. */
+app.get("/session/:id/runtime-health", async (c) => {
+  const health = await appServerRuntime.getRuntimeHealth(c.req.param("id"));
+  return health
+    ? c.json(health)
+    : c.json({ error: "Session not found" }, 404);
+});
+
 app.post("/session/:id/abort", async (c) => {
   const outcome = await appServerRuntime.abort(c.req.param("id"));
   if (!outcome) return c.json({ error: "Session not found" }, 404);
@@ -969,7 +1242,7 @@ app.get("/event/subscribe", (c) => {
   // `?since=` is what our own client sends; `Last-Event-ID` is what a native
   // EventSource sends when the browser reconnects on its own. Accept both.
   const cursor =
-    parseEventCursor(c.req.query("since")) ?? parseEventCursor(c.req.header("Last-Event-ID"));
+    parseEventCursor(c.req.query("since")) ?? parseEventCursor(c.req.header("last-event-id"));
   const sessionFilter = c.req.query("sessionId")?.trim() || null;
 
   return streamSSE(c, async (stream) => {
@@ -1036,7 +1309,10 @@ app.get("/event/subscribe", (c) => {
 
     const listener = async (event: SseEvent, revision: number) => {
       if (buffered) {
-        if (buffered.length >= MAX_BUFFERED_REPLAY_EVENTS) {
+        if (
+          buffered.length
+          >= (sseRouteTestHooks?.maxBufferedReplayEvents ?? MAX_BUFFERED_REPLAY_EVENTS)
+        ) {
           failSlowSubscriber("replay buffer overflowed");
           return;
         }

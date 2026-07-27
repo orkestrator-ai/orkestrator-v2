@@ -2,6 +2,8 @@ import { create } from "zustand";
 import {
   type OpenCodeMessage,
   type OpenCodeModel,
+  type OpenCodeAgent,
+  type OpenCodeRuntimeHealth,
   type OpenCodeSlashCommand,
   type OpenCodeConversationMode,
   type OpencodeClient,
@@ -74,6 +76,8 @@ interface OpenCodeState
   isComposing: Map<string, boolean>;
   selectedMode: Map<string, OpenCodeConversationMode>;
   contextUsage: Map<string, ContextUsageSnapshot>;
+  runtimeHealth: Map<string, OpenCodeRuntimeHealth>;
+  selectedAgent: Map<string, string>;
 
   // Agent-specific state (per-request)
   pendingQuestions: Map<string, QuestionRequest>;
@@ -101,6 +105,11 @@ interface OpenCodeState
     sessionKey: string,
     usage: ContextUsageSnapshot | null,
   ) => void;
+  setRuntimeHealth: (
+    environmentId: string,
+    health: OpenCodeRuntimeHealth | null,
+  ) => void;
+  setSelectedAgent: (sessionKey: string, agent: string | undefined) => void;
 
   // Agent-specific actions (per-request)
   addPendingQuestion: (question: QuestionRequest) => void;
@@ -124,6 +133,9 @@ interface OpenCodeState
   getPendingPermissionsForSession: (sessionId: string) => PermissionRequest[];
   getPendingPermission: (requestId: string) => PermissionRequest | undefined;
   getContextUsage: (sessionKey: string) => ContextUsageSnapshot | undefined;
+  getRuntimeHealth: (environmentId: string) => OpenCodeRuntimeHealth | undefined;
+  getAgents: (environmentId: string) => OpenCodeAgent[];
+  getSelectedAgent: (sessionKey: string) => string | undefined;
 }
 
 // Stable empty arrays to prevent infinite render loops with useSyncExternalStore.
@@ -132,6 +144,7 @@ const EMPTY_MODELS: OpenCodeModel[] = [];
 const EMPTY_COMMANDS: OpenCodeSlashCommand[] = [];
 const EMPTY_QUESTIONS: QuestionRequest[] = [];
 const EMPTY_PERMISSIONS: PermissionRequest[] = [];
+const EMPTY_AGENTS: OpenCodeAgent[] = [];
 
 /**
  * Every map keyed by sessionKey, shared by the environment and tab sweeps so
@@ -148,6 +161,14 @@ const OPENCODE_SESSION_KEYED_MAPS = [
   "selectedMode",
   "isComposing",
   "contextUsage",
+  "selectedAgent",
+  /*
+   * Written under both the environment id and a session key (the chat tab
+   * records health for its own session as well as the environment), and the
+   * session-keyed sweep drops the environment id too — so one entry here
+   * clears both.
+   */
+  "runtimeHealth",
 ] as const satisfies ReadonlyArray<keyof OpenCodeState>;
 
 export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
@@ -168,6 +189,8 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   isComposing: new Map(),
   selectedMode: new Map(),
   contextUsage: new Map(),
+  runtimeHealth: new Map(),
+  selectedAgent: new Map(),
   pendingQuestions: new Map(),
   pendingPermissions: new Map(),
 
@@ -227,6 +250,22 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
         next.delete(sessionKey);
       }
       return { contextUsage: next };
+    }),
+
+  setRuntimeHealth: (environmentId, health) =>
+    set((state) => {
+      const next = new Map(state.runtimeHealth);
+      if (health) next.set(environmentId, health);
+      else next.delete(environmentId);
+      return { runtimeHealth: next };
+    }),
+
+  setSelectedAgent: (sessionKey, agent) =>
+    set((state) => {
+      const next = new Map(state.selectedAgent);
+      if (agent) next.set(sessionKey, agent);
+      else next.delete(sessionKey);
+      return { selectedAgent: next };
     }),
 
   clearSession: (sessionKey) => {
@@ -376,4 +415,8 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   getPendingPermission: (requestId) => get().pendingPermissions.get(requestId),
 
   getContextUsage: (sessionKey) => get().contextUsage.get(sessionKey),
+  getRuntimeHealth: (environmentId) => get().runtimeHealth.get(environmentId),
+  getAgents: (environmentId) =>
+    get().runtimeHealth.get(environmentId)?.agents ?? EMPTY_AGENTS,
+  getSelectedAgent: (sessionKey) => get().selectedAgent.get(sessionKey),
 }));

@@ -58,6 +58,18 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   pinnedAccessory?: ReactNode;
   /** Bottom spacer height class; widen when a tall accessory is pinned. */
   bottomSpacerClassName?: string;
+  /**
+   * Per-message hover actions, e.g. "fork from here".
+   *
+   * Must be referentially stable per message id or `memo(NativeMessage)` stops
+   * holding and every visible message rerenders on each streamed frame.
+   */
+  messageActions?: (message: TMessage) => ReactNode;
+  /**
+   * Extra content in the dock's top strip, beside the scroll-to-bottom button
+   * — Claude's prompt-suggestion chip.
+   */
+  topAccessory?: ReactNode;
 
   centerCompose: boolean;
   composer: ReactNode;
@@ -103,6 +115,8 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   blockingCards,
   pinnedAccessory,
   bottomSpacerClassName = "h-32",
+  messageActions,
+  topAccessory,
   centerCompose,
   composer,
   resumeDialog,
@@ -229,6 +243,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
               previousMessage={previous}
               assistantLabel={agentLabel}
               containerId={containerId}
+              actions={messageActions?.(message)}
             />
           )}
           emptyState={
@@ -316,16 +331,21 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           ) : null
         }
         topAccessory={
-          !isAtBottom ? (
-            <button
-              type="button"
-              onClick={scrollToBottom}
-              className="flex items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
-              aria-label="Scroll to bottom of conversation"
-            >
-              <ArrowDown className="h-3.5 w-3.5" />
-              <span>Scroll down</span>
-            </button>
+          topAccessory || !isAtBottom ? (
+            <div className="flex min-w-0 items-center gap-2">
+              {topAccessory}
+              {!isAtBottom ? (
+                <button
+                  type="button"
+                  onClick={scrollToBottom}
+                  className="flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
+                  aria-label="Scroll to bottom of conversation"
+                >
+                  <ArrowDown className="h-3.5 w-3.5" />
+                  <span>Scroll down</span>
+                </button>
+              ) : null}
+            </div>
           ) : null
         }
         actions={

@@ -10,6 +10,7 @@ interface MobileAppShellLayoutProps {
   filesPanelOpen: boolean;
   centralPanelStyle: CSSProperties;
   actionBar: ReactNode;
+  agentInfoButton: ReactNode;
   sidebar: ReactNode;
   filesPanel: ReactNode;
   children?: ReactNode;
@@ -23,6 +24,7 @@ export function MobileAppShellLayout({
   filesPanelOpen,
   centralPanelStyle,
   actionBar,
+  agentInfoButton,
   sidebar,
   filesPanel,
   children,
@@ -120,6 +122,14 @@ export function MobileAppShellLayout({
         >
           <Wrench className="h-4.5 w-4.5" />
         </Button>
+        <div
+          className="absolute right-11.5 h-9 w-9"
+          data-testid="mobile-agent-info-slot"
+          style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          {agentInfoButton}
+        </div>
 
         {toolsOpen && (
           <button

@@ -594,13 +594,20 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     }
 
     let port: number | null = null;
+    let authToken: string | undefined;
     if (isLocal) {
       let status = await backend.getLocalCodexServerStatus(environmentId);
-      if (!status.running) {
+      if (!status.running || !status.authToken) {
         const result = await backend.startLocalCodexServer(environmentId);
-        status = { running: true, port: result.port, pid: result.pid };
+        status = {
+          running: true,
+          port: result.port,
+          pid: result.pid,
+          authToken: result.authToken,
+        };
       }
       port = status.port ?? null;
+      authToken = status.authToken;
     } else {
       const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
       const containerId = environment?.containerId;
@@ -609,19 +616,27 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       }
 
       let status = await backend.getCodexServerStatus(containerId);
-      if (!status.running) {
+      if (!status.running || !status.authToken) {
         const result = await backend.startCodexServer(containerId);
-        status = { running: true, hostPort: result.hostPort };
+        status = {
+          running: true,
+          hostPort: result.hostPort,
+          authToken: result.authToken,
+        };
       }
       port = status.hostPort ?? null;
+      authToken = status.authToken;
     }
 
     if (!port) {
       throw new Error("Failed to resolve Codex bridge port");
     }
+    if (!authToken) {
+      throw new Error("Codex bridge authentication is unavailable");
+    }
 
     setServerStatus(environmentId, { running: true, hostPort: port });
-    const nextClient = createClient(`http://127.0.0.1:${port}`);
+    const nextClient = createClient(`http://127.0.0.1:${port}`, authToken);
     setClient(environmentId, nextClient);
 
     if (!(await checkHealth(nextClient))) {

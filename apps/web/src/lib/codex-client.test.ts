@@ -1,15 +1,20 @@
 import { afterEach, beforeEach, describe, expect, test, mock } from "bun:test";
 import {
   CODEX_MODELS,
+  CodexForkError,
   DEFAULT_CODEX_MODEL,
   abortSession,
   checkHealth,
   classifyCodexPromptOutcome,
+  compactCodexSession,
   createClient,
   createSession,
   deleteSession,
   fetchPendingApprovals,
+  fetchPendingInteractions,
+  forkCodexSession,
   getBridgeHealth,
+  getCodexRuntimeHealth,
   getModels,
   getSessionMessages,
   getSessionStatus,
@@ -19,13 +24,20 @@ import {
   listSessions,
   lookupSessionStatus,
   parseApproval,
+  parseContextUsage,
+  parseInteraction,
   respondToApproval,
+  respondToInteraction,
   resumeSession,
   sendPrompt,
+  startCodexNativeReview,
+  steerCodexSession,
   subscribeToEvents,
   updateSessionConfig,
+  type CodexApprovalResponseResult,
   type CodexClient,
 } from "./codex-client";
+import type { ContextUsageSnapshot } from "./context-usage";
 import { StructuredOutputReadUnavailableError } from "@orkestrator/protocol/structured-output";
 
 const originalFetch = globalThis.fetch;
@@ -65,6 +77,13 @@ describe("codex-client createClient", () => {
       baseUrl: `${window.location.origin}/__orkestrator/proxy/loopback/9999`,
     });
   });
+
+  test("retains the per-bridge authentication token", () => {
+    expect(createClient("http://127.0.0.1:9999", "bridge-secret")).toEqual({
+      baseUrl: "http://127.0.0.1:9999",
+      authToken: "bridge-secret",
+    });
+  });
 });
 
 describe("codex-client checkHealth", () => {
@@ -74,6 +93,18 @@ describe("codex-client checkHealth", () => {
     mockFetch(async () => new Response(null, { status: 200 }));
 
     expect(await checkHealth(client)).toBe(true);
+  });
+
+  test("uses the authenticated probe and bearer header", async () => {
+    const fetchMock = mock(() => new Response(null, { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    expect(await checkHealth(createClient("http://127.0.0.1:4000", "bridge-secret")))
+      .toBe(true);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4000/global/auth-check");
+    expect(new Headers(init.headers).get("X-Orkestrator-Codex-Token")).toBe("bridge-secret");
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
   });
 
   test("returns false on non-ok health response or network error", async () => {
@@ -1228,6 +1259,13 @@ describe("codex-client event cursor", () => {
     expect(url.searchParams.get("sessionId")).toBe("session/a b");
   });
 
+  test("puts the token only on the EventSource URL", () => {
+    const authenticated = createClient("http://127.0.0.1:4000", "bridge-secret");
+    subscribeToEvents(authenticated)[Symbol.asyncIterator]().next();
+    const url = new URL(instances[0]!.url);
+    expect(url.searchParams.get("token")).toBe("bridge-secret");
+  });
+
   test("ignores a nonsensical cursor rather than sending it", () => {
     subscribeToEvents(client, undefined, -1)[Symbol.asyncIterator]().next();
     expect(instances[0]!.url).not.toContain("since");
@@ -1284,12 +1322,30 @@ describe("codex-client event cursor", () => {
     expect((await second).value.revision).toBeUndefined();
   });
 
-  test("subscribes to the approval and reconcile event types", () => {
+  /**
+   * A named SSE event is only delivered to an explicit listener, so a type the
+   * bridge emits but this list omits is silently dropped — the card never
+   * appears and the turn blocks until the bridge's auto-deny. Asserted as the
+   * whole set so adding a `CodexEvent["type"]` without a listener fails here.
+   */
+  test("subscribes to every event type the bridge emits", () => {
     subscribeToEvents(client)[Symbol.asyncIterator]().next();
-    const types = [...instances[0]!.listeners.keys()];
-    expect(types).toContain("session.approval-requested");
-    expect(types).toContain("session.approval-resolved");
-    expect(types).toContain("session.reconcile-required");
+    expect([...instances[0]!.listeners.keys()].sort()).toEqual([
+      "bridge.cursor",
+      "connected",
+      "keepalive",
+      "message.updated",
+      "session.approval-requested",
+      "session.approval-resolved",
+      "session.error",
+      "session.idle",
+      "session.interaction-requested",
+      "session.interaction-resolved",
+      "session.reconcile-required",
+      "session.structured-output",
+      "session.title-updated",
+      "session.updated",
+    ]);
   });
 });
 
@@ -1351,6 +1407,30 @@ describe("codex-client approvals", () => {
       changes: [{ path: "/valid", kind: "update" }],
     });
     expect(approvals[0]?.permissions).toBeUndefined();
+  });
+
+  test("accepts a well-formed permissions descriptor", async () => {
+    mockFetch(() =>
+      Response.json({
+        approvals: [{
+          approvalId: "apr-permissions",
+          kind: "permissions",
+          method: "item/permissions/requestApproval",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          requestedAt: 1,
+          expiresAt: 2,
+          permissions: { network: true, fileSystem: false },
+          actionable: true,
+          supportsApproveForSession: false,
+        }],
+      }),
+    );
+
+    await expect(fetchPendingApprovals(client, "session-1")).resolves.toMatchObject([
+      { permissions: { network: true, fileSystem: false } },
+    ]);
   });
 
   test("fetchPendingApprovals rejects bad responses so callers preserve existing state", async () => {
@@ -1524,5 +1604,692 @@ describe("codex-client approvals", () => {
     await respondToApproval(client, "session-1", "apr/1?x", "deny");
     const [url] = fetchMock.mock.calls[0] as unknown as [string];
     expect(url).toContain("apr%2F1%3Fx");
+  });
+});
+
+describe("codex-client interactions", () => {
+  afterEach(restoreFetch);
+
+  const QUESTION = {
+    id: "q-1",
+    header: "Deploy target",
+    question: "Which environment?",
+    options: [
+      { label: "staging", description: "safe" },
+      { label: "production" },
+    ],
+  };
+
+  const VALID_INTERACTION = {
+    interactionId: "int-1",
+    kind: "question",
+    method: "item/userInput/request",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+    requestedAt: 1,
+    expiresAt: 2,
+    questions: [QUESTION],
+  };
+
+  describe("parseInteraction", () => {
+    test("accepts the descriptor the bridge actually sends", () => {
+      expect(parseInteraction(VALID_INTERACTION)).toEqual({
+        interactionId: "int-1",
+        kind: "question",
+        method: "item/userInput/request",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        requestedAt: 1,
+        expiresAt: 2,
+        questions: [
+          {
+            id: "q-1",
+            header: "Deploy target",
+            question: "Which environment?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "staging", description: "safe" },
+              { label: "production" },
+            ],
+          },
+        ],
+      });
+    });
+
+    test("nulls a turnId and itemId that are not strings", () => {
+      const parsed = parseInteraction({
+        ...VALID_INTERACTION,
+        turnId: 5,
+        itemId: null,
+      });
+      expect(parsed?.turnId).toBeNull();
+      expect(parsed?.itemId).toBeNull();
+    });
+
+    test("carries the mcp-form and mcp-url payload fields", () => {
+      expect(
+        parseInteraction({
+          ...VALID_INTERACTION,
+          kind: "mcp-form",
+          questions: undefined,
+          serverName: "docs",
+          message: "Fill this in",
+          schema: { type: "object" },
+          elicitationId: "elic-1",
+        }),
+      ).toMatchObject({
+        kind: "mcp-form",
+        serverName: "docs",
+        message: "Fill this in",
+        schema: { type: "object" },
+        elicitationId: "elic-1",
+      });
+
+      expect(
+        parseInteraction({
+          ...VALID_INTERACTION,
+          kind: "mcp-url",
+          questions: undefined,
+          url: "https://example.test/auth",
+          autoResolutionMs: 30_000,
+        }),
+      ).toMatchObject({
+        kind: "mcp-url",
+        url: "https://example.test/auth",
+        autoResolutionMs: 30_000,
+      });
+    });
+
+    test.each([
+      ["a null payload", null],
+      ["a non-object payload", "int-1"],
+      ["an array payload", [VALID_INTERACTION]],
+      // An empty id produces `POST /session/:id/interactions/`, which matches no
+      // bridge route: the card renders but can never be answered.
+      ["an empty interactionId", { ...VALID_INTERACTION, interactionId: "" }],
+      ["a non-string interactionId", { ...VALID_INTERACTION, interactionId: 7 }],
+      ["a missing interactionId", { ...VALID_INTERACTION, interactionId: undefined }],
+      ["an unknown kind", { ...VALID_INTERACTION, kind: "mcp-widget" }],
+      ["a missing kind", { ...VALID_INTERACTION, kind: undefined }],
+      ["a non-string method", { ...VALID_INTERACTION, method: 12 }],
+      ["a null threadId", { ...VALID_INTERACTION, threadId: null }],
+      ["a non-string threadId", { ...VALID_INTERACTION, threadId: 5 }],
+      ["a missing requestedAt", { ...VALID_INTERACTION, requestedAt: undefined }],
+      ["a NaN requestedAt", { ...VALID_INTERACTION, requestedAt: Number.NaN }],
+      [
+        "an infinite requestedAt",
+        { ...VALID_INTERACTION, requestedAt: Number.POSITIVE_INFINITY },
+      ],
+      ["a missing expiresAt", { ...VALID_INTERACTION, expiresAt: undefined }],
+      ["a NaN expiresAt", { ...VALID_INTERACTION, expiresAt: Number.NaN }],
+      [
+        "an infinite expiresAt",
+        { ...VALID_INTERACTION, expiresAt: Number.NEGATIVE_INFINITY },
+      ],
+      // A question card with nothing to answer is a permanently blocked turn.
+      ["a question kind with no questions", { ...VALID_INTERACTION, questions: undefined }],
+      ["a question kind with an empty question list", { ...VALID_INTERACTION, questions: [] }],
+      [
+        "a question kind whose only question is malformed",
+        { ...VALID_INTERACTION, questions: [{ id: "q-1" }] },
+      ],
+    ])("rejects %s", (_label, payload) => {
+      expect(parseInteraction(payload)).toBeNull();
+    });
+
+    test("omits optional fields the bridge sent in the wrong shape", () => {
+      const parsed = parseInteraction({
+        ...VALID_INTERACTION,
+        autoResolutionMs: "soon",
+        serverName: 5,
+        message: {},
+        url: [],
+        elicitationId: 9,
+      });
+      expect(parsed).not.toBeNull();
+      expect(parsed?.autoResolutionMs).toBeUndefined();
+      expect(parsed?.serverName).toBeUndefined();
+      expect(parsed?.message).toBeUndefined();
+      expect(parsed?.url).toBeUndefined();
+      expect(parsed?.elicitationId).toBeUndefined();
+    });
+
+    test("keeps a schema key even when its value is null", () => {
+      // `"schema" in raw` is deliberate: the MCP form schema is opaque and a
+      // null schema is a server answer, not an absent field.
+      const parsed = parseInteraction({
+        ...VALID_INTERACTION,
+        kind: "mcp-form",
+        questions: undefined,
+        schema: null,
+      });
+      expect(parsed).not.toBeNull();
+      expect("schema" in (parsed as object)).toBe(true);
+      expect(parsed?.schema).toBeNull();
+    });
+  });
+
+  describe("parseInteractionQuestion", () => {
+    const withQuestions = (questions: unknown) =>
+      parseInteraction({ ...VALID_INTERACTION, questions })?.questions;
+
+    test("defaults the isOther and isSecret flags to false", () => {
+      expect(
+        withQuestions([{ id: "q-1", header: "H", question: "Q?" }]),
+      ).toEqual([{ id: "q-1", header: "H", question: "Q?", isOther: false, isSecret: false }]);
+    });
+
+    test("passes the isOther and isSecret flags through only when strictly true", () => {
+      expect(
+        withQuestions([
+          { id: "q-1", header: "H", question: "Q?", isOther: true, isSecret: "yes" },
+        ]),
+      ).toEqual([{ id: "q-1", header: "H", question: "Q?", isOther: true, isSecret: false }]);
+    });
+
+    test.each([
+      ["null entries", null],
+      ["array entries", []],
+      ["string entries", "q-1"],
+      ["a non-string id", { id: 1, header: "H", question: "Q?" }],
+      ["a missing header", { id: "q-1", question: "Q?" }],
+      ["a missing question", { id: "q-1", header: "H" }],
+      ["a non-string question", { id: "q-1", header: "H", question: 5 }],
+    ])("drops %s", (_label, entry) => {
+      // One malformed question among good ones is dropped rather than failing
+      // the whole interaction.
+      expect(
+        withQuestions([entry, { id: "q-2", header: "H", question: "Q?" }]),
+      ).toEqual([{ id: "q-2", header: "H", question: "Q?", isOther: false, isSecret: false }]);
+    });
+
+    test("filters options down to the entries that carry a label", () => {
+      expect(
+        withQuestions([
+          {
+            id: "q-1",
+            header: "H",
+            question: "Q?",
+            options: [
+              null,
+              "staging",
+              [],
+              { description: "no label" },
+              { label: 5 },
+              { label: "prod", description: 7 },
+            ],
+          },
+        ]),
+      ).toEqual([
+        {
+          id: "q-1",
+          header: "H",
+          question: "Q?",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "prod" }],
+        },
+      ]);
+    });
+
+    test("omits the options key when nothing survived the filter", () => {
+      const parsed = withQuestions([
+        { id: "q-1", header: "H", question: "Q?", options: [null, { label: 5 }] },
+      ]);
+      expect(parsed?.[0]?.options).toBeUndefined();
+
+      const notAnArray = withQuestions([
+        { id: "q-1", header: "H", question: "Q?", options: "staging" },
+      ]);
+      expect(notAnArray?.[0]?.options).toBeUndefined();
+    });
+  });
+
+  describe("fetchPendingInteractions", () => {
+    test("returns the parsed list", async () => {
+      mockFetch(() => Response.json({ interactions: [VALID_INTERACTION] }));
+
+      const interactions = await fetchPendingInteractions(client, "session-1");
+      expect(interactions).toHaveLength(1);
+      expect(interactions[0]?.interactionId).toBe("int-1");
+    });
+
+    test("drops the entries it cannot parse rather than the whole snapshot", async () => {
+      mockFetch(() =>
+        Response.json({
+          interactions: [
+            { ...VALID_INTERACTION, interactionId: "" },
+            VALID_INTERACTION,
+            null,
+          ],
+        }),
+      );
+
+      const interactions = await fetchPendingInteractions(client, "session-1");
+      expect(interactions.map((entry) => entry.interactionId)).toEqual(["int-1"]);
+    });
+
+    test("throws on a non-2xx response, a malformed body and a network failure", async () => {
+      mockFetch(() => new Response(null, { status: 500 }));
+      await expect(fetchPendingInteractions(client, "session-1")).rejects.toThrow(
+        "HTTP 500",
+      );
+
+      mockFetch(() => Response.json({ interactions: "not-an-array" }));
+      await expect(fetchPendingInteractions(client, "session-1")).rejects.toThrow(
+        "malformed",
+      );
+
+      mockFetch(() => Response.json({}));
+      await expect(fetchPendingInteractions(client, "session-1")).rejects.toThrow(
+        "malformed",
+      );
+
+      mockFetchError(new Error("network down"));
+      await expect(fetchPendingInteractions(client, "session-1")).rejects.toThrow(
+        "network down",
+      );
+    });
+  });
+
+  describe("respondToInteraction", () => {
+    test("posts the answer to the interaction route", async () => {
+      const fetchMock = mock(() => Response.json({ status: "applied" }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      expect(
+        await respondToInteraction(client, "session-1", "int-1", {
+          action: "accept",
+          answers: { "q-1": ["staging"] },
+        }),
+      ).toBe("applied");
+
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe("http://127.0.0.1:4000/session/session-1/interactions/int-1");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body as string)).toEqual({
+        action: "accept",
+        answers: { "q-1": ["staging"] },
+      });
+    });
+
+    test("encodes the interaction id into the path", async () => {
+      const fetchMock = mock(() => Response.json({ status: "applied" }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await respondToInteraction(client, "session-1", "int/1?x", { action: "decline" });
+      const [url] = fetchMock.mock.calls[0] as unknown as [string];
+      expect(url).toContain("int%2F1%3Fx");
+    });
+
+    test.each([
+      [200, "applied"],
+      [409, "stale"],
+      [403, "forbidden"],
+      [500, "error"],
+      [404, "error"],
+    ])("maps HTTP %p to %p", async (status, expected) => {
+      mockFetch(() => new Response(null, { status: status as number }));
+      expect(
+        await respondToInteraction(client, "session-1", "int-1", { action: "cancel" }),
+      ).toBe(expected as CodexApprovalResponseResult);
+    });
+
+    test("reports error rather than throwing when the request fails outright", async () => {
+      mockFetchError(new Error("network down"));
+      expect(
+        await respondToInteraction(client, "session-1", "int-1", { action: "cancel" }),
+      ).toBe("error");
+    });
+  });
+});
+
+describe("codex-client parseContextUsage", () => {
+  const EXACT: ContextUsageSnapshot = {
+    usedTokens: 12_500,
+    totalTokens: 200_000,
+    percentUsed: 6.25,
+    inputTokens: 10_000,
+    outputTokens: 2_000,
+    cacheReadTokens: 400,
+    cacheWriteTokens: 100,
+    reasoningTokens: 50,
+    lastTurnTokens: 900,
+    sessionTokens: 12_500,
+    costUsd: 0.42,
+    durationMs: 1_200,
+    apiDurationMs: 900,
+    permissionDenials: 1,
+    linesAdded: 30,
+    linesRemoved: 4,
+    modelId: "gpt-5-codex",
+    estimated: false,
+    source: "provider",
+    updatedAt: "2026-07-26T00:00:00.000Z",
+    rateLimits: [
+      { label: "5h", usedPercent: 12, resetsAt: "2026-07-26T05:00:00.000Z", windowMinutes: 300 },
+    ],
+    credits: { hasCredits: true, unlimited: false, balance: "12.00" },
+    contextCategories: [{ name: "tools", tokens: 500, color: "#fff" }],
+  };
+
+  test("passes an exact bridge snapshot through unchanged", () => {
+    expect(parseContextUsage(EXACT)).toEqual(EXACT);
+  });
+
+  test("accepts the bare numeric triple", () => {
+    expect(parseContextUsage({ usedTokens: 1, totalTokens: 2, percentUsed: 50 })).toEqual({
+      usedTokens: 1,
+      totalTokens: 2,
+      percentUsed: 50,
+    });
+  });
+
+  test.each([
+    ["a null payload", null],
+    ["a string payload", "12%"],
+    ["an array payload", [{ usedTokens: 1, totalTokens: 2, percentUsed: 50 }]],
+    ["a missing usedTokens", { totalTokens: 2, percentUsed: 50 }],
+    ["a missing totalTokens", { usedTokens: 1, percentUsed: 50 }],
+    // The UI calls `percentUsed.toFixed(...)` unguarded, so a string here throws
+    // inside render and takes the whole tab down, not just the meter.
+    ["a string percentUsed", { usedTokens: 1, totalTokens: 2, percentUsed: "50" }],
+    ["a missing percentUsed", { usedTokens: 1, totalTokens: 2 }],
+    ["a NaN usedTokens", { usedTokens: Number.NaN, totalTokens: 2, percentUsed: 50 }],
+    [
+      "an infinite totalTokens",
+      { usedTokens: 1, totalTokens: Number.POSITIVE_INFINITY, percentUsed: 50 },
+    ],
+  ])("rejects %s", (_label, payload) => {
+    expect(parseContextUsage(payload)).toBeNull();
+  });
+
+  test("drops malformed optional fields rather than the whole reading", () => {
+    const parsed = parseContextUsage({
+      usedTokens: 1,
+      totalTokens: 2,
+      percentUsed: 50,
+      inputTokens: "10",
+      costUsd: Number.NaN,
+      durationMs: null,
+      modelId: "",
+      updatedAt: 12,
+      estimated: "false",
+      source: "telepathy",
+    });
+
+    expect(parsed).toEqual({ usedTokens: 1, totalTokens: 2, percentUsed: 50 });
+  });
+
+  test("keeps only the well-formed rate limit windows", () => {
+    expect(
+      parseContextUsage({
+        usedTokens: 1,
+        totalTokens: 2,
+        percentUsed: 50,
+        rateLimits: [
+          null,
+          "5h",
+          { usedPercent: 10 },
+          { label: "" },
+          { label: "weekly", usedPercent: "10", resetsAt: 5, windowMinutes: Number.NaN },
+          { label: "5h", usedPercent: 12 },
+        ],
+      })?.rateLimits,
+    ).toEqual([{ label: "weekly" }, { label: "5h", usedPercent: 12 }]);
+  });
+
+  test("omits empty optional collections entirely", () => {
+    expect(
+      parseContextUsage({
+        usedTokens: 1,
+        totalTokens: 2,
+        percentUsed: 50,
+        rateLimits: [null],
+        contextCategories: "lots",
+        credits: { balance: 5 },
+      }),
+    ).toEqual({ usedTokens: 1, totalTokens: 2, percentUsed: 50 });
+  });
+
+  test("keeps only the well-formed context categories", () => {
+    expect(
+      parseContextUsage({
+        usedTokens: 1,
+        totalTokens: 2,
+        percentUsed: 50,
+        contextCategories: [
+          { name: "tools", tokens: 500 },
+          { name: "system" },
+          { tokens: 10 },
+          null,
+        ],
+      })?.contextCategories,
+    ).toEqual([{ name: "tools", tokens: 500 }]);
+  });
+
+  test("gates the session status snapshot on the same validation", async () => {
+    mockFetch(() =>
+      Response.json({
+        status: "idle",
+        contextUsage: { usedTokens: 5, totalTokens: 10, percentUsed: "50" },
+      }),
+    );
+    const rejected = await lookupSessionStatus(client, "session-1");
+    expect(rejected.kind).toBe("found");
+    expect(rejected.kind === "found" && rejected.session.contextUsage).toBeUndefined();
+
+    mockFetch(() =>
+      Response.json({
+        status: "idle",
+        contextUsage: { usedTokens: 5, totalTokens: 10, percentUsed: 50 },
+      }),
+    );
+    const accepted = await lookupSessionStatus(client, "session-1");
+    expect(accepted.kind === "found" && accepted.session.contextUsage).toEqual({
+      usedTokens: 5,
+      totalTokens: 10,
+      percentUsed: 50,
+    });
+
+    restoreFetch();
+  });
+});
+
+describe("codex-client session operations", () => {
+  afterEach(restoreFetch);
+
+  function captureFetch(response: () => Response) {
+    const fetchMock = mock(response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    return () => fetchMock.mock.calls[0] as unknown as [string, RequestInit | undefined];
+  }
+
+  describe("forkCodexSession", () => {
+    test("returns the forked session and posts the anchor message id", async () => {
+      const call = captureFetch(() =>
+        Response.json({ sessionId: "session-2", title: "Fork" }),
+      );
+
+      expect(await forkCodexSession(client, "session-1", "msg-3")).toEqual({
+        sessionId: "session-2",
+        title: "Fork",
+      });
+      const [url, init] = call();
+      expect(url).toBe("http://127.0.0.1:4000/session/session-1/fork");
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(init?.body as string)).toEqual({ lastMessageId: "msg-3" });
+    });
+
+    test("omits a title the bridge did not report", async () => {
+      mockFetch(() => Response.json({ sessionId: "session-2", title: 7 }));
+      expect(await forkCodexSession(client, "session-1")).toEqual({
+        sessionId: "session-2",
+      });
+    });
+
+    test("throws rather than binding a tab to an absent session id", async () => {
+      mockFetch(() => Response.json({}));
+      await expect(forkCodexSession(client, "session-1")).rejects.toThrow(
+        "did not include a session id",
+      );
+
+      mockFetch(() => Response.json({ sessionId: 7 }));
+      await expect(forkCodexSession(client, "session-1")).rejects.toThrow(
+        CodexForkError,
+      );
+    });
+
+    /**
+     * The bridge answers each fork failure with its own status and reason
+     * (bridges/codex-bridge/src/index.ts). Collapsing them all to null made the
+     * UI blame "an active or empty session" for a 404, so the client must carry
+     * both the status and the bridge's own message.
+     */
+    test.each([
+      [404, "Session not found"],
+      [409, "Session cannot be forked while it is running"],
+      [422, "That message is not a usable fork point: it belongs to no Codex turn"],
+      [503, "Codex did not return a forked thread"],
+    ])("surfaces the bridge's %p reason", async (status, error) => {
+      mockFetch(() => Response.json({ error }, { status }));
+
+      const attempt = forkCodexSession(client, "session-1");
+      await expect(attempt).rejects.toBeInstanceOf(CodexForkError);
+      await expect(attempt).rejects.toMatchObject({ status, message: error });
+    });
+
+    test("falls back to a per-status reason when the error body is absent", async () => {
+      mockFetch(() => new Response(null, { status: 409 }));
+      await expect(forkCodexSession(client, "session-1")).rejects.toMatchObject({
+        status: 409,
+        message: "Codex session cannot be forked while it is running",
+      });
+
+      mockFetch(() => new Response(null, { status: 500 }));
+      await expect(forkCodexSession(client, "session-1")).rejects.toMatchObject({
+        status: 500,
+        message: "Codex fork failed: HTTP 500",
+      });
+    });
+
+    test("wraps a transport failure as status 0", async () => {
+      mockFetchError(new Error("bridge offline"));
+
+      const attempt = forkCodexSession(client, "session-1");
+      await expect(attempt).rejects.toBeInstanceOf(CodexForkError);
+      await expect(attempt).rejects.toMatchObject({
+        status: 0,
+        message: "bridge offline",
+      });
+    });
+  });
+
+  describe("compactCodexSession", () => {
+    test("posts to the compact route", async () => {
+      const call = captureFetch(() => new Response(null, { status: 200 }));
+
+      expect(await compactCodexSession(client, "session-1")).toBe(true);
+      const [url, init] = call();
+      expect(url).toBe("http://127.0.0.1:4000/session/session-1/compact");
+      expect(init?.method).toBe("POST");
+    });
+
+    test("reports failure without throwing", async () => {
+      mockFetch(() => new Response(null, { status: 409 }));
+      expect(await compactCodexSession(client, "session-1")).toBe(false);
+
+      mockFetchError(new Error("bridge offline"));
+      expect(await compactCodexSession(client, "session-1")).toBe(false);
+    });
+  });
+
+  describe("steerCodexSession", () => {
+    test("posts the input alongside its idempotency key", async () => {
+      const call = captureFetch(() => new Response(null, { status: 200 }));
+
+      expect(
+        await steerCodexSession(client, "session-1", "use bun", "req-1"),
+      ).toBe(true);
+      const [url, init] = call();
+      expect(url).toBe("http://127.0.0.1:4000/session/session-1/steer");
+      expect(JSON.parse(init?.body as string)).toEqual({
+        input: "use bun",
+        requestId: "req-1",
+      });
+    });
+
+    test("reports failure without throwing", async () => {
+      mockFetch(() => new Response(null, { status: 409 }));
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toBe(
+        false,
+      );
+
+      mockFetchError(new Error("bridge offline"));
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toBe(
+        false,
+      );
+    });
+  });
+
+  describe("startCodexNativeReview", () => {
+    test("defaults to reviewing the uncommitted changes", async () => {
+      const call = captureFetch(() => new Response(null, { status: 200 }));
+
+      expect(await startCodexNativeReview(client, "session-1")).toBe(true);
+      const [url, init] = call();
+      expect(url).toBe("http://127.0.0.1:4000/session/session-1/review");
+      expect(JSON.parse(init?.body as string)).toEqual({ type: "uncommittedChanges" });
+    });
+
+    test.each([
+      [{ type: "uncommittedChanges" as const }],
+      [{ type: "baseBranch" as const, branch: "main" }],
+      [{ type: "commit" as const, sha: "abc123", title: "Fix it" }],
+      [{ type: "custom" as const, instructions: "Look at the auth path" }],
+    ])("forwards the %p target verbatim", async (target) => {
+      const call = captureFetch(() => new Response(null, { status: 200 }));
+      await startCodexNativeReview(client, "session-1", target);
+      expect(JSON.parse(call()[1]?.body as string)).toEqual(target);
+    });
+
+    test("reports failure without throwing", async () => {
+      mockFetch(() => new Response(null, { status: 500 }));
+      expect(await startCodexNativeReview(client, "session-1")).toBe(false);
+
+      mockFetchError(new Error("bridge offline"));
+      expect(await startCodexNativeReview(client, "session-1")).toBe(false);
+    });
+  });
+
+  describe("getCodexRuntimeHealth", () => {
+    test("returns the bridge payload", async () => {
+      const call = captureFetch(() => Response.json({ mcpServers: [], skills: [] }));
+
+      expect(await getCodexRuntimeHealth(client, "session-1")).toEqual({
+        mcpServers: [],
+        skills: [],
+      });
+      expect(call()[0]).toBe(
+        "http://127.0.0.1:4000/session/session-1/runtime-health",
+      );
+    });
+
+    test("throws on a non-2xx response", async () => {
+      mockFetch(() => new Response(null, { status: 503 }));
+      await expect(getCodexRuntimeHealth(client, "session-1")).rejects.toThrow(
+        "HTTP 503",
+      );
+    });
+
+    test("propagates a network failure", async () => {
+      mockFetchError(new Error("network down"));
+      await expect(getCodexRuntimeHealth(client, "session-1")).rejects.toThrow(
+        "network down",
+      );
+    });
   });
 });

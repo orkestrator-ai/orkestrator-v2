@@ -69,7 +69,7 @@ const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MAX_BROWSER_PREVIEW_BODY_BYTES = 8 * 1024 * 1024;
 const KEEPALIVE_MS = 25_000;
 const CORS_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
-const CORS_ALLOWED_HEADERS = "Authorization, Content-Type";
+const CORS_ALLOWED_HEADERS = "Authorization, Content-Type, X-Orkestrator-Codex-Token";
 
 class InvalidRequestBodyError extends Error {}
 class RequestBodyTooLargeError extends Error {}
@@ -388,7 +388,11 @@ function filterGatewayCookie(cookieHeader: string | string[] | undefined): strin
   return cookies.length > 0 ? cookies.join("; ") : undefined;
 }
 
-function sanitizeTargetRequestHeaders(headers: IncomingHttpHeaders, target: URL): IncomingHttpHeaders {
+function sanitizeTargetRequestHeaders(
+  headers: IncomingHttpHeaders,
+  target: URL,
+  stripOrigin = false,
+): IncomingHttpHeaders {
   const sanitized: IncomingHttpHeaders = {
     ...headers,
     host: target.host,
@@ -402,6 +406,12 @@ function sanitizeTargetRequestHeaders(headers: IncomingHttpHeaders, target: URL)
   delete sanitized.authorization;
   delete sanitized.connection;
   delete sanitized["proxy-authorization"];
+  if (stripOrigin) {
+    // This endpoint is an authenticated server-side hop to a loopback API.
+    // Forwarding the public browser origin would make the loopback service
+    // mistake the gateway for an untrusted direct browser caller.
+    delete sanitized.origin;
+  }
   return sanitized;
 }
 
@@ -1242,6 +1252,8 @@ export class OrkestratorGateway {
       response,
       new URL(`http://127.0.0.1:${port}${targetPath}`),
       `${API_PREFIX}/proxy/loopback/${port}`,
+      false,
+      true,
     );
   }
 
@@ -1267,7 +1279,14 @@ export class OrkestratorGateway {
     );
   }
 
-  private async proxyToTarget(request: IncomingMessage, response: ServerResponse, target: URL, proxyPrefix?: string, browserPreview = false): Promise<void> {
+  private async proxyToTarget(
+    request: IncomingMessage,
+    response: ServerResponse,
+    target: URL,
+    proxyPrefix?: string,
+    browserPreview = false,
+    stripOrigin = false,
+  ): Promise<void> {
     await new Promise<void>((resolve) => {
       let settled = false;
       let activeProxyResponse: IncomingMessage | null = null;
@@ -1288,7 +1307,7 @@ export class OrkestratorGateway {
         }
         finish();
       };
-      const targetHeaders = sanitizeTargetRequestHeaders(request.headers, target);
+      const targetHeaders = sanitizeTargetRequestHeaders(request.headers, target, stripOrigin);
       if (browserPreview) targetHeaders["accept-encoding"] = "identity";
       const proxyRequest = http.request({
         host: target.hostname,

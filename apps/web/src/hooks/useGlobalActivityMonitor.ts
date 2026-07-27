@@ -14,6 +14,7 @@ import { listen, type UnlistenFn } from "@/lib/native/events";
 import * as backend from "@/lib/backend";
 import { useEnvironmentStore, useUIStore } from "@/stores";
 import {
+  parseUsableAgentActivityTime,
   useAgentActivityStore,
   type AgentActivityState,
 } from "@/stores/agentActivityStore";
@@ -35,6 +36,18 @@ interface EnvironmentActivityRecordedEvent {
   environment_id: string;
   occurred_at: string;
   activity_kind?: "prompt" | "completed";
+}
+
+let pollSubscriptionCounter = 0;
+
+function createPollSubscriptionId(containerId: string): string {
+  let randomId: string | undefined;
+  try {
+    randomId = globalThis.crypto?.randomUUID?.();
+  } catch {
+    // The monotonic fallback is sufficient for an in-process ownership token.
+  }
+  return `activity-${containerId}-${randomId ?? ++pollSubscriptionCounter}`;
 }
 
 /**
@@ -102,6 +115,7 @@ function setEnvironmentSourceActivity(
   sourceState: AgentActivityState,
   setContainerState: SetContainerState,
   occurredAt?: string,
+  notifyCallbacks = true,
 ): void {
   let environmentSources = activitySources.current.get(environmentId);
   if (!environmentSources) {
@@ -118,7 +132,12 @@ function setEnvironmentSourceActivity(
   const currentState =
     useAgentActivityStore.getState().containerStates[environmentId];
   if (currentState !== desiredState) {
-    setContainerState(environmentId, desiredState, occurredAt);
+    setContainerState(
+      environmentId,
+      desiredState,
+      occurredAt,
+      notifyCallbacks,
+    );
   }
 }
 
@@ -457,8 +476,11 @@ export function useGlobalActivityMonitor(): void {
   const lastIssuedActivityTime = useRef(0);
 
   // Track active pollers and listeners for container environments
-  const activePollers = useRef(new Map<string, symbol>());
+  const activePollers = useRef(new Map<string, string>());
   const activeListeners = useRef(new Map<string, UnlistenFn>());
+  const pollRetryTimers = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
+  );
 
   const persistActivity = useCallback((
     environmentId: string,
@@ -600,21 +622,40 @@ export function useGlobalActivityMonitor(): void {
           || candidate.containerId === activityKey,
       );
       if (!environment) return;
-      const persistedTime = environment.agentActivityUpdatedAt
-        ? Date.parse(environment.agentActivityUpdatedAt)
-        : Number.NEGATIVE_INFINITY;
-      const observedTime = Date.parse(observedAt);
+      const persistedTime = parseUsableAgentActivityTime(
+        environment.agentActivityUpdatedAt,
+      );
+      const observedTime = parseUsableAgentActivityTime(observedAt);
       if (
         Number.isFinite(persistedTime)
         && Number.isFinite(observedTime)
         && observedTime <= persistedTime
       ) {
-        observedAt = new Date(persistedTime + 1).toISOString();
+        const nextPersistedTime = persistedTime + 1;
+        if (nextPersistedTime <= 8_640_000_000_000_000) {
+          observedAt = new Date(nextPersistedTime).toISOString();
+        }
       }
 
       // The environment record is the cross-client authority. Apply the local
       // observation immediately for a responsive sidebar, then commit it. The
       // backend rejects reports older than agentActivityUpdatedAt.
+      const previousState = environment.agentActivityState;
+      const previousUpdatedAt = environment.agentActivityUpdatedAt;
+      const reconcileAgentActivity = (
+        state: AgentActivityState | undefined,
+        updatedAt: string | undefined,
+      ) => {
+        useEnvironmentStore.getState().updateEnvironment(environment.id, {
+          agentActivityState: state,
+          agentActivityUpdatedAt: updatedAt,
+        });
+        useAgentActivityStore.getState().reconcileContainerState(
+          activityKey,
+          state,
+          updatedAt,
+        );
+      };
       environmentStore.updateEnvironment(environment.id, {
         agentActivityState: newState,
         agentActivityUpdatedAt: observedAt,
@@ -623,12 +664,58 @@ export function useGlobalActivityMonitor(): void {
         environment.id,
         newState,
         observedAt,
-      ).catch((error) => {
-        console.warn(
-          "[GlobalActivityMonitor] Failed to persist agent activity state:",
-          error,
-        );
-      });
+      )
+        .then((updatedEnvironment) => {
+          if (!updatedEnvironment) return;
+          const currentEnvironment = useEnvironmentStore
+            .getState()
+            .getEnvironmentById(environment.id);
+          if (currentEnvironment?.agentActivityUpdatedAt !== observedAt) return;
+          reconcileAgentActivity(
+            updatedEnvironment.agentActivityState,
+            updatedEnvironment.agentActivityUpdatedAt,
+          );
+        })
+        .catch(async (error) => {
+          const currentEnvironment = useEnvironmentStore
+            .getState()
+            .getEnvironmentById(environment.id);
+          if (currentEnvironment?.agentActivityUpdatedAt === observedAt) {
+            try {
+              const snapshots = await backend.getEnvironmentSnapshots(
+                environment.projectId,
+              );
+              const persistedEnvironment = snapshots.find(
+                (candidate) => candidate.id === environment.id,
+              );
+              const latestEnvironment = useEnvironmentStore
+                .getState()
+                .getEnvironmentById(environment.id);
+              if (latestEnvironment?.agentActivityUpdatedAt === observedAt) {
+                reconcileAgentActivity(
+                  persistedEnvironment?.agentActivityState ?? previousState,
+                  persistedEnvironment?.agentActivityUpdatedAt
+                    ?? previousUpdatedAt,
+                );
+              }
+            } catch (snapshotError) {
+              const latestEnvironment = useEnvironmentStore
+                .getState()
+                .getEnvironmentById(environment.id);
+              if (latestEnvironment?.agentActivityUpdatedAt === observedAt) {
+                reconcileAgentActivity(previousState, previousUpdatedAt);
+              }
+              console.warn(
+                "[GlobalActivityMonitor] Failed to refresh agent activity:",
+                snapshotError,
+              );
+            }
+          }
+          console.warn(
+            "[GlobalActivityMonitor] Failed to persist agent activity state:",
+            error,
+          );
+        });
 
     });
 
@@ -652,12 +739,19 @@ export function useGlobalActivityMonitor(): void {
       const cid = env.containerId!;
       if (activePollers.current.has(cid)) continue;
 
-      const registration = Symbol(cid);
+      const registration = createPollSubscriptionId(cid);
       activePollers.current.set(cid, registration);
       const eventName = `claude-state-${cid}`;
 
       listen<ClaudeStateEvent>(eventName, (event) => {
         const state = event.payload.state as AgentActivityState;
+        const occurredAt = event.payload.occurred_at;
+        if (
+          occurredAt !== undefined
+          && !Number.isFinite(parseUsableAgentActivityTime(occurredAt))
+        ) {
+          return;
+        }
         if (state === "working" || state === "waiting" || state === "idle") {
           const previousState = useAgentActivityStore
             .getState()
@@ -668,7 +762,12 @@ export function useGlobalActivityMonitor(): void {
             "claude-terminal",
             state,
             setContainerState,
-            event.payload.occurred_at,
+            occurredAt,
+            // Terminal polling commits its own `claude-terminal` source before
+            // emitting. Re-persisting this event as `frontend` would leave a
+            // duplicate working source behind if a later terminal event were
+            // missed while this renderer was inactive.
+            false,
           );
           const newState = useAgentActivityStore
             .getState()
@@ -686,13 +785,43 @@ export function useGlobalActivityMonitor(): void {
             return;
           }
           activeListeners.current.set(cid, unlisten);
-          backend.startClaudeStatePolling(cid).catch((e) => {
-            console.warn(
-              "[GlobalActivityMonitor] Failed to start polling for",
-              cid,
-              e
+          const releaseRegistration = () => {
+            void backend.stopClaudeStatePolling(cid, registration).catch(
+              () => undefined,
             );
-          });
+          };
+          const startPolling = (attempt: number) => {
+            if (activePollers.current.get(cid) !== registration) return;
+            void backend.startClaudeStatePolling(cid, registration)
+              .then(() => {
+                if (activePollers.current.get(cid) !== registration) {
+                  // The environment stopped while the start request was in
+                  // flight. Release again so a late backend start cannot leak.
+                  releaseRegistration();
+                }
+              })
+              .catch((e) => {
+                console.warn(
+                  "[GlobalActivityMonitor] Failed to start polling for",
+                  cid,
+                  e
+                );
+                if (activePollers.current.get(cid) !== registration) {
+                  // A transport failure can be ambiguous: the backend may
+                  // already have accepted the idempotent registration.
+                  releaseRegistration();
+                  return;
+                }
+                const retryTimer = setTimeout(() => {
+                  pollRetryTimers.current.delete(cid);
+                  startPolling(attempt + 1);
+                }, attempt === 0
+                  ? 0
+                  : Math.min(250 * (2 ** (attempt - 1)), 30_000));
+                pollRetryTimers.current.set(cid, retryTimer);
+              });
+          };
+          startPolling(0);
         })
         .catch((e) => {
           console.error(
@@ -709,13 +838,20 @@ export function useGlobalActivityMonitor(): void {
     // Stop polling for containers that are no longer running
     for (const cid of activePollers.current.keys()) {
       if (!currentContainerIds.has(cid)) {
+        const registration = activePollers.current.get(cid);
         activePollers.current.delete(cid);
+        const retryTimer = pollRetryTimers.current.get(cid);
+        if (retryTimer) {
+          clearTimeout(retryTimer);
+          pollRetryTimers.current.delete(cid);
+        }
         const unlisten = activeListeners.current.get(cid);
         if (unlisten) {
           unlisten();
           activeListeners.current.delete(cid);
         }
-        backend.stopClaudeStatePolling(cid).catch((e) => {
+        if (!registration) continue;
+        backend.stopClaudeStatePolling(cid, registration).catch((e) => {
           console.warn(
             "[GlobalActivityMonitor] Failed to stop polling for",
             cid,
@@ -729,12 +865,16 @@ export function useGlobalActivityMonitor(): void {
   // Cleanup all polling on unmount (app shutdown)
   useEffect(() => {
     return () => {
-      for (const [cid, unlisten] of activeListeners.current) {
-        unlisten();
-        backend.stopClaudeStatePolling(cid).catch(() => {});
+      for (const [cid, registration] of activePollers.current) {
+        activeListeners.current.get(cid)?.();
+        backend.stopClaudeStatePolling(cid, registration).catch(() => {});
+      }
+      for (const timer of pollRetryTimers.current.values()) {
+        clearTimeout(timer);
       }
       activePollers.current.clear();
       activeListeners.current.clear();
+      pollRetryTimers.current.clear();
     };
   }, []);
 

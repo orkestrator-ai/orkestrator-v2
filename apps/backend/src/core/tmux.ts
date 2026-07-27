@@ -1869,51 +1869,153 @@ async function sendInteractiveData(
   await flushLiteral();
 }
 
-class ClaudeStatePollManager {
-  private readonly polls = new Map<string, { timer: NodeJS.Timeout; lastState: string }>();
+type ClaudeStatePoll = {
+  timer: unknown;
+  lastState: string;
+  subscribers: Set<string>;
+  active: boolean;
+  pollRequested: boolean;
+  inFlight?: Promise<void>;
+  context: CommandContext;
+};
 
-  start(containerId: string, context: CommandContext): void {
-    if (this.polls.has(containerId)) return;
-    const poll = { timer: undefined as unknown as NodeJS.Timeout, lastState: "" };
-    poll.timer = setInterval(() => {
-      void this.poll(containerId, context).catch(() => undefined);
-    }, 1_000);
-    this.polls.set(containerId, poll);
-    void this.poll(containerId, context).catch(() => undefined);
+export type ClaudeStatePollManagerOptions = {
+  readState?: (containerId: string) => Promise<string>;
+  schedule?: (callback: () => void) => unknown;
+  cancel?: (timer: unknown) => void;
+  now?: () => string;
+};
+
+export class ClaudeStatePollManager {
+  private readonly polls = new Map<string, ClaudeStatePoll>();
+  private readonly readState: (containerId: string) => Promise<string>;
+  private readonly schedule: (callback: () => void) => unknown;
+  private readonly cancel: (timer: unknown) => void;
+  private readonly now: () => string;
+
+  constructor(options: ClaudeStatePollManagerOptions = {}) {
+    this.readState = options.readState ?? (async (containerId) => (
+      await runCommand(
+        "docker",
+        ["exec", containerId, "cat", "/tmp/.claude-state"],
+        { timeoutMs: 5_000 },
+      )
+    ).stdout.trim());
+    this.schedule = options.schedule ?? ((callback) => setInterval(callback, 1_000));
+    this.cancel = options.cancel ?? ((timer) => clearInterval(timer as NodeJS.Timeout));
+    this.now = options.now ?? (() => new Date().toISOString());
   }
 
-  stop(containerId: string): void {
+  start(
+    containerId: string,
+    context: CommandContext,
+    subscriptionId = "legacy",
+  ): void {
+    const existing = this.polls.get(containerId);
+    if (existing) {
+      existing.subscribers.add(subscriptionId);
+      return;
+    }
+    const poll: ClaudeStatePoll = {
+      timer: undefined,
+      lastState: "",
+      subscribers: new Set([subscriptionId]),
+      active: true,
+      pollRequested: false,
+      context,
+    };
+    poll.timer = this.schedule(() => this.requestPoll(containerId, poll));
+    this.polls.set(containerId, poll);
+    this.requestPoll(containerId, poll);
+  }
+
+  async stop(containerId: string, subscriptionId = "legacy"): Promise<void> {
     const poll = this.polls.get(containerId);
     if (!poll) return;
-    clearInterval(poll.timer);
+    poll.subscribers.delete(subscriptionId);
+    // Polling is backend-owned once started so activity remains authoritative
+    // while every renderer is inactive. A release only removes that client's
+    // lease; environment lifecycle (or this release after a stop) ends the
+    // underlying process.
+    const environment = (await poll.context.storage.loadEnvironments()).find(
+      (candidate) => candidate.containerId === containerId,
+    );
+    if (environment?.status === "running") return;
+    this.deactivate(containerId, poll);
+  }
+
+  shutdown(containerId: string): void {
+    const poll = this.polls.get(containerId);
+    if (poll) this.deactivate(containerId, poll);
+  }
+
+  private deactivate(containerId: string, poll: ClaudeStatePoll): void {
+    if (this.polls.get(containerId) !== poll) return;
+    poll.active = false;
+    this.cancel(poll.timer);
     this.polls.delete(containerId);
   }
 
-  private async poll(containerId: string, context: CommandContext): Promise<void> {
-    const poll = this.polls.get(containerId);
-    if (!poll) return;
-    const state = (await runCommand("docker", ["exec", containerId, "cat", "/tmp/.claude-state"], { timeoutMs: 5_000 })
-      .then((result) => result.stdout.trim())
-      .catch(() => "")).trim();
-    if (state !== "working" && state !== "waiting" && state !== "idle") return;
-    if (state === poll.lastState) return;
-    const occurredAt = new Date().toISOString();
-    const environment = (await context.storage.loadEnvironments()).find(
+  private requestPoll(containerId: string, poll: ClaudeStatePoll): void {
+    if (!poll.active || this.polls.get(containerId) !== poll) return;
+    if (poll.inFlight) {
+      poll.pollRequested = true;
+      return;
+    }
+    poll.inFlight = this.poll(containerId, poll)
+      .catch(() => undefined)
+      .finally(() => {
+        poll.inFlight = undefined;
+        if (
+          poll.active
+          && this.polls.get(containerId) === poll
+          && poll.pollRequested
+        ) {
+          poll.pollRequested = false;
+          this.requestPoll(containerId, poll);
+        }
+      });
+  }
+
+  private isCurrent(containerId: string, poll: ClaudeStatePoll): boolean {
+    return poll.active && this.polls.get(containerId) === poll;
+  }
+
+  private async poll(containerId: string, poll: ClaudeStatePoll): Promise<void> {
+    const state = (await this.readState(containerId).catch(() => "")).trim();
+    if (!this.isCurrent(containerId, poll)) return;
+    const environment = (await poll.context.storage.loadEnvironments()).find(
       (candidate) => candidate.containerId === containerId,
     );
+    if (!this.isCurrent(containerId, poll)) return;
+    if (!environment || environment.status !== "running") {
+      this.deactivate(containerId, poll);
+      return;
+    }
+    if (state !== "working" && state !== "waiting" && state !== "idle") return;
+    if (state === poll.lastState) return;
+    const occurredAt = this.now();
     const persisted = environment
-      ? await context.storage.setEnvironmentAgentActivity(
+      ? await poll.context.storage.setEnvironmentAgentActivity(
           environment.id,
           state,
           occurredAt,
           "claude-terminal",
         )
       : null;
+    if (!this.isCurrent(containerId, poll)) return;
+    const persistedTerminal =
+      persisted?.agentActivitySources?.["claude-terminal"];
+    if (persisted && persistedTerminal?.state !== state) {
+      // Storage rejected a stale token. Keep the previous observed state so a
+      // later poll retries with a fresh backend timestamp.
+      return;
+    }
     poll.lastState = state;
-    context.emit(`claude-state-${containerId}`, {
+    poll.context.emit(`claude-state-${containerId}`, {
       container_id: containerId,
       state,
-      occurred_at: persisted?.agentActivityUpdatedAt ?? occurredAt,
+      occurred_at: persistedTerminal?.updatedAt ?? occurredAt,
     });
   }
 }
@@ -1925,11 +2027,18 @@ function environmentContainerId(environment: Environment | null | undefined): st
 }
 
 export function registerTmuxBackendCommands(register: RegisterCommand): void {
-  register("start_claude_state_polling", ({ containerId }, context) => {
-    claudeStatePolls.start(asString(containerId, "containerId"), context);
+  register("start_claude_state_polling", ({ containerId, subscriptionId }, context) => {
+    claudeStatePolls.start(
+      asString(containerId, "containerId"),
+      context,
+      asString(subscriptionId, "subscriptionId"),
+    );
   });
-  register("stop_claude_state_polling", ({ containerId }) => {
-    claudeStatePolls.stop(asString(containerId, "containerId"));
+  register("stop_claude_state_polling", ({ containerId, subscriptionId }) => {
+    return claudeStatePolls.stop(
+      asString(containerId, "containerId"),
+      asString(subscriptionId, "subscriptionId"),
+    );
   });
 
   register("claude_tmux_start", async ({ tabId, environmentId, initialPrompt, model, effort, resumeSessionId }, context) => {

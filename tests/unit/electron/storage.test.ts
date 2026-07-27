@@ -262,6 +262,8 @@ describe("Electron StorageService", () => {
     expect(environment.name).toMatch(/^\d{8}-\d{6}$/);
     expect(environment.branch).toBe(environment.name);
     expect(environment.lastActivityAt).toBe(environment.createdAt);
+    expect(environment.agentActivityState).toBe("idle");
+    expect(environment.agentActivityUpdatedAt).toBe(environment.createdAt);
   });
 
   test("recovers JSON from a rotated backup when the primary file is malformed", async () => {
@@ -619,9 +621,18 @@ describe("Electron StorageService", () => {
       agentActivityState: "idle",
       agentActivitySources: {},
     });
-    expect(Date.parse(
-      (await firstStorage.getEnvironment(environment.id))!.agentActivityUpdatedAt!,
-    )).toBeGreaterThan(Date.parse(workingAgainAt));
+    const stoppedEnvironment = (await firstStorage.getEnvironment(environment.id))!;
+    expect(Date.parse(stoppedEnvironment.agentActivityUpdatedAt!))
+      .toBeGreaterThan(Date.parse(workingAgainAt));
+    await expect(firstStorage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      workingAgainAt,
+    )).resolves.toMatchObject({
+      agentActivityState: "idle",
+      agentActivityUpdatedAt: stoppedEnvironment.agentActivityUpdatedAt,
+      agentActivitySources: {},
+    });
 
     await expect(firstStorage.setEnvironmentAgentActivity(
       environment.id,
@@ -633,6 +644,216 @@ describe("Electron StorageService", () => {
       "working",
       "invalid",
     )).rejects.toThrow("occurredAt must be a valid ISO timestamp");
+    await expect(firstStorage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      frontendIdleAt,
+      "unknown-source" as never,
+    )).rejects.toThrow("source must be frontend or claude-terminal");
+  });
+
+  test("preserves waiting precedence and rejects an equal source timestamp", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-waiting-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const createdTime = Date.parse(environment.agentActivityUpdatedAt!);
+    const waitingAt = new Date(createdTime + 1_000).toISOString();
+    const terminalIdleAt = new Date(createdTime + 2_000).toISOString();
+
+    await storage.setEnvironmentAgentActivity(
+      environment.id,
+      "waiting",
+      waitingAt,
+    );
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      terminalIdleAt,
+      "claude-terminal",
+    )).resolves.toMatchObject({
+      agentActivityState: "waiting",
+      agentActivityUpdatedAt: terminalIdleAt,
+    });
+
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      waitingAt,
+    )).resolves.toMatchObject({
+      agentActivityState: "waiting",
+      agentActivityUpdatedAt: terminalIdleAt,
+      agentActivitySources: {
+        frontend: { state: "waiting", updatedAt: waitingAt },
+      },
+    });
+  });
+
+  test("keeps serialized backend terminal observations monotonic across clock ties", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-terminal-clock-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const occurredAt = new Date(
+      Date.parse(environment.createdAt) + 1_000,
+    ).toISOString();
+
+    await storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      occurredAt,
+      "claude-terminal",
+    );
+    const updated = await storage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      occurredAt,
+      "claude-terminal",
+    );
+
+    expect(updated.agentActivityState).toBe("idle");
+    expect(Date.parse(
+      updated.agentActivitySources!["claude-terminal"]!.updatedAt,
+    )).toBe(Date.parse(occurredAt) + 1);
+  });
+
+  test("bounds client clocks and recovers poisoned legacy activity timestamps", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-clock-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const maximumDate = "+275760-09-13T00:00:00.000Z";
+
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      maximumDate,
+    )).rejects.toThrow("occurredAt must not be more than 5 minutes in the future");
+
+    const environmentsPath = path.join(dataDir, "environments.json");
+    await fs.writeFile(environmentsPath, JSON.stringify([{
+      ...environment,
+      agentActivityState: "working",
+      agentActivityUpdatedAt: maximumDate,
+      agentActivitySources: {
+        frontend: {
+          state: "working",
+          updatedAt: maximumDate,
+        },
+        "claude-terminal": {
+          state: "invalid-legacy-state",
+          updatedAt: "not-a-date",
+        },
+      },
+    }]));
+
+    const occurredAt = new Date().toISOString();
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      occurredAt,
+    )).resolves.toMatchObject({
+      agentActivityState: "idle",
+      agentActivityUpdatedAt: occurredAt,
+      agentActivitySources: {
+        frontend: { state: "idle", updatedAt: occurredAt },
+      },
+    });
+
+    await fs.writeFile(environmentsPath, JSON.stringify([{
+      ...environment,
+      status: "running",
+      agentActivityState: "working",
+      agentActivityUpdatedAt: maximumDate,
+      agentActivitySources: {
+        frontend: { state: "working", updatedAt: maximumDate },
+      },
+    }]));
+    await expect(storage.updateEnvironment(
+      environment.id,
+      { status: "error" },
+    )).resolves.toMatchObject({
+      status: "error",
+      agentActivityState: "idle",
+      agentActivitySources: {},
+    });
+    const reset = await storage.getEnvironment(environment.id);
+    expect(Number.isFinite(Date.parse(reset!.agentActivityUpdatedAt!))).toBe(true);
+    expect(reset!.agentActivityUpdatedAt).not.toBe(maximumDate);
+  });
+
+  test("accepts legacy environments without activity fields", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-legacy-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = createEnvironment("project-1");
+    delete environment.agentActivityState;
+    delete environment.agentActivityUpdatedAt;
+    delete environment.agentActivitySources;
+    await fs.writeFile(
+      path.join(dataDir, "environments.json"),
+      JSON.stringify([environment]),
+    );
+
+    const legacy = await storage.getEnvironment(environment.id);
+    expect(legacy?.id).toBe(environment.id);
+    expect(legacy).not.toHaveProperty("agentActivityState");
+    expect(legacy).not.toHaveProperty("agentActivityUpdatedAt");
+    const occurredAt = new Date().toISOString();
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      occurredAt,
+    )).resolves.toMatchObject({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: occurredAt,
+      agentActivitySources: {
+        frontend: { state: "working", updatedAt: occurredAt },
+      },
+    });
+  });
+
+  test("serializes concurrent agent observations to the newest source timestamp", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-concurrent-");
+    const firstStorage = new StorageService(dataDir);
+    const secondStorage = new StorageService(dataDir);
+    await Promise.all([firstStorage.init(), secondStorage.init()]);
+    const environment = await firstStorage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const createdTime = Date.parse(environment.createdAt);
+    const older = new Date(createdTime + 1_000).toISOString();
+    const newer = new Date(createdTime + 2_000).toISOString();
+
+    await Promise.all([
+      firstStorage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        newer,
+      ),
+      secondStorage.setEnvironmentAgentActivity(
+        environment.id,
+        "waiting",
+        older,
+      ),
+    ]);
+
+    await expect(firstStorage.getEnvironment(environment.id)).resolves.toMatchObject({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: newer,
+      agentActivitySources: {
+        frontend: {
+          state: "working",
+          updatedAt: newer,
+        },
+      },
+    });
   });
 
   test("recovers an abandoned environment mutation lock", async () => {

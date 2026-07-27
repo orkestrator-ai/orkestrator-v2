@@ -230,8 +230,8 @@ describe("build pipeline commands", () => {
   });
 });
 
-describe("set_environment_unread", () => {
-  test("persists agent activity and rejects malformed states", async () => {
+describe("set_environment_agent_activity", () => {
+  test("persists agent activity and rejects malformed command arguments", async () => {
     await withCommands(async (invoke) => {
       const occurredAt = "2026-07-27T12:00:00.000Z";
       await expect(invoke("set_environment_agent_activity", {
@@ -248,8 +248,42 @@ describe("set_environment_unread", () => {
         state: "busy",
         occurredAt,
       })).rejects.toThrow("state must be idle, working, or waiting");
+
+      await expect(invoke("set_environment_agent_activity", {
+        environmentId: 42,
+        state: "working",
+        occurredAt,
+      })).rejects.toThrow("Expected environmentId to be a string");
+      await expect(invoke("set_environment_agent_activity", {
+        environmentId: "e1",
+        state: 42,
+        occurredAt,
+      })).rejects.toThrow("Expected state to be a string");
+      await expect(invoke("set_environment_agent_activity", {
+        environmentId: "e1",
+        state: "working",
+        occurredAt: 42,
+      })).rejects.toThrow("Expected occurredAt to be a string");
+      await expect(invoke("set_environment_agent_activity", {
+        environmentId: "e1",
+        state: "working",
+        occurredAt: "invalid",
+      })).rejects.toThrow("occurredAt must be a valid ISO timestamp");
+      await expect(invoke("set_environment_agent_activity", {
+        environmentId: "e1",
+        state: "working",
+        occurredAt: "+275760-09-13T00:00:00.000Z",
+      })).rejects.toThrow("occurredAt must not be more than 5 minutes in the future");
+      await expect(invoke("set_environment_agent_activity", {
+        environmentId: "missing",
+        state: "working",
+        occurredAt,
+      })).rejects.toThrow("Environment not found: missing");
     });
   });
+});
+
+describe("set_environment_unread", () => {
   async function seedEnvironment(storage: StorageService): Promise<void> {
     if (!await storage.getProject("proj-1")) {
       await storage.addProject({

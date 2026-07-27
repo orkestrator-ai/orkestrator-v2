@@ -135,7 +135,10 @@ mock.module("@/lib/backend", () => ({
   readFileBase64: async () => "",
 }));
 
-import { EnvironmentItem } from "../../../apps/web/src/components/environments/EnvironmentItem";
+import {
+  EnvironmentItem,
+  resolveEnvironmentAgentActivity,
+} from "../../../apps/web/src/components/environments/EnvironmentItem";
 import { useAgentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
 import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
@@ -372,6 +375,101 @@ describe("EnvironmentItem activity icon", () => {
 
     const icon = container.querySelector('div[role="button"] svg');
     expect(icon?.getAttribute("class")).toContain("text-amber-500");
+  });
+
+  test("prefers a persisted observation when it is newer or equally recent", () => {
+    const environment = makeEnvironment({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: "2026-07-27T12:00:01.000Z",
+    });
+
+    expect(resolveEnvironmentAgentActivity(
+      environment,
+      { "env-1": "waiting" },
+      { "env-1": "2026-07-27T12:00:00.000Z" },
+    )).toBe("working");
+    expect(resolveEnvironmentAgentActivity(
+      environment,
+      { "env-1": "waiting" },
+      { "env-1": "2026-07-27T12:00:01.000Z" },
+    )).toBe("working");
+  });
+
+  test("uses a runtime observation keyed by the legacy container ID", () => {
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment(),
+      { "container-1": "waiting" },
+      { "container-1": "2026-07-27T12:00:00.000Z" },
+    )).toBe("waiting");
+  });
+
+  test("selects the freshest of conflicting environment and container observations", () => {
+    const environment = makeEnvironment();
+    expect(resolveEnvironmentAgentActivity(
+      environment,
+      { "env-1": "working", "container-1": "waiting" },
+      {
+        "env-1": "2026-07-27T12:00:00.000Z",
+        "container-1": "2026-07-27T12:00:01.000Z",
+      },
+    )).toBe("waiting");
+
+    // Equal timestamps resolve deterministically to the environment ID, the
+    // current canonical key, rather than depending on object insertion order.
+    expect(resolveEnvironmentAgentActivity(
+      environment,
+      { "container-1": "waiting", "env-1": "working" },
+      {
+        "container-1": "2026-07-27T12:00:01.000Z",
+        "env-1": "2026-07-27T12:00:01.000Z",
+      },
+    )).toBe("working");
+  });
+
+  test("does not let a malformed timestamp beat a valid observation", () => {
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment({
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "not-a-date",
+      }),
+      { "env-1": "waiting" },
+      { "env-1": "2026-07-27T12:00:00.000Z" },
+    )).toBe("waiting");
+
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment({
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+      }),
+      { "env-1": "waiting" },
+      { "env-1": "not-a-date" },
+    )).toBe("working");
+  });
+
+  test("falls back to idle and ignores poisoned future ordering tokens", () => {
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment(),
+      {},
+      {},
+    )).toBe("idle");
+
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment({
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "+275760-09-13T00:00:00.000Z",
+      }),
+      { "env-1": "waiting" },
+      { "env-1": new Date().toISOString() },
+    )).toBe("waiting");
+
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment({
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "not-a-date",
+      }),
+      { "env-1": "waiting" },
+      { "env-1": "also-not-a-date" },
+    )).toBe("idle");
   });
 });
 

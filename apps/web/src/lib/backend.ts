@@ -1002,12 +1002,18 @@ export async function updateEnvironmentAllowedDomains(
 
 // --- Claude State Commands ---
 
-export async function startClaudeStatePolling(containerId: string): Promise<void> {
-  return invoke("start_claude_state_polling", { containerId });
+export async function startClaudeStatePolling(
+  containerId: string,
+  subscriptionId: string,
+): Promise<void> {
+  return invoke("start_claude_state_polling", { containerId, subscriptionId });
 }
 
-export async function stopClaudeStatePolling(containerId: string): Promise<void> {
-  return invoke("stop_claude_state_polling", { containerId });
+export async function stopClaudeStatePolling(
+  containerId: string,
+  subscriptionId: string,
+): Promise<void> {
+  return invoke("stop_claude_state_polling", { containerId, subscriptionId });
 }
 
 // --- Editor Commands ---

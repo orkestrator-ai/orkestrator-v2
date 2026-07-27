@@ -48,6 +48,8 @@ const {
   recordEnvironmentActivity,
   recordEnvironmentCompletion,
   setEnvironmentAgentActivity,
+  startClaudeStatePolling,
+  stopClaudeStatePolling,
   runEnvironmentSetup,
   resetWebClientServe,
   savePaneLayout,
@@ -276,6 +278,22 @@ describe("backend setup wrappers", () => {
         environmentId: "env-1",
         state: "waiting",
         occurredAt,
+      }],
+    ]);
+  });
+
+  test("uses an idempotent subscription token for Claude state polling", async () => {
+    await startClaudeStatePolling("container-1", "subscription-1");
+    await stopClaudeStatePolling("container-1", "subscription-1");
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["start_claude_state_polling", {
+        containerId: "container-1",
+        subscriptionId: "subscription-1",
+      }],
+      ["stop_claude_state_polling", {
+        containerId: "container-1",
+        subscriptionId: "subscription-1",
       }],
     ]);
   });

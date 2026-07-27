@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+  ClaudeStatePollManager,
   containerExecArgs,
   newestJsonlFindCommand,
   newestJsonlInDir,
@@ -18,6 +19,7 @@ import {
   type ExecOutput,
 } from "../../../apps/backend/src/core/tmux";
 import type { Environment } from "../../../apps/backend/src/core/models";
+import type { CommandContext } from "../../../apps/backend/src/core/commands";
 
 const tempDirs: string[] = [];
 /** mkdtemp prefix for the fake tmux runtime; also the guard for its cleanup path. */
@@ -301,6 +303,20 @@ async function waitFor(
     await delay(25);
   }
   throw new Error("timed out waiting for condition");
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("Electron tmux backend command registration", () => {
@@ -1557,6 +1573,316 @@ exit 0
 
       await invoke(handlers, "claude_tmux_stop", { tabId: "tab-tasks", environmentId: environment.id }, context);
     });
+  });
+});
+
+describe("ClaudeStatePollManager", () => {
+  function createPollHarness(options: {
+    states?: string[];
+    readState?: (containerId: string) => Promise<string>;
+    environments?: Environment[];
+    loadEnvironments?: () => Promise<Environment[]>;
+    persist?: (
+      environmentId: string,
+      state: "idle" | "working" | "waiting",
+      occurredAt: string,
+      source: "frontend" | "claude-terminal",
+    ) => Promise<Environment>;
+  } = {}) {
+    const scheduled: Array<() => void> = [];
+    const cancelled = new Set<unknown>();
+    const emitted: Array<{ event: string; payload: unknown }> = [];
+    const persisted: Array<{
+      environmentId: string;
+      state: string;
+      occurredAt: string;
+      source: string;
+    }> = [];
+    const states = [...(options.states ?? [])];
+    const environment = createEnvironment("/worktree", "env-poll");
+    environment.containerId = "container-poll";
+    const environments = options.environments ?? [environment];
+    const fixedNow = "2026-07-27T12:00:00.000Z";
+    const context = {
+      storage: {
+        loadEnvironments: options.loadEnvironments ?? (async () => environments),
+        setEnvironmentAgentActivity: async (
+          environmentId: string,
+          state: "idle" | "working" | "waiting",
+          occurredAt: string,
+          source: "frontend" | "claude-terminal",
+        ) => {
+          persisted.push({ environmentId, state, occurredAt, source });
+          if (options.persist) {
+            return options.persist(environmentId, state, occurredAt, source);
+          }
+          return {
+            ...environment,
+            agentActivityState: state,
+            agentActivityUpdatedAt: "2026-07-27T12:00:00.001Z",
+            agentActivitySources: {
+              "claude-terminal": {
+                state,
+                updatedAt: occurredAt,
+              },
+            },
+          };
+        },
+      },
+      emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+      appRoot: "",
+      resourceRoot: "",
+    } as unknown as CommandContext;
+    const manager = new ClaudeStatePollManager({
+      readState: options.readState ?? (async () => states.shift() ?? ""),
+      schedule: (callback) => {
+        scheduled.push(callback);
+        return callback;
+      },
+      cancel: (timer) => {
+        cancelled.add(timer);
+      },
+      now: () => fixedNow,
+    });
+    return {
+      manager,
+      context,
+      scheduled,
+      cancelled,
+      emitted,
+      persisted,
+      environment,
+    };
+  }
+
+  test("persists a changed terminal state before emitting its authoritative timestamp", async () => {
+    const harness = createPollHarness({ states: ["working", "working"] });
+
+    harness.manager.start("container-poll", harness.context);
+    await waitFor(() => harness.emitted.length === 1);
+
+    expect(harness.persisted).toEqual([{
+      environmentId: "env-poll",
+      state: "working",
+      occurredAt: "2026-07-27T12:00:00.000Z",
+      source: "claude-terminal",
+    }]);
+    expect(harness.emitted).toEqual([{
+      event: "claude-state-container-poll",
+      payload: {
+        container_id: "container-poll",
+        state: "working",
+        occurred_at: "2026-07-27T12:00:00.000Z",
+      },
+    }]);
+
+    harness.scheduled[0]!();
+    await delay(0);
+    expect(harness.persisted).toHaveLength(1);
+    expect(harness.emitted).toHaveLength(1);
+    harness.manager.shutdown("container-poll");
+  });
+
+  test("emits the terminal source token when another source owns the aggregate timestamp", async () => {
+    let persistenceCount = 0;
+    const harness = createPollHarness({
+      states: ["working", "idle"],
+      persist: async (_environmentId, state) => {
+        const sourceUpdatedAt = persistenceCount++ === 0
+          ? "2026-07-27T12:00:00.000Z"
+          : "2026-07-27T12:00:00.001Z";
+        return {
+          ...createEnvironment("/worktree", "env-poll"),
+          containerId: "container-poll",
+          agentActivityState: "working",
+          agentActivityUpdatedAt: "2026-07-27T12:00:10.000Z",
+          agentActivitySources: {
+            frontend: {
+              state: "working",
+              updatedAt: "2026-07-27T12:00:10.000Z",
+            },
+            "claude-terminal": {
+              state,
+              updatedAt: sourceUpdatedAt,
+            },
+          },
+        };
+      },
+    });
+
+    harness.manager.start("container-poll", harness.context);
+    await waitFor(() => harness.emitted.length === 1);
+    harness.scheduled[0]!();
+    await waitFor(() => harness.emitted.length === 2);
+
+    expect(harness.emitted.map(({ payload }) => (
+      payload as { occurred_at: string }
+    ).occurred_at)).toEqual([
+      "2026-07-27T12:00:00.000Z",
+      "2026-07-27T12:00:00.001Z",
+    ]);
+    harness.manager.shutdown("container-poll");
+  });
+
+  test("keeps polling across idempotent subscriber leases until the environment stops", async () => {
+    const harness = createPollHarness({
+      states: ["working", "idle", "working"],
+    });
+
+    harness.manager.start("container-poll", harness.context, "client-a");
+    harness.manager.start("container-poll", harness.context, "client-a");
+    harness.manager.start("container-poll", harness.context, "client-b");
+    await waitFor(() => harness.emitted.length === 1);
+
+    await harness.manager.stop("container-poll", "client-a");
+    await harness.manager.stop("container-poll", "client-a");
+    expect(harness.cancelled.size).toBe(0);
+    harness.scheduled[0]!();
+    await waitFor(() => harness.emitted.length === 2);
+    expect(harness.persisted.map((entry) => entry.state)).toEqual([
+      "working",
+      "idle",
+    ]);
+
+    await harness.manager.stop("container-poll", "client-b");
+    expect(harness.cancelled.size).toBe(0);
+    harness.environment.status = "stopped";
+    harness.scheduled[0]!();
+    await waitFor(() => harness.cancelled.size === 1);
+    expect(harness.cancelled.size).toBe(1);
+    harness.scheduled[0]!();
+    await delay(0);
+    expect(harness.persisted).toHaveLength(2);
+  });
+
+  test("serializes timer ticks and runs one trailing poll instead of overlapping reads", async () => {
+    const first = deferred<string>();
+    const second = deferred<string>();
+    const reads: Array<ReturnType<typeof deferred<string>>> = [first, second];
+    let readCount = 0;
+    const harness = createPollHarness({
+      readState: async () => {
+        const read = reads[readCount++];
+        if (!read) return "";
+        return read.promise;
+      },
+    });
+
+    harness.manager.start("container-poll", harness.context);
+    harness.scheduled[0]!();
+    harness.scheduled[0]!();
+    expect(readCount).toBe(1);
+
+    first.resolve("working");
+    await waitFor(() => readCount === 2);
+    expect(harness.persisted.map((entry) => entry.state)).toEqual(["working"]);
+
+    second.resolve("idle");
+    await waitFor(() => harness.persisted.length === 2);
+    expect(harness.persisted.map((entry) => entry.state)).toEqual([
+      "working",
+      "idle",
+    ]);
+    harness.manager.shutdown("container-poll");
+  });
+
+  test("discards an in-flight read after the environment stops", async () => {
+    const state = deferred<string>();
+    const harness = createPollHarness({
+      readState: async () => state.promise,
+    });
+
+    harness.manager.start("container-poll", harness.context, "client-a");
+    harness.environment.status = "stopped";
+    await harness.manager.stop("container-poll", "client-a");
+    state.resolve("working");
+    await delay(0);
+
+    expect(harness.persisted).toHaveLength(0);
+    expect(harness.emitted).toHaveLength(0);
+  });
+
+  test("retries read and persistence failures without emitting stale state", async () => {
+    let readCount = 0;
+    let persistCount = 0;
+    const harness = createPollHarness({
+      readState: async () => {
+        readCount += 1;
+        if (readCount === 1) throw new Error("docker unavailable");
+        return "waiting";
+      },
+      persist: async () => {
+        persistCount += 1;
+        if (persistCount === 1) throw new Error("disk unavailable");
+        return {
+          ...createEnvironment("/worktree", "env-poll"),
+          containerId: "container-poll",
+          agentActivityState: "waiting",
+          agentActivityUpdatedAt: "2026-07-27T12:00:00.002Z",
+          agentActivitySources: {
+            "claude-terminal": {
+              state: "waiting",
+              updatedAt: "2026-07-27T12:00:00.002Z",
+            },
+          },
+        };
+      },
+    });
+
+    harness.manager.start("container-poll", harness.context);
+    await delay(0);
+    expect(harness.emitted).toHaveLength(0);
+
+    harness.scheduled[0]!();
+    await waitFor(() => persistCount === 1);
+    expect(harness.emitted).toHaveLength(0);
+
+    harness.scheduled[0]!();
+    await waitFor(() => harness.emitted.length === 1);
+    expect(persistCount).toBe(2);
+    harness.manager.shutdown("container-poll");
+  });
+
+  test("ignores invalid states and retries an environment-load failure", async () => {
+    let loadCount = 0;
+    const environment = createEnvironment("/worktree", "env-poll");
+    environment.containerId = "container-poll";
+    const harness = createPollHarness({
+      states: ["busy", "waiting", "waiting"],
+      loadEnvironments: async () => {
+        loadCount += 1;
+        if (loadCount === 2) throw new Error("storage unavailable");
+        return [environment];
+      },
+    });
+
+    harness.manager.start("container-poll", harness.context);
+    await delay(0);
+    expect(loadCount).toBe(1);
+    expect(harness.emitted).toHaveLength(0);
+
+    harness.scheduled[0]!();
+    await waitFor(() => loadCount === 2);
+    expect(harness.persisted).toHaveLength(0);
+    expect(harness.emitted).toHaveLength(0);
+
+    harness.scheduled[0]!();
+    await waitFor(() => harness.emitted.length === 1);
+    expect(harness.persisted.map((entry) => entry.state)).toEqual(["waiting"]);
+    harness.manager.shutdown("container-poll");
+  });
+
+  test("stops polling when no environment owns the container", async () => {
+    const harness = createPollHarness({
+      states: ["idle"],
+      environments: [],
+    });
+
+    harness.manager.start("container-poll", harness.context);
+    await waitFor(() => harness.cancelled.size === 1);
+
+    expect(harness.persisted).toHaveLength(0);
+    expect(harness.emitted).toHaveLength(0);
   });
 });
 

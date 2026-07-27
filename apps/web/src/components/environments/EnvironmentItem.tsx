@@ -28,7 +28,11 @@ import {
 import { Bell, Trash2, Play, Square, Container, Laptop, Shield, Globe, Settings2, RotateCw, Loader2, Network, Copy, MoreVertical } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentActivityState, Environment } from "@/types";
-import { useAgentActivityStore, useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
+import { useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
+import {
+  parseUsableAgentActivityTime,
+  useAgentActivityStore,
+} from "@/stores/agentActivityStore";
 import { EnvironmentSettingsDialog } from "./EnvironmentSettingsDialog";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
@@ -40,9 +44,7 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
 
 function activityTime(value: string | undefined): number {
-  if (!value) return Number.NEGATIVE_INFINITY;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+  return parseUsableAgentActivityTime(value);
 }
 
 /**
@@ -65,6 +67,7 @@ export function resolveEnvironmentAgentActivity(
     const candidate = runtimeStates[key];
     if (!candidate) continue;
     const candidateTime = activityTime(runtimeUpdatedAt[key]);
+    if (!Number.isFinite(candidateTime)) continue;
     if (!runtimeState || candidateTime > runtimeTime) {
       runtimeState = candidate;
       runtimeTime = candidateTime;
@@ -73,10 +76,14 @@ export function resolveEnvironmentAgentActivity(
 
   const persistedState = environment.agentActivityState;
   const persistedTime = activityTime(environment.agentActivityUpdatedAt);
-  if (persistedState && (!runtimeState || persistedTime >= runtimeTime)) {
+  if (
+    persistedState
+    && Number.isFinite(persistedTime)
+    && (!runtimeState || persistedTime >= runtimeTime)
+  ) {
     return persistedState;
   }
-  return runtimeState ?? persistedState ?? "idle";
+  return runtimeState ?? "idle";
 }
 
 /**

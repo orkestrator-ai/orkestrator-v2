@@ -33,6 +33,13 @@ interface AgentActivityStoreState {
     containerId: string,
     state: AgentActivityState,
     occurredAt?: string,
+    notifyCallbacks?: boolean,
+  ) => void;
+  /** Replace an optimistic observation with an authoritative backend value. */
+  reconcileContainerState: (
+    containerId: string,
+    state: AgentActivityState | undefined,
+    occurredAt: string | undefined,
   ) => void;
   removeContainerState: (containerId: string) => void;
   /** Increment the reference count for a container (call when tab mounts) */
@@ -53,12 +60,36 @@ interface AgentActivityStoreState {
 let callbackIdCounter = 0;
 let lastActivityObservationTime = 0;
 
+export const AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS = 5 * 60_000;
+
+export function parseUsableAgentActivityTime(
+  value: string | undefined,
+  referenceTime = Date.now(),
+): number {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed)
+    && parsed <= referenceTime + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS
+    ? parsed
+    : Number.NEGATIVE_INFINITY;
+}
+
 function nextObservationTime(requested?: string): string {
-  const requestedTime = requested ? Date.parse(requested) : Number.NaN;
+  const referenceTime = Date.now();
+  const requestedTime = parseUsableAgentActivityTime(requested, referenceTime);
+  const previousGeneratedTime =
+    lastActivityObservationTime <= referenceTime + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS
+      ? lastActivityObservationTime
+      : Number.NEGATIVE_INFINITY;
   const time = Number.isFinite(requestedTime)
     ? requestedTime
-    : Math.max(Date.now(), lastActivityObservationTime + 1);
-  lastActivityObservationTime = Math.max(lastActivityObservationTime, time);
+    : Math.max(
+        referenceTime,
+        Number.isFinite(previousGeneratedTime)
+          ? previousGeneratedTime + 1
+          : Number.NEGATIVE_INFINITY,
+      );
+  lastActivityObservationTime = Math.max(previousGeneratedTime, time);
   return new Date(time).toISOString();
 }
 
@@ -83,13 +114,26 @@ export const useAgentActivityStore = create<AgentActivityStoreState>()(
         return { tabStates: rest };
       }),
 
-    setContainerState: (containerId, state, requestedOccurredAt) => {
-      const previousState = get().containerStates[containerId] || "idle";
-      const requestedTime = requestedOccurredAt
-        ? Date.parse(requestedOccurredAt)
-        : Number.NaN;
-      const previousTime = Date.parse(
-        get().containerStateUpdatedAt[containerId] ?? "",
+    setContainerState: (
+      containerId,
+      state,
+      requestedOccurredAt,
+      notifyCallbacks = true,
+    ) => {
+      const current = get();
+      const hadPreviousObservation = Object.hasOwn(
+        current.containerStates,
+        containerId,
+      );
+      const previousState = current.containerStates[containerId] ?? "idle";
+      const referenceTime = Date.now();
+      const requestedTime = parseUsableAgentActivityTime(
+        requestedOccurredAt,
+        referenceTime,
+      );
+      const previousTime = parseUsableAgentActivityTime(
+        current.containerStateUpdatedAt[containerId],
+        referenceTime,
       );
       if (
         Number.isFinite(requestedTime)
@@ -98,10 +142,12 @@ export const useAgentActivityStore = create<AgentActivityStoreState>()(
       ) {
         return;
       }
-      if (previousState === state) return;
       const occurredAt = nextObservationTime(requestedOccurredAt);
 
-      // Update state first
+      // A first idle observation is still meaningful: it must override a stale
+      // persisted working snapshot and reach the persistence callback. Newer
+      // same-state observations refresh local recency without manufacturing a
+      // state transition callback.
       set((prev) => ({
         containerStates: { ...prev.containerStates, [containerId]: state },
         containerStateUpdatedAt: {
@@ -112,7 +158,7 @@ export const useAgentActivityStore = create<AgentActivityStoreState>()(
 
       // Notify callbacks if state actually changed
       // Deferred to next microtask to avoid blocking state updates
-      if (previousState !== state) {
+      if (notifyCallbacks && (!hadPreviousObservation || previousState !== state)) {
         queueMicrotask(() => {
           const callbacks = get().stateChangeCallbacks;
           callbacks.forEach((callback) => {
@@ -125,6 +171,30 @@ export const useAgentActivityStore = create<AgentActivityStoreState>()(
         });
       }
     },
+
+    reconcileContainerState: (containerId, state, occurredAt) =>
+      set((prev) => {
+        const { [containerId]: _state, ...restStates } = prev.containerStates;
+        const { [containerId]: _time, ...restUpdatedAt } =
+          prev.containerStateUpdatedAt;
+        const occurredTime = parseUsableAgentActivityTime(occurredAt);
+        if (!state || !Number.isFinite(occurredTime)) {
+          return {
+            containerStates: restStates,
+            containerStateUpdatedAt: restUpdatedAt,
+          };
+        }
+        return {
+          containerStates: {
+            ...restStates,
+            [containerId]: state,
+          },
+          containerStateUpdatedAt: {
+            ...restUpdatedAt,
+            [containerId]: new Date(occurredTime).toISOString(),
+          },
+        };
+      }),
 
     removeContainerState: (containerId) =>
       set((prev) => {

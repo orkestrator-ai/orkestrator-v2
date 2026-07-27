@@ -39,6 +39,11 @@ import type {
 
 export type JsonRecord = Record<string, unknown>;
 
+// Renderer observations originate on the same machine as the backend, so a
+// small allowance covers ordinary clock adjustments without allowing a broken
+// or malicious client clock to permanently outrank backend-owned observations.
+const AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS = 5 * 60_000;
+
 type KanbanComment = {
   id: string;
   text: string;
@@ -196,6 +201,34 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
 
 function isNonBlankString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function parseUsableAgentActivityTime(
+  value: unknown,
+  referenceTime: number,
+): number {
+  if (typeof value !== "string") return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed)
+    && parsed <= referenceTime + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS
+    ? parsed
+    : Number.NEGATIVE_INFINITY;
+}
+
+function nextAgentActivityTimestamp(
+  previousValue: unknown,
+  referenceTime = Date.now(),
+): string {
+  const previousTime = parseUsableAgentActivityTime(
+    previousValue,
+    referenceTime,
+  );
+  return new Date(Math.max(
+    referenceTime,
+    Number.isFinite(previousTime)
+      ? previousTime + 1
+      : Number.NEGATIVE_INFINITY,
+  )).toISOString();
 }
 
 function isPositiveInteger(value: unknown): value is number {
@@ -1142,17 +1175,11 @@ export class StorageService {
       if ("status" in updates && isOneOf(updates.status, ["running", "stopped", "error", "creating", "stopping"])) {
         environment.status = updates.status;
         if (updates.status === "stopped" || updates.status === "error") {
-          const previousActivityTime = environment.agentActivityUpdatedAt
-            ? Date.parse(environment.agentActivityUpdatedAt)
-            : Number.NEGATIVE_INFINITY;
           environment.agentActivityState = "idle";
           environment.agentActivitySources = {};
-          environment.agentActivityUpdatedAt = new Date(Math.max(
-            Date.now(),
-            Number.isFinite(previousActivityTime)
-              ? previousActivityTime + 1
-              : Number.NEGATIVE_INFINITY,
-          )).toISOString();
+          environment.agentActivityUpdatedAt = nextAgentActivityTimestamp(
+            environment.agentActivityUpdatedAt,
+          );
         }
       }
       if ("environmentType" in updates && isOneOf(updates.environmentType, ["containerized", "local"])) {
@@ -1310,7 +1337,9 @@ export class StorageService {
     if (!Number.isFinite(occurredTime)) {
       throw new Error("occurredAt must be a valid ISO timestamp");
     }
-    const normalizedOccurredAt = new Date(occurredTime).toISOString();
+    if (occurredTime > Date.now() + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS) {
+      throw new Error("occurredAt must not be more than 5 minutes in the future");
+    }
     if (!isOneOf(source, ["frontend", "claude-terminal"])) {
       throw new Error("source must be frontend or claude-terminal");
     }
@@ -1320,22 +1349,52 @@ export class StorageService {
       const environment = environments.find((candidate) => candidate.id === environmentId);
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
 
-      const previousSource = environment.agentActivitySources?.[source];
-      const previousTime = previousSource?.updatedAt
-        ? Date.parse(previousSource.updatedAt)
-        : environment.agentActivityUpdatedAt
-          ? Date.parse(environment.agentActivityUpdatedAt)
-          : Number.NEGATIVE_INFINITY;
-      if (Number.isFinite(previousTime) && previousTime >= occurredTime) {
-        return environment;
+      const referenceTime = Date.now();
+      const sources: Environment["agentActivitySources"] = {};
+      for (const candidateSource of ["frontend", "claude-terminal"] as const) {
+        const snapshot = environment.agentActivitySources?.[candidateSource];
+        if (
+          snapshot
+          && isOneOf(snapshot.state, ["idle", "working", "waiting"])
+        ) {
+          const snapshotTime = parseUsableAgentActivityTime(
+            snapshot.updatedAt,
+            referenceTime,
+          );
+          if (Number.isFinite(snapshotTime)) {
+            sources[candidateSource] = {
+              state: snapshot.state,
+              updatedAt: new Date(snapshotTime).toISOString(),
+            };
+          }
+        }
       }
 
-      const sources = {
-        ...environment.agentActivitySources,
-        [source]: {
-          state,
-          updatedAt: normalizedOccurredAt,
-        },
+      const previousSource = sources[source];
+      const previousTime = previousSource
+        ? Date.parse(previousSource.updatedAt)
+        : Object.keys(sources).length === 0
+          ? parseUsableAgentActivityTime(
+            environment.agentActivityUpdatedAt,
+            referenceTime,
+          )
+          : Number.NEGATIVE_INFINITY;
+      let acceptedOccurredTime = occurredTime;
+      if (Number.isFinite(previousTime) && previousTime >= occurredTime) {
+        if (source === "frontend" || previousTime > occurredTime) {
+          return environment;
+        }
+        // Backend polling is serialized, so arrival order is authoritative even
+        // if two observations share a millisecond. Keep its per-source token
+        // monotonic instead of dropping a real terminal transition. Strictly
+        // older tokens remain stale and are still rejected.
+        acceptedOccurredTime = previousTime + 1;
+      }
+      const normalizedOccurredAt = new Date(acceptedOccurredTime).toISOString();
+
+      sources[source] = {
+        state,
+        updatedAt: normalizedOccurredAt,
       };
       let aggregate: AgentActivityState = "idle";
       for (const snapshot of Object.values(sources)) {
@@ -1349,11 +1408,12 @@ export class StorageService {
 
       environment.agentActivitySources = sources;
       environment.agentActivityState = aggregate;
-      const aggregateTime = environment.agentActivityUpdatedAt
-        ? Date.parse(environment.agentActivityUpdatedAt)
-        : Number.NEGATIVE_INFINITY;
+      const aggregateTime = parseUsableAgentActivityTime(
+        environment.agentActivityUpdatedAt,
+        referenceTime,
+      );
       environment.agentActivityUpdatedAt = new Date(Math.max(
-        occurredTime,
+        acceptedOccurredTime,
         Number.isFinite(aggregateTime)
           ? aggregateTime
           : Number.NEGATIVE_INFINITY,

@@ -1,5 +1,5 @@
 import { afterEach, describe, test, expect, mock, beforeEach } from "bun:test";
-import { act, cleanup, render, fireEvent, waitFor } from "@testing-library/react";
+import { act, cleanup, render, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { Environment } from "../../../apps/web/src/types";
 import {
   mockToastError as toastErrorMock,
@@ -77,13 +77,46 @@ mock.module("@/components/ui/alert-dialog", () => ({
 }));
 
 mock.module("@/components/ui/checkbox", () => ({
-  Checkbox: () => <input type="checkbox" />,
+  Checkbox: ({
+    checked,
+    onCheckedChange,
+    className,
+  }: {
+    checked?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+    className?: string;
+  }) => (
+    <input
+      type="checkbox"
+      aria-label="Select environment"
+      className={className}
+      checked={checked ?? false}
+      onChange={(event) => onCheckedChange?.(event.target.checked)}
+    />
+  ),
 }));
 
+// The stub exposes the two update shapes the real dialog can emit, so the
+// component's own transitioning bookkeeping can be driven from a test.
 mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
   EnvironmentSettingsDialog: (props: SettingsDialogProps) => {
     settingsDialogPropsMock(props);
-    return props.open ? <div data-testid="settings-dialog" /> : null;
+    return props.open ? (
+      <div data-testid="settings-dialog">
+        <button
+          type="button"
+          onClick={() => props.onUpdate({ ...props.environment, status: "creating" })}
+        >
+          Emit transitioning update
+        </button>
+        <button
+          type="button"
+          onClick={() => props.onUpdate({ ...props.environment, status: "running" })}
+        >
+          Emit settled update
+        </button>
+      </div>
+    ) : null;
   },
 }));
 
@@ -104,6 +137,8 @@ mock.module("@/lib/backend", () => ({
 
 import { EnvironmentItem } from "../../../apps/web/src/components/environments/EnvironmentItem";
 import { useAgentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
+import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
+import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
@@ -140,8 +175,8 @@ type RenderOptions = {
   onUpdate?: (environment: Environment) => void;
 };
 
-function renderItem(env: Environment, options: RenderOptions = {}) {
-  return render(
+function itemElement(env: Environment, options: RenderOptions = {}) {
+  return (
     <EnvironmentItem
       environment={env}
       isSelected={options.isSelected ?? false}
@@ -153,8 +188,12 @@ function renderItem(env: Environment, options: RenderOptions = {}) {
       onUpdate={options.onUpdate}
       isMultiSelectMode={options.isMultiSelectMode}
       isChecked={options.isChecked}
-    />,
+    />
   );
+}
+
+function renderItem(env: Environment, options: RenderOptions = {}) {
+  return render(itemElement(env, options));
 }
 
 function findMenuItem(container: HTMLElement, label: string) {
@@ -187,11 +226,116 @@ beforeEach(() => {
     stateChangeCallbacks: new Map(),
   });
   useUIStore.setState({ selectedEnvironmentId: null });
+  useEnvironmentStore.setState({ deletingEnvironments: new Set<string>() });
+  useBuildPipelineStore.setState({ buildEnvironmentIds: new Set<string>() });
 });
 
 afterEach(() => {
   cleanup();
 });
+
+// The mobile actions button is gated on a real media query rather than a
+// `md:hidden` class, so tests can select a viewport instead of asserting on
+// Tailwind class strings that happy-dom never evaluates.
+const MOBILE_QUERY = "(max-width: 767px)";
+
+function useViewport(kind: "mobile" | "desktop") {
+  const original = window.matchMedia;
+
+  beforeEach(() => {
+    window.matchMedia = ((query: string) => ({
+      matches: query === MOBILE_QUERY && kind === "mobile",
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+  });
+
+  afterEach(() => {
+    window.matchMedia = original;
+  });
+}
+
+/** The row's own selectable region — deliberately not the whole row. */
+function getRowButton(container: HTMLElement) {
+  const row = container.querySelector('div[role="button"]');
+  expect(row).not.toBeNull();
+  return row as HTMLElement;
+}
+
+function queryActionsTrigger(): HTMLElement | null {
+  return document.body.querySelector('button[aria-label="Environment actions"]');
+}
+
+/**
+ * Radix opens the dropdown on pointerdown and then settles its portal and
+ * popper asynchronously, so the open is awaited inside `act` to keep those
+ * follow-up renders out of the test's assertions.
+ */
+async function openActionsMenu() {
+  const trigger = queryActionsTrigger();
+  expect(trigger).not.toBeNull();
+  await act(async () => {
+    fireEvent.pointerDown(trigger!, { button: 0, ctrlKey: false, pointerType: "touch" });
+  });
+  return trigger!;
+}
+
+/** Radix portals the dropdown outside the render container. */
+async function findActionsMenu() {
+  let menu: HTMLElement | null = null;
+  await waitFor(() => {
+    menu = document.body.querySelector('[role="menu"]');
+    expect(menu).not.toBeNull();
+  });
+  return menu!;
+}
+
+function actionsMenuLabels(menu: HTMLElement) {
+  return Array.from(menu.querySelectorAll('[role="menuitem"]')).map(
+    (item) => item.textContent ?? "",
+  );
+}
+
+function findActionsMenuItem(menu: HTMLElement, label: string) {
+  const item = Array.from(menu.querySelectorAll('[role="menuitem"]')).find(
+    (candidate) => candidate.textContent === label,
+  ) as HTMLElement | undefined;
+  expect(item).not.toBeUndefined();
+  return item!;
+}
+
+/** Choosing an item also closes the menu, so flush those renders too. */
+async function selectActionsMenuItem(menu: HTMLElement, label: string) {
+  const item = findActionsMenuItem(menu, label);
+  await act(async () => {
+    fireEvent.click(item);
+  });
+  return item;
+}
+
+/**
+ * Dismisses a menu that a test only inspected, so Escape-to-close stays
+ * exercised and no test hands an open modal layer to the next one.
+ */
+async function closeActionsMenu(menu: HTMLElement) {
+  await act(async () => {
+    fireEvent.keyDown(menu, { key: "Escape" });
+  });
+}
+
+/** Labels the desktop context menu is currently offering, in order. */
+function contextMenuLabels(container: HTMLElement) {
+  const content = container.querySelector('[data-testid="context-menu-content"]');
+  expect(content).not.toBeNull();
+  return Array.from(content!.querySelectorAll('[role="menuitem"]')).map(
+    (item) => item.textContent ?? "",
+  );
+}
 
 describe("EnvironmentItem activity icon", () => {
   test("shows a pulsing blue container icon while tmux activity is working", () => {
@@ -597,5 +741,393 @@ describe("EnvironmentItem unread activity indicator", () => {
     );
 
     expect(container.querySelector('[aria-label="New completed activity"]')).not.toBeNull();
+  });
+});
+
+describe("EnvironmentItem mobile actions menu", () => {
+  useViewport("mobile");
+
+  test("renders an actions trigger for the row", () => {
+    renderItem(makeEnvironment());
+
+    expect(queryActionsTrigger()).not.toBeNull();
+  });
+
+  test("the trigger is not nested inside the row's selectable region", () => {
+    const { container } = renderItem(makeEnvironment());
+
+    // ARIA treats the children of role="button" as presentational, so a control
+    // nested there would be hidden from assistive tech on the one platform that
+    // needs it. Keep the trigger a sibling of the selectable region.
+    expect(getRowButton(container).contains(queryActionsTrigger())).toBe(false);
+  });
+
+  test("the trigger does not make the row ambiguous to query by name", () => {
+    renderItem(makeEnvironment({ name: "test-env" }));
+
+    // Folding the environment name into the trigger's label would give the page
+    // two buttons named "test-env" and break every role+name lookup for a row.
+    const named = screen.getAllByRole("button", { name: /test-env/ });
+    expect(named).toHaveLength(1);
+    expect(named[0].getAttribute("role")).toBe("button");
+    expect(named[0].tagName).toBe("DIV");
+  });
+
+  test("the trigger describes itself with the row name instead of naming itself after it", () => {
+    const { container } = renderItem(makeEnvironment({ name: "test-env" }));
+
+    const trigger = queryActionsTrigger();
+    const describedBy = trigger!.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(container.querySelector(`#${CSS.escape(describedBy!)}`)?.textContent).toBe("test-env");
+  });
+
+  test("pressing the trigger does not reach an ancestor pointerdown listener", async () => {
+    // dnd-kit drag activation and Radix's context-menu long-press both hang off
+    // pointerdown on an ancestor; the trigger must not start either.
+    const ancestorPointerDown = mock(() => {});
+    const { container } = render(
+      <div onPointerDown={ancestorPointerDown}>{itemElement(makeEnvironment())}</div>,
+    );
+
+    // Opens the dropdown as a side effect, so settle it inside act().
+    await act(async () => {
+      fireEvent.pointerDown(queryActionsTrigger()!, { button: 0, pointerType: "touch" });
+    });
+    expect(ancestorPointerDown).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.pointerDown(getRowButton(container), { button: 0, pointerType: "touch" });
+    });
+    expect(ancestorPointerDown).toHaveBeenCalled();
+  });
+
+  test("choosing Stop stops the environment without selecting the row", async () => {
+    const onSelect = mock(() => {});
+    const onStop = mock(() => {});
+    renderItem(makeEnvironment({ status: "running" }), { onSelect, onStop });
+
+    await openActionsMenu();
+    const menu = await findActionsMenu();
+
+    await selectActionsMenuItem(menu, "Stop");
+    expect(onStop).toHaveBeenCalledWith("env-1");
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  test("offers exactly the actions the desktop context menu offers", async () => {
+    const { container } = renderItem(
+      makeEnvironment({
+        status: "running",
+        entryPort: 3000,
+        hostEntryPort: 49152,
+        initialPrompt: "Review the migration plan",
+      }),
+    );
+
+    await openActionsMenu();
+    const menu = await findActionsMenu();
+
+    expect(actionsMenuLabels(menu)).toEqual([
+      "Settings",
+      "Copy Address",
+      "Copy Initial Prompt",
+      "Stop",
+      "Restart",
+      "Delete",
+    ]);
+    expect(actionsMenuLabels(menu)).toEqual(contextMenuLabels(container));
+
+    await closeActionsMenu(menu);
+  });
+
+  test("omits container lifecycle actions for a local environment", async () => {
+    const { container } = renderItem(
+      makeEnvironment({ environmentType: "local", containerId: null, status: "stopped" }),
+    );
+
+    await openActionsMenu();
+    const menu = await findActionsMenu();
+
+    expect(actionsMenuLabels(menu)).toEqual(["Settings", "Delete"]);
+    expect(actionsMenuLabels(menu)).toEqual(contextMenuLabels(container));
+
+    await closeActionsMenu(menu);
+  });
+
+  test("offers Start and a disabled Restart for a stopped container environment", async () => {
+    const onStart = mock(() => {});
+    const onRestart = mock(() => {});
+    renderItem(makeEnvironment({ status: "stopped" }), { onStart, onRestart });
+
+    await openActionsMenu();
+    const menu = await findActionsMenu();
+
+    expect(actionsMenuLabels(menu)).toEqual(["Settings", "Start", "Restart", "Delete"]);
+
+    const restart = findActionsMenuItem(menu, "Restart");
+    expect(restart.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(restart);
+    expect(onRestart).not.toHaveBeenCalled();
+
+    await selectActionsMenuItem(menu, "Start");
+    expect(onStart).toHaveBeenCalledWith("env-1");
+  });
+
+  test("disables Stop and Restart while the container is transitioning", async () => {
+    const onStop = mock(() => {});
+    const onRestart = mock(() => {});
+    renderItem(makeEnvironment({ status: "stopping" }), { onStop, onRestart });
+
+    await openActionsMenu();
+    const menu = await findActionsMenu();
+
+    // A "stopping" container still reports isRunning === false, so the power
+    // action offers Start; both lifecycle actions must be inert either way.
+    for (const label of ["Start", "Restart"]) {
+      const item = findActionsMenuItem(menu, label);
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(item);
+    }
+    expect(onStop).not.toHaveBeenCalled();
+    expect(onRestart).not.toHaveBeenCalled();
+
+    await closeActionsMenu(menu);
+  });
+
+  test("Copy Address copies the mapped host address", async () => {
+    const writeText = mock(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+    renderItem(makeEnvironment({ entryPort: 3000, hostEntryPort: 49152 }));
+
+    await openActionsMenu();
+    const menu = await findActionsMenu();
+
+    await selectActionsMenuItem(menu, "Copy Address");
+    expect(writeText).toHaveBeenCalledWith("localhost:49152");
+  });
+
+  test("Copy Initial Prompt copies the trimmed prompt", async () => {
+    const writeText = mock(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+    renderItem(makeEnvironment({ initialPrompt: "  Review the migration plan\n" }));
+
+    await openActionsMenu();
+    const menu = await findActionsMenu();
+
+    await selectActionsMenuItem(menu, "Copy Initial Prompt");
+    expect(writeText).toHaveBeenCalledWith("Review the migration plan");
+  });
+
+  test("Settings opens the settings dialog", async () => {
+    const { container } = renderItem(makeEnvironment());
+
+    await openActionsMenu();
+    const menu = await findActionsMenu();
+
+    await selectActionsMenuItem(menu, "Settings");
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="settings-dialog"]')).not.toBeNull();
+    });
+  });
+
+  test("Delete asks for confirmation instead of deleting immediately", async () => {
+    const onDelete = mock(() => {});
+    const { container } = renderItem(makeEnvironment({ name: "delete-me" }), { onDelete });
+
+    await openActionsMenu();
+    const menu = await findActionsMenu();
+
+    await selectActionsMenuItem(menu, "Delete");
+    await waitFor(() => {
+      expect(container.textContent).toContain("Delete Environment");
+    });
+    expect(onDelete).not.toHaveBeenCalled();
+
+    const confirm = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Delete",
+    );
+    fireEvent.click(confirm!);
+    expect(onDelete).toHaveBeenCalledWith("env-1");
+  });
+});
+
+describe("EnvironmentItem on a desktop viewport", () => {
+  useViewport("desktop");
+
+  test("does not render the mobile actions trigger", () => {
+    renderItem(makeEnvironment());
+
+    expect(queryActionsTrigger()).toBeNull();
+  });
+
+  test("leaves the row as the only element matching its name", () => {
+    renderItem(makeEnvironment({ name: "test-env" }));
+
+    expect(screen.getAllByRole("button", { name: /test-env/ })).toHaveLength(1);
+  });
+
+  test("still exposes every action through the context menu", () => {
+    const { container } = renderItem(
+      makeEnvironment({ status: "running", entryPort: 3000, hostEntryPort: 49152 }),
+    );
+
+    expect(contextMenuLabels(container)).toEqual([
+      "Settings",
+      "Copy Address",
+      "Stop",
+      "Restart",
+      "Delete",
+    ]);
+  });
+});
+
+describe("EnvironmentItem multi-select", () => {
+  test("renders a selection checkbox only in multi-select mode", () => {
+    const { container: plain } = renderItem(makeEnvironment());
+    expect(plain.querySelector('input[type="checkbox"]')).toBeNull();
+
+    cleanup();
+
+    const { container: multi } = renderItem(makeEnvironment(), { isMultiSelectMode: true });
+    expect(multi.querySelector('input[type="checkbox"]')).not.toBeNull();
+  });
+
+  test("the checkbox sits outside the row's selectable region", () => {
+    const { container } = renderItem(makeEnvironment(), { isMultiSelectMode: true });
+
+    const checkbox = container.querySelector('input[type="checkbox"]');
+    expect(getRowButton(container).contains(checkbox)).toBe(false);
+  });
+
+  test("toggling the checkbox forwards a meta-click selection intent", () => {
+    const onSelect = mock(() => {});
+    const { container } = renderItem(makeEnvironment(), { isMultiSelectMode: true, onSelect });
+
+    fireEvent.click(container.querySelector('input[type="checkbox"]')!);
+    expect(onSelect).toHaveBeenCalledWith("env-1", { metaKey: true });
+  });
+
+  test("reflects the checked state without hiding the environment icon slot", () => {
+    const { container } = renderItem(makeEnvironment(), {
+      isMultiSelectMode: true,
+      isChecked: true,
+    });
+
+    expect((container.querySelector('input[type="checkbox"]') as HTMLInputElement).checked).toBe(true);
+    // The checkbox replaces the status icon rather than sitting beside it.
+    expect(container.querySelector('div[role="button"] svg')).toBeNull();
+  });
+
+  test("a deleting environment shows the delete spinner instead of the checkbox", () => {
+    useEnvironmentStore.getState().setDeleting("env-1", true);
+
+    const { container } = renderItem(makeEnvironment(), { isMultiSelectMode: true });
+
+    expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).toContain("text-destructive");
+    expect(icon?.getAttribute("class")).toContain("animate-spin");
+  });
+});
+
+describe("EnvironmentItem transitioning state", () => {
+  test("shows the amber spinner while the container is creating", () => {
+    const { container } = renderItem(makeEnvironment({ status: "creating" }));
+
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).toContain("text-amber-500");
+    expect(icon?.getAttribute("class")).toContain("animate-spin");
+  });
+
+  test("never shows the transitioning spinner for a local environment", () => {
+    const { container } = renderItem(
+      makeEnvironment({ environmentType: "local", containerId: null, status: "creating" }),
+    );
+
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).toContain("lucide-laptop");
+    expect(icon?.getAttribute("class")).not.toContain("animate-spin");
+  });
+
+  test("forwards a settings update and clears the spinner once the environment settles", () => {
+    const onUpdate = mock(() => {});
+    const { container, rerender } = renderItem(makeEnvironment({ status: "creating" }), {
+      onUpdate,
+    });
+
+    fireEvent.click(findMenuItem(container, "Settings")!);
+    const emit = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Emit transitioning update",
+    );
+    fireEvent.click(emit!);
+
+    expect(onUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "env-1", status: "creating" }),
+    );
+    expect(container.querySelector('div[role="button"] svg')?.getAttribute("class")).toContain(
+      "animate-spin",
+    );
+
+    // The parent reports the environment as settled; the local override the
+    // dialog set must not keep the spinner alive.
+    rerender(itemElement(makeEnvironment({ status: "running" }), { onUpdate }));
+
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).toContain("lucide-container");
+    expect(icon?.getAttribute("class")).not.toContain("animate-spin");
+  });
+
+  test("a settled settings update leaves a non-transitioning row unchanged", () => {
+    const onUpdate = mock(() => {});
+    const { container } = renderItem(makeEnvironment({ status: "running" }), { onUpdate });
+
+    fireEvent.click(findMenuItem(container, "Settings")!);
+    const emit = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Emit settled update",
+    );
+    fireEvent.click(emit!);
+
+    expect(onUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "env-1", status: "running" }),
+    );
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).not.toContain("animate-spin");
+  });
+
+  test("renders without an onUpdate handler", () => {
+    const { container } = renderItem(makeEnvironment());
+
+    fireEvent.click(findMenuItem(container, "Settings")!);
+    const emit = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Emit settled update",
+    );
+    expect(() => fireEvent.click(emit!)).not.toThrow();
+  });
+});
+
+describe("EnvironmentItem build pipeline naming", () => {
+  test("strips the Build: prefix and tints the name for build environments", () => {
+    useBuildPipelineStore.setState({ buildEnvironmentIds: new Set(["env-1"]) });
+
+    const { container } = renderItem(makeEnvironment({ name: "Build: checkout-flow" }));
+
+    const name = getRowButton(container).querySelector("span span span");
+    expect(name?.textContent).toBe("checkout-flow");
+    expect(name?.getAttribute("class")).toContain("text-yellow-400");
+  });
+
+  test("leaves the name untouched for a non-build environment", () => {
+    const { container } = renderItem(makeEnvironment({ name: "Build: checkout-flow" }));
+
+    expect(container.textContent).toContain("Build: checkout-flow");
   });
 });

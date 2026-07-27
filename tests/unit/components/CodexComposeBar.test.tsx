@@ -2,6 +2,11 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { forwardRef, useImperativeHandle } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
+import {
+  emitViewportChange,
+  restoreMatchMedia,
+  setMobileViewport,
+} from "../../mocks/match-media";
 
 const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
@@ -37,6 +42,7 @@ afterAll(() => {
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/hooks/useFileMentions", () => realUseFileMentionsSnapshot);
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
+  restoreMatchMedia();
 });
 
 // --- Module mocks (must be before component import) ---
@@ -232,6 +238,7 @@ function renderComposeBar(
 
 describe("CodexComposeBar", () => {
   beforeEach(() => {
+    setMobileViewport(false);
     mockReadImage.mockReset();
     mockWriteContainerFile.mockReset();
     mockWriteLocalFile.mockReset();
@@ -281,6 +288,28 @@ describe("CodexComposeBar", () => {
   test("renders input placeholder", () => {
     renderComposeBar();
     expect(screen.getByPlaceholderText("Ask Codex anything...")).toBeTruthy();
+  });
+
+  test("focuses on desktop but not on mobile mount", () => {
+    const desktop = renderComposeBar();
+    expect(mockInputFocus).toHaveBeenCalledTimes(1);
+
+    desktop.unmount();
+    mockInputFocus.mockClear();
+    setMobileViewport(true);
+    renderComposeBar();
+
+    expect(mockInputFocus).not.toHaveBeenCalled();
+  });
+
+  test("does not focus when the viewport widens past the mobile breakpoint", () => {
+    setMobileViewport(true);
+    renderComposeBar();
+    expect(mockInputFocus).not.toHaveBeenCalled();
+
+    act(() => emitViewportChange(false));
+
+    expect(mockInputFocus).not.toHaveBeenCalled();
   });
 
   test("renders selected model name in dropdown trigger", () => {

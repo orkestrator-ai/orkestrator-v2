@@ -96,6 +96,7 @@ export function CreateEnvironmentFlowDialog({
         null,
         agentSettings.opencodeMode,
         agentSettings.codexMode,
+        options.launchAgent,
       );
       updateEnvironment(environment.id, configuredEnvironment);
 

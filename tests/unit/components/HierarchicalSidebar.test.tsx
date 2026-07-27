@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { createElement, type ComponentProps } from "react";
 import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { mockReadImage } from "../../mocks/clipboard";
+import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import { useClaudeOptionsStore, useConfigStore, useUIStore } from "@/stores";
 import type { Environment, Project } from "@/types";
 import { ENVIRONMENT_LIST_RESYNC_INTERVAL_MS } from "@/hooks/useEnvironmentListSync";
@@ -152,6 +153,7 @@ afterAll(() => {
     "@/components/environments/EnvironmentSettingsDialog",
     () => realEnvironmentSettingsDialogSnapshot,
   );
+  restoreMatchMedia();
 });
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -200,6 +202,7 @@ function mockActivityRowOffsetTop(
 
 describe("HierarchicalSidebar", () => {
   beforeEach(() => {
+    setMobileViewport(false);
     cleanup();
     createEnvironmentMock.mockClear();
     updateEnvironmentAgentSettingsMock.mockClear();
@@ -1046,7 +1049,15 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
-      expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled();
+      expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalledWith(
+        "env-created",
+        "claude",
+        "terminal",
+        null,
+        null,
+        null,
+        true,
+      );
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "");
       expect(screen.queryByText("Create Ork (Environment)")).toBeNull();
@@ -1350,6 +1361,45 @@ describe("HierarchicalSidebar", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Environment Three" }));
     await waitFor(() => expect(startEnvironmentMock).toHaveBeenCalledWith("env-3"));
+  });
+
+  test("blurs the active input before activating an environment on mobile", () => {
+    setMobileViewport(true);
+    environmentsValue = [
+      { ...createdEnvironment, id: "env-mobile", name: "Mobile Environment" },
+    ];
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    try {
+      input.focus();
+      render(<HierarchicalSidebar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Mobile Environment" }));
+
+      expect(document.activeElement).not.toBe(input);
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-mobile");
+    } finally {
+      input.remove();
+    }
+  });
+
+  test("keeps the focused input on desktop when activating an environment", () => {
+    environmentsValue = [
+      { ...createdEnvironment, id: "env-desktop", name: "Desktop Environment" },
+    ];
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    try {
+      input.focus();
+      render(<HierarchicalSidebar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Desktop Environment" }));
+
+      expect(document.activeElement).toBe(input);
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-desktop");
+    } finally {
+      input.remove();
+    }
   });
 
   test("reports an automatic local environment start failure", async () => {

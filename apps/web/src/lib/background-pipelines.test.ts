@@ -258,6 +258,66 @@ describe("getBackgroundProcessingEnvironments", () => {
     expect(result).toEqual([env]);
   });
 
+  test("keeps durable pending agent launches mounted after renderer reload", () => {
+    const env = makeEnv("e1");
+
+    const result = getBackgroundProcessingEnvironments(
+      new Map(),
+      [env],
+      null,
+      new Set(),
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      ["e1"],
+    );
+
+    expect(result).toEqual([env]);
+  });
+
+  test("ignores blank ids in the durable pending agent launch list", () => {
+    const env = makeEnv("e1");
+
+    const result = getBackgroundProcessingEnvironments(
+      new Map(),
+      [env],
+      null,
+      new Set(),
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      ["", "e1"],
+    );
+
+    expect(result).toEqual([env]);
+  });
+
+  test("does not mount the visible environment for a durable pending agent launch", () => {
+    const env = makeEnv("e1");
+
+    const result = getBackgroundProcessingEnvironments(
+      new Map(),
+      [env],
+      "e1",
+      new Set(),
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      ["e1"],
+    );
+
+    expect(result).toEqual([]);
+  });
+
   test("returns environments with pending setup commands even before setup is marked running", () => {
     const env = makeEnv("e1");
 

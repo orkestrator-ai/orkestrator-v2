@@ -140,6 +140,11 @@ export interface Environment {
    * a per-window guess.
    */
   hasUnreadWork?: boolean;
+  /**
+   * Durable intent to open the configured agent once setup is ready. The
+   * backend owns this flag so mobile page eviction cannot lose the launch.
+   */
+  pendingAgentLaunch?: boolean;
   /** Initial prompt used when this environment was created. */
   initialPrompt?: string;
   /** Prompt awaiting a backend-owned rename after the environment starts. */

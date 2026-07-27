@@ -559,6 +559,7 @@ export function createEnvironment(
     opencodeMode: undefined,
     codexMode: undefined,
     setupScriptsComplete: false,
+    pendingAgentLaunch: false,
     initialPrompt: options.initialPrompt,
     pendingRenamePrompt: options.pendingRenamePrompt,
   };
@@ -1206,6 +1207,9 @@ export class StorageService {
         else if (typeof updates.setupScriptsComplete === "boolean") {
           environment.setupScriptsComplete = updates.setupScriptsComplete;
         }
+      }
+      if ("pendingAgentLaunch" in updates && typeof updates.pendingAgentLaunch === "boolean") {
+        environment.pendingAgentLaunch = updates.pendingAgentLaunch;
       }
       if ("claudeModelCatalog" in updates) {
         if (updates.claudeModelCatalog == null) {

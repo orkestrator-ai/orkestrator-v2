@@ -22,7 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useVirtuosoScrollState } from "@/hooks";
+import { useMediaQuery, useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
@@ -2428,6 +2428,7 @@ function TmuxComposeBar({
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const prevFileMentionMenuOpen = useRef(false);
   const pendingCursorPositionRef = useRef<number | null>(null);
+  const isMobile = useMediaQuery("(max-width: 767px)");
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const value = useClaudeTmuxStore((state) => state.draftText.get(sessionKey) ?? "");
   const fileMentions = useClaudeTmuxStore(
@@ -2813,7 +2814,7 @@ function TmuxComposeBar({
           }
           disabled={disabled || submitting}
           rows={2}
-          autoFocus={autoFocus}
+          autoFocus={autoFocus && !isMobile}
           className={cn(
             "w-full resize-none bg-transparent text-sm leading-5",
             "px-1 py-1 focus:outline-none placeholder:text-muted-foreground/60",

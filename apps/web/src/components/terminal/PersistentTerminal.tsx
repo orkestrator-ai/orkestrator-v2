@@ -4,6 +4,7 @@ import { writeText } from "@/lib/native/clipboard";
 import { useTerminal } from "@/hooks/useTerminal";
 import { useAgentState } from "@/hooks/useAgentState";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import { useTerminalSessionStore, createSessionKey, useConfigStore, usePaneLayoutStore, useEnvironmentStore } from "@/stores";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
@@ -104,6 +105,11 @@ export function PersistentTerminal({
   onSetupComplete,
   onWrite,
 }: PersistentTerminalProps) {
+  const isMobile = useMediaQuery("(max-width: 767px)");
+  // Mirrored into a ref so the focus effect below can read the current
+  // viewport without listing isMobile as a dependency: crossing the
+  // breakpoint must not re-fire focus on an already-active terminal.
+  const isMobileRef = useRef(isMobile);
   const terminalRef = useRef<HTMLDivElement>(null);
   const writeRef = useRef<(data: string) => Promise<void>>(() => Promise.resolve());
   const [isEnvironmentReady, setIsEnvironmentReady] = useState(false);
@@ -135,6 +141,10 @@ export function PersistentTerminal({
   const restorationInProgressRef = useRef<boolean>(false);
   // Track if initial buffer restoration has completed - prevents cleanup from overwriting buffer during mount cycle
   const initialRestorationCompleteRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    isMobileRef.current = isMobile;
+  }, [isMobile]);
 
   useEffect(() => {
     if (initialLaunchModel || initialLaunchReasoningEffort) {
@@ -1225,10 +1235,13 @@ export function PersistentTerminal({
     }
   }, [isEnvironmentReady, isConnected, tabType, tabId, initialPrompt, initialCommands, initialLaunchModel, initialLaunchReasoningEffort, isSetupTab, sessionKey, setHasLaunchedCommandStore]);
 
-  // Focus when active
+  // Focus when active. Mobile is excluded so activating a tab does not raise
+  // the on-screen keyboard; the terminal still fits, and tapping it focuses.
   useEffect(() => {
     if (isActive && isConnected) {
-      terminal.focus();
+      if (!isMobileRef.current) {
+        terminal.focus();
+      }
       scheduleFit();
     }
   }, [isActive, isConnected, terminal, scheduleFit]);

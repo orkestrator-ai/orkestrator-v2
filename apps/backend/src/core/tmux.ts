@@ -32,7 +32,12 @@ const PERMISSION_MODE_SWITCH_TIMEOUT_MS = 1_500;
 const PERMISSION_MODE_POLL_MS = 100;
 const BACKUP_SENTINEL_NO_ORIGINAL = "__orkestrator_no_original__";
 const CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN = ".claude/settings.local.json";
-const RUNTIME_ROOT_PREFIX = "/tmp/orkestrator-v2-claude-tmux";
+/**
+ * Root for per-environment tmux runtime state. Exported so tests can derive the
+ * same path instead of duplicating the literal: stopping a session removes this
+ * whole directory, so a test that guesses the path wrong cleans up nothing.
+ */
+export const RUNTIME_ROOT_PREFIX = "/tmp/orkestrator-v2-claude-tmux";
 /**
  * The thinking flags the launcher asks for. The probe below is built from these
  * same constants so the pair it validates can never drift from the pair the

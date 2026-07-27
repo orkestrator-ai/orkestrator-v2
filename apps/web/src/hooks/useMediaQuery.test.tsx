@@ -37,7 +37,14 @@ const originalMatchMedia = window.matchMedia;
 
 afterEach(() => {
   cleanup();
-  window.matchMedia = originalMatchMedia;
+  // defineProperty rather than assignment: the "matchMedia is unavailable"
+  // test replaces the property, and a plain assignment would not restore it
+  // if that descriptor were ever left non-writable.
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: originalMatchMedia,
+  });
 });
 
 describe("useMediaQuery", () => {
@@ -70,8 +77,16 @@ describe("useMediaQuery", () => {
   });
 
   test("returns false when matchMedia is unavailable", () => {
-    Object.defineProperty(window, "matchMedia", { configurable: true, value: undefined });
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
     const { result } = renderHook(() => useMediaQuery("(max-width: 767px)"));
     expect(result.current).toBe(false);
+  });
+
+  test("restores a working matchMedia for later suites", () => {
+    expect(typeof window.matchMedia).toBe(typeof originalMatchMedia);
   });
 });

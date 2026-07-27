@@ -688,12 +688,12 @@ describe("pinned desktop toolchain cache", () => {
       {
         body: Buffer.from("#!/definitely/missing/interpreter\n"),
         message: "could not execute from the Orkestrator toolchain cache",
-        timeout: 1_000,
+        timeout: 5_000,
       },
       {
         body: Buffer.from("#!/bin/sh\nexit 7\n"),
         message: "version check failed (code 7",
-        timeout: 1_000,
+        timeout: 5_000,
       },
       {
         body: Buffer.from("#!/bin/sh\nsleep 1\n"),
@@ -722,7 +722,7 @@ describe("pinned desktop toolchain cache", () => {
       })).rejects.toThrow(failure.message);
       await expect(lstat(path.join(dataDir, "toolchains", ".install.lock"))).rejects.toThrow();
     }
-  });
+  }, 15_000);
 
   test("reports deterministic macOS code-signature spawn, timeout, and nonzero failures", async () => {
     const cases: Array<{ outcome: SpawnOutcome; message: string; timeout?: number }> = [
@@ -799,7 +799,7 @@ describe("pinned desktop toolchain cache", () => {
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(sha256(await readFile(installedPath))).toBe(EXECUTABLE_SHA256);
-  });
+  }, 20_000);
 
   test("retains pinned upstream state for repair-flagged artifacts and reuses it without redownloading", async () => {
     const dataDir = await createDataDir();

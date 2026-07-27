@@ -2,6 +2,11 @@ import { afterAll, describe, expect, mock, test, beforeEach, afterEach } from "b
 import { act, render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { forwardRef, useImperativeHandle } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
+import {
+  emitViewportChange,
+  restoreMatchMedia,
+  setMobileViewport,
+} from "../../mocks/match-media";
 import { mockToastError } from "../../mocks/sonner";
 
 const mockWriteContainerFile = mock(async () => {});
@@ -49,6 +54,7 @@ afterAll(() => {
   mock.module("@/components/chat/FileMentionMenu", () => realFileMentionMenuSnapshot);
   mock.module("@/hooks/useFileMentions", () => realUseFileMentionsSnapshot);
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
+  restoreMatchMedia();
 });
 
 // --- Module mocks (must be before component import) ---
@@ -216,6 +222,7 @@ function renderComposeBar(overrides: Partial<Parameters<typeof ClaudeComposeBar>
 
 describe("ClaudeComposeBar", () => {
   beforeEach(() => {
+    setMobileViewport(false);
     mockReadImage.mockReset();
     mockWriteContainerFile.mockReset();
     mockWriteLocalFile.mockReset();
@@ -280,6 +287,29 @@ describe("ClaudeComposeBar", () => {
   test("renders input placeholder", () => {
     renderComposeBar();
     expect(screen.getByPlaceholderText("Ask Claude anything...")).toBeTruthy();
+  });
+
+  test("focuses the mentionable input on desktop mount", () => {
+    renderComposeBar();
+
+    expect(mockInputFocus).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not focus the mentionable input on mobile mount", () => {
+    setMobileViewport(true);
+    renderComposeBar();
+
+    expect(mockInputFocus).not.toHaveBeenCalled();
+  });
+
+  test("does not focus when the viewport widens past the mobile breakpoint", () => {
+    setMobileViewport(true);
+    renderComposeBar();
+    expect(mockInputFocus).not.toHaveBeenCalled();
+
+    act(() => emitViewportChange(false));
+
+    expect(mockInputFocus).not.toHaveBeenCalled();
   });
 
   test("renders model name in model dropdown trigger", () => {

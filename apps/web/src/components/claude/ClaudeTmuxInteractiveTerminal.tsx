@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import {
   createInteractiveTerminal,
   detachInteractiveTerminal,
@@ -37,6 +38,12 @@ export function ClaudeTmuxInteractiveTerminal({
   isActive,
   className,
 }: ClaudeTmuxInteractiveTerminalProps) {
+  const isMobile = useMediaQuery("(max-width: 767px)");
+  // Mirrored into a ref so neither the session-creating effect (whose cleanup
+  // disposes the terminal and detaches the tmux session) nor the activation
+  // effect has to depend on isMobile. Crossing the breakpoint must not tear
+  // down a live attachment or steal focus from an already-active terminal.
+  const isMobileRef = useRef(isMobile);
   const terminalHostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -44,6 +51,10 @@ export function ClaudeTmuxInteractiveTerminal({
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    isMobileRef.current = isMobile;
+  }, [isMobile]);
 
   const terminalAppearance = useConfigStore(
     (state) => state.config.global.terminalAppearance,
@@ -243,7 +254,9 @@ export function ClaudeTmuxInteractiveTerminal({
         setConnected(true);
         setError(null);
         fit();
-        terminal.focus();
+        if (!isMobileRef.current) {
+          terminal.focus();
+        }
       } catch (e) {
         cleanupCreatedSession();
         if (!cancelled) setError(String(e));
@@ -288,7 +301,9 @@ export function ClaudeTmuxInteractiveTerminal({
       } catch {
         return;
       }
-      terminal.focus();
+      if (!isMobileRef.current) {
+        terminal.focus();
+      }
     });
   }, [isActive]);
 

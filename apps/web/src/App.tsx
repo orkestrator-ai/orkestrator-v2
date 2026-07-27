@@ -171,6 +171,16 @@ function App() {
     [pendingSetupCommands],
   );
   const pendingNativeLaunches = useClaudeOptionsStore((state) => state.pendingNativeLaunches);
+  // Only a running environment can act on a durable launch, so only a running
+  // one earns a background mount. This matches the target selection in
+  // reconcileEnvironmentSetupSnapshots; a stopped environment has its intent
+  // cleared by the backend rather than waiting here.
+  const durablePendingAgentLaunchEnvironmentIds = useMemo(
+    () => environments
+      .filter((environment) => environment.pendingAgentLaunch && environment.status === "running")
+      .map((environment) => environment.id),
+    [environments],
+  );
   const paneLayoutEnvironments = usePaneLayoutStore((state) => state.environments);
   const pendingInitialPromptEnvironmentIds = useMemo(() => {
     const environmentIds: string[] = [];
@@ -269,6 +279,7 @@ function App() {
       queuedAgentPromptEnvironmentIds,
       pendingSetupEnvironmentIds,
       loopedReviews.values(),
+      durablePendingAgentLaunchEnvironmentIds,
     ),
     [
       pipelines,
@@ -281,6 +292,7 @@ function App() {
       loadingNativeSessionEnvironmentIds,
       queuedAgentPromptEnvironmentIds,
       loopedReviews,
+      durablePendingAgentLaunchEnvironmentIds,
     ],
   );
 

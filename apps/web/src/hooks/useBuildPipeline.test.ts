@@ -361,6 +361,52 @@ describe("useBuildPipeline", () => {
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-visible");
   });
 
+  test("startBuild records a durable launch intent for a Claude pipeline", async () => {
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        ["env-build", {
+          root: { kind: "leaf", id: "pane-build", tabs: [], activeTabId: null },
+          activePaneId: "pane-build",
+          containerId: "container-build",
+        }],
+      ]),
+      activeEnvironmentId: "env-visible",
+    });
+
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuild({
+        id: "task-claude",
+        projectId: "project-1",
+        title: "Build task",
+        description: "Ship the feature",
+        acceptanceCriteria: "All checks green",
+        status: "backlog",
+        comments: [],
+        images: [],
+        environmentId: undefined,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        order: 0,
+      }, "containerized", "claude");
+    });
+
+    // A Claude pipeline opens the agent through the renderer-memory options
+    // store, so the intent must also be recorded durably or a mobile page
+    // eviction before workspace-ready loses the launch.
+    await waitFor(() => {
+      expect(mockUpdateEnvironmentAgentSettings).toHaveBeenCalledWith(
+        "env-build",
+        "claude",
+        expect.anything(),
+        null,
+        null,
+        null,
+        true,
+      );
+    });
+  });
+
   test("startBuild propagates codexMode to environment agent settings", async () => {
     usePaneLayoutStore.setState({
       environments: new Map([
@@ -404,6 +450,9 @@ describe("useBuildPipeline", () => {
         null,
         null,
         "native",
+        // A Codex pipeline does not open a Claude agent tab, so there is no
+        // post-setup launch to record.
+        false,
       );
     });
 
@@ -501,6 +550,7 @@ describe("useBuildPipeline", () => {
       null,
       null,
       "native",
+      false,
     );
 
     const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId("task-feature");

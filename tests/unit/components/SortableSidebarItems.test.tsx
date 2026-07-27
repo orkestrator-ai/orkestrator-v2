@@ -6,7 +6,7 @@ import * as realEnvironmentItem from "@/components/environments/EnvironmentItem"
 
 const realSortableSnapshot = { ...realSortable };
 const realEnvironmentItemSnapshot = { ...realEnvironmentItem };
-const sortableState = { isDragging: false };
+const sortableState = { isDragging: false, dragPointerDown: mock(() => {}) };
 
 mock.module("@dnd-kit/sortable", () => ({
   ...realSortableSnapshot,
@@ -16,7 +16,7 @@ mock.module("@dnd-kit/sortable", () => ({
   verticalListSortingStrategy: {},
   useSortable: mock(() => ({
     attributes: { "data-sortable-attributes": "true" },
-    listeners: { onPointerDown: () => {} },
+    listeners: { onPointerDown: () => sortableState.dragPointerDown() },
     setNodeRef: () => {},
     transform: null,
     transition: null,
@@ -70,6 +70,7 @@ describe("sortable sidebar items", () => {
   afterEach(() => {
     cleanup();
     sortableState.isDragging = false;
+    sortableState.dragPointerDown.mockClear();
   });
 
   afterAll(() => {
@@ -98,6 +99,31 @@ describe("sortable sidebar items", () => {
     ) as HTMLElement;
     expect(selectedRow.className).toContain("border-zinc-700/70");
     expect(screen.getByRole("button", { name: "Feature Env" })).toBeTruthy();
+  });
+
+  test("SortableEnvironmentItem activates dragging from the grip handle only", () => {
+    const { container } = render(
+      <SortableEnvironmentItem
+        environment={environment}
+        isSelected={false}
+        onSelect={() => {}}
+        onDelete={() => {}}
+        onStart={() => {}}
+        onStop={() => {}}
+        onRestart={() => {}}
+      />,
+    );
+
+    const grip = container.querySelector('button[data-sortable-attributes="true"]');
+    expect(grip).not.toBeNull();
+
+    fireEvent.pointerDown(grip!);
+    expect(sortableState.dragPointerDown).toHaveBeenCalledTimes(1);
+
+    // The row keeps its own controls (selection, and an actions button on
+    // mobile), so drag activation must stay off the environment row itself.
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Feature Env" }));
+    expect(sortableState.dragPointerDown).toHaveBeenCalledTimes(1);
   });
 
   test("SortableProjectGroup renders project count, selected environment, and add action", () => {

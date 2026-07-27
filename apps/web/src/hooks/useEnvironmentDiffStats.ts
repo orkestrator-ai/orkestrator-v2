@@ -15,7 +15,7 @@ interface DiffPollEnv {
   worktreePath?: string;
   status: string;
   containerId?: string | null;
-  createdFromCommit?: string;
+  comparisonRef: string;
 }
 
 type DiffPollTarget =
@@ -39,7 +39,7 @@ function getDiffPollEnvKey(env: DiffPollEnv): string {
     env.worktreePath ?? "",
     env.status,
     env.containerId ?? "",
-    env.createdFromCommit ?? "",
+    env.comparisonRef,
   ]);
 }
 
@@ -49,14 +49,14 @@ function getDiffPollEnvKey(env: DiffPollEnv): string {
  */
 export function useEnvironmentDiffStats() {
   const environments = useEnvironmentStore((s) => s.environments);
-  const getRepositoryConfig = useConfigStore((s) => s.getRepositoryConfig);
+  const repositoryConfigs = useConfigStore((s) => s.config?.repositories);
   const setStats = useEnvironmentDiffStore((s) => s.setStats);
   const pruneStats = useEnvironmentDiffStore((s) => s.pruneStats);
   const loadingRef = useRef(new Set<string>());
 
   // Derive a stable snapshot of only the fields we need, keyed by a string
-  // of IDs so the effect only re-runs when the environment list itself changes
-  // (not on unrelated field updates like name changes).
+  // of IDs so the effect only re-runs when availability or the comparison
+  // baseline changes (not on unrelated field updates like name changes).
   const envSnapshot = useMemo<DiffPollEnv[]>(
     () =>
       environments.map((e) => ({
@@ -66,13 +66,16 @@ export function useEnvironmentDiffStats() {
         worktreePath: e.worktreePath,
         status: e.status,
         containerId: e.containerId,
-        createdFromCommit: e.createdFromCommit,
+        comparisonRef:
+          e.createdFromCommit
+          || repositoryConfigs?.[e.projectId]?.prBaseBranch
+          || "main",
       })),
-    [environments]
+    [environments, repositoryConfigs]
   );
 
   // Stable identity string that only changes when the set of environments
-  // or their availability-relevant fields change.
+  // or their availability/baseline fields change.
   const envKey = useMemo(
     () => JSON.stringify(envSnapshot.map(getDiffPollEnvKey)),
     [envSnapshot]
@@ -82,9 +85,6 @@ export function useEnvironmentDiffStats() {
   // reads current data without needing to be in the dependency array.
   const envRef = useRef(envSnapshot);
   envRef.current = envSnapshot;
-
-  const getRepositoryConfigRef = useRef(getRepositoryConfig);
-  getRepositoryConfigRef.current = getRepositoryConfig;
 
   useEffect(() => {
     const fetchStatsForEnvironment = async (env: DiffPollEnv) => {
@@ -100,18 +100,15 @@ export function useEnvironmentDiffStats() {
       if (!target) return;
 
       const requestKey = getDiffPollEnvKey(env);
-      const repoConfig = getRepositoryConfigRef.current(env.projectId);
-      const comparisonRef = env.createdFromCommit || repoConfig?.prBaseBranch || "main";
 
       loadingRef.current.add(env.id);
       try {
         const changes: backend.GitFileChange[] = target.kind === "local"
-          ? await backend.getLocalGitStatus(target.worktreePath, comparisonRef, true)
-          : await backend.getGitStatus(target.containerId, comparisonRef, true);
+          ? await backend.getLocalGitStatus(target.worktreePath, env.comparisonRef, true)
+          : await backend.getGitStatus(target.containerId, env.comparisonRef, true);
 
         // The snapshot this result describes may have been replaced while the
-        // request was open - most commonly by createdFromCommit being recorded,
-        // which changes the ref the stats are measured against.
+        // request was open, including a change to the ref the stats use.
         const isCurrentEnvironment = envRef.current.some(
           (currentEnv) => getDiffPollEnvKey(currentEnv) === requestKey,
         );
@@ -140,9 +137,15 @@ export function useEnvironmentDiffStats() {
 
     const fetchAll = () => {
       const currentEnvs = envRef.current;
-      // Prune stats for environments that no longer exist
-      const currentIds = new Set(currentEnvs.map((e) => e.id));
-      pruneStats(currentIds);
+      // An environment can remain in the list after its worktree/container stops
+      // being available. Retaining its id here would leave its last successful
+      // counts visible even though there is no current snapshot to display.
+      const pollableIds = new Set(
+        currentEnvs
+          .filter((env) => resolveDiffPollTarget(env) !== undefined)
+          .map((env) => env.id),
+      );
+      pruneStats(pollableIds);
 
       currentEnvs.forEach(fetchStatsForEnvironment);
     };

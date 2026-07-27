@@ -122,6 +122,21 @@ mock.module("@/lib/claude-client", () => ({
 }));
 
 mock.module("@/lib/backend", () => ({
+  claimPromptQueueHead: mock(async (
+    queueKey: string,
+    environmentId: string,
+    _expectedMessageId: string,
+    candidateMessages: Array<{ id: string }>,
+  ) => ({
+    claimed: candidateMessages[0] ?? null,
+    queue: {
+      queueKey,
+      environmentId,
+      messages: candidateMessages.slice(1),
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    },
+  })),
   startClaudeServer: mock(async () => ({ hostPort: 9999 })),
   getClaudeServerStatus: mock(async () => ({ running: true, hostPort: 9999 })),
   getClaudeServerLog: mock(async () => ""),

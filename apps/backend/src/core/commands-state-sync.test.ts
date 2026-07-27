@@ -21,6 +21,12 @@ async function withCommands<T>(
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-state-sync-"));
   const storage = new StorageService(dataDir);
   await storage.init();
+  await storage.addEnvironment({
+    id: "e1", name: "Env", projectId: "proj-1", status: "running",
+    environmentType: "local", branch: "main", order: 0,
+    containerId: null, prUrl: null, prState: null, hasMergeConflicts: null,
+    networkAccessMode: "restricted", createdAt: new Date(0).toISOString(),
+  });
   const commands = createCommandRegistry();
   const context = {
     appRoot: "",
@@ -114,6 +120,48 @@ describe("prompt queue commands", () => {
     });
   });
 
+  test("atomically claims the expected queue head", async () => {
+    await withCommands(async (invoke) => {
+      const candidateMessages = [{ id: "m1" }, { id: "m2" }];
+      await expect(invoke("claim_prompt_queue_head", {
+        queueKey: KEY,
+        environmentId: "e1",
+        expectedMessageId: "m1",
+        candidateMessages,
+      })).resolves.toMatchObject({
+        claimed: { id: "m1" },
+        queue: { messages: [{ id: "m2" }], revision: 1 },
+      });
+
+      await expect(invoke("claim_prompt_queue_head", {
+        queueKey: KEY,
+        environmentId: "e1",
+        expectedMessageId: "m1",
+        candidateMessages,
+      })).resolves.toMatchObject({
+        claimed: null,
+        queue: { messages: [{ id: "m2" }], revision: 1 },
+      });
+    });
+  });
+
+  test("rejects malformed atomic-claim arguments", async () => {
+    await withCommands(async (invoke) => {
+      await expect(invoke("claim_prompt_queue_head", {
+        queueKey: KEY,
+        environmentId: "e1",
+        expectedMessageId: "",
+        candidateMessages: [],
+      })).rejects.toThrow();
+      await expect(invoke("claim_prompt_queue_head", {
+        queueKey: KEY,
+        environmentId: "e1",
+        expectedMessageId: "m1",
+        candidateMessages: "bad",
+      })).rejects.toThrow("must be an array");
+    });
+  });
+
   test("rejects blank identifiers", async () => {
     await withCommands(async (invoke) => {
       await expect(invoke("save_prompt_queue", {
@@ -184,15 +232,20 @@ describe("build pipeline commands", () => {
 
 describe("set_environment_unread", () => {
   async function seedEnvironment(storage: StorageService): Promise<void> {
-    await storage.addProject({
-      id: "proj-1", name: "Project", gitUrl: "https://example.com/repo.git",
-      localPath: null, order: 0, createdAt: new Date().toISOString(),
-    } as never);
-    await storage.addEnvironment({
-      id: "e1", name: "Env", projectId: "proj-1", status: "running",
-      environmentType: "local", branch: "main", order: 0,
-      createdAt: new Date().toISOString(),
-    } as never);
+    if (!await storage.getProject("proj-1")) {
+      await storage.addProject({
+        id: "proj-1", name: "Project", gitUrl: "https://example.com/repo.git",
+        localPath: null, order: 0, addedAt: new Date().toISOString(),
+      });
+    }
+    if (!await storage.getEnvironment("e1")) {
+      await storage.addEnvironment({
+        id: "e1", name: "Env", projectId: "proj-1", status: "running",
+        environmentType: "local", branch: "main", order: 0,
+        containerId: null, prUrl: null, prState: null, hasMergeConflicts: null,
+        networkAccessMode: "restricted", createdAt: new Date().toISOString(),
+      });
+    }
   }
 
   test("sets and clears the badge on the environment record", async () => {
@@ -201,7 +254,9 @@ describe("set_environment_unread", () => {
 
       await expect(invoke("set_environment_unread", { environmentId: "e1", unread: true }))
         .resolves.toMatchObject({ id: "e1", hasUnreadWork: true });
-      await expect(invoke("set_environment_unread", { environmentId: "e1", unread: false }))
+      await expect(invoke("set_environment_unread", {
+        environmentId: "e1", unread: false, expectedLastActivityAt: null,
+      }))
         .resolves.toMatchObject({ id: "e1", hasUnreadWork: false });
     });
   });
@@ -222,6 +277,75 @@ describe("set_environment_unread", () => {
     await withCommands(async (invoke) => {
       await expect(invoke("set_environment_unread", { environmentId: "missing", unread: true }))
         .rejects.toThrow("not found");
+    });
+  });
+
+  test("does not let a delayed clear erase a newer completion", async () => {
+    await withCommands(async (invoke, storage) => {
+      await seedEnvironment(storage);
+      const first = "2026-01-01T00:00:00.000Z";
+      const second = "2026-01-01T00:00:01.000Z";
+
+      await expect(invoke("record_environment_completion", {
+        environmentId: "e1", occurredAt: first,
+      })).resolves.toMatchObject({ lastActivityAt: first, hasUnreadWork: true });
+
+      await expect(invoke("record_environment_completion", {
+        environmentId: "e1", occurredAt: second,
+      })).resolves.toMatchObject({ lastActivityAt: second, hasUnreadWork: true });
+
+      await expect(invoke("set_environment_unread", {
+        environmentId: "e1",
+        unread: false,
+        expectedLastActivityAt: first,
+      })).resolves.toMatchObject({ lastActivityAt: second, hasUnreadWork: true });
+    });
+  });
+
+  test("guards an absent activity token with explicit null", async () => {
+    await withCommands(async (invoke, storage) => {
+      await seedEnvironment(storage);
+      const completion = "2026-01-01T00:00:00.000Z";
+
+      await invoke("record_environment_completion", {
+        environmentId: "e1", occurredAt: completion,
+      });
+      await expect(invoke("set_environment_unread", {
+        environmentId: "e1",
+        unread: false,
+        expectedLastActivityAt: null,
+      })).resolves.toMatchObject({ lastActivityAt: completion, hasUnreadWork: true });
+    });
+  });
+
+  test("rejects a malformed clear token instead of clearing without a guard", async () => {
+    await withCommands(async (invoke, storage) => {
+      await seedEnvironment(storage);
+      await invoke("set_environment_unread", { environmentId: "e1", unread: true });
+
+      await expect(invoke("set_environment_unread", {
+        environmentId: "e1",
+        unread: false,
+        expectedLastActivityAt: 42,
+      })).rejects.toThrow("Expected expectedLastActivityAt to be a string");
+      expect(await storage.getEnvironment("e1")).toMatchObject({ hasUnreadWork: true });
+    });
+  });
+
+  test("ignores a stale completion without raising a new badge", async () => {
+    await withCommands(async (invoke, storage) => {
+      await seedEnvironment(storage);
+      const newest = "2026-01-01T00:00:01.000Z";
+      await invoke("record_environment_completion", {
+        environmentId: "e1", occurredAt: newest,
+      });
+      await invoke("set_environment_unread", {
+        environmentId: "e1", unread: false, expectedLastActivityAt: newest,
+      });
+
+      await expect(invoke("record_environment_completion", {
+        environmentId: "e1", occurredAt: "2026-01-01T00:00:00.000Z",
+      })).resolves.toMatchObject({ lastActivityAt: newest, hasUnreadWork: false });
     });
   });
 });

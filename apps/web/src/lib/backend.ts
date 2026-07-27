@@ -114,6 +114,14 @@ export async function recordEnvironmentActivity(
   return invoke<Environment>("record_environment_activity", { environmentId, occurredAt });
 }
 
+/** Atomically records a completed turn and marks its environment unread. */
+export async function recordEnvironmentCompletion(
+  environmentId: string,
+  occurredAt: string,
+): Promise<Environment> {
+  return invoke<Environment>("record_environment_completion", { environmentId, occurredAt });
+}
+
 export async function createEnvironment(
   projectId: string,
   name?: string,
@@ -1451,8 +1459,13 @@ export async function deleteBuildPipeline(pipelineId: string): Promise<void> {
 export async function setEnvironmentUnread(
   environmentId: string,
   unread: boolean,
+  expectedLastActivityAt?: string | null,
 ): Promise<Environment> {
-  return invoke<Environment>("set_environment_unread", { environmentId, unread });
+  return invoke<Environment>("set_environment_unread", {
+    environmentId,
+    unread,
+    ...(expectedLastActivityAt === undefined ? {} : { expectedLastActivityAt }),
+  });
 }
 
 // --- Prompt Queues ---
@@ -1480,6 +1493,23 @@ export async function savePromptQueue<T>(
     environmentId,
     messages,
     ...(expectedRevision === undefined ? {} : { expectedRevision }),
+  });
+}
+
+export async function claimPromptQueueHead<T>(
+  queueKey: string,
+  environmentId: string,
+  expectedMessageId: string,
+  candidateMessages: T[],
+): Promise<{
+  claimed: T | null;
+  queue: PersistedPromptQueue<T> | null;
+}> {
+  return invoke("claim_prompt_queue_head", {
+    queueKey,
+    environmentId,
+    expectedMessageId,
+    candidateMessages,
   });
 }
 

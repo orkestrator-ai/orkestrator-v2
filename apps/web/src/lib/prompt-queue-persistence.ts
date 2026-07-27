@@ -109,6 +109,7 @@ function hasUnflushedLocalEdit<TItem extends QueuedItem>(
 function applyPersisted<TItem extends QueuedItem>(
   source: PromptQueueSource<TItem>,
   persisted: PersistedPromptQueue<TItem>,
+  options: { force?: boolean } = {},
 ): void {
   const parsed = parsePromptQueueKey(persisted.queueKey);
   if (!parsed || parsed.agent !== source.agent) return;
@@ -122,7 +123,8 @@ function applyPersisted<TItem extends QueuedItem>(
   // and adopting that is what stops two clients both dispatching the same head.
   const observedRevision = queueRevisions.get(persisted.queueKey);
   if (
-    observedRevision !== undefined
+    !options.force
+    && observedRevision !== undefined
     && persisted.revision <= observedRevision
     && hasUnflushedLocalEdit(source, parsed.sessionKey, persisted.queueKey)
   ) {
@@ -138,6 +140,66 @@ function applyPersisted<TItem extends QueuedItem>(
   queueRevisions.set(persisted.queueKey, persisted.revision);
   lastWritten.set(persisted.queueKey, JSON.stringify(messages));
   source.setQueue(parsed.sessionKey, messages);
+}
+
+export type PromptQueueClaimer = <TItem extends QueuedItem>(
+  queueKey: string,
+  environmentId: string,
+  expectedMessageId: string,
+  candidateMessages: TItem[],
+) => Promise<{
+  claimed: TItem | null;
+  queue: PersistedPromptQueue<TItem> | null;
+}>;
+
+/**
+ * Atomically takes one queue head from the backend before its irreversible
+ * agent dispatch.
+ *
+ * The candidate list closes the short window where a newly queued local item
+ * has not reached the debounced mirror yet. The backend either seeds and claims
+ * that list in one locked mutation, or claims the matching head from the record
+ * another client already wrote. A competing client sees a different head and
+ * receives no claim.
+ */
+export async function claimPromptQueueHead<TItem extends QueuedItem>(
+  source: PromptQueueSource<TItem>,
+  sessionKey: string,
+  claim: PromptQueueClaimer = backend.claimPromptQueueHead,
+): Promise<TItem | null> {
+  const environmentId = source.environmentIdFor(sessionKey);
+  if (!environmentId) return null;
+
+  const messages = [...(source.getQueues().get(sessionKey) ?? [])];
+  const expected = messages[0];
+  if (!expected) return null;
+
+  const queueKey = promptQueueKey(source.agent, sessionKey);
+  const result = await claim(
+    queueKey,
+    environmentId,
+    expected.id,
+    messages,
+  );
+  if (result.queue) {
+    applyPersisted(source, result.queue, { force: true });
+  } else if (!result.claimed) {
+    // The environment/queue disappeared while this client was preparing the
+    // claim. Do not keep a locally dispatchable ghost queue.
+    queueRevisions.delete(queueKey);
+    lastWritten.delete(queueKey);
+    source.setQueue(sessionKey, []);
+  }
+
+  const claimed = result.claimed;
+  return (
+    typeof claimed === "object"
+    && claimed !== null
+    && typeof claimed.id === "string"
+    && claimed.id === expected.id
+  )
+    ? claimed
+    : null;
 }
 
 /**
@@ -208,12 +270,15 @@ export function startPromptQueuePersistence(
   const save = options.save ?? backend.savePromptQueue;
   const load = options.load ?? backend.getPromptQueue;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const retryAttempts = new Map<string, number>();
   const chains = new Map<string, Promise<void>>();
   const unsubscribes: Array<() => void> = [];
+  let detached = false;
   interface PendingWrite {
     source: PromptQueueSource;
     sessionKey: string;
     environmentId: string;
+    fingerprint: string;
   }
   const pending = new Map<string, PendingWrite>();
 
@@ -221,6 +286,25 @@ export function startPromptQueuePersistence(
     const timer = timers.get(queueKey);
     if (timer) clearTimeout(timer);
     timers.delete(queueKey);
+  };
+
+  const schedule = (queueKey: string, delayMs: number) => {
+    if (detached || !pending.has(queueKey)) return;
+    cancelTimer(queueKey);
+    timers.set(queueKey, setTimeout(() => {
+      void flush(queueKey);
+    }, delayMs));
+  };
+
+  const scheduleRetry = (queueKey: string) => {
+    const attempt = (retryAttempts.get(queueKey) ?? 0) + 1;
+    retryAttempts.set(queueKey, attempt);
+    // Bound the retry cadence so an unavailable backend cannot create a hot
+    // loop. Dirty state remains pending even after the automatic attempts are
+    // exhausted, allowing a later mutation/pagehide/detach flush to retry it.
+    if (attempt <= 5) {
+      schedule(queueKey, Math.min(5_000, 100 * (2 ** (attempt - 1))));
+    }
   };
 
   const write = (
@@ -233,7 +317,12 @@ export function startPromptQueuePersistence(
     const next = previous.then(async () => {
       const messages = source.getQueues().get(sessionKey) ?? [];
       const serialized = JSON.stringify(messages);
-      if (lastWritten.get(queueKey) === serialized) return;
+      if (lastWritten.get(queueKey) === serialized) {
+        const queued = pending.get(queueKey);
+        if (queued?.fingerprint === serialized) pending.delete(queueKey);
+        retryAttempts.delete(queueKey);
+        return;
+      }
       try {
         const saved = await save(
           queueKey,
@@ -243,6 +332,9 @@ export function startPromptQueuePersistence(
         );
         queueRevisions.set(queueKey, saved.revision);
         lastWritten.set(queueKey, serialized);
+        const queued = pending.get(queueKey);
+        if (queued?.fingerprint === serialized) pending.delete(queueKey);
+        retryAttempts.delete(queueKey);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (message.includes("revision conflict")) {
@@ -251,7 +343,9 @@ export function startPromptQueuePersistence(
           // a duplicate dispatch.
           const winner = await load(queueKey).catch(() => null);
           if (winner) {
-            applyPersisted(source, winner);
+            applyPersisted(source, winner, { force: true });
+            pending.delete(queueKey);
+            retryAttempts.delete(queueKey);
             return;
           }
         }
@@ -259,6 +353,7 @@ export function startPromptQueuePersistence(
           `[PromptQueue] Failed to persist queue ${sessionKey}:`,
           message,
         );
+        scheduleRetry(queueKey);
       }
     });
     chains.set(queueKey, next);
@@ -272,7 +367,6 @@ export function startPromptQueuePersistence(
     const entry = pending.get(queueKey);
     if (!entry) return undefined;
     cancelTimer(queueKey);
-    pending.delete(queueKey);
     return write(entry.source, entry.sessionKey, queueKey, entry.environmentId);
   };
 
@@ -298,11 +392,10 @@ export function startPromptQueuePersistence(
         // unscoped queue could never be cleaned up when its environment goes.
         if (!environmentId) continue;
         const queueKey = promptQueueKey(source.agent, sessionKey);
-        pending.set(queueKey, { source, sessionKey, environmentId });
-        cancelTimer(queueKey);
-        timers.set(queueKey, setTimeout(() => {
-          void flush(queueKey);
-        }, debounceMs));
+        const fingerprint = JSON.stringify(current ?? []);
+        pending.set(queueKey, { source, sessionKey, environmentId, fingerprint });
+        retryAttempts.delete(queueKey);
+        schedule(queueKey, debounceMs);
       }
     }));
   }
@@ -315,6 +408,9 @@ export function startPromptQueuePersistence(
   return () => {
     for (const unsubscribe of unsubscribes) unsubscribe();
     window.removeEventListener("pagehide", onPageHide);
+    for (const timer of timers.values()) clearTimeout(timer);
+    timers.clear();
+    detached = true;
     // Start the outstanding writes while the backend connection still exists.
     // A queue the user just added to must not be lost to teardown.
     void flushAll();

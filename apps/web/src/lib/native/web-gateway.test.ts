@@ -26,6 +26,7 @@ type TestGatewayWindow = {
 
 class MockEventSource {
   static instances: MockEventSource[] = [];
+  onopen: (() => void) | null = null;
   onmessage: ((message: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
@@ -252,6 +253,11 @@ describe("web gateway browser API", () => {
       token: "direct-token-123456",
       eventReconnectDelayMs: 0,
     });
+    const connected = mock(() => undefined);
+    const stopConnected = api.listen(
+      "native-event-stream-connected",
+      connected,
+    );
 
     try {
       const payload = await new Promise<string>((resolve) => {
@@ -263,9 +269,29 @@ describe("web gateway browser API", () => {
       expect(payload).toBe("reconnected");
       expect(attempt).toBe(2);
       expect(warning).toHaveBeenCalledTimes(1);
+      expect(connected).toHaveBeenCalledTimes(1);
     } finally {
+      stopConnected();
       console.warn = originalWarn;
     }
+  });
+
+  test("announces every browser EventSource connection", () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+    const connected = mock(() => undefined);
+    const unsubscribe = api.listen(
+      "native-event-stream-connected",
+      connected,
+    );
+    const source = MockEventSource.instances[0];
+    if (!source) throw new Error("EventSource was not created");
+
+    source.onopen?.();
+    source.onopen?.();
+
+    expect(connected).toHaveBeenCalledTimes(2);
+    unsubscribe();
   });
 
   test("throws gateway invoke errors from non-ok responses", async () => {

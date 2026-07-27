@@ -76,6 +76,12 @@ describe("isResourceChange", () => {
     expect(isResourceChange(change({ revision: Number.POSITIVE_INFINITY }))).toBe(false);
   });
 
+  test("rejects a revision that cannot be part of the positive integer sequence", () => {
+    for (const revision of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(isResourceChange(change({ revision }))).toBe(false);
+    }
+  });
+
   test("rejects a non-number revision", () => {
     expect(isResourceChange(change({ revision: "1" as never }))).toBe(false);
     expect(isResourceChange({ resource: "environment", id: "env-1" })).toBe(false);

@@ -95,6 +95,21 @@ const mockGetOpencodeModelPreferences = mock<
   favorite: [] as OpenCodeModelRef[],
   variant: {} as Record<string, string>,
 }));
+const mockClaimPromptQueueHead = mock(async (
+  queueKey: string,
+  environmentId: string,
+  _expectedMessageId: string,
+  candidateMessages: Array<{ id: string }>,
+) => ({
+  claimed: candidateMessages[0] ?? null,
+  queue: {
+    queueKey,
+    environmentId,
+    messages: candidateMessages.slice(1),
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    revision: 1,
+  },
+}));
 
 mock.module("@/lib/opencode-client", () => ({
   ...realOpenCodeClientSnapshot,
@@ -117,6 +132,7 @@ mock.module("@/lib/opencode-client", () => ({
 }));
 
 mock.module("@/lib/backend", () => ({
+  claimPromptQueueHead: mockClaimPromptQueueHead,
   startOpenCodeServer: mockStartOpenCodeServer,
   getOpenCodeServerStatus: mockGetOpenCodeServerStatus,
   getOpenCodeServerLog: mockGetOpenCodeServerLog,
@@ -460,6 +476,22 @@ afterAll(() => {
 describe("OpenCodeChatTab", () => {
   beforeEach(() => {
     cleanup();
+    mockClaimPromptQueueHead.mockReset();
+    mockClaimPromptQueueHead.mockImplementation(async (
+      queueKey,
+      environmentId,
+      _expectedMessageId,
+      candidateMessages,
+    ) => ({
+      claimed: candidateMessages[0] ?? null,
+      queue: {
+        queueKey,
+        environmentId,
+        messages: candidateMessages.slice(1),
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        revision: 1,
+      },
+    }));
     composeText = "Rename the environment";
     composeAttachments = [];
     mockRenameEnvironmentFromPrompt.mockClear();
@@ -1612,6 +1644,40 @@ describe("OpenCodeChatTab", () => {
         }),
       );
     });
+  });
+
+  test("a failed backend claim does not spin or dispatch the unclaimed prompt", async () => {
+    const originalError = console.error;
+    console.error = mock(() => undefined) as unknown as typeof console.error;
+    mockClaimPromptQueueHead.mockRejectedValueOnce(new Error("claim unavailable"));
+    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "Keep queued",
+      attachments: [],
+      model: "openai/gpt-5",
+      mode: "build",
+    });
+    try {
+      render(
+        <OpenCodeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={false}
+        />,
+      );
+
+      await waitFor(() => expect(mockClaimPromptQueueHead).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      expect(mockClaimPromptQueueHead).toHaveBeenCalledTimes(1);
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+      expect(useOpenCodeStore.getState().messageQueue.get(SESSION_KEY))
+        .toEqual([expect.objectContaining({ id: "queue-1" })]);
+    } finally {
+      console.error = originalError;
+    }
   });
 
   test("removes a queued prompt and records an error when queued send fails", async () => {

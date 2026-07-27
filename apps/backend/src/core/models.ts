@@ -55,6 +55,15 @@ export interface Environment {
   projectId: string;
   /** Persisted association used to recover a build pipeline after renderer remount. */
   buildPipelineId?: string;
+  /**
+   * Set before durable child state is removed.
+   *
+   * Queue and pipeline writes reject an environment carrying this marker, so a
+   * delayed renderer write cannot recreate state after deletion cleanup has
+   * passed. The marker intentionally remains when cleanup fails: a retry may
+   * continue deletion, but background work must not resume in the meantime.
+   */
+  deletionRequestedAt?: string;
   name: string;
   branch: string;
   containerId: string | null;

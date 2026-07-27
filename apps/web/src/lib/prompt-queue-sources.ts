@@ -1,5 +1,9 @@
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
-import type { PromptQueueSource } from "@/lib/prompt-queue-persistence";
+import {
+  claimPromptQueueHead,
+  type PromptQueueSource,
+  type QueuedItem,
+} from "@/lib/prompt-queue-persistence";
 import { useClaudeStore } from "@/stores/claudeStore";
 import {
   getEnvironmentIdFromClaudeTmuxStateKey,
@@ -53,8 +57,11 @@ function createSource(
  * Every agent whose queue is mirrored. Claude native, Codex and OpenCode share
  * the `env-{id}:{tab}` key; tmux uses its own scoped form.
  */
-export function createPromptQueueSources(): PromptQueueSource[] {
-  return [
+let sharedSources: PromptQueueSource[] | null = null;
+
+function getSharedSources(): PromptQueueSource[] {
+  if (sharedSources) return sharedSources;
+  sharedSources = [
     createSource(
       "claude",
       useClaudeStore as unknown as AnyQueueStore,
@@ -76,4 +83,26 @@ export function createPromptQueueSources(): PromptQueueSource[] {
       getEnvironmentIdFromClaudeTmuxStateKey,
     ),
   ];
+  return sharedSources;
+}
+
+export function createPromptQueueSources(): PromptQueueSource[] {
+  return [...getSharedSources()];
+}
+
+/**
+ * Claims one queued prompt for an agent tab. Agent components use this instead
+ * of synchronously removing from their renderer store, so no prompt leaves the
+ * process until the backend has granted this client ownership.
+ */
+export async function claimAgentPromptQueueHead<TItem extends QueuedItem>(
+  agent: string,
+  sessionKey: string,
+): Promise<TItem | null> {
+  const source = getSharedSources().find((candidate) => candidate.agent === agent);
+  if (!source) return null;
+  return claimPromptQueueHead(
+    source as unknown as PromptQueueSource<TItem>,
+    sessionKey,
+  );
 }

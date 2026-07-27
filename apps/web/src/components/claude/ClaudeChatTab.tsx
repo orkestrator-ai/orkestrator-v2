@@ -58,7 +58,8 @@ import type { ClaudeNativeData } from "@/types/paneLayout";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
-import type { ClaudeAttachment } from "@/stores/claudeStore";
+import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
+import type { ClaudeAttachment, QueuedMessage } from "@/stores/claudeStore";
 import { normalizeClaudeMessagesForDisplay } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 
@@ -172,7 +173,6 @@ export function ClaudeChatTab({
     isFastMode,
     getSessionKeyBySdkSessionId,
     addToQueue,
-    removeFromQueue,
     clients: clientsMap,
     sessions: sessionsMap,
     pendingQuestions: pendingQuestionsMap,
@@ -1508,48 +1508,44 @@ export function ClaudeChatTab({
       !setupPending &&
       !isProcessingQueueRef.current
     ) {
-      const nextMessage = removeFromQueue(sessionKey);
-      if (nextMessage) {
-        // Set flag to prevent double-processing during state transitions
-        isProcessingQueueRef.current = true;
-
-        // Send the queued message using handleSend
-        const sendPromise = handleSendRef.current?.(
-          nextMessage.text,
-          nextMessage.attachments,
-          nextMessage.effort,
-          nextMessage.planModeEnabled,
-          nextMessage.fastModeEnabled
-        );
-
-        // Handle completion/errors and reset the processing flag
-        if (sendPromise) {
-          sendPromise
-            .catch((error) => {
-              console.error("[ClaudeChatTab] Failed to send queued message:", error);
-              // Add error message to inform user which queued message failed
-              const errorMessage: ClaudeMessageType = {
-                id: `${ERROR_MESSAGE_PREFIX}${createUuid()}`,
-                role: "assistant",
-                content: `Failed to send queued message: ${error instanceof Error ? error.message : "Unknown error"}`,
-                parts: [{ type: "text", content: `Failed to send queued message: ${error instanceof Error ? error.message : "Unknown error"}` }],
-                timestamp: new Date().toISOString(),
-              };
-              addMessage(sessionKey, errorMessage);
-              setSessionLoading(sessionKey, false);
-            })
-            .finally(() => {
-              // Reset processing flag after a short delay to allow state to settle
-              setTimeout(() => {
-                isProcessingQueueRef.current = false;
-              }, 100);
-            });
-        } else {
-          isProcessingQueueRef.current = false;
-        }
-      }
+      // Set the guard before beginning the asynchronous backend claim so a
+      // second render cannot start a competing claim for this client.
+      isProcessingQueueRef.current = true;
+      void claimAgentPromptQueueHead<QueuedMessage>("claude", sessionKey)
+        .then((nextMessage) => {
+          if (!nextMessage) return;
+          return handleSendRef.current?.(
+            nextMessage.text,
+            nextMessage.attachments,
+            nextMessage.effort,
+            nextMessage.planModeEnabled,
+            nextMessage.fastModeEnabled,
+          );
+        })
+        .catch((error) => {
+          console.error("[ClaudeChatTab] Failed to send queued message:", error);
+          const content = `Failed to send queued message: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`;
+          const errorMessage: ClaudeMessageType = {
+            id: `${ERROR_MESSAGE_PREFIX}${createUuid()}`,
+            role: "assistant",
+            content,
+            parts: [{ type: "text", content }],
+            timestamp: new Date().toISOString(),
+          };
+          addMessage(sessionKey, errorMessage);
+          setSessionLoading(sessionKey, false);
+        })
+        .finally(() => {
+          // Allow the store updates from the authoritative remaining queue to
+          // settle before another head is claimed.
+          setTimeout(() => {
+            isProcessingQueueRef.current = false;
+          }, 100);
+        });
     }
-  }, [connectionState, client, session, session?.isLoading, queueLength, isQueueBlockedByDraft, setupPending, sessionKey, removeFromQueue, addMessage, setSessionLoading]);
+  }, [connectionState, client, session, session?.isLoading, queueLength, isQueueBlockedByDraft, setupPending, sessionKey, addMessage, setSessionLoading]);
 
   const handleRetry = useCallback(() => {
     setConnectionState("connecting");

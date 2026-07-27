@@ -22,14 +22,44 @@ export function useUnreadEnvironmentSync(): void {
     );
     if (!environment?.hasUnreadWork) return;
 
+    const observedActivityAt = environment.lastActivityAt ?? null;
     useEnvironmentStore.getState().updateEnvironment(selectedEnvironmentId, {
       hasUnreadWork: false,
     });
-    void backend.setEnvironmentUnread(selectedEnvironmentId, false).catch((error) => {
-      console.warn(
-        `[UnreadSync] Failed to clear unread work for ${selectedEnvironmentId}:`,
-        error,
-      );
-    });
+    void backend
+      .setEnvironmentUnread(selectedEnvironmentId, false, observedActivityAt)
+      .then((persistedEnvironment) => {
+        const currentEnvironment = useEnvironmentStore
+          .getState()
+          .getEnvironmentById(selectedEnvironmentId);
+        if (!currentEnvironment) return;
+
+        const currentActivityAt = currentEnvironment.lastActivityAt ?? null;
+        const persistedActivityAt = persistedEnvironment.lastActivityAt ?? null;
+        const persistedIsCurrent =
+          currentActivityAt === persistedActivityAt ||
+          (
+            persistedActivityAt !== null &&
+            Number.isFinite(Date.parse(persistedActivityAt)) &&
+            (
+              currentActivityAt === null ||
+              Date.parse(persistedActivityAt) >= Date.parse(currentActivityAt)
+            )
+          );
+        if (persistedIsCurrent) {
+          useEnvironmentStore.getState().updateEnvironment(selectedEnvironmentId, {
+            hasUnreadWork: persistedEnvironment.hasUnreadWork === true,
+          });
+        }
+      })
+      .catch((error) => {
+        // Keep the optimistic clear for the client currently viewing this
+        // environment. The authoritative resource snapshot will restore and
+        // retry the badge if the backend mutation did not commit.
+        console.warn(
+          `[UnreadSync] Failed to clear unread work for ${selectedEnvironmentId}:`,
+          error,
+        );
+      });
   }, [selectedEnvironmentId, environments]);
 }

@@ -370,6 +370,8 @@ describe("buildPipelineStore", () => {
         "taskId",
         "projectId",
         "environmentId",
+        "environmentType",
+        "agentType",
         "phase",
         "sessions",
         "currentSessionIndex",
@@ -402,6 +404,151 @@ describe("buildPipelineStore", () => {
 
     test("rejects a snapshot whose taskSnapshot is null", () => {
       expect(isBuildPipeline({ ...validSnapshot(), taskSnapshot: null })).toBe(false);
+    });
+
+    test("accepts a snapshot with a valid current session and optional recovery metadata", () => {
+      const snapshot = {
+        ...validSnapshot(),
+        sessions: [createMockSession({ startedAt: "2026-07-23T08:00:00.000Z" })],
+        currentSessionIndex: 0,
+        iteration: 1,
+        maxIterations: 3,
+        verificationResult: "fail" as const,
+        verificationFeedback: "Retry",
+        pendingPromptAttempt: createPromptAttempt(),
+        source: {
+          type: "github" as const,
+          repositoryOwner: "acme",
+          repositoryName: "widget",
+          issueNumber: 42,
+          issueUrl: "https://github.com/acme/widget/issues/42",
+          status: "Open",
+          updatedAt: "2026-07-23T08:00:00.000Z",
+        },
+      };
+
+      expect(isBuildPipeline(snapshot)).toBe(true);
+    });
+
+    test("rejects invalid finite integer ranges and session indexes", () => {
+      const snapshot = validSnapshot();
+      for (const candidate of [
+        { ...snapshot, backendRevision: Number.NaN },
+        { ...snapshot, backendRevision: Number.POSITIVE_INFINITY },
+        { ...snapshot, backendRevision: -1 },
+        { ...snapshot, backendRevision: 1.5 },
+        { ...snapshot, iteration: -1 },
+        { ...snapshot, iteration: 1.5 },
+        { ...snapshot, maxIterations: 0 },
+        { ...snapshot, maxIterations: 1.5 },
+        { ...snapshot, iteration: 4, maxIterations: 3 },
+        { ...snapshot, currentSessionIndex: 0 },
+        {
+          ...snapshot,
+          sessions: [createMockSession()],
+          currentSessionIndex: -1,
+        },
+        {
+          ...snapshot,
+          sessions: [createMockSession()],
+          currentSessionIndex: 1,
+        },
+        {
+          ...snapshot,
+          sessions: [createMockSession({ iteration: 4 })],
+          currentSessionIndex: 0,
+          maxIterations: 3,
+        },
+      ]) {
+        expect(isBuildPipeline(candidate)).toBe(false);
+      }
+    });
+
+    test("rejects malformed nested sessions", () => {
+      const snapshot = validSnapshot();
+      const validSession = createMockSession({ startedAt: "2026-07-23T08:00:00.000Z" });
+      for (const session of [
+        null,
+        { ...validSession, phase: "unknown" },
+        { ...validSession, iteration: -1 },
+        { ...validSession, iteration: 0.5 },
+        { ...validSession, sessionKey: "" },
+        { ...validSession, sdkSessionId: "" },
+        { ...validSession, status: "pending" },
+        { ...validSession, startedAt: "not-a-date" },
+        { ...validSession, label: 42 },
+      ]) {
+        expect(isBuildPipeline({
+          ...snapshot,
+          sessions: [session],
+          currentSessionIndex: 0,
+        })).toBe(false);
+      }
+    });
+
+    test("rejects malformed task snapshots", () => {
+      const snapshot = validSnapshot();
+      const task = snapshot.taskSnapshot;
+      for (const taskSnapshot of [
+        { ...task, title: 42 },
+        { ...task, description: null },
+        { ...task, acceptanceCriteria: [] },
+        { ...task, comments: [{ body: "wrong field" }] },
+        { ...task, comments: [{ text: 42 }] },
+        { ...task, images: [{ filename: "", data: "abc" }] },
+        { ...task, images: [{ filename: "image.png", data: 42 }] },
+      ]) {
+        expect(isBuildPipeline({ ...snapshot, taskSnapshot })).toBe(false);
+      }
+    });
+
+    test("validates each source variant and its numeric and date boundaries", () => {
+      const snapshot = validSnapshot();
+      const invalidSources = [
+        { type: "kanban", taskId: "" },
+        { type: "linear", issueId: "", issueIdentifier: "ENG-1" },
+        { type: "linear", issueId: "1", issueIdentifier: "ENG-1", updatedAt: "yesterday" },
+        {
+          type: "github",
+          repositoryOwner: "acme",
+          repositoryName: "widget",
+          issueNumber: 0,
+          issueUrl: "https://github.com/acme/widget/issues/0",
+          status: "Open",
+        },
+        {
+          type: "github",
+          repositoryOwner: "acme",
+          repositoryName: "widget",
+          issueNumber: 1.5,
+          issueUrl: "https://github.com/acme/widget/issues/1",
+          status: "Open",
+        },
+        { type: "unknown" },
+      ];
+
+      for (const source of invalidSources) {
+        expect(isBuildPipeline({ ...snapshot, source })).toBe(false);
+      }
+    });
+
+    test("rejects invalid enums, dates, and prompt attempt metadata", () => {
+      const snapshot = validSnapshot();
+      for (const candidate of [
+        { ...snapshot, environmentType: "remote" },
+        { ...snapshot, agentType: "unknown" },
+        { ...snapshot, createdAt: "not-a-date" },
+        { ...snapshot, pausedFromPhase: "paused" },
+        { ...snapshot, verificationResult: "unknown" },
+        { ...snapshot, completionCommentStatus: "unknown" },
+        { ...snapshot, completionCommentPostedAt: "not-a-date" },
+        { ...snapshot, pendingPromptAttempt: { ...createPromptAttempt(), id: "" } },
+        { ...snapshot, pendingPromptAttempt: { ...createPromptAttempt(), startedAt: "invalid" } },
+        { ...snapshot, reconnectAttempt: { ...createReconnectAttempt(), startedAt: "invalid" } },
+        { ...snapshot, structuredReview: {} },
+      ]) {
+        expect(isBuildPipeline(candidate)).toBe(false);
+      }
     });
   });
 

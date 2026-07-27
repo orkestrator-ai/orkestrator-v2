@@ -7,7 +7,11 @@ import * as backend from "@/lib/backend";
 import type { Environment } from "@/types";
 
 const setEnvironmentUnreadMock = mock<typeof backend.setEnvironmentUnread>(
-  async (_environmentId: string, _unread: boolean) => ({} as Environment),
+  async (
+    _environmentId: string,
+    _unread: boolean,
+    _expectedLastActivityAt?: string | null,
+  ) => ({} as Environment),
 );
 
 mock.module("@/lib/backend", () => ({
@@ -53,7 +57,7 @@ describe("useUnreadEnvironmentSync", () => {
       renderHook(() => useUnreadEnvironmentSync());
     });
 
-    expect(setEnvironmentUnreadMock).toHaveBeenCalledWith("env-1", false);
+    expect(setEnvironmentUnreadMock).toHaveBeenCalledWith("env-1", false, null);
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.hasUnreadWork)
       .toBe(false);
   });
@@ -120,7 +124,7 @@ describe("useUnreadEnvironmentSync", () => {
       useEnvironmentStore.getState().updateEnvironment("env-1", { hasUnreadWork: true });
     });
 
-    expect(setEnvironmentUnreadMock).toHaveBeenCalledWith("env-1", false);
+    expect(setEnvironmentUnreadMock).toHaveBeenCalledWith("env-1", false, null);
   });
 
   test("does nothing when no environment is selected", async () => {
@@ -148,5 +152,62 @@ describe("useUnreadEnvironmentSync", () => {
     // The badge must not flicker back on for the client that is looking at it.
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.hasUnreadWork)
       .toBe(false);
+  });
+
+  test("guards the clear with the activity token observed before the write", async () => {
+    const lastActivityAt = "2026-07-23T10:00:00.000Z";
+    useEnvironmentStore.setState({
+      environments: [environment({ hasUnreadWork: true, lastActivityAt })],
+    });
+    useUIStore.setState({ selectedEnvironmentId: "env-1" });
+
+    await act(async () => {
+      renderHook(() => useUnreadEnvironmentSync());
+    });
+
+    expect(setEnvironmentUnreadMock).toHaveBeenCalledWith(
+      "env-1",
+      false,
+      lastActivityAt,
+    );
+  });
+
+  test("does not let a delayed clear response overwrite a newer completion", async () => {
+    const observedAt = "2026-07-23T10:00:00.000Z";
+    const completedAt = "2026-07-23T10:00:01.000Z";
+    let resolveClear!: (environment: Environment) => void;
+    setEnvironmentUnreadMock.mockImplementationOnce(
+      () => new Promise<Environment>((resolve) => {
+        resolveClear = resolve;
+      }),
+    );
+    useEnvironmentStore.setState({
+      environments: [environment({ hasUnreadWork: true, lastActivityAt: observedAt })],
+    });
+    useUIStore.setState({ selectedEnvironmentId: "env-1" });
+
+    await act(async () => {
+      renderHook(() => useUnreadEnvironmentSync());
+    });
+
+    // The user navigates away before newer work completes. The original clear
+    // is still in flight and must not erase the new unread badge.
+    await act(async () => {
+      useUIStore.setState({ selectedEnvironmentId: null });
+      useEnvironmentStore.getState().updateEnvironment("env-1", {
+        hasUnreadWork: true,
+        lastActivityAt: completedAt,
+      });
+      resolveClear(environment({
+        hasUnreadWork: true,
+        lastActivityAt: completedAt,
+      }));
+      await Promise.resolve();
+    });
+
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
+      hasUnreadWork: true,
+      lastActivityAt: completedAt,
+    });
   });
 });

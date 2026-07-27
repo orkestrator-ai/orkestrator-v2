@@ -69,6 +69,17 @@ function seed(...pipelines: BuildPipeline[]): void {
 
 const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 500,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for condition");
+    await tick(5);
+  }
+}
+
 beforeEach(() => {
   useBuildPipelineStore.setState({
     pipelines: new Map(),
@@ -99,6 +110,33 @@ describe("hydrateBuildPipeline", () => {
     expect(restored).toMatchObject({ phase: "verifying", backendRevision: 9 });
   });
 
+  test("keeps an unsaved local transition at the same backend revision", async () => {
+    const save = mock(async (
+      _id: string,
+      _projectId: string,
+      _environmentId: string,
+      _version: number,
+      snapshot: BuildPipeline,
+    ) => persisted(snapshot, 6));
+    const stop = startBuildPipelinePersistence({
+      debounceMs: 10_000,
+      save: save as never,
+    });
+    try {
+      seed(pipeline({ phase: "verifying", backendRevision: 5 }));
+
+      const restored = await hydrateBuildPipeline(
+        "pipeline-1",
+        async () => persisted(pipeline({ phase: "building" }), 5),
+      );
+
+      expect(restored).toMatchObject({ phase: "verifying", backendRevision: 5 });
+    } finally {
+      stop();
+      await tick(10);
+    }
+  });
+
   test("drops a snapshot whose id does not match the record", async () => {
     const restored = await hydrateBuildPipeline(
       "pipeline-1",
@@ -123,6 +161,35 @@ describe("hydrateBuildPipeline", () => {
 
     expect(restored).toBeNull();
     expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+  });
+
+  test("rejects past and future snapshot schema versions", async () => {
+    for (const version of [BUILD_PIPELINE_VERSION - 1, BUILD_PIPELINE_VERSION + 1]) {
+      const restored = await hydrateBuildPipeline(
+        "pipeline-1",
+        async () => ({ ...persisted(pipeline(), 3), version }),
+      );
+
+      expect(restored).toBeNull();
+      expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    }
+  });
+
+  test("rejects invalid record metadata and environment mismatches", async () => {
+    for (const record of [
+      { ...persisted(pipeline(), 3), revision: Number.NaN },
+      { ...persisted(pipeline(), 3), revision: 0 },
+      { ...persisted(pipeline(), 3), updatedAt: "not-a-date" },
+      { ...persisted(pipeline(), 3), environmentId: "another-env" },
+    ]) {
+      const restored = await hydrateBuildPipeline(
+        "pipeline-1",
+        async () => record,
+      );
+
+      expect(restored).toBeNull();
+      expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    }
   });
 
   test("returns null when the backend has no record", async () => {
@@ -195,6 +262,52 @@ describe("hydrateBuildPipelinesForProject", () => {
       completionCommentId: "c1",
     });
   });
+
+  test("keeps dirty equal-revision and locally newer pipelines during project hydration", async () => {
+    const save = mock(async (
+      _id: string,
+      _projectId: string,
+      _environmentId: string,
+      _version: number,
+      snapshot: BuildPipeline,
+    ) => persisted(snapshot, snapshot.backendRevision + 1));
+    const stop = startBuildPipelinePersistence({
+      debounceMs: 10_000,
+      save: save as never,
+    });
+    try {
+      seed(
+        pipeline({ id: "pipeline-1", phase: "verifying", backendRevision: 5 }),
+        pipeline({
+          id: "pipeline-newer",
+          environmentId: "env-newer",
+          phase: "creating-pr",
+          backendRevision: 9,
+        }),
+      );
+
+      const restored = await hydrateBuildPipelinesForProject(PROJECT_ID, async () => [
+        persisted(pipeline({ id: "pipeline-1", phase: "building" }), 5),
+        persisted(pipeline({
+          id: "pipeline-newer",
+          environmentId: "env-newer",
+          phase: "reviewing",
+        }), 8),
+      ]);
+
+      expect(restored).toEqual([
+        expect.objectContaining({ id: "pipeline-1", phase: "verifying", backendRevision: 5 }),
+        expect.objectContaining({
+          id: "pipeline-newer",
+          phase: "creating-pr",
+          backendRevision: 9,
+        }),
+      ]);
+    } finally {
+      stop();
+      await tick(10);
+    }
+  });
 });
 
 describe("persistBuildPipelineNow", () => {
@@ -235,6 +348,24 @@ describe("persistBuildPipelineNow", () => {
     await expect(
       persistBuildPipelineNow("pipeline-1", { save: save as never }),
     ).rejects.toThrow("disk is full");
+  });
+
+  test("propagates a conflict when the backend winner is invalid", async () => {
+    seed(pipeline({ backendRevision: 2 }));
+    const save = mock(async () => {
+      throw new Error("Build pipeline revision conflict");
+    });
+    const load = mock(async () => ({
+      ...persisted(pipeline({ phase: "creating-pr" }), 6),
+      version: BUILD_PIPELINE_VERSION + 1,
+    }));
+
+    await expect(
+      persistBuildPipelineNow("pipeline-1", {
+        save: save as never,
+        load: load as never,
+      }),
+    ).rejects.toThrow("revision conflict");
   });
 
   test("throws for a pipeline this client does not hold", async () => {
@@ -326,6 +457,32 @@ describe("startBuildPipelinePersistence", () => {
 
       expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1"))
         .toMatchObject({ phase: "complete", backendRevision: 11 });
+    } finally {
+      stop();
+    }
+  });
+
+  test("retries a transient mirrored write without requiring another transition", async () => {
+    let calls = 0;
+    const save = mock(async (..._args: unknown[]) => {
+      calls += 1;
+      if (calls === 1) throw new Error("disk temporarily unavailable");
+      return persisted(pipeline(), 1);
+    });
+    const stop = startBuildPipelinePersistence({
+      debounceMs: 5,
+      retryMs: 5,
+      maxRetryMs: 10,
+      save: save as never,
+    });
+    try {
+      seed(pipeline({ phase: "reviewing" }));
+
+      await waitForCondition(() => save.mock.calls.length >= 2);
+
+      expect(save).toHaveBeenCalledTimes(2);
+      expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1")?.backendRevision)
+        .toBe(1);
     } finally {
       stop();
     }

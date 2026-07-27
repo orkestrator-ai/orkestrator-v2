@@ -6,6 +6,7 @@ import {
 } from "../../../apps/web/src/hooks/useEnvironmentListSync";
 import {
   dispatchResourceChange,
+  requestResourceResync,
   resetResourceSync,
 } from "../../../apps/web/src/lib/resource-sync";
 
@@ -79,6 +80,27 @@ describe("useEnvironmentListSync", () => {
     ]);
   });
 
+  test("refreshes every current project after reconnect or revision-gap recovery", async () => {
+    const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
+    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
+
+    renderHook(() => useEnvironmentListSync(
+      ["project-1", "project-2"],
+      refreshProject,
+    ));
+
+    await act(async () => {
+      requestResourceResync();
+      await Promise.resolve();
+    });
+
+    expect(refreshProject.mock.calls.map(([projectId]) => projectId)).toEqual([
+      "project-1",
+      "project-2",
+    ]);
+  });
+
   test("coalesces an announcement burst into a single refresh per project", async () => {
     const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
     globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
@@ -108,6 +130,55 @@ describe("useEnvironmentListSync", () => {
     await announceEnvironmentChange();
 
     expect(refreshProject).not.toHaveBeenCalled();
+  });
+
+  test("does not run a queued follow-up after unmounting during an in-flight refresh", async () => {
+    let finishRefresh: (() => void) | undefined;
+    const refreshProject = mock<(projectId: string) => Promise<void>>(
+      () => new Promise<void>((resolve) => { finishRefresh = resolve; }),
+    );
+    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
+
+    const { unmount } = renderHook(() =>
+      useEnvironmentListSync(["project-1"], refreshProject)
+    );
+    await announceEnvironmentChange(1);
+    await announceEnvironmentChange(2);
+    expect(refreshProject).toHaveBeenCalledTimes(1);
+
+    unmount();
+    await act(async () => {
+      finishRefresh?.();
+      await Promise.resolve();
+    });
+
+    expect(refreshProject).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not re-run a removed project after its in-flight refresh settles", async () => {
+    let finishRefresh: (() => void) | undefined;
+    const refreshProject = mock<(projectId: string) => Promise<void>>(
+      () => new Promise<void>((resolve) => { finishRefresh = resolve; }),
+    );
+    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
+
+    const hook = renderHook(
+      ({ projectIds }) => useEnvironmentListSync(projectIds, refreshProject),
+      { initialProps: { projectIds: ["project-1"] } },
+    );
+    await announceEnvironmentChange(1);
+    hook.rerender({ projectIds: [] });
+    await announceEnvironmentChange(2);
+    expect(refreshProject).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishRefresh?.();
+      await Promise.resolve();
+    });
+
+    expect(refreshProject).toHaveBeenCalledTimes(1);
   });
 
   test("does nothing when there are no projects", async () => {

@@ -8,7 +8,7 @@ import {
   useProjectStore,
 } from "@/stores/projectStore";
 import * as backend from "@/lib/backend";
-import { onResourceChanged } from "@/lib/resource-sync";
+import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 
 interface ProjectLoad {
   mutationVersion: number;
@@ -80,6 +80,14 @@ export function useProjects() {
   // The snapshot cache is keyed by mutation version, so it must be invalidated
   // first or the shared in-flight read would replay stale data.
   useEffect(() => onResourceChanged("project", () => {
+    invalidateProjectSnapshots();
+    void loadProjects();
+  }), [loadProjects]);
+
+  // The event transport has no replay buffer. A reconnect or detected sequence
+  // gap therefore invalidates the shared snapshot even when no project event
+  // follows the missed window.
+  useEffect(() => onResourceResync(() => {
     invalidateProjectSnapshots();
     void loadProjects();
   }), [loadProjects]);

@@ -2036,8 +2036,12 @@ describe("FeaturesView lifecycle and navigation", () => {
   });
 
   test("does not clear an unavailable recovery state when stale status returns running", async () => {
+    const sessionId = "session-stale-running";
     const status = deferred<{ status: "running" }>();
-    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedStores(chatFeature({
+      messages: [pendingUser()],
+      codexSessionId: sessionId,
+    }));
     seedExistingCodexEnvironment();
     getSessionStatusMock.mockImplementation(async () => status.promise);
     render(<FeaturesView projectId="project-1" />);
@@ -2067,7 +2071,11 @@ describe("FeaturesView lifecycle and navigation", () => {
       phase: "unavailable",
       error: "Keep this recovery visible.",
     });
-    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+    expect(
+      getSessionMessagesMock.mock.calls.some(([, calledSessionId]) =>
+        calledSessionId === sessionId
+      ),
+    ).toBe(false);
   });
 
   test("settles successful reconciliation persistence even after the view unmounts", async () => {

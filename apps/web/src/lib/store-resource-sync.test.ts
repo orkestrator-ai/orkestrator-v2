@@ -31,22 +31,36 @@ afterAll(() => {
  */
 
 const hydrateLoopedReviewWorkflow = mock(async (_id: string) => undefined);
+const hydrateLoopedReviewWorkflowsForEnvironment = mock(async (_id: string) => []);
 const hydrateBuildPipeline = mock(async (_id: string) => null as unknown);
+const hydrateBuildPipelinesForProject = mock(async (_id: string) => []);
 const hydratePromptQueuesForEnvironment = mock(async (_id: string, _sources: unknown) => undefined);
 const createPromptQueueSources = mock(() => []);
 
-mock.module("@/lib/looped-review-persistence", () => ({ hydrateLoopedReviewWorkflow }));
-mock.module("@/lib/build-pipeline-persistence", () => ({ hydrateBuildPipeline }));
+mock.module("@/lib/looped-review-persistence", () => ({
+  hydrateLoopedReviewWorkflow,
+  hydrateLoopedReviewWorkflowsForEnvironment,
+}));
+mock.module("@/lib/build-pipeline-persistence", () => ({
+  hydrateBuildPipeline,
+  hydrateBuildPipelinesForProject,
+}));
 mock.module("@/lib/prompt-queue-persistence", () => ({ hydratePromptQueuesForEnvironment }));
 mock.module("@/lib/prompt-queue-sources", () => ({ createPromptQueueSources }));
 
-const { dispatchResourceChange, resetResourceSync } = await import("./resource-sync");
+const {
+  dispatchResourceChange,
+  requestResourceResync,
+  resetResourceSync,
+} = await import("./resource-sync");
 const { startStoreResourceSync } = await import("./store-resource-sync");
 const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
 const { useConfigStore } = await import("@/stores/configStore");
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
 const { useFeaturePlanStore } = await import("@/stores/featurePlanStore");
 const { useKanbanStore } = await import("@/stores/kanbanStore");
+const { useLoopedReviewStore } = await import("@/stores/loopedReviewStore");
+const { useProjectStore } = await import("@/stores/projectStore");
 const { useSessionStore } = await import("@/stores/sessionStore");
 
 const tick = (ms = 80) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -88,11 +102,17 @@ beforeEach(() => {
   hydrateLoopedReviewWorkflow.mockClear();
   hydrateBuildPipeline.mockClear();
   hydrateBuildPipeline.mockImplementation(async () => null);
+  hydrateBuildPipelinesForProject.mockClear();
+  hydrateBuildPipelinesForProject.mockImplementation(async () => []);
+  hydrateLoopedReviewWorkflowsForEnvironment.mockClear();
+  hydrateLoopedReviewWorkflowsForEnvironment.mockImplementation(async () => []);
   hydratePromptQueuesForEnvironment.mockClear();
   useEnvironmentStore.setState({ environments: [] });
   useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
   useKanbanStore.setState({ currentProjectId: null, currentNotesProjectId: null });
   useFeaturePlanStore.setState({ currentProjectId: null });
+  useProjectStore.setState({ projects: [] });
+  useLoopedReviewStore.setState({ workflows: new Map() });
   detach = startStoreResourceSync();
 });
 
@@ -315,6 +335,163 @@ describe("bindings absent by design", () => {
 
     expect(loadTasks).not.toHaveBeenCalled();
     expect(hydratePromptQueuesForEnvironment).not.toHaveBeenCalled();
+  });
+});
+
+describe("authoritative resync", () => {
+  test("refreshes every active backend-owned store after a reconnect or gap", async () => {
+    const loadSessionsForEnvironment = mock(async () => {});
+    const loadTasks = mock(async () => {});
+    const loadNotes = mock(async () => {});
+    const loadFeatures = mock(async () => {});
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    useProjectStore.setState({
+      projects: [{ id: "project-1" } as never],
+    });
+    useSessionStore.setState({ loadSessionsForEnvironment } as never);
+    useKanbanStore.setState({
+      currentProjectId: "project-1",
+      currentNotesProjectId: "project-1",
+      loadTasks,
+      loadNotes,
+    } as never);
+    useFeaturePlanStore.setState({
+      currentProjectId: "project-1",
+      loadFeatures,
+    } as never);
+
+    requestResourceResync();
+    await tick();
+
+    expect(hydratePromptQueuesForEnvironment).toHaveBeenCalledWith(
+      "env-1",
+      expect.anything(),
+    );
+    expect(loadSessionsForEnvironment).toHaveBeenCalledWith("env-1");
+    expect(hydrateLoopedReviewWorkflowsForEnvironment).toHaveBeenCalledWith("env-1");
+    expect(hydrateBuildPipelinesForProject).toHaveBeenCalledWith("project-1");
+    expect(loadTasks).toHaveBeenCalledWith("project-1");
+    expect(loadNotes).toHaveBeenCalledWith("project-1");
+    expect(loadFeatures).toHaveBeenCalledWith("project-1");
+  });
+
+  test("removes persisted pipelines and reviews absent from authoritative lists", async () => {
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
+    useBuildPipelineStore.setState({
+      pipelines: new Map([["pipeline-1", pipeline("pipeline-1", 4)]]),
+      buildEnvironmentIds: new Set(["env-1"]),
+    });
+    useLoopedReviewStore.setState({
+      workflows: new Map([[
+        "workflow-1",
+        {
+          id: "workflow-1",
+          environmentId: "env-1",
+          backendRevision: 3,
+        } as never,
+      ]]),
+    });
+
+    requestResourceResync();
+    await tick();
+
+    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(false);
+    expect(useLoopedReviewStore.getState().workflows.has("workflow-1")).toBe(false);
+  });
+
+  test("keeps unsaved local records when an authoritative list does not contain them", async () => {
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
+    useBuildPipelineStore.setState({
+      pipelines: new Map([["pipeline-1", pipeline("pipeline-1", 0)]]),
+      buildEnvironmentIds: new Set(["env-1"]),
+    });
+    useLoopedReviewStore.setState({
+      workflows: new Map([[
+        "workflow-1",
+        {
+          id: "workflow-1",
+          environmentId: "env-1",
+          backendRevision: 0,
+        } as never,
+      ]]),
+    });
+
+    requestResourceResync();
+    await tick();
+
+    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(true);
+    expect(useLoopedReviewStore.getState().workflows.has("workflow-1")).toBe(true);
+  });
+
+  test("retries a failed config refresh on the next resync", async () => {
+    detach?.();
+    const getConfig = mock()
+      .mockImplementationOnce(async () => {
+        throw new Error("backend down");
+      })
+      .mockImplementationOnce(async () => ({ theme: "dark" }));
+    const setConfig = mock(() => {});
+    useConfigStore.setState({ setConfig } as never);
+    detach = startStoreResourceSync({ getConfig: getConfig as never });
+
+    requestResourceResync();
+    await tick();
+    expect(setConfig).not.toHaveBeenCalled();
+
+    requestResourceResync();
+    await tick();
+    expect(getConfig).toHaveBeenCalledTimes(2);
+    expect(setConfig).toHaveBeenCalledWith({ theme: "dark" });
+  });
+
+  test("does not let an older config read overwrite a newer event refresh", async () => {
+    detach?.();
+    let resolveOlder: ((value: unknown) => void) | undefined;
+    let resolveNewer: ((value: unknown) => void) | undefined;
+    const getConfig = mock()
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOlder = resolve;
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveNewer = resolve;
+      }));
+    const setConfig = mock(() => {});
+    useConfigStore.setState({ setConfig } as never);
+    detach = startStoreResourceSync({ getConfig: getConfig as never });
+
+    requestResourceResync();
+    dispatchResourceChange({ resource: "config", id: "app", revision: 1 });
+    await tick();
+    expect(getConfig).toHaveBeenCalledTimes(2);
+
+    resolveNewer?.({ theme: "dark" });
+    await tick(0);
+    resolveOlder?.({ theme: "light" });
+    await tick(0);
+
+    expect(setConfig).toHaveBeenCalledTimes(1);
+    expect(setConfig).toHaveBeenCalledWith({ theme: "dark" });
+  });
+
+  test("ignores a resync result after detaching", async () => {
+    detach?.();
+    let resolveConfig: ((value: unknown) => void) | undefined;
+    const getConfig = mock(() => new Promise((resolve) => {
+      resolveConfig = resolve;
+    }));
+    const setConfig = mock(() => {});
+    useConfigStore.setState({ setConfig } as never);
+    detach = startStoreResourceSync({ getConfig: getConfig as never });
+
+    requestResourceResync();
+    detach();
+    detach = null;
+    resolveConfig?.({ theme: "dark" });
+    await tick(0);
+
+    expect(setConfig).not.toHaveBeenCalled();
   });
 });
 

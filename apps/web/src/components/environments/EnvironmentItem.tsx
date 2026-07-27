@@ -90,10 +90,10 @@ export function EnvironmentItem({
 
   // Clear local transitioning state when environment status changes to non-transitioning
   useEffect(() => {
-    if (!isCreating && !isStopping && isLocalTransitioning) {
+    if (!isCreating && !isStopping) {
       setIsLocalTransitioning(false);
     }
-  }, [environment.status, isCreating, isStopping, isLocalTransitioning]);
+  }, [environment.status, isCreating, isStopping]);
 
   const confirmDelete = () => {
     onDelete(environment.id);

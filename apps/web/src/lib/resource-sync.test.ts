@@ -33,6 +33,7 @@ const listenMock = mock((event: string, handler: Handler): Promise<UnlistenFn> =
 mock.module("@/lib/native/events", () => ({
   listen: listenMock,
   emit: mock(() => Promise.resolve()),
+  NATIVE_EVENT_STREAM_CONNECTED_EVENT: "native-event-stream-connected",
 }));
 
 afterAll(() => {
@@ -42,6 +43,8 @@ afterAll(() => {
 const {
   dispatchResourceChange,
   onResourceChanged,
+  onResourceResync,
+  requestResourceResync,
   resetResourceSync,
   startResourceSync,
 } = await import("./resource-sync");
@@ -49,12 +52,16 @@ const {
 const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Comfortably past the module's 50ms coalescing window. */
 const COALESCED = 80;
+const originalSetInterval = globalThis.setInterval;
+const originalClearInterval = globalThis.clearInterval;
 
 function change(overrides: Partial<ResourceChange> = {}): ResourceChange {
   return { resource: "environment", id: "env-1", revision: 1, ...overrides };
 }
 
 beforeEach(() => {
+  globalThis.setInterval = originalSetInterval;
+  globalThis.clearInterval = originalClearInterval;
   resetResourceSync();
   listenCalls = [];
   unlistenCount = 0;
@@ -65,6 +72,8 @@ beforeEach(() => {
 
 afterEach(() => {
   resetResourceSync();
+  globalThis.setInterval = originalSetInterval;
+  globalThis.clearInterval = originalClearInterval;
 });
 
 describe("onResourceChanged", () => {
@@ -228,12 +237,32 @@ describe("resetResourceSync", () => {
   });
 });
 
+describe("onResourceResync", () => {
+  test("unsubscribes independently and isolates throwing handlers", () => {
+    const removed = mock(() => undefined);
+    const reached = mock(() => undefined);
+    const unsubscribe = onResourceResync(removed);
+    unsubscribe();
+    onResourceResync(() => {
+      throw new Error("resync exploded");
+    });
+    onResourceResync(reached);
+
+    expect(() => requestResourceResync()).not.toThrow();
+    expect(removed).not.toHaveBeenCalled();
+    expect(reached).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("startResourceSync", () => {
   test("subscribes to the resource-changed event", async () => {
     startResourceSync();
     await tick(0);
 
-    expect(listenCalls.map((call) => call.event)).toEqual(["resource-changed"]);
+    expect(listenCalls.map((call) => call.event)).toEqual([
+      "resource-changed",
+      "native-event-stream-connected",
+    ]);
   });
 
   test("routes a valid payload to subscribers", async () => {
@@ -270,7 +299,7 @@ describe("startResourceSync", () => {
 
     stop();
 
-    expect(unlistenCount).toBe(1);
+    expect(unlistenCount).toBe(2);
   });
 
   test("detaches a subscription that resolves after disposal", async () => {
@@ -292,5 +321,81 @@ describe("startResourceSync", () => {
     await tick(0);
 
     expect(() => stop()).not.toThrow();
+  });
+
+  test("requests an authoritative resync after initial attachment", async () => {
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+
+    startResourceSync();
+    await tick(10);
+
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("deduplicates the initial connection signal and resyncs on reconnect", async () => {
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+    startResourceSync();
+    await tick(10);
+    resync.mockClear();
+
+    const connected = listenCalls.find(
+      ({ event }) => event === "native-event-stream-connected",
+    );
+    connected?.handler({ payload: undefined });
+    connected?.handler({ payload: undefined });
+
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("requests a resync when a global revision gap is observed", async () => {
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+    startResourceSync();
+    await tick(10);
+    resync.mockClear();
+
+    const resource = listenCalls.find(({ event }) => event === "resource-changed");
+    resource?.handler({ payload: change({ revision: 10 }) });
+    resource?.handler({ payload: change({ revision: 12 }) });
+
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("requests a resync when the backend sequence resets", async () => {
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+    startResourceSync();
+    await tick(10);
+    resync.mockClear();
+
+    const resource = listenCalls.find(({ event }) => event === "resource-changed");
+    resource?.handler({ payload: change({ revision: 10 }) });
+    resource?.handler({ payload: change({ revision: 1 }) });
+
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("periodically resyncs as a safety net and clears the timer on stop", async () => {
+    let intervalCallback: (() => void) | undefined;
+    const clearIntervalMock = mock(() => undefined);
+    globalThis.setInterval = ((callback: TimerHandler, timeout?: number) => {
+      expect(timeout).toBe(60_000);
+      intervalCallback = callback as () => void;
+      return 42 as unknown as ReturnType<typeof setInterval>;
+    }) as unknown as typeof setInterval;
+    globalThis.clearInterval = clearIntervalMock as typeof clearInterval;
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+
+    const stop = startResourceSync();
+    await tick(10);
+    resync.mockClear();
+    intervalCallback?.();
+
+    expect(resync).toHaveBeenCalledTimes(1);
+    stop();
+    expect(clearIntervalMock).toHaveBeenCalledWith(42);
   });
 });

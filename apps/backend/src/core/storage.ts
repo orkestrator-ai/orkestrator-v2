@@ -1146,6 +1146,7 @@ export class StorageService {
         "pendingRenamePrompt",
         "createdFromCommit",
         "lastActivityAt",
+        "deletionRequestedAt",
       ] as const;
       for (const field of optionalStringFields) {
         if (field in updates) {
@@ -1263,6 +1264,69 @@ export class StorageService {
       }
 
       environment.lastActivityAt = normalizedActivityAt;
+      await this.saveJson(this.environmentsFile(), environments);
+      this.announce("environment", environmentId);
+      return environment;
+    });
+  }
+
+  async recordEnvironmentCompletion(
+    environmentId: string,
+    occurredAt: string,
+  ): Promise<Environment> {
+    const activityTime = Date.parse(occurredAt);
+    if (!Number.isFinite(activityTime)) {
+      throw new Error("occurredAt must be a valid ISO timestamp");
+    }
+    const normalizedActivityAt = new Date(activityTime).toISOString();
+
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+
+      const previousTime = environment.lastActivityAt
+        ? Date.parse(environment.lastActivityAt)
+        : Number.NEGATIVE_INFINITY;
+      if (Number.isFinite(previousTime) && previousTime >= activityTime) {
+        return environment;
+      }
+
+      environment.lastActivityAt = normalizedActivityAt;
+      environment.hasUnreadWork = true;
+      await this.saveJson(this.environmentsFile(), environments);
+      this.announce("environment", environmentId);
+      return environment;
+    });
+  }
+
+  async setEnvironmentUnread(
+    environmentId: string,
+    unread: boolean,
+    expectedLastActivityAt?: string | null,
+  ): Promise<Environment> {
+    if (
+      expectedLastActivityAt !== undefined
+      && expectedLastActivityAt !== null
+      && typeof expectedLastActivityAt !== "string"
+    ) {
+      throw new Error("expectedLastActivityAt must be a string or null");
+    }
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+
+      if (
+        !unread
+        && expectedLastActivityAt !== undefined
+        && (environment.lastActivityAt ?? null) !== expectedLastActivityAt
+      ) {
+        return environment;
+      }
+      if (environment.hasUnreadWork === unread) return environment;
+
+      environment.hasUnreadWork = unread;
       await this.saveJson(this.environmentsFile(), environments);
       this.announce("environment", environmentId);
       return environment;
@@ -1625,6 +1689,40 @@ export class StorageService {
     return next;
   }
 
+  private validatePromptQueueMessages(messages: unknown): asserts messages is unknown[] {
+    if (!Array.isArray(messages)) {
+      throw new Error("Prompt queue messages must be an array");
+    }
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(messages);
+    } catch {
+      throw new Error("Prompt queue messages must be JSON serializable");
+    }
+    if (serialized === undefined) {
+      throw new Error("Prompt queue messages must be JSON serializable");
+    }
+    // Queued prompts carry pasted image attachments, so the ceiling has to be
+    // generous; it exists to stop a runaway client, not to bound normal use.
+    if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
+      throw new Error("Prompt queue exceeds the 32 MB limit");
+    }
+  }
+
+  private async assertEnvironmentAcceptsBackgroundState(
+    environmentId: string,
+    label: string,
+  ): Promise<Environment> {
+    const environment = await this.getEnvironment(environmentId);
+    if (!environment) {
+      throw new Error(`${label} environment not found: ${environmentId}`);
+    }
+    if (environment.deletionRequestedAt) {
+      throw new Error(`${label} environment is being deleted: ${environmentId}`);
+    }
+    return environment;
+  }
+
   private async loadPromptQueues(): Promise<Record<string, PersistedPromptQueue>> {
     const stored = await this.loadJson<Record<string, PersistedPromptQueue>>(
       this.promptQueuesFile(),
@@ -1672,28 +1770,13 @@ export class StorageService {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Prompt queue environment ID must not be blank");
     }
-    if (!Array.isArray(messages)) {
-      throw new Error("Prompt queue messages must be an array");
-    }
+    this.validatePromptQueueMessages(messages);
     if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
       throw new Error("Prompt queue expected revision must be a non-negative integer");
     }
-    let serialized: string | undefined;
-    try {
-      serialized = JSON.stringify(messages);
-    } catch {
-      throw new Error("Prompt queue messages must be JSON serializable");
-    }
-    if (serialized === undefined) {
-      throw new Error("Prompt queue messages must be JSON serializable");
-    }
-    // Queued prompts carry pasted image attachments, so the ceiling has to be
-    // generous; it exists to stop a runaway client, not to bound normal use.
-    if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
-      throw new Error("Prompt queue exceeds the 32 MB limit");
-    }
 
     return this.enqueuePromptQueueMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
       const queues = await this.loadPromptQueues();
       const previous = queues[queueKey];
       if (previous && previous.environmentId !== environmentId) {
@@ -1719,6 +1802,54 @@ export class StorageService {
     });
   }
 
+  async claimPromptQueueHead(
+    queueKey: string,
+    environmentId: string,
+    expectedMessageId: string,
+    candidateMessages: unknown[],
+  ): Promise<{ claimed: unknown | null; queue: PersistedPromptQueue | null }> {
+    if (!isNonBlankString(queueKey)) {
+      throw new Error("Prompt queue key must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Prompt queue environment ID must not be blank");
+    }
+    if (!isNonBlankString(expectedMessageId)) {
+      throw new Error("Expected prompt message ID must not be blank");
+    }
+    this.validatePromptQueueMessages(candidateMessages);
+
+    return this.enqueuePromptQueueMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (previous && previous.environmentId !== environmentId) {
+        throw new Error("Prompt queue belongs to another environment");
+      }
+
+      const messages = previous?.messages ?? candidateMessages;
+      const head = messages[0];
+      if (
+        !isRecord(head)
+        || head.id !== expectedMessageId
+      ) {
+        return { claimed: null, queue: previous ?? null };
+      }
+
+      const saved: PersistedPromptQueue = {
+        queueKey,
+        environmentId,
+        messages: messages.slice(1),
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      queues[queueKey] = saved;
+      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+      this.announce("prompt-queue", environmentId);
+      return { claimed: head, queue: saved };
+    });
+  }
+
   async deletePromptQueuesByEnvironment(environmentId: string): Promise<string[]> {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Prompt queue environment ID must not be blank");
@@ -1728,15 +1859,16 @@ export class StorageService {
       const removedKeys = Object.values(queues)
         .filter((queue) => queue.environmentId === environmentId)
         .map((queue) => queue.queueKey);
-      if (removedKeys.length === 0) return [];
-      for (const key of removedKeys) delete queues[key];
-      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
-      this.announce("prompt-queue", environmentId);
+      if (removedKeys.length > 0) {
+        for (const key of removedKeys) delete queues[key];
+        await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+        this.announce("prompt-queue", environmentId);
+      }
 
       // Queued prompts carry user-authored text and pasted attachments, and
-      // rotating the primary file leaves them readable in its backups. Scrub
-      // before releasing the lock so deleting the environment really removes
-      // them.
+      // rotating the primary file leaves them readable in its backups. Always
+      // scrub, even when the current primary has no matching record: a prior
+      // failed delete may have removed the primary while leaving a backup.
       await this.scrubSensitiveJsonBackups(
         this.promptQueuesFile(),
         (storedKey, queue) =>
@@ -1818,6 +1950,9 @@ export class StorageService {
     }
 
     return this.enqueueBuildPipelineMutation(async () => {
+      if (environmentId) {
+        await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Build pipeline");
+      }
       const pipelines = await this.loadBuildPipelines();
       const previous = pipelines[pipelineId];
       if (previous && previous.projectId !== projectId) {
@@ -1851,34 +1986,59 @@ export class StorageService {
     }
     await this.enqueueBuildPipelineMutation(async () => {
       const pipelines = await this.loadBuildPipelines();
-      if (!(pipelineId in pipelines)) return;
-      delete pipelines[pipelineId];
-      await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
-      this.announce("build-pipeline", pipelineId);
+      if (pipelineId in pipelines) {
+        delete pipelines[pipelineId];
+        await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
+        this.announce("build-pipeline", pipelineId);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.buildPipelinesFile(),
+        (storedId, pipeline) =>
+          storedId !== pipelineId && isPersistedBuildPipeline(pipeline, storedId),
+      );
     });
   }
 
-  async deleteBuildPipelinesByEnvironment(environmentId: string): Promise<string[]> {
+  async deleteBuildPipelinesByEnvironment(
+    environmentId: string,
+    linkedPipelineId?: string,
+  ): Promise<string[]> {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Build pipeline environment ID must not be blank");
     }
+    if (
+      linkedPipelineId !== undefined
+      && linkedPipelineId !== ""
+      && !isNonBlankString(linkedPipelineId)
+    ) {
+      throw new Error("Linked build pipeline ID must not be blank");
+    }
     return this.enqueueBuildPipelineMutation(async () => {
       const pipelines = await this.loadBuildPipelines();
+      const linkedId = isNonBlankString(linkedPipelineId) ? linkedPipelineId : null;
       const removedIds = Object.values(pipelines)
-        .filter((pipeline) => pipeline.environmentId === environmentId)
+        .filter((pipeline) =>
+          pipeline.environmentId === environmentId || pipeline.id === linkedId
+        )
         .map((pipeline) => pipeline.id);
-      if (removedIds.length === 0) return [];
-      for (const removedId of removedIds) delete pipelines[removedId];
-      await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
-      for (const removedId of removedIds) this.announce("build-pipeline", removedId);
+      if (removedIds.length > 0) {
+        for (const removedId of removedIds) delete pipelines[removedId];
+        await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
+        for (const removedId of removedIds) this.announce("build-pipeline", removedId);
+      }
+      const removedIdSet = new Set(removedIds);
+      if (linkedId) removedIdSet.add(linkedId);
 
       // Task snapshots embed base64 attachments and full review findings, so
       // the same backup scrub the looped review path performs applies here.
+      // Check both ownership forms because a newly-created pipeline deliberately
+      // has a blank environmentId until create_environment links it.
       await this.scrubSensitiveJsonBackups(
         this.buildPipelinesFile(),
         (storedId, pipeline) =>
           isPersistedBuildPipeline(pipeline, storedId)
-          && pipeline.environmentId !== environmentId,
+          && pipeline.environmentId !== environmentId
+          && !removedIdSet.has(storedId),
       );
       return removedIds;
     });

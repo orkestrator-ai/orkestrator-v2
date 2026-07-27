@@ -1,12 +1,18 @@
 import { afterEach, describe, test, expect, mock, beforeEach } from "bun:test";
-import { cleanup, render, fireEvent, waitFor } from "@testing-library/react";
+import { act, cleanup, render, fireEvent, waitFor } from "@testing-library/react";
 import type { Environment } from "../../../apps/web/src/types";
 import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
 } from "../../mocks/sonner";
 
-const settingsDialogPropsMock = mock(() => {});
+type SettingsDialogProps = {
+  open: boolean;
+  environment: Environment;
+  onUpdate: (environment: Environment) => void;
+};
+
+const settingsDialogPropsMock = mock((_props: SettingsDialogProps) => {});
 
 // Mock UI components that require providers.
 // NOTE: @/components/ui/tooltip is already mocked by StatusIndicator.test.tsx
@@ -75,7 +81,7 @@ mock.module("@/components/ui/checkbox", () => ({
 }));
 
 mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
-  EnvironmentSettingsDialog: (props: { open: boolean }) => {
+  EnvironmentSettingsDialog: (props: SettingsDialogProps) => {
     settingsDialogPropsMock(props);
     return props.open ? <div data-testid="settings-dialog" /> : null;
   },
@@ -290,6 +296,20 @@ describe("EnvironmentItem copy address", () => {
     expect(writeTextMock).toHaveBeenCalledWith("localhost:49152");
   });
 
+  test("shows an error toast when copying an address fails", async () => {
+    writeTextMock.mockRejectedValueOnce(new Error("clipboard unavailable"));
+    const env = makeEnvironment({ entryPort: 3000, hostEntryPort: 49152 });
+    const { container } = renderItem(env);
+
+    const copyItem = findMenuItem(container, "Copy Address");
+    expect(copyItem).not.toBeUndefined();
+    fireEvent.click(copyItem!);
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith("Failed to copy address");
+    });
+  });
+
   test("context menu does not show Copy Address when no port is mapped", () => {
     const env = makeEnvironment({ entryPort: 3000 });
     const { container } = renderItem(env);
@@ -393,6 +413,64 @@ describe("EnvironmentItem menu actions and selection", () => {
     expect(settingsDialogPropsMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ open: true }),
     );
+  });
+
+  test("keeps transition controls disabled until a non-transitioning status arrives", async () => {
+    const onUpdate = mock((_environment: Environment) => {});
+    const initialEnvironment = makeEnvironment({ status: "running" });
+    const rendered = renderItem(initialEnvironment, { onUpdate });
+
+    fireEvent.click(findMenuItem(rendered.container, "Settings")!);
+    const dialogProps = settingsDialogPropsMock.mock.calls.at(-1)?.[0];
+    expect(dialogProps).toBeDefined();
+
+    const stoppingEnvironment = {
+      ...initialEnvironment,
+      status: "stopping" as const,
+    };
+    act(() => {
+      dialogProps!.onUpdate(stoppingEnvironment);
+    });
+
+    expect(onUpdate).toHaveBeenCalledWith(stoppingEnvironment);
+    expect(findMenuItem(rendered.container, "Stop")?.getAttribute("aria-disabled"))
+      .toBe("true");
+    expect(
+      rendered.container.querySelector("svg.animate-spin.text-amber-500"),
+    ).not.toBeNull();
+
+    rendered.rerender(
+      <EnvironmentItem
+        environment={{ ...initialEnvironment, status: "stopped" }}
+        isSelected={false}
+        onSelect={noopSelect}
+        onDelete={noopEnvironmentHandler}
+        onStart={noopEnvironmentHandler}
+        onStop={noopEnvironmentHandler}
+        onRestart={noopEnvironmentHandler}
+        onUpdate={onUpdate}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(findMenuItem(rendered.container, "Start")?.getAttribute("aria-disabled"))
+        .toBeNull();
+      expect(
+        rendered.container.querySelector("svg.animate-spin.text-amber-500"),
+      ).toBeNull();
+    });
+  });
+
+  test("local environments never enter the container transition lifecycle", () => {
+    const localEnvironment = makeEnvironment({
+      environmentType: "local",
+      containerId: null,
+      status: "creating",
+    });
+    const { container } = renderItem(localEnvironment);
+
+    expect(container.querySelector("svg.animate-spin.text-amber-500")).toBeNull();
+    expect(container.querySelector("svg.lucide-laptop")).not.toBeNull();
   });
 
   test("context menu Stop calls onStop for a running container environment", () => {

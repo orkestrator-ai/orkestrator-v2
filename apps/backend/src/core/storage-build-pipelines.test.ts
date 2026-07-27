@@ -8,6 +8,23 @@ async function withStorage<T>(run: (storage: StorageService) => Promise<T>): Pro
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-build-pipelines-"));
   const storage = new StorageService(dataDir);
   await storage.init();
+  for (const id of ["e1", "e2", "e3"]) {
+    await storage.addEnvironment({
+      id,
+      projectId: "proj-1",
+      name: id,
+      branch: "main",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+    });
+  }
   try {
     return await run(storage);
   } finally {
@@ -107,6 +124,26 @@ describe("StorageService build pipelines", () => {
     });
   });
 
+  test("rejects non-serializable snapshots and malformed revision metadata", async () => {
+    await withStorage(async (storage) => {
+      const circular: Record<string, unknown> = { id: "p1" };
+      circular.self = circular;
+      await expect(storage.saveBuildPipeline("p1", "proj-1", "e1", 1, circular))
+        .rejects.toThrow("JSON serializable");
+      await expect(storage.saveBuildPipeline("p1", "proj-1", "e1", 0, snapshot()))
+        .rejects.toThrow("positive integer");
+      await expect(storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot(), -1))
+        .rejects.toThrow("non-negative integer");
+      await expect(storage.saveBuildPipeline(
+        "p1",
+        "proj-1",
+        null as unknown as string,
+        1,
+        snapshot(),
+      )).rejects.toThrow("must be a string");
+    });
+  });
+
   test("rejects an over-sized snapshot rather than truncating the task", async () => {
     await withStorage(async (storage) => {
       const huge = { id: "p1", blob: "x".repeat(33 * 1024 * 1024) };
@@ -142,6 +179,46 @@ describe("StorageService build pipelines", () => {
     });
   });
 
+  test("serializes concurrent writes across StorageService instances", async () => {
+    await withStorage(async (storage) => {
+      const second = new StorageService(storage.getDataDir());
+      await second.init();
+      const results = await Promise.all(
+        Array.from({ length: 8 }, (_, index) =>
+          (index % 2 === 0 ? storage : second)
+            .saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot()),
+        ),
+      );
+      expect(results.map((result) => result.revision).sort((a, b) => a - b))
+        .toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    });
+  });
+
+  test("rejects a nonblank environment that does not exist or is being deleted", async () => {
+    await withStorage(async (storage) => {
+      await expect(
+        storage.saveBuildPipeline("missing", "proj-1", "missing", 1, snapshot()),
+      ).rejects.toThrow("environment not found");
+
+      await storage.updateEnvironment("e1", {
+        deletionRequestedAt: new Date().toISOString(),
+      });
+      await expect(
+        storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot()),
+      ).rejects.toThrow("being deleted");
+    });
+  });
+
+  test("deletes a linked pipeline while its stored environment id is still blank", async () => {
+    await withStorage(async (storage) => {
+      await storage.saveBuildPipeline("p1", "proj-1", "", 1, snapshot());
+      await storage.updateEnvironment("e1", { buildPipelineId: "p1" });
+
+      expect(await storage.deleteBuildPipelinesByEnvironment("e1", "p1")).toEqual(["p1"]);
+      expect(await storage.getBuildPipeline("p1")).toBeNull();
+    });
+  });
+
   test("rejects blank identifiers", async () => {
     await withStorage(async (storage) => {
       await expect(storage.getBuildPipeline("")).rejects.toThrow("must not be blank");
@@ -149,6 +226,11 @@ describe("StorageService build pipelines", () => {
       await expect(storage.saveBuildPipeline("", "proj-1", "e1", 1, snapshot()))
         .rejects.toThrow("must not be blank");
       await expect(storage.saveBuildPipeline("p1", "", "e1", 1, snapshot()))
+        .rejects.toThrow("must not be blank");
+      await expect(storage.deleteBuildPipeline("")).rejects.toThrow("must not be blank");
+      await expect(storage.deleteBuildPipelinesByEnvironment(""))
+        .rejects.toThrow("must not be blank");
+      await expect(storage.deleteBuildPipelinesByEnvironment("e1", "   "))
         .rejects.toThrow("must not be blank");
     });
   });
@@ -179,6 +261,20 @@ describe("StorageService build pipelines", () => {
         await storage.deleteBuildPipelinesByEnvironment("e1");
 
         expect(await readAllCopies(storage)).not.toContain("EMBEDDED-ATTACHMENT");
+      });
+    });
+
+    test("single-pipeline deletion removes its snapshots from every retained backup", async () => {
+      await withStorage(async (storage) => {
+        await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, {
+          id: "p1", phase: "building", notes: "SINGLE-DELETE-SECRET",
+        });
+        await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot("reviewing"), 1);
+        expect(await readAllCopies(storage)).toContain("SINGLE-DELETE-SECRET");
+
+        await storage.deleteBuildPipeline("p1");
+
+        expect(await readAllCopies(storage)).not.toContain("SINGLE-DELETE-SECRET");
       });
     });
 

@@ -1874,7 +1874,10 @@ function persistTerminalActivity(
   }
 
   const occurredAt = new Date().toISOString();
-  void context.storage.recordEnvironmentActivity(environmentId, occurredAt)
+  const persistActivity = activityKind === "completed"
+    ? context.storage.recordEnvironmentCompletion.bind(context.storage)
+    : context.storage.recordEnvironmentActivity.bind(context.storage);
+  void persistActivity(environmentId, occurredAt)
     .then((environment) => {
       context.emit("environment-activity-recorded", {
         environment_id: environment.id,
@@ -2934,6 +2937,13 @@ async function deleteEnvironment(
     await enqueueLocalServerEnvironmentOperation(environmentId, async () => {
       const { storage } = context;
       const environment = await storage.getEnvironment(environmentId);
+      // Persist the deletion intent before any durable child-state cleanup.
+      // Queue/pipeline saves consult this marker while holding their own locks:
+      // a write that began earlier is swept by cleanup, and a later write is
+      // rejected even if cleanup pauses or fails.
+      await storage.updateEnvironment(environmentId, {
+        deletionRequestedAt: new Date().toISOString(),
+      });
       if (environment) await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
       if (environment?.containerId) {
         await runCommand(
@@ -2950,9 +2960,12 @@ async function deleteEnvironment(
       await storage.deleteLoopedReviewWorkflowsByEnvironment(environmentId);
       // A pipeline whose environment is gone can never advance again; leaving it
       // behind would resurrect a dead build on the next client that hydrates.
-      await storage.deleteBuildPipelinesByEnvironment(environmentId).catch(() => undefined);
+      await storage.deleteBuildPipelinesByEnvironment(
+        environmentId,
+        environment?.buildPipelineId,
+      );
       // Queued prompts for a deleted environment can never be dispatched.
-      await storage.deletePromptQueuesByEnvironment(environmentId).catch(() => undefined);
+      await storage.deletePromptQueuesByEnvironment(environmentId);
       await storage.removeEnvironment(environmentId);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);
       cleanupEnvironmentSetupState(environmentId);
@@ -4296,6 +4309,11 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const activityAt = asString(occurredAt, "occurredAt");
     return storage.recordEnvironmentActivity(id, activityAt);
   });
+  register("record_environment_completion", async ({ environmentId, occurredAt }, { storage }) => {
+    const id = asString(environmentId, "environmentId");
+    const activityAt = asString(occurredAt, "occurredAt");
+    return storage.recordEnvironmentCompletion(id, activityAt);
+  });
   register("set_environment_setup_complete", async ({ environmentId, complete }, { storage }) => {
     const updated = await storage.updateEnvironment(asString(environmentId, "environmentId"), { setupScriptsComplete: asBoolean(complete) });
     return asBoolean(complete) ? captureCreatedFromCommit(updated, storage) : updated;
@@ -4716,10 +4734,16 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     storage.deleteBuildPipeline(asString(pipelineId, "pipelineId")),
   );
 
-  register("set_environment_unread", async ({ environmentId, unread }, { storage }) =>
-    storage.updateEnvironment(asString(environmentId, "environmentId"), {
-      hasUnreadWork: asBoolean(unread),
-    }),
+  register(
+    "set_environment_unread",
+    async ({ environmentId, unread, expectedLastActivityAt }, { storage }) =>
+      storage.setEnvironmentUnread(
+        asString(environmentId, "environmentId"),
+        asBoolean(unread),
+        expectedLastActivityAt === undefined || expectedLastActivityAt === null
+          ? expectedLastActivityAt
+          : asString(expectedLastActivityAt, "expectedLastActivityAt"),
+      ),
   );
 
   register("get_prompt_queue", ({ queueKey }, { storage }) =>
@@ -4741,6 +4765,16 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
         expectedRevision === undefined
           ? undefined
           : asNumber(expectedRevision, "expectedRevision"),
+      ),
+  );
+  register(
+    "claim_prompt_queue_head",
+    ({ queueKey, environmentId, expectedMessageId, candidateMessages }, { storage }) =>
+      storage.claimPromptQueueHead(
+        asString(queueKey, "queueKey"),
+        asString(environmentId, "environmentId"),
+        asString(expectedMessageId, "expectedMessageId"),
+        candidateMessages as unknown[],
       ),
   );
 

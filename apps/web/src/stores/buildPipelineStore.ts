@@ -2,7 +2,10 @@ import { create } from "zustand";
 import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { TaskSnapshot } from "@/prompts";
 import { createUuid } from "@/lib/uuid";
-import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import {
+  isStructuredReviewReport,
+  type StructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
 
 export type BuildPhase =
   | "creating-environment"
@@ -237,23 +240,142 @@ function isResumableBuildPhase(phase: BuildPhase): phase is ResumableBuildPhase 
  * machine would advance a build in a way nobody wrote.
  */
 export function isBuildPipeline(value: unknown): value is BuildPipeline {
-  if (typeof value !== "object" || value === null) return false;
+  if (!isRecord(value)) return false;
   const candidate = value as Record<string, unknown>;
+
+  if (
+    !isNonEmptyString(candidate.id)
+    || !isNonEmptyString(candidate.taskId)
+    || !isNonEmptyString(candidate.projectId)
+    || typeof candidate.environmentId !== "string"
+    || !ENVIRONMENT_TYPES.has(candidate.environmentType)
+    || !AGENT_TYPES.has(candidate.agentType)
+    || !isBuildPhaseValue(candidate.phase)
+    || !Array.isArray(candidate.sessions)
+    || !candidate.sessions.every(isPipelineSession)
+    || !isNonNegativeSafeInteger(candidate.iteration)
+    || !isPositiveSafeInteger(candidate.maxIterations)
+    || candidate.iteration > candidate.maxIterations
+    || !isNonNegativeSafeInteger(candidate.backendRevision)
+    || !isValidDateString(candidate.createdAt)
+    || typeof candidate.taskTitle !== "string"
+    || !isTaskSnapshot(candidate.taskSnapshot)
+    || !isOptional(candidate.verificationResult, (entry) =>
+      entry === "pass" || entry === "fail")
+    || !isOptionalString(candidate.verificationFeedback)
+    || !isOptional(candidate.structuredReview, isStructuredReviewReport)
+    || !isOptionalNonEmptyString(candidate.structuredReviewRequestId)
+    || !isOptional(candidate.pausedFromPhase, isResumableBuildPhaseValue)
+    || !isOptionalString(candidate.error)
+    || !isOptional(candidate.failureContext, isPipelineFailureContext)
+    || !isOptional(candidate.reconnectAttempt, isPipelineReconnectAttempt)
+    || !isOptional(candidate.pendingPromptAttempt, isPipelinePromptAttempt)
+    || !isOptional(candidate.activePromptContext, isPipelineFailureContext)
+    || !isOptional(candidate.source, isBuildPipelineSource)
+    || !isOptional(candidate.completionCommentStatus, (entry) =>
+      COMPLETION_COMMENT_STATUSES.has(entry))
+    || !isOptionalString(candidate.completionCommentError)
+    || !isOptionalString(candidate.completionCommentId)
+    || !isOptional(candidate.completionCommentPostedAt, isValidDateString)
+  ) {
+    return false;
+  }
+
+  const currentSessionIndex = candidate.currentSessionIndex;
+  if (
+    typeof currentSessionIndex !== "number"
+    || !Number.isSafeInteger(currentSessionIndex)
+    || candidate.sessions.some((session) =>
+      session.iteration > (candidate.maxIterations as number))
+  ) {
+    return false;
+  }
+  if (candidate.sessions.length === 0) return currentSessionIndex === -1;
+  return currentSessionIndex >= 0 && currentSessionIndex < candidate.sessions.length;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalNonEmptyString(value: unknown): value is string | undefined {
+  return value === undefined || isNonEmptyString(value);
+}
+
+function isOptional(
+  value: unknown,
+  predicate: (entry: unknown) => boolean,
+): boolean {
+  return value === undefined || predicate(value);
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
+}
+
+function isValidDateString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && Number.isFinite(Date.parse(value));
+}
+
+function isResumableBuildPhaseValue(value: unknown): value is ResumableBuildPhase {
+  return isBuildPhaseValue(value)
+    && value !== "paused"
+    && value !== "complete"
+    && value !== "failed";
+}
+
+function isPipelineSession(value: unknown): value is PipelineSession {
+  if (!isRecord(value)) return false;
   return (
-    typeof candidate.id === "string" && candidate.id.length > 0
-    && typeof candidate.taskId === "string"
-    && typeof candidate.projectId === "string" && candidate.projectId.length > 0
-    && typeof candidate.environmentId === "string"
-    && typeof candidate.phase === "string"
-    && BUILD_PHASES.has(candidate.phase)
-    && Array.isArray(candidate.sessions)
-    && typeof candidate.currentSessionIndex === "number"
-    && typeof candidate.iteration === "number"
-    && typeof candidate.maxIterations === "number"
-    && typeof candidate.createdAt === "string"
-    && typeof candidate.taskTitle === "string"
-    && typeof candidate.taskSnapshot === "object" && candidate.taskSnapshot !== null
-    && typeof candidate.backendRevision === "number"
+    PIPELINE_SESSION_PHASES.has(value.phase)
+    && isNonNegativeSafeInteger(value.iteration)
+    && isNonEmptyString(value.sessionKey)
+    && isNonEmptyString(value.sdkSessionId)
+    && PIPELINE_SESSION_STATUSES.has(value.status)
+    && isValidDateString(value.startedAt)
+    && typeof value.label === "string"
+  );
+}
+
+function isTaskSnapshot(value: unknown): value is TaskSnapshot {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.title === "string"
+    && typeof value.description === "string"
+    && typeof value.acceptanceCriteria === "string"
+    && Array.isArray(value.comments)
+    && value.comments.every((comment) =>
+      isRecord(comment) && typeof comment.text === "string")
+    && Array.isArray(value.images)
+    && value.images.every((image) =>
+      isRecord(image)
+      && isNonEmptyString(image.filename)
+      && typeof image.data === "string")
+  );
+}
+
+function isPipelineFailureContext(value: unknown): value is PipelineFailureContext {
+  if (!isRecord(value)) return false;
+  return (
+    isResumableBuildPhaseValue(value.phase)
+    && PIPELINE_FAILURE_KINDS.has(value.kind)
+    && isOptionalNonEmptyString(value.sessionId)
+    && isOptionalString(value.prompt)
+    && (value.useTaskImages === undefined || typeof value.useTaskImages === "boolean")
+    && isOptionalNonEmptyString(value.requestId)
+    && (value.structuredReview === undefined || typeof value.structuredReview === "boolean")
   );
 }
 
@@ -272,6 +394,80 @@ const BUILD_PHASES: ReadonlySet<string> = new Set<BuildPhase>([
   "complete",
   "failed",
 ]);
+
+function isPipelineReconnectAttempt(value: unknown): value is PipelineReconnectAttempt {
+  return isRecord(value)
+    && isPipelineFailureContext(value)
+    && isNonEmptyString(value.id)
+    && isValidDateString(value.startedAt);
+}
+
+function isPipelinePromptAttempt(value: unknown): value is PipelinePromptAttempt {
+  if (!isRecord(value)) return false;
+  return (
+    isNonEmptyString(value.id)
+    && isNonEmptyString(value.sessionId)
+    && isNonEmptyString(value.requestId)
+    && isResumableBuildPhaseValue(value.phase)
+    && typeof value.prompt === "string"
+    && typeof value.useTaskImages === "boolean"
+    && (value.structuredReview === undefined || typeof value.structuredReview === "boolean")
+    && isValidDateString(value.startedAt)
+  );
+}
+
+function isBuildPipelineSource(value: unknown): value is BuildPipelineSource {
+  if (!isRecord(value)) return false;
+  switch (value.type) {
+    case "kanban":
+      return isNonEmptyString(value.taskId);
+    case "linear":
+      return (
+        isNonEmptyString(value.issueId)
+        && isNonEmptyString(value.issueIdentifier)
+        && isOptionalString(value.issueUrl)
+        && isOptionalString(value.status)
+        && isOptionalString(value.teamKey)
+        && isOptional(value.updatedAt, isValidDateString)
+      );
+    case "github":
+      return (
+        isNonEmptyString(value.repositoryOwner)
+        && isNonEmptyString(value.repositoryName)
+        && isPositiveSafeInteger(value.issueNumber)
+        && isNonEmptyString(value.issueUrl)
+        && typeof value.status === "string"
+        && isOptional(value.updatedAt, isValidDateString)
+      );
+    default:
+      return false;
+  }
+}
+
+const ENVIRONMENT_TYPES: ReadonlySet<unknown> = new Set(["containerized", "local"]);
+const AGENT_TYPES: ReadonlySet<unknown> = new Set(["claude", "opencode", "codex"]);
+const PIPELINE_SESSION_PHASES: ReadonlySet<unknown> = new Set([
+  "build",
+  "review",
+  "verify",
+  "fix",
+  "pr",
+  "resolve-conflicts",
+]);
+const PIPELINE_SESSION_STATUSES: ReadonlySet<unknown> = new Set(["running", "idle", "error"]);
+const PIPELINE_FAILURE_KINDS: ReadonlySet<unknown> = new Set([
+  "prompt-dispatch",
+  "stage-transition",
+]);
+const COMPLETION_COMMENT_STATUSES: ReadonlySet<unknown> = new Set([
+  "posting",
+  "posted",
+  "failed",
+]);
+
+function isBuildPhaseValue(value: unknown): value is BuildPhase {
+  return typeof value === "string" && BUILD_PHASES.has(value);
+}
 
 export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => ({
   pipelines: new Map(),

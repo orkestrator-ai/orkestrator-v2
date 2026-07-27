@@ -65,6 +65,7 @@ export function isResourceChange(value: unknown): value is ResourceChange {
     && typeof candidate.id === "string"
     && candidate.id.length > 0
     && typeof candidate.revision === "number"
-    && Number.isFinite(candidate.revision)
+    && Number.isSafeInteger(candidate.revision)
+    && candidate.revision > 0
   );
 }

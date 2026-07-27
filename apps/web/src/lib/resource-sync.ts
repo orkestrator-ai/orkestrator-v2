@@ -4,7 +4,11 @@ import {
   type ResourceChange,
   type ResourceKind,
 } from "@orkestrator/protocol/resource-events";
-import { listen, type UnlistenFn } from "@/lib/native/events";
+import {
+  listen,
+  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+  type UnlistenFn,
+} from "@/lib/native/events";
 
 /**
  * Client half of the backend change feed.
@@ -27,8 +31,16 @@ import { listen, type UnlistenFn } from "@/lib/native/events";
  */
 
 type ResourceHandler = (change: ResourceChange) => void;
+type ResourceResyncHandler = () => void;
 
 const handlers = new Map<ResourceKind, Set<ResourceHandler>>();
+const resyncHandlers = new Set<ResourceResyncHandler>();
+
+/**
+ * Safety net for native/local transports that cannot surface a reconnect.
+ * Reconnect notifications and revision-gap detection are the primary path.
+ */
+export const RESOURCE_RESYNC_INTERVAL_MS = 60_000;
 
 /** Coalescing window for bursts. Reorders announce once per moved record. */
 const COALESCE_MS = 50;
@@ -39,6 +51,7 @@ interface PendingDispatch {
 }
 
 const pending = new Map<string, PendingDispatch>();
+const activeTransportStops = new Set<() => void>();
 
 function coalesceKey(change: ResourceChange): string {
   return `${change.resource}\u0000${change.id}`;
@@ -62,6 +75,28 @@ export function onResourceChanged(
     set.delete(handler);
     if (set.size === 0) handlers.delete(resource);
   };
+}
+
+/**
+ * Subscribes to authoritative resync requests. These are raised after the
+ * event transport attaches/reconnects, when a sequence gap/reset is detected,
+ * and periodically as a last-resort recovery path.
+ */
+export function onResourceResync(handler: ResourceResyncHandler): () => void {
+  resyncHandlers.add(handler);
+  return () => {
+    resyncHandlers.delete(handler);
+  };
+}
+
+export function requestResourceResync(): void {
+  for (const handler of [...resyncHandlers]) {
+    try {
+      handler();
+    } catch (error) {
+      console.error("[resource-sync] Resync handler threw:", error);
+    }
+  }
 }
 
 function deliver(change: ResourceChange): void {
@@ -101,9 +136,11 @@ export function dispatchResourceChange(change: ResourceChange): void {
 
 /** Drops queued dispatches. Tests use this to avoid cross-file bleed. */
 export function resetResourceSync(): void {
+  for (const stop of [...activeTransportStops]) stop();
   for (const { timer } of pending.values()) clearTimeout(timer);
   pending.clear();
   handlers.clear();
+  resyncHandlers.clear();
 }
 
 /**
@@ -111,10 +148,44 @@ export function resetResourceSync(): void {
  * function detaches it.
  */
 export function startResourceSync(): () => void {
-  let unlisten: UnlistenFn | null = null;
+  const unlistens: UnlistenFn[] = [];
   let disposed = false;
+  let lastRevision: number | null = null;
+  let attachedListeners = 0;
+  let connectionAnnounced = false;
+  let initialResyncRequested = false;
 
-  void listen<unknown>(RESOURCE_CHANGED_EVENT, (event) => {
+  const attach = (
+    event: string,
+    handler: (event: { payload: unknown }) => void,
+  ): void => {
+    void listen<unknown>(event, handler).then((stop) => {
+      if (disposed) {
+        stop();
+        return;
+      }
+      unlistens.push(stop);
+      attachedListeners += 1;
+      // Wait until both subscriptions exist so the connection notification
+      // cannot race past its own listener. The zero-delay task also lets store
+      // and hook subscribers mounted in the same React commit attach first.
+      if (attachedListeners === 2) {
+        setTimeout(() => {
+          if (!disposed && !connectionAnnounced) {
+            initialResyncRequested = true;
+            requestResourceResync();
+          }
+        }, 0);
+      }
+    }).catch((error) => {
+      console.error(
+        `[resource-sync] Failed to subscribe to ${event}:`,
+        error,
+      );
+    });
+  };
+
+  attach(RESOURCE_CHANGED_EVENT, (event) => {
     if (!isResourceChange(event.payload)) {
       console.warn(
         "[resource-sync] Dropping malformed resource-changed payload:",
@@ -122,20 +193,40 @@ export function startResourceSync(): () => void {
       );
       return;
     }
-    dispatchResourceChange(event.payload);
-  }).then((stop) => {
-    if (disposed) {
-      stop();
-      return;
+    const revision = event.payload.revision;
+    if (
+      lastRevision !== null
+      && (revision <= lastRevision || revision > lastRevision + 1)
+    ) {
+      requestResourceResync();
     }
-    unlisten = stop;
-  }).catch((error) => {
-    console.error("[resource-sync] Failed to subscribe to backend changes:", error);
+    lastRevision = revision;
+    dispatchResourceChange(event.payload);
   });
 
-  return () => {
+  attach(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+    // The gateway has no replay buffer. Reset sequence tracking and refetch
+    // every active authoritative cache before accepting incremental updates.
+    const isReconnect = connectionAnnounced;
+    lastRevision = null;
+    connectionAnnounced = true;
+    if (isReconnect || !initialResyncRequested) {
+      initialResyncRequested = true;
+      requestResourceResync();
+    }
+  });
+
+  const intervalId = setInterval(() => {
+    requestResourceResync();
+  }, RESOURCE_RESYNC_INTERVAL_MS);
+
+  const stop = () => {
+    if (disposed) return;
     disposed = true;
-    unlisten?.();
-    unlisten = null;
+    clearInterval(intervalId);
+    for (const unlisten of unlistens.splice(0)) unlisten();
+    activeTransportStops.delete(stop);
   };
+  activeTransportStops.add(stop);
+  return stop;
 }

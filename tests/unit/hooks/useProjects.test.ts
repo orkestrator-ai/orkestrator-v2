@@ -5,6 +5,11 @@ import {
 } from "../../../apps/web/src/stores/projectStore";
 import type { Project } from "../../../apps/web/src/types";
 import { createMockProject } from "../utils/testFactories";
+import {
+  dispatchResourceChange,
+  requestResourceResync,
+  resetResourceSync,
+} from "../../../apps/web/src/lib/resource-sync";
 
 // Mock backend module BEFORE importing the hook
 const mockGetProjects = mock<() => Promise<Project[]>>(() => Promise.resolve([]));
@@ -36,6 +41,7 @@ import { useProjects } from "../../../apps/web/src/hooks/useProjects";
 
 describe("useProjects", () => {
   beforeEach(() => {
+    resetResourceSync();
     // Reset store between tests
     useProjectStore.setState({
       projects: [],
@@ -554,5 +560,56 @@ describe("useProjects", () => {
 
     expect(result.current.isLoading).toBe(false);
     expect(result.current.projects.map((project) => project.id)).toEqual(["authoritative"]);
+  });
+
+  test("reloads projects when a project resource change is announced", async () => {
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    mockGetProjects.mockClear();
+    mockGetProjects.mockImplementation(() => Promise.resolve([
+      createMockProject({ id: "remote-project", name: "remote", order: 0 }),
+    ]));
+
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "project",
+        id: "remote-project",
+        revision: 1,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    });
+
+    expect(mockGetProjects).toHaveBeenCalledTimes(1);
+    expect(result.current.projects.map(({ id }) => id)).toEqual(["remote-project"]);
+  });
+
+  test("reloads projects after reconnect or revision-gap recovery", async () => {
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    mockGetProjects.mockClear();
+    mockGetProjects.mockImplementation(() => Promise.resolve([
+      createMockProject({ id: "recovered-project", name: "recovered", order: 0 }),
+    ]));
+
+    await act(async () => {
+      requestResourceResync();
+      await Promise.resolve();
+    });
+
+    expect(mockGetProjects).toHaveBeenCalledTimes(1);
+    expect(result.current.projects.map(({ id }) => id)).toEqual(["recovered-project"]);
+  });
+
+  test("unsubscribes project change and recovery listeners on unmount", async () => {
+    const hook = renderHook(() => useProjects());
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+    mockGetProjects.mockClear();
+    hook.unmount();
+
+    requestResourceResync();
+    dispatchResourceChange({ resource: "project", id: "project-1", revision: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(mockGetProjects).not.toHaveBeenCalled();
   });
 });

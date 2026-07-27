@@ -99,7 +99,24 @@ function resetBackendMocks() {
     return Promise.resolve(mockUnlisten);
   });
   mockInvoke.mockClear();
-  mockInvoke.mockImplementation(() => Promise.resolve());
+  mockInvoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
+    if (
+      command === "record_environment_activity" ||
+      command === "record_environment_completion"
+    ) {
+      const environment = useEnvironmentStore
+        .getState()
+        .getEnvironmentById(String(args?.environmentId));
+      return Promise.resolve({
+        ...environment,
+        lastActivityAt: args?.occurredAt,
+        ...(command === "record_environment_completion"
+          ? { hasUnreadWork: true }
+          : {}),
+      });
+    }
+    return Promise.resolve();
+  });
 }
 
 /**
@@ -174,8 +191,13 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     const environment = makeEnvironment("env-tmux", "container-tmux");
     useEnvironmentStore.getState().setEnvironments([environment]);
     mockInvoke.mockImplementation((command: string, args?: Record<string, unknown>) =>
-      command === "record_environment_activity"
-        ? Promise.resolve({ ...environment, lastActivityAt: args?.occurredAt })
+      command === "record_environment_activity" ||
+      command === "record_environment_completion"
+        ? Promise.resolve({
+            ...environment,
+            lastActivityAt: args?.occurredAt,
+            hasUnreadWork: command === "record_environment_completion",
+          })
         : Promise.resolve(),
     );
     const stateKey = createClaudeTmuxStateKey("env-tmux", "tab-1");
@@ -204,6 +226,10 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     });
     await waitFor(() => {
       expect(unreadEnvironmentIds()).toEqual(["env-tmux"]);
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "record_environment_completion",
+        expect.objectContaining({ environmentId: "env-tmux" }),
+      );
     });
   });
 
@@ -212,8 +238,13 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     useEnvironmentStore.getState().setEnvironments([environment]);
     useUIStore.setState({ selectedEnvironmentId: environment.id });
     mockInvoke.mockImplementation((command: string, args?: Record<string, unknown>) =>
-      command === "record_environment_activity"
-        ? Promise.resolve({ ...environment, lastActivityAt: args?.occurredAt })
+      command === "record_environment_activity" ||
+      command === "record_environment_completion"
+        ? Promise.resolve({
+            ...environment,
+            lastActivityAt: args?.occurredAt,
+            hasUnreadWork: command === "record_environment_completion",
+          })
         : Promise.resolve(),
     );
     const stateKey = createClaudeTmuxStateKey(environment.id, "tab-1");
@@ -239,8 +270,13 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     const environment = makeEnvironment("env-tmux", "container-tmux");
     useEnvironmentStore.getState().setEnvironments([environment]);
     mockInvoke.mockImplementation((command: string, args?: Record<string, unknown>) =>
-      command === "record_environment_activity"
-        ? Promise.resolve({ ...environment, lastActivityAt: args?.occurredAt })
+      command === "record_environment_activity" ||
+      command === "record_environment_completion"
+        ? Promise.resolve({
+            ...environment,
+            lastActivityAt: args?.occurredAt,
+            hasUnreadWork: command === "record_environment_completion",
+          })
         : Promise.resolve(),
     );
     const firstTab = createClaudeTmuxStateKey("env-tmux", "tab-1");
@@ -284,7 +320,10 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     await waitFor(() => {
       expect(mockInvoke.mock.calls.filter(
         ([command]) => command === "record_environment_activity",
-      )).toHaveLength(2);
+      )).toHaveLength(1);
+      expect(mockInvoke.mock.calls.filter(
+        ([command]) => command === "record_environment_completion",
+      )).toHaveLength(1);
       expect(useAgentActivityStore.getState().getContainerState("env-tmux"))
         .toBe("working");
     });
@@ -330,6 +369,63 @@ describe("useGlobalActivityMonitor tmux activity", () => {
         expect(mockInvoke).toHaveBeenCalledWith(
           "get_environment_snapshots",
           { projectId: "project-1" },
+        );
+      });
+    } finally {
+      consoleWarn.mockRestore();
+    }
+  });
+
+  test("restores the persisted unread state when atomic completion persistence fails", async () => {
+    const previousActivityAt = "2026-07-20T10:00:00.000Z";
+    const environment = {
+      ...makeEnvironment("env-tmux", "container-tmux"),
+      lastActivityAt: previousActivityAt,
+      hasUnreadWork: false,
+    };
+    useEnvironmentStore.getState().setEnvironments([environment]);
+    mockInvoke.mockImplementation((
+      command: string,
+      args?: Record<string, unknown>,
+    ) => {
+      if (command === "record_environment_activity") {
+        return Promise.resolve({
+          ...environment,
+          lastActivityAt: args?.occurredAt,
+        });
+      }
+      if (command === "record_environment_completion") {
+        return Promise.reject(new Error("completion persistence unavailable"));
+      }
+      if (command === "get_environment_snapshots") {
+        return Promise.resolve([environment]);
+      }
+      return Promise.resolve();
+    });
+    const consoleWarn = spyOn(console, "warn").mockImplementation(() => {});
+    const stateKey = createClaudeTmuxStateKey("env-tmux", "tab-1");
+
+    try {
+      render(<MonitorHarness />);
+      act(() => {
+        const store = useClaudeTmuxStore.getState();
+        store.setRunning(stateKey, true, {
+          environmentId: "env-tmux",
+          sessionId: "session-1",
+        });
+        store.setBusy(stateKey, true);
+        store.setBusy(stateKey, false);
+      });
+
+      await waitFor(() => {
+        expect(useEnvironmentStore.getState().getEnvironmentById("env-tmux"))
+          .toMatchObject({
+            lastActivityAt: previousActivityAt,
+            hasUnreadWork: false,
+          });
+        expect(consoleWarn).toHaveBeenCalledWith(
+          "[GlobalActivityMonitor] Failed to persist environment completion:",
+          expect.any(Error),
         );
       });
     } finally {
@@ -724,18 +820,25 @@ describe("useGlobalActivityMonitor terminal activity", () => {
     useEnvironmentStore.setState({ environments: [environment] });
     let resolveFirstActivity: ((value: Environment) => void) | undefined;
     let firstOccurredAt = "";
-    let activityCalls = 0;
+    let persistenceCalls = 0;
     mockInvoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
-      if (command !== "record_environment_activity") return Promise.resolve();
-      activityCalls += 1;
+      if (
+        command !== "record_environment_activity" &&
+        command !== "record_environment_completion"
+      ) return Promise.resolve();
+      persistenceCalls += 1;
       const occurredAt = String(args?.occurredAt);
-      if (activityCalls === 1) {
+      if (persistenceCalls === 1) {
         firstOccurredAt = occurredAt;
         return new Promise<Environment>((resolve) => {
           resolveFirstActivity = resolve;
         });
       }
-      return Promise.resolve({ ...environment, lastActivityAt: occurredAt });
+      return Promise.resolve({
+        ...environment,
+        lastActivityAt: occurredAt,
+        hasUnreadWork: command === "record_environment_completion",
+      });
     });
 
     render(<MonitorHarness />);
@@ -746,7 +849,7 @@ describe("useGlobalActivityMonitor terminal activity", () => {
         payload: { container_id: "container-1", state: "working" },
       });
     });
-    await waitFor(() => expect(activityCalls).toBe(1));
+    await waitFor(() => expect(persistenceCalls).toBe(1));
     await new Promise((resolve) => setTimeout(resolve, 5));
     act(() => {
       eventCallbacks.get("claude-state-container-1")?.({
@@ -754,7 +857,7 @@ describe("useGlobalActivityMonitor terminal activity", () => {
       });
     });
 
-    await waitFor(() => expect(activityCalls).toBe(2));
+    await waitFor(() => expect(persistenceCalls).toBe(2));
     const newerActivityAt = useEnvironmentStore
       .getState()
       .getEnvironmentById("env-container")?.lastActivityAt;
@@ -1132,9 +1235,16 @@ describe("useGlobalActivityMonitor native agent activity", () => {
     }));
     useEnvironmentStore.getState().setEnvironments(environments);
     mockInvoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
-      if (command !== "record_environment_activity") return Promise.resolve();
+      if (
+        command !== "record_environment_activity" &&
+        command !== "record_environment_completion"
+      ) return Promise.resolve();
       const environment = environments.find((candidate) => candidate.id === args?.environmentId)!;
-      return Promise.resolve({ ...environment, lastActivityAt: args?.occurredAt });
+      return Promise.resolve({
+        ...environment,
+        lastActivityAt: args?.occurredAt,
+        hasUnreadWork: command === "record_environment_completion",
+      });
     });
 
     const claudeA = createClaudeSessionKey("env-claude", "tab-a");
@@ -1242,10 +1352,16 @@ describe("useGlobalActivityMonitor native agent activity", () => {
       const activityCalls = mockInvoke.mock.calls.filter(
         ([command]) => command === "record_environment_activity",
       );
-      expect(activityCalls).toHaveLength(6);
+      const completionCalls = mockInvoke.mock.calls.filter(
+        ([command]) => command === "record_environment_completion",
+      );
+      expect(activityCalls).toHaveLength(3);
+      expect(completionCalls).toHaveLength(3);
       for (const environmentId of ["env-claude", "env-opencode", "env-codex"]) {
         expect(activityCalls.filter(([, args]) => args?.environmentId === environmentId))
-          .toHaveLength(2);
+          .toHaveLength(1);
+        expect(completionCalls.filter(([, args]) => args?.environmentId === environmentId))
+          .toHaveLength(1);
         expect(useAgentActivityStore.getState().getContainerState(environmentId))
           .toBe("working");
       }

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { onResourceChanged } from "@/lib/resource-sync";
+import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 
 /**
  * Safety-net poll interval.
@@ -32,11 +32,14 @@ export function useEnvironmentListSync(
   refreshProjectRef.current = refreshProject;
 
   useEffect(() => {
+    let disposed = false;
+
     // A refresh already running was started before the mutation that prompted
     // this one, so it cannot contain it. Dropping the request would leave the
     // list stale until the next slow resync, so record it and re-run once the
     // in-flight read finishes instead.
     const refreshProjectOnce = async (projectId: string): Promise<void> => {
+      if (disposed || !projectIdsRef.current.includes(projectId)) return;
       if (inFlightProjectIdsRef.current.has(projectId)) {
         rerunProjectIdsRef.current.add(projectId);
         return;
@@ -48,6 +51,7 @@ export function useEnvironmentListSync(
         // arriving during one read collapse into a single follow-up.
         do {
           rerunProjectIdsRef.current.delete(projectId);
+          if (disposed || !projectIdsRef.current.includes(projectId)) break;
           try {
             await refreshProjectRef.current(projectId);
           } catch (error) {
@@ -58,7 +62,11 @@ export function useEnvironmentListSync(
               error,
             );
           }
-        } while (rerunProjectIdsRef.current.has(projectId));
+        } while (
+          !disposed
+          && projectIdsRef.current.includes(projectId)
+          && rerunProjectIdsRef.current.has(projectId)
+        );
       } finally {
         inFlightProjectIdsRef.current.delete(projectId);
         rerunProjectIdsRef.current.delete(projectId);
@@ -77,13 +85,18 @@ export function useEnvironmentListSync(
     const unsubscribe = onResourceChanged("environment", () => {
       void refreshAll();
     });
+    const unsubscribeResync = onResourceResync(() => {
+      void refreshAll();
+    });
 
     const intervalId = window.setInterval(() => {
       void refreshAll();
     }, ENVIRONMENT_LIST_RESYNC_INTERVAL_MS);
 
     return () => {
+      disposed = true;
       unsubscribe();
+      unsubscribeResync();
       window.clearInterval(intervalId);
     };
   }, []);

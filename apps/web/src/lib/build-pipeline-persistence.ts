@@ -72,9 +72,15 @@ function toSnapshot(
   persisted: PersistedBuildPipeline<BuildPipeline>,
 ): BuildPipeline | null {
   if (
-    !isBuildPipeline(persisted.snapshot)
+    persisted.version !== BUILD_PIPELINE_VERSION
+    || !Number.isSafeInteger(persisted.revision)
+    || persisted.revision < 1
+    || typeof persisted.updatedAt !== "string"
+    || !Number.isFinite(Date.parse(persisted.updatedAt))
+    || !isBuildPipeline(persisted.snapshot)
     || persisted.snapshot.id !== persisted.id
     || persisted.snapshot.projectId !== persisted.projectId
+    || persisted.snapshot.environmentId !== persisted.environmentId
   ) {
     return null;
   }
@@ -254,6 +260,10 @@ export async function persistBuildPipelineNow(
 
 export interface BuildPipelinePersistenceOptions {
   debounceMs?: number;
+  /** Initial retry delay for a transient backend failure. */
+  retryMs?: number;
+  /** Maximum delay between retries while a pipeline remains dirty. */
+  maxRetryMs?: number;
   save?: PipelineSaver;
   load?: PipelineLoader;
   remove?: (pipelineId: string) => Promise<void>;
@@ -270,6 +280,8 @@ export function startBuildPipelinePersistence(
   options: BuildPipelinePersistenceOptions = {},
 ): () => void {
   const debounceMs = options.debounceMs ?? 250;
+  const retryMs = Math.max(1, options.retryMs ?? 1_000);
+  const maxRetryMs = Math.max(retryMs, options.maxRetryMs ?? 30_000);
   const save = options.save ?? backend.saveBuildPipeline;
   const load = options.load ?? backend.getBuildPipeline;
   const remove = options.remove ?? backend.deleteBuildPipeline;
@@ -277,11 +289,32 @@ export function startBuildPipelinePersistence(
   const pending = new Map<string, PendingWrite>();
   const chains = new Map<string, Promise<void>>();
   const lastSavedFingerprint = new Map<string, string>();
+  const retryAttempts = new Map<string, number>();
+  let stopped = false;
 
   const cancelTimer = (pipelineId: string) => {
     const timer = timers.get(pipelineId);
     if (timer) clearTimeout(timer);
     timers.delete(pipelineId);
+  };
+
+  const scheduleRetry = (pipelineId: string) => {
+    if (stopped || timers.has(pipelineId) || !pending.has(pipelineId)) return;
+    const attempt = retryAttempts.get(pipelineId) ?? 1;
+    const delay = Math.min(maxRetryMs, retryMs * (2 ** Math.min(attempt - 1, 20)));
+    timers.set(pipelineId, setTimeout(() => {
+      void flush(pipelineId);
+    }, delay));
+  };
+
+  const retainDirtyWrite = (pipelineId: string) => {
+    const latest = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+    if (!latest) return;
+    const fingerprint = pipelineFingerprint(latest);
+    dirtyPipelineFingerprints.set(pipelineId, fingerprint);
+    pending.set(pipelineId, { pipeline: latest, fingerprint });
+    retryAttempts.set(pipelineId, (retryAttempts.get(pipelineId) ?? 0) + 1);
+    scheduleRetry(pipelineId);
   };
 
   const enqueue = (pipelineId: string): Promise<void> => {
@@ -301,6 +334,7 @@ export function startBuildPipelinePersistence(
         const savedFingerprint = pipelineFingerprint(current);
         lastSavedFingerprint.set(pipelineId, savedFingerprint);
         markPipelineClean(pipelineId, savedFingerprint);
+        retryAttempts.delete(pipelineId);
         useBuildPipelineStore.getState().setBackendRevision(pipelineId, saved.revision);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -314,10 +348,12 @@ export function startBuildPipelinePersistence(
               useBuildPipelineStore.getState().replacePipeline(snapshot);
               lastSavedFingerprint.set(pipelineId, pipelineFingerprint(snapshot));
               dirtyPipelineFingerprints.delete(pipelineId);
+              retryAttempts.delete(pipelineId);
               return;
             }
           }
         }
+        retainDirtyWrite(pipelineId);
         console.error(
           `[BuildPipeline] Failed to persist pipeline ${pipelineId}:`,
           message,
@@ -351,6 +387,7 @@ export function startBuildPipelinePersistence(
         cancelTimer(id);
         pending.delete(id);
         lastSavedFingerprint.delete(id);
+        retryAttempts.delete(id);
         dirtyPipelineFingerprints.delete(id);
         // A non-zero backendRevision means the backend holds a record for this
         // pipeline, so dropping it locally is a real deletion and must remove
@@ -400,6 +437,7 @@ export function startBuildPipelinePersistence(
   window.addEventListener("pagehide", onPageHide);
 
   return () => {
+    stopped = true;
     unsubscribe();
     window.removeEventListener("pagehide", onPageHide);
     void flushAll();

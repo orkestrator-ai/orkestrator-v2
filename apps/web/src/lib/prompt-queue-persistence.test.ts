@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import {
+  claimPromptQueueHead,
   hydratePromptQueue,
   hydratePromptQueuesForEnvironment,
   parsePromptQueueKey,
   promptQueueKey,
   resetPromptQueueRevisions,
   startPromptQueuePersistence,
+  type PromptQueueClaimer,
   type PromptQueueLoader,
   type PromptQueueSaver,
   type PromptQueueSource,
@@ -128,6 +130,21 @@ describe("hydratePromptQueuesForEnvironment", () => {
 
     expect(source.read(SESSION)).toEqual([{ id: "m1" }]);
   });
+
+  test("ignores malformed lists, foreign environments, and malformed keys", async () => {
+    const source = createSource();
+    await hydratePromptQueuesForEnvironment(
+      "env-1",
+      [source],
+      async () => "not-an-array" as unknown as Array<PersistedPromptQueue<QueuedItem>>,
+    );
+    await hydratePromptQueuesForEnvironment("env-1", [source], async () => [
+      persisted(promptQueueKey("claude", SESSION), [{ id: "foreign" }], 1, "env-2"),
+      persisted("missing-separator", [{ id: "malformed" }], 1),
+    ]);
+
+    expect(source.size()).toBe(0);
+  });
 });
 
 /**
@@ -241,6 +258,75 @@ describe("hydratePromptQueue", () => {
 
     expect(source.read(SESSION)).toEqual([{ id: "b" }]);
   });
+
+  test("does not load a single queue for an unknown agent", async () => {
+    const source = createSource("claude");
+    const load = mock<PromptQueueLoader>(async () =>
+      persisted(promptQueueKey("codex", SESSION), [{ id: "m1" }], 1));
+
+    await hydratePromptQueue(promptQueueKey("codex", SESSION), [source], load);
+
+    expect(load).not.toHaveBeenCalled();
+    expect(source.size()).toBe(0);
+  });
+});
+
+describe("claimPromptQueueHead", () => {
+  test("allows only one of two clients to claim the same head", async () => {
+    const first = createSource();
+    const second = createSource();
+    const initial = [{ id: "m1" }, { id: "m2" }];
+    first.push(SESSION, initial);
+    second.push(SESSION, initial);
+
+    let backendQueue = [...initial];
+    let revision = 0;
+    const claim = (async (
+      queueKey: string,
+      environmentId: string,
+      expectedMessageId: string,
+      candidateMessages: QueuedItem[],
+    ) => {
+      if (revision === 0) backendQueue = [...candidateMessages];
+      const head = backendQueue[0];
+      if (!head || head.id !== expectedMessageId) {
+        return {
+          claimed: null,
+          queue: persisted(queueKey, backendQueue, revision, environmentId),
+        };
+      }
+      backendQueue = backendQueue.slice(1);
+      revision += 1;
+      return {
+        claimed: head,
+        queue: persisted(queueKey, backendQueue, revision, environmentId),
+      };
+    }) as unknown as PromptQueueClaimer;
+
+    const [winner, loser] = await Promise.all([
+      claimPromptQueueHead(first, SESSION, claim),
+      claimPromptQueueHead(second, SESSION, claim),
+    ]);
+
+    expect(winner).toEqual({ id: "m1" });
+    expect(loser).toBeNull();
+    expect(first.read(SESSION)).toEqual([{ id: "m2" }]);
+    expect(second.read(SESSION)).toEqual([{ id: "m2" }]);
+  });
+
+  test("clears a local ghost queue when the backend refuses a missing queue", async () => {
+    const source = createSource();
+    source.push(SESSION, [{ id: "m1" }]);
+
+    const claimed = await claimPromptQueueHead(
+      source,
+      SESSION,
+      async () => ({ claimed: null, queue: null }),
+    );
+
+    expect(claimed).toBeNull();
+    expect(source.read(SESSION)).toEqual([]);
+  });
 });
 
 describe("startPromptQueuePersistence", () => {
@@ -296,6 +382,80 @@ describe("startPromptQueuePersistence", () => {
       await tick(60);
 
       expect(source.read(SESSION)).toEqual([{ id: "taken-by-peer" }]);
+    } finally {
+      stop();
+    }
+  });
+
+  test("retries a transient save failure without another store mutation", async () => {
+    const source = createSource();
+    let attempts = 0;
+    const save = mock<PromptQueueSaver>(async (_key, _environment, messages) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("backend temporarily unavailable");
+      return persisted(promptQueueKey("claude", SESSION), messages, 1);
+    });
+    const stop = startPromptQueuePersistence([source], { debounceMs: 1, save });
+    try {
+      source.push(SESSION, [{ id: "m1" }]);
+      await tick(180);
+
+      expect(save).toHaveBeenCalledTimes(2);
+      expect(save.mock.calls[1]?.[2]).toEqual([{ id: "m1" }]);
+    } finally {
+      stop();
+    }
+  });
+
+  test("retries when a revision conflict cannot load an authoritative winner", async () => {
+    const source = createSource();
+    let attempts = 0;
+    const save = mock<PromptQueueSaver>(async (_key, _environment, messages) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("Prompt queue revision conflict");
+      return persisted(promptQueueKey("claude", SESSION), messages, 2);
+    });
+    const load = mock<PromptQueueLoader>(async () => null);
+    const stop = startPromptQueuePersistence([source], {
+      debounceMs: 1,
+      save,
+      load,
+    });
+    try {
+      source.push(SESSION, [{ id: "m1" }]);
+      await tick(180);
+
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(save).toHaveBeenCalledTimes(2);
+    } finally {
+      stop();
+    }
+  });
+
+  test("serializes writes for one queue while preserving the newest state", async () => {
+    const source = createSource();
+    let releaseFirst: () => void = () => {};
+    const firstPending = new Promise<void>((resolve) => {
+      releaseFirst = () => resolve();
+    });
+    let callCount = 0;
+    const save = mock<PromptQueueSaver>(async (key, environment, messages) => {
+      const call = ++callCount;
+      if (call === 1) await firstPending;
+      return persisted(key, messages, call, environment);
+    });
+    const stop = startPromptQueuePersistence([source], { debounceMs: 1, save });
+    try {
+      source.push(SESSION, [{ id: "m1" }]);
+      await tick(20);
+      source.push(SESSION, [{ id: "m1" }, { id: "m2" }]);
+      await tick(20);
+
+      expect(save).toHaveBeenCalledTimes(1);
+      releaseFirst();
+      await tick(30);
+      expect(save).toHaveBeenCalledTimes(2);
+      expect(save.mock.calls[1]?.[2]).toEqual([{ id: "m1" }, { id: "m2" }]);
     } finally {
       stop();
     }
@@ -382,5 +542,40 @@ describe("startPromptQueuePersistence", () => {
     await tick(50);
 
     expect(save).not.toHaveBeenCalled();
+  });
+
+  test("flushes a pending debounced write on pagehide", async () => {
+    const source = createSource();
+    const save = mock<PromptQueueSaver>(async (key, environment, messages) =>
+      persisted(key, messages, 1, environment));
+    const stop = startPromptQueuePersistence([source], {
+      debounceMs: 10_000,
+      save,
+    });
+    try {
+      source.push(SESSION, [{ id: "m1" }]);
+      window.dispatchEvent(new Event("pagehide"));
+      await tick(20);
+
+      expect(save).toHaveBeenCalledTimes(1);
+    } finally {
+      stop();
+    }
+  });
+
+  test("flushes a pending debounced write when detached", async () => {
+    const source = createSource();
+    const save = mock<PromptQueueSaver>(async (key, environment, messages) =>
+      persisted(key, messages, 1, environment));
+    const stop = startPromptQueuePersistence([source], {
+      debounceMs: 10_000,
+      save,
+    });
+    source.push(SESSION, [{ id: "m1" }]);
+
+    stop();
+    await tick(20);
+
+    expect(save).toHaveBeenCalledTimes(1);
   });
 });

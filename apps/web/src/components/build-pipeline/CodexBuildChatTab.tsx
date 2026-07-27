@@ -755,12 +755,31 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       // mirror would land ~250ms later, which is exactly the window in which a
       // crash leaves a dispatched turn with no record that it was attempted.
       try {
-        await persistBuildPipelineNow(pipelineId);
+        const persisted = await persistBuildPipelineNow(pipelineId);
+        const durableAttempt = persisted.pendingPromptAttempt;
+        if (
+          durableAttempt?.id !== attemptId
+          || durableAttempt.sessionId !== sdkSessionId
+          || durableAttempt.requestId !== requestId
+          || durableAttempt.phase !== options.phase
+          || durableAttempt.prompt !== prompt
+          || durableAttempt.useTaskImages !== options.useTaskImages
+          || durableAttempt.structuredReview !== (
+            options.structuredReview ? true : undefined
+          )
+        ) {
+          // A compare-and-swap conflict means another client owns the durable
+          // pipeline snapshot. Never dispatch from this client's stale state.
+          completePromptAttempt(pipelineId, attemptId);
+          return false;
+        }
       } catch (error) {
-        console.warn(
-          `[CodexBuildChatTab] Failed to record dispatch lease for ${pipelineId}:`,
+        console.error(
+          `[CodexBuildChatTab] Refusing to dispatch without a durable lease for ${pipelineId}:`,
           error,
         );
+        completePromptAttempt(pipelineId, attemptId);
+        return false;
       }
 
       try {

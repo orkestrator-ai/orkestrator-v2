@@ -58,10 +58,19 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
   const type = nonEmptyString(value.type);
   if (!id || !type) return null;
 
+  // `initialAgentModel`/`initialReasoningEffort` are one-shot launch options that
+  // `sanitizeTab` in pane-layout-persistence deliberately keeps on disk. Reading
+  // them back is what makes the tab itself the durable carrier of the user's
+  // create-dialog choice: a renderer reload before the agent surface applied the
+  // model rehydrates the tab with it instead of silently falling back to the
+  // configured default. The consumer clears them via `clearTabInitialAgentOptions`
+  // once applied, so a restored value is by definition still unconsumed.
   const common = {
     id,
     displayTitle: optionalString(value.displayTitle),
     isReviewTab: optionalBoolean(value.isReviewTab),
+    initialAgentModel: optionalString(value.initialAgentModel),
+    initialReasoningEffort: optionalString(value.initialReasoningEffort),
   };
 
   if (value.isSetupTab === true) {

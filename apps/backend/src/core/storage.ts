@@ -1206,6 +1206,8 @@ export class StorageService {
       const optionalStringFields = [
         "worktreePath",
         "initialPrompt",
+        "initialAgentModel",
+        "initialReasoningEffort",
         "pendingRenamePrompt",
         "createdFromCommit",
         "lastActivityAt",

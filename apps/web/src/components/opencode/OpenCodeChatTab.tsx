@@ -69,6 +69,12 @@ import {
   type OpenCodeModelPreferences,
 } from "@/lib/backend";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
+import {
+  buildMessageForkPlan,
+  findNextForkMessage,
+  forkAttachmentNotice,
+  type MessageForkKind,
+} from "@/components/chat/message-fork";
 import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { OpenCodeComposeBar } from "./OpenCodeComposeBar";
@@ -277,10 +283,10 @@ export function OpenCodeChatTab({
     [environmentId, tabId],
   );
 
-  useEffect(() => {
-    if (initialLaunchOptionsPendingRef.current) {
-      clearTabInitialAgentOptions(tabId, environmentId);
-    }
+  const acknowledgeInitialLaunchOptions = useCallback(() => {
+    if (!initialLaunchOptionsPendingRef.current) return;
+    initialLaunchOptionsPendingRef.current = false;
+    clearTabInitialAgentOptions(tabId, environmentId);
   }, [clearTabInitialAgentOptions, environmentId, tabId]);
 
   // Get client from Map (shared per environment) - subscribing to the Map ensures re-render on changes
@@ -304,6 +310,33 @@ export function OpenCodeChatTab({
     ),
     [sessionMessages],
   );
+  const forkPlan = useMemo(
+    () => buildMessageForkPlan(displayMessages, {
+      responseInProgress: session?.isLoading ?? false,
+      /*
+       * OpenCode's boundary is exclusive: it clones the messages *before*
+       * messageID. A prompt therefore branches at its own id, while a response
+       * branches at the message after it — or, when it ends the transcript, at
+       * no boundary at all, which clones everything.
+       */
+      resolvePromptBoundary: (message) => ({
+        type: "message",
+        messageId: message.id,
+      }),
+      resolveResponseBoundary: (message, messages) => {
+        const next = findNextForkMessage(messages, message.id);
+        return next
+          ? { type: "message", messageId: next.id }
+          : { type: "whole-session" };
+      },
+    }),
+    [displayMessages, session?.isLoading],
+  );
+  // Read by the fork handler so it does not have to depend on the transcript:
+  // `displayMessages` is a fresh array on every streaming tick, and a handler
+  // that changed with it would rebuild every fork button on every tick.
+  const forkPlanRef = useRef(forkPlan);
+  forkPlanRef.current = forkPlan;
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
   const showAddressAll = Boolean(
@@ -732,10 +765,12 @@ export function OpenCodeChatTab({
               });
             if (resolvedModel) setSelectedModel(sessionKey, resolvedModel);
             setSelectedVariant(sessionKey, resolvedVariant);
+            if (pendingLaunchOptions) {
+              acknowledgeInitialLaunchOptions();
+            }
           }
           // A warm client cannot safely send an unvalidated modal value. If its
           // model snapshot is empty, retain the store's existing selection.
-          initialLaunchOptionsPendingRef.current = false;
         }
         if (existingClient && existingSession?.sessionId) {
           console.debug("[OpenCodeChatTab] Fast reconnect - reusing existing client and session", {
@@ -949,14 +984,15 @@ export function OpenCodeChatTab({
             currentModel,
             currentVariant,
           });
-        initialLaunchOptionsPendingRef.current = false;
-
         if (resolvedModel && resolvedModel !== getSelectedModel(sessionKey)) {
           setSelectedModel(sessionKey, resolvedModel);
         }
 
         if (resolvedVariant !== getSelectedVariant(sessionKey)) {
           setSelectedVariant(sessionKey, resolvedVariant);
+        }
+        if (pendingInitialOptions && availableModels.length > 0) {
+          acknowledgeInitialLaunchOptions();
         }
 
         // Check for existing session - first from component ref, then from Zustand store
@@ -1095,6 +1131,7 @@ export function OpenCodeChatTab({
     syncPendingRequests,
     getSelectedModel,
     getSelectedVariant,
+    acknowledgeInitialLaunchOptions,
     setSelectedModel,
     setSelectedVariant,
     setupPending,
@@ -2018,7 +2055,10 @@ export function OpenCodeChatTab({
     [client, environmentId, models, sessionKey, syncPendingRequests, tabId, updateTabNativeSessionId],
   );
 
-  const handleForkFromMessage = useCallback(async (messageId: string) => {
+  const handleForkFromMessage = useCallback(async (
+    messageId: string,
+    kind: MessageForkKind,
+  ) => {
     if (!client || !session?.sessionId) return;
     // Each call forks server-side and then adds a tab with a freshly generated
     // id, so the pane store cannot dedupe a double click. The ref latches
@@ -2027,18 +2067,39 @@ export function OpenCodeChatTab({
     forkInFlightRef.current = true;
     setForkInFlight(true);
     try {
-      const fork = await forkOpenCodeSession(client, session.sessionId, messageId);
+      const planned = forkPlanRef.current.get(messageId);
+      if (!planned || planned.kind !== kind) {
+        throw new Error("The selected message is no longer in this session");
+      }
+
+      const fork = await forkOpenCodeSession(
+        client,
+        session.sessionId,
+        planned.boundary.type === "message"
+          ? planned.boundary.messageId
+          : undefined,
+      );
       const paneStore = usePaneLayoutStore.getState();
+      const forkTabId = createUuid();
+      if (planned.kind === "prompt") {
+        useOpenCodeStore.getState().setDraftText(
+          createSessionKey(environmentId, forkTabId),
+          planned.draftText,
+        );
+      }
       paneStore.addTab(
         paneStore.getActivePaneId(environmentId),
         {
-          id: createUuid(),
+          id: forkTabId,
           type: "opencode-native",
           displayTitle: fork.title ?? "OpenCode fork",
           openCodeNativeData: { ...data, sessionId: fork.id },
         },
         environmentId,
       );
+
+      const attachmentNotice = forkAttachmentNotice(planned.droppedAttachmentCount);
+      if (attachmentNotice) toast.warning(attachmentNotice);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to fork OpenCode session");
     } finally {
@@ -2047,10 +2108,12 @@ export function OpenCodeChatTab({
     }
   }, [client, data, environmentId, session?.sessionId]);
 
-  // Referentially stable per message id, so `memo(NativeMessage)` still holds
-  // for every visible message while an answer streams in.
+  // None of these change while an answer streams in — the transcript is read
+  // through `forkPlanRef` precisely so it cannot drag the handler's identity
+  // with it. That keeps the cached fork elements below referentially stable per
+  // message id, which is what lets `memo(NativeMessage)` hold on every tick.
   const forkAction = useMessageForkAction({
-    label: "Fork OpenCode session from this message",
+    agentLabel: "OpenCode",
     disabled: forkInFlight,
     onFork: handleForkFromMessage,
   });
@@ -2130,9 +2193,10 @@ export function OpenCodeChatTab({
       virtuosoRef={virtuosoRef}
       onResumeClick={client ? () => setResumeDialogOpen(true) : undefined}
       emptyStateMessage="No messages yet. Start a conversation!"
-      messageActions={(message) =>
-        message.role === "user" ? forkAction(message.id) : undefined
-      }
+      messageActions={(message) => {
+        const planned = forkPlan.get(message.id);
+        return planned ? forkAction(message.id, planned.kind) : undefined;
+      }}
       blockingCards={
         session && client && (pendingPermissions.length > 0 || pendingQuestions.length > 0) ? (
           <>

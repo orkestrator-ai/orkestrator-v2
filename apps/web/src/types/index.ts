@@ -154,6 +154,10 @@ export interface Environment {
    * backend owns this flag so mobile page eviction cannot lose the launch.
    */
   pendingAgentLaunch?: boolean;
+  /** One-shot model for the agent tab created from pendingAgentLaunch. */
+  initialAgentModel?: string;
+  /** One-shot reasoning effort for the agent tab created from pendingAgentLaunch. */
+  initialReasoningEffort?: string;
   /** Initial prompt used when this environment was created. */
   initialPrompt?: string;
   /** Prompt awaiting a backend-owned rename after the environment starts. */

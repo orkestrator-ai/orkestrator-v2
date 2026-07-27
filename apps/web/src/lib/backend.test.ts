@@ -104,6 +104,8 @@ describe("backend setup wrappers", () => {
       null,
       "native",
       true,
+      "gpt-5.6-sol",
+      "high",
     );
 
     expect(invokeMock.mock.calls).toEqual([
@@ -115,8 +117,32 @@ describe("backend setup wrappers", () => {
         opencodeMode: null,
         codexMode: "native",
         pendingAgentLaunch: true,
+        initialAgentModel: "gpt-5.6-sol",
+        initialReasoningEffort: "high",
       }],
     ]);
+  });
+
+  test("omits the one-shot option keys when they are absent or blank", async () => {
+    // Key absence is meaningful on the backend: `update_environment_agent_settings`
+    // leaves a stored option alone when its key is missing, so an unset option
+    // must not be sent as `undefined`/`""` and quietly overwrite one.
+    await updateEnvironmentAgentSettings(
+      "env-1",
+      "codex",
+      null,
+      null,
+      null,
+      "native",
+      true,
+      undefined,
+      "",
+    );
+
+    const payload = invokeMock.mock.calls[0]![1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("initialAgentModel");
+    expect(payload).not.toHaveProperty("initialReasoningEffort");
+    expect(payload.pendingAgentLaunch).toBe(true);
   });
 
   test("omits the launch intent key entirely when no launch is being configured", async () => {
@@ -752,6 +778,38 @@ describe("backend command wrapper coverage", () => {
         preparation,
       },
     );
+  });
+
+  test("forwards explicit committed-only Git status requests", async () => {
+    await backendWrappers.getGitStatus("container-1", "base-sha", false);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_git_status", {
+      containerId: "container-1",
+      targetBranch: "base-sha",
+      includeUncommitted: false,
+    });
+
+    await backendWrappers.getLocalGitStatus("/tmp/worktree", "base-sha", false);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_local_git_status", {
+      worktreePath: "/tmp/worktree",
+      targetBranch: "base-sha",
+      includeUncommitted: false,
+    });
+  });
+
+  test("includes uncommitted changes in Git status requests by default", async () => {
+    await backendWrappers.getGitStatus("container-1", "main");
+    expect(invokeMock).toHaveBeenLastCalledWith("get_git_status", {
+      containerId: "container-1",
+      targetBranch: "main",
+      includeUncommitted: true,
+    });
+
+    await backendWrappers.getLocalGitStatus("/tmp/worktree", "main");
+    expect(invokeMock).toHaveBeenLastCalledWith("get_local_git_status", {
+      worktreePath: "/tmp/worktree",
+      targetBranch: "main",
+      includeUncommitted: true,
+    });
   });
 
   test("every exported command wrapper reaches the native invoke boundary", async () => {

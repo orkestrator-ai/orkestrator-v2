@@ -4,6 +4,24 @@
 
 set -e
 
+# Capability declaration. The backend greps for this exact line before it invokes
+# --prepare-only, because an older image's copy of this script has no argument
+# handling at all: it would ignore the flag and run the *entire* setup, including
+# the repository-controlled orkestrator-ai.json commands, before the backend ever
+# reads HEAD. Refusing up front is what stops a polluted creation commit being
+# recorded on an image that predates this contract. Keep the literal text in sync
+# with CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER in apps/backend/src/core/commands.ts.
+ORKESTRATOR_SETUP_CAPABILITIES=prepare-only
+export ORKESTRATOR_SETUP_CAPABILITIES
+
+PREPARE_ONLY=false
+if [ "${1:-}" = "--prepare-only" ]; then
+    PREPARE_ONLY=true
+elif [ "$#" -gt 0 ]; then
+    echo "Unknown workspace setup argument: $1" >&2
+    exit 2
+fi
+
 # Color output helpers - use $'...' syntax for proper escape sequence handling
 GREEN=$'\033[0;32m'
 BLUE=$'\033[0;34m'
@@ -175,6 +193,25 @@ append_git_exclude_pattern() {
     local pattern="$2"
     ensure_git_exclude_trailing_newline "$exclude_file"
     printf '%s\n' "$pattern" >> "$exclude_file"
+}
+
+validate_prepared_workspace() {
+    local workspace="${1:-/workspace}"
+    git -C "$workspace" rev-parse --verify 'HEAD^{commit}' >/dev/null 2>&1
+}
+
+# Terminates the --prepare-only run. The sentinel is what the backend matches on
+# to confirm this phase actually ran to completion; a script that merely exits 0
+# is not enough, because the pre-contract script also exits 0.
+emit_prepare_only_checkpoint() {
+    local workspace="${1:-/workspace}"
+    if ! validate_prepared_workspace "$workspace"; then
+        echo -e "${RED}Workspace preparation failed - no valid Git HEAD${NC}" >&2
+        return 1
+    fi
+    printf '\036ORKESTRATOR_PREPARE_OK\037'
+    echo -e "${GREEN}Workspace preparation complete${NC}"
+    return 0
 }
 
 # Function to add Orkestrator workspace artifacts to .git/info/exclude
@@ -459,6 +496,13 @@ fi
 
 restore_orkestrator_workspace_state
 add_workspace_artifacts_to_git_exclude
+
+# The backend invokes this phase separately and durably stores HEAD before it
+# allows copied files or repository-controlled setup commands to run.
+if [ "$PREPARE_ONLY" = true ]; then
+    emit_prepare_only_checkpoint /workspace || exit 1
+    exit 0
+fi
 
 # Copy .env files to workspace
 echo ""

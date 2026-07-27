@@ -18,6 +18,31 @@ interface DiffPollEnv {
   createdFromCommit?: string;
 }
 
+type DiffPollTarget =
+  | { kind: "local"; worktreePath: string }
+  | { kind: "container"; containerId: string };
+
+/** Returns the backend target to poll, or undefined when the environment cannot be polled yet. */
+function resolveDiffPollTarget(env: DiffPollEnv): DiffPollTarget | undefined {
+  if (env.environmentType === "local") {
+    return env.worktreePath ? { kind: "local", worktreePath: env.worktreePath } : undefined;
+  }
+  if (env.status !== "running" || !env.containerId) return undefined;
+  return { kind: "container", containerId: env.containerId };
+}
+
+function getDiffPollEnvKey(env: DiffPollEnv): string {
+  return JSON.stringify([
+    env.id,
+    env.projectId,
+    env.environmentType,
+    env.worktreePath ?? "",
+    env.status,
+    env.containerId ?? "",
+    env.createdFromCommit ?? "",
+  ]);
+}
+
 /**
  * Hook that polls git diff stats for all environments and updates the diff store.
  * Should be mounted once at the sidebar/app level.
@@ -49,10 +74,7 @@ export function useEnvironmentDiffStats() {
   // Stable identity string that only changes when the set of environments
   // or their availability-relevant fields change.
   const envKey = useMemo(
-    () =>
-      envSnapshot
-        .map((e) => `${e.id}:${e.status}:${e.worktreePath ?? ""}:${e.containerId ?? ""}:${e.createdFromCommit ?? ""}`)
-        .join("|"),
+    () => JSON.stringify(envSnapshot.map(getDiffPollEnvKey)),
     [envSnapshot]
   );
 
@@ -66,32 +88,37 @@ export function useEnvironmentDiffStats() {
 
   useEffect(() => {
     const fetchStatsForEnvironment = async (env: DiffPollEnv) => {
+      // Serialise on the environment id, not the snapshot key. Each request runs a
+      // `git fetch` inside the environment, so keying the guard by snapshot would
+      // let a field changing mid-flight start a second concurrent request against
+      // the same container. Staleness is handled separately, below.
       if (loadingRef.current.has(env.id)) return;
 
-      const isLocal = env.environmentType === "local";
-      const isAvailable = isLocal
-        ? !!env.worktreePath
-        : env.status === "running" && !!env.containerId;
+      // Availability and dispatch are derived from one narrowing so there is no
+      // second, unreachable "neither path is usable" branch to keep in sync.
+      const target = resolveDiffPollTarget(env);
+      if (!target) return;
 
-      if (!isAvailable) return;
-
+      const requestKey = getDiffPollEnvKey(env);
       const repoConfig = getRepositoryConfigRef.current(env.projectId);
       const comparisonRef = env.createdFromCommit || repoConfig?.prBaseBranch || "main";
 
       loadingRef.current.add(env.id);
       try {
-        let changes: backend.GitFileChange[];
-        if (isLocal && env.worktreePath) {
-          changes = await backend.getLocalGitStatus(env.worktreePath, comparisonRef);
-        } else if (env.containerId) {
-          changes = await backend.getGitStatus(env.containerId, comparisonRef);
-        } else {
-          return;
-        }
+        const changes: backend.GitFileChange[] = target.kind === "local"
+          ? await backend.getLocalGitStatus(target.worktreePath, comparisonRef, false)
+          : await backend.getGitStatus(target.containerId, comparisonRef, false);
+
+        // The snapshot this result describes may have been replaced while the
+        // request was open - most commonly by createdFromCommit being recorded,
+        // which changes the ref the stats are measured against.
+        const isCurrentEnvironment = envRef.current.some(
+          (currentEnv) => getDiffPollEnvKey(currentEnv) === requestKey,
+        );
+        if (!isCurrentEnvironment) return;
 
         const totalAdditions = changes.reduce((sum, c) => sum + c.additions, 0);
         const totalDeletions = changes.reduce((sum, c) => sum + c.deletions, 0);
-
         setStats(env.id, {
           additions: totalAdditions,
           deletions: totalDeletions,
@@ -101,6 +128,13 @@ export function useEnvironmentDiffStats() {
         // Silently ignore - stats are non-critical
       } finally {
         loadingRef.current.delete(env.id);
+        // A discarded result would otherwise leave stale stats on screen until the
+        // next tick, because the effect re-run that changed the snapshot was itself
+        // suppressed by the in-flight guard above. Refetch once for the new snapshot.
+        const latest = envRef.current.find((currentEnv) => currentEnv.id === env.id);
+        if (latest && getDiffPollEnvKey(latest) !== requestKey) {
+          void fetchStatsForEnvironment(latest);
+        }
       }
     };
 

@@ -13,6 +13,7 @@ import type {
   PipelineSession,
 } from "../../../apps/web/src/stores/buildPipelineStore";
 import type { TaskSnapshot } from "../../../apps/web/src/prompts";
+import { TEST_LEGACY_STRUCTURED_REVIEW_REPORT } from "../../../apps/web/src/components/build-pipeline/structured-review-test-fixture";
 
 const defaultTaskSnapshot: TaskSnapshot = {
   title: "Test task",
@@ -362,6 +363,23 @@ describe("buildPipelineStore", () => {
 
     test("rejects a snapshot carrying an unknown phase", () => {
       expect(isBuildPipeline({ ...validSnapshot(), phase: "teleporting" })).toBe(false);
+    });
+
+    test("accepts a structured review written before notRun existed", () => {
+      // Snapshots reaching this guard come from the backend or from legacy
+      // localStorage. Holding them to the current contract would discard the
+      // whole pipeline over a field the report predates.
+      expect(isBuildPipeline({
+        ...validSnapshot(),
+        structuredReview: TEST_LEGACY_STRUCTURED_REVIEW_REPORT,
+      })).toBe(true);
+      expect(isBuildPipeline({
+        ...validSnapshot(),
+        structuredReview: {
+          ...TEST_LEGACY_STRUCTURED_REVIEW_REPORT,
+          testResults: { total: 5, passed: 6, failed: 0, failures: [] },
+        },
+      })).toBe(false);
     });
 
     test("rejects a snapshot missing a required field", () => {

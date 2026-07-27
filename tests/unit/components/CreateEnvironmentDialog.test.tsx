@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, test, expect, mock } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { useCodexStore } from "@/stores/codexStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { mockReadImage } from "../../mocks/clipboard";
 import {
   mockToastError as toastErrorMock,
@@ -9,6 +12,9 @@ import {
 
 const { CreateEnvironmentDialog, getEncodedImageSizeError, resolveAgentDefaults } = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
 const defaultConfig = structuredClone(useConfigStore.getState().config);
+const defaultClaudeModels = useClaudeStore.getState().models;
+const defaultCodexModels = useCodexStore.getState().models;
+const defaultOpenCodeModels = useOpenCodeStore.getState().models;
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {
@@ -48,6 +54,9 @@ describe("resolveAgentDefaults", () => {
       isLoading: false,
       error: null,
     });
+    useClaudeStore.setState({ models: defaultClaudeModels });
+    useCodexStore.setState({ models: defaultCodexModels });
+    useOpenCodeStore.setState({ models: new Map(defaultOpenCodeModels) });
     mockReadImage.mockReset();
     putImageData.mockReset();
     toastSuccessMock.mockReset();
@@ -146,6 +155,34 @@ describe("resolveAgentDefaults", () => {
     expect(result.claudeMode).toBe("native");
     expect(result.opencodeMode).toBe("native");
     expect(result.codexMode).toBe("terminal");
+  });
+
+  test("shows the project name in the title and presents the compact agent controls in order", () => {
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        projectName="Orkestrator"
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Create Ork (Environment) Orkestrator",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getAllByRole("radio").map((control) => control.getAttribute("aria-label")),
+    ).toEqual(["Claude", "Codex", "OpenCode"]);
+    expect(screen.getByRole("combobox", { name: "Model" })).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", { name: "Reasoning effort" }),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("checkbox", { name: "Use TUI" }) as HTMLButtonElement)
+        .getAttribute("data-state"),
+    ).toBe(defaultConfig.global.claudeMode === "terminal" ? "checked" : "unchecked");
   });
 
   test("starts on the prompt tab and preserves values while moving between mobile sections", () => {
@@ -557,8 +594,8 @@ describe("resolveAgentDefaults", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
-    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use TUI" }));
     fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
       target: { value: "Review the migration plan" },
     });
@@ -572,6 +609,379 @@ describe("resolveAgentDefaults", () => {
           initialPrompt: "Review the migration plan",
         })
       );
+    });
+  });
+
+  test("submits the selected model and reasoning effort", async () => {
+    const onCreate = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
+    fireEvent.click(
+      await screen.findByRole("option", { name: "GPT-5.4-Mini" }),
+    );
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Reasoning effort" }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "High" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "codex",
+          model: "gpt-5.4-mini",
+          reasoningEffort: "high",
+        }),
+      );
+    });
+  });
+
+  test("submits the synthetic OpenCode default as no explicit model", async () => {
+    // With no cached OpenCode catalog the model select only offers the
+    // synthetic `{ id: "default" }` placeholder. Submitting that id would pin a
+    // model no OpenCode server knows and — because a one-shot launch option is
+    // treated as authoritative downstream — suppress the user's own saved
+    // OpenCode preferences. It has to submit as "no explicit choice".
+    useOpenCodeStore.setState({ models: new Map() });
+    // No configured default either, so nothing real gets injected into the
+    // catalog and the placeholder is genuinely all there is.
+    const config = structuredClone(defaultConfig);
+    config.global.opencodeModel = undefined;
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ agentType: "opencode", model: undefined }),
+      );
+    });
+  });
+
+  test("keeps Claude's real 'default' model id, which is not a placeholder", async () => {
+    // The mirror of the test above: `CLAUDE_FALLBACK_MODELS` genuinely contains
+    // an id of "default", so it must keep flowing through untouched.
+    useClaudeStore.setState({ models: [] });
+    const onCreate = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "Claude" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Default (recommended)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ agentType: "claude", model: "default" }),
+      );
+    });
+  });
+
+  test("submits an unset reasoning effort as undefined", async () => {
+    const onCreate = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Reasoning effort" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Default" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ agentType: "codex", reasoningEffort: undefined }),
+      );
+    });
+  });
+
+  test("disables the reasoning effort select when the model supports none", async () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("combobox", { name: "Reasoning effort" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+    });
+    // The model select stays usable — only the dependent control is disabled.
+    expect(
+      screen.getByRole("combobox", { name: "Model" }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  test("honors project mode defaults in the checkbox and submission", async () => {
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "claude";
+    config.global.claudeMode = "terminal";
+    config.repositories["project-mode"] = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      agentStyle: "native",
+    };
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        projectId="project-mode"
+      />,
+    );
+
+    expect(
+      screen.getByRole("checkbox", { name: "Use TUI" }).getAttribute("data-state"),
+    ).toBe("unchecked");
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ agentType: "claude", claudeMode: "native" }),
+      )
+    );
+  });
+
+  test("falls back to the global Codex effort when the project has no override", async () => {
+    useCodexStore.setState({
+      models: [{
+        id: "codex-preferred",
+        name: "Codex Preferred",
+        description: "Preferred",
+        reasoningEfforts: ["medium", "high"],
+      }],
+    });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "codex";
+    config.global.codexModel = "codex-preferred";
+    config.global.codexReasoningEffort = "high";
+    config.repositories["project-codex"] = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      defaultAgent: "codex",
+      defaultModel: "codex-preferred",
+    };
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        projectId="project-codex"
+      />,
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: "Reasoning effort" }).textContent,
+    ).toContain("High");
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "codex",
+          model: "codex-preferred",
+          reasoningEffort: "high",
+        }),
+      )
+    );
+  });
+
+  test("prefers a project effort and drops an unsupported configured effort", async () => {
+    useCodexStore.setState({
+      models: [{
+        id: "codex-medium-only",
+        name: "Codex Medium",
+        description: "Medium only",
+        reasoningEfforts: ["medium"],
+      }],
+    });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "codex";
+    config.global.codexModel = "codex-medium-only";
+    config.global.codexReasoningEffort = "high";
+    config.repositories["project-codex"] = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      defaultAgent: "codex",
+      defaultModel: "codex-medium-only",
+      defaultEffort: "medium",
+    };
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    const { unmount } = render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        projectId="project-codex"
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Reasoning effort" }).textContent,
+    ).toContain("Medium");
+
+    unmount();
+    config.repositories["project-codex"]!.defaultEffort = "high";
+    useConfigStore.setState({ config: structuredClone(config) });
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        projectId="project-codex"
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Reasoning effort" }).textContent,
+    ).toContain("Default");
+  });
+
+  test("offers cached OpenCode models and a configured project variant", async () => {
+    useOpenCodeStore.getState().setModels("existing-env", [
+      {
+        id: "provider/model-a",
+        name: "Model A",
+        provider: "Provider",
+        variants: ["fast"],
+      },
+      {
+        id: "provider/model-b",
+        name: "Model B",
+        provider: "Provider",
+        variants: ["deep"],
+      },
+    ]);
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "opencode";
+    config.global.opencodeModel = "provider/model-a";
+    config.repositories["project-opencode"] = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      defaultAgent: "opencode",
+      defaultModel: "provider/model-b",
+      defaultEffort: "deep",
+    };
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        projectId="project-opencode"
+      />,
+    );
+
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Model B");
+    expect(
+      screen.getByRole("combobox", { name: "Reasoning effort" }).textContent,
+    ).toContain("Deep");
+    fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
+    expect(await screen.findByRole("option", { name: "Model A" })).toBeTruthy();
+    fireEvent.click(await screen.findByRole("option", { name: "Model B" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "opencode",
+          model: "provider/model-b",
+          reasoningEffort: "deep",
+        }),
+      )
+    );
+  });
+
+  test("resets effort for an incompatible model and reconciles a refreshed catalog", async () => {
+    useCodexStore.setState({
+      models: [
+        {
+          id: "codex-high",
+          name: "Codex High",
+          description: "High",
+          reasoningEfforts: ["high"],
+        },
+        {
+          id: "codex-low",
+          name: "Codex Low",
+          description: "Low",
+          reasoningEfforts: ["low"],
+        },
+      ],
+    });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "codex";
+    config.global.codexModel = "codex-high";
+    config.global.codexReasoningEffort = "high";
+    useConfigStore.setState({ config });
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Codex Low" }));
+    expect(
+      screen.getByRole("combobox", { name: "Reasoning effort" }).textContent,
+    ).toContain("Default");
+
+    await act(async () => {
+      useCodexStore.setState({
+        models: [{
+          id: "codex-refreshed",
+          name: "Codex Refreshed",
+          description: "Refreshed",
+          reasoningEfforts: ["medium"],
+        }],
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .toContain("Codex Refreshed");
+      expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+        .toContain("Default");
     });
   });
 
@@ -623,10 +1033,11 @@ describe("resolveAgentDefaults", () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole("button", { name: agentLabel }));
-      fireEvent.click(screen.getByRole("button", { name: "Native" }));
-      if (selectedMode === "Terminal") {
-        fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+      fireEvent.click(screen.getByRole("radio", { name: agentLabel }));
+      const useTui = screen.getByRole("checkbox", { name: "Use TUI" });
+      const isTerminal = useTui.getAttribute("data-state") === "checked";
+      if ((selectedMode === "Terminal") !== isTerminal) {
+        fireEvent.click(screen.getByRole("checkbox", { name: "Use TUI" }));
       }
       fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
@@ -1407,7 +1818,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(screen.getByRole("combobox", { name: "Protocol" }));
     const udpOption = await screen.findByRole("option", { name: "UDP" });
     fireEvent.click(udpOption);
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));

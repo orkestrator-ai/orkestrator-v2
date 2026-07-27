@@ -6,6 +6,7 @@ import {
   flushPaneLayoutNow,
   startPaneLayoutPersistence,
 } from "./pane-layout-persistence";
+import { reconcilePersistedLayout } from "./pane-layout-restore";
 
 const waitForTimers = () => new Promise((resolve) => setTimeout(resolve, 20));
 type LayoutInput = ReturnType<typeof createPersistedPaneLayoutInput>;
@@ -69,11 +70,31 @@ describe("pane layout persistence", () => {
     expect(save).toHaveBeenCalledTimes(1);
     const persisted = save.mock.calls[0]?.[1];
     expect(JSON.stringify(persisted)).not.toContain("initialPrompt");
-    expect(JSON.stringify(persisted)).not.toContain("initialAgentModel");
-    expect(JSON.stringify(persisted)).not.toContain("initialReasoningEffort");
+    expect(JSON.stringify(persisted)).toContain('"initialAgentModel":"gpt-5.6-sol"');
+    expect(JSON.stringify(persisted)).toContain('"initialReasoningEffort":"xhigh"');
     expect(JSON.stringify(persisted)).not.toContain("initialCommands");
     expect(JSON.stringify(persisted)).not.toContain("hostPort");
     expect(JSON.stringify(persisted)).toContain("session-1");
+
+    // Persisting is only half the contract — the restore side has to read them
+    // back, or the write is dead weight and the one-shot choice is lost on the
+    // reload it exists for. Round-trip the real payload through the real
+    // restorer rather than trusting the write alone.
+    const rehydrated = reconcilePersistedLayout(
+      createSaved("env-1", persisted!),
+      { environmentId: "env-1", containerId: "container-1", isLocal: false },
+    );
+    const rehydratedTab = (rehydrated?.root as unknown as { tabs: Array<Record<string, unknown>> })
+      .tabs.find((tab) => tab.id === "native");
+    expect(rehydratedTab?.initialAgentModel).toBe("gpt-5.6-sol");
+    expect(rehydratedTab?.initialReasoningEffort).toBe("xhigh");
+    expect(rehydratedTab?.initialPrompt).toBeUndefined();
+
+    store.clearTabInitialAgentOptions("native", "env-1");
+    await waitForTimers();
+    const consumed = save.mock.calls.at(-1)?.[1];
+    expect(JSON.stringify(consumed)).not.toContain("initialAgentModel");
+    expect(JSON.stringify(consumed)).not.toContain("initialReasoningEffort");
     stop();
   });
 

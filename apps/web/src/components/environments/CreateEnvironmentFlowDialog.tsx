@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { updateEnvironmentAgentSettings } from "@/lib/backend";
-import { useClaudeOptionsStore, useConfigStore, useUIStore } from "@/stores";
+import {
+  useClaudeOptionsStore,
+  useConfigStore,
+  useProjectStore,
+  useUIStore,
+} from "@/stores";
 import type {
   Environment,
   EnvironmentType,
@@ -27,6 +32,7 @@ interface CreateEnvironmentFlowDialogProps extends CreateEnvironmentFlowOperatio
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string | null;
+  projectName?: string;
 }
 
 export function resolveEnvironmentCreateRequest(options: ClaudeOptions) {
@@ -60,6 +66,7 @@ export function CreateEnvironmentFlowDialog({
   open,
   onOpenChange,
   projectId,
+  projectName: providedProjectName,
   createEnvironment,
   updateEnvironment,
   startEnvironment,
@@ -67,6 +74,12 @@ export function CreateEnvironmentFlowDialog({
   const [isCreating, setIsCreating] = useState(false);
   const setOptions = useClaudeOptionsStore((state) => state.setOptions);
   const config = useConfigStore((state) => state.config);
+  const storedProjectName = useProjectStore((state) =>
+    projectId
+      ? state.projects.find((project) => project.id === projectId)?.name
+      : undefined,
+  );
+  const projectName = providedProjectName ?? storedProjectName;
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
   const selectProjectAndEnvironment = useUIStore(
     (state) => state.selectProjectAndEnvironment,
@@ -97,6 +110,8 @@ export function CreateEnvironmentFlowDialog({
         agentSettings.opencodeMode,
         agentSettings.codexMode,
         options.launchAgent,
+        options.launchAgent ? options.model : undefined,
+        options.launchAgent ? options.reasoningEffort : undefined,
       );
       updateEnvironment(environment.id, configuredEnvironment);
 
@@ -105,6 +120,11 @@ export function CreateEnvironmentFlowDialog({
         agentType: options.agentType,
         initialPrompt: options.initialPrompt,
         initialPromptAttachments: options.initialPromptAttachments,
+        // Mirror the backend write above: a one-shot model only means anything
+        // for a launch, and storing it when `launchAgent` is false would leave a
+        // stale model in the transient options store for the next reader.
+        model: options.launchAgent ? options.model : undefined,
+        reasoningEffort: options.launchAgent ? options.reasoningEffort : undefined,
       });
 
       setProjectCollapsed(projectId, false);
@@ -129,6 +149,7 @@ export function CreateEnvironmentFlowDialog({
       onCreate={handleCreate}
       isLoading={isCreating}
       projectId={projectId}
+      projectName={projectName}
       defaultPortMappings={
         projectId ? config.repositories[projectId]?.defaultPortMappings : undefined
       }

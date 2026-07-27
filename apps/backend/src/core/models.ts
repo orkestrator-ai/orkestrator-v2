@@ -128,6 +128,10 @@ export interface Environment {
   hasUnreadWork?: boolean;
   /** Durable intent to open the configured agent once setup is ready. */
   pendingAgentLaunch?: boolean;
+  /** One-shot model for the agent tab created from pendingAgentLaunch. */
+  initialAgentModel?: string;
+  /** One-shot reasoning effort for the agent tab created from pendingAgentLaunch. */
+  initialReasoningEffort?: string;
   initialPrompt?: string;
   /** Prompt awaiting a backend-owned rename after the environment starts. */
   pendingRenamePrompt?: string;

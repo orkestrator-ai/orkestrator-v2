@@ -365,7 +365,10 @@ function createData(overrides: Partial<OpenCodeNativeData> = {}): OpenCodeNative
   };
 }
 
-function seedPaneLayout(sessionId?: string) {
+function seedPaneLayout(
+  sessionId?: string,
+  launchOptions?: { initialAgentModel?: string; initialReasoningEffort?: string },
+) {
   usePaneLayoutStore.setState({
     environments: new Map([
       [
@@ -379,6 +382,8 @@ function seedPaneLayout(sessionId?: string) {
                 id: TAB_ID,
                 type: "opencode-native",
                 openCodeNativeData: createData({ sessionId }),
+                initialAgentModel: launchOptions?.initialAgentModel,
+                initialReasoningEffort: launchOptions?.initialReasoningEffort,
               },
             ],
             activeTabId: TAB_ID,
@@ -2057,6 +2062,72 @@ describe("OpenCodeChatTab", () => {
     });
   });
 
+  test("retains one-shot launch options when the catalog comes back empty", async () => {
+    // An empty catalog means the choice could not be validated, let alone
+    // applied. Clearing here would destroy the tab's copy — the only durable
+    // one left once `TerminalContainer` has handed ownership over — so a later
+    // mount could never honour it.
+    useOpenCodeStore.setState((state) => ({ ...state, clients: new Map(), models: new Map() }));
+    seedPaneLayout(undefined, {
+      initialAgentModel: "openai/gpt-5",
+      initialReasoningEffort: "high",
+    });
+    mockGetModelsWithDefaults.mockImplementationOnce(async () => ({
+      models: [],
+      defaults: {},
+    } as never));
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="openai/gpt-5"
+        initialReasoningEffort="high"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetModelsWithDefaults).toHaveBeenCalled();
+    });
+    const tab = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)
+      .find((candidate) => candidate.id === TAB_ID);
+    expect(tab?.initialAgentModel).toBe("openai/gpt-5");
+    expect(tab?.initialReasoningEffort).toBe("high");
+  });
+
+  test("clears one-shot launch options once the cold path resolves them", async () => {
+    useOpenCodeStore.setState((state) => ({ ...state, clients: new Map(), models: new Map() }));
+    seedPaneLayout(undefined, {
+      initialAgentModel: "openai/gpt-5",
+      initialReasoningEffort: "high",
+    });
+    mockGetModelsWithDefaults.mockImplementationOnce(async () => ({
+      models: [
+        { id: "openai/gpt-5", name: "GPT-5", provider: "OpenAI", variants: ["high"] },
+      ],
+      defaults: {},
+    } as never));
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="openai/gpt-5"
+        initialReasoningEffort="high"
+      />,
+    );
+
+    await waitFor(() => {
+      const tab = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)
+        .find((candidate) => candidate.id === TAB_ID);
+      expect(tab?.initialAgentModel).toBeUndefined();
+      expect(tab?.initialReasoningEffort).toBeUndefined();
+    });
+    expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe("openai/gpt-5");
+  });
+
   test("seeds a model for a second tab that reuses a warm client", async () => {
     // Only the cold path fetches the model catalogue. A second tab in an
     // environment that already has a client takes the warm path, so without
@@ -2303,7 +2374,7 @@ describe("OpenCodeChatTab", () => {
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
 
       fireEvent.click(screen.getByRole("button", {
-        name: "Fork OpenCode session from this message",
+        name: "Fork OpenCode session from this prompt",
       }));
 
       await waitFor(() => {
@@ -2325,6 +2396,55 @@ describe("OpenCodeChatTab", () => {
             sessionId: "fork-session",
           },
         });
+        expect(
+          useOpenCodeStore.getState().getDraftText(
+            createOpenCodeSessionKey(ENVIRONMENT_ID, tabs[1]!.id),
+          ),
+        ).toBe("Start here");
+      });
+    });
+
+    test("forks through a response and opens an empty composer", async () => {
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [
+        {
+          id: "user-message-1",
+          role: "user",
+          content: "Start here",
+          parts: [{ type: "text", content: "Start here" }],
+          createdAt: "2026-07-16T12:00:00.000Z",
+        },
+        {
+          id: "assistant-message-1",
+          role: "assistant",
+          content: "Done",
+          parts: [{ type: "text", content: "Done" }],
+          createdAt: "2026-07-16T12:01:00.000Z",
+        },
+      ]);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      fireEvent.click(screen.getByRole("button", {
+        name: "Fork OpenCode session from this response",
+      }));
+
+      await waitFor(() => {
+        expect(mockForkOpenCodeSession).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          "session-1",
+          undefined,
+        );
+        const tabs = usePaneLayoutStore.getState().getPane(
+          "default",
+          ENVIRONMENT_ID,
+        )?.tabs ?? [];
+        expect(tabs).toHaveLength(2);
+        // `getDraftText` returns "" for any unseen key, so asserting on it would
+        // pass whether or not a draft was written. Assert on the backing map.
+        expect(
+          useOpenCodeStore.getState().draftText.has(
+            createOpenCodeSessionKey(ENVIRONMENT_ID, tabs[1]!.id),
+          ),
+        ).toBe(false);
       });
     });
 
@@ -2334,7 +2454,7 @@ describe("OpenCodeChatTab", () => {
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
 
       fireEvent.click(screen.getByRole("button", {
-        name: "Fork OpenCode session from this message",
+        name: "Fork OpenCode session from this prompt",
       }));
 
       await waitFor(() => {
@@ -2351,7 +2471,7 @@ describe("OpenCodeChatTab", () => {
       mockForkOpenCodeSession.mockImplementation(() => pendingFork.promise);
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
       const button = screen.getByRole("button", {
-        name: "Fork OpenCode session from this message",
+        name: "Fork OpenCode session from this prompt",
       });
 
       fireEvent.click(button);

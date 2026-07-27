@@ -1066,9 +1066,14 @@ export interface FileContent {
 /** Get git changes comparing current state against a target branch */
 export async function getGitStatus(
   containerId: string,
-  targetBranch: string
+  targetBranch: string,
+  includeUncommitted = true,
 ): Promise<GitFileChange[]> {
-  return invoke<GitFileChange[]>("get_git_status", { containerId, targetBranch });
+  return invoke<GitFileChange[]>("get_git_status", {
+    containerId,
+    targetBranch,
+    includeUncommitted,
+  });
 }
 
 /** Get workspace file tree from a container */
@@ -1138,9 +1143,14 @@ export async function deleteContainerFile(
 /** Get git changes for a local environment (worktree path) */
 export async function getLocalGitStatus(
   worktreePath: string,
-  targetBranch: string
+  targetBranch: string,
+  includeUncommitted = true,
 ): Promise<GitFileChange[]> {
-  return invoke<GitFileChange[]>("get_local_git_status", { worktreePath, targetBranch });
+  return invoke<GitFileChange[]>("get_local_git_status", {
+    worktreePath,
+    targetBranch,
+    includeUncommitted,
+  });
 }
 
 /** Get file tree from a local environment (worktree path) */
@@ -1219,6 +1229,8 @@ export async function updateEnvironmentAgentSettings(
   opencodeMode: OpenCodeMode | null,
   codexMode: CodexMode | null,
   pendingAgentLaunch?: boolean,
+  initialAgentModel?: string,
+  initialReasoningEffort?: string,
 ): Promise<Environment> {
   return invoke<Environment>("update_environment_agent_settings", {
     environmentId,
@@ -1228,6 +1240,8 @@ export async function updateEnvironmentAgentSettings(
     opencodeMode,
     codexMode,
     ...(typeof pendingAgentLaunch === "boolean" ? { pendingAgentLaunch } : {}),
+    ...(initialAgentModel ? { initialAgentModel } : {}),
+    ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
   });
 }
 

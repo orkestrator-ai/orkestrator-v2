@@ -808,7 +808,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
     createTab(agentOverride || defaultAgent, {
       initialPrompt: resolvePrompt,
-      displayTitle: "Conflict",
+      displayTitle: "Resolve",
     });
   }, [createTab, selectedProjectId, canCreateTab, config.repositories, defaultAgent]);
 

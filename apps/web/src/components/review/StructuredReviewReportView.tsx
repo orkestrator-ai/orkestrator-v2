@@ -84,6 +84,13 @@ export function StructuredReviewReportView({
   const [showRaw, setShowRaw] = useState(false);
   const scope = report.reviewScope;
   const changed = report.whatChanged;
+  const notRun = report.testResults.notRun
+    ?? Math.max(
+      0,
+      report.testResults.total
+        - report.testResults.passed
+        - report.testResults.failed,
+    );
 
   return (
     <article
@@ -266,6 +273,7 @@ export function StructuredReviewReportView({
           <span className={report.testResults.failed > 0 ? "text-red-400" : "text-muted-foreground"}>
             {report.testResults.failed} failed
           </span>
+          <span className="text-muted-foreground">{notRun} not run</span>
         </div>
         <List
           items={report.testResults.failures}

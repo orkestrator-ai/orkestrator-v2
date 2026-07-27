@@ -92,6 +92,8 @@ describe("createReviewPrompt", () => {
     expect(result).toContain("## Risk Profile");
     expect(result).toContain("Overall risk: low | medium | high");
     expect(result).toContain("## Test Results");
+    expect(result).toContain("Total: N (must equal Passed + Failed + Not run)");
+    expect(result).toContain("Not run: N (all skipped, todo, pending, or disabled tests)");
     expect(result).toContain("## Issues");
     expect(result).toContain("Number issues sequentially starting at 1");
     expect(result).toContain("### 1. [P0|P1|P2][conf:NN][category]\n#### Short title");

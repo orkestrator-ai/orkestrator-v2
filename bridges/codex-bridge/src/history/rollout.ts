@@ -20,7 +20,17 @@ import {
   readPersistedSessionTitleEntries,
   type PersistedSessionTitleSource,
 } from "../session-titles.js";
-import { createMessageId, type MessageRole, type NormalizedMessage } from "../messages/types.js";
+import {
+  createMessageId,
+  type MessageRole,
+  type NormalizedMessage,
+  type NormalizedPart,
+  type ToolState,
+} from "../messages/types.js";
+import {
+  applyTranscriptToolOutput,
+  normalizeTranscriptToolArgs,
+} from "../subagent-transcript.js";
 
 export interface PersistedSessionIndexEntry {
   id?: unknown;
@@ -511,6 +521,72 @@ function readTurnId(payload: unknown): string | undefined {
   return undefined;
 }
 
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value
+    : undefined;
+}
+
+/**
+ * The outcome a rollout *call* record claims. `"pending"` means it claimed none.
+ *
+ * `function_call` records carry no `status` field at all (92,495 of 92,495 across
+ * this repo's full Codex history), so every one starts `"pending"` — "in flight,
+ * and this record does not say how it ended". `custom_tool_call` records do carry
+ * one, always `"completed"` in 34,640 sampled records; `"failed"` is the
+ * counterpart in the same field and is kept as a guard rather than deleted.
+ *
+ * Mirrors `parseChildTranscript`, which reads the same records from child rollouts.
+ */
+function persistedToolState(value: unknown): ToolState {
+  return value === "failed"
+    ? "failure"
+    : value === "completed"
+      ? "success"
+      : "pending";
+}
+
+function createPersistedToolPart(
+  payload: Record<string, unknown>,
+): NormalizedPart {
+  const toolName = asNonEmptyString(payload.name) ?? "tool";
+  const rawArgs = payload.type === "custom_tool_call"
+    ? payload.input
+    : payload.arguments;
+  const toolState = persistedToolState(payload.status);
+  const part: NormalizedPart = {
+    type: "tool-invocation",
+    content: toolName,
+    toolName,
+    toolArgs: normalizeTranscriptToolArgs(toolName, rawArgs),
+    toolState,
+    toolTitle: toolName,
+  };
+
+  // Only a `custom_tool_call` can carry both a terminal outcome and an inline
+  // result on the call record itself; a `function_call` never does.
+  return payload.type === "custom_tool_call" && toolState !== "pending"
+    ? applyTranscriptToolOutput(part, payload.output, toolState)
+    : part;
+}
+
+/**
+ * The outcome to carry over when a `*_call_output` record is folded in.
+ *
+ * `null` means "the rollout never recorded an outcome", which clears `toolState`
+ * instead of asserting success. A `function_call_output` is written whether the
+ * command succeeded or failed and carries no status, exit code, or error marker
+ * (12,785 sampled outputs: no candidate marker appeared in more than 0.2%), so
+ * inferring success from its presence would paint a green badge on every failed
+ * command. `custom_tool_call_output` keeps whatever its call record claimed.
+ */
+function persistedOutputState(
+  payloadType: unknown,
+  part: NormalizedPart,
+): ToolState | null {
+  return payloadType === "custom_tool_call_output" ? (part.toolState ?? null) : null;
+}
+
 export async function hydrateMessagesFromPersistedSession(
   threadId: string,
 ): Promise<{
@@ -527,6 +603,10 @@ export async function hydrateMessagesFromPersistedSession(
 
   const { records } = await readCachedTranscript(meta.transcriptPath);
   const messages: NormalizedMessage[] = [];
+  const toolPartsByCallId = new Map<
+    string,
+    { message: NormalizedMessage; partIndex: number }
+  >();
   /**
    * Turn boundaries reconstructed from the rollout.
    *
@@ -540,33 +620,101 @@ export async function hydrateMessagesFromPersistedSession(
    * message ("fork from here") silently became impossible.
    */
   let currentTurnId: string | undefined;
+  let currentAssistantMessage: NormalizedMessage | undefined;
 
   for (const record of records) {
     const recordTurnId = readTurnId(record.payload);
-    if (recordTurnId) currentTurnId = recordTurnId;
+    if (recordTurnId && recordTurnId !== currentTurnId) {
+      currentTurnId = recordTurnId;
+      currentAssistantMessage = undefined;
+    }
 
-    if (record.type !== "response_item" || record.payload?.type !== "message") {
+    if (record.type !== "response_item" || !record.payload) {
+      continue;
+    }
+
+    const payload = record.payload;
+    const timestamp =
+      typeof record.timestamp === "string"
+        ? record.timestamp
+        : new Date().toISOString();
+
+    const ensureAssistantMessage = (): NormalizedMessage => {
+      if (currentAssistantMessage) return currentAssistantMessage;
+      currentAssistantMessage = {
+        id: createMessageId(),
+        role: "assistant",
+        content: "",
+        parts: [],
+        createdAt: timestamp,
+        ...(currentTurnId ? { turnId: currentTurnId } : {}),
+      };
+      messages.push(currentAssistantMessage);
+      return currentAssistantMessage;
+    };
+
+    if (payload.type === "function_call" || payload.type === "custom_tool_call") {
+      const assistantMessage = ensureAssistantMessage();
+      const part = createPersistedToolPart(payload);
+      assistantMessage.parts.push(part);
+
+      const callId = asNonEmptyString(payload.call_id);
+      if (callId) {
+        toolPartsByCallId.set(callId, {
+          message: assistantMessage,
+          partIndex: assistantMessage.parts.length - 1,
+        });
+      }
+      continue;
+    }
+
+    if (
+      payload.type === "function_call_output"
+      || payload.type === "custom_tool_call_output"
+    ) {
+      const callId = asNonEmptyString(payload.call_id);
+      // Consume the pairing: a `call_id` is unique to one call, so a second
+      // output bearing it must not reach back and rewrite an earlier turn's part.
+      const target = callId ? toolPartsByCallId.get(callId) : undefined;
+      if (callId) toolPartsByCallId.delete(callId);
+      if (target) {
+        const existing = target.message.parts[target.partIndex]!;
+        target.message.parts[target.partIndex] = applyTranscriptToolOutput(
+          existing,
+          payload.output,
+          persistedOutputState(payload.type, existing),
+        );
+      }
+      continue;
+    }
+
+    if (payload.type !== "message") {
       continue;
     }
 
     const role =
-      record.payload.role === "assistant" || record.payload.role === "user"
-        ? (record.payload.role as MessageRole)
+      payload.role === "assistant" || payload.role === "user"
+        ? (payload.role as MessageRole)
         : null;
     if (!role) continue;
 
-    const text = extractPersistedMessageText(record.payload.content, role);
+    const text = extractPersistedMessageText(payload.content, role);
     if (!text) continue;
 
+    if (role === "assistant") {
+      const assistantMessage = ensureAssistantMessage();
+      assistantMessage.content = text;
+      assistantMessage.parts.push({ type: "text", content: text });
+      continue;
+    }
+
+    currentAssistantMessage = undefined;
     messages.push({
       id: createMessageId(),
       role,
       content: text,
       parts: [{ type: "text", content: text }],
-      createdAt:
-        typeof record.timestamp === "string"
-          ? record.timestamp
-          : new Date().toISOString(),
+      createdAt: timestamp,
       ...(currentTurnId ? { turnId: currentTurnId } : {}),
     });
   }

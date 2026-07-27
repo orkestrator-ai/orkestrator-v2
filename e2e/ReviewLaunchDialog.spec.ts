@@ -94,6 +94,45 @@ test("provider choices follow native radio keyboard behavior", async ({
   await expect(claudeRadio).toHaveAttribute("tabindex", "-1");
 });
 
+test("model trigger grows to contain its name and description", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop project only");
+  await page.goto("/review-launch");
+
+  const modelTrigger = page.getByRole("combobox", { name: "Model" });
+  await expect(modelTrigger).toContainText("Claude Sonnet");
+  await expect(modelTrigger).toContainText("Balanced reviews for everyday code changes");
+
+  const layout = await modelTrigger.evaluate((element) => {
+    const trigger = element as HTMLElement;
+    const textStack = trigger.firstElementChild as HTMLElement;
+    const name = textStack.children[0] as HTMLElement;
+    const description = textStack.children[1] as HTMLElement;
+    const triggerRect = trigger.getBoundingClientRect();
+    const nameRect = name.getBoundingClientRect();
+    const descriptionRect = description.getBoundingClientRect();
+
+    return {
+      clientHeight: trigger.clientHeight,
+      scrollHeight: trigger.scrollHeight,
+      triggerTop: triggerRect.top,
+      triggerBottom: triggerRect.bottom,
+      triggerHeight: triggerRect.height,
+      nameTop: nameRect.top,
+      nameBottom: nameRect.bottom,
+      descriptionTop: descriptionRect.top,
+      descriptionBottom: descriptionRect.bottom,
+    };
+  });
+
+  expect(layout.triggerHeight).toBeGreaterThan(44);
+  expect(layout.scrollHeight).toBeLessThanOrEqual(layout.clientHeight);
+  expect(layout.nameTop).toBeGreaterThanOrEqual(layout.triggerTop);
+  expect(layout.descriptionTop).toBeGreaterThanOrEqual(layout.nameBottom);
+  expect(layout.descriptionBottom).toBeLessThanOrEqual(layout.triggerBottom);
+});
+
 test("step and header icon badges render as equally sized circles", async ({
   page,
 }, testInfo) => {

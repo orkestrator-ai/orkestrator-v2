@@ -484,3 +484,9 @@ export function normalizeClaudeMessagesForDisplay(
     splitClaudeAssistantTextBlocks(normalizeClaudeMessage(message)),
   );
 }
+
+/** Resolve a timestamp-split display row back to its persisted Claude message. */
+export function getClaudeSourceMessageId(messageId: string): string {
+  const splitMarker = messageId.indexOf(":text-block:");
+  return splitMarker < 0 ? messageId : messageId.slice(0, splitMarker);
+}

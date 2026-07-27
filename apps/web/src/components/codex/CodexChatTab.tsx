@@ -65,6 +65,12 @@ import {
   SYSTEM_MESSAGE_PREFIX,
 } from "@/lib/opencode-client";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
+import {
+  buildMessageForkPlan,
+  findPreviousForkMessage,
+  forkAttachmentNotice,
+  type MessageForkKind,
+} from "@/components/chat/message-fork";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { CodexComposeBar } from "./CodexComposeBar";
 import { CodexApprovalCard } from "./CodexApprovalCard";
@@ -241,6 +247,9 @@ export function CodexChatTab({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
   });
+  const initialLaunchOptionsPendingRef = useRef(
+    Boolean(initialAgentModel || initialReasoningEffort),
+  );
   const initialLaunchModel = initialLaunchOptionsRef.current.model;
   const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
   const clearTabInitialAgentOptions = usePaneLayoutStore(
@@ -270,17 +279,16 @@ export function CodexChatTab({
         initialLaunchReasoningEffort as CodexReasoningEffort,
       );
     }
-    if (initialLaunchModel || initialLaunchReasoningEffort) {
-      clearTabInitialAgentOptions(tabId, environmentId);
-    }
   }, [
-    clearTabInitialAgentOptions,
-    environmentId,
     initialLaunchModel,
     initialLaunchReasoningEffort,
     sessionKey,
-    tabId,
   ]);
+  const acknowledgeInitialLaunchOptions = useCallback(() => {
+    if (!initialLaunchOptionsPendingRef.current) return;
+    initialLaunchOptionsPendingRef.current = false;
+    clearTabInitialAgentOptions(tabId, environmentId);
+  }, [clearTabInitialAgentOptions, environmentId, tabId]);
   const config = useConfigStore((state) => state.config);
   const setConfig = useConfigStore((state) => state.setConfig);
   const persistedPreferencesRef = useRef(getPersistedCodexPreferences(config));
@@ -419,6 +427,46 @@ export function CodexChatTab({
     () => sessionMessages.map(normalizeCodexNativeMessage),
     [sessionMessages],
   );
+  const forkPlan = useMemo(
+    () => buildMessageForkPlan(displayMessages, {
+      responseInProgress: session?.isLoading ?? false,
+      /*
+       * Codex forks at *turn* granularity, so branching before a prompt means
+       * forking at the last message of the previous turn. A prompt that opens
+       * the transcript instead starts an empty sibling session. Anything else —
+       * history with no recorded turn boundaries, which the bridge answers with
+       * `no-fork-point` — resolves to null so the button is never offered: it
+       * could only ever raise a toast.
+       */
+      resolvePromptBoundary: (message, messages) => {
+        const previousTurn = findPreviousForkMessage(
+          messages,
+          message.id,
+          (candidate) => (
+            Boolean(candidate.turnId)
+            && candidate.turnId !== message.turnId
+          ),
+        );
+        if (previousTurn) {
+          return { type: "message", messageId: previousTurn.id };
+        }
+        return findPreviousForkMessage(messages, message.id)
+          ? null
+          : { type: "session-start" };
+      },
+      // A response is inclusive, so Codex must be able to attribute it to a
+      // turn before it can be used as a boundary at all.
+      resolveResponseBoundary: (message) => (
+        message.turnId ? { type: "message", messageId: message.id } : null
+      ),
+    }),
+    [displayMessages, session?.isLoading],
+  );
+  // Read by the fork handler so it does not have to depend on the transcript:
+  // `displayMessages` is a fresh array on every streaming tick, and a handler
+  // that changed with it would rebuild every fork button on every tick.
+  const forkPlanRef = useRef(forkPlan);
+  forkPlanRef.current = forkPlan;
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
   const latestAssistantMessage = useMemo(() => {
@@ -999,7 +1047,10 @@ export function CodexChatTab({
     ],
   );
 
-  const handleForkFromMessage = useCallback(async (messageId: string) => {
+  const handleForkFromMessage = useCallback(async (
+    messageId: string,
+    kind: MessageForkKind,
+  ) => {
     if (!client || !session?.sessionId) return;
     // A fork POSTs then opens a tab with a freshly generated id, so the pane
     // store's existing-id dedupe cannot collapse a double click: it would
@@ -1010,18 +1061,54 @@ export function CodexChatTab({
     forkInFlightRef.current = true;
     setForkInFlight(true);
     try {
-      const fork = await forkCodexSession(client, session.sessionId, messageId);
+      const planned = forkPlanRef.current.get(messageId);
+      if (!planned || planned.kind !== kind) {
+        // Typed so the catch below surfaces the reason rather than replacing it
+        // with the generic fallback, which tells the user nothing.
+        throw new CodexForkError(
+          404,
+          "The selected message is no longer in this session",
+        );
+      }
+
+      let fork: Awaited<ReturnType<typeof forkCodexSession>>;
+      if (planned.boundary.type === "message") {
+        fork = await forkCodexSession(
+          client,
+          session.sessionId,
+          planned.boundary.messageId,
+        );
+      } else {
+        fork = await createSession(client, {
+          title: session.title ? `${session.title} (fork)` : "Forked session",
+          model: selectedModel,
+          modelReasoningEffort: selectedReasoningEffort,
+          mode: selectedMode,
+          fastMode: fastModeEnabled,
+        });
+      }
+
       const paneStore = usePaneLayoutStore.getState();
+      const forkTabId = createUuid();
+      if (planned.kind === "prompt") {
+        useCodexStore.getState().setDraftText(
+          createSessionKey(environmentId, forkTabId),
+          planned.draftText,
+        );
+      }
       paneStore.addTab(
         paneStore.getActivePaneId(environmentId),
         {
-          id: createUuid(),
+          id: forkTabId,
           type: "codex-native",
           displayTitle: fork.title ?? "Codex fork",
           codexNativeData: { ...data, sessionId: fork.sessionId },
         },
         environmentId,
       );
+
+      const attachmentNotice = forkAttachmentNotice(planned.droppedAttachmentCount);
+      if (attachmentNotice) toast.warning(attachmentNotice);
     } catch (error) {
       /*
        * The bridge answers a fork refusal with a differentiated status and its
@@ -1040,12 +1127,24 @@ export function CodexChatTab({
       forkInFlightRef.current = false;
       setForkInFlight(false);
     }
-  }, [client, data, environmentId, session?.sessionId]);
+  }, [
+    client,
+    data,
+    environmentId,
+    fastModeEnabled,
+    selectedMode,
+    selectedModel,
+    selectedReasoningEffort,
+    session?.sessionId,
+    session?.title,
+  ]);
 
-  // Referentially stable per message id, so `memo(NativeMessage)` still holds
-  // for every visible message while an answer streams in.
+  // None of these change while an answer streams in — the transcript is read
+  // through `forkPlanRef` precisely so it cannot drag the handler's identity
+  // with it. That keeps the cached fork elements below referentially stable per
+  // message id, which is what lets `memo(NativeMessage)` hold on every tick.
   const forkAction = useMessageForkAction({
-    label: "Fork Codex session from this message",
+    agentLabel: "Codex",
     disabled: forkInFlight,
     onFork: handleForkFromMessage,
   });
@@ -1076,6 +1175,7 @@ export function CodexChatTab({
         const cachedClient = useCodexStore.getState().clients.get(environmentId);
         const cachedSession = useCodexStore.getState().sessions.get(sessionKey);
         if (cachedClient && cachedSession?.sessionId) {
+          acknowledgeInitialLaunchOptions();
           console.debug("[CodexChatTab] Fast reconnect - reusing existing client and session", {
             tabId,
             environmentId,
@@ -1151,6 +1251,7 @@ export function CodexChatTab({
               setSelectedReasoningEffort(sessionKey, resolvedSelection.reasoningEffort);
               isInitializedRef.current = true;
               setConnectionState("connected");
+              acknowledgeInitialLaunchOptions();
               return;
             }
             updateTabNativeSessionId(tabId, undefined, environmentId);
@@ -1176,6 +1277,7 @@ export function CodexChatTab({
           setSelectedMode(sessionKey, resolvedMode);
           setSelectedReasoningEffort(sessionKey, resolvedSelection.reasoningEffort);
           setConnectionState("connected");
+          acknowledgeInitialLaunchOptions();
           return;
         }
 
@@ -1312,6 +1414,7 @@ export function CodexChatTab({
           setSelectedReasoningEffort(sessionKey, resolvedReasoningEffort);
         }
         setConnectionState("connected");
+        acknowledgeInitialLaunchOptions();
       } catch (error) {
         if (!mounted) return;
         isInitializedRef.current = false;
@@ -1342,6 +1445,7 @@ export function CodexChatTab({
       mounted = false;
     };
   }, [
+    acknowledgeInitialLaunchOptions,
     containerId,
     environmentId,
     initialPrompt,
@@ -2144,12 +2248,13 @@ export function CodexChatTab({
       onResumeClick={client ? () => setResumeDialogOpen(true) : undefined}
       // h-32 ≈ compose bar; h-80 adds room for the plan card (~230px) above it
       bottomSpacerClassName={showPlanModeCard ? "h-80" : "h-32"}
-      messageActions={(message) =>
-        // Only a message whose turn boundary is known can be forked from.
-        message.role === "user" && message.turnId
-          ? forkAction(message.id)
-          : undefined
-      }
+      messageActions={(message) => {
+        // Presence in the plan *is* the gate: a message Codex has no usable
+        // turn boundary for never made it in, so it cannot render a button the
+        // click handler would then have to refuse.
+        const planned = forkPlan.get(message.id);
+        return planned ? forkAction(message.id, planned.kind) : undefined;
+      }}
       blockingCards={
         showApprovals || showInteractions ? (
           <>

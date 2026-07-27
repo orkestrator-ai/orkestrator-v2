@@ -40,6 +40,7 @@ export const TEST_STRUCTURED_REVIEW_REPORT: StructuredReviewReport = {
     total: 1,
     passed: 1,
     failed: 0,
+    notRun: 0,
     failures: [],
   },
   strengths: [{
@@ -76,4 +77,42 @@ export const TEST_STRUCTURED_REVIEW_OUTPUT = {
   ok: true as const,
   provider: "claude" as const,
   value: TEST_STRUCTURED_REVIEW_REPORT,
+};
+
+/**
+ * A report with nothing to address, so `structuredReviewHasFindings` is false.
+ *
+ * Without this every pipeline test can only exercise the "has findings" branch,
+ * which leaves the review -> verify transition unreachable.
+ */
+export const TEST_CLEAN_STRUCTURED_REVIEW_REPORT: StructuredReviewReport = {
+  ...TEST_STRUCTURED_REVIEW_REPORT,
+  issues: [],
+  testCoverageGaps: [],
+  verdict: {
+    ready: "yes",
+    reasoning: "No high-confidence issues were found.",
+  },
+  reviewSummary: "No high-confidence issues were found in the reviewed scope.",
+};
+
+export const TEST_CLEAN_STRUCTURED_REVIEW_OUTPUT = {
+  ok: true as const,
+  provider: "claude" as const,
+  value: TEST_CLEAN_STRUCTURED_REVIEW_REPORT,
+};
+
+/**
+ * A report as it was persisted before `testResults.notRun` existed: 13 tests
+ * were skipped, so `total` exceeds `passed + failed` with nowhere to put the
+ * difference. This is the shape that used to fail validation outright.
+ */
+export const TEST_LEGACY_STRUCTURED_REVIEW_REPORT = {
+  ...TEST_STRUCTURED_REVIEW_REPORT,
+  testResults: {
+    total: 8_107,
+    passed: 8_094,
+    failed: 0,
+    failures: [],
+  },
 };

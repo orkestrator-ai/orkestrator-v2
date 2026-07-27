@@ -508,6 +508,7 @@ function validateTestResults(value: unknown, path: string, issues: Issues): void
     "total",
     "passed",
     "failed",
+    "notRun",
     "failures",
   ]);
   if (!object) return;
@@ -515,10 +516,12 @@ function validateTestResults(value: unknown, path: string, issues: Issues): void
   const total = readRequired(object, "total", path, issues);
   const passed = readRequired(object, "passed", path, issues);
   const failed = readRequired(object, "failed", path, issues);
+  const notRun = readRequired(object, "notRun", path, issues);
   const failures = readRequired(object, "failures", path, issues);
   const validTotal = validateInteger(total, `${path}.total`, issues, 0);
   const validPassed = validateInteger(passed, `${path}.passed`, issues, 0);
   const validFailed = validateInteger(failed, `${path}.failed`, issues, 0);
+  const validNotRun = validateInteger(notRun, `${path}.notRun`, issues, 0);
   const validFailures = validateArray(
     failures,
     `${path}.failures`,
@@ -530,13 +533,15 @@ function validateTestResults(value: unknown, path: string, issues: Issues): void
     validTotal &&
     validPassed &&
     validFailed &&
-    (total as number) !== (passed as number) + (failed as number)
+    validNotRun &&
+    (total as number) !==
+      (passed as number) + (failed as number) + (notRun as number)
   ) {
     addIssue(
       issues,
       `${path}.total`,
       "inconsistent_value",
-      "Total must equal passed plus failed.",
+      "Total must equal passed plus failed plus notRun.",
     );
   }
   if (
@@ -976,6 +981,49 @@ function normalizeOptionalAlternativeFixes(value: unknown): unknown {
   return changed ? normalized : value;
 }
 
+/**
+ * Back-fills `testResults.notRun` for reports written before the field existed.
+ *
+ * Structured reviews originally described tests as only passed or failed, so a
+ * run with skipped tests produced a report the totals rule now rejects. This is
+ * the migration for that data, and it is deliberately **opt-in**: callers that
+ * read a durable, previously-written report ask for it, while a live provider
+ * reply is held to the schema it was given. Silently inferring a count there
+ * would fabricate a test summary instead of reporting a malfunction.
+ *
+ * The inference is clamped at zero and scoped to `$.testResults` by path, not
+ * by object shape, so it cannot fire on some other object that happens to carry
+ * the same keys. A report whose counts are genuinely inconsistent
+ * (`total < passed + failed`) still fails validation afterwards.
+ */
+export function backfillLegacyTestResults(value: unknown): unknown {
+  if (!isPlainObject(value)) return value;
+  const testResults = value.testResults;
+  if (
+    !isPlainObject(testResults)
+    || Object.hasOwn(testResults, "notRun")
+    || typeof testResults.total !== "number"
+    || typeof testResults.passed !== "number"
+    || typeof testResults.failed !== "number"
+  ) {
+    return value;
+  }
+  return {
+    ...value,
+    testResults: {
+      ...testResults,
+      notRun: Math.max(
+        0,
+        testResults.total - testResults.passed - testResults.failed,
+      ),
+    },
+  };
+}
+
+function isPlainObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function safeParseContract<T>(
   contract: ReviewContractName,
   value: unknown,
@@ -991,30 +1039,49 @@ function safeParseContract<T>(
   }
 }
 
+export interface StructuredReviewParseOptions {
+  /**
+   * Accept a report written before `testResults.notRun` existed, inferring the
+   * count from the other totals. Only for durable data this app wrote earlier —
+   * see {@link backfillLegacyTestResults}.
+   */
+  allowLegacyTestResults?: boolean;
+}
+
+function toReportCandidate(
+  value: unknown,
+  options?: StructuredReviewParseOptions,
+): unknown {
+  return options?.allowLegacyTestResults ? backfillLegacyTestResults(value) : value;
+}
+
 export function parseStructuredReviewReport(
   value: unknown,
+  options?: StructuredReviewParseOptions,
 ): StructuredReviewReport {
   return parseContract(
     "structured-review-report",
-    value,
+    toReportCandidate(value, options),
     validateStructuredReviewReportValue,
   );
 }
 
 export function safeParseStructuredReviewReport(
   value: unknown,
+  options?: StructuredReviewParseOptions,
 ): ReviewContractParseResult<StructuredReviewReport> {
   return safeParseContract(
     "structured-review-report",
-    value,
+    toReportCandidate(value, options),
     validateStructuredReviewReportValue,
   );
 }
 
 export function isStructuredReviewReport(
   value: unknown,
+  options?: StructuredReviewParseOptions,
 ): value is StructuredReviewReport {
-  return safeParseStructuredReviewReport(value).success;
+  return safeParseStructuredReviewReport(value, options).success;
 }
 
 export function parseReviewFindingPool(value: unknown): ReviewFindingPool {

@@ -823,7 +823,11 @@ export function CodexChatTab({
     sessionKey,
     claimHead: () => claimAgentPromptQueueHead<CodexQueuedMessage>("codex", sessionKey),
     store: useCodexStore,
-    canDrain: !setupPending && connectionState === "connected" && !!client,
+    canDrain:
+      handoff.ready
+      && !setupPending
+      && connectionState === "connected"
+      && !!client,
     queueLength,
     isLoading: session?.isLoading ?? false,
     blockedByDraft: isQueueBlockedByDraft,
@@ -2201,6 +2205,7 @@ export function CodexChatTab({
     if (
       connectionState !== "connected"
       || !session?.sessionId
+      || !handoff.ready
       || !launchPrompt
       || initialPromptSent
       || setupPending
@@ -2217,6 +2222,7 @@ export function CodexChatTab({
     connectionState,
     environmentId,
     handleSend,
+    handoff.ready,
     launchPrompt,
     initialPromptSent,
     setupPending,
@@ -2324,7 +2330,7 @@ export function CodexChatTab({
           selectedReasoningEffort={selectedReasoningEffort}
           slashCommands={slashCommands}
           settingsLocked={session?.isLoading ?? false}
-          disabled={!session?.sessionId}
+          disabled={!handoff.ready || !session?.sessionId}
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}
           onSend={handleSend}

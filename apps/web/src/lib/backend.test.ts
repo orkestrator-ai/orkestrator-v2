@@ -854,6 +854,18 @@ describe("backend command wrapper coverage", () => {
     });
   });
 
+  test("deletes an agent handoff through its environment-scoped command", async () => {
+    invokeMock.mockResolvedValueOnce(true);
+
+    await expect(
+      backendWrappers.deleteAgentHandoff("handoff-1", "env-1"),
+    ).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith("delete_agent_handoff", {
+      handoffId: "handoff-1",
+      environmentId: "env-1",
+    });
+  });
+
   test("readBinaryFile decodes the base64 wrapper result", async () => {
     await expect(backendWrappers.readBinaryFile("/tmp/image.bin")).resolves.toEqual(
       Uint8Array.from(new TextEncoder().encode("binary")),

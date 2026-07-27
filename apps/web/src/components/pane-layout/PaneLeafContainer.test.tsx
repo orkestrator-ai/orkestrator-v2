@@ -82,16 +82,19 @@ mock.module("@/components/claude/ClaudeChatTab", () => ({
     isReviewTab,
     initialAgentModel,
     initialReasoningEffort,
+    agentHandoffId,
     refreshRequestId,
   }: {
     tabId: string;
     isReviewTab?: boolean;
     initialAgentModel?: string;
     initialReasoningEffort?: string;
+    agentHandoffId?: string;
     refreshRequestId?: number;
   }) => (
     <div
       data-agent-model={initialAgentModel}
+      data-agent-handoff-id={agentHandoffId}
       data-reasoning-effort={initialReasoningEffort}
       data-refresh-request-id={refreshRequestId}
       data-review-tab={String(Boolean(isReviewTab))}
@@ -134,16 +137,19 @@ mock.module("@/components/codex/CodexChatTab", () => ({
     isReviewTab,
     initialAgentModel,
     initialReasoningEffort,
+    agentHandoffId,
     refreshRequestId,
   }: {
     tabId: string;
     isReviewTab?: boolean;
     initialAgentModel?: string;
     initialReasoningEffort?: string;
+    agentHandoffId?: string;
     refreshRequestId?: number;
   }) => (
     <div
       data-agent-model={initialAgentModel}
+      data-agent-handoff-id={agentHandoffId}
       data-reasoning-effort={initialReasoningEffort}
       data-refresh-request-id={refreshRequestId}
       data-review-tab={String(Boolean(isReviewTab))}
@@ -160,16 +166,19 @@ mock.module("@/components/opencode/OpenCodeChatTab", () => ({
     isReviewTab,
     initialAgentModel,
     initialReasoningEffort,
+    agentHandoffId,
     refreshRequestId,
   }: {
     tabId: string;
     isReviewTab?: boolean;
     initialAgentModel?: string;
     initialReasoningEffort?: string;
+    agentHandoffId?: string;
     refreshRequestId?: number;
   }) => (
     <div
       data-agent-model={initialAgentModel}
+      data-agent-handoff-id={agentHandoffId}
       data-reasoning-effort={initialReasoningEffort}
       data-refresh-request-id={refreshRequestId}
       data-review-tab={String(Boolean(isReviewTab))}
@@ -419,6 +428,7 @@ describe("PaneLeafContainer", () => {
           id: "tab-claude",
           type: "claude-native" as const,
           isReviewTab: true,
+          agentHandoffId: "handoff-claude",
           initialAgentModel: "claude-review",
           initialReasoningEffort: "high",
           claudeNativeData: { environmentId: "env-visible" },
@@ -435,6 +445,7 @@ describe("PaneLeafContainer", () => {
           id: "tab-codex",
           type: "codex-native" as const,
           isReviewTab: true,
+          agentHandoffId: "handoff-codex",
           initialAgentModel: "codex-review",
           initialReasoningEffort: "medium",
           codexNativeData: { environmentId: "env-visible" },
@@ -443,6 +454,7 @@ describe("PaneLeafContainer", () => {
           id: "tab-opencode",
           type: "opencode-native" as const,
           isReviewTab: true,
+          agentHandoffId: "handoff-opencode",
           initialAgentModel: "provider/opencode-review",
           initialReasoningEffort: "deep",
           openCodeNativeData: { environmentId: "env-visible" },
@@ -464,6 +476,9 @@ describe("PaneLeafContainer", () => {
     expect(screen.getByTestId("claude-tmux-tab").dataset.reviewTab).toBe("true");
     expect(screen.getByTestId("codex-tab").dataset.reviewTab).toBe("true");
     expect(screen.getByTestId("opencode-tab").dataset.reviewTab).toBe("true");
+    expect(screen.getByTestId("claude-tab").dataset.agentHandoffId).toBe("handoff-claude");
+    expect(screen.getByTestId("codex-tab").dataset.agentHandoffId).toBe("handoff-codex");
+    expect(screen.getByTestId("opencode-tab").dataset.agentHandoffId).toBe("handoff-opencode");
     expect(screen.getByTestId("claude-tab").dataset).toMatchObject({
       agentModel: "claude-review",
       reasoningEffort: "high",

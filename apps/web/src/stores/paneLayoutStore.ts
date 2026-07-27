@@ -31,6 +31,7 @@ import { deleteSession as deleteCodexSession } from "@/lib/codex-client";
 import { deleteSession as deleteOpenCodeSession } from "@/lib/opencode-client";
 import { createUuid } from "@/lib/uuid";
 import { destroyBrowserPreview } from "@/lib/native/browser-preview";
+import { forgetAgentHandoff } from "@/lib/agent-handoff";
 
 /**
  * Per-environment state for pane layout
@@ -337,6 +338,28 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
   }
 }
 
+function deleteUnreferencedAgentHandoffs(
+  envId: string,
+  removedTabs: TabInfo[],
+  remainingRoot: PaneNode,
+): void {
+  const remainingHandoffIds = new Set(
+    getAllLeaves(remainingRoot)
+      .flatMap((leaf) => leaf.tabs)
+      .flatMap((tab) => tab.agentHandoffId ? [tab.agentHandoffId] : []),
+  );
+  const removedHandoffIds = new Set(
+    removedTabs.flatMap((tab) => tab.agentHandoffId ? [tab.agentHandoffId] : []),
+  );
+  for (const handoffId of removedHandoffIds) {
+    if (remainingHandoffIds.has(handoffId)) continue;
+    forgetAgentHandoff(handoffId);
+    backend.deleteAgentHandoff(handoffId, envId).catch((error) => {
+      console.debug("[PaneLayout] Error deleting agent handoff:", error);
+    });
+  }
+}
+
 export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
   environments: new Map(),
   hydration: new Map(),
@@ -515,6 +538,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
         const newEnvs = new Map(state.environments);
         newEnvs.set(envId, { ...envState, root: newRoot });
         set({ environments: newEnvs });
+        if (closedTab) {
+          deleteUnreferencedAgentHandoffs(envId, [closedTab], newRoot);
+        }
       }
       return;
     }
@@ -533,6 +559,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
+    if (closedTab) {
+      deleteUnreferencedAgentHandoffs(envId, [closedTab], newRoot);
+    }
   },
 
   setActiveTab: (paneId, tabId, environmentId) => {
@@ -751,6 +780,8 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     if (!envState) return;
     const paneWithTab = findPaneWithTab(envState.root, tabId);
     if (!paneWithTab) return;
+    const tabWithHandoff = paneWithTab.tabs.find((tab) => tab.id === tabId);
+    if (!tabWithHandoff?.agentHandoffId) return;
 
     const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
       ...leaf,
@@ -761,6 +792,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
+    deleteUnreferencedAgentHandoffs(envId, [tabWithHandoff], newRoot);
   },
 
   updateTabNativeSessionId: (tabId, sessionId, environmentId) => {
@@ -1084,6 +1116,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: newActivePaneId });
     set({ environments: newEnvs });
+    deleteUnreferencedAgentHandoffs(envId, pane.tabs, newRoot);
   },
 
   setActivePane: (paneId, environmentId) => {

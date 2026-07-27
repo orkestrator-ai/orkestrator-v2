@@ -1052,7 +1052,10 @@ export function ClaudeChatTab({
           // Check if we have an initial prompt to send
           // We send it BEFORE starting SSE to avoid race conditions where
           // SSE events could wipe locally-added messages before they're synced
-          const shouldSendInitialPrompt = launchPrompt && !initialPromptSentRef.current;
+          const shouldSendInitialPrompt =
+            handoff.ready
+            && launchPrompt
+            && !initialPromptSentRef.current;
 
           if (shouldSendInitialPrompt) {
             // Mark as sent immediately to prevent double-sending
@@ -1718,6 +1721,7 @@ export function ClaudeChatTab({
       connectionState === "connected" &&
       client &&
       session &&
+      handoff.ready &&
       launchPrompt &&
       !setupPending &&
       !initialPromptSentRef.current &&
@@ -1729,13 +1733,17 @@ export function ClaudeChatTab({
       console.debug("[ClaudeChatTab] Sending initial prompt on reconnection for tab:", tabId);
       handleSendRef.current?.(launchPrompt, [], effortValue, planModeEnabledValue, fastModeEnabledValue);
     }
-  }, [connectionState, client, session, launchPrompt, setupPending, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
+  }, [connectionState, client, session, handoff.ready, launchPrompt, setupPending, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
 
   useNativeMessageQueue({
     agentLabel: "Claude",
     sessionKey,
     store: useClaudeStore,
-    canDrain: !setupPending && connectionState === "connected" && !!client,
+    canDrain:
+      handoff.ready
+      && !setupPending
+      && connectionState === "connected"
+      && !!client,
     queueLength,
     isLoading: session?.isLoading ?? false,
     blockedByDraft: isQueueBlockedByDraft,
@@ -2045,7 +2053,7 @@ export function ClaudeChatTab({
           containerId={containerId}
           models={models}
           onSend={handleSend}
-          disabled={!client || !session}
+          disabled={!handoff.ready || !client || !session}
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}
           onStop={handleStop}

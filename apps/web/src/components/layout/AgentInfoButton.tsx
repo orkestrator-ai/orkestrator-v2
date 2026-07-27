@@ -59,10 +59,14 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUuid } from "@/lib/uuid";
 import {
   AGENT_PROVIDER_LABELS,
+  composeAgentHandoffTransferMessages,
   createAgentHandoffSnapshot,
+  forgetAgentHandoff,
+  loadAgentHandoff,
   persistAgentHandoff,
   type AgentProvider,
 } from "@/lib/agent-handoff";
+import { deleteAgentHandoff } from "@/lib/backend";
 import {
   normalizeClaudeMessagesForDisplay,
   normalizeCodexNativeMessage,
@@ -773,13 +777,22 @@ export function AgentInfoButton({
       if (status.status !== "idle") {
         throw new Error("Wait for Claude to finish before continuing in another agent");
       }
-      return normalizeClaudeMessagesForDisplay(
+      const messages = normalizeClaudeMessagesForDisplay(
         await getClaudeSessionMessages(
           claudeClient,
           currentSessionId,
           { throwOnError: true },
         ),
       );
+      const statusAfterRead = await getClaudeSession(claudeClient, currentSessionId);
+      if (!statusAfterRead) throw new Error("Claude session is unavailable");
+      if (statusAfterRead.status !== "idle") {
+        throw new Error("Claude started working while its conversation was being transferred");
+      }
+      if (statusAfterRead.lastActivity !== status.lastActivity) {
+        throw new Error("Claude conversation changed while it was being transferred");
+      }
+      return messages;
     }
     if (activeSession.provider === "opencode" && openCodeClient) {
       const status = await getOpenCodeSessionStatus(
@@ -791,13 +804,42 @@ export function AgentInfoButton({
       if (status === "busy" || status === "retry") {
         throw new Error("Wait for OpenCode to finish before continuing in another agent");
       }
-      return (
+      const messages = (
         await getOpenCodeSessionMessages(
           openCodeClient,
           currentSessionId,
           { throwOnError: true },
         )
       ).map(normalizeOpenCodeNativeMessage);
+      const statusAfterRead = await getOpenCodeSessionStatus(
+        openCodeClient,
+        currentSessionId,
+        { throwOnError: true },
+      );
+      if (!statusAfterRead) throw new Error("OpenCode session is unavailable");
+      if (statusAfterRead === "busy" || statusAfterRead === "retry") {
+        throw new Error("OpenCode started working while its conversation was being transferred");
+      }
+      const messagesAfterRead = (
+        await getOpenCodeSessionMessages(
+          openCodeClient,
+          currentSessionId,
+          { throwOnError: true },
+        )
+      ).map(normalizeOpenCodeNativeMessage);
+      const finalStatus = await getOpenCodeSessionStatus(
+        openCodeClient,
+        currentSessionId,
+        { throwOnError: true },
+      );
+      if (!finalStatus) throw new Error("OpenCode session is unavailable");
+      if (finalStatus === "busy" || finalStatus === "retry") {
+        throw new Error("OpenCode started working while its conversation was being transferred");
+      }
+      if (JSON.stringify(messagesAfterRead) !== JSON.stringify(messages)) {
+        throw new Error("OpenCode conversation changed while it was being transferred");
+      }
+      return messagesAfterRead;
     }
     if (activeSession.provider === "codex" && codexClient) {
       const status = await getCodexSessionStatus(
@@ -809,13 +851,30 @@ export function AgentInfoButton({
       if (status.status !== "idle") {
         throw new Error("Wait for Codex to finish before continuing in another agent");
       }
-      return (
+      const messages = (
         await getCodexSessionMessages(
           codexClient,
           currentSessionId,
           { throwOnError: true },
         )
       ).map(normalizeCodexNativeMessage);
+      const statusAfterRead = await getCodexSessionStatus(
+        codexClient,
+        currentSessionId,
+        { throwOnError: true },
+      );
+      if (!statusAfterRead) throw new Error("Codex session is unavailable");
+      if (statusAfterRead.status !== "idle") {
+        throw new Error("Codex started working while its conversation was being transferred");
+      }
+      if (
+        status.messageRevision !== undefined
+        && statusAfterRead.messageRevision !== undefined
+        && statusAfterRead.messageRevision !== status.messageRevision
+      ) {
+        throw new Error("Codex conversation changed while it was being transferred");
+      }
+      return messages;
     }
     throw new Error(`${activeSession.providerLabel} is not connected`);
   };
@@ -873,7 +932,7 @@ export function AgentInfoButton({
   });
 
   const continueIn = (destination: AgentProvider) =>
-    runAction(`continue-${destination}`, async () => {
+    runAction(`continue-${destination}`, async ({ isCurrent }) => {
       if (!activeSession || !currentSessionId) return;
       if (destination === activeSession.provider) return;
       if (currentSessionLoading) {
@@ -881,7 +940,28 @@ export function AgentInfoButton({
           `Wait for ${AGENT_PROVIDER_LABELS[activeSession.provider]} to finish before transferring`,
         );
       }
-      const messages = await readAuthoritativeHandoffMessages();
+      const providerMessages = await readAuthoritativeHandoffMessages();
+      if (!isCurrent()) return;
+      const priorHandoff = activeTab?.agentHandoffId
+        ? await loadAgentHandoff(activeTab.agentHandoffId)
+        : null;
+      if (activeTab?.agentHandoffId && !priorHandoff) {
+        throw new Error("The previous conversation transfer could not be loaded");
+      }
+      if (
+        priorHandoff
+        && (
+          priorHandoff.environmentId !== activeSession.environmentId
+          || priorHandoff.destinationProvider !== activeSession.provider
+        )
+      ) {
+        throw new Error("The previous conversation transfer does not belong to this session");
+      }
+      if (!isCurrent()) return;
+      const messages = composeAgentHandoffTransferMessages(
+        priorHandoff,
+        providerMessages,
+      );
       if (messages.length === 0) {
         throw new Error("This conversation has no history to transfer");
       }
@@ -907,6 +987,14 @@ export function AgentInfoButton({
         messages,
       });
       await persistAgentHandoff(handoff);
+      if (!isCurrent()) {
+        // The source tab changed while persistence was in flight, so no
+        // destination tab will own this sensitive snapshot. Remove it instead
+        // of leaving an unreachable handoff in durable storage.
+        forgetAgentHandoff(handoff.id);
+        await deleteAgentHandoff(handoff.id, handoff.environmentId);
+        return;
+      }
       openHandoffTab(destination, handoff.id);
       toast.success(
         `Continuing in ${AGENT_PROVIDER_LABELS[destination]} with `

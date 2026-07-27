@@ -181,6 +181,64 @@ describe("prompt queue commands", () => {
   });
 });
 
+describe("agent handoff commands", () => {
+  test("saves, reads, and deletes an environment-owned handoff", async () => {
+    await withCommands(async (invoke, storage) => {
+      const snapshot = {
+        sourceProvider: "claude",
+        destinationProvider: "codex",
+        messages: [{ id: "m1" }],
+      };
+      await expect(invoke("save_agent_handoff", {
+        handoffId: "h1",
+        environmentId: "e1",
+        version: 1,
+        snapshot,
+      })).resolves.toMatchObject({
+        id: "h1",
+        environmentId: "e1",
+        version: 1,
+        snapshot,
+      });
+      await expect(invoke("get_agent_handoff", { handoffId: "h1" }))
+        .resolves.toMatchObject({ id: "h1", snapshot });
+      await expect(invoke("delete_agent_handoff", {
+        handoffId: "h1",
+        environmentId: "e1",
+      })).resolves.toBe(true);
+      await expect(storage.getAgentHandoff("h1")).resolves.toBeNull();
+      await expect(invoke("delete_agent_handoff", {
+        handoffId: "h1",
+        environmentId: "e1",
+      })).resolves.toBe(false);
+    });
+  });
+
+  test("rejects malformed command arguments before mutation", async () => {
+    await withCommands(async (invoke, storage) => {
+      await expect(invoke("save_agent_handoff", {
+        handoffId: "h1",
+        environmentId: "e1",
+        version: "1",
+        snapshot: {},
+      })).rejects.toThrow("version");
+      await expect(invoke("save_agent_handoff", {
+        handoffId: "h1",
+        environmentId: "e1",
+        version: 1,
+        snapshot: [],
+      })).rejects.toThrow("must be an object");
+      await expect(invoke("get_agent_handoff", { handoffId: 1 }))
+        .rejects.toThrow("handoffId");
+      await expect(invoke("delete_agent_handoff", {
+        handoffId: "h1",
+        environmentId: null,
+      })).rejects.toThrow("environmentId");
+      await expect(storage.getAgentHandoff("h1")).resolves.toBeNull();
+    });
+  });
+});
+
 describe("build pipeline commands", () => {
   const snapshot = { id: "p1", phase: "building" };
 

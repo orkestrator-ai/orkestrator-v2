@@ -5638,6 +5638,14 @@ export function createCommandRegistry(
         snapshot,
       ),
   );
+  register(
+    "delete_agent_handoff",
+    ({ handoffId, environmentId }, { storage }) =>
+      storage.deleteAgentHandoff(
+        asString(handoffId, "handoffId"),
+        asString(environmentId, "environmentId"),
+      ),
+  );
 
   register("create_terminal_session", async ({ containerId, cols, rows, user, trackEnvironmentActivity }, { storage }) => {
     const resolvedContainerId = asString(containerId, "containerId");

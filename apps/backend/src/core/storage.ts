@@ -2118,11 +2118,16 @@ export class StorageService {
     return next;
   }
 
-  private async loadAgentHandoffs(): Promise<Record<string, PersistedAgentHandoff>> {
-    const stored = await this.loadJson<Record<string, PersistedAgentHandoff>>(
+  private async loadAgentHandoffEntries(): Promise<Record<string, unknown>> {
+    const stored = await this.loadJson<unknown>(
       this.agentHandoffsFile(),
       () => ({}),
     );
+    return isRecord(stored) ? stored : {};
+  }
+
+  private async loadAgentHandoffs(): Promise<Record<string, PersistedAgentHandoff>> {
+    const stored = await this.loadAgentHandoffEntries();
     return Object.fromEntries(
       Object.entries(stored).filter(([storedId, handoff]) =>
         isPersistedAgentHandoff(handoff, storedId)
@@ -2191,17 +2196,96 @@ export class StorageService {
     });
   }
 
+  private async assertAgentHandoffBackupOwnership(
+    handoffId: string,
+    environmentId: string,
+  ): Promise<void> {
+    for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
+      const backup = this.backupPath(this.agentHandoffsFile(), index);
+      if (!await exists(backup)) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await fs.readFile(backup, "utf8"));
+      } catch {
+        // The scrub that follows removes corrupt backups because their content
+        // cannot be proven free of the targeted handoff.
+        continue;
+      }
+      if (!isRecord(parsed)) continue;
+      const candidate = parsed[handoffId];
+      if (
+        isRecord(candidate)
+        && isNonBlankString(candidate.environmentId)
+        && candidate.environmentId !== environmentId
+      ) {
+        throw new Error("Agent handoff belongs to another environment");
+      }
+    }
+  }
+
+  /**
+   * Deletes one handoff after its destination tab no longer references it.
+   *
+   * The environment id is required even though handoff ids are globally unique:
+   * it prevents a stale or malformed client from deleting another environment's
+   * transcript. Backups are scrubbed even when the primary no longer contains
+   * the record so retrying a partially completed cleanup finishes the privacy
+   * boundary rather than reporting success with retained content.
+   */
+  async deleteAgentHandoff(
+    handoffId: string,
+    environmentId: string,
+  ): Promise<boolean> {
+    if (!isNonBlankString(handoffId)) {
+      throw new Error("Agent handoff ID must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Agent handoff environment ID must not be blank");
+    }
+    return this.enqueueAgentHandoffMutation(async () => {
+      const handoffs = await this.loadAgentHandoffEntries();
+      const stored = handoffs[handoffId];
+      if (
+        isRecord(stored)
+        && isNonBlankString(stored.environmentId)
+        && stored.environmentId !== environmentId
+      ) {
+        throw new Error("Agent handoff belongs to another environment");
+      }
+      await this.assertAgentHandoffBackupOwnership(handoffId, environmentId);
+      const existed = Object.prototype.hasOwnProperty.call(handoffs, handoffId);
+      delete handoffs[handoffId];
+      // Always rewrite: a corrupt primary may have fallen back to a backup, and
+      // an idempotent retry still needs to replace that unreadable primary.
+      await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      await this.scrubSensitiveJsonBackups(
+        this.agentHandoffsFile(),
+        (storedId) => storedId !== handoffId,
+      );
+      return existed;
+    });
+  }
+
   async deleteAgentHandoffsByEnvironment(environmentId: string): Promise<string[]> {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Agent handoff environment ID must not be blank");
     }
     return this.enqueueAgentHandoffMutation(async () => {
-      const handoffs = await this.loadAgentHandoffs();
-      const removedIds = Object.values(handoffs)
-        .filter((handoff) => handoff.environmentId === environmentId)
-        .map((handoff) => handoff.id);
-      if (removedIds.length > 0) {
-        for (const id of removedIds) delete handoffs[id];
+      const stored = await this.loadAgentHandoffEntries();
+      const removedIds = Object.entries(stored)
+        .filter(([, handoff]) =>
+          isRecord(handoff) && handoff.environmentId === environmentId
+        )
+        .map(([storedId]) => storedId);
+      const handoffs = Object.fromEntries(
+        Object.entries(stored).filter(([storedId, handoff]) =>
+          isPersistedAgentHandoff(handoff, storedId)
+          && handoff.environmentId !== environmentId
+        ),
+      );
+      // Rewrite even if no valid record matched. Invalid primary entries cannot
+      // be proven free of content from the environment being deleted.
+      if (await exists(this.agentHandoffsFile())) {
         await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
       }
       await this.scrubSensitiveJsonBackups(

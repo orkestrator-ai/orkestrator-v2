@@ -105,6 +105,7 @@ const mockGetLocalClaudeServerStatus = mock(async () => ({
 const mockReadFileBase64 = mock(async () => "chat-local-base64");
 const mockReadContainerFileBase64 = mock(async () => "chat-container-base64");
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
+const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
 
 class MockSessionNotFoundError extends Error {}
 
@@ -176,6 +177,7 @@ mock.module("@/lib/backend", () => ({
       revision: 1,
     },
   })),
+  getAgentHandoff: mockGetAgentHandoff,
   startClaudeServer: mockStartClaudeServer,
   getClaudeServerStatus: mockGetClaudeServerStatus,
   getClaudeServerLog: mockGetClaudeServerLog,
@@ -232,6 +234,40 @@ function createData(overrides: Partial<ClaudeNativeData> = {}): ClaudeNativeData
     containerId: "container-1",
     isLocal: false,
     ...overrides,
+  };
+}
+
+function agentHandoffRecord(id: string, bootstrapPrompt: string) {
+  const createdAt = "2026-07-27T12:00:00.000Z";
+  return {
+    version: 1,
+    id,
+    environmentId: ENVIRONMENT_ID,
+    createdAt,
+    snapshot: {
+      version: 1,
+      id,
+      environmentId: ENVIRONMENT_ID,
+      sourceProvider: "codex",
+      destinationProvider: "claude",
+      sourceSessionId: "source-codex-session",
+      createdAt,
+      messages: [{
+        id: "source-message",
+        role: "user",
+        content: "Continue the transferred task",
+        parts: [{ type: "text", content: "Continue the transferred task" }],
+        createdAt,
+      }],
+      bootstrapPrompt,
+      stats: {
+        messageCount: 1,
+        toolCallCount: 0,
+        includedMessageCount: 1,
+        omittedMessageCount: 0,
+        promptCharacters: bootstrapPrompt.length,
+      },
+    },
   };
 }
 
@@ -459,6 +495,8 @@ describe("ClaudeChatTab", () => {
     );
     mockRenameEnvironmentFromPrompt.mockClear();
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
+    mockGetAgentHandoff.mockReset();
+    mockGetAgentHandoff.mockResolvedValue(null);
     mockStartClaudeServer.mockReset();
     mockStartClaudeServer.mockImplementation(async () => ({ hostPort: 9999 }));
     mockGetClaudeServerStatus.mockReset();
@@ -492,6 +530,67 @@ describe("ClaudeChatTab", () => {
     mockToastError.mockClear();
     mockToastWarning.mockClear();
     lastVirtualizedMessages = [];
+  });
+
+  test("blocks sending until a restored agent handoff finishes loading", async () => {
+    const handoffId = "claude-delayed-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    const pending = deferred<any>();
+    mockGetAgentHandoff.mockImplementation(async () => pending.promise);
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+
+    const input = document.querySelector('[data-placeholder="Ask Claude anything..."]');
+    expect(input?.getAttribute("contenteditable")).toBe("false");
+    expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pending.resolve(agentHandoffRecord(handoffId, bootstrapPrompt));
+      await pending.promise;
+    });
+
+    await waitFor(() =>
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        expect.stringContaining(`"id": "${handoffId}"`),
+        expect.any(Object),
+      ),
+    );
+  });
+
+  test("unblocks with a visible error when a restored handoff cannot load", async () => {
+    const handoffId = "claude-failed-handoff";
+    mockGetAgentHandoff.mockRejectedValueOnce(new Error("handoff storage unavailable"));
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(lastVirtualizedMessages.some(
+        (message) => message.content === "handoff storage unavailable",
+      )).toBe(true),
+    );
+    expect(
+      document
+        .querySelector('[data-placeholder="Ask Claude anything..."]')
+        ?.getAttribute("contenteditable"),
+    ).toBe("true");
+    expect(mockSendPrompt).not.toHaveBeenCalled();
   });
 
   test("retains one-shot launch options while the model catalog is empty", async () => {

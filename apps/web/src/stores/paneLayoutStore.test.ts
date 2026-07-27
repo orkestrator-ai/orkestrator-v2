@@ -1,5 +1,6 @@
 import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import type { TabInfo } from "@/types/paneLayout";
 
 const closeLocalTerminalSession = mock(async (_sessionId: string) => {});
 const detachTerminal = mock(async (_sessionId: string) => {});
@@ -8,6 +9,10 @@ const stopTmuxSession = mock(async (_tabId: string, _environmentId?: string) => 
 const deleteClaudeSession = mock(async (_client: unknown, _sessionId: string) => true);
 const deleteCodexSession = mock(async (_client: unknown, _sessionId: string) => true);
 const deleteOpenCodeSession = mock(async (_client: unknown, _sessionId: string) => true);
+const deleteAgentHandoff = mock(
+  async (_handoffId: string, _environmentId: string) => true,
+);
+const getAgentHandoff = mock(async (_handoffId: string) => null);
 let consoleDebugSpy: ReturnType<typeof spyOn> | undefined;
 let consoleErrorSpy: ReturnType<typeof spyOn> | undefined;
 const originalOrkestrator = window.orkestrator;
@@ -36,6 +41,8 @@ mock.module("@/lib/backend", () => ({
   getSessionsByEnvironment: mock(async () => []),
   saveSessionBuffer: mock(async () => {}),
   loadSessionBuffer: mock(async () => null),
+  deleteAgentHandoff,
+  getAgentHandoff,
   syncSessionsWithContainer: mock(async () => []),
   renameSession: mock(async () => ({})),
   reorderSessions: mock(async () => []),
@@ -79,6 +86,11 @@ afterEach(() => {
 });
 
 const { getAllLeaves, usePaneLayoutStore } = await import("./paneLayoutStore");
+const {
+  loadAgentHandoff,
+  rememberAgentHandoff,
+  resetAgentHandoffCache,
+} = await import("@/lib/agent-handoff");
 const { useTerminalSessionStore, createSessionKey: createTerminalSessionKey } = await import("./terminalSessionStore");
 const { useClaudeStore } = await import("./claudeStore");
 const { useCodexStore } = await import("./codexStore");
@@ -114,6 +126,7 @@ function resetStores() {
   useEnvironmentStore.setState({
     setupScriptsRunning: new Set(),
   });
+  resetAgentHandoffCache();
 
   closeLocalTerminalSession.mockClear();
   detachTerminal.mockClear();
@@ -122,12 +135,16 @@ function resetStores() {
   deleteClaudeSession.mockClear();
   deleteCodexSession.mockClear();
   deleteOpenCodeSession.mockClear();
+  deleteAgentHandoff.mockClear();
+  getAgentHandoff.mockClear();
+  deleteAgentHandoff.mockImplementation(async () => true);
+  getAgentHandoff.mockImplementation(async () => null);
 }
 
 function seedSingleTabEnvironment(
   environmentId: string,
   containerId: string | null,
-  tab: { id: string; type: string },
+  tab: Pick<TabInfo, "id" | "type"> & Partial<TabInfo>,
 ) {
   usePaneLayoutStore.setState({
     activeEnvironmentId: environmentId,
@@ -240,6 +257,114 @@ describe("paneLayoutStore tab cleanup", () => {
     expect(consoleDebugSpy).toHaveBeenCalledWith(
       "[PaneLayout] Error destroying browser preview:",
       expect.objectContaining({ message: "destroy failed" }),
+    );
+  });
+
+  test("deletes and evicts an unreferenced handoff when its tab is explicitly closed", async () => {
+    seedSingleTabEnvironment("env-handoff", null, {
+      id: "handoff-tab",
+      type: "plain",
+      agentHandoffId: "handoff-1",
+    });
+    rememberAgentHandoff({ id: "handoff-1" } as never);
+
+    usePaneLayoutStore.getState().removeTab("default", "handoff-tab", "env-handoff");
+
+    expect(deleteAgentHandoff).toHaveBeenCalledWith("handoff-1", "env-handoff");
+    await expect(loadAgentHandoff("handoff-1")).resolves.toBeNull();
+    expect(getAgentHandoff).toHaveBeenCalledWith("handoff-1");
+  });
+
+  test("does not call handoff deletion for a tab without a handoff", () => {
+    seedSingleTabEnvironment("env-plain", null, {
+      id: "plain-tab",
+      type: "plain",
+    });
+
+    usePaneLayoutStore.getState().removeTab("default", "plain-tab", "env-plain");
+
+    expect(deleteAgentHandoff).not.toHaveBeenCalled();
+  });
+
+  test("retains a handoff until its last referencing tab is closed", () => {
+    usePaneLayoutStore.setState({
+      activeEnvironmentId: "env-shared",
+      environments: new Map([[
+        "env-shared",
+        {
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "first", type: "plain", agentHandoffId: "handoff-shared" },
+              { id: "second", type: "plain", agentHandoffId: "handoff-shared" },
+            ],
+            activeTabId: "first",
+          },
+        },
+      ]]),
+    } as never);
+
+    usePaneLayoutStore.getState().removeTab("default", "first", "env-shared");
+    expect(deleteAgentHandoff).not.toHaveBeenCalled();
+
+    usePaneLayoutStore.getState().removeTab("default", "second", "env-shared");
+    expect(deleteAgentHandoff).toHaveBeenCalledTimes(1);
+    expect(deleteAgentHandoff).toHaveBeenCalledWith("handoff-shared", "env-shared");
+  });
+
+  test("deletes only unreferenced handoffs when a whole pane is closed", () => {
+    seedPaneTree({
+      kind: "split",
+      id: "split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "closing",
+          tabs: [
+            { id: "unique", type: "plain", agentHandoffId: "handoff-unique" },
+            { id: "shared-left", type: "plain", agentHandoffId: "handoff-shared" },
+          ],
+          activeTabId: "unique",
+        },
+        {
+          kind: "leaf",
+          id: "remaining",
+          tabs: [
+            { id: "shared-right", type: "plain", agentHandoffId: "handoff-shared" },
+          ],
+          activeTabId: "shared-right",
+        },
+      ],
+    }, "closing", "env-close-pane");
+
+    usePaneLayoutStore.getState().closePane("closing", "env-close-pane");
+
+    expect(deleteAgentHandoff).toHaveBeenCalledTimes(1);
+    expect(deleteAgentHandoff).toHaveBeenCalledWith("handoff-unique", "env-close-pane");
+  });
+
+  test("keeps tab removal successful when handoff deletion fails", async () => {
+    consoleDebugSpy = spyOn(console, "debug").mockImplementation(() => {});
+    deleteAgentHandoff.mockRejectedValueOnce(new Error("storage unavailable"));
+    seedSingleTabEnvironment("env-handoff", null, {
+      id: "handoff-tab",
+      type: "plain",
+      agentHandoffId: "handoff-1",
+    });
+
+    usePaneLayoutStore.getState().removeTab("default", "handoff-tab", "env-handoff");
+    await Promise.resolve();
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-handoff")).toEqual([]);
+    expect(consoleDebugSpy).toHaveBeenCalledWith(
+      "[PaneLayout] Error deleting agent handoff:",
+      expect.objectContaining({ message: "storage unavailable" }),
     );
   });
 
@@ -1317,6 +1442,54 @@ describe("paneLayoutStore pane and tab actions", () => {
     }]);
   });
 
+  test("clears, deletes and evicts a consumed handoff reference", async () => {
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [{
+        id: "handoff-tab",
+        type: "codex-native",
+        agentHandoffId: "handoff-1",
+        displayTitle: "Codex · from Claude",
+        codexNativeData: { environmentId: "env-handoff" },
+      }],
+      activeTabId: "handoff-tab",
+    }, "default", "env-handoff");
+    rememberAgentHandoff({ id: "handoff-1" } as never);
+
+    usePaneLayoutStore.getState().clearTabAgentHandoff("handoff-tab", "env-handoff");
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-handoff")[0]).toMatchObject({
+      id: "handoff-tab",
+      agentHandoffId: undefined,
+      displayTitle: "Codex · from Claude",
+      codexNativeData: { environmentId: "env-handoff" },
+    });
+    expect(deleteAgentHandoff).toHaveBeenCalledWith("handoff-1", "env-handoff");
+    await expect(loadAgentHandoff("handoff-1")).resolves.toBeNull();
+    expect(getAgentHandoff).toHaveBeenCalledWith("handoff-1");
+  });
+
+  test("clearing one of multiple handoff references preserves backend storage", () => {
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [
+        { id: "first", type: "plain", agentHandoffId: "handoff-shared" },
+        { id: "second", type: "plain", agentHandoffId: "handoff-shared" },
+      ],
+      activeTabId: "first",
+    }, "default", "env-handoff");
+
+    usePaneLayoutStore.getState().clearTabAgentHandoff("first", "env-handoff");
+
+    expect(deleteAgentHandoff).not.toHaveBeenCalled();
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-handoff")
+        .find((tab) => tab.id === "second")?.agentHandoffId,
+    ).toBe("handoff-shared");
+  });
+
   test("consumes one-shot agent options without clearing the pending prompt", () => {
     seedPaneTree({
       kind: "leaf",
@@ -1699,5 +1872,27 @@ describe("paneLayoutStore guard branches", () => {
       initialAgentModel: "gpt-5.6-sol",
       initialReasoningEffort: "xhigh",
     });
+  });
+
+  test("clearTabAgentHandoff is a no-op for unknown environments and tabs", () => {
+    const before = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.getState().clearTabAgentHandoff("tab-one");
+    expect(usePaneLayoutStore.getState().environments).toBe(before);
+
+    seedSingleTabEnvironment("env-handoff-noop", null, {
+      id: "handoff-tab",
+      type: "plain",
+      agentHandoffId: "handoff-1",
+    });
+    const seeded = usePaneLayoutStore.getState().environments;
+
+    usePaneLayoutStore.getState().clearTabAgentHandoff("handoff-tab", "missing-env");
+    usePaneLayoutStore.getState().clearTabAgentHandoff("missing-tab", "env-handoff-noop");
+
+    expect(usePaneLayoutStore.getState().environments).toBe(seeded);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-handoff-noop")[0]?.agentHandoffId,
+    ).toBe("handoff-1");
+    expect(deleteAgentHandoff).not.toHaveBeenCalled();
   });
 });

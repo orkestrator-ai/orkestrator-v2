@@ -1871,7 +1871,11 @@ export function OpenCodeChatTab({
     agentLabel: "OpenCode",
     sessionKey,
     store: useOpenCodeStore,
-    canDrain: !setupPending && connectionState === "connected" && !!client,
+    canDrain:
+      handoff.ready
+      && !setupPending
+      && connectionState === "connected"
+      && !!client,
     queueLength,
     isLoading: session?.isLoading ?? false,
     blockedByDraft: isQueueBlockedByDraft,
@@ -1906,6 +1910,7 @@ export function OpenCodeChatTab({
       connectionState === "connected" &&
       client &&
       session &&
+      handoff.ready &&
       launchPrompt &&
       !setupPending &&
       !initialPromptSentRef.current &&
@@ -1929,6 +1934,7 @@ export function OpenCodeChatTab({
     connectionState,
     client,
     session,
+    handoff.ready,
     launchPrompt,
     setupPending,
     tabId,
@@ -2250,7 +2256,7 @@ export function OpenCodeChatTab({
           onSend={async (text, attachments) => {
             await handleSend(text, attachments);
           }}
-          disabled={!client || !session}
+          disabled={!handoff.ready || !client || !session}
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}
           onStop={handleStop}

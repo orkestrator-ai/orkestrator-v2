@@ -6,6 +6,14 @@ import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabInfo } from "@/types/paneLayout";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
+import type { NativeMessage } from "@/lib/chat/native-message-types";
+import { invoke as nativeInvoke } from "@/lib/native/backend";
+import {
+  createAgentHandoffSnapshot,
+  loadAgentHandoff,
+  rememberAgentHandoff,
+  resetAgentHandoffCache,
+} from "@/lib/agent-handoff";
 import {
   mockToastError,
   mockToastSuccess,
@@ -30,7 +38,17 @@ const mockForkClaudeSession = mock<
   (_client: unknown, _sessionId: string) => Promise<{ sessionId: string; title?: string }>
 >(async () => ({ sessionId: "claude-fork", title: "Claude fork title" }));
 const mockCompactClaudeSession = mock(async () => true);
-const mockGetClaudeSession = mock(async () => ({
+const mockGetClaudeSession = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+  ) => Promise<{
+    id: string;
+    status: "idle" | "running" | "error";
+    createdAt: string;
+    lastActivity: string;
+  } | null>
+>(async () => ({
   id: "claude-session-1",
   status: "idle" as const,
   createdAt: "2026-07-27T10:00:00.000Z",
@@ -57,6 +75,22 @@ const mockCompactOpenCodeSession = mock(async () => undefined);
 const mockForkOpenCodeSession = mock<
   (_client: unknown, _sessionId: string) => Promise<{ id: string; title?: string }>
 >(async () => ({ id: "opencode-fork", title: "OpenCode fork title" }));
+const mockGetOpenCodeSessionMessages = mock<
+  (_client: unknown, _sessionId: string) => Promise<NativeMessage[]>
+>(async () => [{
+  id: "opencode-message-1",
+  role: "user" as const,
+  content: "continue from OpenCode",
+  parts: [{ type: "text" as const, content: "continue from OpenCode" }],
+  createdAt: "2026-07-27T10:00:00.000Z",
+}]);
+const mockGetOpenCodeSessionStatus = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _options?: { throwOnError?: boolean },
+  ) => Promise<"idle" | "busy" | "retry" | null>
+>(async () => "idle");
 const mockRevertOpenCodeSession = mock(async () => undefined);
 const mockUnrevertOpenCodeSession = mock(async () => undefined);
 const mockShareOpenCodeSession = mock<
@@ -74,6 +108,26 @@ const mockForkCodexSession = mock<
     _messageId?: string,
   ) => Promise<{ sessionId: string; title?: string }>
 >(async () => ({ sessionId: "codex-fork", title: "Codex fork title" }));
+const mockGetCodexSessionMessages = mock<
+  (_client: unknown, _sessionId: string) => Promise<NativeMessage[]>
+>(async () => [{
+  id: "codex-message-1",
+  role: "user" as const,
+  content: "continue from Codex",
+  parts: [{ type: "text" as const, content: "continue from Codex" }],
+  createdAt: "2026-07-27T10:00:00.000Z",
+}]);
+const mockGetCodexSessionStatus = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _options?: { throwOnError?: boolean },
+  ) => Promise<{
+    status: "idle" | "running" | "error";
+    title?: string;
+    messageRevision?: number;
+  } | null>
+>(async () => ({ status: "idle" }));
 const mockGetCodexRuntimeHealth = mock<
   (_client: unknown, _sessionId: string) => Promise<unknown>
 >(async () => null);
@@ -101,6 +155,8 @@ mock.module("@/lib/opencode-client", () => ({
   ...realOpenCodeClientSnapshot,
   compactOpenCodeSession: mockCompactOpenCodeSession,
   forkOpenCodeSession: mockForkOpenCodeSession,
+  getSessionMessages: mockGetOpenCodeSessionMessages,
+  getSessionStatus: mockGetOpenCodeSessionStatus,
   revertOpenCodeSession: mockRevertOpenCodeSession,
   shareOpenCodeSession: mockShareOpenCodeSession,
   unrevertOpenCodeSession: mockUnrevertOpenCodeSession,
@@ -111,6 +167,8 @@ mock.module("@/lib/codex-client", () => ({
   ...realCodexClientSnapshot,
   compactCodexSession: mockCompactCodexSession,
   forkCodexSession: mockForkCodexSession,
+  getSessionMessages: mockGetCodexSessionMessages,
+  getSessionStatus: mockGetCodexSessionStatus,
   getCodexRuntimeHealth: mockGetCodexRuntimeHealth,
   startCodexNativeReview: mockStartCodexNativeReview,
   steerCodexSession: mockSteerCodexSession,
@@ -132,6 +190,7 @@ const CODEX_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
 const OPENCODE_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
 const CLAUDE_CLIENT = { baseUrl: "http://127.0.0.1:1111" } as never;
 const CODEX_CLIENT = { baseUrl: "http://127.0.0.1:2222" } as never;
+const nativeInvokeMock = nativeInvoke as ReturnType<typeof mock>;
 
 let openCodeSessionGet = mock(
   async (_parameters: { sessionID: string }): Promise<unknown> => ({
@@ -255,6 +314,8 @@ beforeEach(() => {
   confirmMessages = [];
   clipboardWrites = [];
   clipboardRejection = null;
+  nativeInvokeMock.mockClear();
+  nativeInvokeMock.mockImplementation(() => Promise.resolve());
 
   window.confirm = ((message?: string) => {
     confirmMessages.push(message ?? "");
@@ -284,12 +345,16 @@ beforeEach(() => {
   mockStopClaudeBackgroundTask.mockClear();
   mockCompactOpenCodeSession.mockClear();
   mockForkOpenCodeSession.mockClear();
+  mockGetOpenCodeSessionMessages.mockClear();
+  mockGetOpenCodeSessionStatus.mockClear();
   mockRevertOpenCodeSession.mockClear();
   mockUnrevertOpenCodeSession.mockClear();
   mockShareOpenCodeSession.mockClear();
   mockUnshareOpenCodeSession.mockClear();
   mockCompactCodexSession.mockClear();
   mockForkCodexSession.mockClear();
+  mockGetCodexSessionMessages.mockClear();
+  mockGetCodexSessionStatus.mockClear();
   mockGetCodexRuntimeHealth.mockClear();
   mockStartCodexNativeReview.mockClear();
   mockSteerCodexSession.mockClear();
@@ -319,6 +384,14 @@ beforeEach(() => {
     id: "opencode-fork",
     title: "OpenCode fork title",
   }));
+  mockGetOpenCodeSessionMessages.mockImplementation(async () => [{
+    id: "opencode-message-1",
+    role: "user",
+    content: "continue from OpenCode",
+    parts: [{ type: "text", content: "continue from OpenCode" }],
+    createdAt: "2026-07-27T10:00:00.000Z",
+  }]);
+  mockGetOpenCodeSessionStatus.mockImplementation(async () => "idle");
   mockRevertOpenCodeSession.mockImplementation(async () => undefined);
   mockUnrevertOpenCodeSession.mockImplementation(async () => undefined);
   mockShareOpenCodeSession.mockImplementation(async () => "https://share.opencode.test/abc");
@@ -328,9 +401,18 @@ beforeEach(() => {
     sessionId: "codex-fork",
     title: "Codex fork title",
   }));
+  mockGetCodexSessionMessages.mockImplementation(async () => [{
+    id: "codex-message-1",
+    role: "user",
+    content: "continue from Codex",
+    parts: [{ type: "text", content: "continue from Codex" }],
+    createdAt: "2026-07-27T10:00:00.000Z",
+  }]);
+  mockGetCodexSessionStatus.mockImplementation(async () => ({ status: "idle" }));
   mockGetCodexRuntimeHealth.mockImplementation(async () => null);
   mockStartCodexNativeReview.mockImplementation(async () => true);
   mockSteerCodexSession.mockImplementation(async () => true);
+  resetAgentHandoffCache();
 
   seedPaneLayout();
 });
@@ -1170,6 +1252,7 @@ describe("AgentInfoButton session actions", () => {
       "claude-session-1",
       { throwOnError: true },
     );
+    expect(mockGetClaudeSession).toHaveBeenCalledTimes(2);
     const handoffTab = usePaneLayoutStore
       .getState()
       .getAllTabs(ENVIRONMENT_ID)
@@ -1183,6 +1266,273 @@ describe("AgentInfoButton session actions", () => {
     expect(mockToastSuccess).toHaveBeenCalledWith(
       "Continuing in Codex with 1 message and 0 tool calls",
     );
+  });
+
+  test("deletes a persisted handoff if its source session changes before the destination opens", async () => {
+    seedClaudeSession([{ id: "m1", role: "user", content: "continue this" }]);
+    let releaseSave!: () => void;
+    let reportSaveStarted!: () => void;
+    const saveStarted = new Promise<void>((resolve) => {
+      reportSaveStarted = resolve;
+    });
+    const saveReleased = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "save_agent_handoff") {
+        reportSaveStarted();
+        await saveReleased;
+      }
+      return command === "delete_agent_handoff" ? true : undefined;
+    });
+
+    const view = render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    await saveStarted;
+
+    view.rerender(<AgentInfoButton activeTab={claudeTab({ id: "another-tab" })} />);
+    releaseSave();
+
+    await waitFor(() =>
+      expect(nativeInvokeMock).toHaveBeenCalledWith(
+        "delete_agent_handoff",
+        expect.objectContaining({ environmentId: ENVIRONMENT_ID }),
+      ),
+    );
+    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+    expect(mockToastSuccess).not.toHaveBeenCalled();
+  });
+
+  test("reads and revalidates an authoritative OpenCode handoff before opening Claude", async () => {
+    seedOpenCodeSession();
+    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
+
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+    );
+    expect(mockGetOpenCodeSessionStatus).toHaveBeenCalledTimes(3);
+    expect(mockGetOpenCodeSessionStatus).toHaveBeenNthCalledWith(
+      1,
+      openCodeClient,
+      "opencode-session-1",
+      { throwOnError: true },
+    );
+    expect(mockGetOpenCodeSessionMessages).toHaveBeenCalledWith(
+      openCodeClient,
+      "opencode-session-1",
+      { throwOnError: true },
+    );
+    expect(mockGetOpenCodeSessionMessages).toHaveBeenCalledTimes(2);
+    const handoffTab = usePaneLayoutStore
+      .getState()
+      .getAllTabs(ENVIRONMENT_ID)
+      .find((tab) => tab.id !== TAB_ID)!;
+    expect(handoffTab.type).toBe("claude-native");
+    expect(handoffTab.claudeNativeData?.environmentId).toBe(ENVIRONMENT_ID);
+  });
+
+  test("reads and revalidates an authoritative Codex handoff before opening OpenCode", async () => {
+    seedCodexSession();
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+    fireEvent.click(screen.getByRole("button", { name: "OpenCode" }));
+
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+    );
+    expect(mockGetCodexSessionStatus).toHaveBeenCalledTimes(2);
+    expect(mockGetCodexSessionMessages).toHaveBeenCalledWith(
+      CODEX_CLIENT,
+      "codex-session-1",
+      { throwOnError: true },
+    );
+    const handoffTab = usePaneLayoutStore
+      .getState()
+      .getAllTabs(ENVIRONMENT_ID)
+      .find((tab) => tab.id !== TAB_ID)!;
+    expect(handoffTab.type).toBe("opencode-native");
+    expect(handoffTab.openCodeNativeData?.environmentId).toBe(ENVIRONMENT_ID);
+  });
+
+  test.each([
+    ["Claude", "Codex", () => {
+      seedClaudeSession();
+      mockGetClaudeSession
+        .mockResolvedValueOnce({
+          id: "claude-session-1",
+          status: "idle",
+          createdAt: "2026-07-27T10:00:00.000Z",
+          lastActivity: "2026-07-27T10:01:00.000Z",
+        })
+        .mockResolvedValueOnce({
+          id: "claude-session-1",
+          status: "running",
+          createdAt: "2026-07-27T10:00:00.000Z",
+          lastActivity: "2026-07-27T10:02:00.000Z",
+        });
+      return claudeTab();
+    }],
+    ["OpenCode", "Claude", () => {
+      seedOpenCodeSession();
+      mockGetOpenCodeSessionStatus
+        .mockResolvedValueOnce("idle")
+        .mockResolvedValueOnce("busy");
+      return openCodeTab();
+    }],
+    ["Codex", "OpenCode", () => {
+      seedCodexSession();
+      mockGetCodexSessionStatus
+        .mockResolvedValueOnce({ status: "idle" })
+        .mockResolvedValueOnce({ status: "running" });
+      return codexTab();
+    }],
+  ] as const)(
+    "rejects a %s transfer when the provider starts working during the message read",
+    async (provider, destination, setup) => {
+      const tab = setup();
+      render(<AgentInfoButton activeTab={tab} />);
+      open();
+      fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+      fireEvent.click(screen.getByRole("button", { name: destination }));
+
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          `${provider} started working while its conversation was being transferred`,
+        ),
+      );
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+    },
+  );
+
+  test.each([
+    ["Claude", "Codex", () => {
+      seedClaudeSession();
+      mockGetClaudeSession
+        .mockResolvedValueOnce({
+          id: "claude-session-1",
+          status: "idle",
+          createdAt: "2026-07-27T10:00:00.000Z",
+          lastActivity: "2026-07-27T10:01:00.000Z",
+        })
+        .mockResolvedValueOnce({
+          id: "claude-session-1",
+          status: "idle",
+          createdAt: "2026-07-27T10:00:00.000Z",
+          lastActivity: "2026-07-27T10:02:00.000Z",
+        });
+      return claudeTab();
+    }],
+    ["Codex", "OpenCode", () => {
+      seedCodexSession();
+      mockGetCodexSessionStatus
+        .mockResolvedValueOnce({ status: "idle", messageRevision: 1 })
+        .mockResolvedValueOnce({ status: "idle", messageRevision: 2 });
+      return codexTab();
+    }],
+  ] as const)(
+    "rejects a fast %s turn that finishes during the message read",
+    async (provider, destination, setup) => {
+      render(<AgentInfoButton activeTab={setup()} />);
+      open();
+      fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+      fireEvent.click(screen.getByRole("button", { name: destination }));
+
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          `${provider} conversation changed while it was being transferred`,
+        ),
+      );
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+    },
+  );
+
+  test("rejects a fast OpenCode turn when two idle reads return different messages", async () => {
+    seedOpenCodeSession();
+    mockGetOpenCodeSessionMessages
+      .mockResolvedValueOnce([{
+        id: "m1",
+        role: "user",
+        content: "before",
+        parts: [{ type: "text", content: "before" }],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      }])
+      .mockResolvedValueOnce([{
+        id: "m1",
+        role: "user",
+        content: "after",
+        parts: [{ type: "text", content: "after" }],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      }]);
+    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        "OpenCode conversation changed while it was being transferred",
+      ),
+    );
+    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+  });
+
+  test("preserves the prior imported transcript when a transferred tab is handed off again", async () => {
+    const prior = createAgentHandoffSnapshot({
+      id: "prior-handoff",
+      environmentId: ENVIRONMENT_ID,
+      sourceProvider: "claude",
+      destinationProvider: "codex",
+      sourceSessionId: "claude-session-1",
+      messages: [{
+        id: "prior-message",
+        role: "user",
+        content: "original request",
+        parts: [{ type: "text", content: "original request" }],
+        createdAt: "2026-07-27T09:00:00.000Z",
+      }],
+    });
+    rememberAgentHandoff(prior);
+    seedCodexSession();
+    mockGetCodexSessionMessages.mockImplementation(async () => [
+      {
+        id: "bootstrap",
+        role: "user",
+        content: prior.bootstrapPrompt,
+        parts: [{ type: "text", content: prior.bootstrapPrompt }],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      },
+      {
+        id: "codex-answer",
+        role: "assistant",
+        content: "current provider answer",
+        parts: [{ type: "text", content: "current provider answer" }],
+        createdAt: "2026-07-27T10:01:00.000Z",
+      },
+    ]);
+
+    render(<AgentInfoButton activeTab={codexTab({ agentHandoffId: prior.id })} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+    fireEvent.click(screen.getByRole("button", { name: "OpenCode" }));
+
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+    );
+    const handoffTab = usePaneLayoutStore
+      .getState()
+      .getAllTabs(ENVIRONMENT_ID)
+      .find((tab) => tab.id !== TAB_ID)!;
+    const saved = await loadAgentHandoff(handoffTab.agentHandoffId!);
+    expect(saved?.messages.map((message) => message.id)).toEqual([
+      "prior-message",
+      "codex-answer",
+    ]);
   });
 
   test("does not allow a handoff while the source turn is running", () => {

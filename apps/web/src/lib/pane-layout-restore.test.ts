@@ -121,23 +121,29 @@ describe("reconcilePersistedLayout", () => {
     }
   });
 
-  test("ignores non-string one-shot agent launch options", () => {
-    const restored = reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane-1",
-      tabs: [{
-        id: "native",
-        type: "claude-native",
-        claudeNativeData: { environmentId: "env-1" },
-        initialAgentModel: 42,
-        initialReasoningEffort: { nested: true },
-      }],
-      activeTabId: "native",
-    }), context);
+  test("ignores malformed one-shot agent launch and handoff values", () => {
+    for (const agentHandoffId of [["not", "a", "string"], "", "   "]) {
+      const restored = reconcilePersistedLayout(saved({
+        kind: "leaf",
+        id: "pane-1",
+        tabs: [{
+          id: "native",
+          type: "claude-native",
+          claudeNativeData: { environmentId: "env-1" },
+          initialAgentModel: 42,
+          initialReasoningEffort: { nested: true },
+          agentHandoffId,
+        }],
+        activeTabId: "native",
+      }), context);
 
-    const tab = (restored?.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs[0]!;
-    expect(tab.initialAgentModel).toBeUndefined();
-    expect(tab.initialReasoningEffort).toBeUndefined();
+      const tab = (
+        restored?.root as unknown as { tabs: Array<Record<string, unknown>> }
+      ).tabs[0]!;
+      expect(tab.initialAgentModel).toBeUndefined();
+      expect(tab.initialReasoningEffort).toBeUndefined();
+      expect(tab.agentHandoffId).toBeUndefined();
+    }
   });
 
   test("restores the last browser address", () => {

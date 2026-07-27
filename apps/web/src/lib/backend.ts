@@ -1607,6 +1607,13 @@ export async function saveAgentHandoff<T extends Record<string, unknown>>(
   });
 }
 
+export async function deleteAgentHandoff(
+  handoffId: string,
+  environmentId: string,
+): Promise<boolean> {
+  return invoke<boolean>("delete_agent_handoff", { handoffId, environmentId });
+}
+
 // --- Local Server Commands (for local/worktree environments) ---
 
 export interface LocalServerStartResult {

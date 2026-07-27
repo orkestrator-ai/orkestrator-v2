@@ -171,6 +171,7 @@ const mockUpdateGlobalConfig = mock(async (config: any) => ({
   ...useConfigStore.getState().config,
   global: config,
 }));
+const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
 const claimedPromptHeads = new Set<string>();
 const mockClaimPromptQueueHead = mock(async (
   queueKey: string,
@@ -199,6 +200,7 @@ const mockClaimPromptQueueHead = mock(async (
 
 mock.module("@/lib/backend", () => ({
   claimPromptQueueHead: mockClaimPromptQueueHead,
+  getAgentHandoff: mockGetAgentHandoff,
   getCodexServerLog: mockGetCodexServerLog,
   getCodexServerStatus: mockGetCodexServerStatus,
   getLocalCodexServerStatus: mockGetLocalCodexServerStatus,
@@ -525,6 +527,40 @@ function createData(overrides: Partial<CodexNativeData> = {}): CodexNativeData {
   };
 }
 
+function agentHandoffRecord(id: string, bootstrapPrompt: string) {
+  const createdAt = "2026-07-27T12:00:00.000Z";
+  return {
+    version: 1,
+    id,
+    environmentId: ENVIRONMENT_ID,
+    createdAt,
+    snapshot: {
+      version: 1,
+      id,
+      environmentId: ENVIRONMENT_ID,
+      sourceProvider: "claude",
+      destinationProvider: "codex",
+      sourceSessionId: "source-claude-session",
+      createdAt,
+      messages: [{
+        id: "source-message",
+        role: "user",
+        content: "Continue the transferred task",
+        parts: [{ type: "text", content: "Continue the transferred task" }],
+        createdAt,
+      }],
+      bootstrapPrompt,
+      stats: {
+        messageCount: 1,
+        toolCallCount: 0,
+        includedMessageCount: 1,
+        omittedMessageCount: 0,
+        promptCharacters: bootstrapPrompt.length,
+      },
+    },
+  };
+}
+
 function seedConfigStore() {
   useConfigStore.setState({
     config: {
@@ -705,6 +741,8 @@ describe("CodexChatTab", () => {
 
     mockRenameEnvironmentFromPrompt.mockClear();
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
+    mockGetAgentHandoff.mockReset();
+    mockGetAgentHandoff.mockResolvedValue(null);
     mockSendPrompt.mockClear();
     mockSendPrompt.mockImplementation(async () => ({ status: "processing" }));
     mockGetSessionMessages.mockClear();
@@ -788,6 +826,81 @@ describe("CodexChatTab", () => {
     cleanup();
     restoreTimerHarness();
     mock.restore();
+  });
+
+  test("blocks sending until a restored agent handoff finishes loading", async () => {
+    const handoffId = "codex-delayed-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    const pending = deferred<any>();
+    mockGetAgentHandoff.mockImplementation(async () => pending.promise);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+
+    expect((await screen.findByTestId("codex-send")).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByTestId("codex-send"));
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pending.resolve(agentHandoffRecord(handoffId, bootstrapPrompt));
+      await pending.promise;
+    });
+
+    await waitFor(() =>
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        SESSION_ID,
+        expect.stringContaining(`"id": "${handoffId}"`),
+        expect.any(Object),
+      ),
+    );
+  });
+
+  test("does not append a handoff bootstrap to a restored destination transcript", async () => {
+    const handoffId = "codex-restored-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    mockGetAgentHandoff.mockResolvedValue(
+      agentHandoffRecord(handoffId, bootstrapPrompt),
+    );
+    const existingMessage = createMessage(
+      "existing-answer",
+      "Destination work already started",
+    );
+    seedCodexStore([existingMessage]);
+    mockGetSessionMessages.mockResolvedValue([existingMessage]);
+
+    const first = render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: SESSION_ID })}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+
+    await waitFor(() => expect(mockGetAgentHandoff).toHaveBeenCalledWith(handoffId));
+    expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false);
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    first.unmount();
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: SESSION_ID })}
+        isActive={false}
+        agentHandoffId={handoffId}
+      />,
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(mockSendPrompt).not.toHaveBeenCalled();
   });
 
   test("renames timestamp environments before sending the first prompt", async () => {

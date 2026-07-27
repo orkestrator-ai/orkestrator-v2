@@ -998,6 +998,23 @@ describe("session lifecycle", () => {
         {
           type: "response_item",
           payload: {
+            type: "function_call",
+            name: "exec_command",
+            call_id: "persisted-tool",
+            arguments: JSON.stringify({ cmd: "git status --short" }),
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "persisted-tool",
+            output: "clean",
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
             type: "message",
             role: "assistant",
             content: [{ type: "output_text", text: "Persisted answer" }],
@@ -1020,8 +1037,17 @@ describe("session lifecycle", () => {
       "thread/resume": () => ({ thread: threadPayload("thread-named", { name: "Codex Name" }) }),
     });
 
-    expect((await h.runtime.getMessages("session-named"))?.map((message) => message.content))
-      .toEqual(["Persisted answer"]);
+    const messages = await h.runtime.getMessages("session-named");
+    expect(messages?.map((message) => message.content)).toEqual(["Persisted answer"]);
+    expect(messages?.[0]?.parts).toEqual([
+      expect.objectContaining({
+        type: "tool-invocation",
+        toolName: "exec_command",
+        toolState: "success",
+        toolOutput: "clean",
+      }),
+      { type: "text", content: "Persisted answer" },
+    ]);
     expect(h.runtime.getStatus("session-named")?.messageRevision).toBe(1);
     // app-server's own name outranks anything reconstructed from the rollout.
     expect(h.runtime.getStatus("session-named")).toMatchObject({ title: "Codex Name" });

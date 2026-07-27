@@ -111,7 +111,7 @@ function parseJson<T>(value: unknown): T | null {
   }
 }
 
-function normalizeTranscriptToolArgs(
+export function normalizeTranscriptToolArgs(
   toolName: string,
   rawArgs: unknown,
 ): Record<string, unknown> | undefined {
@@ -189,7 +189,7 @@ export function capActionOutput(text: string): string {
   );
 }
 
-function stringifyOutput(value: unknown): string | undefined {
+export function stringifyTranscriptToolOutput(value: unknown): string | undefined {
   if (typeof value === "string") {
     return capActionOutput(value);
   }
@@ -227,7 +227,7 @@ function updateActionPart(
   output: unknown,
   state: ToolState | null = null,
 ): TranscriptActionPart {
-  const serializedOutput = stringifyOutput(output);
+  const serializedOutput = stringifyTranscriptToolOutput(output);
   const nextState = state === null ? undefined : state;
 
   return {

@@ -501,6 +501,145 @@ describe("rollout public helpers (continued)", () => {
     }
   });
 
+  test("rehydrates persisted tool calls and results in assistant timeline order", async () => {
+    const path = await temporaryRollout("thread-tools", [
+      {
+        type: "session_meta",
+        payload: {
+          id: "thread-tools",
+          cwd: "/workspace",
+          timestamp: "2026-07-25T12:00:00.000Z",
+        },
+      },
+      { type: "turn_context", payload: { turn_id: "turn-tools", cwd: "/workspace" } },
+      {
+        timestamp: "2026-07-25T12:01:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Inspect the repository" }],
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:01:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "I'll inspect it." }],
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:01:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          call_id: "call-exec",
+          arguments: JSON.stringify({ cmd: "git status --short" }),
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:01:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-exec",
+          output: " M src/example.ts",
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:01:04.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "apply_patch",
+          call_id: "call-patch",
+          input: "*** Begin Patch",
+          status: "failed",
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:01:05.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "call-patch",
+          output: "Patch did not apply",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "unknown-call",
+          output: "must not create an orphan result",
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:01:06.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "The repository has one modified file." }],
+        },
+      },
+    ]);
+
+    const previousHome = process.env.CODEX_HOME;
+    const previousCwd = process.env.CWD;
+    process.env.CODEX_HOME = dirname(dirname(path));
+    process.env.CWD = "/workspace";
+    try {
+      const hydrated = await hydrateMessagesFromPersistedSession("thread-tools");
+      expect(hydrated.messages).toHaveLength(2);
+      expect(hydrated.messages[0]).toMatchObject({
+        role: "user",
+        content: "Inspect the repository",
+        turnId: "turn-tools",
+      });
+      expect(hydrated.messages[1]).toMatchObject({
+        role: "assistant",
+        content: "The repository has one modified file.",
+        turnId: "turn-tools",
+      });
+      expect(hydrated.messages[1]?.parts).toEqual([
+        { type: "text", content: "I'll inspect it." },
+        {
+          type: "tool-invocation",
+          content: "exec_command",
+          toolName: "exec_command",
+          toolArgs: {
+            cmd: "git status --short",
+            command: "git status --short",
+          },
+          toolState: "success",
+          toolTitle: "exec_command",
+          toolOutput: " M src/example.ts",
+          toolError: undefined,
+        },
+        {
+          type: "tool-invocation",
+          content: "apply_patch",
+          toolName: "apply_patch",
+          toolArgs: { input: "*** Begin Patch" },
+          toolState: "failure",
+          toolTitle: "apply_patch",
+          toolOutput: undefined,
+          toolError: "Patch did not apply",
+        },
+        { type: "text", content: "The repository has one modified file." },
+      ]);
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+    }
+  });
+
   /**
    * Turn boundaries are what make "fork from here" survive a bridge restart, and
    * they are reconstructed from *two* record shapes: `turn_context`, and the

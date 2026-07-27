@@ -20,7 +20,17 @@ import {
   readPersistedSessionTitleEntries,
   type PersistedSessionTitleSource,
 } from "../session-titles.js";
-import { createMessageId, type MessageRole, type NormalizedMessage } from "../messages/types.js";
+import {
+  createMessageId,
+  type MessageRole,
+  type NormalizedMessage,
+  type NormalizedPart,
+  type ToolState,
+} from "../messages/types.js";
+import {
+  normalizeTranscriptToolArgs,
+  stringifyTranscriptToolOutput,
+} from "../subagent-transcript.js";
 
 export interface PersistedSessionIndexEntry {
   id?: unknown;
@@ -511,6 +521,59 @@ function readTurnId(payload: unknown): string | undefined {
   return undefined;
 }
 
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value
+    : undefined;
+}
+
+function persistedToolState(value: unknown): ToolState {
+  return value === "failed"
+    ? "failure"
+    : value === "completed"
+      ? "success"
+      : "pending";
+}
+
+function createPersistedToolPart(
+  payload: Record<string, unknown>,
+): NormalizedPart {
+  const toolName = asNonEmptyString(payload.name) ?? "tool";
+  const rawArgs = payload.type === "custom_tool_call"
+    ? payload.input
+    : payload.arguments;
+  const toolState = persistedToolState(payload.status);
+  const output = stringifyTranscriptToolOutput(payload.output);
+
+  return {
+    type: "tool-invocation",
+    content: toolName,
+    toolName,
+    toolArgs: normalizeTranscriptToolArgs(toolName, rawArgs),
+    toolState,
+    toolTitle: toolName,
+    ...(output === undefined
+      ? {}
+      : toolState === "failure"
+        ? { toolError: output }
+        : { toolOutput: output }),
+  };
+}
+
+function applyPersistedToolOutput(
+  part: NormalizedPart,
+  output: unknown,
+): NormalizedPart {
+  const serialized = stringifyTranscriptToolOutput(output);
+  const failed = part.toolState === "failure";
+  return {
+    ...part,
+    toolState: failed ? "failure" : "success",
+    toolOutput: failed ? undefined : serialized,
+    toolError: failed ? serialized ?? "Tool failed" : undefined,
+  };
+}
+
 export async function hydrateMessagesFromPersistedSession(
   threadId: string,
 ): Promise<{
@@ -527,6 +590,10 @@ export async function hydrateMessagesFromPersistedSession(
 
   const { records } = await readCachedTranscript(meta.transcriptPath);
   const messages: NormalizedMessage[] = [];
+  const toolPartsByCallId = new Map<
+    string,
+    { message: NormalizedMessage; partIndex: number }
+  >();
   /**
    * Turn boundaries reconstructed from the rollout.
    *
@@ -540,33 +607,96 @@ export async function hydrateMessagesFromPersistedSession(
    * message ("fork from here") silently became impossible.
    */
   let currentTurnId: string | undefined;
+  let currentAssistantMessage: NormalizedMessage | undefined;
 
   for (const record of records) {
     const recordTurnId = readTurnId(record.payload);
-    if (recordTurnId) currentTurnId = recordTurnId;
+    if (recordTurnId && recordTurnId !== currentTurnId) {
+      currentTurnId = recordTurnId;
+      currentAssistantMessage = undefined;
+    }
 
-    if (record.type !== "response_item" || record.payload?.type !== "message") {
+    if (record.type !== "response_item" || !record.payload) {
+      continue;
+    }
+
+    const payload = record.payload;
+    const timestamp =
+      typeof record.timestamp === "string"
+        ? record.timestamp
+        : new Date().toISOString();
+
+    const ensureAssistantMessage = (): NormalizedMessage => {
+      if (currentAssistantMessage) return currentAssistantMessage;
+      currentAssistantMessage = {
+        id: createMessageId(),
+        role: "assistant",
+        content: "",
+        parts: [],
+        createdAt: timestamp,
+        ...(currentTurnId ? { turnId: currentTurnId } : {}),
+      };
+      messages.push(currentAssistantMessage);
+      return currentAssistantMessage;
+    };
+
+    if (payload.type === "function_call" || payload.type === "custom_tool_call") {
+      const assistantMessage = ensureAssistantMessage();
+      const part = createPersistedToolPart(payload);
+      assistantMessage.parts.push(part);
+
+      const callId = asNonEmptyString(payload.call_id);
+      if (callId) {
+        toolPartsByCallId.set(callId, {
+          message: assistantMessage,
+          partIndex: assistantMessage.parts.length - 1,
+        });
+      }
+      continue;
+    }
+
+    if (
+      payload.type === "function_call_output"
+      || payload.type === "custom_tool_call_output"
+    ) {
+      const callId = asNonEmptyString(payload.call_id);
+      const target = callId ? toolPartsByCallId.get(callId) : undefined;
+      if (target) {
+        target.message.parts[target.partIndex] = applyPersistedToolOutput(
+          target.message.parts[target.partIndex]!,
+          payload.output,
+        );
+      }
+      continue;
+    }
+
+    if (payload.type !== "message") {
       continue;
     }
 
     const role =
-      record.payload.role === "assistant" || record.payload.role === "user"
-        ? (record.payload.role as MessageRole)
+      payload.role === "assistant" || payload.role === "user"
+        ? (payload.role as MessageRole)
         : null;
     if (!role) continue;
 
-    const text = extractPersistedMessageText(record.payload.content, role);
+    const text = extractPersistedMessageText(payload.content, role);
     if (!text) continue;
 
+    if (role === "assistant") {
+      const assistantMessage = ensureAssistantMessage();
+      assistantMessage.content = text;
+      assistantMessage.parts.push({ type: "text", content: text });
+      continue;
+    }
+
+    currentAssistantMessage = undefined;
     messages.push({
       id: createMessageId(),
       role,
       content: text,
       parts: [{ type: "text", content: text }],
-      createdAt:
-        typeof record.timestamp === "string"
-          ? record.timestamp
-          : new Date().toISOString(),
+      createdAt: timestamp,
       ...(currentTurnId ? { turnId: currentTurnId } : {}),
     });
   }

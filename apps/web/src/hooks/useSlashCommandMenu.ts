@@ -102,8 +102,9 @@ export function useSlashCommandMenu<TCommand extends SlashCommandOption>({
           return true;
         case "Tab":
         case "Enter": {
-          // Shift+Enter is a newline, never a selection.
-          if (event.key === "Enter" && event.shiftKey) return false;
+          // Shift+Enter is a newline and Shift+Tab is Codex's Plan/Build mode
+          // toggle — neither is ever a selection.
+          if (event.shiftKey) return false;
           const command = filteredCommands[selectedIndex];
           if (!command) return false;
           event.preventDefault();

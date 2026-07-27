@@ -1,7 +1,12 @@
 import { createSessionKey } from "@/lib/utils";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createOptimisticNativeMessage } from "@/lib/chat/client-only-messages";
-import { CODEX_MODELS, DEFAULT_CODEX_MODEL, type CodexApproval } from "@/lib/codex-client";
+import {
+  CODEX_MODELS,
+  DEFAULT_CODEX_MODEL,
+  type CodexApproval,
+  type CodexApprovalFileChange,
+} from "@/lib/codex-client";
 import { useCodexStore } from "./codexStore";
 
 const SESSION_KEY = createSessionKey("env-1", "tab-1");
@@ -38,6 +43,47 @@ function approval(approvalId: string): CodexApproval {
     requestedAt: 0,
     expiresAt: 300_000,
     command: "ls",
+    actionable: true,
+    supportsApproveForSession: true,
+  };
+}
+
+/** Permission-upgrade approval, the only kind carrying a `permissions` block. */
+function permissionsApproval(
+  approvalId: string,
+  permissions: { network: boolean; fileSystem: boolean },
+): CodexApproval {
+  return {
+    approvalId,
+    kind: "permissions",
+    method: "thread/requestPermissionUpgrade",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: null,
+    requestedAt: 0,
+    expiresAt: 300_000,
+    permissions,
+    actionable: true,
+    supportsApproveForSession: false,
+  };
+}
+
+/** File-change approval, the only kind carrying a `changes` list. */
+function fileChangeApproval(
+  approvalId: string,
+  changes: CodexApprovalFileChange[],
+): CodexApproval {
+  return {
+    approvalId,
+    kind: "file-change",
+    method: "item/fileChange/requestApproval",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+    requestedAt: 0,
+    expiresAt: 300_000,
+    cwd: "/workspace",
+    changes,
     actionable: true,
     supportsApproveForSession: true,
   };
@@ -428,6 +474,42 @@ describe("codexStore selection defaults", () => {
     store.setSelectedModel(SESSION_KEY, "");
     expect(useCodexStore.getState().selectedModel.get(SESSION_KEY)).toBe(DEFAULT_CODEX_MODEL);
   });
+
+  test("isFastMode defaults to off for a session that never set it", () => {
+    // Fast mode changes what the next turn costs, so an unset tab must not
+    // inherit anything.
+    expect(useCodexStore.getState().isFastMode(SESSION_KEY)).toBe(false);
+  });
+
+  test("setFastMode toggles one tab without touching its siblings", () => {
+    const otherKey = createSessionKey("env-1", "tab-2");
+    const store = useCodexStore.getState();
+
+    store.setFastMode(SESSION_KEY, true);
+    expect(useCodexStore.getState().isFastMode(SESSION_KEY)).toBe(true);
+    expect(useCodexStore.getState().isFastMode(otherKey)).toBe(false);
+
+    store.setFastMode(otherKey, true);
+    store.setFastMode(SESSION_KEY, false);
+    // An explicit `false` is recorded, not deleted — the selector's default and a
+    // deliberate opt-out read the same, but the map must still hold the choice.
+    expect(useCodexStore.getState().fastMode.get(SESSION_KEY)).toBe(false);
+    expect(useCodexStore.getState().isFastMode(SESSION_KEY)).toBe(false);
+    expect(useCodexStore.getState().isFastMode(otherKey)).toBe(true);
+  });
+
+  test("clearEnvironment resets fast mode for that environment only", () => {
+    const otherEnvKey = createSessionKey("env-2", "tab-1");
+    const store = useCodexStore.getState();
+
+    store.setFastMode(SESSION_KEY, true);
+    store.setFastMode(otherEnvKey, true);
+
+    store.clearEnvironment("env-1");
+
+    expect(useCodexStore.getState().isFastMode(SESSION_KEY)).toBe(false);
+    expect(useCodexStore.getState().isFastMode(otherEnvKey)).toBe(true);
+  });
 });
 
 describe("codexStore session phases", () => {
@@ -565,6 +647,164 @@ describe("codexStore pending approvals", () => {
     expect(
       useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.command,
     ).toBe("rm -rf build");
+  });
+
+  test("treats a byte-identical permissions/file-change snapshot as unchanged", () => {
+    // The contrast case for the payload tests below: every compared field —
+    // including the nested `permissions` block and the whole `changes` list —
+    // matches, so the reconcile poll must stay free.
+    const store = useCodexStore.getState();
+    const changes: CodexApprovalFileChange[] = [
+      { path: "/workspace/a.ts", kind: "update" },
+      { path: "/workspace/b.ts", kind: "add" },
+    ];
+    store.setPendingApprovals(SESSION_KEY, [
+      permissionsApproval("apr-perms", { network: true, fileSystem: false }),
+      fileChangeApproval("apr-files", changes),
+    ]);
+    const before = useCodexStore.getState().pendingApprovals;
+
+    store.setPendingApprovals(SESSION_KEY, [
+      permissionsApproval("apr-perms", { network: true, fileSystem: false }),
+      fileChangeApproval("apr-files", [
+        { path: "/workspace/a.ts", kind: "update" },
+        { path: "/workspace/b.ts", kind: "add" },
+      ]),
+    ]);
+
+    expect(useCodexStore.getState().pendingApprovals).toBe(before);
+  });
+
+  test("adopts a snapshot whose only change is permissions.network", () => {
+    // Rendering the stale block would show the user a network grant they are not
+    // actually being asked for.
+    const store = useCodexStore.getState();
+    store.setPendingApprovals(SESSION_KEY, [
+      permissionsApproval("apr-perms", { network: false, fileSystem: true }),
+    ]);
+    const before = useCodexStore.getState().pendingApprovals;
+
+    store.setPendingApprovals(SESSION_KEY, [
+      permissionsApproval("apr-perms", { network: true, fileSystem: true }),
+    ]);
+
+    expect(useCodexStore.getState().pendingApprovals).not.toBe(before);
+    expect(
+      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.permissions,
+    ).toEqual({ network: true, fileSystem: true });
+  });
+
+  test("adopts a snapshot whose only change is permissions.fileSystem", () => {
+    const store = useCodexStore.getState();
+    store.setPendingApprovals(SESSION_KEY, [
+      permissionsApproval("apr-perms", { network: true, fileSystem: false }),
+    ]);
+    const before = useCodexStore.getState().pendingApprovals;
+
+    store.setPendingApprovals(SESSION_KEY, [
+      permissionsApproval("apr-perms", { network: true, fileSystem: true }),
+    ]);
+
+    expect(useCodexStore.getState().pendingApprovals).not.toBe(before);
+    expect(
+      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.permissions,
+    ).toEqual({ network: true, fileSystem: true });
+  });
+
+  test("adopts a snapshot whose only change is actionable", () => {
+    // `actionable` gates the Approve buttons and must fail closed. Discarding a
+    // re-report that revoked it would leave the user approving a command the
+    // bridge can no longer describe.
+    const store = useCodexStore.getState();
+    store.setPendingApprovals(SESSION_KEY, [
+      { ...approval("apr-actionable"), actionable: true },
+    ]);
+    const before = useCodexStore.getState().pendingApprovals;
+
+    store.setPendingApprovals(SESSION_KEY, [
+      { ...approval("apr-actionable"), actionable: false },
+    ]);
+
+    expect(useCodexStore.getState().pendingApprovals).not.toBe(before);
+    expect(
+      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.actionable,
+    ).toBe(false);
+  });
+
+  test("adopts a snapshot whose changes list grew or shrank", () => {
+    // A card showing one file for a two-file patch is the user approving less
+    // than they think.
+    const store = useCodexStore.getState();
+    store.setPendingApprovals(SESSION_KEY, [
+      fileChangeApproval("apr-files", [{ path: "/workspace/a.ts", kind: "update" }]),
+    ]);
+    const before = useCodexStore.getState().pendingApprovals;
+
+    store.setPendingApprovals(SESSION_KEY, [
+      fileChangeApproval("apr-files", [
+        { path: "/workspace/a.ts", kind: "update" },
+        { path: "/workspace/b.ts", kind: "add" },
+      ]),
+    ]);
+
+    expect(useCodexStore.getState().pendingApprovals).not.toBe(before);
+    expect(
+      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.changes,
+    ).toHaveLength(2);
+
+    const grown = useCodexStore.getState().pendingApprovals;
+    store.setPendingApprovals(SESSION_KEY, [
+      fileChangeApproval("apr-files", [{ path: "/workspace/a.ts", kind: "update" }]),
+    ]);
+
+    expect(useCodexStore.getState().pendingApprovals).not.toBe(grown);
+    expect(
+      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.changes,
+    ).toHaveLength(1);
+  });
+
+  test("adopts a snapshot whose changes differ only by path", () => {
+    const store = useCodexStore.getState();
+    store.setPendingApprovals(SESSION_KEY, [
+      fileChangeApproval("apr-files", [
+        { path: "/workspace/a.ts", kind: "update" },
+        { path: "/workspace/b.ts", kind: "update" },
+      ]),
+    ]);
+    const before = useCodexStore.getState().pendingApprovals;
+
+    store.setPendingApprovals(SESSION_KEY, [
+      fileChangeApproval("apr-files", [
+        { path: "/workspace/a.ts", kind: "update" },
+        { path: "/workspace/c.ts", kind: "update" },
+      ]),
+    ]);
+
+    expect(useCodexStore.getState().pendingApprovals).not.toBe(before);
+    expect(
+      useCodexStore
+        .getState()
+        .pendingApprovals.get(SESSION_KEY)?.[0]
+        ?.changes?.map((change) => change.path),
+    ).toEqual(["/workspace/a.ts", "/workspace/c.ts"]);
+  });
+
+  test("adopts a snapshot whose changes differ only by kind", () => {
+    // Same path, but `delete` instead of `update` is a materially different ask.
+    const store = useCodexStore.getState();
+    store.setPendingApprovals(SESSION_KEY, [
+      fileChangeApproval("apr-files", [{ path: "/workspace/a.ts", kind: "update" }]),
+    ]);
+    const before = useCodexStore.getState().pendingApprovals;
+
+    store.setPendingApprovals(SESSION_KEY, [
+      fileChangeApproval("apr-files", [{ path: "/workspace/a.ts", kind: "delete" }]),
+    ]);
+
+    expect(useCodexStore.getState().pendingApprovals).not.toBe(before);
+    expect(
+      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.changes?.[0]?.kind,
+    ).toBe("delete");
   });
 
   test("clearEnvironment drops approvals for that environment only", () => {

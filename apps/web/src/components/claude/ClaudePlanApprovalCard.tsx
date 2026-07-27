@@ -3,6 +3,7 @@ import { useState, useCallback, useMemo } from "react";
 import { FileText, Check, X, ChevronRight } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -16,6 +17,19 @@ interface ClaudePlanApprovalCardProps {
   client: ClaudeClient;
   sessionId: string;
   messages: ClaudeMessage[];
+}
+
+const APPROVE_FAILURE_TITLE = "Failed to approve plan";
+const REJECT_FAILURE_TITLE = "Failed to send plan feedback";
+const DISMISS_FAILURE_TITLE = "Failed to dismiss plan";
+/**
+ * Shown when the bridge answered but rejected the response (5xx). There is no
+ * error object to quote, and the turn stays blocked until a response lands.
+ */
+const RETRY_HINT = "Claude is still waiting for a decision. Please try again.";
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -104,9 +118,15 @@ export function ClaudePlanApprovalCard({
         // Request expired - remove the card since it's no longer actionable
         console.warn("[ClaudePlanApprovalCard] Plan approval request expired, removing card");
         removePendingPlanApproval(approval.id);
+      } else {
+        // The card stays retryable, but the turn is fully blocked on this
+        // answer: without a toast the user has no signal it never landed.
+        console.error("[ClaudePlanApprovalCard] Plan approval was not delivered");
+        toast.error(APPROVE_FAILURE_TITLE, { description: RETRY_HINT });
       }
     } catch (err) {
       console.error("[ClaudePlanApprovalCard] Failed to approve plan:", err);
+      toast.error(APPROVE_FAILURE_TITLE, { description: describeError(err) });
     } finally {
       setIsSubmitting(false);
     }
@@ -136,9 +156,13 @@ export function ClaudePlanApprovalCard({
         // Request expired - remove the card since it's no longer actionable
         console.warn("[ClaudePlanApprovalCard] Plan rejection request expired, removing card");
         removePendingPlanApproval(approval.id);
+      } else {
+        console.error("[ClaudePlanApprovalCard] Plan feedback was not delivered");
+        toast.error(REJECT_FAILURE_TITLE, { description: RETRY_HINT });
       }
     } catch (err) {
       console.error("[ClaudePlanApprovalCard] Failed to reject plan:", err);
+      toast.error(REJECT_FAILURE_TITLE, { description: describeError(err) });
     } finally {
       setIsSubmitting(false);
     }
@@ -155,9 +179,14 @@ export function ClaudePlanApprovalCard({
         if (result === "expired") {
           console.warn("[ClaudePlanApprovalCard] Plan dismiss request expired, card removed anyway");
         }
+        if (result === "failed") {
+          console.error("[ClaudePlanApprovalCard] Plan dismissal was not delivered");
+          toast.error(DISMISS_FAILURE_TITLE, { description: RETRY_HINT });
+        }
       })
       .catch((err) => {
         console.error("[ClaudePlanApprovalCard] Failed to dismiss plan:", err);
+        toast.error(DISMISS_FAILURE_TITLE, { description: describeError(err) });
       })
       .finally(() => {
         setIsSubmitting(false);

@@ -1427,6 +1427,10 @@ export class StorageService {
       const config = await this.loadConfig();
       config.global[key] = modelId;
       await this.saveJson(this.configFile(), config);
+      // Same announcement every other config mutation makes: other clients
+      // rehydrate their model defaults from the authoritative snapshot rather
+      // than only learning about the change through the window that made it.
+      this.announce("config", "app");
       return config;
     });
   }

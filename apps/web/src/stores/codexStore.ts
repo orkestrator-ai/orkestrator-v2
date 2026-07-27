@@ -128,6 +128,10 @@ function isSameApproval(a: CodexApproval, b: CodexApproval | undefined): boolean
     && a.reason === b.reason
     && a.grantRoot === b.grantRoot
     && a.networkHost === b.networkHost
+    // `actionable` gates the Approve buttons and must fail closed, so a
+    // re-report that only flips it has to reach the card rather than being
+    // discarded as an interchangeable snapshot.
+    && a.actionable === b.actionable
     && a.supportsApproveForSession === b.supportsApproveForSession
     && a.permissions?.network === b.permissions?.network
     && a.permissions?.fileSystem === b.permissions?.fileSystem

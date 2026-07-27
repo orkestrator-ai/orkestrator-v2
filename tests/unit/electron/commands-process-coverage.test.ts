@@ -439,3 +439,332 @@ describe("process and platform command behavior", () => {
     expect(delegated[0]).toMatchObject({ domain: "localhost", valid: true, resolvable: true, error: null });
   });
 });
+
+/**
+ * Linear and looped-review commands. The Linear handlers are the only ones
+ * here that reach an external service, so `fetch` is stubbed at the module
+ * boundary: everything below it (auth gating, argument validation, GraphQL
+ * response mapping and error sanitization) is the real implementation.
+ */
+describe("Linear and looped review command behavior", () => {
+  const originalFetch = globalThis.fetch;
+
+  type LinearAuth = { apiKey: string; viewer: { id: string; name: string } } | null;
+
+  function jsonResponse(payload: unknown, status = 200): Response {
+    return new Response(JSON.stringify(payload), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  function issueNode(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "issue-1",
+      identifier: "ENG-1",
+      title: "Ship the thing",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      createdAt: "2025-12-01T00:00:00.000Z",
+      url: "https://linear.app/acme/issue/ENG-1",
+      priorityLabel: "Urgent",
+      sortOrder: 1,
+      state: { name: "In Progress", type: "started" },
+      team: { key: "ENG", name: "Engineering" },
+      assignee: { name: "Ada" },
+      ...overrides,
+    };
+  }
+
+  function createLinearContext(auth: LinearAuth) {
+    const getLinearAuth = mock(async () => auth);
+    const context = {
+      appRoot: root,
+      resourceRoot: root,
+      emit: mock(() => {}),
+      storage: { getLinearAuth },
+    } as unknown as CommandContext;
+    return { context, getLinearAuth };
+  }
+
+  function createWorkflowContext(workflows: Record<string, unknown>) {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const context = {
+      appRoot: root,
+      resourceRoot: root,
+      emit: mock(() => {}),
+      storage: {
+        getLoopedReviewWorkflow: mock(async (workflowId: string) => {
+          calls.push({ method: "get", args: [workflowId] });
+          return workflows[workflowId] ?? null;
+        }),
+        listLoopedReviewWorkflows: mock(async (environmentId: string) => {
+          calls.push({ method: "list", args: [environmentId] });
+          return Object.values(workflows).filter(
+            (workflow) =>
+              (workflow as { environmentId?: string }).environmentId === environmentId,
+          );
+        }),
+        deleteLoopedReviewWorkflow: mock(async (workflowId: string) => {
+          calls.push({ method: "delete", args: [workflowId] });
+          delete workflows[workflowId];
+        }),
+      },
+    } as unknown as CommandContext;
+    return { context, calls };
+  }
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test("refuses Linear issue commands before an account is connected", async () => {
+    const { context, getLinearAuth } = createLinearContext(null);
+    const fetchMock = mock(async () => jsonResponse({ data: {} }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(invoke("get_linear_issues", {}, context)).rejects.toThrow(
+      "Linear is not connected",
+    );
+    await expect(
+      invoke("get_linear_issue", { issueId: "ENG-1" }, context),
+    ).rejects.toThrow("Linear is not connected");
+
+    // The auth gate runs before any network call.
+    expect(getLinearAuth).toHaveBeenCalledTimes(2);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("lists Linear issues with the stored API key and paginates", async () => {
+    const { context } = createLinearContext({
+      apiKey: "lin_api_secret",
+      viewer: { id: "viewer-1", name: "Ada" },
+    });
+    const requests: Array<{ headers: unknown; variables: Record<string, unknown> }> = [];
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        variables: Record<string, unknown>;
+      };
+      requests.push({ headers: init?.headers, variables: body.variables });
+      if (requests.length === 1) {
+        return jsonResponse({
+          data: {
+            issues: {
+              nodes: [issueNode()],
+              pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+            },
+          },
+        });
+      }
+      return jsonResponse({
+        data: {
+          issues: {
+            nodes: [issueNode({ id: "issue-2", identifier: "ENG-2", sortOrder: 2 })],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      });
+    }) as unknown as typeof fetch;
+
+    const issues = await invoke("get_linear_issues", {}, context) as Array<
+      Record<string, unknown>
+    >;
+
+    expect(issues.map((issue) => issue.identifier)).toEqual(["ENG-1", "ENG-2"]);
+    expect(issues[0]).toMatchObject({
+      id: "issue-1",
+      title: "Ship the thing",
+      status: "In Progress",
+      statusType: "started",
+      teamKey: "ENG",
+      assigneeName: "Ada",
+      priorityLabel: "Urgent",
+    });
+    expect(requests[0]?.headers).toMatchObject({ Authorization: "lin_api_secret" });
+    expect(requests[0]?.variables).toEqual({ after: null });
+    expect(requests[1]?.variables).toEqual({ after: "cursor-1" });
+  });
+
+  test("sanitizes the API key out of a failed Linear issue list", async () => {
+    const { context } = createLinearContext({
+      apiKey: "lin_api_secret",
+      viewer: { id: "viewer-1", name: "Ada" },
+    });
+    globalThis.fetch = mock(async () =>
+      jsonResponse(
+        { errors: [{ message: "Authentication failed for lin_api_secret" }] },
+        401,
+      ),
+    ) as unknown as typeof fetch;
+
+    const error = await invoke("get_linear_issues", {}, context).then(
+      () => null,
+      (reason: unknown) => reason as Error,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).not.toContain("lin_api_secret");
+    expect(error?.message).toContain("[redacted]");
+  });
+
+  test("fetches one Linear issue with its comments", async () => {
+    const { context } = createLinearContext({
+      apiKey: "lin_api_secret",
+      viewer: { id: "viewer-1", name: "Ada" },
+    });
+    const variables: Array<Record<string, unknown>> = [];
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: Record<string, unknown>;
+      };
+      variables.push(body.variables);
+      if (body.query.includes("comments(")) {
+        return jsonResponse({
+          data: {
+            issue: {
+              comments: {
+                nodes: [{
+                  id: "comment-1",
+                  body: "Looks good",
+                  createdAt: "2026-01-02T00:00:00.000Z",
+                  user: { name: "Grace" },
+                }],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        });
+      }
+      return jsonResponse({
+        data: {
+          issue: issueNode({
+            description: "Full description",
+            creator: { name: "Ada" },
+            project: { name: "Platform" },
+            cycle: { name: "Cycle 4" },
+            labels: { nodes: [{ name: "backend" }] },
+          }),
+        },
+      });
+    }) as unknown as typeof fetch;
+
+    const issue = await invoke(
+      "get_linear_issue",
+      { issueId: "ENG-1" },
+      context,
+    ) as Record<string, unknown>;
+
+    expect(issue).toMatchObject({
+      id: "issue-1",
+      identifier: "ENG-1",
+      description: "Full description",
+      creatorName: "Ada",
+      projectName: "Platform",
+      cycleName: "Cycle 4",
+      labels: ["backend"],
+    });
+    expect(issue.comments).toMatchObject([{ id: "comment-1", body: "Looks good" }]);
+    expect(variables[0]).toEqual({ id: "ENG-1" });
+  });
+
+  test("reports a missing Linear issue without leaking the API key", async () => {
+    const { context } = createLinearContext({
+      apiKey: "lin_api_secret",
+      viewer: { id: "viewer-1", name: "Ada" },
+    });
+    globalThis.fetch = mock(async () =>
+      jsonResponse({ data: { issue: null } }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      invoke("get_linear_issue", { issueId: "ENG-404" }, context),
+    ).rejects.toThrow("Linear issue not found: ENG-404");
+  });
+
+  test("validates the issueId argument of get_linear_issue", async () => {
+    const { context } = createLinearContext({
+      apiKey: "lin_api_secret",
+      viewer: { id: "viewer-1", name: "Ada" },
+    });
+    const fetchMock = mock(async () => jsonResponse({ data: {} }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(invoke("get_linear_issue", { issueId: 7 }, context)).rejects.toThrow(
+      "Expected issueId to be a string",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("reads, lists, and deletes looped review workflows through storage", async () => {
+    const workflows: Record<string, unknown> = {
+      "workflow-1": {
+        version: 1,
+        id: "workflow-1",
+        environmentId: "environment-1",
+        snapshot: { phase: "reviewing" },
+        updatedAt: new Date(0).toISOString(),
+        revision: 3,
+      },
+      "workflow-2": {
+        version: 1,
+        id: "workflow-2",
+        environmentId: "environment-2",
+        snapshot: { phase: "completed" },
+        updatedAt: new Date(0).toISOString(),
+        revision: 1,
+      },
+    };
+    const { context, calls } = createWorkflowContext(workflows);
+
+    expect(await invoke("get_looped_review_workflow", { workflowId: "workflow-1" }, context))
+      .toMatchObject({ id: "workflow-1", revision: 3, snapshot: { phase: "reviewing" } });
+
+    // Listing is environment-scoped: another environment's workflow is excluded.
+    expect(
+      await invoke(
+        "list_looped_review_workflows",
+        { environmentId: "environment-1" },
+        context,
+      ),
+    ).toMatchObject([{ id: "workflow-1" }]);
+
+    await invoke("delete_looped_review_workflow", { workflowId: "workflow-1" }, context);
+
+    expect(await invoke("get_looped_review_workflow", { workflowId: "workflow-1" }, context))
+      .toBeNull();
+    expect(calls).toEqual([
+      { method: "get", args: ["workflow-1"] },
+      { method: "list", args: ["environment-1"] },
+      { method: "delete", args: ["workflow-1"] },
+      { method: "get", args: ["workflow-1"] },
+    ]);
+  });
+
+  test("returns nothing for an unknown looped review workflow or environment", async () => {
+    const { context } = createWorkflowContext({});
+
+    expect(await invoke("get_looped_review_workflow", { workflowId: "missing" }, context))
+      .toBeNull();
+    expect(
+      await invoke("list_looped_review_workflows", { environmentId: "missing" }, context),
+    ).toEqual([]);
+    // Deleting an absent workflow is a no-op rather than an error.
+    await invoke("delete_looped_review_workflow", { workflowId: "missing" }, context);
+  });
+
+  test("validates looped review workflow arguments", async () => {
+    const { context, calls } = createWorkflowContext({});
+
+    await expect(
+      invoke("get_looped_review_workflow", { workflowId: 1 }, context),
+    ).rejects.toThrow("Expected workflowId to be a string");
+    await expect(
+      invoke("list_looped_review_workflows", { environmentId: null }, context),
+    ).rejects.toThrow("Expected environmentId to be a string");
+    await expect(
+      invoke("delete_looped_review_workflow", {}, context),
+    ).rejects.toThrow("Expected workflowId to be a string");
+
+    expect(calls).toEqual([]);
+  });
+});

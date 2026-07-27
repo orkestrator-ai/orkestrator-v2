@@ -143,6 +143,65 @@ describe("NativeResumeSessionDialog", () => {
     expect(screen.getByText("• Error")).toBeTruthy();
   });
 
+  test("renders no badge for an idle session", async () => {
+    renderDialog([{ id: "a", title: "Quiet", status: "idle" }]);
+
+    await waitFor(() => expect(screen.getByText("Quiet")).toBeTruthy());
+    expect(screen.queryByText("• Running")).toBeNull();
+    expect(screen.queryByText("• Error")).toBeNull();
+  });
+
+  test("renders the trailing detail next to the timestamp", async () => {
+    renderDialog([{ id: "a", title: "Chatty", detail: "12 messages" }]);
+
+    await waitFor(() => expect(screen.getByText("12 messages")).toBeTruthy());
+  });
+
+  test("shows a spinner until the fetch settles", async () => {
+    const pending = deferred<ResumableSession[]>();
+    const { container } = render(
+      <NativeResumeSessionDialog
+        open
+        onOpenChange={() => {}}
+        agentLabel="Test"
+        fetchSessions={() => pending.promise}
+        onResume={() => {}}
+        emptyMessage="Nothing here"
+      />,
+    );
+
+    expect(container.ownerDocument.querySelector(".animate-spin")).toBeTruthy();
+    expect(screen.queryByText("Nothing here")).toBeNull();
+
+    await act(async () => {
+      pending.resolve([]);
+      await pending.promise;
+    });
+
+    expect(container.ownerDocument.querySelector(".animate-spin")).toBeNull();
+    expect(screen.getByText("Nothing here")).toBeTruthy();
+  });
+
+  test("reports a dismissal through onOpenChange", async () => {
+    const onOpenChange = mock(() => {});
+    render(
+      <NativeResumeSessionDialog
+        open
+        onOpenChange={onOpenChange}
+        agentLabel="Test"
+        fetchSessions={async () => []}
+        onResume={() => {}}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("No previous sessions found.")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
   test("does not fetch while closed, and fetches when opened", async () => {
     const fetchSessions = mock(() => Promise.resolve([] as ResumableSession[]));
     const { rerender } = render(
@@ -170,43 +229,75 @@ describe("NativeResumeSessionDialog", () => {
     await waitFor(() => expect(fetchSessions).toHaveBeenCalledTimes(1));
   });
 
-  test("ignores an older request when fetch dependencies change", async () => {
-    const first = deferred<ResumableSession[]>();
-    const second = deferred<ResumableSession[]>();
-    const onOpenChange = () => {};
-    const onResume = () => {};
-    const { rerender } = render(
-      <NativeResumeSessionDialog
-        open
-        onOpenChange={onOpenChange}
-        agentLabel="Test"
-        fetchSessions={() => first.promise}
-        onResume={onResume}
-      />,
-    );
+  test("fetches once per open cycle even with an unstable fetchSessions prop", async () => {
+    /**
+     * A chat tab re-renders on every streamed chunk, and the natural thing to
+     * write is an inline lambda. Keying the fetch on the prop identity refetched
+     * on each of those renders: a spinner flash and a list rebuilt under the
+     * user's cursor for the whole turn.
+     */
+    let fetchCount = 0;
+    const props = (open: boolean) => ({
+      open,
+      onOpenChange: () => {},
+      agentLabel: "Test",
+      // Deliberately NOT memoized: a new function identity on every render.
+      fetchSessions: async () => {
+        fetchCount += 1;
+        return [{ id: "only", title: "Only session" }];
+      },
+      onResume: () => {},
+    });
 
-    rerender(
-      <NativeResumeSessionDialog
-        open
-        onOpenChange={onOpenChange}
-        agentLabel="Test"
-        fetchSessions={() => second.promise}
-        onResume={onResume}
-      />,
-    );
+    const { rerender } = render(<NativeResumeSessionDialog {...props(true)} />);
+    await waitFor(() => expect(screen.getByText("Only session")).toBeTruthy());
+
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => {
+        rerender(<NativeResumeSessionDialog {...props(true)} />);
+      });
+    }
+
+    expect(fetchCount).toBe(1);
+    expect(screen.getByText("Only session")).toBeTruthy();
+
+    // Closing and reopening is still a new cycle, and does refetch.
+    await act(async () => {
+      rerender(<NativeResumeSessionDialog {...props(false)} />);
+    });
+    await act(async () => {
+      rerender(<NativeResumeSessionDialog {...props(true)} />);
+    });
+    await waitFor(() => expect(fetchCount).toBe(2));
+  });
+
+  test("re-filters without refetching when the current session changes", async () => {
+    // The exclusion is derived, not baked in at fetch time, so switching
+    // sessions under an open picker cannot leave the current one listed.
+    const fetchSessions = mock(async () => [
+      { id: "a", title: "Session A" },
+      { id: "b", title: "Session B" },
+    ]);
+    const props = (currentSessionId: string) => ({
+      open: true,
+      onOpenChange: () => {},
+      agentLabel: "Test",
+      fetchSessions,
+      onResume: () => {},
+      currentSessionId,
+    });
+
+    const { rerender } = render(<NativeResumeSessionDialog {...props("a")} />);
+    await waitFor(() => expect(screen.getByText("Session B")).toBeTruthy());
+    expect(screen.queryByText("Session A")).toBeNull();
 
     await act(async () => {
-      second.resolve([{ id: "new", title: "New result" }]);
-      await second.promise;
+      rerender(<NativeResumeSessionDialog {...props("b")} />);
     });
-    expect(await screen.findByText("New result")).toBeTruthy();
 
-    await act(async () => {
-      first.resolve([{ id: "old", title: "Stale result" }]);
-      await first.promise;
-    });
-    expect(screen.getByText("New result")).toBeTruthy();
-    expect(screen.queryByText("Stale result")).toBeNull();
+    expect(screen.getByText("Session A")).toBeTruthy();
+    expect(screen.queryByText("Session B")).toBeNull();
+    expect(fetchSessions).toHaveBeenCalledTimes(1);
   });
 
   test("ignores a request from a previous open cycle", async () => {

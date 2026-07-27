@@ -180,6 +180,11 @@ export function CodexChatTab({
   const isInitializedRef = useRef(false);
   /** Set when an interrupt is accepted; cleared when the turn actually ends. */
   const awaitingStopMarkerRef = useRef(false);
+  /**
+   * Set when the error came from the background health check rather than from a
+   * failed connect, so retry keeps the live thread instead of starting a new one.
+   */
+  const transientDisconnectRef = useRef(false);
   const reconcileSequenceRef = useRef(0);
   const manualReconcileSequenceRef = useRef(0);
   /**
@@ -426,7 +431,6 @@ export function CodexChatTab({
     ),
   );
   const handleSendRef = useRef<CodexSendHandler | null>(null);
-  /** Lets a finished drain start the next one without re-declaring the callback. */
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
     session?.isLoading,
     session?.sessionId,
@@ -486,6 +490,10 @@ export function CodexChatTab({
     approvalActivitySequenceRef.current += 1;
     retryablePromptRef.current = null;
     unconfirmedDispatchRef.current = null;
+    // The pending "stopped" marker belongs to the session that was interrupted.
+    // If the identity changed before the interrupt settled, writing it now would
+    // append TURN_STOPPED_BY_USER to a transcript the user never stopped.
+    awaitingStopMarkerRef.current = false;
   }, [sessionKey, session?.sessionId]);
 
   /**
@@ -866,16 +874,27 @@ export function CodexChatTab({
    * This used to only flip the local flags, so a retry reconnected on top of a
    * stale client and session — matching Claude and OpenCode means dropping the
    * cached client, session and server status too.
+   *
+   * The exception is a transient disconnect: the background health check flips a
+   * healthy tab to "error" on a single failed ping, and discarding the session
+   * there would strand a live thread behind the resume dialog and start the user
+   * in an empty one. The client and server status are still dropped — those are
+   * what went stale — but the session id is kept so init reattaches to the
+   * existing thread, falling back to a new session only if that fails.
    */
   const handleRetry = useCallback(() => {
+    const preserveSession = transientDisconnectRef.current;
+    transientDisconnectRef.current = false;
     isInitializedRef.current = false;
     lastInitTimeRef.current = 0;
     setConnectionState("connecting");
     setErrorMessage(null);
-    updateTabNativeSessionId(tabId, undefined, environmentId);
-    clearPersistedVirtuosoState(sessionKey);
+    if (!preserveSession) {
+      updateTabNativeSessionId(tabId, undefined, environmentId);
+      clearPersistedVirtuosoState(sessionKey);
+      setSession(sessionKey, null);
+    }
     setClient(environmentId, null);
-    setSession(sessionKey, null);
     setServerStatus(environmentId, { running: false, hostPort: null });
     setInitAttempt((value) => value + 1);
   }, [
@@ -969,11 +988,13 @@ export function CodexChatTab({
           checkHealth(cachedClient).then((healthy) => {
             if (!mounted || healthy) return;
             console.warn("[CodexChatTab] Background health check failed, re-initializing");
+            transientDisconnectRef.current = true;
             setClient(environmentId, null);
             setConnectionState("error");
             setErrorMessage("Codex bridge server disconnected. Click retry to reconnect.");
           }).catch(() => {
             if (!mounted) return;
+            transientDisconnectRef.current = true;
             setClient(environmentId, null);
             setConnectionState("error");
             setErrorMessage("Codex bridge server disconnected. Click retry to reconnect.");

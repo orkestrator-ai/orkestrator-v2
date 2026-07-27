@@ -26,6 +26,16 @@ interface UseStalledTurnWatchdogOptions {
   activitySignal?: unknown;
   /** How long activity must be quiet before a turn counts as stalled. */
   staleAfterMs?: number;
+  /**
+   * Floor on the gap between two *successful* reconciles within one turn.
+   *
+   * `staleAfterMs` cannot bound the poll rate on its own for a tab whose
+   * `activitySignal` is the session object: an applied reconcile writes the
+   * session back to the store, which replaces that object and so resets the
+   * staleness clock. Without this floor the watchdog settles into a sustained
+   * `staleAfterMs + intervalMs` loop for the whole quiet stretch of a turn.
+   */
+  minReconcileIntervalMs?: number;
   /** Poll period. Defaults to one second, matching Codex's watchdog. */
   intervalMs?: number;
 }
@@ -34,12 +44,29 @@ interface UseStalledTurnWatchdogOptions {
 export const DEFAULT_TURN_STALE_AFTER_MS = 1500;
 
 /**
+ * Default floor between two successful reconciles.
+ *
+ * `DEFAULT_TURN_STALE_AFTER_MS` was tuned for detection latency, not for poll
+ * cost: at 1.5s a Claude tab that reconciles once re-arms itself and issues
+ * roughly four bridge GETs — including the full transcript — every couple of
+ * seconds until the turn ends. Ten seconds still recovers a genuinely dropped
+ * frame quickly while making the steady-state cost negligible.
+ */
+export const DEFAULT_MIN_RECONCILE_INTERVAL_MS = 10_000;
+
+/**
  * Poll for a turn that has stopped reporting.
  *
  * SSE is the primary channel, but a dropped frame — a reconnect, a tab that was
  * unmounted mid-turn — leaves the composer disabled forever with no way back
  * except a manual refresh. `AGENTS.md` requires that the UI be able to catch up
  * from status/transcript APIs when events are missed; only Codex did.
+ *
+ * Two independent throttles apply. `staleAfterMs` decides when a quiet turn
+ * counts as stalled at all, and `minReconcileIntervalMs` caps how often a stall
+ * that persists — or that the reconcile itself keeps re-arming — may be
+ * re-checked. A *failed* reconcile is not throttled: it changed nothing, so the
+ * next tick retries.
  *
  * Deliberately not gated on `isActive`: a background environment is exactly the
  * case where frames get missed, so the watchdog must run for hidden mounts too.
@@ -52,6 +79,7 @@ export function useStalledTurnWatchdog({
   shouldReconcile,
   activitySignal,
   staleAfterMs = DEFAULT_TURN_STALE_AFTER_MS,
+  minReconcileIntervalMs = DEFAULT_MIN_RECONCILE_INTERVAL_MS,
   intervalMs = 1000,
 }: UseStalledTurnWatchdogOptions): void {
   const isRefreshInFlightRef = useRef(false);
@@ -68,10 +96,16 @@ export function useStalledTurnWatchdog({
     lastActivityAtRef.current = Date.now();
   }, [activitySignal, isLoading]);
 
+  // Timestamp of the last reconcile that completed successfully, or 0 while the
+  // current arming has not reconciled yet. Reset below on every re-arm so a new
+  // turn is never made to wait out the previous turn's throttle.
+  const lastReconciledAtRef = useRef(0);
+
   useEffect(() => {
     if (!isLoading || !isReady) return;
 
     let cancelled = false;
+    lastReconciledAtRef.current = 0;
 
     const poll = async () => {
       // One reconcile at a time: these hit the network, and a slow response
@@ -80,11 +114,21 @@ export function useStalledTurnWatchdog({
       // A turn that is still reporting is not stalled; reconciling under it only
       // costs bridge round trips and races the user's own refresh.
       if (Date.now() - lastActivityAtRef.current < staleAfterMs) return;
+      // A reconcile that applied is itself "activity" for callers that pass the
+      // session as their activity signal, so the staleness gate above cannot see
+      // it. This one can.
+      if (
+        lastReconciledAtRef.current > 0 &&
+        Date.now() - lastReconciledAtRef.current < minReconcileIntervalMs
+      ) {
+        return;
+      }
       if (shouldReconcileRef.current && !shouldReconcileRef.current()) return;
 
       isRefreshInFlightRef.current = true;
       try {
         await reconcileRef.current();
+        lastReconciledAtRef.current = Date.now();
       } catch (error) {
         // A failed poll is not actionable — the next tick retries. Logged at
         // debug so a flapping connection does not spam the console.
@@ -102,5 +146,12 @@ export function useStalledTurnWatchdog({
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [agentLabel, isLoading, isReady, intervalMs, staleAfterMs]);
+  }, [
+    agentLabel,
+    isLoading,
+    isReady,
+    intervalMs,
+    minReconcileIntervalMs,
+    staleAfterMs,
+  ]);
 }

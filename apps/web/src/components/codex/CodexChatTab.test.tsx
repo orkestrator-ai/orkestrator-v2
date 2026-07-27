@@ -409,6 +409,16 @@ const CONTAINER_ID = "container-1";
 const TAB_ID = "tab-1";
 const SESSION_ID = "session-1";
 const SESSION_KEY = createSessionKey(ENVIRONMENT_ID, TAB_ID);
+
+/** True once the client-only "stopped by user" marker is in the transcript. */
+function hasStopMarker() {
+  return (
+    useCodexStore
+      .getState()
+      .sessions.get(SESSION_KEY)
+      ?.messages.some((message) => message.content === "Query stopped by user.") ?? false
+  );
+}
 const MOCK_CLIENT = { baseUrl: "http://127.0.0.1:9999" } as const;
 const ORIGINAL_DATE_NOW = Date.now;
 const ORIGINAL_SET_INTERVAL = globalThis.setInterval;
@@ -1058,6 +1068,55 @@ describe("CodexChatTab", () => {
     ).toBeTruthy();
     expect(useCodexStore.getState().clients.has(ENVIRONMENT_ID)).toBe(false);
     expect(screen.getByRole("button", { name: /Retry/i })).toBeTruthy();
+  });
+
+  test("keeps the live thread when retrying after a transient health check failure", async () => {
+    /**
+     * One failed background ping flips a healthy tab to "error". Clearing the
+     * session there would strand a running thread behind the resume dialog and
+     * drop the user into an empty one, so retry reattaches instead.
+     */
+    mockCheckHealth.mockResolvedValue(false);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(
+      await screen.findByText("Codex bridge server disconnected. Click retry to reconnect."),
+    ).toBeTruthy();
+    // The stale client is dropped, but the session survives for the reattach.
+    expect(useCodexStore.getState().clients.has(ENVIRONMENT_ID)).toBe(false);
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(SESSION_ID);
+
+    mockCheckHealth.mockResolvedValue(true);
+    mockCreateSession.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().clients.has(ENVIRONMENT_ID)).toBe(true);
+    });
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(SESSION_ID);
+    // Reattached rather than started over.
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("starts a fresh session when retrying after a failed connect", async () => {
+    // A cold-init failure is not transient: nothing was ever connected, so the
+    // full reset stays in place.
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    mockGetCodexServerStatus.mockRejectedValueOnce(new Error("container bridge unavailable"));
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByText("container bridge unavailable")).toBeTruthy();
+
+    mockCreateSession.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
+
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
   });
 
   test("queues prompts with a generated UUID", async () => {
@@ -2866,6 +2925,56 @@ describe("CodexChatTab", () => {
     expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
 
     resolveAbort?.({ status: "accepted" });
+  });
+
+  test("writes the stop marker once the interrupted turn settles", async () => {
+    // Authoritative status stays running so only the explicit flip below can
+    // settle the turn — `turn/interrupt` is asynchronous, so the marker is
+    // written when the turn actually ends, not when the request is accepted.
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    mockAbortSession.mockImplementation(async () => ({ status: "accepted" as const }));
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-stop"));
+    await waitFor(() => expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID));
+    expect(hasStopMarker()).toBe(false);
+
+    act(() => {
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, false);
+    });
+
+    expect(hasStopMarker()).toBe(true);
+  });
+
+  test("drops a pending stop marker when the session identity changes first", async () => {
+    // Stopping a turn and then resuming a different thread before the interrupt
+    // settles must not append the marker to the thread the user never stopped.
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    mockAbortSession.mockImplementation(async () => ({ status: "accepted" as const }));
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-stop"));
+    await waitFor(() => expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID));
+    expect(hasStopMarker()).toBe(false);
+
+    act(() => {
+      useCodexStore.getState().setSession(SESSION_KEY, {
+        sessionId: "session-2",
+        messages: [],
+        isLoading: true,
+        title: "Resumed elsewhere",
+      });
+    });
+
+    act(() => {
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, false);
+    });
+
+    expect(hasStopMarker()).toBe(false);
   });
 
   test("a rejected abort remains locked when status cannot be reconciled", async () => {

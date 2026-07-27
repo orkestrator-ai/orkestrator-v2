@@ -669,6 +669,46 @@ describe("useGlobalActivityMonitor tmux activity", () => {
         .toBe("working");
     });
   });
+
+  test("does not persist activity for an environment the store does not know", async () => {
+    // The environment store is empty, so persistActivity bails before issuing
+    // any backend write — an unknown id has no row to update.
+    const stateKey = createClaudeTmuxStateKey("env-unknown", "tab-1");
+    render(<MonitorHarness />);
+
+    act(() => {
+      const store = useClaudeTmuxStore.getState();
+      store.setRunning(stateKey, true, {
+        environmentId: "env-unknown",
+        sessionId: "session-1",
+      });
+      store.setBusy(stateKey, true);
+    });
+
+    // The in-memory activity state still updates; only persistence is skipped.
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-unknown"))
+        .toBe("working");
+    });
+
+    act(() => {
+      useClaudeTmuxStore.getState().setBusy(stateKey, false);
+    });
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-unknown"))
+        .toBe("idle");
+    });
+
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "record_environment_activity",
+      expect.anything(),
+    );
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "record_environment_completion",
+      expect.anything(),
+    );
+    expect(unreadEnvironmentIds()).toEqual([]);
+  });
 });
 
 describe("useGlobalActivityMonitor terminal activity", () => {
@@ -1030,6 +1070,66 @@ describe("useGlobalActivityMonitor terminal activity", () => {
       "stop_claude_state_polling",
       { containerId: "container-1" },
     );
+  });
+
+  test("disposes a stale listener when the container restarts mid-registration", async () => {
+    // The container stops and comes back while the first listen() is still in
+    // flight. The superseded registration must drop its listener instead of
+    // installing it, otherwise the restarted container would end up with two
+    // subscriptions and the stale one would outlive the next stop.
+    let resolveFirstListen: ((unlisten: () => void) => void) | undefined;
+    const staleUnlisten = mock(() => {});
+    mockListen.mockImplementationOnce(
+      () =>
+        new Promise<() => void>((resolve) => {
+          resolveFirstListen = resolve;
+        }),
+    );
+
+    useEnvironmentStore.setState({
+      environments: [makeEnvironment("env-container", "container-1")],
+    });
+    render(<MonitorHarness />);
+
+    await waitFor(() => expect(resolveFirstListen).toBeDefined());
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "start_claude_state_polling",
+      { containerId: "container-1" },
+    );
+
+    // Container stops, then the same container id starts again. The second
+    // pass allocates a fresh registration symbol for the same key.
+    await act(async () => {
+      useEnvironmentStore.setState({ environments: [] });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      useEnvironmentStore.setState({
+        environments: [makeEnvironment("env-container", "container-1")],
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "start_claude_state_polling",
+        { containerId: "container-1" },
+      );
+    });
+    const startCallsAfterRestart = mockInvoke.mock.calls.filter(
+      ([command]) => command === "start_claude_state_polling",
+    ).length;
+
+    await act(async () => {
+      resolveFirstListen?.(staleUnlisten);
+      await Promise.resolve();
+    });
+
+    // The superseded registration unsubscribes and does not start a second poll.
+    expect(staleUnlisten).toHaveBeenCalledTimes(1);
+    expect(mockInvoke.mock.calls.filter(
+      ([command]) => command === "start_claude_state_polling",
+    )).toHaveLength(startCallsAfterRestart);
   });
 
   test("disposes a listener that resolves after the monitor unmounts", async () => {
@@ -1877,6 +1977,149 @@ describe("useGlobalActivityMonitor native agent activity", () => {
 
     await waitFor(() => {
       expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("idle");
+    });
+  });
+
+  test("derives OpenCode waiting from a pending question", async () => {
+    // pendingQuestions is the second arm of OpenCode's isWaiting; a question
+    // blocks the turn on the user exactly like a permission prompt does.
+    const sessionKey = createSessionKey("env-opencode", "tab-1");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useOpenCodeStore.setState({
+        clients: new Map([["env-opencode", {} as any]]),
+        sessions: new Map([
+          [
+            sessionKey,
+            {
+              sessionId: "opencode-session",
+              messages: [],
+              isLoading: false,
+            } as any,
+          ],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("idle");
+    });
+
+    act(() => {
+      useOpenCodeStore.setState({
+        pendingQuestions: new Map([
+          ["question-1", { sessionId: "opencode-session" } as any],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("waiting");
+    });
+
+    act(() => {
+      useOpenCodeStore.setState({ pendingQuestions: new Map() });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("idle");
+    });
+  });
+
+  test("ignores an OpenCode question raised against another session", async () => {
+    const sessionKey = createSessionKey("env-opencode", "tab-1");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useOpenCodeStore.setState({
+        clients: new Map([["env-opencode", {} as any]]),
+        sessions: new Map([
+          [
+            sessionKey,
+            {
+              sessionId: "opencode-session",
+              messages: [],
+              isLoading: true,
+            } as any,
+          ],
+        ]),
+        pendingQuestions: new Map([
+          ["question-1", { sessionId: "some-other-session" } as any],
+        ]),
+      });
+    });
+
+    // The question belongs to a session this environment does not own, so the
+    // running turn stays blue rather than flipping to amber.
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("working");
+    });
+  });
+
+  test("merges sibling sessions of one agent so working outranks waiting", async () => {
+    // Within a single store the per-session states are folded together: a
+    // waiting tab must not mask a sibling tab that is still running.
+    const waitingKey = createSessionKey("env-opencode", "tab-waiting");
+    const workingKey = createSessionKey("env-opencode", "tab-working");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useOpenCodeStore.setState({
+        clients: new Map([["env-opencode", {} as any]]),
+        sessions: new Map([
+          [
+            waitingKey,
+            { sessionId: "waiting-session", messages: [], isLoading: false } as any,
+          ],
+          [
+            workingKey,
+            { sessionId: "working-session", messages: [], isLoading: true } as any,
+          ],
+        ]),
+        pendingQuestions: new Map([
+          ["question-1", { sessionId: "waiting-session" } as any],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("working");
+    });
+
+    act(() => {
+      useOpenCodeStore.setState({
+        sessions: new Map([
+          [
+            waitingKey,
+            { sessionId: "waiting-session", messages: [], isLoading: false } as any,
+          ],
+          [
+            workingKey,
+            { sessionId: "working-session", messages: [], isLoading: false } as any,
+          ],
+        ]),
+      });
+    });
+
+    // With nothing running the unanswered question surfaces as amber.
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("waiting");
+    });
+
+    act(() => {
+      useOpenCodeStore.setState({ pendingQuestions: new Map() });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
         .toBe("idle");
     });
   });

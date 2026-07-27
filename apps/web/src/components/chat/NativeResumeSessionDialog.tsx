@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Clock, Loader2, MessageSquare } from "lucide-react";
 import {
   Dialog,
@@ -33,7 +33,15 @@ interface NativeResumeSessionDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Used in the dialog copy: "Select a previous {agentLabel} session…". */
   agentLabel: string;
-  /** Fetches the candidate list. Re-run each time the dialog opens. */
+  /**
+   * Fetches the candidate list. Called exactly once per open, never on a
+   * re-render.
+   *
+   * The latest prop is read through a ref, so the identity does not have to be
+   * stable: a chat tab re-renders on every streamed chunk, and keying the fetch
+   * on an inline lambda would flash the spinner and rebuild the list under the
+   * user's cursor for the whole turn.
+   */
   fetchSessions: () => Promise<ResumableSession[]>;
   onResume: (sessionId: string) => void;
   /** Excluded from the list — resuming the session you are in is a no-op. */
@@ -59,50 +67,65 @@ export function NativeResumeSessionDialog({
   currentSessionId,
   emptyMessage = "No previous sessions found.",
 }: NativeResumeSessionDialogProps) {
-  const [sessions, setSessions] = useState<ResumableSession[]>([]);
+  const [fetchedSessions, setFetchedSessions] = useState<ResumableSession[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestGenerationRef = useRef(0);
 
-  const loadSessions = useCallback(async () => {
+  // Latest-props refs, so the fetch below can be keyed on `open` alone.
+  const fetchSessionsRef = useRef(fetchSessions);
+  const agentLabelRef = useRef(agentLabel);
+  useEffect(() => {
+    fetchSessionsRef.current = fetchSessions;
+    agentLabelRef.current = agentLabel;
+  });
+
+  useEffect(() => {
+    if (!open) return;
+
     const requestGeneration = ++requestGenerationRef.current;
     setIsLoading(true);
     setError(null);
 
-    try {
-      const all = await fetchSessions();
-      if (requestGeneration !== requestGenerationRef.current) return;
+    void (async () => {
+      try {
+        const all = await fetchSessionsRef.current();
+        if (requestGeneration !== requestGenerationRef.current) return;
+        setFetchedSessions(all);
+      } catch (err) {
+        if (requestGeneration !== requestGenerationRef.current) return;
 
-      const filtered = all
-        .filter((session) => session.id !== currentSessionId)
-        .sort((a, b) => activityTimestamp(b) - activityTimestamp(a));
-      setSessions(filtered);
-    } catch (err) {
-      if (requestGeneration !== requestGenerationRef.current) return;
-
-      console.error(
-        `[${agentLabel}ResumeSessionDialog] Failed to fetch sessions:`,
-        err,
-      );
-      setError("Failed to load sessions");
-    } finally {
-      if (requestGeneration === requestGenerationRef.current) {
-        setIsLoading(false);
+        console.error(
+          `[${agentLabelRef.current}ResumeSessionDialog] Failed to fetch sessions:`,
+          err,
+        );
+        setError("Failed to load sessions");
+      } finally {
+        if (requestGeneration === requestGenerationRef.current) {
+          setIsLoading(false);
+        }
       }
-    }
-  }, [agentLabel, currentSessionId, fetchSessions]);
-
-  useEffect(() => {
-    if (open) {
-      void loadSessions();
-    }
+    })();
 
     return () => {
-      // Ignore a request started for a previous open cycle, dependency set, or
-      // component instance. It may still settle, but it no longer owns state.
+      // Ignore a request started for a previous open cycle or component
+      // instance. It may still settle, but it no longer owns state.
       requestGenerationRef.current += 1;
     };
-  }, [open, loadSessions]);
+  }, [open]);
+
+  /**
+   * Derived rather than baked in at fetch time: the exclusion and the ordering
+   * both have to stay correct when the session the user is in changes while the
+   * picker is open, and neither is a reason to hit the bridge again.
+   */
+  const sessions = useMemo(
+    () =>
+      fetchedSessions
+        .filter((session) => session.id !== currentSessionId)
+        .sort((a, b) => activityTimestamp(b) - activityTimestamp(a)),
+    [fetchedSessions, currentSessionId],
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

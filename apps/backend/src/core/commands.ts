@@ -3848,14 +3848,16 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     );
     return redactAppConfig(updated);
   });
-  register("update_agent_model_default", async ({ key, modelId }, { storage }) =>
-    redactAppConfig(
-      await storage.updateAgentModelDefault(
-        asAgentModelConfigKey(key),
-        asString(modelId, "modelId"),
-      ),
-    )
-  );
+  register("update_agent_model_default", async ({ key, modelId }, { storage }) => {
+    // The key is validated against a closed set, so the model id must be held to
+    // the same bar: storage writes it verbatim into a required config field and a
+    // renderer bug must not be able to persist an empty default.
+    const id = asString(modelId, "modelId").trim();
+    if (!id) throw new Error("Expected modelId to be non-empty");
+    return redactAppConfig(
+      await storage.updateAgentModelDefault(asAgentModelConfigKey(key), id),
+    );
+  });
   register("set_github_token", async ({ token }, { storage }) => {
     const nextToken = token === null ? null : asString(token, "token").trim();
     if (nextToken !== null && !nextToken) {

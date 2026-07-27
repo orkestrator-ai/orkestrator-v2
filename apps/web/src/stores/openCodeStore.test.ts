@@ -309,6 +309,54 @@ describe("openCodeStore clearSession", () => {
     expect(next.getPendingQuestion("req-1")).toBeUndefined();
     expect(next.getPendingQuestion("req-2")).toBeTruthy();
   });
+
+  test("clears a tab with no session id without sweeping pending requests", () => {
+    // A tab closed before its OpenCode session was created has nothing to sweep
+    // by: an empty session id matches every unrelated request, so the sweep is
+    // skipped entirely and only the session-keyed maps are pruned.
+    const store = useOpenCodeStore.getState();
+    const neverStarted = "env-env-123:tab-1";
+    const neverOpened = "env-env-123:tab-2";
+
+    store.setSession(neverStarted, {
+      sessionId: "",
+      messages: [],
+      isLoading: false,
+    });
+    store.setDraftText(neverStarted, "draft");
+    store.setSelectedModel(neverStarted, "openai/gpt-5");
+    store.setDraftText(neverOpened, "unopened draft");
+    store.addPendingQuestion({
+      id: "req-unrelated",
+      sessionId: "",
+      questions: [],
+    });
+    store.addPendingPermission({
+      id: "perm-unrelated",
+      sessionId: "",
+      permission: "read",
+      patterns: [],
+      metadata: {},
+      always: [],
+    });
+
+    store.clearSession(neverStarted);
+
+    let next = useOpenCodeStore.getState();
+    expect(next.getSession(neverStarted)).toBeUndefined();
+    expect(next.getDraftText(neverStarted)).toBe("");
+    expect(next.getSelectedModel(neverStarted)).toBeUndefined();
+    expect(next.getPendingQuestion("req-unrelated")).toBeTruthy();
+    expect(next.getPendingPermission("perm-unrelated")).toBeTruthy();
+
+    // Same branch when the tab never had a session record at all.
+    store.clearSession(neverOpened);
+
+    next = useOpenCodeStore.getState();
+    expect(next.getDraftText(neverOpened)).toBe("");
+    expect(next.getPendingQuestion("req-unrelated")).toBeTruthy();
+    expect(next.getPendingPermission("perm-unrelated")).toBeTruthy();
+  });
 });
 
 describe("openCodeStore same-environment tab isolation", () => {
@@ -694,6 +742,53 @@ describe("openCodeStore pending permissions", () => {
     expect(permissions[0]?.id).toBe("perm-1");
   });
 
+  test("removePendingPermission drops only the answered request", () => {
+    const store = useOpenCodeStore.getState();
+
+    store.addPendingPermission({
+      id: "perm-1",
+      sessionId: "session-1",
+      permission: "read",
+      patterns: ["/workspace/**"],
+      metadata: {},
+      always: ["/workspace/**"],
+    });
+    store.addPendingPermission({
+      id: "perm-2",
+      sessionId: "session-1",
+      permission: "bash",
+      patterns: ["*"],
+      metadata: {},
+      always: [],
+    });
+
+    expect(store.getPendingPermissionsForSession("session-1")).toHaveLength(2);
+
+    store.removePendingPermission("perm-1");
+
+    expect(store.getPendingPermission("perm-1")).toBeUndefined();
+    expect(store.getPendingPermission("perm-2")?.id).toBe("perm-2");
+    expect(store.getPendingPermissionsForSession("session-1")).toHaveLength(1);
+
+    // Removing an id nobody is holding must not throw or disturb the rest.
+    store.removePendingPermission("perm-missing");
+    expect(store.getPendingPermission("perm-2")?.id).toBe("perm-2");
+  });
+
+  test("returns the same empty array for a session with no pending permissions", () => {
+    // useSyncExternalStore compares snapshots by reference, so a fresh [] on every
+    // read would rerender forever.
+    const first = useOpenCodeStore
+      .getState()
+      .getPendingPermissionsForSession("session-none");
+    const second = useOpenCodeStore
+      .getState()
+      .getPendingPermissionsForSession("session-none");
+
+    expect(first).toBe(second);
+    expect(first).toEqual([]);
+  });
+
   test("clearEnvironment removes pending permissions for every tab session", () => {
     const store = useOpenCodeStore.getState();
 
@@ -869,6 +964,31 @@ describe("openCodeStore selectors and session mutations", () => {
     expect(store.getSelectedVariant("env-1")).toBeUndefined();
   });
 
+  test("setSelectedVariant treats a blank or whitespace-only value as no variant", () => {
+    // A variant is sent verbatim to the model picker, so " " is not a selection —
+    // it has to clear the key rather than be stored and later sent as-is.
+    const store = useOpenCodeStore.getState();
+    const sessionKey = "env-env-1:tab-1";
+
+    store.setSelectedVariant(sessionKey, "high");
+    expect(useOpenCodeStore.getState().getSelectedVariant(sessionKey)).toBe("high");
+
+    store.setSelectedVariant(sessionKey, "   ");
+    expect(useOpenCodeStore.getState().getSelectedVariant(sessionKey)).toBeUndefined();
+
+    store.setSelectedVariant(sessionKey, "low");
+    store.setSelectedVariant(sessionKey, "\t\n");
+    expect(useOpenCodeStore.getState().getSelectedVariant(sessionKey)).toBeUndefined();
+
+    store.setSelectedVariant(sessionKey, "low");
+    store.setSelectedVariant(sessionKey, undefined);
+    expect(useOpenCodeStore.getState().getSelectedVariant(sessionKey)).toBeUndefined();
+
+    // A padded but non-blank value is a real selection and is kept verbatim.
+    store.setSelectedVariant(sessionKey, " high ");
+    expect(useOpenCodeStore.getState().getSelectedVariant(sessionKey)).toBe(" high ");
+  });
+
   test("adds and removes messages from an existing session", () => {
     const store = useOpenCodeStore.getState();
     const sessionKey = "env-env-1:tab-1";
@@ -983,6 +1103,20 @@ describe("openCodeStore questions and event subscriptions", () => {
 
     store.removePendingQuestion("question-1");
     expect(store.getPendingQuestion("question-1")).toBeUndefined();
+  });
+
+  test("returns the same empty array for a session with no pending questions", () => {
+    // Same reference-stability contract as the permissions selector: a new []
+    // per read would loop useSyncExternalStore.
+    const first = useOpenCodeStore
+      .getState()
+      .getPendingQuestionsForSession("session-none");
+    const second = useOpenCodeStore
+      .getState()
+      .getPendingQuestionsForSession("session-none");
+
+    expect(first).toBe(second);
+    expect(first).toEqual([]);
   });
 
   test("creates, updates, and closes event subscriptions", async () => {

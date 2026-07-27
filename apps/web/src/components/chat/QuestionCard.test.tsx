@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QuestionCard, type QuestionCardQuestion } from "./QuestionCard";
 
 /**
@@ -31,6 +38,14 @@ const TWO_QUESTIONS: QuestionCardQuestion[] = [
 ];
 
 afterEach(() => cleanup());
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
 
 describe("QuestionCard multi-question submit", () => {
   test("navigates to the first unanswered question instead of doing nothing", async () => {
@@ -228,6 +243,300 @@ describe("QuestionCard custom-answer overrides", () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["same answer"]]));
     expect(screen.getAllByText("same answer")).toHaveLength(1);
+  });
+});
+
+describe("QuestionCard exclusive draft supersedes the committed answer", () => {
+  const QUESTION: QuestionCardQuestion[] = [
+    { question: "Pick one?", options: [{ label: "Option A" }, { label: "Option B" }] },
+  ];
+
+  test("clears the committed chip once a new draft replaces it", async () => {
+    /**
+     * Exclusive mode submits the draft alone, so a chip left on screen with a
+     * check mark and "will be included when you submit" was describing an
+     * answer that was about to be silently dropped.
+     */
+    const { onSubmit } = renderCard(QUESTION, { exclusiveSingleSelect: true });
+    const input = screen.getByPlaceholderText(/type your own/i);
+
+    fireEvent.change(input, { target: { value: "answer A" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByLabelText("Remove answer A")).toBeTruthy();
+
+    fireEvent.change(input, { target: { value: "ans" } });
+    expect(screen.queryByLabelText("Remove answer A")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["ans"]]));
+  });
+
+  test("restores the superseded chip when the draft is erased", () => {
+    // Superseding is a rendering rule, not a deletion: nothing the user
+    // committed is destroyed by typing.
+    renderCard(QUESTION, { exclusiveSingleSelect: true });
+    const input = screen.getByPlaceholderText(/type your own/i);
+
+    fireEvent.change(input, { target: { value: "answer A" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(input, { target: { value: "ans" } });
+    expect(screen.queryByLabelText("Remove answer A")).toBeNull();
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(screen.getByLabelText("Remove answer A")).toBeTruthy();
+  });
+
+  test("clears the selected option's check mark while a draft is pending", () => {
+    renderCard(QUESTION, { exclusiveSingleSelect: true });
+
+    const optionA = screen.getByRole("button", { name: "Option A" });
+    fireEvent.click(optionA);
+    expect(optionA.querySelector("div.rounded-full.bg-primary")).toBeTruthy();
+
+    fireEvent.change(screen.getByPlaceholderText(/type your own/i), {
+      target: { value: "something else" },
+    });
+    expect(optionA.querySelector("div.rounded-full.bg-primary")).toBeNull();
+  });
+
+  test("picking an option while a draft is pending selects it and drops the draft", async () => {
+    const { onSubmit } = renderCard(QUESTION, { exclusiveSingleSelect: true });
+    const input = screen.getByPlaceholderText(/type your own/i);
+
+    fireEvent.click(screen.getByRole("button", { name: "Option A" }));
+    fireEvent.change(input, { target: { value: "typed instead" } });
+    // Drawn as unselected, so this click must select rather than deselect.
+    fireEvent.click(screen.getByRole("button", { name: "Option B" }));
+
+    expect((input as HTMLInputElement).value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["Option B"]]));
+  });
+
+  test("leaves the non-exclusive card's chip alone while typing", () => {
+    // Claude keeps a committed chip alongside whatever comes next, so nothing
+    // is superseded and the chip must stay visible.
+    renderCard(QUESTION);
+    const input = screen.getByPlaceholderText(/type your own/i);
+
+    fireEvent.change(input, { target: { value: "answer A" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(input, { target: { value: "answer B" } });
+
+    expect(screen.getByLabelText("Remove answer A")).toBeTruthy();
+  });
+});
+
+describe("QuestionCard submit contract", () => {
+  const QUESTION: QuestionCardQuestion[] = [
+    { question: "Continue?", options: [{ label: "Yes" }] },
+  ];
+
+  test("ignores the handler's return value and stays open for a retry", async () => {
+    /**
+     * The card never removes itself: each wrapper owns that (removePendingQuestion)
+     * because the agent has to accept the reply first. `false` therefore means
+     * nothing here beyond the caller's own bookkeeping.
+     */
+    const onSubmit = mock(async () => false);
+    renderCard(QUESTION, { onSubmit });
+
+    fireEvent.click(screen.getByRole("button", { name: "Yes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+
+    const submit = await screen.findByRole("button", { name: "Submit" });
+    expect(submit.hasAttribute("disabled")).toBe(false);
+    expect(screen.getByText("Continue?")).toBeTruthy();
+
+    fireEvent.click(submit);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    expect(onSubmit).toHaveBeenLastCalledWith([["Yes"]]);
+  });
+
+  test("releases the card after a rejected submit", async () => {
+    const onSubmit = mock(async () => {
+      throw new Error("bridge down");
+    });
+    const consoleError = console.error;
+    const errorSpy = mock(() => {});
+    console.error = errorSpy;
+
+    try {
+      renderCard(QUESTION, { onSubmit });
+
+      fireEvent.click(screen.getByRole("button", { name: "Yes" }));
+      fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+      await waitFor(() => expect(errorSpy).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled"),
+        ).toBe(false),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    } finally {
+      console.error = consoleError;
+    }
+  });
+
+  test("disables the options and the custom input while submitting", async () => {
+    const pending = deferred<boolean>();
+    const onSubmit = mock(() => pending.promise);
+    renderCard(QUESTION, { onSubmit, onDismiss: async () => {} });
+
+    fireEvent.click(screen.getByRole("button", { name: "Yes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Submitting..." }).hasAttribute("disabled"),
+      ).toBe(true),
+    );
+    expect(screen.getByRole("button", { name: "Yes" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByPlaceholderText(/type your own/i).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Dismiss" }).hasAttribute("disabled")).toBe(true);
+
+    await act(async () => {
+      pending.resolve(true);
+      await pending.promise;
+    });
+
+    expect(screen.getByRole("button", { name: "Yes" }).hasAttribute("disabled")).toBe(false);
+  });
+});
+
+describe("QuestionCard multi-select", () => {
+  test("removes an option that is clicked a second time", async () => {
+    const { onSubmit } = renderCard([
+      {
+        question: "Pick many?",
+        multiSelect: true,
+        options: [{ label: "A" }, { label: "B" }, { label: "C" }],
+      },
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "A" }));
+    fireEvent.click(screen.getByRole("button", { name: "B" }));
+    fireEvent.click(screen.getByRole("button", { name: "C" }));
+    fireEvent.click(screen.getByRole("button", { name: "B" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["A", "C"]]));
+  });
+
+  test("labels the question as multi-select", () => {
+    renderCard([
+      { question: "Pick many?", multiSelect: true, options: [{ label: "A" }] },
+    ]);
+    expect(screen.getByText("(select all that apply)")).toBeTruthy();
+  });
+});
+
+describe("QuestionCard custom input keyboard handling", () => {
+  test("does not commit the draft on Shift+Enter", async () => {
+    // Shift+Enter is a newline everywhere else in the composer; committing here
+    // would make the same chord mean two different things.
+    const { onSubmit } = renderCard([{ question: "Answer?", options: [] }]);
+    const input = screen.getByPlaceholderText("Type your answer");
+
+    fireEvent.change(input, { target: { value: "draft text" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+
+    expect(screen.queryByLabelText("Remove draft text")).toBeNull();
+    expect((input as HTMLInputElement).value).toBe("draft text");
+
+    // Still submitted, because an uncommitted draft is never lost.
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["draft text"]]));
+  });
+
+  test("removes a committed chip through its remove button", () => {
+    renderCard([{ question: "Answer?", options: [], multiSelect: true }]);
+    const input = screen.getByPlaceholderText("Type your answer");
+
+    fireEvent.change(input, { target: { value: "chip text" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(screen.getByLabelText("Remove chip text"));
+
+    expect(screen.queryByLabelText("Remove chip text")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled"),
+    ).toBe(true);
+  });
+});
+
+describe("QuestionCard multi-question navigation", () => {
+  test("steps back to the previous question with its answer intact", async () => {
+    const { onSubmit } = renderCard(TWO_QUESTIONS);
+
+    fireEvent.click(screen.getByRole("button", { name: "1b" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText("Two?")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByText("One?")).toBeTruthy();
+
+    // Answer preserved: switching selection here proves the card round-tripped.
+    fireEvent.click(screen.getByRole("button", { name: "1a" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "2b" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["1a"], ["2b"]]));
+  });
+
+  test("offers no Back button on the first question", () => {
+    renderCard(TWO_QUESTIONS);
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+  });
+
+  test("tracks the answered count and flags a complete card", () => {
+    const { container } = render(
+      <QuestionCard
+        agentLabel="Test"
+        title="Agent needs your input"
+        questions={TWO_QUESTIONS}
+        onSubmit={async () => true}
+      />,
+    );
+
+    expect(screen.getByText("0/2 answered")).toBeTruthy();
+    expect(container.querySelector("svg.ml-auto.text-green-500")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "1b" }));
+    expect(screen.getByText("1/2 answered")).toBeTruthy();
+    expect(screen.getByText("1 of 2")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "2a" }));
+    expect(screen.getByText("2/2 answered")).toBeTruthy();
+    expect(container.querySelector("svg.ml-auto.text-green-500")).toBeTruthy();
+    expect(screen.getByText("2 of 2")).toBeTruthy();
+  });
+
+  test("counts a single question without a progress fraction", () => {
+    renderCard([{ question: "Only?", options: [{ label: "Yes" }] }]);
+    expect(screen.getByText("1 question")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
+  });
+});
+
+describe("QuestionCard dismiss affordance", () => {
+  test("hides the Dismiss button when asked to", () => {
+    renderCard([{ question: "Continue?", options: [{ label: "Yes" }] }], {
+      onDismiss: async () => {},
+      hideDismiss: true,
+    });
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+  });
+
+  test("hides the Dismiss button when there is nothing to dismiss to", () => {
+    // The build pipeline reuses this card with no dismiss path at all.
+    renderCard([{ question: "Continue?", options: [{ label: "Yes" }] }]);
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
   });
 });
 

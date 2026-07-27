@@ -297,7 +297,17 @@ export function ClaudeChatTab({
     return approvals;
   }, [session?.sessionId, pendingPlanApprovalsMap]);
 
-  const refreshSessionFromServer = useCallback(async (
+  /**
+   * True only while the user's own refresh is in flight.
+   *
+   * A manual refresh is slow — it forces the model catalog, which makes the
+   * bridge respawn model discovery and a synchronous `claude --version` — so a
+   * background reconcile that lands mid-flight would mutate the store under it
+   * and turn the user's click into a "session changed while refreshing" error.
+   */
+  const manualRefreshInFlightRef = useRef(false);
+
+  const applyServerSessionSnapshot = useCallback(async (
     { manual = false }: RefreshSessionOptions = {},
   ) => {
     const stateBeforeRefresh = useClaudeStore.getState();
@@ -418,6 +428,22 @@ export function ClaudeChatTab({
     setSessionTitle,
   ]);
 
+  const refreshSessionFromServer = useCallback(
+    async (options: RefreshSessionOptions = {}) => {
+      if (!options.manual) {
+        await applyServerSessionSnapshot(options);
+        return;
+      }
+      manualRefreshInFlightRef.current = true;
+      try {
+        await applyServerSessionSnapshot(options);
+      } finally {
+        manualRefreshInFlightRef.current = false;
+      }
+    },
+    [applyServerSessionSnapshot],
+  );
+
   useManualSessionRefresh({
     refreshRequestId,
     isReady:
@@ -437,6 +463,10 @@ export function ClaudeChatTab({
     // Explicitly background: no forced model-catalog reload, and superseded by
     // any newer refresh rather than superseding the user's own.
     reconcile: () => refreshSessionFromServer({ manual: false }),
+    // Stand down entirely while the user's refresh is running. That pass is slow
+    // enough (forced model catalog → `claude --version` on the same bridge) that
+    // a reconcile landing mid-flight would fail it with "session changed".
+    shouldReconcile: () => !manualRefreshInFlightRef.current,
   });
 
   // Memoize messages separately to provide stable reference for child components

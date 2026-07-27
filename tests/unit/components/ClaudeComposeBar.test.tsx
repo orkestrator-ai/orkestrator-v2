@@ -265,7 +265,9 @@ describe("ClaudeComposeBar", () => {
       effort: new Map(),
       planMode: new Map(),
       fastMode: new Map(),
-      queuedMessages: new Map(),
+      // The shared native-chat slice stores the queue under `messageQueue`;
+      // resetting anything else leaves queued prompts leaking between tests.
+      messageQueue: new Map(),
       sessionInitData: new Map(),
       contextUsage: new Map(),
     });
@@ -708,6 +710,28 @@ describe("ClaudeComposeBar", () => {
     );
   });
 
+  test("falls back to onSend while loading when no queue callback is available", async () => {
+    useClaudeStore.getState().setDraftText(SESSION_KEY, "Send through fallback");
+    const { onSend } = renderComposeBar({ isLoading: true, onQueue: undefined });
+
+    fireEvent.click(screen.getByTitle("Add to queue"));
+
+    // Claude does not refuse a busy submit: without a queue callback the
+    // prompt is dispatched immediately rather than dropped.
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith(
+        "Send through fallback",
+        [],
+        "high",
+        false,
+        false,
+      );
+    });
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("");
+    });
+  });
+
   test("queues the prompt while Claude is loading", async () => {
     const { onQueue } = renderComposeBar({ isLoading: true });
     const input = screen.getByTestId("mentionable-input");
@@ -853,6 +877,18 @@ describe("ClaudeComposeBar", () => {
     await waitFor(() => {
       expect(onSend).toHaveBeenCalledWith("/rev", [], "high", false, false);
     });
+  });
+
+  test("Shift+Enter preserves a multiline draft without submitting", () => {
+    const { onSend, onQueue } = renderComposeBar();
+    const input = screen.getByTestId("mentionable-input");
+
+    fireEvent.change(input, { target: { value: "first line" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onQueue).not.toHaveBeenCalled();
+    expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("first line");
   });
 
   test("toggles plan mode with Shift+Tab without submitting", async () => {
@@ -1047,6 +1083,72 @@ describe("ClaudeComposeBar", () => {
     await waitFor(() => {
       expect(useClaudeStore.getState().getQueueLength(SESSION_KEY)).toBe(0);
     });
+  });
+
+  test("shows an empty queue when the indicator count is stale", () => {
+    // queueLength is supplied by the chat tab; the dialog reads the store, so a
+    // stale indicator must not render phantom rows.
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+
+    expect(screen.getByText("Queue is empty.")).toBeTruthy();
+  });
+
+  test("renders queued prompt metadata and attachment pluralization", () => {
+    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+      id: "metadata-one",
+      text: "Plan carefully",
+      attachments: [{
+        id: "one",
+        type: "image",
+        path: "/workspace/one.png",
+        previewUrl: "data:image/png;base64,abc",
+        name: "one.png",
+      }],
+      effort: "max",
+      planModeEnabled: true,
+      fastModeEnabled: true,
+    });
+    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+      id: "metadata-two",
+      text: "Build carefully",
+      attachments: [
+        {
+          id: "two",
+          type: "image",
+          path: "/workspace/two.png",
+          previewUrl: "data:image/png;base64,abc",
+          name: "two.png",
+        },
+        {
+          id: "three",
+          type: "image",
+          path: "/workspace/three.png",
+          previewUrl: "data:image/png;base64,abc",
+          name: "three.png",
+        },
+      ],
+      effort: "low",
+      planModeEnabled: false,
+      fastModeEnabled: false,
+    });
+
+    const { unmount } = renderComposeBar({ queueLength: 2 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+
+    expect(screen.getByText("#1")).toBeTruthy();
+    expect(screen.getByText("#2")).toBeTruthy();
+    expect(screen.getByText("Effort: Max")).toBeTruthy();
+    expect(screen.getByText("Effort: Low")).toBeTruthy();
+    // Plan and fast mode are only labelled for the prompt that enabled them.
+    expect(screen.getAllByText("Plan mode")).toHaveLength(1);
+    expect(screen.getAllByText("Fast mode")).toHaveLength(1);
+    expect(screen.getByText("1 attachment")).toBeTruthy();
+    expect(screen.getByText("2 attachments")).toBeTruthy();
+
+    // The dialog is portalled outside the render container; unmount explicitly
+    // so its rows cannot leak into the next test's queries.
+    unmount();
   });
 
   test("enforces queue movement boundaries and reorders queued prompts", async () => {

@@ -4,6 +4,7 @@ import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { createSessionKey as createOpenCodeSessionKey } from "@/lib/utils";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useConfigStore } from "@/stores/configStore";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -312,6 +313,8 @@ const ENVIRONMENT_ID = "env-1";
 const TAB_ID = "tab-1";
 const SESSION_KEY = createOpenCodeSessionKey(ENVIRONMENT_ID, TAB_ID);
 const MOCK_CLIENT = { baseUrl: "http://127.0.0.1:9999" } as const;
+/** The user's persisted global OpenCode default, as the compose bar writes it. */
+const DEFAULT_GLOBAL_MODEL = "openai/global-default";
 const ORIGINAL_DATE_NOW = Date.now;
 const ORIGINAL_SET_INTERVAL = globalThis.setInterval;
 const ORIGINAL_CLEAR_INTERVAL = globalThis.clearInterval;
@@ -413,6 +416,14 @@ function resetStores(name = "20260415-123456") {
     setupCommandsResolved: new Set(),
     setupScriptsRunning: new Set(),
   });
+
+  useConfigStore.setState((state) => ({
+    config: {
+      ...state.config,
+      global: { ...state.config.global, opencodeModel: DEFAULT_GLOBAL_MODEL },
+    },
+  }));
+
   seedPaneLayout();
 }
 
@@ -1952,6 +1963,88 @@ describe("OpenCodeChatTab", () => {
         initialPrompt,
         expect.objectContaining({ model: undefined, variant: undefined }),
       );
+    });
+  });
+
+  test("seeds a model for a second tab that reuses a warm client", async () => {
+    // Only the cold path fetches the model catalogue. A second tab in an
+    // environment that already has a client takes the warm path, so without
+    // explicit seeding its sessionKey would stay unset and every prompt would
+    // silently fall back to the server default.
+    const secondTabId = "tab-2";
+    const secondSessionKey = createOpenCodeSessionKey(ENVIRONMENT_ID, secondTabId);
+    useOpenCodeStore.getState().setModels(ENVIRONMENT_ID, [
+      { id: "openai/other-model", name: "Other Model", provider: "OpenAI", variants: [] },
+      { id: DEFAULT_GLOBAL_MODEL, name: "Global Default", provider: "OpenAI", variants: [] },
+    ] as any);
+    mockCreateSession.mockImplementation(async () => ({
+      id: "session-2",
+      createdAt: "2026-04-15T10:05:00.000Z",
+    }));
+    expect(useOpenCodeStore.getState().getSelectedModel(secondSessionKey)).toBeUndefined();
+
+    render(
+      <OpenCodeChatTab
+        tabId={secondTabId}
+        data={createData()}
+        isActive
+        initialPrompt="Prompt from the second tab"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getSelectedModel(secondSessionKey)).toBe(
+        DEFAULT_GLOBAL_MODEL,
+      );
+    });
+    // The first tab's own selection is untouched.
+    expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe("openai/gpt-5");
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-2",
+        "Prompt from the second tab",
+        expect.objectContaining({ model: DEFAULT_GLOBAL_MODEL }),
+      );
+    });
+  });
+
+  test("queues the variant selected now, not the one implied by the launch model", async () => {
+    composeText = "Queue after switching models";
+    useOpenCodeStore.setState((state) => ({
+      ...state,
+      // Empty catalogue keeps the synthetic launch model "default" in place.
+      models: new Map(),
+      selectedModel: new Map([[SESSION_KEY, "default"]]),
+    }));
+    useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="default"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("opencode-queue")).toBeTruthy();
+    });
+
+    // The user switches off "default" onto a variant-capable model.
+    act(() => {
+      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "openai/gpt-5");
+      useOpenCodeStore.getState().setSelectedVariant(SESSION_KEY, "deep");
+    });
+
+    fireEvent.click(screen.getByTestId("opencode-queue"));
+
+    await waitFor(() => {
+      const queued = useOpenCodeStore.getState().messageQueue.get(SESSION_KEY)?.[0];
+      expect(queued?.model).toBe("openai/gpt-5");
+      expect(queued?.variant).toBe("deep");
     });
   });
 

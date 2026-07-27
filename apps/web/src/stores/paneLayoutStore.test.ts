@@ -1438,3 +1438,266 @@ describe("paneLayoutStore pane and tab actions", () => {
     expect(store.getRoot("env-nested")).toBe(singlePaneRoot);
   });
 });
+
+describe("paneLayoutStore guard branches", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  test("setActiveTab does nothing without an environment or for an unknown one", () => {
+    const before = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.getState().setActiveTab("default", "tab-one");
+    expect(usePaneLayoutStore.getState().environments).toBe(before);
+
+    seedSingleTabEnvironment("env-active-tab", null, { id: "tab-one", type: "plain" });
+    const seeded = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.getState().setActiveTab("default", "tab-one", "missing-env");
+    expect(usePaneLayoutStore.getState().environments).toBe(seeded);
+  });
+
+  test("setActiveTab on an unknown pane leaves the tree untouched", () => {
+    seedSingleTabEnvironment("env-active-tab", null, { id: "tab-one", type: "plain" });
+    const originalRoot = usePaneLayoutStore.getState().getRoot("env-active-tab");
+
+    usePaneLayoutStore.getState().setActiveTab("missing-pane", "tab-one", "env-active-tab");
+
+    const store = usePaneLayoutStore.getState();
+    // No leaf matches, so updateLeaf returns the same tree; only the focused
+    // pane id moves (the store does not validate the pane exists).
+    expect(store.getRoot("env-active-tab")).toBe(originalRoot);
+    expect(store.getPane("default", "env-active-tab")?.activeTabId).toBe("tab-one");
+    expect(store.getActivePaneId("env-active-tab")).toBe("missing-pane");
+  });
+
+  test("setActiveTab accepts a tab id that is not in the pane", () => {
+    seedSingleTabEnvironment("env-ghost-tab", null, { id: "tab-one", type: "plain" });
+
+    usePaneLayoutStore.getState().setActiveTab("default", "ghost-tab", "env-ghost-tab");
+
+    const pane = usePaneLayoutStore.getState().getPane("default", "env-ghost-tab");
+    // Documented behaviour: the id is stored unvalidated and the tab list is
+    // untouched, so the pane ends up with an activeTabId it does not contain.
+    expect(pane?.tabs.map((tab) => tab.id)).toEqual(["tab-one"]);
+    expect(pane?.activeTabId).toBe("ghost-tab");
+  });
+
+  test("getOpenFilePaths collects paths from every pane, duplicates included", () => {
+    seedPaneTree({
+      kind: "split",
+      id: "root-split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "left",
+          tabs: [
+            { id: "file-a", type: "file", fileData: { filePath: "/repo/a.ts" } },
+            { id: "plain-a", type: "plain" },
+            { id: "file-empty", type: "file", fileData: { filePath: "" } },
+          ],
+          activeTabId: "file-a",
+        },
+        {
+          kind: "leaf",
+          id: "right",
+          tabs: [
+            // The same file opened in a second pane must still be reported so
+            // callers can see it is open, hence duplicates are preserved.
+            { id: "file-a-copy", type: "file", fileData: { filePath: "/repo/a.ts" } },
+            { id: "file-b", type: "file", fileData: { filePath: "/repo/b.ts" } },
+            { id: "file-no-data", type: "file" },
+          ],
+          activeTabId: "file-b",
+        },
+      ],
+    }, "left", "env-open-files");
+
+    expect(usePaneLayoutStore.getState().getOpenFilePaths("env-open-files")).toEqual([
+      "/repo/a.ts",
+      "/repo/a.ts",
+      "/repo/b.ts",
+    ]);
+  });
+
+  test("getOpenFilePaths returns nothing for an environment with no file tabs", () => {
+    seedSingleTabEnvironment("env-no-files", null, { id: "tab-one", type: "plain" });
+
+    expect(usePaneLayoutStore.getState().getOpenFilePaths("env-no-files")).toEqual([]);
+  });
+
+  test("splitPane leaves state unchanged for missing environments, panes, and tabs", () => {
+    const storeWithoutEnvironment = usePaneLayoutStore.getState();
+    const before = storeWithoutEnvironment.environments;
+    storeWithoutEnvironment.splitPane("default", "horizontal", "tab-one");
+    expect(usePaneLayoutStore.getState().environments).toBe(before);
+
+    storeWithoutEnvironment.splitPane("default", "horizontal", "tab-one", "missing-env");
+
+    seedSingleTabEnvironment("env-invalid-split", null, { id: "tab-one", type: "plain" });
+    const store = usePaneLayoutStore.getState();
+    const originalRoot = store.getRoot("env-invalid-split");
+    const seededEnvironments = store.environments;
+
+    store.splitPane("missing-pane", "horizontal", "tab-one", "env-invalid-split");
+    store.splitPane("default", "horizontal", "missing-tab", "env-invalid-split");
+
+    expect(usePaneLayoutStore.getState().getRoot("env-invalid-split")).toBe(originalRoot);
+    expect(usePaneLayoutStore.getState().environments).toBe(seededEnvironments);
+  });
+
+  test("splitPane refuses to split once the tree is at the maximum depth", () => {
+    let root: any = {
+      kind: "leaf",
+      id: "deep-target",
+      tabs: [
+        { id: "tab-one", type: "plain" },
+        { id: "tab-two", type: "plain" },
+      ],
+      activeTabId: "tab-two",
+    };
+    // MAX_SPLIT_DEPTH is 9, so nine nested splits sit exactly at the limit.
+    for (let depth = 1; depth <= 9; depth += 1) {
+      root = {
+        kind: "split",
+        id: `split-${depth}`,
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth,
+        children: [
+          root,
+          { kind: "leaf", id: `filler-${depth}`, tabs: [], activeTabId: null },
+        ],
+      };
+    }
+    seedPaneTree(root, "deep-target", "env-split-depth");
+
+    usePaneLayoutStore.getState().splitPane(
+      "deep-target",
+      "horizontal",
+      "tab-two",
+      "env-split-depth",
+    );
+
+    expect(usePaneLayoutStore.getState().getRoot("env-split-depth")).toBe(root);
+  });
+
+  test("finishHydration with nothing restored only marks hydration done", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-fresh");
+    store.beginHydration("env-fresh");
+    const existing = usePaneLayoutStore.getState().environments.get("env-fresh");
+    expect(usePaneLayoutStore.getState().hydration.get("env-fresh")).toBe("pending");
+
+    usePaneLayoutStore.getState().finishHydration("env-fresh");
+
+    expect(usePaneLayoutStore.getState().hydration.get("env-fresh")).toBe("done");
+    // The freshly initialized layout survives: nothing is installed over it.
+    expect(usePaneLayoutStore.getState().environments.get("env-fresh")).toBe(existing);
+  });
+
+  test("finishHydration marks an environment done even if hydration never began", () => {
+    usePaneLayoutStore.getState().finishHydration("env-never-began");
+
+    expect(usePaneLayoutStore.getState().hydration.get("env-never-began")).toBe("done");
+    expect(usePaneLayoutStore.getState().environments.has("env-never-began")).toBe(false);
+  });
+
+  test("updateSizes ignores unknown environments and unknown split ids", () => {
+    const before = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.getState().updateSizes("split-1", [30, 70]);
+    expect(usePaneLayoutStore.getState().environments).toBe(before);
+
+    seedPaneTree({
+      kind: "split",
+      id: "outer",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "left",
+          tabs: [{ id: "left-tab", type: "plain" }],
+          activeTabId: "left-tab",
+        },
+        {
+          kind: "leaf",
+          id: "right",
+          tabs: [{ id: "right-tab", type: "plain" }],
+          activeTabId: "right-tab",
+        },
+      ],
+    }, "left", "env-sizes");
+    const seeded = usePaneLayoutStore.getState().environments;
+
+    usePaneLayoutStore.getState().updateSizes("outer", [30, 70], "missing-env");
+    expect(usePaneLayoutStore.getState().environments).toBe(seeded);
+
+    usePaneLayoutStore.getState().updateSizes("missing-split", [30, 70], "env-sizes");
+    expect(usePaneLayoutStore.getState().getRoot("env-sizes")).toMatchObject({
+      id: "outer",
+      sizes: [50, 50],
+    });
+  });
+
+  test("updateSizes on a leaf-only layout leaves the tree alone", () => {
+    seedSingleTabEnvironment("env-leaf-sizes", null, { id: "tab-one", type: "plain" });
+    const originalRoot = usePaneLayoutStore.getState().getRoot("env-leaf-sizes");
+
+    usePaneLayoutStore.getState().updateSizes("default", [30, 70], "env-leaf-sizes");
+
+    // A leaf carries no sizes, so the recursive update returns it untouched.
+    expect(usePaneLayoutStore.getState().getRoot("env-leaf-sizes")).toBe(originalRoot);
+  });
+
+  test("clearTabInitialPrompt is a no-op for unknown environments and tabs", () => {
+    const before = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.getState().clearTabInitialPrompt("tab-one");
+    expect(usePaneLayoutStore.getState().environments).toBe(before);
+
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [{ id: "prompt-tab", type: "plain", initialPrompt: "Run the checks" }],
+      activeTabId: "prompt-tab",
+    }, "default", "env-clear-prompt");
+    const seeded = usePaneLayoutStore.getState().environments;
+
+    usePaneLayoutStore.getState().clearTabInitialPrompt("prompt-tab", "missing-env");
+    usePaneLayoutStore.getState().clearTabInitialPrompt("missing-tab", "env-clear-prompt");
+
+    expect(usePaneLayoutStore.getState().environments).toBe(seeded);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-clear-prompt")[0]?.initialPrompt)
+      .toBe("Run the checks");
+  });
+
+  test("clearTabInitialAgentOptions is a no-op for unknown environments and tabs", () => {
+    const before = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.getState().clearTabInitialAgentOptions("tab-one");
+    expect(usePaneLayoutStore.getState().environments).toBe(before);
+
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [{
+        id: "review-tab",
+        type: "codex-native",
+        initialAgentModel: "gpt-5.6-sol",
+        initialReasoningEffort: "xhigh",
+      }],
+      activeTabId: "review-tab",
+    }, "default", "env-clear-options");
+    const seeded = usePaneLayoutStore.getState().environments;
+
+    usePaneLayoutStore.getState().clearTabInitialAgentOptions("review-tab", "missing-env");
+    usePaneLayoutStore.getState().clearTabInitialAgentOptions("missing-tab", "env-clear-options");
+
+    expect(usePaneLayoutStore.getState().environments).toBe(seeded);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-clear-options")[0]).toMatchObject({
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "xhigh",
+    });
+  });
+});

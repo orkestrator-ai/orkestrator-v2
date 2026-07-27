@@ -1,4 +1,5 @@
 import {
+  Children,
   useCallback,
   useLayoutEffect,
   useState,
@@ -121,10 +122,9 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   }, []);
 
   useLayoutEffect(() => {
-    if (!composeDockElement) {
-      setComposeDockHeight(null);
-      return;
-    }
+    // The dock is rendered unconditionally, so a null element only ever means
+    // the shell is unmounting: nothing to measure and nothing worth resetting.
+    if (!composeDockElement) return;
 
     const syncHeight = () => {
       const nextHeight = Math.ceil(composeDockElement.getBoundingClientRect().height);
@@ -185,7 +185,9 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         {showLog && serverLog && (
           <div className="mt-2 w-full max-w-lg">
             <pre className="max-h-48 overflow-auto rounded-md bg-muted p-3 text-left text-xs whitespace-pre-wrap">
-              {serverLog || "(empty log)"}
+              {/* A whitespace-only log is truthy, so say so rather than
+                  opening an empty box the user cannot interpret. */}
+              {serverLog.trim() ? serverLog : "(empty log)"}
             </pre>
           </div>
         )}
@@ -193,7 +195,22 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     );
   }
 
-  const hasPinnedContent = Boolean(blockingCards) || Boolean(pinnedAccessory);
+  /**
+   * Counted, not coerced. The natural thing to pass is a `.map()` result, and
+   * an empty array is truthy — `Boolean([])` would render the empty pinned
+   * wrapper and permanently switch the spacer to dock-height mode for a tab
+   * that has no blocking prompt at all.
+   */
+  const hasPinnedContent =
+    Children.count(blockingCards) > 0 || Children.count(pinnedAccessory) > 0;
+
+  /**
+   * A measured height of 0 means the dock has not laid out yet (first paint, a
+   * hidden tab), so pinned content still needs the conservative reservation
+   * rather than a spacer that clears nothing.
+   */
+  const measuredDockHeight =
+    composeDockHeight !== null && composeDockHeight > 0 ? composeDockHeight : null;
 
   return (
     <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
@@ -267,15 +284,15 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                 data-testid="transcript-bottom-spacer"
                 className={cn(
                   "shrink-0",
-                  hasPinnedContent && composeDockHeight === null
-                    ? "h-80"
-                    : !hasPinnedContent
-                      ? bottomSpacerClassName
+                  !hasPinnedContent
+                    ? bottomSpacerClassName
+                    : measuredDockHeight === null
+                      ? "h-80"
                       : undefined,
                 )}
                 style={
-                  hasPinnedContent && composeDockHeight !== null
-                    ? { height: composeDockHeight }
+                  hasPinnedContent && measuredDockHeight !== null
+                    ? { height: measuredDockHeight }
                     : undefined
                 }
                 aria-hidden="true"

@@ -8,6 +8,7 @@ import type {
 } from "@/lib/claude-client";
 import * as realClaudeClient from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 const realClaudeClientSnapshot = { ...realClaudeClient };
 const respondToPlanApprovalMock = mock(
@@ -31,17 +32,24 @@ function assistantMessage(
   id: string,
   filePath: string,
   content: string,
+  overrides: {
+    role?: ClaudeMessage["role"];
+    toolName?: string;
+    omitContent?: boolean;
+  } = {},
 ): ClaudeMessage {
   return {
     id,
-    role: "assistant",
+    role: overrides.role ?? "assistant",
     content: "",
     timestamp: "2026-07-20T10:00:00.000Z",
     parts: [
       {
         type: "tool-invocation",
-        toolName: "Write",
-        toolArgs: { file_path: filePath, content },
+        toolName: overrides.toolName ?? "Write",
+        toolArgs: overrides.omitContent
+          ? { file_path: filePath }
+          : { file_path: filePath, content },
       },
     ],
   };
@@ -66,6 +74,7 @@ afterAll(() => {
 beforeEach(() => {
   respondToPlanApprovalMock.mockClear();
   respondToPlanApprovalMock.mockImplementation(async () => "applied");
+  mockToastError.mockClear();
   useClaudeStore.setState({ pendingPlanApprovals: new Map() });
 });
 
@@ -93,6 +102,80 @@ describe("ClaudePlanApprovalCard", () => {
 
     expect(screen.getByText(/review the plan in the conversation above/i)).toBeTruthy();
     expect(screen.queryByText("Implementation Plan")).toBeNull();
+  });
+
+  test.each([
+    ["a bare plan file", "/workspace/plan.md"],
+    ["the plan-prefixed form", "/workspace/plan-phase-two.md"],
+    ["the underscore-prefixed form", "/workspace/plan_phase_two.md"],
+    ["a suffixed plan file", "/workspace/rollout-plan.md"],
+    ["any markdown under .claude/", "/workspace/.claude/notes.md"],
+    ["any markdown under plans/", "/workspace/plans/notes.md"],
+    ["a path recognized case-insensitively", "/workspace/Docs/Plans/Feature.MD"],
+  ])("recognizes %s as a plan", (_label, filePath) => {
+    renderCard([assistantMessage("plan", filePath, "# Recognized plan")]);
+
+    expect(screen.getByRole("heading", { name: "Recognized plan" })).toBeTruthy();
+  });
+
+  test.each([
+    ["a non-markdown file in a plan directory", "/workspace/docs/plans/feature.txt"],
+    ["markdown outside any plan directory", "/workspace/docs/architecture.md"],
+    ["a file that merely mentions plan", "/workspace/planning.md"],
+  ])("does not treat %s as a plan", (_label, filePath) => {
+    renderCard([assistantMessage("not-a-plan", filePath, "# Not a plan")]);
+
+    expect(screen.queryByRole("heading", { name: "Not a plan" })).toBeNull();
+    expect(screen.getByText(/review the plan in the conversation above/i)).toBeTruthy();
+  });
+
+  test("keeps searching past a plan Write that carried no content", () => {
+    // A Write whose args never made it through is not a plan the user can
+    // review; stopping there would hide the plan that does exist.
+    renderCard([
+      assistantMessage("with-content", "/workspace/plan.md", "# Earlier plan"),
+      assistantMessage("empty", "/workspace/plan.md", "", { omitContent: true }),
+      assistantMessage("blank", "/workspace/plan.md", ""),
+    ]);
+
+    expect(screen.getByRole("heading", { name: "Earlier plan" })).toBeTruthy();
+  });
+
+  test("matches the Write tool name case-insensitively", () => {
+    renderCard([
+      assistantMessage("lower", "/workspace/plan.md", "# Lowercase tool", {
+        toolName: "write",
+      }),
+    ]);
+
+    expect(screen.getByRole("heading", { name: "Lowercase tool" })).toBeTruthy();
+  });
+
+  test("ignores plan Writes that are not on an assistant message", () => {
+    // Only the assistant's own tool calls describe what Claude proposes; a
+    // replayed user or system part must not be rendered as the plan.
+    renderCard([
+      assistantMessage("user-part", "/workspace/plan.md", "# User plan", {
+        role: "user",
+      }),
+      assistantMessage("system-part", "/workspace/plan.md", "# System plan", {
+        role: "system",
+      }),
+    ]);
+
+    expect(screen.queryByRole("heading", { name: "User plan" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "System plan" })).toBeNull();
+    expect(screen.getByText(/review the plan in the conversation above/i)).toBeTruthy();
+  });
+
+  test("ignores non-Write tool invocations that touch a plan file", () => {
+    renderCard([
+      assistantMessage("read", "/workspace/plan.md", "# Read plan", {
+        toolName: "Read",
+      }),
+    ]);
+
+    expect(screen.queryByRole("heading", { name: "Read plan" })).toBeNull();
   });
 
   test("approves the request and removes the pending card", async () => {
@@ -158,42 +241,92 @@ describe("ClaudePlanApprovalCard", () => {
   });
 
   test.each([
-    ["failed response", async () => "failed" as const],
+    ["failed response", async () => "failed" as const, {
+      description: "Claude is still waiting for a decision. Please try again.",
+    }],
     ["transport error", async () => {
       throw new Error("bridge unavailable");
-    }],
-  ])("keeps the approval retryable after a %s", async (_label, response) => {
+    }, { description: "bridge unavailable" }],
+  ])("keeps the approval retryable and reports a %s", async (_label, response, expectedToast) => {
+    /**
+     * The card staying enabled is not a signal on its own — the turn is fully
+     * blocked on this answer, so a response that never landed has to say so.
+     */
     respondToPlanApprovalMock.mockImplementation(response);
+    const consoleError = console.error;
+    console.error = (() => {}) as typeof console.error;
+    try {
+      renderCard();
+      fireEvent.click(screen.getByRole("button", { name: "Approve Plan" }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Approve Plan" }).hasAttribute("disabled")).toBe(false),
+      );
+      expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
+      expect(mockToastError).toHaveBeenCalledWith("Failed to approve plan", expectedToast);
+    } finally {
+      console.error = consoleError;
+    }
+  });
+
+  test.each([
+    ["failed response", async () => "failed" as const, {
+      description: "Claude is still waiting for a decision. Please try again.",
+    }],
+    ["transport error", async () => {
+      throw new Error("bridge unavailable");
+    }, { description: "bridge unavailable" }],
+  ])("keeps feedback rejection available for retry and reports a %s", async (
+    _label,
+    response,
+    expectedToast,
+  ) => {
+    respondToPlanApprovalMock.mockImplementation(response);
+    const consoleError = console.error;
+    console.error = (() => {}) as typeof console.error;
+    try {
+      renderCard();
+      fireEvent.click(screen.getByRole("button", { name: "Request Changes" }));
+      fireEvent.click(screen.getByRole("button", { name: "Submit Feedback" }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Submit Feedback" }).hasAttribute("disabled")).toBe(false),
+      );
+      expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send plan feedback", expectedToast);
+    } finally {
+      console.error = consoleError;
+    }
+  });
+
+  test("keeps a failed dismiss available for retry and reports it", async () => {
+    respondToPlanApprovalMock.mockImplementation(async () => "failed");
+    const consoleError = console.error;
+    console.error = (() => {}) as typeof console.error;
+    try {
+      renderCard();
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Dismiss" }).hasAttribute("disabled")).toBe(false),
+      );
+      expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
+      expect(mockToastError).toHaveBeenCalledWith("Failed to dismiss plan", {
+        description: "Claude is still waiting for a decision. Please try again.",
+      });
+    } finally {
+      console.error = consoleError;
+    }
+  });
+
+  test("stays silent when the response lands", async () => {
     renderCard();
     fireEvent.click(screen.getByRole("button", { name: "Approve Plan" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Approve Plan" }).hasAttribute("disabled")).toBe(false),
+      expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(false),
     );
-    expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
-  });
-
-  test("keeps a failed feedback rejection available for retry", async () => {
-    respondToPlanApprovalMock.mockImplementation(async () => "failed");
-    renderCard();
-    fireEvent.click(screen.getByRole("button", { name: "Request Changes" }));
-    fireEvent.click(screen.getByRole("button", { name: "Submit Feedback" }));
-
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Submit Feedback" }).hasAttribute("disabled")).toBe(false),
-    );
-    expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
-  });
-
-  test("keeps a failed dismiss available for retry", async () => {
-    respondToPlanApprovalMock.mockImplementation(async () => "failed");
-    renderCard();
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Dismiss" }).hasAttribute("disabled")).toBe(false),
-    );
-    expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
+    expect(mockToastError).not.toHaveBeenCalled();
   });
 
   test("locks every decision while a response is in flight", async () => {

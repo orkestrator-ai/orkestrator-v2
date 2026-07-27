@@ -8,7 +8,7 @@ import {
   test,
 } from "bun:test";
 import { createRef } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import * as realVirtualizedMessageList from "./VirtualizedMessageList";
 
@@ -134,6 +134,71 @@ describe("NativeChatShell", () => {
     expect(spacer.style.height).toBe("");
   });
 
+  test("treats an empty blockingCards array as no pinned content", () => {
+    /**
+     * `blockingCards` is a ReactNode and the natural thing to pass is a
+     * `.map()` — Codex passes `pendingApprovals.map(...)`. An empty array is
+     * truthy, so a `Boolean()` check would render the empty pinned wrapper and
+     * permanently switch the spacer to dock-height mode on a tab with no
+     * blocking prompt at all.
+     */
+    render(<NativeChatShell {...shellProps()} blockingCards={[]} />);
+
+    const dock = screen.getByTestId("compose-dock");
+    const spacer = screen.getByTestId("transcript-bottom-spacer");
+    dock.getBoundingClientRect = () => ({ height: 500 }) as DOMRect;
+    act(() => {
+      resizeCallback?.([], resizeObserver!);
+    });
+
+    expect(spacer.className).toContain("h-32");
+    expect(spacer.style.height).toBe("");
+    expect(dock.querySelector(".max-h-\\[60vh\\]")).toBeNull();
+  });
+
+  test("reserves a conservative spacer for pinned content before the dock is measured", () => {
+    // The dock has no laid-out height yet, so reserving its measurement would
+    // clear nothing and the prompt would sit on top of the transcript.
+    render(
+      <NativeChatShell
+        {...shellProps()}
+        blockingCards={<div>Approve this command</div>}
+      />,
+    );
+
+    const spacer = screen.getByTestId("transcript-bottom-spacer");
+    expect(spacer.className).toContain("h-80");
+    expect(spacer.style.height).toBe("");
+  });
+
+  test("measures the dock without a ResizeObserver", () => {
+    // Older webviews have no ResizeObserver; the window resize listener alone
+    // still has to keep the pinned clearance correct.
+    const stub = globalThis.ResizeObserver;
+    // @ts-expect-error - deliberately removing the global for this test.
+    delete globalThis.ResizeObserver;
+
+    try {
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          blockingCards={<div>Approve this command</div>}
+        />,
+      );
+
+      const dock = screen.getByTestId("compose-dock");
+      const spacer = screen.getByTestId("transcript-bottom-spacer");
+      dock.getBoundingClientRect = () => ({ height: 360 }) as DOMRect;
+
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      expect(spacer.style.height).toBe("360px");
+    } finally {
+      globalThis.ResizeObserver = stub;
+    }
+  });
+
   test("renders blocking cards before the pinned accessory in one pinned region", () => {
     render(
       <NativeChatShell
@@ -150,5 +215,263 @@ describe("NativeChatShell", () => {
       blockingCard.compareDocumentPosition(accessory)
         & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  describe("connection states", () => {
+    test("shows a connecting screen instead of the transcript", () => {
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Codex"
+          connectionState="connecting"
+        />,
+      );
+
+      expect(screen.getByText("Connecting to Codex...")).toBeTruthy();
+      expect(screen.queryByTestId("compose-dock")).toBeNull();
+      expect(screen.queryByTestId("transcript-bottom-spacer")).toBeNull();
+    });
+
+    test("reports the failure reason and retries on demand", () => {
+      const onRetry = mock(() => {});
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          connectionState="error"
+          errorMessage="spawn ENOENT"
+          onRetry={onRetry}
+        />,
+      );
+
+      expect(screen.getByText("Connection Failed")).toBeTruthy();
+      expect(screen.getByText("spawn ENOENT")).toBeTruthy();
+      expect(screen.queryByTestId("compose-dock")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(onRetry).toHaveBeenCalledTimes(1);
+    });
+
+    test("falls back to a generic message when the error has no detail", () => {
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="OpenCode"
+          connectionState="error"
+          errorMessage={null}
+        />,
+      );
+
+      expect(screen.getByText("Unable to connect to OpenCode")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /Log/ })).toBeNull();
+    });
+
+    test("toggles the server log on and off", () => {
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          connectionState="error"
+          serverLog={"listening on 4242\nEADDRINUSE"}
+        />,
+      );
+
+      expect(screen.queryByText(/EADDRINUSE/)).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Show Log" }));
+      expect(screen.getByText(/EADDRINUSE/)).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Hide Log" }));
+      expect(screen.queryByText(/EADDRINUSE/)).toBeNull();
+    });
+
+    test("says so rather than opening an empty log box", () => {
+      // A whitespace-only log is truthy, so the toggle is offered; showing a
+      // blank pane would read as a broken UI rather than an empty log.
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          connectionState="error"
+          serverLog={"   \n  "}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Show Log" }));
+      expect(screen.getByText("(empty log)")).toBeTruthy();
+    });
+  });
+
+  describe("empty state", () => {
+    test("uses the agent-specific default copy", () => {
+      render(<NativeChatShell {...shellProps()} agentLabel="Claude" />);
+      expect(
+        screen.getByText("No messages yet. Start a conversation with Claude!"),
+      ).toBeTruthy();
+    });
+
+    test("prefers an explicit empty-state message", () => {
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          emptyStateMessage="Pick a session to get going."
+        />,
+      );
+
+      expect(screen.getByText("Pick a session to get going.")).toBeTruthy();
+      expect(screen.queryByText(/No messages yet/)).toBeNull();
+    });
+
+    test("suppresses the empty state while the composer is centered", () => {
+      // The centered composer already is the empty state; a second one below it
+      // would be duplicate copy.
+      render(<NativeChatShell {...shellProps()} centerCompose />);
+      expect(screen.queryByText(/No messages yet/)).toBeNull();
+    });
+
+    test("offers Resume Session from the empty transcript", () => {
+      const onResumeClick = mock(() => {});
+      render(
+        <NativeChatShell {...shellProps()} onResumeClick={onResumeClick} />,
+      );
+
+      // The dock's copy is aria-hidden while docked, so this is the empty
+      // state's button.
+      fireEvent.click(screen.getByRole("button", { name: /Resume Session/ }));
+      expect(onResumeClick).toHaveBeenCalledTimes(1);
+    });
+
+    test("omits Resume Session when there is nothing to resume", () => {
+      render(<NativeChatShell {...shellProps()} />);
+      expect(screen.queryByText("Resume Session")).toBeNull();
+    });
+  });
+
+  describe("dock actions", () => {
+    test("exposes Resume Session only while the composer is centered", () => {
+      const onResumeClick = mock(() => {});
+      const { rerender } = render(
+        <NativeChatShell
+          {...shellProps()}
+          centerCompose
+          onResumeClick={onResumeClick}
+        />,
+      );
+
+      const dockButton = screen
+        .getByTestId("compose-dock")
+        .querySelector("button") as HTMLButtonElement;
+      expect(dockButton.getAttribute("aria-hidden")).toBe("false");
+      expect(dockButton.getAttribute("tabindex")).toBe("0");
+
+      fireEvent.click(dockButton);
+      expect(onResumeClick).toHaveBeenCalledTimes(1);
+
+      rerender(
+        <NativeChatShell
+          {...shellProps()}
+          centerCompose={false}
+          onResumeClick={onResumeClick}
+        />,
+      );
+
+      // Collapsed out of the docked layout, so it must leave the tab order too.
+      expect(dockButton.getAttribute("aria-hidden")).toBe("true");
+      expect(dockButton.getAttribute("tabindex")).toBe("-1");
+    });
+
+    test("renders the resume dialog outside the dock so its portal is not clipped", () => {
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          resumeDialog={<div data-testid="resume-dialog" />}
+        />,
+      );
+
+      const dialog = screen.getByTestId("resume-dialog");
+      expect(screen.getByTestId("compose-dock").contains(dialog)).toBe(false);
+    });
+  });
+
+  describe("transcript footer", () => {
+    test("shows the thinking indicator and the running elapsed time", () => {
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Codex"
+          isLoading
+          elapsedSeconds={95}
+        />,
+      );
+
+      expect(screen.getByRole("status").textContent).toBe("Codex is thinking...");
+      expect(screen.getByText("1m 35s")).toBeTruthy();
+    });
+
+    test("prefers an explicit status label over the thinking indicator", () => {
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          isLoading
+          statusLabel={<span>Stopping…</span>}
+          elapsedSeconds={0}
+        />,
+      );
+
+      expect(screen.getByText("Stopping…")).toBeTruthy();
+      expect(screen.queryByRole("status")).toBeNull();
+      // A zero elapsed reads as noise next to a status that just started.
+      expect(screen.queryByText("0s")).toBeNull();
+    });
+
+    test("reports the completed duration once the turn ends", () => {
+      const { rerender } = render(
+        <NativeChatShell
+          {...shellProps()}
+          isLoading
+          elapsedSeconds={12}
+          finalElapsedSeconds={12}
+        />,
+      );
+
+      expect(screen.queryByText(/Completed in/)).toBeNull();
+
+      rerender(
+        <NativeChatShell
+          {...shellProps()}
+          isLoading={false}
+          elapsedSeconds={null}
+          finalElapsedSeconds={12}
+        />,
+      );
+
+      expect(screen.getByText("Completed in 12s")).toBeTruthy();
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+  });
+
+  describe("scroll affordance", () => {
+    test("offers a scroll-down shortcut only when scrolled away from the bottom", () => {
+      const scrollToBottom = mock(() => {});
+      const { rerender } = render(
+        <NativeChatShell
+          {...shellProps()}
+          isAtBottom
+          scrollToBottom={scrollToBottom}
+        />,
+      );
+
+      expect(screen.queryByText("Scroll down")).toBeNull();
+
+      rerender(
+        <NativeChatShell
+          {...shellProps()}
+          isAtBottom={false}
+          scrollToBottom={scrollToBottom}
+        />,
+      );
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Scroll to bottom of conversation" }),
+      );
+      expect(scrollToBottom).toHaveBeenCalledTimes(1);
+    });
   });
 });

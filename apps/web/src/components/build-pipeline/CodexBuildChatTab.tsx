@@ -33,7 +33,6 @@ import {
   type CodexPromptSendOutcome,
   type CodexReasoningEffort,
 } from "@/lib/codex-client";
-import {} from "@/stores/codexStore";
 import type { BuildTabData } from "@/types/paneLayout";
 import type { TaskSnapshotImage } from "@/prompts";
 import {
@@ -48,7 +47,7 @@ import {
 import { parseVerificationResult } from "@/lib/parse-verification-result";
 import { isSetupPending } from "@/lib/setup-commands";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
-import {cn, createSessionKey} from "@/lib/utils";
+import { cn, createSessionKey } from "@/lib/utils";
 import { createPipelineResumePrompt, getPipelineResumePhase, isSessionCompatibleWithResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
 import {

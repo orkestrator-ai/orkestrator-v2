@@ -7617,6 +7617,28 @@ describe("storage-backed command delegation", () => {
       key: "reviewInstruction",
       modelId: "unsafe",
     }, context)).rejects.toThrow("Expected key to identify an agent model default");
+    // A blank model id would be written verbatim into a required config field.
+    storage.updateAgentModelDefault.mockClear();
+    await expect(commands.get("update_agent_model_default")?.({
+      key: "codexModel",
+      modelId: "   ",
+    }, context)).rejects.toThrow("Expected modelId to be non-empty");
+    await expect(commands.get("update_agent_model_default")?.({
+      key: "codexModel",
+      modelId: "",
+    }, context)).rejects.toThrow("Expected modelId to be non-empty");
+    expect(storage.updateAgentModelDefault).not.toHaveBeenCalled();
+    // Surrounding whitespace is trimmed rather than persisted.
+    await expect(commands.get("update_agent_model_default")?.({
+      key: "claudeModel",
+      modelId: "  claude-opus-4  ",
+    }, context)).resolves.toMatchObject({
+      global: { claudeModel: "claude-opus-4" },
+    });
+    expect(storage.updateAgentModelDefault).toHaveBeenLastCalledWith(
+      "claudeModel",
+      "claude-opus-4",
+    );
 
     await expect(commands.get("set_github_token")?.({ token: " replacement_token " }, context))
       .resolves.toMatchObject({

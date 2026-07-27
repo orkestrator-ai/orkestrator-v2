@@ -22,7 +22,15 @@ export interface QuestionCardQuestion {
   allowCustomAnswer?: boolean;
 }
 
-/** Returning false marks the submit as failed and keeps the card open. */
+/**
+ * Receives the answers the user submitted.
+ *
+ * The return value is the caller's own bookkeeping — the card ignores it. The
+ * card never removes itself either way: every wrapper owns its lifecycle (via
+ * `removePendingQuestion` and friends) because the reply has to be accepted by
+ * the agent before the prompt stops blocking the turn. A rejected submit simply
+ * leaves the card as it was, ready to be retried.
+ */
 export type SubmitAnswersHandler = (
   answers: string[][],
 ) => Promise<boolean | void> | boolean | void;
@@ -90,6 +98,17 @@ function QuestionItem({
     [answer, optionValues],
   );
 
+  /**
+   * In exclusive mode the reply is exactly one answer, and `mergeAnswerForIndex`
+   * makes an uncommitted draft that answer — so while the user is typing, the
+   * selected option and any committed chip are already gone from what will be
+   * submitted. Clear them visually rather than showing a check mark next to
+   * something the submit is about to drop. Nothing is destroyed: erasing the
+   * draft brings the previous selection straight back.
+   */
+  const draftSupersedesAnswer =
+    exclusiveSingleSelect && !isMultiple && customText.trim().length > 0;
+
   const handleOptionClick = useCallback(
     (value: string) => {
       let nextAnswer: string[];
@@ -97,6 +116,12 @@ function QuestionItem({
         nextAnswer = answer.includes(value)
           ? answer.filter((a) => a !== value)
           : [...answer, value];
+      } else if (draftSupersedesAnswer) {
+        // The draft is the current answer and the selection is drawn as
+        // cleared, so a click picks the option rather than toggling a
+        // selection the user cannot see.
+        nextAnswer = [value];
+        onCustomTextChange("");
       } else if (answer.includes(value)) {
         nextAnswer = allowOptionDeselect ? [] : answer;
       } else if (exclusiveSingleSelect) {
@@ -112,10 +137,12 @@ function QuestionItem({
       answer,
       isMultiple,
       onAnswerChange,
+      onCustomTextChange,
       onOptionSelect,
       allowOptionDeselect,
       exclusiveSingleSelect,
       committedCustomAnswers,
+      draftSupersedesAnswer,
     ],
   );
 
@@ -182,7 +209,7 @@ function QuestionItem({
         <div className="space-y-1">
           {info.options!.map((option, optIndex) => {
             const value = optionValue(option);
-            const isSelected = answer.includes(value);
+            const isSelected = !draftSupersedesAnswer && answer.includes(value);
             return (
               <button
                 key={optIndex}
@@ -229,7 +256,7 @@ function QuestionItem({
       )}
 
       {/* Committed custom answers, so the user can see what will be submitted. */}
-      {committedCustomAnswers.length > 0 && (
+      {committedCustomAnswers.length > 0 && !draftSupersedesAnswer && (
         <div className="flex flex-wrap gap-1.5 pt-1">
           {committedCustomAnswers.map((label) => (
             <span
@@ -324,6 +351,8 @@ export function QuestionCard({
       if (!draft || committed.includes(draft)) return committed;
       // Uncommitted text obeys the same exclusivity rule as a committed chip,
       // or a never-pressed-Enter draft would smuggle a second answer through.
+      // `QuestionItem` draws the superseded option and chip as cleared while the
+      // draft is present, so the card shows exactly what this returns.
       if (exclusiveSingleSelect && !(questions[i]?.multiSelect ?? false)) {
         return [draft];
       }

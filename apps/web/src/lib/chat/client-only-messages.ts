@@ -34,7 +34,16 @@ function toOptimisticFileUrl(path: string, previewUrl?: string): string | undefi
     return undefined;
   }
 
-  return `file://${encodeURI(path)}`;
+  /**
+   * `encodeURI` leaves `#` and `?` intact because they are legal URI
+   * delimiters, so a real filename containing either — `error #1.png` — parses
+   * as a fragment or query and the image resolves to the wrong (or no) file.
+   * Every other character `encodeURI` escapes stays escaped.
+   */
+  const encodedPath = encodeURI(path)
+    .replace(/#/g, "%23")
+    .replace(/\?/g, "%3F");
+  return `file://${encodedPath}`;
 }
 
 function getPartFingerprint(part: NativeMessagePart): string {

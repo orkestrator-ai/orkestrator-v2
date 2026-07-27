@@ -16,7 +16,9 @@ export interface NativeServerStatus {
 
 /**
  * Shared session state shape. Each agent's message type plugs into `TMessage`.
- * `title` is optional because OpenCode does not populate it; Claude/Codex do.
+ * `title` is optional because it is only known once the agent reports one — all
+ * three agents populate it, but not until the session has been titled, so tab
+ * labels (`DraggableTab`) must tolerate its absence.
  */
 export interface NativeSessionState<TMessage> {
   sessionId: string;

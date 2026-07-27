@@ -98,6 +98,22 @@ describe("OpenCodePermissionCard", () => {
     expect(screen.queryByRole("button", { name: "Always Allow" })).toBeNull();
   });
 
+  test("omits the requested paths block when the server sends no patterns", () => {
+    render(
+      <OpenCodePermissionCard
+        permission={makePermission({ patterns: [] })}
+        client={CLIENT}
+      />,
+    );
+
+    expect(screen.queryByText("Requested paths")).toBeNull();
+    expect(screen.queryByText("/workspace/src/**")).toBeNull();
+    // The permission itself still renders, and `always` is independent of
+    // `patterns`, so persistent approval stays available.
+    expect(screen.getByText("edit")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Always Allow" })).toBeTruthy();
+  });
+
   test.each([
     ["Reject", "reject"],
     ["Allow Once", "once"],

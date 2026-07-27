@@ -26,6 +26,21 @@ const mockDetectPr = mock(async () => null as {
   hasMergeConflicts: boolean;
 } | null);
 const mockDetectPrLocal = mockDetectPr;
+// Named so the local/container server-start branches can be asserted on.
+const mockGetLocalOpencodeServerStatus = mock(async (_environmentId: string) => ({
+  running: true,
+  port: 9999 as number | null,
+  pid: 1234 as number | undefined,
+}));
+const mockStartLocalOpencodeServer = mock(async (_environmentId: string) => ({
+  port: 9999,
+  pid: 1234,
+}));
+const mockGetOpenCodeServerStatus = mock(async (_containerId: string) => ({
+  running: true,
+  hostPort: 9999 as number | null,
+}));
+const mockStartOpenCodeServer = mock(async (_containerId: string) => ({ hostPort: 9999 }));
 const originalFetch = globalThis.fetch;
 
 mock.module("@/lib/opencode-client", () => ({
@@ -65,11 +80,11 @@ mock.module("@/components/ui/separator", () => ({
 mock.module("@/lib/backend", () => ({
   detectPr: mockDetectPr,
   detectPrLocal: mockDetectPrLocal,
-  getLocalOpencodeServerStatus: mock(async () => ({ running: true, port: 9999, pid: 1234 })),
-  getOpenCodeServerStatus: mock(async () => ({ running: true, hostPort: 9999 })),
+  getLocalOpencodeServerStatus: mockGetLocalOpencodeServerStatus,
+  getOpenCodeServerStatus: mockGetOpenCodeServerStatus,
   getProjectNotes: mockGetProjectNotes,
-  startLocalOpencodeServer: mock(async () => ({ port: 9999, pid: 1234 })),
-  startOpenCodeServer: mock(async () => ({ hostPort: 9999 })),
+  startLocalOpencodeServer: mockStartLocalOpencodeServer,
+  startOpenCodeServer: mockStartOpenCodeServer,
 }));
 
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
@@ -96,6 +111,56 @@ function createData(): BuildTabData {
     taskId: TASK_ID,
     isLocal: false,
   };
+}
+
+function createLocalData(): BuildTabData {
+  return { ...createData(), isLocal: true };
+}
+
+/**
+ * Local worktree environment with setup finished: no container id, setup
+ * commands resolved and nothing running.
+ */
+function seedLocalEnvironment() {
+  useEnvironmentStore.setState({
+    environments: [
+      {
+        id: ENV_ID,
+        projectId: "project-1",
+        name: "test-env",
+        branch: "feature/test",
+        containerId: null,
+        status: "running",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: "2026-04-15T00:00:00.000Z",
+        networkAccessMode: "restricted",
+        order: 0,
+        environmentType: "local",
+        worktreePath: "/tmp/worktree",
+      },
+    ],
+    isLoading: false,
+    error: null,
+    workspaceReadyEnvironments: new Set([ENV_ID]),
+    deletingEnvironments: new Set(),
+    pendingSetupCommands: new Map(),
+    setupCommandsResolved: new Set([ENV_ID]),
+    setupScriptsRunning: new Set(),
+  });
+}
+
+function setPipelinePhase(phase: string) {
+  useBuildPipelineStore.setState((state) => {
+    const pipeline = state.pipelines.get(PIPELINE_ID)!;
+    return {
+      pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+        ...pipeline,
+        phase: phase as typeof pipeline.phase,
+      }),
+    };
+  });
 }
 
 function seedConfigStore() {
@@ -445,6 +510,18 @@ describe("OpenCodeBuildChatTab", () => {
     mockRejectQuestion.mockClear();
     mockGetProjectNotes.mockClear();
     mockDetectPr.mockClear();
+    mockGetLocalOpencodeServerStatus.mockClear();
+    mockStartLocalOpencodeServer.mockClear();
+    mockGetOpenCodeServerStatus.mockClear();
+    mockStartOpenCodeServer.mockClear();
+    mockGetLocalOpencodeServerStatus.mockImplementation(async () => ({
+      running: true,
+      port: 9999,
+      pid: 1234,
+    }));
+    mockStartLocalOpencodeServer.mockImplementation(async () => ({ port: 9999, pid: 1234 }));
+    mockGetOpenCodeServerStatus.mockImplementation(async () => ({ running: true, hostPort: 9999 }));
+    mockStartOpenCodeServer.mockImplementation(async () => ({ hostPort: 9999 }));
     mockCreateSession.mockImplementation(async () => ({
       id: "review-session",
       createdAt: "2026-04-15T00:00:00.000Z",
@@ -1399,5 +1476,191 @@ describe("OpenCodeBuildChatTab", () => {
       expect(pipeline?.error).toContain("Max iterations (3) reached");
     });
     expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  describe("local bridge connection", () => {
+    test("starts the local OpenCode server when setup completes", async () => {
+      seedPendingPipeline();
+      seedLocalEnvironment();
+      mockGetLocalOpencodeServerStatus.mockImplementationOnce(async () => ({
+        running: false,
+        port: null,
+        pid: undefined,
+      }));
+      globalThis.fetch = mock(async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
+
+      render(<OpenCodeBuildChatTab data={createLocalData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockGetLocalOpencodeServerStatus).toHaveBeenCalledWith(ENV_ID);
+      });
+      await waitFor(() => {
+        expect(mockStartLocalOpencodeServer).toHaveBeenCalledWith(ENV_ID);
+      });
+      // The local branch resolves the port from the started server, never the
+      // container status API.
+      expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
+      await waitFor(() => {
+        expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:9999");
+      });
+    });
+
+    test("reuses an already running local OpenCode server", async () => {
+      seedPendingPipeline();
+      seedLocalEnvironment();
+      globalThis.fetch = mock(async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
+
+      render(<OpenCodeBuildChatTab data={createLocalData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockGetLocalOpencodeServerStatus).toHaveBeenCalledWith(ENV_ID);
+      });
+      expect(mockStartLocalOpencodeServer).not.toHaveBeenCalled();
+    });
+
+    test("does not start the local server while setup scripts are running", async () => {
+      seedPendingPipeline();
+      seedLocalEnvironment();
+      useEnvironmentStore.setState({
+        setupScriptsRunning: new Set([ENV_ID]),
+        setupCommandsResolved: new Set([ENV_ID]),
+      });
+
+      render(<OpenCodeBuildChatTab data={createLocalData()} isActive />);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(mockGetLocalOpencodeServerStatus).not.toHaveBeenCalled();
+      expect(mockStartLocalOpencodeServer).not.toHaveBeenCalled();
+      expect(screen.getByText("Waiting for setup scripts to complete...")).toBeTruthy();
+    });
+
+    test("does not start the local server while setup commands are unresolved", async () => {
+      seedPendingPipeline();
+      seedLocalEnvironment();
+      // setupCommandsResolved intentionally left empty.
+      useEnvironmentStore.setState({ setupCommandsResolved: new Set() });
+
+      render(<OpenCodeBuildChatTab data={createLocalData()} isActive />);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(mockGetLocalOpencodeServerStatus).not.toHaveBeenCalled();
+      expect(screen.getByText("Waiting for setup scripts to complete...")).toBeTruthy();
+    });
+  });
+
+  describe("container bridge connection", () => {
+    test("fails the connection when the environment has no container id", async () => {
+      seedPendingPipeline();
+      useEnvironmentStore.setState({
+        environments: [{
+          ...useEnvironmentStore.getState().environments[0]!,
+          containerId: null,
+        }],
+      });
+
+      render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+      expect(await screen.findByText("Connection Failed")).toBeTruthy();
+      expect(
+        screen.getByText("Container ID is required for containerized OpenCode environments"),
+      ).toBeTruthy();
+      expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
+      expect(mockStartOpenCodeServer).not.toHaveBeenCalled();
+    });
+
+    test("starts the container OpenCode server when none is running", async () => {
+      seedPendingPipeline();
+      mockGetOpenCodeServerStatus.mockImplementationOnce(async () => ({
+        running: false,
+        hostPort: null,
+      }));
+      globalThis.fetch = mock(async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
+
+      render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockGetOpenCodeServerStatus).toHaveBeenCalledWith("container-1");
+      });
+      await waitFor(() => {
+        expect(mockStartOpenCodeServer).toHaveBeenCalledWith("container-1");
+      });
+      expect(mockGetLocalOpencodeServerStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("setup gating", () => {
+    test("shows the setup-pending screen while the container workspace is not ready", () => {
+      seedPendingPipeline();
+      useEnvironmentStore.setState({ workspaceReadyEnvironments: new Set() });
+
+      render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+      expect(screen.getByText("Waiting for setup scripts to complete...")).toBeTruthy();
+      expect(screen.getByText("Build will start automatically once setup finishes")).toBeTruthy();
+    });
+
+    for (const phase of ["complete", "failed", "paused"] as const) {
+      test(`does not gate a ${phase} pipeline behind setup`, () => {
+        seedPendingPipeline();
+        setPipelinePhase(phase);
+        useEnvironmentStore.setState({ workspaceReadyEnvironments: new Set() });
+
+        render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+        // Setup is still pending, but a pipeline in a terminal or paused phase
+        // is never held behind the waiting screen — it falls through to the
+        // normal connection UI.
+        expect(screen.queryByText("Waiting for setup scripts to complete...")).toBeNull();
+        expect(screen.getByText("Connecting to OpenCode server...")).toBeTruthy();
+      });
+    }
+
+    test("still gates a running pipeline behind setup", () => {
+      seedPendingPipeline();
+      setPipelinePhase("building");
+      useEnvironmentStore.setState({ workspaceReadyEnvironments: new Set() });
+
+      render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+      expect(screen.getByText("Waiting for setup scripts to complete...")).toBeTruthy();
+    });
+  });
+
+  test("skips PR conflict detection when the environment has no container id", async () => {
+    seedPipeline("building", "running");
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          phase: "creating-pr",
+          sessions: [{
+            ...pipeline.sessions[0]!,
+            phase: "pr",
+            label: "PR Creation Session",
+          }],
+        }),
+      };
+    });
+    seedOpenCodeStore(false);
+    // The cached client keeps the connection healthy, so only the conflict
+    // check sees the missing container id.
+    useEnvironmentStore.setState({
+      environments: [{
+        ...useEnvironmentStore.getState().environments[0]!,
+        containerId: null,
+      }],
+    });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe("complete");
+    });
+    // No container id means no way to ask GitHub, so the pipeline treats the PR
+    // as conflict-free rather than calling detectPr with an empty id.
+    expect(mockDetectPr).not.toHaveBeenCalled();
   });
 });

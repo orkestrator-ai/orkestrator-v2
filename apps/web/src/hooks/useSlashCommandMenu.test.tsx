@@ -132,6 +132,27 @@ describe("useSlashCommandMenu", () => {
     expect(setText).toHaveBeenLastCalledWith("/compact ");
   });
 
+  test("leaves Shift+Tab to the caller so Codex can still toggle Plan/Build", async () => {
+    const setText = mock(() => {});
+    const { result } = renderHook(() =>
+      useSlashCommandMenu({
+        commands: COMMANDS,
+        text: "/com",
+        setText,
+      }),
+    );
+    await waitFor(() => expect(result.current.isOpen).toBe(true));
+    expect(result.current.filteredCommands).toHaveLength(1);
+
+    const shiftTab = keyEvent("Tab", true);
+    act(() => {
+      expect(result.current.handleKeyDown(shiftTab)).toBe(false);
+    });
+    expect(shiftTab.preventDefault).not.toHaveBeenCalled();
+    expect(setText).not.toHaveBeenCalled();
+    expect(result.current.isOpen).toBe(true);
+  });
+
   test("does not consume Shift+Enter, unmatched input, or keys while closed", async () => {
     const { result } = renderHook(() =>
       useSlashCommandMenu({

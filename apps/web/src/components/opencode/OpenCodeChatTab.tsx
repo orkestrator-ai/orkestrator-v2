@@ -16,9 +16,10 @@ import {
 } from "@/lib/chat/client-only-messages";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
-import {useOpenCodeStore} from "@/stores/openCodeStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useConfigStore } from "@/stores/configStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
@@ -607,7 +608,10 @@ export function OpenCodeChatTab({
     isReady:
       connectionState === "connected" && !!client && !!session?.sessionId,
     // Every SSE frame replaces the session object, so a session reference that
-    // stops changing is exactly the stall this watchdog exists to catch.
+    // stops changing is exactly the stall this watchdog exists to catch. An
+    // applied reconcile replaces it too, so the staleness clock alone cannot
+    // bound the poll rate — `minReconcileIntervalMs` (defaulted in the hook) is
+    // what keeps a quiet turn from becoming a sustained poll loop.
     activitySignal: session,
     // Explicitly background: superseded by any newer refresh rather than
     // superseding the user's own.
@@ -644,16 +648,39 @@ export function OpenCodeChatTab({
         // reconnect instantly. This makes environment switching near-instant.
         const existingClient = useOpenCodeStore.getState().clients.get(environmentId);
         const existingSession = useOpenCodeStore.getState().sessions.get(sessionKey);
-        if (existingClient && initialLaunchOptionsPendingRef.current) {
+        /**
+         * Seed this sessionKey's model/variant before either warm path returns.
+         *
+         * Only the cold path below fetches the model catalogue, so a tab that
+         * finds a warm client — a second tab in the environment, or one
+         * reopened after `clearSession` — would otherwise never seed its own
+         * sessionKey-keyed selection: the compose bar shows "Select model" and
+         * `handleSend` sends `model: undefined`, silently falling back to
+         * whatever the server happens to default to.
+         */
+        const pendingLaunchOptions = initialLaunchOptionsPendingRef.current;
+        if (
+          existingClient &&
+          (pendingLaunchOptions || !getSelectedModel(sessionKey))
+        ) {
           const availableModels = useOpenCodeStore.getState().getModels(environmentId);
           if (availableModels.length > 0) {
             const { model: resolvedModel, variant: resolvedVariant } =
               resolveModelSelection({
                 availableModels,
                 defaults: {},
-                preferences: EMPTY_MODEL_PREFERENCES,
-                currentModel: initialLaunchOptionsRef.current.model,
-                currentVariant: initialLaunchOptionsRef.current.reasoningEffort,
+                preferences: pendingLaunchOptions
+                  ? EMPTY_MODEL_PREFERENCES
+                  : modelPreferences,
+                currentModel: pendingLaunchOptions
+                  ? initialLaunchOptionsRef.current.model
+                  : // No launch option to honour, so fall back to the user's
+                    // global OpenCode default — the same value the compose bar
+                    // persists whenever a model is picked.
+                    useConfigStore.getState().config.global.opencodeModel,
+                currentVariant: pendingLaunchOptions
+                  ? initialLaunchOptionsRef.current.reasoningEffort
+                  : getSelectedVariant(sessionKey),
               });
             if (resolvedModel) setSelectedModel(sessionKey, resolvedModel);
             setSelectedVariant(sessionKey, resolvedVariant);
@@ -1667,10 +1694,11 @@ export function OpenCodeChatTab({
         text,
         attachments,
         model: getSelectedModel(sessionKey),
-        variant:
-          initialLaunchOptionsRef.current.model === "default"
-            ? undefined
-            : getSelectedVariant(sessionKey),
+        // Queue what is selected *now*, exactly as `handleSend` would read it.
+        // Gating on the tab's launch-time model dropped the variant for the
+        // rest of the tab's life once it had launched on "default", even after
+        // the user switched to a variant-capable model.
+        variant: getSelectedVariant(sessionKey),
         mode: getSelectedMode(sessionKey),
       });
     },
@@ -1680,7 +1708,6 @@ export function OpenCodeChatTab({
       getSelectedModel,
       getSelectedVariant,
       getSelectedMode,
-      environmentId,
     ],
   );
 

@@ -150,6 +150,39 @@ describe("useNativeComposeSubmit", () => {
     }
   });
 
+  test("reports a send failure and leaves the draft intact", async () => {
+    const sendError = new Error("send unavailable");
+    const onSend = mock(async () => {
+      throw sendError;
+    });
+    const setup = makeOptions({ onSend });
+    const consoleError = mock(() => {});
+    const originalConsoleError = console.error;
+    console.error = consoleError;
+
+    try {
+      const { result } = renderHook(() =>
+        useNativeComposeSubmit<Attachment>(setup.options),
+      );
+      await act(async () => {
+        await result.current.submit();
+      });
+
+      expect(onSend).toHaveBeenCalledWith("serialized:hello", []);
+      expect(setup.draft.getDraftText()).toBe(" hello ");
+      expect(setup.draft.getDraftMentions()).toEqual([MENTION]);
+      expect(setup.draft.removedAttachmentIds).toEqual([]);
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt");
+      expect(consoleError).toHaveBeenCalledWith(
+        "[TestComposeBar] Failed to send prompt:",
+        sendError,
+      );
+      expect(result.current.isSending).toBe(false);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
   test("preserves text typed during send but removes submitted attachments", async () => {
     const attachment = { id: "attachment-1", name: "image.png" };
     let resolveSend!: () => void;
@@ -174,6 +207,62 @@ describe("useNativeComposeSubmit", () => {
     expect(setup.draft.getDraftText()).toBe("new text");
     expect(setup.draft.getDraftMentions()).toEqual([]);
     expect(setup.draft.removedAttachmentIds).toEqual(["attachment-1"]);
+  });
+
+  test("preserves the draft when only the mentions changed during send", async () => {
+    const addedMention: FileMention = {
+      id: "mention-2",
+      filename: "other.ts",
+      relativePath: "src/other.ts",
+    };
+    let resolveSend!: () => void;
+    const onSend = mock(() => new Promise<void>((resolve) => {
+      resolveSend = resolve;
+    }));
+    const setup = makeOptions({ onSend });
+    const { result } = renderHook(() =>
+      useNativeComposeSubmit<Attachment>(setup.options),
+    );
+
+    let submission!: Promise<void>;
+    act(() => {
+      submission = result.current.submit();
+    });
+    // Text is byte-for-byte what was submitted; only the mentions moved on.
+    setup.draft.setDraft(" hello ", [MENTION, addedMention]);
+    await act(async () => {
+      resolveSend();
+      await submission;
+    });
+
+    expect(setup.draft.getDraftText()).toBe(" hello ");
+    expect(setup.draft.getDraftMentions()).toEqual([MENTION, addedMention]);
+  });
+
+  test("clears the draft when the mentions are value-equal but freshly allocated", async () => {
+    let resolveSend!: () => void;
+    const onSend = mock(() => new Promise<void>((resolve) => {
+      resolveSend = resolve;
+    }));
+    const setup = makeOptions({ onSend });
+    const { result } = renderHook(() =>
+      useNativeComposeSubmit<Attachment>(setup.options),
+    );
+
+    let submission!: Promise<void>;
+    act(() => {
+      submission = result.current.submit();
+    });
+    // The store hands back a fresh array of fresh objects on every read, so the
+    // comparison has to be by value rather than by reference.
+    setup.draft.setDraft(" hello ", [{ ...MENTION }]);
+    await act(async () => {
+      resolveSend();
+      await submission;
+    });
+
+    expect(setup.draft.getDraftText()).toBe("");
+    expect(setup.draft.getDraftMentions()).toEqual([]);
   });
 
   test("refuses empty, disabled, vetoed, and unsupported busy submissions", async () => {

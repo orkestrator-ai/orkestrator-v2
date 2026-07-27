@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { __testing as commandTesting } from "../../apps/backend/src/core/commands";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 const setupScript = join(repoRoot, "docker", "workspace-setup.sh");
@@ -59,6 +60,71 @@ validate_prepared_workspace "$2"
     encoding: "utf8",
   }).status;
 }
+
+function runPrepareOnlyCheckpoint(workspace: string): { code: number | null; stdout: string; stderr: string } {
+  const harness = `
+set -e
+GREEN=""; RED=""; NC=""
+
+eval "$(sed -n '/^validate_prepared_workspace() {/,/^}$/p; /^emit_prepare_only_checkpoint() {/,/^}$/p' "$1")"
+
+emit_prepare_only_checkpoint "$2"
+`;
+  const result = spawnSync("bash", ["-c", harness, "--", setupScript, workspace], {
+    encoding: "utf8",
+  });
+  return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+
+describe("workspace setup prepare-only contract", () => {
+  // The backend greps for this exact line before it will invoke --prepare-only.
+  // An image whose script lacks it runs the whole setup instead of stopping at the
+  // checkpoint, so drift here silently reintroduces a post-setup baseline.
+  test("declares the capability marker the backend probes for", () => {
+    const setup = read("docker/workspace-setup.sh");
+    const marker = commandTesting.CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER;
+
+    expect(setup.split("\n")).toContain(marker);
+    expect(
+      spawnSync("grep", ["-qxF", marker, setupScript], { encoding: "utf8" }).status,
+    ).toBe(0);
+  });
+
+  test("rejects an unrecognised argument before touching the workspace", () => {
+    // The argument check is the first thing the script does, so this runs the real
+    // file end to end rather than a sourced fragment.
+    const result = spawnSync("bash", [setupScript, "--not-a-real-flag"], { encoding: "utf8" });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("Unknown workspace setup argument: --not-a-real-flag");
+    expect(result.stdout).toBe("");
+  });
+
+  test("emits the completion sentinel only for a workspace with a real commit", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ork-ws-checkpoint-"));
+    try {
+      const withoutRepo = runPrepareOnlyCheckpoint(workspace);
+      expect(withoutRepo.code).not.toBe(0);
+      expect(withoutRepo.stdout).not.toContain("ORKESTRATOR_PREPARE_OK");
+      expect(withoutRepo.stderr).toContain("Workspace preparation failed - no valid Git HEAD");
+
+      if (!gitAvailable()) return;
+      runGit(workspace, ["init"]);
+      runGit(workspace, ["config", "user.email", "test@example.com"]);
+      runGit(workspace, ["config", "user.name", "Test"]);
+      writeFileSync(join(workspace, "tracked.txt"), "base\n");
+      runGit(workspace, ["add", "tracked.txt"]);
+      runGit(workspace, ["commit", "-m", "base"]);
+
+      const prepared = runPrepareOnlyCheckpoint(workspace);
+      expect(prepared.code).toBe(0);
+      expect(prepared.stdout).toContain(commandTesting.CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL);
+      expect(prepared.stdout).toContain("Workspace preparation complete");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("workspace setup attachment preservation (structure)", () => {
   test("preserve/restore wrap workspace cleanup, in correct order", () => {

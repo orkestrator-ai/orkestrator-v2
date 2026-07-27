@@ -14,6 +14,7 @@ let flowProps: (CreateEnvironmentFlowOperations & {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string | null;
+  projectName?: string;
 }) | null = null;
 
 mock.module("@/hooks/useProjects", () => ({
@@ -26,6 +27,7 @@ mock.module("@/components/environments/CreateEnvironmentFlowDialog", () => ({
       open: boolean;
       onOpenChange: (open: boolean) => void;
       projectId: string | null;
+      projectName?: string;
     },
   ) => {
     flowProps = props;
@@ -187,11 +189,15 @@ describe("ProjectLauncher", () => {
     expect(flowProps).toMatchObject({
       open: true,
       projectId: "project-1",
+      projectName: "Project 1",
       ...operations,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Close create flow" }));
     expect(screen.queryByRole("button", { name: "Close create flow" })).toBeNull();
     expect(flowProps?.projectId).toBeNull();
+    // Closing resets the id, so the name lookup must resolve to nothing rather
+    // than to a stale project's name.
+    expect(flowProps?.projectName).toBeUndefined();
   });
 });

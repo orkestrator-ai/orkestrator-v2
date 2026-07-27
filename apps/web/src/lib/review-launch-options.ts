@@ -64,9 +64,15 @@ export function buildReviewModelCatalog(
       reasoningEfforts: [...(model.reasoningEfforts ?? ["medium", "high"])],
     }));
 
+  const openCodeState = useOpenCodeStore.getState();
   const liveOpenCodeModels = environmentId
-    ? useOpenCodeStore.getState().getModels(environmentId)
-    : [];
+    ? openCodeState.getModels(environmentId)
+    : Array.from(openCodeState.models.values())
+        .flat()
+        .filter(
+          (model, index, models) =>
+            models.findIndex((candidate) => candidate.id === model.id) === index,
+        );
   const opencode = liveOpenCodeModels.map((model) => ({
       id: model.id,
       name: model.name,

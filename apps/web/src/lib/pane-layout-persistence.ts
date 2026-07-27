@@ -32,8 +32,6 @@ function sanitizeTab(tab: TabInfo): TabInfo {
   const {
     initialPrompt: _initialPrompt,
     initialCommands: _initialCommands,
-    initialAgentModel: _initialAgentModel,
-    initialReasoningEffort: _initialReasoningEffort,
     ...rest
   } = tab;
 

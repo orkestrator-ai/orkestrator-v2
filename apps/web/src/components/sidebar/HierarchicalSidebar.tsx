@@ -991,6 +991,9 @@ export function HierarchicalSidebar() {
           if (!open) setCreateEnvProjectId(null);
         }}
         projectId={createEnvProjectId}
+        projectName={
+          projects.find((project) => project.id === createEnvProjectId)?.name
+        }
         createEnvironment={createEnvironment}
         updateEnvironment={updateEnvironment}
         startEnvironment={startEnvironment}

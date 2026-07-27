@@ -84,6 +84,62 @@ describe("reconcilePersistedLayout", () => {
     expect(json).not.toContain("isSetupTab");
   });
 
+  test("restores unconsumed one-shot agent launch options for every agent tab type", () => {
+    // `pane-layout-persistence` deliberately keeps these on disk (unlike
+    // `initialPrompt`/`initialCommands`, which must never be replayed). Dropping
+    // them here would make the create dialog's model choice evaporate on a
+    // renderer reload: `TerminalContainer` hands ownership from the backend's
+    // `pendingAgentLaunch` to the tab as soon as the layout is flushed, so the
+    // tab is the only carrier left.
+    const agentTabs = [
+      { id: "claude-native", type: "claude-native", claudeNativeData: { environmentId: "env-1" } },
+      { id: "codex-native", type: "codex-native", codexNativeData: { environmentId: "env-1" } },
+      { id: "opencode-native", type: "opencode-native", openCodeNativeData: { environmentId: "env-1" } },
+      { id: "claude-tmux", type: "claude-tmux", claudeTmuxData: { environmentId: "env-1" } },
+      { id: "claude-terminal", type: "claude" },
+      { id: "codex-terminal", type: "codex" },
+      { id: "opencode-terminal", type: "opencode" },
+    ].map((tab) => ({
+      ...tab,
+      initialAgentModel: `${tab.id}-model`,
+      initialReasoningEffort: "xhigh",
+    }));
+
+    const restored = reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane-1",
+      tabs: agentTabs,
+      activeTabId: "claude-native",
+    }), context);
+
+    expect(restored).not.toBeNull();
+    const tabs = (restored?.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs;
+    expect(tabs).toHaveLength(agentTabs.length);
+    for (const tab of tabs) {
+      expect(tab.initialAgentModel).toBe(`${tab.id}-model`);
+      expect(tab.initialReasoningEffort).toBe("xhigh");
+    }
+  });
+
+  test("ignores non-string one-shot agent launch options", () => {
+    const restored = reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane-1",
+      tabs: [{
+        id: "native",
+        type: "claude-native",
+        claudeNativeData: { environmentId: "env-1" },
+        initialAgentModel: 42,
+        initialReasoningEffort: { nested: true },
+      }],
+      activeTabId: "native",
+    }), context);
+
+    const tab = (restored?.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs[0]!;
+    expect(tab.initialAgentModel).toBeUndefined();
+    expect(tab.initialReasoningEffort).toBeUndefined();
+  });
+
   test("restores the last browser address", () => {
     const result = reconcilePersistedLayout(saved({
       kind: "leaf",

@@ -895,6 +895,75 @@ describe("PersistentTerminal", () => {
     });
   });
 
+  it("retains one-shot launch options until the environment is ready, then consumes them", async () => {
+    // The whole point of the tab-level options is that they outlive a renderer
+    // reload that happens before the agent command runs. A terminal tab waits on
+    // a PTY readiness marker, so this is the longest-lived unconsumed window in
+    // the app — and the one a test must pin, or the retention could be deleted
+    // without any suite noticing.
+    usePaneLayoutStore.setState((state) => {
+      const environments = new Map(state.environments);
+      const environment = environments.get("env-1")!;
+      if (environment.root.kind !== "leaf") throw new Error("expected leaf");
+      environments.set("env-1", {
+        ...environment,
+        root: {
+          ...environment.root,
+          tabs: environment.root.tabs.map((tab) => ({
+            ...tab,
+            initialAgentModel: "gpt-review",
+            initialReasoningEffort: "high",
+          })),
+        },
+      });
+      return { environments };
+    });
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="codex"
+        containerId="container-1"
+        environmentId="env-1"
+        initialPrompt="Fix the failing tests"
+        initialAgentModel="gpt-review"
+        initialReasoningEffort="high"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={true}
+        paneId="pane-1"
+      />
+    );
+
+    // A first container tab with no prior session waits for the setup marker
+    // before it is allowed to launch, so nothing has run yet.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(writeMock).not.toHaveBeenCalled();
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+      initialAgentModel: "gpt-review",
+      initialReasoningEffort: "high",
+    });
+
+    await act(async () => {
+      terminalOnData?.(new TextEncoder().encode("=== Workspace Ready ===\n"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(writeMock).toHaveBeenCalledWith(
+        'codex --model "gpt-review" --config "model_reasoning_effort=\\"high\\"" "Fix the failing tests"\n',
+      );
+    });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+      initialAgentModel: undefined,
+      initialReasoningEffort: undefined,
+    });
+  });
+
   it("creates persistent sessions for local terminals with an empty container id", async () => {
     useEnvironmentStore.setState({
       environments: [

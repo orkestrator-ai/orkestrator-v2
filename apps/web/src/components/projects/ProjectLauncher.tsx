@@ -157,6 +157,9 @@ export function ProjectLauncher(operations: CreateEnvironmentFlowOperations) {
           if (!open) setCreateEnvironmentProjectId(null);
         }}
         projectId={createEnvironmentProjectId}
+        projectName={
+          projects.find((project) => project.id === createEnvironmentProjectId)?.name
+        }
         {...operations}
       />
     </div>

@@ -28,6 +28,38 @@ describe("claudeOptionsStore", () => {
     expect(useClaudeOptionsStore.getState().getOptions("env-1")).toBeUndefined();
   });
 
+  test("round-trips one-shot model and reasoning effort on both launch shapes", () => {
+    const store = useClaudeOptionsStore.getState();
+    store.setOptions("env-1", {
+      launchAgent: true,
+      agentType: "codex",
+      initialPrompt: "Fix tests",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+    expect(useClaudeOptionsStore.getState().getOptions("env-1")).toEqual(
+      expect.objectContaining({ model: "gpt-5.6-sol", reasoningEffort: "high" }),
+    );
+
+    // The pending-launch record is what `TerminalContainer` turns into a tab, so
+    // it has to carry the options too.
+    store.setPendingNativeLaunch("env-1", {
+      containerId: null,
+      environmentId: "env-1",
+      targetPaneId: "default",
+      agentType: "codex",
+      launchMode: "native",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+    expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-1")).toEqual(
+      expect.objectContaining({ model: "gpt-5.6-sol", reasoningEffort: "high" }),
+    );
+
+    store.clearOptions("env-1");
+    expect(useClaudeOptionsStore.getState().getOptions("env-1")).toBeUndefined();
+  });
+
   test("stores initial prompt attachments with launch options", () => {
     useClaudeOptionsStore.getState().setOptions("env-1", {
       launchAgent: true,

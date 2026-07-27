@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -36,7 +37,6 @@ import {
   Network,
   Plus,
   Shield,
-  Terminal,
   Trash2,
   X,
 } from "lucide-react";
@@ -62,8 +62,14 @@ import type {
   PortProtocol,
 } from "@/types";
 import type { AgentType } from "@/stores";
-import { useConfigStore } from "@/stores";
+import {
+  useCodexStore,
+  useConfigStore,
+} from "@/stores";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
+import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
@@ -123,6 +129,12 @@ export interface ClaudeOptions {
   claudeMode: ClaudeMode;
   opencodeMode: OpenCodeMode;
   codexMode: CodexMode;
+  /**
+   * One-shot model for the launched agent tab. `undefined` means "no explicit
+   * choice" — the agent surface falls back to the user's configured defaults.
+   */
+  model?: string;
+  reasoningEffort?: string;
   initialPrompt: string;
   initialPromptAttachments: InitialPromptImageAttachment[];
   networkAccessMode: NetworkAccessMode;
@@ -136,6 +148,8 @@ interface CreateEnvironmentDialogProps {
   isLoading?: boolean;
   /** Project ID for persisting draft prompt text */
   projectId?: string | null;
+  /** Project name displayed in the dialog title */
+  projectName?: string;
   /** Default port mappings from repository settings */
   defaultPortMappings?: PortMapping[];
 }
@@ -149,6 +163,7 @@ export function CreateEnvironmentDialog({
   onCreate,
   isLoading = false,
   projectId,
+  projectName,
   defaultPortMappings = EMPTY_PORT_MAPPINGS,
 }: CreateEnvironmentDialogProps) {
   const { config } = useConfigStore();
@@ -161,6 +176,128 @@ export function CreateEnvironmentDialog({
   const configOpencodeMode = resolved.opencodeMode as OpenCodeMode;
   const configCodexMode = resolved.codexMode as CodexMode;
   const configEnvironmentType: EnvironmentType = repoConfig?.lastEnvironmentType ?? "containerized";
+  const claudeModels = useClaudeStore((state) => state.models);
+  const codexModels = useCodexStore((state) => state.models);
+  const openCodeModels = useOpenCodeStore((state) => state.models);
+  const configuredOpenCodeModel =
+    (configDefaultAgent === "opencode" ? repoConfig?.defaultModel : undefined)
+    ?? config.global.opencodeModel;
+  const configuredOpenCodeEffort =
+    configDefaultAgent === "opencode" ? repoConfig?.defaultEffort : undefined;
+  /**
+   * `buildReviewModelCatalog` synthesises a single `{ id: "default" }` OpenCode
+   * entry when no environment has cached a live catalog yet. That id is a UI
+   * placeholder, not a model any OpenCode server knows, so submitting it would
+   * pin a bogus one-shot model — and because a pending launch option is treated
+   * as authoritative downstream, it would also suppress the user's own saved
+   * OpenCode model preferences. Claude's `"default"` is a real catalog id and
+   * must keep flowing through untouched.
+   */
+  const hasLiveOpenCodeModels = useMemo(
+    () => Array.from(openCodeModels.values()).some((models) => models.length > 0),
+    [openCodeModels],
+  );
+  const modelCatalog = useMemo(
+    () => {
+      const catalog = buildReviewModelCatalog(undefined);
+      if (!configuredOpenCodeModel) return catalog;
+
+      const configuredModel = catalog.opencode.find(
+        (candidate) => candidate.id === configuredOpenCodeModel,
+      );
+      if (configuredModel) {
+        if (
+          !configuredOpenCodeEffort
+          || configuredModel.reasoningEfforts?.includes(configuredOpenCodeEffort)
+        ) {
+          return catalog;
+        }
+        return {
+          ...catalog,
+          opencode: catalog.opencode.map((candidate) =>
+            candidate.id === configuredOpenCodeModel
+              ? {
+                  ...candidate,
+                  reasoningEfforts: [
+                    ...(candidate.reasoningEfforts ?? []),
+                    configuredOpenCodeEffort,
+                  ],
+                }
+              : candidate
+          ),
+        };
+      }
+
+      return {
+        ...catalog,
+        opencode: [
+          {
+            id: configuredOpenCodeModel,
+            name: configuredOpenCodeModel,
+            description: "Configured default",
+            reasoningEfforts: configuredOpenCodeEffort
+              ? [configuredOpenCodeEffort]
+              : [],
+          },
+          ...catalog.opencode,
+        ],
+      };
+    },
+    [
+      claudeModels,
+      codexModels,
+      configuredOpenCodeEffort,
+      configuredOpenCodeModel,
+      openCodeModels,
+    ],
+  );
+
+  const getInitialAgentSelection = useCallback(
+    (nextAgent: AgentType) => {
+      const models = modelCatalog[nextAgent];
+      const globalPreferredModel =
+        nextAgent === "claude"
+          ? config.global.claudeModel
+          : nextAgent === "codex"
+            ? config.global.codexModel
+            : config.global.opencodeModel;
+      const projectPreferredModel =
+        nextAgent === configDefaultAgent ? repoConfig?.defaultModel : undefined;
+      const preferredModel = projectPreferredModel || globalPreferredModel;
+      const selectedModel =
+        models.find((candidate) => candidate.id === preferredModel)?.id ??
+        models[0]?.id ??
+        "default";
+      const supportedEfforts =
+        models.find((candidate) => candidate.id === selectedModel)?.reasoningEfforts ?? [];
+      const projectPreferredEffort =
+        nextAgent === configDefaultAgent ? repoConfig?.defaultEffort : undefined;
+      const preferredEffort =
+        projectPreferredEffort
+        ?? (nextAgent === "codex"
+          ? config.global.codexReasoningEffort
+          : undefined);
+
+      return {
+        model: selectedModel,
+        reasoningEffort:
+          preferredEffort && supportedEfforts.includes(preferredEffort)
+            ? preferredEffort
+            : "default",
+      };
+    },
+    [
+      config.global.claudeModel,
+      config.global.codexModel,
+      config.global.codexReasoningEffort,
+      config.global.opencodeModel,
+      configDefaultAgent,
+      modelCatalog,
+      repoConfig?.defaultEffort,
+      repoConfig?.defaultModel,
+    ],
+  );
+  const initialAgentSelection = getInitialAgentSelection(configDefaultAgent);
 
   const [environmentType, setEnvironmentType] = useState<EnvironmentType>(configEnvironmentType);
   const [environmentName, setEnvironmentName] = useState("");
@@ -169,6 +306,10 @@ export function CreateEnvironmentDialog({
   const [claudeMode, setClaudeMode] = useState<ClaudeMode>(configClaudeMode);
   const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>(configOpencodeMode);
   const [codexMode, setCodexMode] = useState<CodexMode>(configCodexMode);
+  const [model, setModel] = useState(initialAgentSelection.model);
+  const [reasoningEffort, setReasoningEffort] = useState(
+    initialAgentSelection.reasoningEffort,
+  );
   const [initialPrompt, setInitialPrompt] = useState("");
   const [initialPromptAttachments, setInitialPromptAttachments] = useState<InitialPromptImageAttachment[]>([]);
   const [networkAccessMode, setNetworkAccessMode] = useState<NetworkAccessMode>("full");
@@ -209,6 +350,9 @@ export function CreateEnvironmentDialog({
     setClaudeMode(configClaudeMode);
     setOpencodeMode(configOpencodeMode);
     setCodexMode(configCodexMode);
+    const nextSelection = getInitialAgentSelection(configDefaultAgent);
+    setModel(nextSelection.model);
+    setReasoningEffort(nextSelection.reasoningEffort);
     setInitialPrompt("");
     setInitialPromptAttachments([]);
     setNetworkAccessMode("full");
@@ -216,7 +360,15 @@ export function CreateEnvironmentDialog({
     setShowPortConfig(defaultPortMappings.length > 0);
     setMobileSection("prompt");
     setMobileTabTransitionDirection(null);
-  }, [defaultPortMappings, configDefaultAgent, configClaudeMode, configOpencodeMode, configCodexMode, configEnvironmentType]);
+  }, [
+    defaultPortMappings,
+    configClaudeMode,
+    configCodexMode,
+    configDefaultAgent,
+    configEnvironmentType,
+    configOpencodeMode,
+    getInitialAgentSelection,
+  ]);
 
   const handlePromptPaste = useCallback(async (event: ClipboardEvent) => {
     if (!open || !launchAgent || document.activeElement !== promptRef.current) return;
@@ -314,10 +466,87 @@ export function CreateEnvironmentDialog({
       setClaudeMode(configClaudeMode);
       setOpencodeMode(configOpencodeMode);
       setCodexMode(configCodexMode);
+      const nextSelection = getInitialAgentSelection(configDefaultAgent);
+      setModel(nextSelection.model);
+      setReasoningEffort(nextSelection.reasoningEffort);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally omit defaultPortMappings and configDefaultAgent:
-    // we read the current value at dialog-open time, not re-sync when defaults change mid-dialog
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- read current defaults only when the dialog opens
   }, [open]);
+
+  const selectedMode =
+    agentType === "claude"
+      ? claudeMode
+      : agentType === "opencode"
+        ? opencodeMode
+        : codexMode;
+  const availableModels = modelCatalog[agentType];
+  const availableReasoningEfforts =
+    availableModels.find((candidate) => candidate.id === model)?.reasoningEfforts ?? [];
+
+  useEffect(() => {
+    if (!open) return;
+
+    const selectedModel = availableModels.find((candidate) => candidate.id === model);
+    if (!selectedModel) {
+      const nextSelection = getInitialAgentSelection(agentType);
+      setModel(nextSelection.model);
+      setReasoningEffort(nextSelection.reasoningEffort);
+      return;
+    }
+
+    if (
+      reasoningEffort !== "default"
+      && !selectedModel.reasoningEfforts?.includes(reasoningEffort)
+    ) {
+      setReasoningEffort("default");
+    }
+  }, [
+    agentType,
+    availableModels,
+    getInitialAgentSelection,
+    model,
+    open,
+    reasoningEffort,
+  ]);
+
+  const selectAgent = useCallback(
+    (nextAgent: AgentType) => {
+      setAgentType(nextAgent);
+      const nextSelection = getInitialAgentSelection(nextAgent);
+      setModel(nextSelection.model);
+      setReasoningEffort(nextSelection.reasoningEffort);
+    },
+    [getInitialAgentSelection],
+  );
+
+  const setUseTui = useCallback(
+    (checked: boolean | "indeterminate") => {
+      const nextMode = checked === true ? "terminal" : "native";
+      if (agentType === "claude") {
+        setClaudeMode(nextMode);
+      } else if (agentType === "opencode") {
+        setOpencodeMode(nextMode);
+      } else {
+        setCodexMode(nextMode);
+      }
+    },
+    [agentType],
+  );
+
+  const selectModel = useCallback(
+    (nextModel: string) => {
+      setModel(nextModel);
+      const supportedEfforts =
+        availableModels.find((candidate) => candidate.id === nextModel)?.reasoningEfforts ?? [];
+      if (
+        reasoningEffort !== "default" &&
+        !supportedEfforts.includes(reasoningEffort)
+      ) {
+        setReasoningEffort("default");
+      }
+    },
+    [availableModels, reasoningEffort],
+  );
 
   const selectMobileSection = useCallback(
     (nextSection: MobileSection) => {
@@ -413,6 +642,12 @@ export function CreateEnvironmentDialog({
           claudeMode,
           opencodeMode,
           codexMode,
+          model:
+            agentType === "opencode" && model === "default" && !hasLiveOpenCodeModels
+              ? undefined
+              : model,
+          reasoningEffort:
+            reasoningEffort === "default" ? undefined : reasoningEffort,
           initialPrompt: initialPrompt.trim(),
           initialPromptAttachments,
           networkAccessMode,
@@ -429,7 +664,7 @@ export function CreateEnvironmentDialog({
         console.error("Failed to create environment:", err);
       }
     },
-    [environmentType, environmentName, launchAgent, agentType, claudeMode, opencodeMode, codexMode, initialPrompt, initialPromptAttachments, networkAccessMode, portMappings, onCreate, resetForm, onOpenChange, projectId, validatePortMappings]
+    [environmentType, environmentName, launchAgent, agentType, claudeMode, opencodeMode, codexMode, model, hasLiveOpenCodeModels, reasoningEffort, initialPrompt, initialPromptAttachments, networkAccessMode, portMappings, onCreate, resetForm, onOpenChange, projectId, validatePortMappings]
   );
 
   const handlePromptKeyDown = useCallback(
@@ -460,7 +695,9 @@ export function CreateEnvironmentDialog({
         onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>Create Ork (Environment)</DialogTitle>
+          <DialogTitle>
+            Create Ork (Environment){projectName ? ` ${projectName}` : ""}
+          </DialogTitle>
           <DialogDescription>
             Configure a new Ork environment with an optional initial prompt.
           </DialogDescription>
@@ -676,144 +913,124 @@ export function CreateEnvironmentDialog({
 
           </div>
 
-            {/* Agent Mode Selector */}
-            <div className={cn(
-              "space-y-2",
-              !launchAgent && "opacity-50"
-            )}>
-              <Label className="text-sm">
-                {agentType === "claude"
-                  ? "Claude Mode"
-                  : agentType === "opencode"
-                    ? "OpenCode Mode"
-                    : "Codex Mode"}
-              </Label>
-              <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (agentType === "claude") {
-                        setClaudeMode("terminal");
-                      } else if (agentType === "opencode") {
-                        setOpencodeMode("terminal");
-                      } else {
-                        setCodexMode("terminal");
-                      }
-                    }}
-                    disabled={isLoading || !launchAgent}
-                    className={cn(
-                      "p-2 rounded-lg border-2 text-left transition-colors",
-                      (agentType === "claude"
-                        ? claudeMode
-                        : agentType === "opencode"
-                          ? opencodeMode
-                          : codexMode) === "terminal"
-                        ? "border-primary bg-primary/5"
-                        : UNSELECTED_CARD_CLASSES,
-                      (isLoading || !launchAgent) && "opacity-50 cursor-not-allowed"
-                    )}
-                  >
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      <Terminal className="h-3.5 w-3.5" />
-                      Terminal
-                    </div>
-                  </button>
+          {/* Compact agent launch configuration */}
+          <div
+            className={cn(
+              "space-y-3 sm:col-span-2",
+              !launchAgent && "opacity-50",
+            )}
+          >
+            <Label className="text-sm">Default Agent</Label>
+            <div className="grid grid-cols-1 gap-3 rounded-xl border border-border/70 bg-zinc-950/45 p-3 sm:grid-cols-[auto_minmax(0,1fr)_minmax(9rem,0.55fr)] sm:items-end">
+              <div className="space-y-1.5">
+                <span className="block text-xs text-muted-foreground">Agent</span>
+                <div
+                  role="radiogroup"
+                  aria-label="Default Agent"
+                  className="flex h-9 items-center gap-1 rounded-md border border-input bg-input/30 p-1"
+                >
+                  {([
+                    {
+                      value: "claude",
+                      label: "Claude",
+                      icon: <ClaudeIcon className="h-4 w-4" />,
+                    },
+                    {
+                      value: "codex",
+                      label: "Codex",
+                      icon: <CodexIcon className="h-4 w-4" />,
+                    },
+                    {
+                      value: "opencode",
+                      label: "OpenCode",
+                      icon: <OpenCodeIcon className="h-4 w-4" />,
+                    },
+                  ] as const).map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-label={option.label}
+                      aria-checked={agentType === option.value}
+                      title={option.label}
+                      onClick={() => selectAgent(option.value)}
+                      disabled={isLoading || !launchAgent}
+                      className={cn(
+                        "grid h-7 w-8 place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-zinc-800 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        agentType === option.value &&
+                          "bg-primary text-primary-foreground shadow-sm hover:bg-primary hover:text-primary-foreground",
+                        (isLoading || !launchAgent) && "cursor-not-allowed",
+                      )}
+                    >
+                      {option.icon}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (agentType === "claude") {
-                        setClaudeMode("native");
-                      } else if (agentType === "opencode") {
-                        setOpencodeMode("native");
-                      } else {
-                        setCodexMode("native");
-                      }
-                    }}
-                    disabled={isLoading || !launchAgent}
-                    className={cn(
-                      "p-2 rounded-lg border-2 text-left transition-colors",
-                      (agentType === "claude"
-                        ? claudeMode
-                        : agentType === "opencode"
-                          ? opencodeMode
-                          : codexMode) === "native"
-                        ? "border-primary bg-primary/5"
-                        : UNSELECTED_CARD_CLASSES,
-                      (isLoading || !launchAgent) && "opacity-50 cursor-not-allowed"
-                    )}
-                  >
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      <Bot className="h-3.5 w-3.5" />
-                      Native
-                    </div>
-                  </button>
-                </>
+              <div className="min-w-0 space-y-1.5">
+                <Label htmlFor="agent-model" className="text-xs font-normal text-muted-foreground">
+                  Model
+                </Label>
+                <Select
+                  value={model}
+                  onValueChange={selectModel}
+                  disabled={isLoading || !launchAgent}
+                >
+                  <SelectTrigger id="agent-model" className="w-full">
+                    <SelectValue placeholder="Select model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableModels.map((option) => (
+                      <SelectItem key={option.id} value={option.id}>
+                        {option.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="min-w-0 space-y-1.5">
+                <Label
+                  htmlFor="agent-reasoning-effort"
+                  className="text-xs font-normal text-muted-foreground"
+                >
+                  Reasoning effort
+                </Label>
+                <Select
+                  value={reasoningEffort}
+                  onValueChange={setReasoningEffort}
+                  disabled={
+                    isLoading ||
+                    !launchAgent ||
+                    availableReasoningEfforts.length === 0
+                  }
+                >
+                  <SelectTrigger id="agent-reasoning-effort" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">Default</SelectItem>
+                    {availableReasoningEfforts.map((effort) => (
+                      <SelectItem key={effort} value={effort}>
+                        {effort.charAt(0).toUpperCase() + effort.slice(1)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
-          {/* Full-width Default Agent Selector */}
-          <div className={cn(
-            "space-y-2",
-            !launchAgent && "opacity-50",
-            "sm:col-span-2"
-          )}>
-            <Label className="text-sm">Default Agent</Label>
-            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-3">
-              <button
-                type="button"
-                onClick={() => setAgentType("claude")}
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="use-tui"
+                checked={selectedMode === "terminal"}
+                onCheckedChange={setUseTui}
                 disabled={isLoading || !launchAgent}
-                className={cn(
-                  "p-3 rounded-lg border-2 text-left transition-colors",
-                  agentType === "claude"
-                    ? "border-primary bg-primary/5"
-                    : UNSELECTED_CARD_CLASSES,
-                  (isLoading || !launchAgent) && "opacity-50 cursor-not-allowed"
-                )}
-              >
-                <div className="flex items-center gap-2 font-medium text-sm">
-                  <ClaudeIcon className="h-4 w-4" />
-                  Claude
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setAgentType("opencode")}
-                disabled={isLoading || !launchAgent}
-                className={cn(
-                  "p-3 rounded-lg border-2 text-left transition-colors",
-                  agentType === "opencode"
-                    ? "border-primary bg-primary/5"
-                    : UNSELECTED_CARD_CLASSES,
-                  (isLoading || !launchAgent) && "opacity-50 cursor-not-allowed"
-                )}
-              >
-                <div className="flex items-center gap-2 font-medium text-sm">
-                  <OpenCodeIcon className="h-4 w-4 shrink-0" />
-                  OpenCode
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setAgentType("codex")}
-                disabled={isLoading || !launchAgent}
-                className={cn(
-                  "p-3 rounded-lg border-2 text-left transition-colors",
-                  agentType === "codex"
-                    ? "border-primary bg-primary/5"
-                    : UNSELECTED_CARD_CLASSES,
-                  (isLoading || !launchAgent) && "opacity-50 cursor-not-allowed"
-                )}
-              >
-                <div className="flex items-center gap-2 font-medium text-sm">
-                  <CodexIcon className="h-4 w-4 text-foreground" />
-                  Codex
-                </div>
-              </button>
+              />
+              <Label htmlFor="use-tui" className="cursor-pointer text-sm font-normal">
+                Use TUI
+              </Label>
             </div>
           </div>
             </TabsContent>
@@ -905,7 +1122,10 @@ export function CreateEnvironmentDialog({
                       }
                       disabled={isLoading}
                     >
-                      <SelectTrigger className="col-span-3 col-start-1 w-full sm:col-span-1 sm:col-start-auto sm:w-20">
+                      <SelectTrigger
+                        aria-label="Protocol"
+                        className="col-span-3 col-start-1 w-full sm:col-span-1 sm:col-start-auto sm:w-20"
+                      >
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>

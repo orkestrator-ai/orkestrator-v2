@@ -125,6 +125,9 @@ export function PersistentTerminal({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
   });
+  const initialLaunchOptionsPendingRef = useRef(
+    Boolean(initialAgentModel || initialReasoningEffort),
+  );
   const initialLaunchModel = initialLaunchOptionsRef.current.model;
   const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
   const clearTabInitialAgentOptions = usePaneLayoutStore(
@@ -146,17 +149,11 @@ export function PersistentTerminal({
     isMobileRef.current = isMobile;
   }, [isMobile]);
 
-  useEffect(() => {
-    if (initialLaunchModel || initialLaunchReasoningEffort) {
-      clearTabInitialAgentOptions(tabId, environmentId);
-    }
-  }, [
-    clearTabInitialAgentOptions,
-    environmentId,
-    initialLaunchModel,
-    initialLaunchReasoningEffort,
-    tabId,
-  ]);
+  const acknowledgeInitialLaunchOptions = useCallback(() => {
+    if (!initialLaunchOptionsPendingRef.current) return;
+    initialLaunchOptionsPendingRef.current = false;
+    clearTabInitialAgentOptions(tabId, environmentId);
+  }, [clearTabInitialAgentOptions, environmentId, tabId]);
 
   // Get terminal appearance settings from config
   const terminalAppearance = useConfigStore(
@@ -561,6 +558,9 @@ export function PersistentTerminal({
       });
 
       hasLaunchedCommandRef.current = existingPersistentSession.hasLaunchedCommand ?? false;
+      if (hasLaunchedCommandRef.current) {
+        acknowledgeInitialLaunchOptions();
+      }
 
       loadPersistentSessionBuffer(existingPersistentSession.id)
         .then((buffer) => {
@@ -576,6 +576,7 @@ export function PersistentTerminal({
       hasRestoredFromPersistentRef.current = true;
     }
   }, [
+    acknowledgeInitialLaunchOptions,
     environmentId,
     tabId,
     sessionKey,
@@ -693,6 +694,9 @@ export function PersistentTerminal({
       initialRestorationCompleteRef.current = true;
       setHasReconnected(true);
       hasLaunchedCommandRef.current = existingHasLaunchedCommand;
+      if (existingHasLaunchedCommand) {
+        acknowledgeInitialLaunchOptions();
+      }
 
       // Only call onReady from reconnection path if:
       // 1. This is not the first tab, OR
@@ -725,7 +729,7 @@ export function PersistentTerminal({
         console.log("[PersistentTerminal] First tab on new environment, waiting for setup detection before calling onReady, tab:", tabId);
       }
     }
-  }, [isReconnecting, isConnected, hasReconnected, tabId, environmentId, onReady, serializedBuffer, existingHasLaunchedCommand, terminal, fitAddon, isFirstTab, isLocalEnvironment]);
+  }, [acknowledgeInitialLaunchOptions, isReconnecting, isConnected, hasReconnected, tabId, environmentId, onReady, serializedBuffer, existingHasLaunchedCommand, terminal, fitAddon, isFirstTab, isLocalEnvironment]);
 
   // Persistent session buffers can arrive after the PTY reconnection effect has
   // already run. If that restored buffer contains setup completion, rehydrate
@@ -1212,6 +1216,7 @@ export function PersistentTerminal({
           const command = agentCommand;
           console.debug("[PersistentTerminal] Launching command for tab:", tabId, "command:", command);
           writeRef.current(command + "\n");
+          acknowledgeInitialLaunchOptions();
         } else if (tabType === "plain" && initialCommands && initialCommands.length > 0) {
           // For plain tabs with initial commands, execute them
           console.debug("[PersistentTerminal] Executing initial commands for tab:", tabId, "commands:", initialCommands);
@@ -1233,7 +1238,7 @@ export function PersistentTerminal({
         }
       }, 300);
     }
-  }, [isEnvironmentReady, isConnected, tabType, tabId, initialPrompt, initialCommands, initialLaunchModel, initialLaunchReasoningEffort, isSetupTab, sessionKey, setHasLaunchedCommandStore]);
+  }, [acknowledgeInitialLaunchOptions, isEnvironmentReady, isConnected, tabType, tabId, initialPrompt, initialCommands, initialLaunchModel, initialLaunchReasoningEffort, isSetupTab, sessionKey, setHasLaunchedCommandStore]);
 
   // Focus when active. Mobile is excluded so activating a tab does not raise
   // the on-screen keyboard; the terminal still fits, and tapping it focuses.

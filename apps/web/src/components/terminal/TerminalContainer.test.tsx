@@ -70,6 +70,12 @@ const getEnvironmentSetupSessionMock = mock(async (_environmentId: string): Prom
 const setEnvironmentPendingAgentLaunchMock = mock(async (environmentId: string, pending: boolean) => ({
   ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
   pendingAgentLaunch: pending,
+  ...(pending
+    ? {}
+    : {
+        initialAgentModel: undefined,
+        initialReasoningEffort: undefined,
+      }),
 }));
 const setEnvironmentInitialPromptMock = mock(async (environmentId: string, initialPrompt: string) => ({
   ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
@@ -288,6 +294,12 @@ describe("TerminalContainer", () => {
     setEnvironmentPendingAgentLaunchMock.mockImplementation(async (environmentId: string, pending: boolean) => ({
       ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
       pendingAgentLaunch: pending,
+      ...(pending
+        ? {}
+        : {
+            initialAgentModel: undefined,
+            initialReasoningEffort: undefined,
+          }),
     }));
     setEnvironmentInitialPromptMock.mockReset();
     setEnvironmentInitialPromptMock.mockImplementation(async (environmentId: string, initialPrompt: string) => ({
@@ -1627,6 +1639,8 @@ describe("TerminalContainer", () => {
           launchAgent: true,
           agentType: "codex",
           initialPrompt: "Continue after setup",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
         },
       },
       pendingNativeLaunches: {},
@@ -1689,6 +1703,8 @@ describe("TerminalContainer", () => {
 
       const nativeTab = envHidden.root.tabs.find((tab) => tab.type === "codex-native");
       expect(nativeTab?.initialPrompt).toBe("Continue after setup");
+      expect(nativeTab?.initialAgentModel).toBe("gpt-5.6-sol");
+      expect(nativeTab?.initialReasoningEffort).toBe("high");
       expect(
         useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
       ).toBeUndefined();
@@ -1799,6 +1815,8 @@ describe("TerminalContainer", () => {
               setupScriptsComplete: true,
               pendingAgentLaunch: true,
               initialPrompt: "Recover after mobile reload",
+              initialAgentModel: "gpt-5.6-sol",
+              initialReasoningEffort: "high",
               ...overrides,
             }
           : environment
@@ -1821,6 +1839,29 @@ describe("TerminalContainer", () => {
         />
       </TerminalProvider>,
     );
+
+  /**
+   * Wait for the durable launch to reconstruct its agent tab and assert the
+   * one-shot options rode along onto it.
+   *
+   * The tab — not the backend flag — is the durable carrier from this point on:
+   * `TerminalContainer` flushes the layout (options included) before clearing
+   * `pendingAgentLaunch`, and `pane-layout-restore` reads the options back. So
+   * the clear deliberately does *not* wait for a consumer to apply them; doing
+   * so would strand the flag whenever an agent surface reaches a steady state
+   * without applying the model.
+   */
+  const waitForDurableAgentTab = async (type = "codex-native") => {
+    let tabId: string | undefined;
+    await waitFor(() => {
+      const agentTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .find((tab) => tab.type === type);
+      expect(agentTab?.initialAgentModel).toBe("gpt-5.6-sol");
+      expect(agentTab?.initialReasoningEffort).toBe("high");
+      tabId = agentTab?.id;
+    });
+    return tabId!;
+  };
 
   test("reconstructs and clears a durable agent launch after a full renderer reload", async () => {
     usePaneLayoutStore.setState({
@@ -1851,6 +1892,8 @@ describe("TerminalContainer", () => {
               setupScriptsComplete: true,
               pendingAgentLaunch: true,
               initialPrompt: "Recover after mobile reload",
+              initialAgentModel: "gpt-5.6-sol",
+              initialReasoningEffort: "high",
             }
           : environment
       ),
@@ -1878,6 +1921,11 @@ describe("TerminalContainer", () => {
       const codexTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
         .find((tab) => tab.type === "codex-native");
       expect(codexTab?.initialPrompt).toBe("Recover after mobile reload");
+      expect(codexTab?.initialAgentModel).toBe("gpt-5.6-sol");
+      expect(codexTab?.initialReasoningEffort).toBe("high");
+    });
+
+    await waitFor(() => {
       expect(setEnvironmentPendingAgentLaunchMock).toHaveBeenCalledWith(
         "env-hidden",
         false,
@@ -1888,25 +1936,137 @@ describe("TerminalContainer", () => {
       ).toBe(false);
     });
 
-    // The layout must be durable *before* the intent is cleared, or an eviction
-    // in between loses the agent tab with nothing left to retry from.
-    expect(savePaneLayoutMock).toHaveBeenCalled();
-    const savedLayout = savePaneLayoutMock.mock.calls.at(-1)?.[1];
-    expect(JSON.stringify(savedLayout)).toContain("codex-native");
-    expect(savePaneLayoutMock.mock.invocationCallOrder[0]!).toBeLessThan(
-      setEnvironmentPendingAgentLaunchMock.mock.invocationCallOrder[0]!,
-    );
+    // Handing ownership from the backend flag to the tab is only safe if the
+    // options are on disk first. Assert the flushed layout that preceded the
+    // clear actually carried them — this is the invariant that lets a renderer
+    // reload rehydrate the user's model choice instead of silently falling back
+    // to the configured default.
+    const clearOrder = setEnvironmentPendingAgentLaunchMock.mock.invocationCallOrder[0]!;
+    const flushIndex = savePaneLayoutMock.mock.invocationCallOrder
+      .findIndex((order) => order < clearOrder);
+    expect(flushIndex).toBeGreaterThanOrEqual(0);
+    const flushedLayout = savePaneLayoutMock.mock.calls[flushIndex]?.[1];
+    expect(JSON.stringify(flushedLayout)).toContain("codex-native");
+    expect(JSON.stringify(flushedLayout)).toContain('"initialAgentModel":"gpt-5.6-sol"');
+    expect(JSON.stringify(flushedLayout)).toContain('"initialReasoningEffort":"high"');
+  });
+
+  test("stops carrying the options once the agent surface acknowledges them", async () => {
+    setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
+    renderHiddenTerminal();
+    const tabId = await waitForDurableAgentTab();
+
+    await act(async () => {
+      usePaneLayoutStore.getState().clearTabInitialAgentOptions(tabId, "env-hidden");
+      await Promise.resolve();
+    });
+
+    const agentTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+      .find((tab) => tab.id === tabId);
+    expect(agentTab?.initialAgentModel).toBeUndefined();
+    expect(agentTab?.initialReasoningEffort).toBeUndefined();
+  });
+
+  test.each([
+    {
+      label: "Claude native",
+      overrides: { defaultAgent: "claude", claudeMode: "native" },
+      expectedType: "claude-native",
+      model: "claude-fable-5[1m]",
+    },
+    {
+      label: "OpenCode native",
+      overrides: { defaultAgent: "opencode", opencodeMode: "native" },
+      expectedType: "opencode-native",
+      model: "provider/review-model",
+    },
+    {
+      label: "Claude terminal",
+      overrides: { defaultAgent: "claude", claudeMode: "terminal" },
+      expectedType: "claude",
+      model: "sonnet",
+    },
+  ])("carries durable model and effort onto the reconstructed $label tab and its flushed layout", async ({
+    overrides,
+    expectedType,
+    model,
+  }) => {
+    setupDurableLaunchEnvironment({
+      ...overrides,
+      initialAgentModel: model,
+      initialReasoningEffort: "high",
+    });
+    renderHiddenTerminal();
+
+    await waitFor(() => {
+      const agentTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .find((tab) => tab.type === expectedType);
+      expect(agentTab?.initialAgentModel).toBe(model);
+      expect(agentTab?.initialReasoningEffort).toBe("high");
+    });
+
+    await waitFor(() => {
+      expect(setEnvironmentPendingAgentLaunchMock).toHaveBeenCalledWith("env-hidden", false);
+    });
+    const clearOrder = setEnvironmentPendingAgentLaunchMock.mock.invocationCallOrder[0]!;
+    const flushIndex = savePaneLayoutMock.mock.invocationCallOrder
+      .findIndex((order) => order < clearOrder);
+    expect(flushIndex).toBeGreaterThanOrEqual(0);
+    expect(JSON.stringify(savePaneLayoutMock.mock.calls[flushIndex]?.[1]))
+      .toContain(`"initialAgentModel":"${model}"`);
+  });
+
+  test("carries an effort-only durable launch with no model", async () => {
+    setupDurableLaunchEnvironment({
+      defaultAgent: "codex",
+      codexMode: "native",
+      initialAgentModel: undefined,
+      initialReasoningEffort: "xhigh",
+    });
+    renderHiddenTerminal();
+
+    await waitFor(() => {
+      const agentTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .find((tab) => tab.type === "codex-native");
+      expect(agentTab?.initialReasoningEffort).toBe("xhigh");
+      expect(agentTab?.initialAgentModel).toBeUndefined();
+    });
+  });
+
+  test("records the durable model and effort on the pending native launch itself", async () => {
+    setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
+
+    // The record is consumed into a tab on the very next render, so sample every
+    // value the store holds rather than polling for a state that has already
+    // been cleared. The tab is built from this record, so a regression here
+    // silently drops the user's choice on every consuming branch.
+    const observed: Array<{ model?: string; reasoningEffort?: string }> = [];
+    const unsubscribe = useClaudeOptionsStore.subscribe((state) => {
+      const pending = state.pendingNativeLaunches["env-hidden"];
+      if (pending) observed.push({ model: pending.model, reasoningEffort: pending.reasoningEffort });
+    });
+
+    try {
+      renderHiddenTerminal();
+      await waitForDurableAgentTab();
+      expect(observed).toContainEqual({ model: "gpt-5.6-sol", reasoningEffort: "high" });
+    } finally {
+      unsubscribe();
+    }
   });
 
   test("keeps the durable launch pending when persisting the layout fails", async () => {
     setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
-    savePaneLayoutMock.mockRejectedValueOnce(new Error("offline"));
     const originalWarn = console.warn;
     const warned = mock(() => undefined);
     console.warn = warned;
 
     try {
+      // Arm the failure before rendering: the flush now fires as soon as the
+      // reconstructed tab exists, so there is no window to install it later.
+      savePaneLayoutMock.mockRejectedValueOnce(new Error("offline"));
       renderHiddenTerminal();
+      await waitForDurableAgentTab();
 
       await waitFor(() => {
         expect(savePaneLayoutMock).toHaveBeenCalled();
@@ -1931,6 +2091,7 @@ describe("TerminalContainer", () => {
 
     try {
       renderHiddenTerminal();
+      await waitForDurableAgentTab();
 
       await waitFor(() => {
         expect(setEnvironmentPendingAgentLaunchMock).toHaveBeenCalledTimes(1);
@@ -1966,6 +2127,7 @@ describe("TerminalContainer", () => {
     }));
 
     renderHiddenTerminal();
+    await waitForDurableAgentTab();
 
     await waitFor(() => {
       const environment = useEnvironmentStore.getState().getEnvironmentById("env-hidden");
@@ -2856,6 +3018,8 @@ describe("TerminalContainer", () => {
           launchAgent: true,
           agentType: "codex",
           initialPrompt: "Review this build",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
         },
       },
       pendingNativeLaunches: {},
@@ -2883,6 +3047,8 @@ describe("TerminalContainer", () => {
       expect(envHidden.root.tabs[0]?.type).toBe("codex-native");
       expect(envHidden.root.tabs[0]?.isSetupTab).toBeUndefined();
       expect(envHidden.root.tabs[0]?.initialPrompt).toBe("Review this build");
+      expect(envHidden.root.tabs[0]?.initialAgentModel).toBe("gpt-5.6-sol");
+      expect(envHidden.root.tabs[0]?.initialReasoningEffort).toBe("high");
       expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(false);
       expect(useEnvironmentStore.getState().isWorkspaceReady("env-hidden")).toBe(true);
     });
@@ -3020,6 +3186,8 @@ describe("TerminalContainer", () => {
           launchAgent: true,
           agentType: "claude",
           initialPrompt: "",
+          model: "sonnet",
+          reasoningEffort: "high",
         },
       },
       pendingNativeLaunches: {},
@@ -3041,6 +3209,8 @@ describe("TerminalContainer", () => {
         throw new Error("env-hidden root should be a leaf");
       }
       expect(envHidden.root.tabs[0]?.type).toBe("claude");
+      expect(envHidden.root.tabs[0]?.initialAgentModel).toBe("sonnet");
+      expect(envHidden.root.tabs[0]?.initialReasoningEffort).toBe("high");
       expect(
         useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
       ).toBeUndefined();

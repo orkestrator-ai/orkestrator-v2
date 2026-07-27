@@ -241,6 +241,9 @@ export function ClaudeChatTab({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
   });
+  const initialLaunchOptionsPendingRef = useRef(
+    Boolean(initialAgentModel || initialReasoningEffort),
+  );
   const initialLaunchModel = initialLaunchOptionsRef.current.model;
   const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
   const clearTabInitialAgentOptions = usePaneLayoutStore(
@@ -255,17 +258,11 @@ export function ClaudeChatTab({
     }
   }, [initialLaunchReasoningEffort, sessionKey]);
 
-  useEffect(() => {
-    if (initialLaunchModel || initialLaunchReasoningEffort) {
-      clearTabInitialAgentOptions(tabId, environmentId);
-    }
-  }, [
-    clearTabInitialAgentOptions,
-    environmentId,
-    initialLaunchModel,
-    initialLaunchReasoningEffort,
-    tabId,
-  ]);
+  const acknowledgeInitialLaunchOptions = useCallback(() => {
+    if (!initialLaunchOptionsPendingRef.current) return;
+    initialLaunchOptionsPendingRef.current = false;
+    clearTabInitialAgentOptions(tabId, environmentId);
+  }, [clearTabInitialAgentOptions, environmentId, tabId]);
 
   const seedInitialFastMode = useCallback(() => {
     const claudeState = useClaudeStore.getState();
@@ -677,6 +674,7 @@ export function ClaudeChatTab({
         const existingClient = useClaudeStore.getState().clients.get(environmentId);
         const existingSession = useClaudeStore.getState().sessions.get(sessionKey);
         if (existingClient && existingSession?.sessionId) {
+          acknowledgeInitialLaunchOptions();
           console.debug("[ClaudeChatTab] Fast reconnect - reusing existing client and session", {
             tabId,
             environmentId,
@@ -765,6 +763,9 @@ export function ClaudeChatTab({
           const preferredModel = resolvePreferredClaudeModel(resolvedModels, initialLaunchModel);
           if (!currentSelectedModel && preferredModel) {
             setSelectedModel(sessionKey, preferredModel);
+          }
+          if (resolvedModels.length > 0 || !initialLaunchModel) {
+            acknowledgeInitialLaunchOptions();
           }
 
           if (data.sessionId) {
@@ -903,6 +904,9 @@ export function ClaudeChatTab({
         const preferredModel = resolvePreferredClaudeModel(availableModels, initialLaunchModel);
         if (!currentSelectedModel && preferredModel) {
           setSelectedModel(sessionKey, preferredModel);
+        }
+        if (availableModels.length > 0 || !initialLaunchModel) {
+          acknowledgeInitialLaunchOptions();
         }
 
         // Eagerly load slash commands from plugins (before first query)

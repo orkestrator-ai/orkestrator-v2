@@ -76,8 +76,12 @@ function normalizePipelineStructuredReview(value: unknown): unknown {
   const pipeline = value as Record<string, unknown>;
   if (pipeline.structuredReview === undefined) return value;
   try {
+    // A persisted snapshot is durable data this app wrote earlier, so it may
+    // predate `testResults.notRun`. Materialize the field here rather than
+    // leaving every reader to infer it.
     const structuredReview = parseStructuredReviewReport(
       pipeline.structuredReview,
+      { allowLegacyTestResults: true },
     );
     return structuredReview === pipeline.structuredReview
       ? value

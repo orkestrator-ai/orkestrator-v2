@@ -113,6 +113,25 @@ describe("StructuredReviewReportView", () => {
     expect(screen.getByText("13 not run")).toBeTruthy();
   });
 
+  test("clamps an inferred not-run count that would go negative", () => {
+    render(
+      <StructuredReviewReportView
+        report={{
+          ...report,
+          testResults: {
+            total: 2,
+            passed: 3,
+            failed: 1,
+            failures: [],
+          },
+        } as any}
+      />,
+    );
+
+    expect(screen.getByText("0 not run")).toBeTruthy();
+    expect(screen.queryByText("-2 not run")).toBeNull();
+  });
+
   test("renders commit, failed validation, skipped files, and limitations", () => {
     render(
       <StructuredReviewReportView

@@ -61,8 +61,8 @@ import {
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import {
-  readExistingValidatedBuildReview,
   readValidatedBuildReview,
+  recoverExistingBuildReview,
   structuredReviewHasFindings,
 } from "@/lib/build-pipeline-structured-review";
 import { hideRawStructuredReviewMessages } from "@/lib/structured-review-messages";
@@ -1856,34 +1856,35 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
           break;
         }
         case "reviewing": {
-          try {
-            const activeClient = client ?? await initializeClient();
-            const recovered = await readExistingValidatedBuildReview(
-              currentPipeline,
-              (sessionId, requestId) =>
-                getStructuredOutput(activeClient, sessionId, requestId),
-            );
-            if (recovered) {
-              setStructuredReview(pipelineId, recovered.report);
-              const recoveredPipeline = {
-                ...currentPipeline,
-                structuredReview: recovered.report,
-              };
-              if (structuredReviewHasFindings(recovered.report)) {
-                await sendAddressIssuesMessage(
-                  recoveredPipeline,
-                  recovered.session,
-                );
-              } else {
-                await startVerifySession(recoveredPipeline);
-              }
-              break;
+          // Only the read is guarded. Everything after a successful recovery
+          // has already moved the phase and may have dispatched a prompt, so
+          // treating a failure there as "recovery failed" would start a second
+          // review on top of it.
+          const recovered = await recoverExistingBuildReview(
+            currentPipeline,
+            async (sessionId, requestId) =>
+              getStructuredOutput(
+                client ?? await initializeClient(),
+                sessionId,
+                requestId,
+              ),
+            "[CodexBuildChatTab]",
+          );
+          if (recovered) {
+            setStructuredReview(pipelineId, recovered.report);
+            const recoveredPipeline = {
+              ...currentPipeline,
+              structuredReview: recovered.report,
+            };
+            if (structuredReviewHasFindings(recovered.report)) {
+              await sendAddressIssuesMessage(
+                recoveredPipeline,
+                recovered.session,
+              );
+            } else {
+              await startVerifySession(recoveredPipeline);
             }
-          } catch (error) {
-            console.warn(
-              "[CodexBuildChatTab] Existing review result could not be recovered; starting a fresh review:",
-              error,
-            );
+            break;
           }
           await startReviewSession(currentPipeline);
           break;
@@ -1957,6 +1958,17 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     setIsReconnecting(true);
     const stillOwnsReconnect = () =>
       useBuildPipelineStore.getState().pipelines.get(pipelineId)?.reconnectAttempt?.id === attemptId;
+    /**
+     * A restart that advances the pipeline to a phase other than the one it
+     * failed in releases this lease implicitly, because `setPhase` only
+     * preserves a reconnect attempt whose phase matches. That is not the same
+     * as being superseded, and the difference decides whether a later failure
+     * is ours to report.
+     */
+    const reconnectSuperseded = () => {
+      const attempt = useBuildPipelineStore.getState().pipelines.get(pipelineId)?.reconnectAttempt;
+      return attempt !== undefined && attempt.id !== attemptId;
+    };
 
     try {
       if (context.kind === "stage-transition") {
@@ -2039,10 +2051,17 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       const message = `Reconnect failed: ${
         error instanceof Error ? error.message : "Unable to reach the Codex bridge"
       }`;
-      if (failReconnect(pipelineId, attemptId, message) && currentSession) {
-        appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
-        setSessionError(currentSession.sessionKey, message);
-        setSessionLoading(currentSession.sessionKey, false);
+      const failedAttempt = failReconnect(pipelineId, attemptId, message);
+      if (failedAttempt || !reconnectSuperseded()) {
+        // The lease may have been released by a restart that already advanced
+        // the phase. Surface the failure anyway, or the pipeline stops in that
+        // new phase with nothing running, no error, and no Reconnect button.
+        if (!failedAttempt) setPipelineError(pipelineId, message);
+        if (currentSession) {
+          appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
+          setSessionError(currentSession.sessionKey, message);
+          setSessionLoading(currentSession.sessionKey, false);
+        }
       }
     } finally {
       setIsReconnecting(false);
@@ -2058,6 +2077,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     pipelineId,
     restartFailedStage,
     setMessages,
+    setPipelineError,
     setSessionError,
     setSessionLoading,
   ]);

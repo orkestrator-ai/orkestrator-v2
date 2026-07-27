@@ -53,8 +53,8 @@ import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import {
-  readExistingValidatedBuildReview,
   readValidatedBuildReview,
+  recoverExistingBuildReview,
   structuredReviewHasFindings,
 } from "@/lib/build-pipeline-structured-review";
 import { hideRawStructuredReviewMessages } from "@/lib/structured-review-messages";
@@ -1265,34 +1265,31 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
 
     setIsRetryingReview(true);
     try {
-      try {
-        const activeClient = client ?? await initializeClient();
-        const recovered = await readExistingValidatedBuildReview(
-          currentPipeline,
-          (sessionId, requestId) =>
-            getStructuredOutput(activeClient, sessionId, requestId),
-        );
-        if (recovered) {
-          setStructuredReview(pipelineId, recovered.report);
-          const recoveredPipeline = {
-            ...currentPipeline,
-            structuredReview: recovered.report,
-          };
-          if (structuredReviewHasFindings(recovered.report)) {
-            await sendAddressIssuesMessage(
-              recoveredPipeline,
-              recovered.session,
-            );
-          } else {
-            await startVerifySession(recoveredPipeline);
-          }
-          return;
+      // Only the read is guarded. Everything after a successful recovery has
+      // already moved the phase and may have dispatched a prompt, so treating a
+      // failure there as "recovery failed" would start a second review on top.
+      const recovered = await recoverExistingBuildReview(
+        currentPipeline,
+        async (sessionId, requestId) =>
+          getStructuredOutput(
+            client ?? await initializeClient(),
+            sessionId,
+            requestId,
+          ),
+        "[OpenCodeBuildChatTab]",
+      );
+      if (recovered) {
+        setStructuredReview(pipelineId, recovered.report);
+        const recoveredPipeline = {
+          ...currentPipeline,
+          structuredReview: recovered.report,
+        };
+        if (structuredReviewHasFindings(recovered.report)) {
+          await sendAddressIssuesMessage(recoveredPipeline, recovered.session);
+        } else {
+          await startVerifySession(recoveredPipeline);
         }
-      } catch (error) {
-        console.warn(
-          "[OpenCodeBuildChatTab] Existing review result could not be recovered; starting a fresh review:",
-          error,
-        );
+        return;
       }
       await startReviewSession(currentPipeline);
     } finally {

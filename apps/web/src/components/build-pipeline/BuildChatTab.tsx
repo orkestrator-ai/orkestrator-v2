@@ -61,8 +61,8 @@ import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import {
-  readExistingValidatedBuildReview,
   readValidatedBuildReview,
+  recoverExistingBuildReview,
   structuredReviewHasFindings,
 } from "@/lib/build-pipeline-structured-review";
 import { hideRawStructuredReviewMessages } from "@/lib/structured-review-messages";
@@ -1385,35 +1385,29 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
     setIsRetryingReview(true);
     try {
-      if (client) {
-        try {
-          const recovered = await readExistingValidatedBuildReview(
+      // Only the read is guarded. Everything after a successful recovery has
+      // already moved the phase and may have dispatched a prompt, so treating a
+      // failure there as "recovery failed" would start a second review on top.
+      const recovered = client
+        ? await recoverExistingBuildReview(
             currentPipeline,
             (sessionId, requestId) =>
               getStructuredOutput(client, sessionId, requestId),
-          );
-          if (recovered) {
-            setStructuredReview(pipelineId, recovered.report);
-            const recoveredPipeline = {
-              ...currentPipeline,
-              structuredReview: recovered.report,
-            };
-            if (structuredReviewHasFindings(recovered.report)) {
-              await sendAddressIssuesMessage(
-                recoveredPipeline,
-                recovered.session,
-              );
-            } else {
-              await startVerifySession(recoveredPipeline);
-            }
-            return;
-          }
-        } catch (error) {
-          console.warn(
-            "[BuildChatTab] Existing review result could not be recovered; starting a fresh review:",
-            error,
-          );
+            "[BuildChatTab]",
+          )
+        : null;
+      if (recovered) {
+        setStructuredReview(pipelineId, recovered.report);
+        const recoveredPipeline = {
+          ...currentPipeline,
+          structuredReview: recovered.report,
+        };
+        if (structuredReviewHasFindings(recovered.report)) {
+          await sendAddressIssuesMessage(recoveredPipeline, recovered.session);
+        } else {
+          await startVerifySession(recoveredPipeline);
         }
+        return;
       }
       await startReviewSession(currentPipeline);
     } finally {

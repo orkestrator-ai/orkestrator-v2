@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import {
   isReviewFindingPool,
   isReviewReconciliation,
+  backfillLegacyTestResults,
   isStructuredReviewReport,
   type ReviewFindingPool,
   type ReviewReconciliation,
@@ -575,6 +576,45 @@ export function hasReviewFindings(pool: ReviewFindingPool): boolean {
 }
 
 /** Runtime guard used for local and backend workflow recovery. */
+/**
+ * Materializes `testResults.notRun` on every persisted pass report.
+ *
+ * Runs before {@link isLoopedReviewWorkflow} so a workflow written by a build
+ * that predates the field is restored with a complete report rather than
+ * leaving each reader to infer the count. Anything it cannot parse is returned
+ * untouched for the guard below to reject.
+ */
+export function normalizeLoopedReviewWorkflow(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return value;
+  }
+  const workflow = value as Record<string, unknown>;
+  if (!Array.isArray(workflow.rounds)) return value;
+
+  let changed = false;
+  const rounds = workflow.rounds.map((round) => {
+    if (typeof round !== "object" || round === null) return round;
+    const passes = (round as Record<string, unknown>).passes;
+    if (!Array.isArray(passes)) return round;
+
+    let roundChanged = false;
+    const nextPasses = passes.map((pass) => {
+      if (typeof pass !== "object" || pass === null) return pass;
+      const report = (pass as Record<string, unknown>).report;
+      if (report === undefined) return pass;
+      const migrated = backfillLegacyTestResults(report);
+      if (migrated === report) return pass;
+      roundChanged = true;
+      return { ...(pass as Record<string, unknown>), report: migrated };
+    });
+    if (!roundChanged) return round;
+    changed = true;
+    return { ...(round as Record<string, unknown>), passes: nextPasses };
+  });
+
+  return changed ? { ...workflow, rounds } : value;
+}
+
 export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWorkflow {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const workflow = value as Partial<LoopedReviewWorkflow>;
@@ -660,7 +700,13 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
           pass.completedAt === undefined
           || typeof pass.completedAt === "string"
         )
-        && (pass.report === undefined || isStructuredReviewReport(pass.report))
+        && (
+          pass.report === undefined
+          // Persisted passes may predate `testResults.notRun`; rejecting one
+          // would discard the whole workflow. `normalizeLoopedReviewWorkflow`
+          // has already materialized the field for anything reaching here.
+          || isStructuredReviewReport(pass.report, { allowLegacyTestResults: true })
+        )
         && (
           pass.reconciliation === undefined
           || isLoopedReviewReconciliation(pass.reconciliation)
@@ -1640,7 +1686,8 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
       const entries = (persisted as PersistedLoopedReviewState | undefined)?.workflows;
       for (const entry of Array.isArray(entries) ? entries : []) {
         if (!Array.isArray(entry) || entry.length !== 2) continue;
-        const [id, workflow] = entry;
+        const [id, stored] = entry;
+        const workflow = normalizeLoopedReviewWorkflow(stored);
         if (
           typeof id !== "string"
           || !isLoopedReviewWorkflow(workflow)

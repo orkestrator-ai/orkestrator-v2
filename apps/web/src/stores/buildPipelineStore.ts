@@ -263,7 +263,10 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     || !isOptional(candidate.verificationResult, (entry) =>
       entry === "pass" || entry === "fail")
     || !isOptionalString(candidate.verificationFeedback)
-    || !isOptional(candidate.structuredReview, isStructuredReviewReport)
+    // Snapshots reaching this guard come from the backend or from legacy
+    // `localStorage`, so a report predating `testResults.notRun` must be
+    // accepted rather than taken as grounds to drop the whole pipeline.
+    || !isOptional(candidate.structuredReview, isLegacyTolerantStructuredReview)
     || !isOptionalNonEmptyString(candidate.structuredReviewRequestId)
     || !isOptional(candidate.pausedFromPhase, isResumableBuildPhaseValue)
     || !isOptionalString(candidate.error)
@@ -292,6 +295,10 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
   }
   if (candidate.sessions.length === 0) return currentSessionIndex === -1;
   return currentSessionIndex >= 0 && currentSessionIndex < candidate.sessions.length;
+}
+
+function isLegacyTolerantStructuredReview(value: unknown): boolean {
+  return isStructuredReviewReport(value, { allowLegacyTestResults: true });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

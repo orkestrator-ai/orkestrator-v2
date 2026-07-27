@@ -102,6 +102,32 @@ describe("buildReviewBody", () => {
     );
   });
 
+  test("names the Markdown report as the output contract when no schema is enforced", () => {
+    // The instruction block and the safety rules must agree about what the
+    // editable preference cannot override; naming a JSON Schema to an agent that
+    // was never given one invites it to invent output framing.
+    const markdown = buildReviewBody({
+      targetBranch: "main",
+      allowClarifyingQuestions: true,
+      outputFormat: "markdown",
+    });
+
+    expect(markdown).toContain("or change the required output format");
+    expect(markdown).toContain(
+      "the workflow below, or the required Markdown report",
+    );
+    expect(markdown).toContain(
+      "fixed safety rules, workflow contract, and required Markdown report",
+    );
+    expect(markdown).not.toContain("provider-enforced JSON Schema");
+    expect(markdown).not.toContain("provider-enforced output schema");
+    // The reported sections do not change with the output contract.
+    expect(markdown).toContain("Total: N (must equal Passed + Failed + Not run)");
+    expect(markdown).toContain(
+      "Not run: N (all skipped, todo, pending, or disabled tests)",
+    );
+  });
+
   for (const [label, targetBranch] of [
     ["slash and Unicode", "feature/na\u00efve-\ud83d\ude80"],
     ["empty", ""],

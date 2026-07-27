@@ -23,6 +23,7 @@ import {
   type LoopedReviewWorkflow,
   type ReviewPackage,
 } from "./loopedReviewStore";
+import { TEST_LEGACY_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 
 const issue: ReviewIssue = {
   severity: "P1",
@@ -1414,6 +1415,45 @@ describe("looped review persistence", () => {
 
     await useLoopedReviewStore.persist.rehydrate();
     expect(Array.from(useLoopedReviewStore.getState().workflows.keys())).toEqual([id]);
+  });
+
+  test("restores a persisted pass report written before notRun existed", async () => {
+    // The build pipeline normalizes its own persisted reports; this store keeps
+    // the same shape in `localStorage` and must not drop a whole workflow just
+    // because a pass predates the field.
+    const id = createWorkflow();
+    const valid = workflow(id);
+    const legacy = {
+      ...valid,
+      rounds: [{
+        round: 1,
+        allowance: 3,
+        status: "completed" as const,
+        startedAt: valid.createdAt,
+        passes: [{
+          pass: 1,
+          sessionId: "discovery-session",
+          status: "completed" as const,
+          startedAt: valid.createdAt,
+          report: TEST_LEGACY_STRUCTURED_REVIEW_REPORT,
+        }],
+      }],
+    };
+    useLoopedReviewStore.setState({ workflows: new Map() });
+    localStorage.setItem(LOOPED_REVIEW_STORAGE_KEY, JSON.stringify({
+      state: { workflows: [[id, legacy]] },
+      version: LOOPED_REVIEW_WORKFLOW_VERSION,
+    }));
+
+    await useLoopedReviewStore.persist.rehydrate();
+
+    expect(workflow(id).rounds[0]?.passes[0]?.report?.testResults).toEqual({
+      total: 8_107,
+      passed: 8_094,
+      failed: 0,
+      notRun: 13,
+      failures: [],
+    });
   });
 
   test("treats missing or non-array persisted workflow collections as empty", async () => {

@@ -1390,7 +1390,11 @@ describe("FeaturesView lifecycle and navigation", () => {
       messages: [pendingUser()],
     }));
     seedExistingCodexEnvironment(makeEnvironment({ containerId: boundedContainerId }));
-    getCodexServerStatusMock.mockImplementation(async () => ({ running: true, hostPort: 4321 }));
+    getCodexServerStatusMock.mockImplementation(async () => ({
+      running: true,
+      hostPort: 4321,
+      authToken: "bounded-status-token",
+    }));
     getSessionStatusMock.mockImplementation(async () => {
       throw new Error("bridge unavailable");
     });

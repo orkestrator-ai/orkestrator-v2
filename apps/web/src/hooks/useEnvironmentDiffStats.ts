@@ -2,10 +2,11 @@ import { useEffect, useRef, useMemo } from "react";
 import { useEnvironmentStore, useConfigStore } from "@/stores";
 import { useEnvironmentDiffStore } from "@/stores/environmentDiffStore";
 import * as backend from "@/lib/backend";
+import { resolveComparisonRef } from "@/lib/diff-baseline";
 import type { Environment } from "@/types";
 
 /** Polling interval for diff stats (15 seconds - less frequent than files panel) */
-const POLL_INTERVAL = 15000;
+export const POLL_INTERVAL = 15000;
 
 /** Fields needed from each environment for diff polling */
 interface DiffPollEnv {
@@ -29,6 +30,24 @@ function resolveDiffPollTarget(env: DiffPollEnv): DiffPollTarget | undefined {
   }
   if (env.status !== "running" || !env.containerId) return undefined;
   return { kind: "container", containerId: env.containerId };
+}
+
+/**
+ * Whether an environment's last known counts should stay on screen.
+ *
+ * Deliberately weaker than `resolveDiffPollTarget`: "cannot be read right now"
+ * is not "no longer exists". A container spends time in `creating`, `stopping`
+ * and `error`, and is commonly left `stopped` - its work is still on disk, and
+ * the counts are the last true reading, which is exactly what a user needs when
+ * deciding whether to resume or delete it. Dropping them on every transition
+ * would also make the badge flicker across an ordinary restart.
+ *
+ * A local environment with no worktree path has genuinely lost the thing the
+ * counts described, so those are dropped.
+ */
+function retainsDiffStats(env: DiffPollEnv): boolean {
+  if (env.environmentType === "local") return Boolean(env.worktreePath);
+  return true;
 }
 
 function getDiffPollEnvKey(env: DiffPollEnv): string {
@@ -66,10 +85,10 @@ export function useEnvironmentDiffStats() {
         worktreePath: e.worktreePath,
         status: e.status,
         containerId: e.containerId,
-        comparisonRef:
-          e.createdFromCommit
-          || repositoryConfigs?.[e.projectId]?.prBaseBranch
-          || "main",
+        comparisonRef: resolveComparisonRef(
+          e.createdFromCommit,
+          repositoryConfigs?.[e.projectId],
+        ),
       })),
     [environments, repositoryConfigs]
   );
@@ -137,15 +156,13 @@ export function useEnvironmentDiffStats() {
 
     const fetchAll = () => {
       const currentEnvs = envRef.current;
-      // An environment can remain in the list after its worktree/container stops
-      // being available. Retaining its id here would leave its last successful
-      // counts visible even though there is no current snapshot to display.
-      const pollableIds = new Set(
-        currentEnvs
-          .filter((env) => resolveDiffPollTarget(env) !== undefined)
-          .map((env) => env.id),
+      // Drop stats for environments that are gone, plus the ones whose counts can
+      // no longer describe anything real. A merely-unpollable environment keeps
+      // its last reading; see `retainsDiffStats`.
+      const retainedIds = new Set(
+        currentEnvs.filter(retainsDiffStats).map((env) => env.id),
       );
-      pruneStats(pollableIds);
+      pruneStats(retainedIds);
 
       currentEnvs.forEach(fetchStatsForEnvironment);
     };

@@ -76,6 +76,29 @@ describe("environmentDiffStore", () => {
     ]);
   });
 
+  // The hook prunes with an empty set whenever nothing is left to retain, so this
+  // is a real call shape rather than a defensive edge case.
+  test("prunes every entry when nothing is retained", () => {
+    useEnvironmentDiffStore.setState({
+      stats: new Map([
+        ["env-1", { additions: 1, deletions: 1, filesChanged: 1 }],
+        ["env-2", { additions: 2, deletions: 2, filesChanged: 2 }],
+      ]),
+    });
+
+    useEnvironmentDiffStore.getState().pruneStats(new Set());
+
+    expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
+  });
+
+  test("does not replace state when pruning an already empty map", () => {
+    const statsMap = useEnvironmentDiffStore.getState().stats;
+
+    useEnvironmentDiffStore.getState().pruneStats(new Set());
+
+    expect(useEnvironmentDiffStore.getState().stats).toBe(statsMap);
+  });
+
   test("does not replace state when prune finds no stale entries", () => {
     useEnvironmentDiffStore.setState({
       stats: new Map([["env-1", { additions: 1, deletions: 1, filesChanged: 1 }]]),

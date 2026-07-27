@@ -727,6 +727,41 @@ exec '${realBase64}' "$@"
   await run({ ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` });
 }
 
+/**
+ * Records every `git` invocation containing `subcommand` and forwards it to the
+ * real git, so a test can assert that a subcommand was - or was not - reached.
+ */
+async function withGitSubcommandLog(
+  subcommand: string,
+  run: (logPath: string) => Promise<void>,
+): Promise<void> {
+  const root = await createTempDir("ork-electron-git-log-");
+  const binDir = path.join(root, "bin");
+  const logPath = path.join(root, "git-invocations.log");
+  const { stdout } = await execFileAsync("which", ["git"]);
+  const realGit = stdout.trim().replaceAll("'", "'\\''");
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(binDir, "git"), `#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = '${subcommand.replaceAll("'", "'\\''")}' ]; then
+    printf '%s\\n' "$*" >> '${logPath.replaceAll("'", "'\\''")}'
+    break
+  fi
+done
+exec '${realGit}' "$@"
+`);
+  await fs.chmod(path.join(binDir, "git"), 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+  try {
+    await run(logPath);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+}
+
 async function withFailingGitSubcommand(subcommand: string, run: () => Promise<void>): Promise<void> {
   const root = await createTempDir("ork-electron-fake-git-");
   const binDir = path.join(root, "bin");
@@ -3497,6 +3532,149 @@ exit 0
       deletions: 0,
       status: "?",
     }));
+  });
+
+  // Untracked files are line-counted by a streaming walk rather than by reading
+  // and splitting the file, so these pin the counts the walk has to reproduce.
+  test("counts untracked file lines across line endings, encodings and sizes", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const cases: Array<{ name: string; contents: Buffer | string; expected: number }> = [
+      { name: "trailing-newline.txt", contents: "one\ntwo\n", expected: 2 },
+      { name: "no-trailing-newline.txt", contents: "one\ntwo", expected: 2 },
+      { name: "crlf.txt", contents: "one\r\ntwo\r\n", expected: 2 },
+      { name: "cr-only.txt", contents: "one\rtwo\r", expected: 2 },
+      { name: "mixed-endings.txt", contents: "one\r\ntwo\nthree\r", expected: 3 },
+      { name: "single-newline.txt", contents: "\n", expected: 1 },
+      { name: "no-newline-at-all.txt", contents: "solo", expected: 1 },
+      { name: "empty.txt", contents: "", expected: 0 },
+      { name: "unicode.txt", contents: "héllo 🌍\nsecond\n", expected: 2 },
+      // Spans several 64KB read windows, including a separator pair that
+      // straddles a window boundary.
+      { name: "large.txt", contents: `${"x".repeat(65_535)}\r\n${"y".repeat(70_000)}\n`, expected: 2 },
+      { name: "binary.bin", contents: Buffer.from([0x41, 0x00, 0x42, 0x0a]), expected: 0 },
+    ];
+    for (const { name, contents } of cases) {
+      await fs.writeFile(path.join(worktree, name), contents);
+    }
+    const commands = createCommandRegistry();
+
+    const changes = await commands.get("get_local_git_status")?.(
+      { worktreePath: worktree, targetBranch: "main" },
+      createContext(createEnvironment()).context,
+    ) as Array<{ path: string; additions: number; status: string }>;
+
+    for (const { name, expected } of cases) {
+      expect(changes).toContainEqual(expect.objectContaining({
+        path: name,
+        additions: expected,
+        status: "?",
+      }));
+    }
+  });
+
+  test("counts an oversized untracked file as zero rather than reading it", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const oversized = path.join(worktree, "oversized.log");
+    const handle = await fs.open(oversized, "w");
+    try {
+      // Sparse: the size check must reject it without the content being read.
+      await handle.truncate(11 * 1024 * 1024);
+    } finally {
+      await handle.close();
+    }
+    const commands = createCommandRegistry();
+
+    const changes = await commands.get("get_local_git_status")?.(
+      { worktreePath: worktree, targetBranch: "main" },
+      createContext(createEnvironment()).context,
+    ) as Array<{ path: string; additions: number; status: string }>;
+
+    expect(changes).toContainEqual(expect.objectContaining({
+      path: "oversized.log",
+      additions: 0,
+      status: "?",
+    }));
+  });
+
+  test("does not follow an untracked symlink out of the worktree", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const outside = await createTempDir("ork-electron-outside-");
+    const secretPath = path.join(outside, "secret.txt");
+    await fs.writeFile(secretPath, "one\ntwo\nthree\nfour\nfive\n");
+    await fs.symlink(secretPath, path.join(worktree, "link.txt"));
+    const commands = createCommandRegistry();
+
+    const changes = await commands.get("get_local_git_status")?.(
+      { worktreePath: worktree, targetBranch: "main" },
+      createContext(createEnvironment()).context,
+    ) as Array<{ path: string; additions: number; status: string }>;
+
+    expect(changes).toContainEqual(expect.objectContaining({
+      path: "link.txt",
+      additions: 0,
+      status: "?",
+    }));
+  });
+
+  test("counts every untracked file when there are more than the scan window", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const names = Array.from({ length: 40 }, (_, index) => `untracked-${index}.txt`);
+    await Promise.all(names.map((name, index) =>
+      fs.writeFile(path.join(worktree, name), `${"line\n".repeat(index + 1)}`)
+    ));
+    const commands = createCommandRegistry();
+
+    const changes = await commands.get("get_local_git_status")?.(
+      { worktreePath: worktree, targetBranch: "main" },
+      createContext(createEnvironment()).context,
+    ) as Array<{ path: string; additions: number; status: string }>;
+
+    // Concurrency must not drop, duplicate or misalign a result with its path.
+    names.forEach((name, index) => {
+      expect(changes).toContainEqual(expect.objectContaining({
+        path: name,
+        additions: index + 1,
+        status: "?",
+      }));
+    });
+  });
+
+  test("resolves a commit-pinned baseline without fetching from the remote", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const creationCommit = await currentGitCommit(worktree);
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
+    const commands = createCommandRegistry();
+
+    await withGitSubcommandLog("fetch", async (logPath) => {
+      const changes = await commands.get("get_local_git_status")?.(
+        { worktreePath: worktree, targetBranch: creationCommit },
+        createContext(createEnvironment()).context,
+      ) as Array<{ path: string; additions: number; status: string }>;
+
+      expect(changes).toContainEqual(expect.objectContaining({
+        path: "tracked.txt",
+        additions: 1,
+        status: "M",
+      }));
+      // A commit SHA names the same commit forever, so the network round trip
+      // that every poll used to make cannot change the answer.
+      await expect(fs.readFile(logPath, "utf8").catch(() => "")).resolves.toBe("");
+    });
+  });
+
+  test("still fetches when the baseline is a branch that can move", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
+    const commands = createCommandRegistry();
+
+    await withGitSubcommandLog("fetch", async (logPath) => {
+      await commands.get("get_local_git_status")?.(
+        { worktreePath: worktree, targetBranch: "main" },
+        createContext(createEnvironment()).context,
+      );
+
+      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("fetch origin main");
+    });
   });
 
   test("reports local git stats against an environment creation commit", async () => {

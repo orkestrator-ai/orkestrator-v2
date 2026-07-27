@@ -23,7 +23,7 @@ mock.module("@/lib/backend", () => ({
   getLocalGitStatus: mockGetLocalGitStatus,
 }));
 
-const { useEnvironmentDiffStats } = await import("../../../apps/web/src/hooks/useEnvironmentDiffStats");
+const { useEnvironmentDiffStats, POLL_INTERVAL } = await import("../../../apps/web/src/hooks/useEnvironmentDiffStats");
 
 function resetStores(
   environments: Environment[] = [],
@@ -76,20 +76,30 @@ function resetStores(
   });
 }
 
+/**
+ * Replaces the poll timer with one the test drives by hand.
+ *
+ * Matches on the hook's own POLL_INTERVAL rather than a literal, so changing the
+ * interval fails these tests loudly instead of quietly capturing nothing and
+ * leaving them to pass without ever exercising a tick.
+ */
 function capturePollInterval(intervalId: number) {
   const originalSetInterval = globalThis.setInterval;
   const originalClearInterval = globalThis.clearInterval;
+  const fakeIntervalId = intervalId as unknown as Parameters<typeof clearInterval>[0];
   let intervalCallback: (() => void) | undefined;
+  let clearedIntervalIds: number[] = [];
 
   globalThis.setInterval = ((callback: TimerHandler, timeout?: number, ...args: unknown[]) => {
-    if (timeout === 15000) {
+    if (timeout === POLL_INTERVAL) {
       intervalCallback = callback as () => void;
       return intervalId as unknown as ReturnType<typeof setInterval>;
     }
     return originalSetInterval(callback, timeout, ...args);
   }) as typeof setInterval;
   globalThis.clearInterval = ((currentIntervalId: Parameters<typeof clearInterval>[0]) => {
-    if (currentIntervalId === (intervalId as unknown as Parameters<typeof clearInterval>[0])) {
+    if (currentIntervalId === fakeIntervalId) {
+      clearedIntervalIds.push(intervalId);
       return;
     }
     originalClearInterval(currentIntervalId);
@@ -100,9 +110,17 @@ function capturePollInterval(intervalId: number) {
       if (!intervalCallback) throw new Error("Diff poll interval was not installed");
       intervalCallback();
     },
+    get cleared() {
+      return clearedIntervalIds;
+    },
     restore() {
       globalThis.setInterval = originalSetInterval;
       globalThis.clearInterval = originalClearInterval;
+      if (!intervalCallback) {
+        throw new Error(
+          `No setInterval was installed at POLL_INTERVAL (${POLL_INTERVAL}ms); the poll timer changed`,
+        );
+      }
     },
   };
 }
@@ -246,7 +264,7 @@ describe("useEnvironmentDiffStats", () => {
     });
   });
 
-  test("prunes stale stats when existing environments become unpollable", async () => {
+  test("drops stats for a local environment that loses its worktree", async () => {
     const localEnvironment = createMockEnvironment({
       id: "env-local",
       projectId: "project-1",
@@ -254,14 +272,7 @@ describe("useEnvironmentDiffStats", () => {
       worktreePath: "/tmp/worktree",
       status: "stopped",
     });
-    const containerEnvironment = createMockEnvironment({
-      id: "env-container",
-      projectId: "project-1",
-      environmentType: "containerized",
-      containerId: "container-1",
-      status: "running",
-    });
-    resetStores([localEnvironment, containerEnvironment]);
+    resetStores([localEnvironment]);
     mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([{
       path: "local.ts",
       filename: "local.ts",
@@ -270,26 +281,15 @@ describe("useEnvironmentDiffStats", () => {
       additions: 2,
       deletions: 0,
     }]));
-    mockGetGitStatus.mockImplementation(() => Promise.resolve([{
-      path: "container.ts",
-      filename: "container.ts",
-      directory: "",
-      status: "M",
-      additions: 3,
-      deletions: 1,
-    }]));
 
     renderHook(() => useEnvironmentDiffStats());
     await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.size).toBe(2);
+      expect(useEnvironmentDiffStore.getState().stats.size).toBe(1);
     });
 
     act(() => {
       useEnvironmentStore.setState({
-        environments: [
-          { ...localEnvironment, worktreePath: undefined },
-          { ...containerEnvironment, status: "stopped" },
-        ],
+        environments: [{ ...localEnvironment, worktreePath: undefined }],
       });
     });
 
@@ -297,7 +297,145 @@ describe("useEnvironmentDiffStats", () => {
       expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
     });
     expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1);
-    expect(mockGetGitStatus).toHaveBeenCalledTimes(1);
+  });
+
+  // The counts are the last true reading of work that is still on disk, and they
+  // are what a user needs when deciding whether to resume or delete a stopped
+  // environment. Every non-running status is unpollable, so dropping on
+  // "unpollable" would also blank the badge for the whole of a restart.
+  test.each(["stopped", "stopping", "creating", "error"] as const)(
+    "keeps the last known stats for a container in %s",
+    async (status) => {
+      const containerEnvironment = createMockEnvironment({
+        id: "env-container",
+        projectId: "project-1",
+        environmentType: "containerized",
+        containerId: "container-1",
+        status: "running",
+      });
+      resetStores([containerEnvironment]);
+      mockGetGitStatus.mockImplementation(() => Promise.resolve([{
+        path: "container.ts",
+        filename: "container.ts",
+        directory: "",
+        status: "M",
+        additions: 3,
+        deletions: 1,
+      }]));
+
+      renderHook(() => useEnvironmentDiffStats());
+      await waitFor(() => {
+        expect(useEnvironmentDiffStore.getState().stats.get("env-container")).toEqual({
+          additions: 3,
+          deletions: 1,
+          filesChanged: 1,
+        });
+      });
+
+      act(() => {
+        useEnvironmentStore.setState({
+          environments: [{ ...containerEnvironment, status }],
+        });
+      });
+
+      await waitFor(() => {
+        expect(mockGetGitStatus).toHaveBeenCalledTimes(1);
+      });
+      expect(useEnvironmentDiffStore.getState().stats.get("env-container")).toEqual({
+        additions: 3,
+        deletions: 1,
+        filesChanged: 1,
+      });
+    },
+  );
+
+  test("keeps stats across a container restart and refreshes them on the way back", async () => {
+    const containerEnvironment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores([containerEnvironment]);
+    mockGetGitStatus
+      .mockImplementationOnce(() => Promise.resolve([{
+        path: "before.ts",
+        filename: "before.ts",
+        directory: "",
+        status: "M",
+        additions: 3,
+        deletions: 1,
+      }]))
+      .mockImplementationOnce(() => Promise.resolve([{
+        path: "after.ts",
+        filename: "after.ts",
+        directory: "",
+        status: "M",
+        additions: 8,
+        deletions: 2,
+      }]));
+
+    renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(mockGetGitStatus).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      useEnvironmentStore.setState({
+        environments: [{ ...containerEnvironment, status: "stopping" }],
+      });
+    });
+    // The badge must not blank out mid-restart.
+    expect(useEnvironmentDiffStore.getState().stats.get("env-container")).toEqual({
+      additions: 3,
+      deletions: 1,
+      filesChanged: 1,
+    });
+
+    act(() => {
+      useEnvironmentStore.setState({
+        environments: [{ ...containerEnvironment, status: "running" }],
+      });
+    });
+
+    await waitFor(() => {
+      expect(useEnvironmentDiffStore.getState().stats.get("env-container")).toEqual({
+        additions: 8,
+        deletions: 2,
+        filesChanged: 1,
+      });
+    });
+  });
+
+  test("drops stats for an environment that leaves the list entirely", async () => {
+    const containerEnvironment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "stopped",
+    });
+    resetStores([containerEnvironment]);
+    useEnvironmentDiffStore.setState({
+      stats: new Map([["env-container", {
+        additions: 3,
+        deletions: 1,
+        filesChanged: 1,
+      }]]),
+    });
+
+    renderHook(() => useEnvironmentDiffStats());
+    // Retained while it is still listed, even though it cannot be polled.
+    await waitFor(() => {
+      expect(useEnvironmentDiffStore.getState().stats.size).toBe(1);
+    });
+
+    act(() => {
+      useEnvironmentStore.setState({ environments: [] });
+    });
+
+    await waitFor(() => {
+      expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
+    });
   });
 
   test("does not clear existing stats when a non-critical diff request fails", async () => {
@@ -458,8 +596,10 @@ describe("useEnvironmentDiffStats", () => {
     });
 
     renderHook(() => useEnvironmentDiffStats());
+    // Falls through to the repository's own default branch rather than a literal
+    // "main", which would not exist in this repository.
     await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "main", true);
+      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "trunk", true);
     });
 
     act(() => {
@@ -482,6 +622,113 @@ describe("useEnvironmentDiffStats", () => {
     await waitFor(() => {
       expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
     });
+  });
+
+  // The hook subscribes to the whole `repositories` object, so a config refresh
+  // hands it a new object identity on every backend change-feed tick. Only a
+  // change to a baseline it actually uses may cost a `git fetch`.
+  test("does not re-poll for config updates that leave the baseline unchanged", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores([environment]);
+    mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([]));
+
+    renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
+
+    // A global-only edit, and a whole-config replacement that rebuilds
+    // `repositories` with identical values.
+    act(() => {
+      useConfigStore.getState().updateGlobalConfig({ claudeNativeFastModeDefault: true });
+    });
+    act(() => {
+      const config = useConfigStore.getState().config;
+      useConfigStore.setState({
+        config: {
+          ...config,
+          repositories: {
+            "project-1": { defaultBranch: "main", prBaseBranch: "release" },
+          },
+        },
+      });
+    });
+    act(() => {
+      useConfigStore.setState({
+        config: {
+          ...useConfigStore.getState().config,
+          repositories: {
+            "project-1": { defaultBranch: "main", prBaseBranch: "release" },
+            "project-untouched": { defaultBranch: "main", prBaseBranch: "main" },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
+    expect(mockGetLocalGitStatus.mock.calls[0]?.[1]).toBe("release");
+  });
+
+  test("stops refetching once the snapshot settles after repeated baseline changes", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores([environment]);
+
+    const pending: Array<(changes: GitFileChange[]) => void> = [];
+    mockGetLocalGitStatus.mockImplementation(() => new Promise((resolve) => {
+      pending.push(resolve);
+    }));
+
+    const setBaseline = (prBaseBranch: string) => {
+      useConfigStore.setState({
+        config: {
+          ...useConfigStore.getState().config,
+          repositories: {
+            "project-1": { defaultBranch: "main", prBaseBranch },
+          },
+        },
+      });
+    };
+
+    renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
+
+    // Two changes land while the first request is still open, so the refetch
+    // chain has to reconcile against the newest snapshot, not each one in turn.
+    act(() => setBaseline("develop"));
+    act(() => setBaseline("staging"));
+    expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      pending[0]?.([]);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(2));
+    expect(mockGetLocalGitStatus.mock.calls[1]?.[1]).toBe("staging");
+
+    await act(async () => {
+      pending[1]?.([]);
+      await Promise.resolve();
+    });
+
+    // The chain terminates: the snapshot now matches what was just fetched.
+    await waitFor(() => {
+      expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toEqual({
+        additions: 0,
+        deletions: 0,
+        filesChanged: 0,
+      });
+    });
+    expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(2);
   });
 
   test("discards an in-flight result after repository baseline configuration changes", async () => {
@@ -626,25 +873,7 @@ describe("useEnvironmentDiffStats", () => {
   });
 
   test("polling interval refreshes stats with the latest environment snapshot", async () => {
-    const originalSetInterval = globalThis.setInterval;
-    const originalClearInterval = globalThis.clearInterval;
-    let intervalCallback: (() => void) | null = null;
-    const clearIntervalMock = mock(() => {});
-
-    globalThis.setInterval = ((callback: TimerHandler, timeout?: number, ...args: unknown[]) => {
-      if (timeout === 15000) {
-        intervalCallback = callback as () => void;
-        return 7 as unknown as ReturnType<typeof setInterval>;
-      }
-      return originalSetInterval(callback, timeout, ...args);
-    }) as typeof setInterval;
-    globalThis.clearInterval = ((intervalId: Parameters<typeof clearInterval>[0]) => {
-      if (intervalId === (7 as unknown as Parameters<typeof clearInterval>[0])) {
-        clearIntervalMock(intervalId);
-        return;
-      }
-      originalClearInterval(intervalId);
-    }) as typeof clearInterval;
+    const pollInterval = capturePollInterval(7);
 
     try {
       const environment = createMockEnvironment({
@@ -682,9 +911,7 @@ describe("useEnvironmentDiffStats", () => {
           filesChanged: 1,
         });
       });
-      expect(intervalCallback).not.toBeNull();
-
-      intervalCallback?.();
+      pollInterval.tick();
 
       await waitFor(() => {
         expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toEqual({
@@ -696,30 +923,14 @@ describe("useEnvironmentDiffStats", () => {
       expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(2);
 
       unmount();
-      expect(clearIntervalMock).toHaveBeenCalledWith(7);
+      expect(pollInterval.cleared).toEqual([7]);
     } finally {
-      globalThis.setInterval = originalSetInterval;
-      globalThis.clearInterval = originalClearInterval;
+      pollInterval.restore();
     }
   });
 
   test("does not overlap polls for the same environment snapshot", async () => {
-    const originalSetInterval = globalThis.setInterval;
-    const originalClearInterval = globalThis.clearInterval;
-    let intervalCallback: (() => void) | null = null;
-
-    globalThis.setInterval = ((callback: TimerHandler, timeout?: number, ...args: unknown[]) => {
-      if (timeout === 15000) {
-        intervalCallback = callback as () => void;
-        return 8 as unknown as ReturnType<typeof setInterval>;
-      }
-      return originalSetInterval(callback, timeout, ...args);
-    }) as typeof setInterval;
-    globalThis.clearInterval = ((intervalId: Parameters<typeof clearInterval>[0]) => {
-      if (intervalId !== (8 as unknown as Parameters<typeof clearInterval>[0])) {
-        originalClearInterval(intervalId);
-      }
-    }) as typeof clearInterval;
+    const pollInterval = capturePollInterval(8);
 
     try {
       const environment = createMockEnvironment({
@@ -739,8 +950,8 @@ describe("useEnvironmentDiffStats", () => {
       await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
 
       act(() => {
-        intervalCallback?.();
-        intervalCallback?.();
+        pollInterval.tick();
+        pollInterval.tick();
       });
       expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1);
 
@@ -749,8 +960,7 @@ describe("useEnvironmentDiffStats", () => {
         await Promise.resolve();
       });
     } finally {
-      globalThis.setInterval = originalSetInterval;
-      globalThis.clearInterval = originalClearInterval;
+      pollInterval.restore();
     }
   });
 

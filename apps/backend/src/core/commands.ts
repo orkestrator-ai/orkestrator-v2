@@ -1,4 +1,4 @@
-import { existsSync, promises as fs } from "node:fs";
+import { constants as fsConstants, existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -354,6 +354,11 @@ const environmentSetupTasks = new Map<string, Promise<Environment>>();
 const environmentSetupStartTasks = new Map<string, Promise<EnvironmentSetupStartResult>>();
 const environmentBaselineTasks = new Map<string, Promise<Environment>>();
 const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [".orkestrator", ".claude/settings.local.json"] as const;
+
+/** Untracked files whose lines are counted at once during a local git status. */
+const UNTRACKED_SCAN_CONCURRENCY = 8;
+/** Read window for line counting; matches the container scanner's buffer. */
+const FILE_LINE_COUNT_CHUNK_BYTES = 64 * 1024;
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string") throw new Error(`Expected ${name} to be a string`);
@@ -3757,36 +3762,121 @@ async function getLocalGitStatus(
     { timeoutMs: 60_000 },
   );
   const existingPaths = new Set(changes.map((change) => change.path));
+  const untrackedPaths: string[] = [];
   for (const line of porcelain.stdout.split("\0").filter(Boolean)) {
     if (!line.startsWith("?? ")) continue;
     const filePath = line.slice(3);
     if (existingPaths.has(filePath)) continue;
-    const additions = await countLocalFileLines(worktreePath, filePath).catch(() => 0);
+    untrackedPaths.push(filePath);
+  }
+
+  // Counting lines is one open + a streamed read per file, so a worktree with a
+  // few thousand untracked files spends nearly all of its time waiting on the
+  // disk. Running a bounded window concurrently keeps that wait overlapped
+  // without letting a large worktree exhaust the process file descriptors.
+  const additionsPerPath = await mapWithConcurrency(
+    untrackedPaths,
+    UNTRACKED_SCAN_CONCURRENCY,
+    (filePath) => countLocalFileLines(worktreePath, filePath).catch(() => 0),
+  );
+
+  untrackedPaths.forEach((filePath, index) => {
     changes.push({
       path: filePath,
       originalPath: undefined,
       filename: path.basename(filePath),
       directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
-      additions,
+      additions: additionsPerPath[index] ?? 0,
       deletions: 0,
       status: "?",
     });
-  }
+  });
 
   return changes;
 }
 
+/**
+ * Runs `worker` over `items` with at most `limit` in flight, preserving order.
+ *
+ * Workers pull from a shared cursor rather than being sliced into fixed batches,
+ * so one slow file cannot idle the rest of the window behind it.
+ */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index]!, index);
+    }
+  });
+
+  await Promise.all(runners);
+  return results;
+}
+
+/**
+ * Counts the lines in an untracked file without materialising it.
+ *
+ * Reading the whole file and splitting it allocated three copies of every
+ * untracked file on each poll - the buffer, the decoded string, and an array
+ * holding every line - for a number that only needs a running separator count.
+ * The chunked walk below is the same algorithm the container scanner uses
+ * (CONTAINER_UNTRACKED_STATS_SCANNER), so both environment types report
+ * identical counts for identical content.
+ */
 async function countLocalFileLines(rootPath: string, relativePath: string): Promise<number> {
   const target = validateRelativeFilePath(relativePath, "git status path");
   const fullPath = path.join(rootPath, target);
-  const stat = await fs.stat(fullPath);
-  if (stat.size === 0 || stat.size > MAX_BINARY_FILE_BYTES) return 0;
-  const buffer = await fs.readFile(fullPath);
-  if (buffer.includes(0)) return 0;
-  const text = buffer.toString("utf8");
-  if (!text) return 0;
-  const trailingNewline = text.endsWith("\n") || text.endsWith("\r");
-  return text.split(/\r\n|\r|\n/).length - (trailingNewline ? 1 : 0);
+
+  // O_NOFOLLOW, and a stat of the descriptor rather than the path, so an
+  // untracked symlink cannot be followed out of the worktree and the file that
+  // gets measured is provably the one that passed the size check.
+  const handle = await fs.open(fullPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0));
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size === 0 || stat.size > MAX_BINARY_FILE_BYTES) return 0;
+
+    const buffer = Buffer.allocUnsafe(FILE_LINE_COUNT_CHUNK_BYTES);
+    let total = 0;
+    let separators = 0;
+    let previousWasCarriageReturn = false;
+    let lastByte = -1;
+
+    while (true) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      // The file can grow between the stat and the read; stop rather than let an
+      // actively-written log turn one poll into an unbounded scan.
+      if (total > MAX_BINARY_FILE_BYTES) return 0;
+      for (let index = 0; index < bytesRead; index += 1) {
+        const byte = buffer[index]!;
+        if (byte === 0) return 0;
+        if (byte === 0x0d) {
+          separators += 1;
+          previousWasCarriageReturn = true;
+        } else if (byte === 0x0a) {
+          if (!previousWasCarriageReturn) separators += 1;
+          previousWasCarriageReturn = false;
+        } else {
+          previousWasCarriageReturn = false;
+        }
+        lastByte = byte;
+      }
+    }
+
+    return separators + (lastByte !== 0x0d && lastByte !== 0x0a ? 1 : 0);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 async function gitRefExists(worktreePath: string, refName: string): Promise<boolean> {
@@ -3805,8 +3895,25 @@ async function resolveRemoteWorktreeStartPoint(projectPath: string, baseBranch: 
   return remoteRef;
 }
 
+/**
+ * True for a full commit SHA, which names the same commit forever.
+ *
+ * Environments created from a recorded commit pass that SHA as their baseline.
+ * Fetching before resolving it cannot change the answer - the commit is already
+ * in the worktree it was created from - so the network round trip on every diff
+ * poll is pure cost.
+ */
+export function isImmutableCommitRef(ref: string): boolean {
+  return /^[0-9a-f]{40}$/i.test(ref.trim());
+}
+
 async function resolveLocalGitBase(worktreePath: string, targetBranch: string): Promise<string> {
   const branch = validateGitRefName(targetBranch, "target branch");
+
+  if (isImmutableCommitRef(branch) && await gitRefExists(worktreePath, branch)) {
+    return branch;
+  }
+
   await runCommand("git", ["-C", worktreePath, "fetch", "origin", branch], { timeoutMs: 60_000 }).catch(() => undefined);
 
   const remoteRef = `origin/${branch}`;

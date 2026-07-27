@@ -12,7 +12,7 @@ import {
 
 afterEach(() => {
   useAgentActivityStore.setState({
-    tabStates: {}, containerStates: {}, containerRefCounts: {}, stateChangeCallbacks: new Map(),
+    tabStates: {}, containerStates: {}, containerStateUpdatedAt: {}, containerRefCounts: {}, stateChangeCallbacks: new Map(),
   });
   useErrorDialogStore.setState({ error: null });
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
@@ -35,7 +35,27 @@ describe("agentActivityStore", () => {
 
     expect(useAgentActivityStore.getState().getTabState("tab-1")).toBe("working");
     expect(useAgentActivityStore.getState().containerRefCounts["env-1"]).toBe(1);
-    expect(callback).toHaveBeenCalledWith("env-1", "idle", "waiting");
+    expect(callback).toHaveBeenCalledWith(
+      "env-1",
+      "idle",
+      "waiting",
+      expect.any(String),
+    );
+
+    const currentObservation = Date.parse(
+      useAgentActivityStore.getState().containerStateUpdatedAt["env-1"],
+    );
+    const newest = new Date(currentObservation + 2_000).toISOString();
+    state.setContainerState("env-1", "working", newest);
+    state.setContainerState(
+      "env-1",
+      "idle",
+      new Date(currentObservation + 1_000).toISOString(),
+    );
+    expect(useAgentActivityStore.getState().getContainerState("env-1"))
+      .toBe("working");
+    expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-1"])
+      .toBe(newest);
 
     useAgentActivityStore.getState().unregisterStateCallback(callbackId);
     useAgentActivityStore.getState().removeTabState("tab-1");

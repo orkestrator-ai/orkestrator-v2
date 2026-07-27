@@ -4452,6 +4452,21 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const activityAt = asString(occurredAt, "occurredAt");
     return storage.recordEnvironmentActivity(id, activityAt);
   });
+  register("set_environment_agent_activity", async ({ environmentId, state, occurredAt }, { storage }) => {
+    const activityState = asString(state, "state");
+    if (
+      activityState !== "idle"
+      && activityState !== "working"
+      && activityState !== "waiting"
+    ) {
+      throw new Error("state must be idle, working, or waiting");
+    }
+    return storage.setEnvironmentAgentActivity(
+      asString(environmentId, "environmentId"),
+      activityState,
+      asString(occurredAt, "occurredAt"),
+    );
+  });
   register("record_environment_completion", async ({ environmentId, occurredAt }, { storage }) => {
     const id = asString(environmentId, "environmentId");
     const activityAt = asString(occurredAt, "occurredAt");

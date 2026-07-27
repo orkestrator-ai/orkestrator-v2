@@ -11,6 +11,7 @@ export interface Project {
 
 // Environment types
 export type EnvironmentStatus = "running" | "stopped" | "error" | "creating" | "stopping";
+export type AgentActivityState = "idle" | "working" | "waiting";
 
 /** Pull request state from GitHub */
 export type PrState = "open" | "merged" | "closed";
@@ -77,6 +78,10 @@ export interface Environment {
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;
+  /** Backend-owned aggregate agent activity shared by every frontend. */
+  agentActivityState?: AgentActivityState;
+  /** Last-write-wins timestamp for the aggregate activity snapshot. */
+  agentActivityUpdatedAt?: string;
   /** Git commit that this environment was originally created from. */
   createdFromCommit?: string;
   /** Network access mode (defaults to "restricted" for security) */

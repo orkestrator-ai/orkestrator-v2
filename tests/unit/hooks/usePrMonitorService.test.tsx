@@ -163,6 +163,7 @@ beforeEach(() => {
   useAgentActivityStore.setState({
     tabStates: {},
     containerStates: {},
+    containerStateUpdatedAt: {},
     containerRefCounts: {},
     stateChangeCallbacks: new Map(),
   });
@@ -252,6 +253,7 @@ afterEach(() => {
   useAgentActivityStore.setState({
     tabStates: {},
     containerStates: {},
+    containerStateUpdatedAt: {},
     containerRefCounts: {},
     stateChangeCallbacks: new Map(),
   });

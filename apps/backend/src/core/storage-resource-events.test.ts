@@ -87,6 +87,13 @@ describe("StorageService resource change announcements", () => {
       await storage.recordEnvironmentActivity("e1", new Date(1000).toISOString());
       expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
 
+      await storage.setEnvironmentAgentActivity(
+        "e1",
+        "working",
+        new Date(2000).toISOString(),
+      );
+      expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
+
       await storage.removeEnvironment("e1");
       expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
     });
@@ -97,10 +104,20 @@ describe("StorageService resource change announcements", () => {
       await storage.addProject(project("p1"));
       await storage.addEnvironment(environment("e1", "p1"));
       await storage.recordEnvironmentActivity("e1", new Date(5000).toISOString());
+      await storage.setEnvironmentAgentActivity(
+        "e1",
+        "working",
+        new Date(5000).toISOString(),
+      );
 
       changes.length = 0;
       // An older timestamp is discarded without a write, so nothing is announced.
       await storage.recordEnvironmentActivity("e1", new Date(1000).toISOString());
+      await storage.setEnvironmentAgentActivity(
+        "e1",
+        "idle",
+        new Date(1000).toISOString(),
+      );
       expect(changes).toEqual([]);
     });
   });

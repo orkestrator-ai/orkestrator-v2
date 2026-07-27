@@ -231,6 +231,25 @@ describe("build pipeline commands", () => {
 });
 
 describe("set_environment_unread", () => {
+  test("persists agent activity and rejects malformed states", async () => {
+    await withCommands(async (invoke) => {
+      const occurredAt = "2026-07-27T12:00:00.000Z";
+      await expect(invoke("set_environment_agent_activity", {
+        environmentId: "e1",
+        state: "working",
+        occurredAt,
+      })).resolves.toMatchObject({
+        agentActivityState: "working",
+        agentActivityUpdatedAt: occurredAt,
+      });
+
+      await expect(invoke("set_environment_agent_activity", {
+        environmentId: "e1",
+        state: "busy",
+        occurredAt,
+      })).rejects.toThrow("state must be idle, working, or waiting");
+    });
+  });
   async function seedEnvironment(storage: StorageService): Promise<void> {
     if (!await storage.getProject("proj-1")) {
       await storage.addProject({

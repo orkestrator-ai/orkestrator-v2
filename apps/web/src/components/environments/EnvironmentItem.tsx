@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Bell, Trash2, Play, Square, Container, Laptop, Shield, Globe, Settings2, RotateCw, Loader2, Network, Copy, MoreVertical } from "lucide-react";
 import { toast } from "sonner";
-import type { Environment } from "@/types";
+import type { AgentActivityState, Environment } from "@/types";
 import { useAgentActivityStore, useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
 import { EnvironmentSettingsDialog } from "./EnvironmentSettingsDialog";
 import { cn } from "@/lib/utils";
@@ -38,6 +38,46 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 /** Below this width the row shows an explicit actions button; a right-click
  *  context menu is not reachable on touch. Matches Tailwind's `md` breakpoint. */
 const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
+
+function activityTime(value: string | undefined): number {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+/**
+ * Selects the freshest activity observation. Runtime events keep the current
+ * frontend responsive, while the persisted environment snapshot hydrates a
+ * frontend that never saw those events (or was suspended while they fired).
+ */
+export function resolveEnvironmentAgentActivity(
+  environment: Environment,
+  runtimeStates: Record<string, AgentActivityState>,
+  runtimeUpdatedAt: Record<string, string>,
+): AgentActivityState {
+  const runtimeKeys = [
+    environment.id,
+    ...(environment.containerId ? [environment.containerId] : []),
+  ];
+  let runtimeState: AgentActivityState | undefined;
+  let runtimeTime = Number.NEGATIVE_INFINITY;
+  for (const key of runtimeKeys) {
+    const candidate = runtimeStates[key];
+    if (!candidate) continue;
+    const candidateTime = activityTime(runtimeUpdatedAt[key]);
+    if (!runtimeState || candidateTime > runtimeTime) {
+      runtimeState = candidate;
+      runtimeTime = candidateTime;
+    }
+  }
+
+  const persistedState = environment.agentActivityState;
+  const persistedTime = activityTime(environment.agentActivityUpdatedAt);
+  if (persistedState && (!runtimeState || persistedTime >= runtimeTime)) {
+    return persistedState;
+  }
+  return runtimeState ?? persistedState ?? "idle";
+}
 
 /**
  * One entry in the environment action list. The same list drives both the
@@ -135,10 +175,14 @@ export function EnvironmentItem({
   // For terminal-based Claude, state is keyed by containerId
   // For native Claude mode, state is keyed by environmentId
   const containerStates = useAgentActivityStore((s) => s.containerStates);
-  const agentActivityState =
-    containerStates[environment.id] ||  // Check by environmentId first (native mode)
-    (environment.containerId ? containerStates[environment.containerId] : null) ||  // Then by containerId (terminal mode)
-    "idle";
+  const containerStateUpdatedAt = useAgentActivityStore(
+    (s) => s.containerStateUpdatedAt,
+  );
+  const agentActivityState = resolveEnvironmentAgentActivity(
+    environment,
+    containerStates,
+    containerStateUpdatedAt,
+  );
 
   // Check if this environment is being deleted
   const isEnvironmentDeleting = useEnvironmentStore((s) => s.isDeleting(environment.id));

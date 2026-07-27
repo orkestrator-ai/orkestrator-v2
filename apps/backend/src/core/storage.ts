@@ -17,6 +17,8 @@ import {
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
 import type {
+  AgentActivityState,
+  AgentActivitySource,
   AgentModelConfigKey,
   AppConfig,
   ClaudeModelCatalogSnapshot,
@@ -539,6 +541,8 @@ export function createEnvironment(
     // Creation is itself recent environment activity. Persisting the same
     // timestamp makes a new environment immediately lead the activity view.
     lastActivityAt: createdAt,
+    agentActivityState: "idle",
+    agentActivityUpdatedAt: createdAt,
     createdFromCommit: undefined,
     networkAccessMode: options.networkAccessMode ?? (environmentType === "local" ? "full" : "restricted"),
     allowedDomains: undefined,
@@ -1137,6 +1141,19 @@ export class StorageService {
       if (isNonBlankString(updates.branch)) environment.branch = updates.branch;
       if ("status" in updates && isOneOf(updates.status, ["running", "stopped", "error", "creating", "stopping"])) {
         environment.status = updates.status;
+        if (updates.status === "stopped" || updates.status === "error") {
+          const previousActivityTime = environment.agentActivityUpdatedAt
+            ? Date.parse(environment.agentActivityUpdatedAt)
+            : Number.NEGATIVE_INFINITY;
+          environment.agentActivityState = "idle";
+          environment.agentActivitySources = {};
+          environment.agentActivityUpdatedAt = new Date(Math.max(
+            Date.now(),
+            Number.isFinite(previousActivityTime)
+              ? previousActivityTime + 1
+              : Number.NEGATIVE_INFINITY,
+          )).toISOString();
+        }
       }
       if ("environmentType" in updates && isOneOf(updates.environmentType, ["containerized", "local"])) {
         environment.environmentType = updates.environmentType;
@@ -1269,6 +1286,78 @@ export class StorageService {
       }
 
       environment.lastActivityAt = normalizedActivityAt;
+      await this.saveJson(this.environmentsFile(), environments);
+      this.announce("environment", environmentId);
+      return environment;
+    });
+  }
+
+  /**
+   * Persist the aggregate agent state observed by a frontend or backend
+   * monitor. Timestamp ordering makes reports idempotent and prevents a
+   * delayed client from replacing a newer observation.
+   */
+  async setEnvironmentAgentActivity(
+    environmentId: string,
+    state: AgentActivityState,
+    occurredAt: string,
+    source: AgentActivitySource = "frontend",
+  ): Promise<Environment> {
+    if (!isOneOf(state, ["idle", "working", "waiting"])) {
+      throw new Error("state must be idle, working, or waiting");
+    }
+    const occurredTime = Date.parse(occurredAt);
+    if (!Number.isFinite(occurredTime)) {
+      throw new Error("occurredAt must be a valid ISO timestamp");
+    }
+    const normalizedOccurredAt = new Date(occurredTime).toISOString();
+    if (!isOneOf(source, ["frontend", "claude-terminal"])) {
+      throw new Error("source must be frontend or claude-terminal");
+    }
+
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+
+      const previousSource = environment.agentActivitySources?.[source];
+      const previousTime = previousSource?.updatedAt
+        ? Date.parse(previousSource.updatedAt)
+        : environment.agentActivityUpdatedAt
+          ? Date.parse(environment.agentActivityUpdatedAt)
+          : Number.NEGATIVE_INFINITY;
+      if (Number.isFinite(previousTime) && previousTime >= occurredTime) {
+        return environment;
+      }
+
+      const sources = {
+        ...environment.agentActivitySources,
+        [source]: {
+          state,
+          updatedAt: normalizedOccurredAt,
+        },
+      };
+      let aggregate: AgentActivityState = "idle";
+      for (const snapshot of Object.values(sources)) {
+        if (!snapshot) continue;
+        if (snapshot.state === "working") {
+          aggregate = "working";
+          break;
+        }
+        if (snapshot.state === "waiting") aggregate = "waiting";
+      }
+
+      environment.agentActivitySources = sources;
+      environment.agentActivityState = aggregate;
+      const aggregateTime = environment.agentActivityUpdatedAt
+        ? Date.parse(environment.agentActivityUpdatedAt)
+        : Number.NEGATIVE_INFINITY;
+      environment.agentActivityUpdatedAt = new Date(Math.max(
+        occurredTime,
+        Number.isFinite(aggregateTime)
+          ? aggregateTime
+          : Number.NEGATIVE_INFINITY,
+      )).toISOString();
       await this.saveJson(this.environmentsFile(), environments);
       this.announce("environment", environmentId);
       return environment;

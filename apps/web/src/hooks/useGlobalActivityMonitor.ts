@@ -28,6 +28,7 @@ import { useCodexStore } from "@/stores/codexStore";
 interface ClaudeStateEvent {
   container_id: string;
   state: string;
+  occurred_at?: string;
 }
 
 interface EnvironmentActivityRecordedEvent {
@@ -57,7 +58,12 @@ type ClaudeTmuxTabs = ReturnType<typeof useClaudeTmuxStore.getState>["tabs"];
 type SetContainerState = ReturnType<
   typeof useAgentActivityStore.getState
 >["setContainerState"];
-type ActivitySource = "claude" | "claude-tmux" | "opencode" | "codex";
+type ActivitySource =
+  | "claude"
+  | "claude-terminal"
+  | "claude-tmux"
+  | "opencode"
+  | "codex";
 type ActivitySourcesByEnvironment = Map<
   string,
   Map<ActivitySource, AgentActivityState>
@@ -95,6 +101,7 @@ function setEnvironmentSourceActivity(
   source: ActivitySource,
   sourceState: AgentActivityState,
   setContainerState: SetContainerState,
+  occurredAt?: string,
 ): void {
   let environmentSources = activitySources.current.get(environmentId);
   if (!environmentSources) {
@@ -111,7 +118,7 @@ function setEnvironmentSourceActivity(
   const currentState =
     useAgentActivityStore.getState().containerStates[environmentId];
   if (currentState !== desiredState) {
-    setContainerState(environmentId, desiredState);
+    setContainerState(environmentId, desiredState, occurredAt);
   }
 }
 
@@ -579,21 +586,54 @@ export function useGlobalActivityMonitor(): void {
   // backend timestamp is the source of truth; the optimistic store update
   // keeps an activity-sorted sidebar responsive while the write completes.
   useEffect(() => {
-    const callbackId = registerStateCallback((activityKey, previousState, newState) => {
-      const isActivity = isEnvironmentActivityTransition(previousState, newState);
-      const isCompleted = isEnvironmentCompletionTransition(previousState, newState);
-      if (!isActivity && !isCompleted) return;
-
-      const environment = useEnvironmentStore.getState().environments.find(
-        (candidate) => candidate.containerId === activityKey,
+    const callbackId = registerStateCallback((
+      activityKey,
+      _previousState,
+      newState,
+      occurredAt,
+    ) => {
+      let observedAt = occurredAt ?? new Date().toISOString();
+      const environmentStore = useEnvironmentStore.getState();
+      const environment = environmentStore.environments.find(
+        (candidate) =>
+          candidate.id === activityKey
+          || candidate.containerId === activityKey,
       );
       if (!environment) return;
-      if (isCompleted) markCompleted(environment.id);
-      else if (isActivity) recordActivity(environment.id);
+      const persistedTime = environment.agentActivityUpdatedAt
+        ? Date.parse(environment.agentActivityUpdatedAt)
+        : Number.NEGATIVE_INFINITY;
+      const observedTime = Date.parse(observedAt);
+      if (
+        Number.isFinite(persistedTime)
+        && Number.isFinite(observedTime)
+        && observedTime <= persistedTime
+      ) {
+        observedAt = new Date(persistedTime + 1).toISOString();
+      }
+
+      // The environment record is the cross-client authority. Apply the local
+      // observation immediately for a responsive sidebar, then commit it. The
+      // backend rejects reports older than agentActivityUpdatedAt.
+      environmentStore.updateEnvironment(environment.id, {
+        agentActivityState: newState,
+        agentActivityUpdatedAt: observedAt,
+      });
+      void backend.setEnvironmentAgentActivity(
+        environment.id,
+        newState,
+        observedAt,
+      ).catch((error) => {
+        console.warn(
+          "[GlobalActivityMonitor] Failed to persist agent activity state:",
+          error,
+        );
+      });
+
     });
 
     return () => unregisterStateCallback(callbackId);
-  }, [markCompleted, recordActivity, registerStateCallback, unregisterStateCallback]);
+  }, [registerStateCallback, unregisterStateCallback]);
 
   // ── Terminal mode: poll ALL running container environments ──────────
   useEffect(() => {
@@ -619,7 +659,25 @@ export function useGlobalActivityMonitor(): void {
       listen<ClaudeStateEvent>(eventName, (event) => {
         const state = event.payload.state as AgentActivityState;
         if (state === "working" || state === "waiting" || state === "idle") {
-          setContainerState(event.payload.container_id, state);
+          const previousState = useAgentActivityStore
+            .getState()
+            .getContainerState(env.id);
+          setEnvironmentSourceActivity(
+            activitySources,
+            env.id,
+            "claude-terminal",
+            state,
+            setContainerState,
+            event.payload.occurred_at,
+          );
+          const newState = useAgentActivityStore
+            .getState()
+            .getContainerState(env.id);
+          if (isEnvironmentCompletionTransition(previousState, newState)) {
+            markCompleted(env.id);
+          } else if (isEnvironmentActivityTransition(previousState, newState)) {
+            recordActivity(env.id);
+          }
         }
       })
         .then((unlisten) => {
@@ -666,7 +724,7 @@ export function useGlobalActivityMonitor(): void {
         });
       }
     }
-  }, [environments, setContainerState]);
+  }, [environments, markCompleted, recordActivity, setContainerState]);
 
   // Cleanup all polling on unmount (app shutdown)
   useEffect(() => {

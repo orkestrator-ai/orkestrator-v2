@@ -55,6 +55,7 @@ function resetStores() {
   useAgentActivityStore.setState({
     tabStates: {},
     containerStates: {},
+    containerStateUpdatedAt: {},
     containerRefCounts: {},
     stateChangeCallbacks: new Map(),
   });
@@ -217,6 +218,16 @@ describe("useGlobalActivityMonitor tmux activity", () => {
         ([command]) => command === "record_environment_activity",
       );
       expect(activityCall?.[1]).toMatchObject({ environmentId: "env-tmux" });
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "set_environment_agent_activity",
+        expect.objectContaining({
+          environmentId: "env-tmux",
+          state: "working",
+          occurredAt: expect.any(String),
+        }),
+      );
+      expect(useEnvironmentStore.getState().getEnvironmentById("env-tmux"))
+        .toMatchObject({ agentActivityState: "working" });
     });
 
     act(() => {
@@ -227,6 +238,13 @@ describe("useGlobalActivityMonitor tmux activity", () => {
       expect(mockInvoke).toHaveBeenCalledWith(
         "record_environment_completion",
         expect.objectContaining({ environmentId: "env-tmux" }),
+      );
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "set_environment_agent_activity",
+        expect.objectContaining({
+          environmentId: "env-tmux",
+          state: "idle",
+        }),
       );
     });
   });
@@ -745,7 +763,7 @@ describe("useGlobalActivityMonitor terminal activity", () => {
       });
     });
 
-    expect(useAgentActivityStore.getState().getContainerState("container-1"))
+    expect(useAgentActivityStore.getState().getContainerState("env-container"))
       .toBe("waiting");
 
     act(() => {
@@ -759,6 +777,44 @@ describe("useGlobalActivityMonitor terminal activity", () => {
         { containerId: "container-1" },
       );
     });
+  });
+
+  test("does not let an idle terminal source hide working native activity", async () => {
+    const environment = makeEnvironment("env-container", "container-1");
+    const sessionKey = createSessionKey(environment.id, "tab-native");
+    useEnvironmentStore.setState({ environments: [environment] });
+    render(<MonitorHarness />);
+
+    act(() => {
+      useClaudeStore.setState({
+        clients: new Map([[environment.id, {} as any]]),
+        sessions: new Map([[
+          sessionKey,
+          {
+            sessionId: "native-session",
+            messages: [],
+            isLoading: true,
+          } as any,
+        ]]),
+      });
+    });
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState(environment.id))
+        .toBe("working");
+    });
+
+    act(() => {
+      eventCallbacks.get("claude-state-container-1")?.({
+        payload: {
+          container_id: "container-1",
+          state: "idle",
+          occurred_at: "2026-07-27T12:00:00.000Z",
+        },
+      });
+    });
+
+    expect(useAgentActivityStore.getState().getContainerState(environment.id))
+      .toBe("working");
   });
 
   test("applies newer backend terminal activity events to the live environment list", async () => {

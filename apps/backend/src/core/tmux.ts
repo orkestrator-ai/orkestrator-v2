@@ -1897,8 +1897,24 @@ class ClaudeStatePollManager {
       .catch(() => "")).trim();
     if (state !== "working" && state !== "waiting" && state !== "idle") return;
     if (state === poll.lastState) return;
+    const occurredAt = new Date().toISOString();
+    const environment = (await context.storage.loadEnvironments()).find(
+      (candidate) => candidate.containerId === containerId,
+    );
+    const persisted = environment
+      ? await context.storage.setEnvironmentAgentActivity(
+          environment.id,
+          state,
+          occurredAt,
+          "claude-terminal",
+        )
+      : null;
     poll.lastState = state;
-    context.emit(`claude-state-${containerId}`, { container_id: containerId, state });
+    context.emit(`claude-state-${containerId}`, {
+      container_id: containerId,
+      state,
+      occurred_at: persisted?.agentActivityUpdatedAt ?? occurredAt,
+    });
   }
 }
 

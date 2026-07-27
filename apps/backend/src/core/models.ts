@@ -8,6 +8,12 @@ export interface Project {
 }
 
 export type EnvironmentStatus = "running" | "stopped" | "error" | "creating" | "stopping";
+export type AgentActivityState = "idle" | "working" | "waiting";
+export type AgentActivitySource = "frontend" | "claude-terminal";
+export interface AgentActivitySourceSnapshot {
+  state: AgentActivityState;
+  updatedAt: string;
+}
 export type PrState = "open" | "merged" | "closed";
 export type NetworkAccessMode = "full" | "restricted";
 export type EnvironmentType = "containerized" | "local";
@@ -74,6 +80,14 @@ export interface Environment {
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;
+  /** Backend-owned aggregate agent activity shared by every frontend. */
+  agentActivityState?: AgentActivityState;
+  /** Last-write-wins timestamp for the aggregate activity snapshot. */
+  agentActivityUpdatedAt?: string;
+  /** Backend-internal observations used to derive the aggregate state. */
+  agentActivitySources?: Partial<
+    Record<AgentActivitySource, AgentActivitySourceSnapshot>
+  >;
   createdFromCommit?: string;
   networkAccessMode: NetworkAccessMode;
   allowedDomains?: string[];

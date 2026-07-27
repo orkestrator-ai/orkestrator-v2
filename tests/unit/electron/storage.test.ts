@@ -536,6 +536,105 @@ describe("Electron StorageService", () => {
       .rejects.toThrow("Environment not found: missing");
   });
 
+  test("stores and aggregates monotonic agent activity observations", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-activity-");
+    const firstStorage = new StorageService(dataDir);
+    const secondStorage = new StorageService(dataDir);
+    await Promise.all([firstStorage.init(), secondStorage.init()]);
+
+    const environment = await firstStorage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const createdTime = Date.parse(environment.agentActivityUpdatedAt!);
+    const frontendWorkingAt = new Date(createdTime + 1_000).toISOString();
+    const terminalIdleAt = new Date(createdTime + 2_000).toISOString();
+    const terminalWorkingAt = new Date(createdTime + 3_000).toISOString();
+    const frontendIdleAt = new Date(createdTime + 4_000).toISOString();
+    const terminalStoppedAt = new Date(createdTime + 5_000).toISOString();
+
+    await expect(firstStorage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      frontendWorkingAt,
+    )).resolves.toMatchObject({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: frontendWorkingAt,
+    });
+    await expect(secondStorage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      terminalIdleAt,
+      "claude-terminal",
+    )).resolves.toMatchObject({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: terminalIdleAt,
+    });
+    await expect(secondStorage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      terminalWorkingAt,
+      "claude-terminal",
+    )).resolves.toMatchObject({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: terminalWorkingAt,
+    });
+    await expect(firstStorage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      frontendIdleAt,
+    )).resolves.toMatchObject({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: frontendIdleAt,
+    });
+    await expect(secondStorage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      new Date(createdTime + 2_500).toISOString(),
+      "claude-terminal",
+    )).resolves.toMatchObject({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: frontendIdleAt,
+    });
+    await expect(secondStorage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      terminalStoppedAt,
+      "claude-terminal",
+    )).resolves.toMatchObject({
+      agentActivityState: "idle",
+      agentActivityUpdatedAt: terminalStoppedAt,
+    });
+
+    const workingAgainAt = new Date(createdTime + 6_000).toISOString();
+    await firstStorage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      workingAgainAt,
+    );
+    await expect(secondStorage.updateEnvironment(
+      environment.id,
+      { status: "stopped" },
+    )).resolves.toMatchObject({
+      status: "stopped",
+      agentActivityState: "idle",
+      agentActivitySources: {},
+    });
+    expect(Date.parse(
+      (await firstStorage.getEnvironment(environment.id))!.agentActivityUpdatedAt!,
+    )).toBeGreaterThan(Date.parse(workingAgainAt));
+
+    await expect(firstStorage.setEnvironmentAgentActivity(
+      environment.id,
+      "busy" as never,
+      frontendIdleAt,
+    )).rejects.toThrow("state must be idle, working, or waiting");
+    await expect(firstStorage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      "invalid",
+    )).rejects.toThrow("occurredAt must be a valid ISO timestamp");
+  });
+
   test("recovers an abandoned environment mutation lock", async () => {
     const dataDir = await createTempDir("ork-storage-stale-environment-lock-");
     const storage = new StorageService(dataDir);

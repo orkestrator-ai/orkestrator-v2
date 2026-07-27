@@ -222,6 +222,7 @@ beforeEach(() => {
   useAgentActivityStore.setState({
     tabStates: {},
     containerStates: {},
+    containerStateUpdatedAt: {},
     containerRefCounts: {},
     stateChangeCallbacks: new Map(),
   });
@@ -346,6 +347,31 @@ describe("EnvironmentItem activity icon", () => {
     const icon = container.querySelector('div[role="button"] svg');
     expect(icon?.getAttribute("class")).toContain("text-blue-500");
     expect(icon?.getAttribute("class")).toContain("animate-pulse");
+  });
+
+  test("hydrates a working icon from the backend-owned environment snapshot", () => {
+    const { container } = renderItem(makeEnvironment({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+    }));
+
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).toContain("text-blue-500");
+  });
+
+  test("keeps a newer runtime observation over an older backend snapshot", () => {
+    useAgentActivityStore.getState().setContainerState(
+      "env-1",
+      "waiting",
+      "2026-07-27T12:00:01.000Z",
+    );
+    const { container } = renderItem(makeEnvironment({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+    }));
+
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).toContain("text-amber-500");
   });
 });
 

@@ -28,8 +28,8 @@ import {
   type ToolState,
 } from "../messages/types.js";
 import {
+  applyTranscriptToolOutput,
   normalizeTranscriptToolArgs,
-  stringifyTranscriptToolOutput,
 } from "../subagent-transcript.js";
 
 export interface PersistedSessionIndexEntry {
@@ -527,6 +527,17 @@ function asNonEmptyString(value: unknown): string | undefined {
     : undefined;
 }
 
+/**
+ * The outcome a rollout *call* record claims. `"pending"` means it claimed none.
+ *
+ * `function_call` records carry no `status` field at all (92,495 of 92,495 across
+ * this repo's full Codex history), so every one starts `"pending"` — "in flight,
+ * and this record does not say how it ended". `custom_tool_call` records do carry
+ * one, always `"completed"` in 34,640 sampled records; `"failed"` is the
+ * counterpart in the same field and is kept as a guard rather than deleted.
+ *
+ * Mirrors `parseChildTranscript`, which reads the same records from child rollouts.
+ */
 function persistedToolState(value: unknown): ToolState {
   return value === "failed"
     ? "failure"
@@ -543,35 +554,37 @@ function createPersistedToolPart(
     ? payload.input
     : payload.arguments;
   const toolState = persistedToolState(payload.status);
-  const output = stringifyTranscriptToolOutput(payload.output);
-
-  return {
+  const part: NormalizedPart = {
     type: "tool-invocation",
     content: toolName,
     toolName,
     toolArgs: normalizeTranscriptToolArgs(toolName, rawArgs),
     toolState,
     toolTitle: toolName,
-    ...(output === undefined
-      ? {}
-      : toolState === "failure"
-        ? { toolError: output }
-        : { toolOutput: output }),
   };
+
+  // Only a `custom_tool_call` can carry both a terminal outcome and an inline
+  // result on the call record itself; a `function_call` never does.
+  return payload.type === "custom_tool_call" && toolState !== "pending"
+    ? applyTranscriptToolOutput(part, payload.output, toolState)
+    : part;
 }
 
-function applyPersistedToolOutput(
+/**
+ * The outcome to carry over when a `*_call_output` record is folded in.
+ *
+ * `null` means "the rollout never recorded an outcome", which clears `toolState`
+ * instead of asserting success. A `function_call_output` is written whether the
+ * command succeeded or failed and carries no status, exit code, or error marker
+ * (12,785 sampled outputs: no candidate marker appeared in more than 0.2%), so
+ * inferring success from its presence would paint a green badge on every failed
+ * command. `custom_tool_call_output` keeps whatever its call record claimed.
+ */
+function persistedOutputState(
+  payloadType: unknown,
   part: NormalizedPart,
-  output: unknown,
-): NormalizedPart {
-  const serialized = stringifyTranscriptToolOutput(output);
-  const failed = part.toolState === "failure";
-  return {
-    ...part,
-    toolState: failed ? "failure" : "success",
-    toolOutput: failed ? undefined : serialized,
-    toolError: failed ? serialized ?? "Tool failed" : undefined,
-  };
+): ToolState | null {
+  return payloadType === "custom_tool_call_output" ? (part.toolState ?? null) : null;
 }
 
 export async function hydrateMessagesFromPersistedSession(
@@ -660,11 +673,16 @@ export async function hydrateMessagesFromPersistedSession(
       || payload.type === "custom_tool_call_output"
     ) {
       const callId = asNonEmptyString(payload.call_id);
+      // Consume the pairing: a `call_id` is unique to one call, so a second
+      // output bearing it must not reach back and rewrite an earlier turn's part.
       const target = callId ? toolPartsByCallId.get(callId) : undefined;
+      if (callId) toolPartsByCallId.delete(callId);
       if (target) {
-        target.message.parts[target.partIndex] = applyPersistedToolOutput(
-          target.message.parts[target.partIndex]!,
+        const existing = target.message.parts[target.partIndex]!;
+        target.message.parts[target.partIndex] = applyTranscriptToolOutput(
+          existing,
           payload.output,
+          persistedOutputState(payload.type, existing),
         );
       }
       continue;

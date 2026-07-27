@@ -189,7 +189,7 @@ export function capActionOutput(text: string): string {
   );
 }
 
-export function stringifyTranscriptToolOutput(value: unknown): string | undefined {
+function stringifyTranscriptToolOutput(value: unknown): string | undefined {
   if (typeof value === "string") {
     return capActionOutput(value);
   }
@@ -222,11 +222,33 @@ function createActionPart(
   };
 }
 
-function updateActionPart(
-  part: TranscriptActionPart,
+/**
+ * Folds a `*_call_output` rollout record into the tool part it belongs to.
+ *
+ * `state` is the outcome the *call* record claimed, or `null` when the rollout
+ * carries no outcome at all. `null` deliberately clears `toolState` rather than
+ * defaulting to success: a `function_call_output` is written whether the command
+ * succeeded or failed, so treating its mere presence as success paints a green
+ * badge on failed commands. Measured across this repo's full Codex history —
+ * 92,495 `function_call` records — `status` was absent from every one, and no
+ * exit code or error marker appears in the output text either. "Unknown" is the
+ * only honest state, and the UI renders a missing `toolState` as no badge.
+ *
+ * Generic over the part shape so the parent rollout parser
+ * (`history/rollout.ts`) and this sub-agent parser share one implementation and
+ * cannot drift into disagreeing about what a persisted tool result means.
+ */
+export function applyTranscriptToolOutput<
+  Part extends {
+    toolState?: ToolState;
+    toolOutput?: string;
+    toolError?: string;
+  },
+>(
+  part: Part,
   output: unknown,
   state: ToolState | null = null,
-): TranscriptActionPart {
+): Part {
   const serializedOutput = stringifyTranscriptToolOutput(output);
   const nextState = state === null ? undefined : state;
 
@@ -334,7 +356,7 @@ function parseChildTranscript(
 
       if (payloadType === "custom_tool_call" && (initialState === "success" || initialState === "failure")) {
         const output = payload.output;
-        actions.push(updateActionPart(part, output, initialState));
+        actions.push(applyTranscriptToolOutput(part, output, initialState));
       } else {
         actions.push(part);
       }
@@ -357,7 +379,7 @@ function parseChildTranscript(
       }
 
       const existing = actions[actionIndex] as TranscriptActionPart;
-      actions[actionIndex] = updateActionPart(
+      actions[actionIndex] = applyTranscriptToolOutput(
         existing,
         payload.output,
         payloadType === "custom_tool_call_output" ? (existing.toolState ?? null) : null,

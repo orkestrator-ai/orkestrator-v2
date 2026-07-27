@@ -121,4 +121,5 @@ export interface NativeMessage {
   content: string;
   parts: NativeMessagePart[];
   createdAt: string;
+  turnId?: string;
 }

@@ -850,12 +850,29 @@ describe("OpenCodeBuildChatTab", () => {
 
     await waitFor(() => {
       expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([refreshedMessage]);
-      expect(useOpenCodeStore.getState().contextUsage.get(SESSION_KEY)).toEqual({
+      const usage = useOpenCodeStore.getState().contextUsage.get(SESSION_KEY);
+      expect(usage).toEqual({
         usedTokens: 50,
         totalTokens: 1_000,
         percentUsed: 5,
         modelId: "openai/gpt-5",
+        estimated: true,
+        source: "heuristic",
+        updatedAt: expect.any(String),
       });
+      // `toEqual` ignores keys whose value is `undefined`, so it cannot catch a
+      // field silently disappearing from the snapshot. Pin the key set too —
+      // this is the shape the agent information panel renders from.
+      expect(Object.keys(usage ?? {}).sort()).toEqual([
+        "estimated",
+        "modelId",
+        "percentUsed",
+        "source",
+        "totalTokens",
+        "updatedAt",
+        "usedTokens",
+      ]);
+      expect(Number.isNaN(Date.parse(usage?.updatedAt ?? ""))).toBe(false);
     });
 
     channel.push({

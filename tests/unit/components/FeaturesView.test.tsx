@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -62,7 +62,11 @@ const updateFeatureMock = mock(async (
 const loadFeaturesMock = mock(async () => undefined);
 const createEnvironmentMock = mock(async () => makeEnvironment());
 const startEnvironmentMock = mock(async () => undefined);
-const createClientMock = mock((baseUrl: string): CodexClient => ({ baseUrl }));
+const createClientMock = mock((baseUrl: string, authToken?: string): CodexClient => ({
+  baseUrl,
+  authToken,
+}));
+const checkHealthMock = mock(async () => true);
 const createSessionMock = mock(async () => ({ sessionId: "session-new" }));
 const getSessionStatusMock = mock(async () => ({ status: "idle" as const }));
 const getSessionMessagesMock = mock(async () => [] as CodexMessage[]);
@@ -71,10 +75,26 @@ const getEnvironmentMock = mock(async () => null as Environment | null);
 const updateEnvironmentAgentSettingsMock = mock(async (environmentId: string) =>
   makeEnvironment({ id: environmentId })
 );
-const getLocalCodexServerStatusMock = mock(async () => ({ running: true, port: 4100, pid: 10 }));
-const startLocalCodexServerMock = mock(async () => ({ port: 4100, pid: 10 }));
-const getCodexServerStatusMock = mock(async () => ({ running: true, hostPort: 4200 }));
-const startCodexServerMock = mock(async () => ({ hostPort: 4200 }));
+const getLocalCodexServerStatusMock = mock(async () => ({
+  running: true,
+  port: 4100,
+  pid: 10,
+  authToken: "local-token",
+}));
+const startLocalCodexServerMock = mock(async () => ({
+  port: 4100,
+  pid: 10,
+  authToken: "local-token",
+}));
+const getCodexServerStatusMock = mock(async () => ({
+  running: true,
+  hostPort: 4200,
+  authToken: "container-token",
+}));
+const startCodexServerMock = mock(async () => ({
+  hostPort: 4200,
+  authToken: "container-token",
+}));
 const scrollToBottomMock = mock(() => undefined);
 const useVirtuosoScrollStateMock = mock((_options: unknown) => ({
   isAtBottom: true,
@@ -148,6 +168,7 @@ mock.module("@/hooks/useEnvironments", () => ({
 }));
 mock.module("@/lib/codex-client", () => ({
   ...realCodexClientSnapshot,
+  checkHealth: checkHealthMock,
   createClient: createClientMock,
   createSession: createSessionMock,
   getSessionStatus: getSessionStatusMock,
@@ -445,6 +466,33 @@ function seedPipeline(
   return id;
 }
 
+/**
+ * Unmount the view and let its reconcile monitors finish reacting.
+ *
+ * `FeaturesView` keeps one abortable monitor per active conversation, and its
+ * effect cleanup aborts them on unmount — but abort only takes effect at the
+ * monitor's next checkpoint, which sits behind an already-issued status or
+ * transcript promise. Without draining those checkpoints here, a monitor left
+ * over from one test resumed *inside the next one*, calling the freshly cleared
+ * `getSessionStatus`/`getSessionMessages` mocks and making call-count
+ * assertions depend on how loaded the machine was. Draining runs each straggler
+ * to its abort check while its own test's mocks are still installed.
+ */
+async function drainReconcileMonitors(): Promise<void> {
+  cleanup();
+  // Three turns: one for the in-flight request's continuation, one for the poll
+  // timer that resolves early on abort, one for the loop's own re-check.
+  for (let turn = 0; turn < 3; turn += 1) {
+    await act(async () => {
+      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    });
+  }
+}
+
+afterEach(async () => {
+  await drainReconcileMonitors();
+});
+
 beforeEach(() => {
   cleanup();
   mockToastError.mockClear();
@@ -497,7 +545,9 @@ beforeEach(() => {
   startEnvironmentMock.mockClear();
   startEnvironmentMock.mockImplementation(async () => undefined);
   createClientMock.mockClear();
-  createClientMock.mockImplementation((baseUrl) => ({ baseUrl }));
+  createClientMock.mockImplementation((baseUrl, authToken) => ({ baseUrl, authToken }));
+  checkHealthMock.mockClear();
+  checkHealthMock.mockResolvedValue(true);
   createSessionMock.mockClear();
   createSessionMock.mockImplementation(async () => ({ sessionId: "session-new" }));
   getSessionStatusMock.mockClear();
@@ -513,13 +563,29 @@ beforeEach(() => {
     makeEnvironment({ id: environmentId })
   );
   getLocalCodexServerStatusMock.mockClear();
-  getLocalCodexServerStatusMock.mockImplementation(async () => ({ running: true, port: 4100, pid: 10 }));
+  getLocalCodexServerStatusMock.mockImplementation(async () => ({
+    running: true,
+    port: 4100,
+    pid: 10,
+    authToken: "local-token",
+  }));
   startLocalCodexServerMock.mockClear();
-  startLocalCodexServerMock.mockImplementation(async () => ({ port: 4100, pid: 10 }));
+  startLocalCodexServerMock.mockImplementation(async () => ({
+    port: 4100,
+    pid: 10,
+    authToken: "local-token",
+  }));
   getCodexServerStatusMock.mockClear();
-  getCodexServerStatusMock.mockImplementation(async () => ({ running: true, hostPort: 4200 }));
+  getCodexServerStatusMock.mockImplementation(async () => ({
+    running: true,
+    hostPort: 4200,
+    authToken: "container-token",
+  }));
   startCodexServerMock.mockClear();
-  startCodexServerMock.mockImplementation(async () => ({ hostPort: 4200 }));
+  startCodexServerMock.mockImplementation(async () => ({
+    hostPort: 4200,
+    authToken: "container-token",
+  }));
   scrollToBottomMock.mockClear();
   useVirtuosoScrollStateMock.mockClear();
   useVirtuosoScrollStateMock.mockImplementation(() => ({
@@ -629,7 +695,7 @@ describe("FeaturesView message drafts", () => {
     expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("");
     expect(useFeaturePlanStore.getState().getChatDraft("feature:other")).toBe("leave feature");
 
-    cleanup();
+    await drainReconcileMonitors();
     seedStores(featureWithStories({
       codexEnvironmentId: "env-feature",
       codexSessionId: "session-existing",
@@ -891,7 +957,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     expect(screen.getByText("Codex is working...")).toBeTruthy();
     expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
     await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalledWith(
-      { baseUrl: "http://127.0.0.1:4200" },
+      { baseUrl: "http://127.0.0.1:4200", authToken: "container-token" },
       "session-existing",
       { throwOnError: true },
     ));
@@ -937,7 +1003,7 @@ describe("FeaturesView lifecycle and navigation", () => {
 
     await waitFor(() => expect(sendPromptMock).toHaveBeenCalledTimes(1));
     expect(sendPromptMock).toHaveBeenCalledWith(
-      { baseUrl: "http://127.0.0.1:4200" },
+      { baseUrl: "http://127.0.0.1:4200", authToken: "container-token" },
       "session-existing",
       "Persist before dispatch",
     );
@@ -965,7 +1031,7 @@ describe("FeaturesView lifecycle and navigation", () => {
 
     await screen.findByText("Codex is working...");
     await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalledWith(
-      { baseUrl: "http://127.0.0.1:4200" },
+      { baseUrl: "http://127.0.0.1:4200", authToken: "container-token" },
       "session-existing",
       { throwOnError: true },
     ));
@@ -1058,7 +1124,7 @@ describe("FeaturesView lifecycle and navigation", () => {
       startedAt: "2026-01-03T00:00:00.000Z",
     }));
 
-    cleanup();
+    await drainReconcileMonitors();
     useFeaturePlanStore.setState({ activeConversations: new Map() });
     seedStores(chatFeature({
       messages: [pendingUser("2026-01-04T00:00:00.000Z", "feature-latest")],
@@ -1089,7 +1155,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     render(<FeaturesView projectId="project-1" />);
 
     await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalledWith(
-      { baseUrl: "http://127.0.0.1:4200" },
+      { baseUrl: "http://127.0.0.1:4200", authToken: "container-token" },
       "session-existing",
       { throwOnError: true },
     ));
@@ -1324,7 +1390,11 @@ describe("FeaturesView lifecycle and navigation", () => {
       messages: [pendingUser()],
     }));
     seedExistingCodexEnvironment(makeEnvironment({ containerId: boundedContainerId }));
-    getCodexServerStatusMock.mockImplementation(async () => ({ running: true, hostPort: 4321 }));
+    getCodexServerStatusMock.mockImplementation(async () => ({
+      running: true,
+      hostPort: 4321,
+      authToken: "bounded-status-token",
+    }));
     getSessionStatusMock.mockImplementation(async () => {
       throw new Error("bridge unavailable");
     });
@@ -1491,10 +1561,13 @@ describe("FeaturesView lifecycle and navigation", () => {
     render(<FeaturesView projectId="project-1" />);
     await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalled());
     expect(getLocalCodexServerStatusMock).toHaveBeenCalledWith("env-feature");
-    expect(createClientMock).toHaveBeenCalledWith("http://127.0.0.1:4100");
+    expect(createClientMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:4100",
+      "local-token",
+    );
     expect(getCodexServerStatusMock).not.toHaveBeenCalled();
 
-    cleanup();
+    await drainReconcileMonitors();
     getSessionStatusMock.mockClear();
     createClientMock.mockClear();
     getLocalCodexServerStatusMock.mockClear();
@@ -1507,7 +1580,10 @@ describe("FeaturesView lifecycle and navigation", () => {
     await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalled());
     expect(getEnvironmentMock).toHaveBeenCalledWith("env-feature");
     expect(getCodexServerStatusMock).toHaveBeenCalledWith("container-feature");
-    expect(createClientMock).toHaveBeenCalledWith("http://127.0.0.1:4200");
+    expect(createClientMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:4200",
+      "container-token",
+    );
   });
 
   test("moves every unreachable existing-session shape to bounded recovery", async () => {
@@ -1540,14 +1616,18 @@ describe("FeaturesView lifecycle and navigation", () => {
 
     try {
       for (const scenario of cases) {
-        cleanup();
+        await drainReconcileMonitors();
         useEnvironmentStore.setState({ environments: scenario.environment ? [scenario.environment] : [] });
         seedStores(chatFeature({ messages: [pendingUser()] }));
         getEnvironmentMock.mockClear();
         getEnvironmentMock.mockImplementation(async () => scenario.backendEnvironment ?? null);
         getCodexServerStatusMock.mockClear();
         getCodexServerStatusMock.mockImplementation(async () => (
-          scenario.bridge ?? { running: true, hostPort: 4200 }
+          scenario.bridge ?? {
+            running: true,
+            hostPort: 4200,
+            authToken: "container-token",
+          }
         ));
         getSessionStatusMock.mockClear();
         createClientMock.mockClear();
@@ -1639,18 +1719,31 @@ describe("FeaturesView lifecycle and navigation", () => {
     );
 
     const secondStatus = deferred<{ status: "idle" }>();
-    cleanup();
+    await drainReconcileMonitors();
     getSessionStatusMock.mockClear();
     getSessionStatusMock.mockImplementation(async () => secondStatus.promise);
     getSessionMessagesMock.mockClear();
-    const unmountedSessionId = "session-unmounted-during-status";
+    /*
+     * A session id unique to this phase. Reconciliation deliberately outlives
+     * unmount (see the "settles ... even after the view unmounts" test), so
+     * monitors from earlier tests are still running against the shared mocks
+     * and every one of them uses `chatFeature`'s default `session-existing`.
+     * Asserting on that id — or on the mock as a whole — measures those
+     * stragglers rather than this view, which is why it only failed under the
+     * load of a full-suite run.
+     */
+    const unmountedSessionId = "session-unmount-guard";
     seedStores(chatFeature({
       codexSessionId: unmountedSessionId,
       messages: [pendingUser()],
     }));
     seedExistingCodexEnvironment();
     const unmounted = render(<FeaturesView projectId="project-1" />);
-    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalled());
+    // Wait for *this* view's monitor, not a straggler's, or the assertion below
+    // passes vacuously because the read it guards never started.
+    await waitFor(() => expect(
+      getSessionStatusMock.mock.calls.some((call) => call[1] === unmountedSessionId),
+    ).toBe(true));
     unmounted.unmount();
     await act(async () => secondStatus.resolve({ status: "idle" }));
     expect(messageReadsFor(unmountedSessionId)).toHaveLength(0);
@@ -1788,7 +1881,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     expect(appendMessageMock).not.toHaveBeenCalled();
     await waitForConversationToSettle();
 
-    cleanup();
+    await drainReconcileMonitors();
     updateFeatureMock.mockClear();
     const storyResponse = `Local story reply.
 <story_refinement>{"storyId":"story-1","title":"Local story recovery"}</story_refinement>`;
@@ -1995,7 +2088,7 @@ describe("FeaturesView lifecycle and navigation", () => {
       stateApplication: "superseded",
     });
 
-    cleanup();
+    await drainReconcileMonitors();
     updateFeatureMock.mockClear();
     seedStores(feature);
     render(<FeaturesView projectId="project-1" />);
@@ -2050,7 +2143,7 @@ describe("FeaturesView lifecycle and navigation", () => {
       stateApplication: "applied",
     });
 
-    cleanup();
+    await drainReconcileMonitors();
     updateFeatureMock.mockClear();
     seedStores(feature);
     render(<FeaturesView projectId="project-1" />);
@@ -2096,7 +2189,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     await waitForConversationToSettle();
     expect(messageReadsFor(removedFeatureSessionId)).toHaveLength(0);
 
-    cleanup();
+    await drainReconcileMonitors();
     getSessionStatusMock.mockClear();
     const removedTargetSessionId = "session-removed-target";
     const removedTargetStatus = deferred<{ status: "idle" }>();
@@ -2910,7 +3003,7 @@ describe("FeaturesView feature planning chat", () => {
       "pending",
     ));
     expect(sendPromptMock).toHaveBeenCalledWith(
-      { baseUrl: "http://127.0.0.1:4200" },
+      { baseUrl: "http://127.0.0.1:4200", authToken: "container-token" },
       "session-existing",
       "Plan this feature",
     );
@@ -3370,7 +3463,7 @@ describe("FeaturesView feature planning chat", () => {
     fireEvent.click(screen.getByTitle("Refresh Codex status"));
     expect(getSessionMessagesMock.mock.calls.length).toBe(readsBeforeRefresh);
 
-    cleanup();
+    await drainReconcileMonitors();
     getSessionMessagesMock.mockImplementationOnce(async () => {
       throw new Error("bridge unavailable");
     });
@@ -3469,7 +3562,12 @@ describe("FeaturesView Codex session bootstrap", () => {
     createEnvironmentMock.mockImplementationOnce(async () => stoppedLocal);
     updateEnvironmentAgentSettingsMock.mockImplementationOnce(async () => stoppedLocal);
     getEnvironmentMock.mockImplementationOnce(async () => runningLocal);
-    getLocalCodexServerStatusMock.mockImplementationOnce(async () => ({ running: false }));
+    getLocalCodexServerStatusMock.mockImplementation(async () => ({
+      running: false,
+      port: null,
+      pid: null,
+      authToken: "",
+    }));
     getSessionMessagesMock
       .mockImplementationOnce(async () => [])
       .mockImplementationOnce(async () => [assistant]);
@@ -3508,9 +3606,12 @@ describe("FeaturesView Codex session bootstrap", () => {
     expect(updateEnvironmentAgentSettingsMock.mock.calls.at(-1)).toHaveLength(6);
     expect(startEnvironmentMock).toHaveBeenCalledWith("env-local", undefined, { silent: true });
     expect(startLocalCodexServerMock).toHaveBeenCalledWith("env-local");
-    expect(createClientMock).toHaveBeenCalledWith("http://127.0.0.1:4100");
+    expect(createClientMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:4100",
+      "local-token",
+    );
     expect(createSessionMock).toHaveBeenCalledWith(
-      { baseUrl: "http://127.0.0.1:4100" },
+      { baseUrl: "http://127.0.0.1:4100", authToken: "local-token" },
       {
         title: "Local plan",
         model: "repository-model",
@@ -3533,7 +3634,11 @@ describe("FeaturesView Codex session bootstrap", () => {
     seedStores(chatFeature());
     seedExistingCodexEnvironment(environment);
     getEnvironmentMock.mockImplementationOnce(async () => running);
-    getCodexServerStatusMock.mockImplementationOnce(async () => ({ running: false }));
+    getCodexServerStatusMock.mockImplementation(async () => ({
+      running: false,
+      hostPort: null,
+      authToken: "",
+    }));
     getSessionMessagesMock
       .mockImplementationOnce(async () => [])
       .mockImplementationOnce(async () => [firstReply])
@@ -3565,6 +3670,51 @@ describe("FeaturesView Codex session bootstrap", () => {
     expect(startEnvironmentMock).toHaveBeenCalledTimes(1);
     expect(startCodexServerMock).toHaveBeenCalledWith("container-feature");
     expect(createClientMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("replaces a cached Codex client after its authenticated health probe fails", async () => {
+    const firstContent = featurePlannerReply("First");
+    const secondContent = featurePlannerReply("Second");
+    const firstReply = makeCodexMessage({ id: "reply-1", content: firstContent });
+    const secondReply = makeCodexMessage({ id: "reply-2", content: secondContent });
+    seedStores(chatFeature());
+    seedExistingCodexEnvironment();
+    checkHealthMock.mockResolvedValueOnce(false);
+    getSessionMessagesMock
+      .mockImplementationOnce(async () => [])
+      .mockImplementationOnce(async () => [firstReply])
+      .mockImplementationOnce(async () => [firstReply])
+      .mockImplementationOnce(async () => [firstReply, secondReply]);
+    render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
+      target: { value: "First request" },
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => expect(appendMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "assistant",
+      firstContent,
+      "pending",
+    ));
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
+      target: { value: "Second request" },
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => expect(appendMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "assistant",
+      secondContent,
+      "pending",
+    ));
+
+    expect(checkHealthMock).toHaveBeenCalledTimes(1);
+    expect(createClientMock).toHaveBeenCalledTimes(2);
+    expect(createClientMock).toHaveBeenLastCalledWith(
+      "http://127.0.0.1:4200",
+      "container-token",
+    );
   });
 
   test("recreates an expired persisted session before sending", async () => {
@@ -3617,7 +3767,7 @@ describe("FeaturesView Codex session bootstrap", () => {
     ));
     expect(createSessionMock).toHaveBeenCalledTimes(1);
     expect(createSessionMock).toHaveBeenCalledWith(
-      { baseUrl: "http://127.0.0.1:4200" },
+      { baseUrl: "http://127.0.0.1:4200", authToken: "container-token" },
       {
         title: "My Feature",
         model: "global-fallback-model",
@@ -3652,7 +3802,10 @@ describe("FeaturesView Codex session bootstrap", () => {
     ));
     expect(getEnvironmentMock).toHaveBeenCalledWith("env-feature");
     expect(createEnvironmentMock).not.toHaveBeenCalled();
-    expect(createClientMock).toHaveBeenCalledWith("http://127.0.0.1:4200");
+    expect(createClientMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:4200",
+      "container-token",
+    );
   });
 
   test("reports a running local bridge that omits its port", async () => {
@@ -3664,6 +3817,8 @@ describe("FeaturesView Codex session bootstrap", () => {
     getLocalCodexServerStatusMock.mockImplementationOnce(async () => ({
       running: true,
       pid: 10,
+      port: null,
+      authToken: "local-token",
     }));
     render(<FeaturesView projectId="project-1" />);
     await flushReconcileStart();
@@ -3675,7 +3830,7 @@ describe("FeaturesView Codex session bootstrap", () => {
 
     await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
       "Feature planning failed",
-      expect.objectContaining({ description: "Failed to resolve Codex bridge port" }),
+      expect.objectContaining({ description: "Failed to resolve authenticated Codex bridge" }),
     ));
     await waitForConversationToSettle();
     expect(sendPromptMock).not.toHaveBeenCalled();
@@ -3698,11 +3853,15 @@ describe("FeaturesView Codex session bootstrap", () => {
     await waitForConversationToSettle();
     expect(sendPromptMock).not.toHaveBeenCalled();
 
-    cleanup();
+    await drainReconcileMonitors();
     mockToastError.mockClear();
     seedStores(chatFeature());
     seedExistingCodexEnvironment();
-    getCodexServerStatusMock.mockImplementationOnce(async () => ({ running: true }));
+    getCodexServerStatusMock.mockImplementationOnce(async () => ({
+      running: true,
+      hostPort: null,
+      authToken: "container-token",
+    }));
     render(<FeaturesView projectId="project-1" />);
     await flushReconcileStart();
     fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
@@ -3711,7 +3870,7 @@ describe("FeaturesView Codex session bootstrap", () => {
     fireEvent.click(screen.getByTitle("Send message"));
     await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
       "Feature planning failed",
-      expect.objectContaining({ description: "Failed to resolve Codex bridge port" }),
+      expect.objectContaining({ description: "Failed to resolve authenticated Codex bridge" }),
     ));
     await waitForConversationToSettle();
     expect(sendPromptMock).not.toHaveBeenCalled();
@@ -3742,7 +3901,7 @@ describe("FeaturesView story refinement chat", () => {
     openStory();
 
     await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalledWith(
-      { baseUrl: "http://127.0.0.1:4200" },
+      { baseUrl: "http://127.0.0.1:4200", authToken: "container-token" },
       "session-existing",
       { throwOnError: true },
     ));
@@ -4408,7 +4567,7 @@ describe("FeaturesView build action", () => {
     expect(build.hasAttribute("disabled")).toBe(true);
     fireEvent.click(build);
     await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalledWith(
-      { baseUrl: "http://127.0.0.1:4200" },
+      { baseUrl: "http://127.0.0.1:4200", authToken: "container-token" },
       "session-existing",
       { throwOnError: true },
     ));

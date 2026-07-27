@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  buildTranscriptCatalog,
   clearTranscriptPathCache,
   getTranscriptPathCacheStats,
   setTranscriptPathCacheLimitsForTesting,
@@ -12,9 +13,15 @@ import {
   getPersistedSessionMeta,
   getSessionMetaFromTranscriptPath,
   hydrateMessagesFromPersistedSession,
+  listPersistedSessionsForCwd,
   mergePersistedSessionMeta,
   readTranscriptLines,
 } from "./rollout.js";
+import { persistSessionTitle } from "../session-titles.js";
+import {
+  clearTranscriptCache,
+  getTranscriptCacheStats,
+} from "../transcript-cache.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -29,6 +36,7 @@ async function temporaryRollout(threadId: string, lines: unknown[]): Promise<str
 
 afterEach(async () => {
   clearTranscriptPathCache();
+  clearTranscriptCache();
   setTranscriptPathCacheLimitsForTesting();
   await Promise.all(
     temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
@@ -165,6 +173,135 @@ describe("rollout public helpers (continued)", () => {
     });
   });
 
+  test("skips metadata beyond the bounded head without filling the transcript cache", async () => {
+    const path = await temporaryRollout("oversized-head", [
+      { type: "event_msg", payload: { message: "x".repeat(70 * 1024) } },
+      {
+        type: "session_meta",
+        payload: {
+          id: "oversized-head",
+          cwd: "/workspace",
+          timestamp: "2026-07-25T12:00:00.000Z",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Recovered title" }],
+        },
+      },
+    ]);
+
+    expect(await getSessionMetaFromTranscriptPath(path)).toBeNull();
+    expect(getTranscriptCacheStats()).toEqual({ entries: 0, bytes: 0 });
+  });
+
+  test("catalog aliases, malformed index lines, and generated title overrides are defensive", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-catalog-"));
+    temporaryDirectories.push(root);
+    const transcriptPath = join(root, "sessions", "filename-alias.jsonl");
+    await mkdir(dirname(transcriptPath), { recursive: true });
+    await writeFile(transcriptPath, `${[
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "canonical-thread",
+          cwd: "/workspace",
+          timestamp: "2026-07-25T12:00:00.000Z",
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Prompt title" }],
+        },
+      }),
+    ].join("\n")}\n`, "utf8");
+    await writeFile(
+      join(root, "session_index.jsonl"),
+      `{malformed\n${JSON.stringify({
+        id: "canonical-thread",
+        updated_at: "2026-07-25T12:00:00.000Z",
+      })}\n`,
+      "utf8",
+    );
+    await persistSessionTitle(root, "canonical-thread", "Generated title", {
+      source: "generated",
+    });
+
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+    try {
+      const catalog = await buildTranscriptCatalog();
+      expect(catalog.transcriptPathByThreadId.get("filename-alias")).toBe(transcriptPath);
+      expect(catalog.transcriptPathByThreadId.get("canonical-thread")).toBe(transcriptPath);
+
+      const sessions = await listPersistedSessionsForCwd("/workspace");
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]).toMatchObject({
+        id: "canonical-thread",
+        title: "Generated title",
+        titleSource: "generated",
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test("cached and malformed metadata preserve caller fallbacks", async () => {
+    const path = "/sessions/thread-cached.jsonl";
+    const cached = {
+      id: "different-id",
+      title: "Prompt title",
+      titleSource: "prompt" as const,
+      updatedAt: "",
+      cwd: "/workspace",
+      transcriptPath: path,
+    };
+    const catalog = {
+      metas: [cached],
+      metaByPath: new Map([[path, cached]]),
+      transcriptPathByThreadId: new Map([["thread-cached", path]]),
+    };
+
+    expect(
+      await getPersistedSessionMeta(
+        "thread-cached",
+        "Indexed title",
+        "2026-07-25T12:00:00.000Z",
+        catalog,
+      ),
+    ).toMatchObject({
+      id: "thread-cached",
+      title: "Indexed title",
+      titleSource: "codex",
+      updatedAt: "2026-07-25T12:00:00.000Z",
+    });
+
+    const malformed = await temporaryRollout("malformed-meta-fallback", [{
+      type: "session_meta",
+      payload: { id: "" },
+    }]);
+    expect(
+      await getPersistedSessionMeta(
+        "malformed-meta-fallback",
+        "Fallback",
+        "2026-07-25T12:00:00.000Z",
+        undefined,
+        [malformed],
+      ),
+    ).toMatchObject({
+      id: "malformed-meta-fallback",
+      title: "Fallback",
+      transcriptPath: malformed,
+    });
+  });
+
   test("invalid transcript metadata falls back without fabricating a session", async () => {
     const noMeta = await temporaryRollout("no-meta", [{ type: "response_item" }]);
     expect(await getSessionMetaFromTranscriptPath(noMeta)).toBeNull();
@@ -248,6 +385,8 @@ describe("rollout public helpers (continued)", () => {
       extractPersistedMessageText([
         { type: "output_text", text: "one" },
         null,
+        { type: "output_text", text: 42 },
+        { type: "future_content", text: "hidden" },
         { type: "output_text", text: "two" },
       ], "assistant"),
     ).toBe("one\ntwo");
@@ -354,6 +493,114 @@ describe("rollout public helpers (continued)", () => {
         },
       ]);
       expect(hydrated.title).toBe("real prompt");
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+    }
+  });
+
+  /**
+   * Turn boundaries are what make "fork from here" survive a bridge restart, and
+   * they are reconstructed from *two* record shapes: `turn_context`, and the
+   * turn-scoped `event_msg` records. Both precede the messages of their turn, so
+   * the last id seen owns the message. The camelCase spelling is accepted too, so
+   * a rollout-format change degrades to "no fork point" rather than silently
+   * attributing messages to the previous turn.
+   */
+  test("reconstructs turn boundaries from turn_context, event_msg, and either spelling", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-turns-"));
+    temporaryDirectories.push(root);
+    const path = join(root, "sessions", "thread-turns.jsonl");
+    await mkdir(dirname(path), { recursive: true });
+    const records = [
+      {
+        type: "session_meta",
+        payload: { id: "thread-turns", cwd: "/workspace", timestamp: "2026-07-25T12:00:00.000Z" },
+      },
+      // Before the first turn: no boundary has been seen yet.
+      {
+        timestamp: "2026-07-25T12:00:30.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "before any turn" }],
+        },
+      },
+      { type: "turn_context", payload: { turn_id: "turn-a", cwd: "/workspace" } },
+      {
+        timestamp: "2026-07-25T12:01:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "first turn prompt" }],
+        },
+      },
+      // The other ordering: a turn-scoped event_msg carrying the boundary.
+      {
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: "turn-b" },
+      },
+      {
+        timestamp: "2026-07-25T12:02:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "second turn answer" }],
+        },
+      },
+      // camelCase: accepted, so a format change does not misattribute messages.
+      { type: "event_msg", payload: { type: "task_started", turnId: "turn-c" } },
+      {
+        timestamp: "2026-07-25T12:03:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "third turn prompt" }],
+        },
+      },
+      // Neither spelling, and a blank id: leaves the previous boundary standing
+      // rather than clearing it.
+      { type: "event_msg", payload: { type: "task_started", turn_id: "   " } },
+      {
+        timestamp: "2026-07-25T12:04:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "third turn answer" }],
+        },
+      },
+    ];
+    await writeFile(
+      path,
+      `${records.map((line) => JSON.stringify(line)).join("\n")}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(root, "session_index.jsonl"),
+      `${JSON.stringify({ id: "thread-turns", updated_at: "2026-07-25T12:04:00.000Z" })}\n`,
+      "utf8",
+    );
+
+    const previousHome = process.env.CODEX_HOME;
+    const previousCwd = process.env.CWD;
+    process.env.CODEX_HOME = root;
+    process.env.CWD = "/workspace";
+    try {
+      const hydrated = await hydrateMessagesFromPersistedSession("thread-turns");
+      expect(hydrated.messages.map((message) => [message.content, message.turnId])).toEqual([
+        ["before any turn", undefined],
+        ["first turn prompt", "turn-a"],
+        ["second turn answer", "turn-b"],
+        ["third turn prompt", "turn-c"],
+        ["third turn answer", "turn-c"],
+      ]);
     } finally {
       if (previousHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousHome;

@@ -441,6 +441,47 @@ describe("NativeMessage task list rendering", () => {
     expect(container.firstElementChild?.className).not.toContain("pt-0");
   });
 
+  test("survives a platform time formatter failure", () => {
+    const original = Date.prototype.toLocaleTimeString;
+    Date.prototype.toLocaleTimeString = function failingFormatter() {
+      throw new RangeError("formatter unavailable");
+    };
+    try {
+      render(
+        <NativeMessage
+          message={makeMessage([{ type: "text", content: "Still rendered" }])}
+        />,
+      );
+      expect(screen.getByText("Still rendered")).toBeTruthy();
+    } finally {
+      Date.prototype.toLocaleTimeString = original;
+    }
+  });
+
+  test("treats date comparison failures as separate assistant messages", () => {
+    const original = Date.prototype.getTime;
+    Date.prototype.getTime = function failingGetTime() {
+      throw new RangeError("date unavailable");
+    };
+    try {
+      render(
+        <NativeMessage
+          message={makeMessage(
+            [{ type: "text", content: "Second answer" }],
+            { id: "assistant-after-date-error" },
+          )}
+          previousMessage={makeMessage(
+            [{ type: "text", content: "First answer" }],
+            { id: "assistant-before-date-error" },
+          )}
+        />,
+      );
+      expect(screen.getByText(/Assistant/)).toBeTruthy();
+    } finally {
+      Date.prototype.getTime = original;
+    }
+  });
+
   test("uses uniform part spacing for tool and text blocks", () => {
     const message = makeMessage([
       {
@@ -567,6 +608,24 @@ describe("NativeMessage task list rendering", () => {
     expect(
       screen.getByRole("button", { name: /task wrapper/i }).parentElement?.className,
     ).toContain("my-0");
+  });
+
+  test("does not render an empty tool group shell", () => {
+    const message = makeMessage([
+      { type: "text", content: "Before tools" },
+      {
+        type: "tool-group",
+        content: "",
+        parts: [],
+      },
+      { type: "text", content: "After tools" },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).toContain("Before tools");
+    expect(container.textContent).toContain("After tools");
+    expect(container.querySelector(".border-zinc-700\\/70")).toBeNull();
   });
 
   test("renders Claude Agent task groups as compact agent activity rows", () => {
@@ -1889,5 +1948,90 @@ describe("NativeMessage agent status and grouping details", () => {
 
     expect(screen.getByText("4 tool uses")).toBeTruthy();
     expect(screen.getByText("1 update")).toBeTruthy();
+  });
+});
+
+describe("NativeMessage actions slot", () => {
+  afterEach(() => {
+    cleanup();
+    useMessagePartExpansionStore.getState().reset();
+  });
+
+  test("renders caller-supplied actions before the copy button on a user message", () => {
+    // This is the shared render path for all three tabs' fork buttons.
+    const message = makeMessage([{ type: "text", content: "Ship it" }], {
+      id: "user-1",
+      role: "user",
+      content: "Ship it",
+    });
+
+    render(
+      <NativeMessage
+        message={message}
+        actions={<button type="button">Fork from here</button>}
+      />,
+    );
+
+    const fork = screen.getByRole("button", { name: "Fork from here" });
+    const copy = screen.getByRole("button", { name: "Copy text" });
+    expect(fork).toBeTruthy();
+    // Ordering is load-bearing: copy stays the right-most control.
+    expect(
+      fork.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  test("renders actions on an assistant message alongside the copy button", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Done" }])}
+        actions={<button type="button">Custom action</button>}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Custom action" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy text" })).toBeTruthy();
+  });
+
+  test("renders actions even when there is nothing to copy", () => {
+    /*
+     * With no copy content the action row used to be `undefined`, so
+     * `MessageShell` hid it — and with it any caller-supplied action.
+     */
+    const message = makeMessage([
+      { type: "tool-invocation", content: "Read", toolName: "Read", toolState: "success" },
+    ]);
+
+    render(
+      <NativeMessage
+        message={message}
+        actions={<button type="button">Fork from here</button>}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Fork from here" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Copy text" })).toBeNull();
+  });
+
+  test("leaves the copy-only layout undisturbed when no actions are passed", () => {
+    render(<NativeMessage message={makeMessage([{ type: "text", content: "Done" }])} />);
+
+    const copy = screen.getByRole("button", { name: "Copy text" });
+    expect(copy).toBeTruthy();
+    // Exactly one control in the action row — nothing extra was introduced.
+    expect(copy.parentElement?.querySelectorAll("button")).toHaveLength(1);
+  });
+
+  test("renders no action row at all when there is neither copy content nor actions", () => {
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([
+          { type: "tool-invocation", content: "Read", toolName: "Read", toolState: "success" },
+        ])}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Copy text" })).toBeNull();
+    expect(container.textContent).not.toContain("Fork from here");
   });
 });

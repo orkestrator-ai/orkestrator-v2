@@ -123,6 +123,16 @@ export interface ThreadContext {
   error?: string;
   /** Set while a dispatch is mid-flight, so a second tab cannot interleave. */
   dispatchInFlight: boolean;
+  /**
+   * Set while `thread/compact/start` is still running.
+   *
+   * Compaction is asynchronous: the RPC returns immediately and the model
+   * rewrites the thread's context in the background, finishing with a
+   * `thread/compacted` notification. Until that arrives the thread is genuinely
+   * busy — a prompt dispatched in the gap races the rewrite — so this holds the
+   * overlap guard the way `activeTurn` does for a turn.
+   */
+  compacting: boolean;
   name?: string | null;
   cwd?: string;
   /** True once `thread/unsubscribe` has been sent. */
@@ -312,6 +322,7 @@ export class ThreadRegistry {
         activeTurn: null,
         phase: "idle",
         dispatchInFlight: false,
+        compacting: false,
         unsubscribed: false,
         materialized: false,
         cwd: options.cwd,
@@ -363,7 +374,7 @@ export class ThreadRegistry {
   detachableThreads(idleMs: number): ThreadContext[] {
     const cutoff = this.now() - idleMs;
     return this.listThreads().filter((context) => {
-      if (context.activeTurn || context.dispatchInFlight) return false;
+      if (context.activeTurn || context.dispatchInFlight || context.compacting) return false;
       if (context.phase !== "idle" && context.phase !== "failed") return false;
       const sessions = this.sessionsForThread(context.threadId);
       if (sessions.length === 0) return true;
@@ -438,6 +449,9 @@ export class ThreadRegistry {
     const busy =
       context.activeTurn !== null
       || context.dispatchInFlight
+      // Compaction rewrites the thread's context in the background. A turn
+      // dispatched into that window races the rewrite.
+      || context.compacting
       || context.phase === "running"
       || context.phase === "starting"
       // Between the interrupt response and the terminal event the turn may still

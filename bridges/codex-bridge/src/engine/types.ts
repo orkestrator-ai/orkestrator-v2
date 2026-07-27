@@ -151,6 +151,44 @@ export interface EngineTurn {
   duplicate?: boolean;
 }
 
+export interface EngineRateLimitWindow {
+  /**
+   * Which of the account's two windows this is.
+   *
+   * `account/rateLimits/updated` is a sparse rolling update, so a snapshot must
+   * be merged per window rather than replaced. The label cannot be that key: for
+   * the primary window it is the account's plan name and changes independently.
+   */
+  slot: "primary" | "secondary";
+  label: string;
+  usedPercent?: number;
+  resetsAt?: string;
+}
+
+export interface EngineCreditSnapshot {
+  hasCredits?: boolean;
+  unlimited?: boolean;
+  balance?: string;
+}
+
+export interface EngineUsageSnapshot {
+  usedTokens: number;
+  totalTokens: number;
+  percentUsed: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  lastTurnTokens?: number;
+  sessionTokens?: number;
+  credits?: EngineCreditSnapshot;
+  rateLimits?: EngineRateLimitWindow[];
+  estimated: false;
+  source: "provider";
+  updatedAt: string;
+}
+
 export interface EngineModelReasoningOption {
   effort: string;
   description?: string;
@@ -278,6 +316,25 @@ export type EngineEvent = EngineEventMeta &
         willRetry: boolean;
       }
     | { kind: "thread.name.updated"; threadId: string; name?: string }
+    /**
+     * Background context compaction finished.
+     *
+     * Deliberately carries no `turnId` even though the notification does: the
+     * runtime parks turn-scoped events against the active turn, and compaction's
+     * turn is never the active one, so it would be dropped as stale.
+     */
+    | { kind: "thread.compacted"; threadId: string }
+    | {
+        kind: "thread.usage.updated";
+        threadId: string;
+        turnId: string;
+        usage: EngineUsageSnapshot;
+      }
+    | {
+        kind: "account.rateLimits.updated";
+        rateLimits: EngineRateLimitWindow[];
+        credits?: EngineCreditSnapshot;
+      }
     | { kind: "engine.state"; state: EngineState; detail?: string }
     /**
      * A replacement child is ready. Every loaded thread must be re-subscribed and

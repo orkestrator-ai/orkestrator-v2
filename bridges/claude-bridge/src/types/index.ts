@@ -58,8 +58,25 @@ export interface SdkResultMessage extends SdkMessageBase {
   is_error?: boolean;
   num_turns?: number;
   errors?: string[];
+  usage?: Record<string, unknown>;
+  modelUsage?: Record<string, {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+    costUSD?: number;
+    contextWindow?: number;
+  }>;
+  permission_denials?: unknown[];
   /** Present on successful turns requested with Agent SDK `outputFormat`. */
   structured_output?: unknown;
+  /**
+   * Transcript uuid of the user message that opened this turn.
+   *
+   * The authoritative link between the locally generated id the bridge handed
+   * the client and the record a fork or file rewind must address.
+   */
+  user_message_uuid?: string;
 }
 
 /** Type guard for compact boundary message */
@@ -132,6 +149,17 @@ export interface NormalizedMessage {
   parts: NormalizedPart[];
   timestamp: string;
   /**
+   * UUID of the record this message occupies in the SDK's persisted transcript.
+   *
+   * The only id that a fork boundary or a file rewind may be resolved against.
+   * Live messages carry a locally generated `id` (`msg-…`), which exists
+   * nowhere on disk, so without this the bridge would have to *guess* which
+   * transcript record the user pointed at — and both consumers of that answer
+   * (`forkSession({ upToMessageId })` and `rewindFiles()`) act destructively on
+   * it. Absent means "not resolvable"; callers must fail rather than guess.
+   */
+  sdkUuid?: string;
+  /**
    * How many frames have been published for this message, starting at 1 for
    * the full frame. Present only on assistant messages the streaming path
    * publishes incrementally.
@@ -144,6 +172,17 @@ export interface NormalizedMessage {
    * patch stream.
    */
   revision?: number;
+}
+
+export interface ClaudeQueryControl {
+  stopTask?: (taskId: string) => Promise<void>;
+  backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
+  getContextUsage?: () => Promise<unknown>;
+  rewindFiles?: (
+    userMessageId: string,
+    options?: { dryRun?: boolean },
+  ) => Promise<unknown>;
+  close?: () => void | Promise<void>;
 }
 
 /** Session state */
@@ -172,6 +211,100 @@ export interface SessionState {
    * is the authoritative copy `GET /session/:id/tasks` serves.
    */
   taskRegistry?: TaskRegistry;
+  /** True once the persisted SDK transcript has been normalized on demand. */
+  persistedMessagesLoaded?: boolean;
+  /** Latest provider-reported context, token, cost, and rate-limit snapshot. */
+  usage?: SessionUsageSnapshot;
+  /** Predicted next prompt emitted by the SDK after a completed turn. */
+  promptSuggestion?: string;
+  /** Live background/subagent tasks keyed by provider task id. */
+  backgroundTasks?: Record<string, BackgroundTaskSnapshot>;
+  /**
+   * Provider rate-limit windows, held independently of {@link usage}.
+   *
+   * `rate_limit_event` arrives mid-turn, long before the first `result` builds
+   * a usage snapshot, so hanging these off `usage` dropped every window the
+   * first turn reported.
+   */
+  rateLimits?: SessionRateLimitWindow[];
+  /**
+   * True while a destructive file rewind is restoring the working tree.
+   *
+   * A rewind is not a turn, so `status` stays `idle` throughout; without a
+   * separate flag a prompt accepted a millisecond later would run against files
+   * that are being rewritten underneath it.
+   */
+  rewindInProgress?: boolean;
+  /** True after durable deletion has claimed the session and before removal. */
+  deleting?: boolean;
+  /** Single in-flight persisted transcript read shared by mounts and prompts. */
+  persistedHydration?: Promise<{
+    messages: NormalizedMessage[];
+    taskRegistry: TaskRegistry;
+  } | undefined>;
+  /** Control for the currently executing (or most recently completed) turn. */
+  queryControl?: ClaudeQueryControl;
+  /**
+   * Control that owns each live background task.
+   *
+   * A follow-up turn installs a new `queryControl`; these per-task handles keep
+   * older provider processes addressable until their tasks settle.
+   */
+  backgroundTaskControls?: Map<string, ClaudeQueryControl>;
+}
+
+export interface SessionRateLimitWindow {
+  label: string;
+  usedPercent?: number;
+  resetsAt?: string;
+}
+
+/**
+ * Outcome of a background-task stop request.
+ *
+ * Discriminated so the HTTP layer can tell "there is nothing by that name"
+ * (404) from "the task exists but no live control channel can reach it" (409);
+ * a single boolean collapsed both into a misleading 404.
+ */
+export type StopBackgroundTaskResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: "session_not_found" | "task_not_found" | "no_control_channel";
+      message: string;
+    };
+
+export interface SessionUsageSnapshot {
+  usedTokens: number;
+  totalTokens: number;
+  percentUsed: number;
+  modelId?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  lastTurnTokens?: number;
+  sessionTokens?: number;
+  costUsd?: number;
+  durationMs?: number;
+  apiDurationMs?: number;
+  estimated?: boolean;
+  source: "claude";
+  updatedAt: string;
+  permissionDenials?: number;
+  contextCategories?: Array<{ name: string; tokens: number; color?: string }>;
+  rateLimits?: SessionRateLimitWindow[];
+}
+
+export interface BackgroundTaskSnapshot {
+  id: string;
+  description?: string;
+  status: "pending" | "running" | "completed" | "failed" | "killed" | "paused";
+  isBackgrounded?: boolean;
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
 }
 
 /** Effort level for controlling how much thinking/reasoning Claude applies */
@@ -259,6 +392,12 @@ export interface SessionInitData {
   mcpServers: McpServerRuntimeStatus[];
   plugins: PluginRuntimeStatus[];
   slashCommands?: string[];
+  agents?: Array<{
+    name: string;
+    description?: string;
+    model?: string;
+    color?: string;
+  }>;
 }
 
 /**
@@ -309,6 +448,12 @@ export interface PromptOptions {
   permissionMode?: PermissionMode;
   /** When true, enables Claude Code fast mode (Opus 4.6 priority service tier). */
   fastMode?: boolean;
+  /** Named top-level agent/profile discovered from the SDK. */
+  agent?: string;
+  /** Include `.claude/settings.local.json` for native-settings fidelity. */
+  includeLocalSettings?: boolean;
+  /** Opt into provider-generated follow-up prompt suggestions. */
+  promptSuggestions?: boolean;
   /** JSON Schema passed to the Agent SDK's structured-output option. */
   outputSchema?: JsonSchema;
   /** Stable caller id used to reconcile an async structured turn. */

@@ -5,6 +5,7 @@ import {
   type CodexApproval,
   type CodexClient,
   type CodexConversationMode,
+  type CodexInteraction,
   type CodexMessage,
   type CodexModel,
   type CodexReasoningEffort,
@@ -12,6 +13,7 @@ import {
   type CodexSlashCommand,
 } from "@/lib/codex-client";
 import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-messages";
+import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import { createSessionKey } from "@/lib/utils";
 import type { FileMention } from "@/types";
 import {
@@ -83,6 +85,8 @@ interface CodexState extends CodexChatSlice {
    * on mount.
    */
   pendingApprovals: Map<string, CodexApproval[]>;
+  pendingInteractions: Map<string, CodexInteraction[]>;
+  contextUsage: Map<string, ContextUsageSnapshot>;
 
   // Agent-specific actions
   setModels: (models: CodexModel[]) => void;
@@ -100,6 +104,23 @@ interface CodexState extends CodexChatSlice {
   /** Adds one, ignoring a duplicate id so an SSE replay cannot double-render. */
   addPendingApproval: (sessionKey: string, approval: CodexApproval) => void;
   removePendingApproval: (sessionKey: string, approvalId: string) => void;
+  setPendingInteractions: (
+    sessionKey: string,
+    interactions: CodexInteraction[],
+  ) => void;
+  addPendingInteraction: (
+    sessionKey: string,
+    interaction: CodexInteraction,
+  ) => void;
+  removePendingInteraction: (
+    sessionKey: string,
+    interactionId: string,
+  ) => void;
+  setContextUsage: (
+    sessionKey: string,
+    usage: ContextUsageSnapshot | null,
+  ) => void;
+  getContextUsage: (sessionKey: string) => ContextUsageSnapshot | undefined;
   isFastMode: (sessionKey: string) => boolean;
   clearEnvironment: (environmentId: string) => void;
 }
@@ -128,6 +149,7 @@ function isSameApproval(a: CodexApproval, b: CodexApproval | undefined): boolean
     && a.reason === b.reason
     && a.grantRoot === b.grantRoot
     && a.networkHost === b.networkHost
+    && a.actionable === b.actionable
     && a.supportsApproveForSession === b.supportsApproveForSession
     && a.permissions?.network === b.permissions?.network
     && a.permissions?.fileSystem === b.permissions?.fileSystem
@@ -155,6 +177,8 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
   fastMode: new Map(),
   sessionPhase: new Map(),
   pendingApprovals: new Map(),
+  pendingInteractions: new Map(),
+  contextUsage: new Map(),
 
   // Agent-specific actions
   setModels: (models) => set({ models: models.length > 0 ? models : CODEX_MODELS }),
@@ -247,6 +271,63 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       return { pendingApprovals: next };
     }),
 
+  setPendingInteractions: (sessionKey, interactions) =>
+    set((state) => {
+      const existing = state.pendingInteractions.get(sessionKey) ?? [];
+      // Same rationale as `setPendingApprovals`: reconcile calls this on every
+      // tick, almost always with an empty list, so an always-new Map here would
+      // rerender the whole tab. `expiresAt` is compared as well as the id because
+      // the bridge re-reports a pending interaction with a refreshed deadline.
+      if (
+        existing.length === interactions.length
+        && existing.every(
+          (entry, index) =>
+            entry.interactionId === interactions[index]?.interactionId
+            && entry.expiresAt === interactions[index]?.expiresAt,
+        )
+      ) {
+        return state;
+      }
+      const next = new Map(state.pendingInteractions);
+      if (interactions.length === 0) next.delete(sessionKey);
+      else next.set(sessionKey, interactions);
+      return { pendingInteractions: next };
+    }),
+
+  addPendingInteraction: (sessionKey, interaction) =>
+    set((state) => {
+      const existing = state.pendingInteractions.get(sessionKey) ?? [];
+      if (existing.some((entry) => entry.interactionId === interaction.interactionId)) {
+        return state;
+      }
+      const next = new Map(state.pendingInteractions);
+      next.set(sessionKey, [...existing, interaction]);
+      return { pendingInteractions: next };
+    }),
+
+  removePendingInteraction: (sessionKey, interactionId) =>
+    set((state) => {
+      const existing = state.pendingInteractions.get(sessionKey);
+      if (!existing?.some((entry) => entry.interactionId === interactionId)) return state;
+      const remaining = existing.filter(
+        (entry) => entry.interactionId !== interactionId,
+      );
+      const next = new Map(state.pendingInteractions);
+      if (remaining.length === 0) next.delete(sessionKey);
+      else next.set(sessionKey, remaining);
+      return { pendingInteractions: next };
+    }),
+
+  setContextUsage: (sessionKey, usage) =>
+    set((state) => {
+      const next = new Map(state.contextUsage);
+      if (usage) next.set(sessionKey, usage);
+      else next.delete(sessionKey);
+      return { contextUsage: next };
+    }),
+
+  getContextUsage: (sessionKey) => get().contextUsage.get(sessionKey),
+
   isFastMode: (sessionKey) => get().fastMode.get(sessionKey) ?? false,
 
   clearEnvironment: (environmentId) =>
@@ -276,6 +357,11 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
         selectedMode: pruneSessionKeyedMap(state.selectedMode, prefix),
         sessionPhase: pruneSessionKeyedMap(state.sessionPhase, prefix),
         pendingApprovals: pruneSessionKeyedMap(state.pendingApprovals, prefix),
+        pendingInteractions: pruneSessionKeyedMap(
+          state.pendingInteractions,
+          prefix,
+        ),
+        contextUsage: pruneSessionKeyedMap(state.contextUsage, prefix),
         selectedReasoningEffort: pruneSessionKeyedMap(
           state.selectedReasoningEffort,
           prefix,

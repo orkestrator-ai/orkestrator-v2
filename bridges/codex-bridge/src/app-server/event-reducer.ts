@@ -13,7 +13,12 @@
 import { adaptAppServerItem, planUpdateToTodoList } from "./item-adapter.js";
 import { codexErrorInfoToCode } from "./errors.js";
 import type { InboundNotification } from "./envelope-validation.js";
-import type { EngineError, EngineEvent, EngineGeneration } from "../engine/types.js";
+import type {
+  EngineError,
+  EngineEvent,
+  EngineGeneration,
+  EngineRateLimitWindow,
+} from "../engine/types.js";
 
 export interface ReduceResult {
   events: EngineEvent[];
@@ -33,6 +38,23 @@ function str(value: unknown): string | undefined {
 
 function num(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * ECMAScript `Date` only represents ±8.64e15 ms around the epoch. `new Date(x)`
+ * outside that range yields an Invalid Date and `toISOString()` *throws* — inside
+ * a reducer this file's header promises is total, from a value app-server can
+ * report as any JSON number. Out-of-range resets are dropped rather than clamped:
+ * a fabricated boundary timestamp would be shown to the user as fact.
+ */
+const MAX_DATE_MS = 8.64e15;
+
+function epochSecondsToIso(value: unknown): string | undefined {
+  const seconds = num(value);
+  if (seconds === undefined) return undefined;
+  const ms = seconds * 1_000;
+  if (!Number.isFinite(ms) || Math.abs(ms) > MAX_DATE_MS) return undefined;
+  return new Date(ms).toISOString();
 }
 
 /** app-server `TurnError` → engine error, keeping the structured code. */
@@ -67,7 +89,6 @@ function turnStatus(value: unknown): "completed" | "interrupted" | "failed" {
 const IGNORED_METHODS = new Set([
   // Connection/account scope, not thread scope.
   "account/updated",
-  "account/rateLimits/updated",
   "account/login/completed",
   "app/list/updated",
   "remoteControl/status/changed",
@@ -95,10 +116,8 @@ const IGNORED_METHODS = new Set([
   "rawResponse/completed",
   // Bookkeeping the bridge tracks itself.
   "serverRequest/resolved",
-  "thread/tokenUsage/updated",
   "thread/status/changed",
   "thread/settings/updated",
-  "thread/compacted",
   "thread/archived",
   "thread/unarchived",
   "thread/deleted",
@@ -151,11 +170,112 @@ export function reduceNotification(
   const turnId = isRecord(params) ? str(params.turnId) : undefined;
 
   switch (notification.method) {
+    case "thread/tokenUsage/updated": {
+      if (!isRecord(params) || !threadId || !turnId || !isRecord(params.tokenUsage)) {
+        return { events: [] };
+      }
+      const total = isRecord(params.tokenUsage.total) ? params.tokenUsage.total : {};
+      const last = isRecord(params.tokenUsage.last) ? params.tokenUsage.last : {};
+      const contextWindow = num(params.tokenUsage.modelContextWindow) ?? 0;
+      const usedTokens = num(last.totalTokens) ?? 0;
+      return {
+        events: [{
+          kind: "thread.usage.updated",
+          threadId,
+          turnId,
+          usage: {
+            usedTokens,
+            totalTokens: contextWindow,
+            percentUsed: contextWindow > 0
+              ? Math.min(100, (usedTokens / contextWindow) * 100)
+              : 0,
+            inputTokens: num(total.inputTokens),
+            outputTokens: num(total.outputTokens),
+            cacheReadTokens: num(total.cachedInputTokens),
+            cacheWriteTokens: num(total.cacheWriteInputTokens),
+            reasoningTokens: num(total.reasoningOutputTokens),
+            lastTurnTokens: usedTokens,
+            sessionTokens: num(total.totalTokens),
+            estimated: false,
+            source: "provider",
+            updatedAt: new Date().toISOString(),
+          },
+          ...base,
+        }],
+      };
+    }
+
+    /**
+     * A **sparse** rolling update, per the generated protocol: only the fields
+     * present carry information, and an absent one must not clear the last
+     * observed value. The event therefore lists only the windows this update
+     * actually carried, and omits `credits` entirely when it carried none —
+     * merging into the retained snapshot is the consumer's job.
+     */
+    case "account/rateLimits/updated": {
+      if (!isRecord(params) || !isRecord(params.rateLimits)) return { events: [] };
+      const snapshot = params.rateLimits;
+      const windows: EngineRateLimitWindow[] = [];
+      for (const [key, label] of [["primary", "Primary"], ["secondary", "Secondary"]] as const) {
+        const window = isRecord(snapshot[key]) ? snapshot[key] : undefined;
+        if (!window) continue;
+        const resetsAt = epochSecondsToIso(window.resetsAt);
+        windows.push({
+          slot: key,
+          label: typeof snapshot.limitName === "string" && snapshot.limitName.length > 0
+            && key === "primary"
+            ? snapshot.limitName
+            : label,
+          usedPercent: num(window.usedPercent),
+          ...(resetsAt !== undefined ? { resetsAt } : {}),
+        });
+      }
+      const rawCredits = isRecord(snapshot.credits) ? snapshot.credits : null;
+      const credits = rawCredits
+        ? {
+            ...(typeof rawCredits.balance === "string"
+              ? { balance: rawCredits.balance }
+              : {}),
+            ...(typeof rawCredits.hasCredits === "boolean"
+              ? { hasCredits: rawCredits.hasCredits }
+              : {}),
+            ...(typeof rawCredits.unlimited === "boolean"
+              ? { unlimited: rawCredits.unlimited }
+              : {}),
+          }
+        : undefined;
+      return {
+        events: [{
+          kind: "account.rateLimits.updated",
+          rateLimits: windows,
+          // An empty credits object carries no information, and emitting one
+          // would look like an update in a stream whose whole contract is
+          // "present means changed".
+          ...(credits && Object.keys(credits).length > 0 ? { credits } : {}),
+          ...base,
+        }],
+      };
+    }
+
     case "thread/started": {
       const thread = isRecord(params) ? params.thread : undefined;
       const id = isRecord(thread) ? str(thread.id) : undefined;
       if (!id) return { events: [] };
       return { events: [{ kind: "thread.started", threadId: id, ...base }] };
+    }
+
+    /**
+     * The only terminal edge for `thread/compact/start`, which returns before the
+     * rewrite has happened. Without it the bridge could never learn that
+     * compaction finished, and the thread it marked busy would stay busy.
+     *
+     * The notification's `turnId` is deliberately dropped: the compaction turn is
+     * never the thread's active turn, so a turn-scoped event would be parked and
+     * then discarded as stale.
+     */
+    case "thread/compacted": {
+      if (!threadId) return { events: [] };
+      return { events: [{ kind: "thread.compacted", threadId, ...base }] };
     }
 
     case "thread/name/updated": {

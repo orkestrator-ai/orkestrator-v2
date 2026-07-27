@@ -7,16 +7,14 @@
  * every branch here must produce a response, and the switch must stay exhaustive
  * over the generated `ServerRequest` union.
  *
- * Orkestrator runs with `approvalPolicy: "never"` and declines the optional
- * capabilities during initialize, so in practice none of these *should* arrive.
- * "Should not" is not "cannot": a config file, an MCP server, or a future Codex
- * version can still produce one. Each unexpected request is therefore declined
- * explicitly, counted as an invariant violation, and surfaced in the transcript
- * rather than being dropped.
+ * Orkestrator runs with `approvalPolicy: "never"` for command/file permissions,
+ * while supported user questions and MCP elicitation are parked for the native
+ * UI. Requests without an addressable UI are declined explicitly and surfaced in
+ * the transcript rather than being dropped.
  *
- * Nothing here ever takes a thread reducer lock, and nothing waits on the
- * browser: a request that needed UI we do not have is cancelled promptly instead
- * of stalling the thread.
+ * Nothing here ever takes a thread reducer lock. Human-facing requests are
+ * parked with a bounded timeout; requests the UI cannot represent are cancelled
+ * promptly instead of stalling the thread.
  */
 import { JSON_RPC_METHOD_NOT_FOUND } from "./errors.js";
 import {
@@ -31,6 +29,14 @@ import {
 } from "./approvals.js";
 import type { InboundServerRequest } from "./envelope-validation.js";
 import type { EngineGeneration } from "../engine/types.js";
+import {
+  buildInteractionResponse,
+  describeInteraction,
+  type InteractionAnswer,
+  type InteractionMethod,
+  type InteractionRequest,
+  type InteractionResolution,
+} from "./interactions.js";
 
 /** Every method in the pinned `ServerRequest` union. */
 export type ServerRequestMethod =
@@ -65,7 +71,8 @@ export type ServerRequestResolution =
   | "protocol-error"
   /** Answered by a human through the approval UI. */
   | "user-approved"
-  | "user-declined";
+  | "user-declined"
+  | "user-answered";
 
 export interface ServerRequestRecord {
   id: string | number;
@@ -124,6 +131,12 @@ export interface ServerRequestRouterOptions {
     decision: ApprovalDecision,
     resolution: ApprovalResolution,
   ) => void;
+  presentInteraction?: (request: InteractionRequest) => boolean;
+  onInteractionResolved?: (
+    request: InteractionRequest,
+    answer: InteractionAnswer,
+    resolution: InteractionResolution,
+  ) => void;
   /** Backstop so a branch that somehow fails to answer still answers. */
   responseTimeoutMs?: number;
   /** How long a human has to answer before the request auto-declines. */
@@ -151,6 +164,15 @@ interface PendingApproval {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingInteraction {
+  key: string;
+  record: ServerRequestRecord;
+  request: InteractionRequest;
+  generation: EngineGeneration;
+  requestId: string | number;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 export class ServerRequestRouter {
   private readonly options: ServerRequestRouterOptions;
   private readonly now: () => number;
@@ -160,6 +182,7 @@ export class ServerRequestRouter {
   private readonly sendStarted = new Set<string>();
   /** Approvals handed to the UI and awaiting a human, keyed by public id. */
   private readonly parkedApprovals = new Map<string, PendingApproval>();
+  private readonly parkedInteractions = new Map<string, PendingInteraction>();
   /** Router keys currently parked, so the fast backstop stands down. */
   private readonly parkedKeys = new Set<string>();
   private readonly history: ServerRequestRecord[] = [];
@@ -175,6 +198,9 @@ export class ServerRequestRouter {
     approvalsApproved: 0,
     approvalsDenied: 0,
     approvalsExpired: 0,
+    interactionsPresented: 0,
+    interactionsAnswered: 0,
+    interactionsExpired: 0,
   };
 
   constructor(options: ServerRequestRouterOptions) {
@@ -187,6 +213,23 @@ export class ServerRequestRouter {
   /** Approvals currently waiting on a human, for SSE rehydration. */
   getParkedApprovals(): readonly ApprovalRequest[] {
     return [...this.parkedApprovals.values()].map((entry) => entry.request);
+  }
+
+  getParkedInteractions(): readonly InteractionRequest[] {
+    return [...this.parkedInteractions.values()].map((entry) => entry.request);
+  }
+
+  resolveInteraction(interactionId: string, answer: InteractionAnswer): boolean {
+    const parked = this.parkedInteractions.get(interactionId);
+    if (!parked) return false;
+    const resolution: InteractionResolution =
+      answer.action === "accept"
+        ? "answered"
+        : answer.action === "decline"
+          ? "declined"
+          : "cancelled";
+    void this.settleInteraction(parked, answer, resolution);
+    return true;
   }
 
   /**
@@ -214,6 +257,15 @@ export class ServerRequestRouter {
       if (parked.generation !== generation) continue;
       void this.settleApproval(parked, "deny", "engine-restarted", { skipSend: true });
     }
+    for (const parked of [...this.parkedInteractions.values()]) {
+      if (parked.generation !== generation) continue;
+      void this.settleInteraction(
+        parked,
+        { action: "cancel" },
+        "engine-restarted",
+        { skipSend: true },
+      );
+    }
   }
 
   /** Drops approvals for a thread whose session is going away. */
@@ -222,13 +274,17 @@ export class ServerRequestRouter {
       if (parked.request.threadId !== threadId) continue;
       void this.settleApproval(parked, "deny", "session-closed");
     }
+    for (const parked of [...this.parkedInteractions.values()]) {
+      if (parked.request.threadId !== threadId) continue;
+      void this.settleInteraction(parked, { action: "cancel" }, "session-closed");
+    }
   }
 
   getMetrics(): Readonly<typeof this.counts> & { pending: number; awaitingUser: number } {
     return {
       ...this.counts,
       pending: this.pending.size,
-      awaitingUser: this.parkedApprovals.size,
+      awaitingUser: this.parkedApprovals.size + this.parkedInteractions.size,
     };
   }
 
@@ -310,6 +366,13 @@ export class ServerRequestRouter {
     if (isInteractiveApprovalMethod(method) && this.options.presentApproval) {
       if (this.tryPark(key, record, method, request, generation)) return;
     }
+    if (
+      (method === "item/tool/requestUserInput"
+        || method === "mcpServer/elicitation/request")
+      && this.options.presentInteraction
+    ) {
+      if (this.tryParkInteraction(key, record, method, request, generation)) return;
+    }
 
     switch (method) {
       /**
@@ -361,19 +424,27 @@ export class ServerRequestRouter {
         );
 
       /**
-       * Interactive input. We have no UI for it in this migration, so cancel
-       * promptly and say so — leaving the turn hanging would look like a freeze.
+       * Interactive input that could not be parked — an unparseable question set,
+       * or no tab attached to the thread to show it. Cancel promptly and say so;
+       * leaving the turn hanging would look like a freeze.
        */
       case "item/tool/requestUserInput":
-        this.explain(record, "Codex asked a question that needs interactive input, which Orkestrator does not support yet. The request was cancelled.");
+        this.explain(record, "Codex asked a question, but no Orkestrator tab was attached to answer it. The request was cancelled.");
         return this.finish(key, record, "cancelled", () =>
           this.options.respond(generation, request.id, { answers: {} }),
         );
 
       case "mcpServer/elicitation/request":
-        // We set mcpServerOpenaiFormElicitation: false, so this is unexpected.
-        this.violation(method, "MCP elicitation requested despite capability opt-out");
-        this.explain(record, "An MCP server requested input Orkestrator cannot display. The request was cancelled.");
+        /**
+         * Reached whenever the request could not be parked: an elicitation `mode`
+         * this build does not recognise, or no tab attached to the thread to show
+         * it. We *do* advertise `mcpServerOpenaiFormElicitation: true`, so this is
+         * an ordinary outcome, not a protocol violation — counting it as one
+         * inflated the `protocol.serverRequests` figure operators watch for real
+         * drift (served on the authenticated `/session/:id/runtime-health`; the
+         * public `/global/health` payload stays stripped).
+         */
+        this.explain(record, "An MCP server asked for input, but no Orkestrator tab was attached to display it. The request was cancelled.");
         return this.finish(key, record, "cancelled", () =>
           this.options.respond(generation, request.id, {
             action: "cancel",
@@ -546,6 +617,98 @@ export class ServerRequestRouter {
       parked.record,
       approved ? "user-approved" : "user-declined",
       () => this.options.respond(parked.generation, parked.requestId, payload.result),
+    );
+  }
+
+  private tryParkInteraction(
+    key: string,
+    record: ServerRequestRecord,
+    method: InteractionMethod,
+    request: InboundServerRequest,
+    generation: EngineGeneration,
+  ): boolean {
+    const requestedAt = this.now();
+    const interaction = describeInteraction({
+      interactionId: `ask-${generation}-${String(request.id)}`,
+      method,
+      params: request.params,
+      generation,
+      requestedAt,
+      defaultExpiresAt: requestedAt + this.approvalTimeoutMs,
+    });
+    if (!interaction) return false;
+
+    let accepted = false;
+    try {
+      accepted = this.options.presentInteraction?.(interaction) === true;
+    } catch (error) {
+      console.error("[codex-bridge] presentInteraction threw; cancelling:", error);
+      return false;
+    }
+    if (!accepted) return false;
+
+    const timer = setTimeout(() => {
+      const parked = this.parkedInteractions.get(interaction.interactionId);
+      if (!parked) return;
+      this.counts.interactionsExpired += 1;
+      record.timedOut = true;
+      void this.settleInteraction(
+        parked,
+        { action: "cancel" },
+        "timed-out",
+      );
+    }, Math.max(1, interaction.expiresAt - requestedAt));
+    timer.unref?.();
+
+    this.parkedInteractions.set(interaction.interactionId, {
+      key,
+      record,
+      request: interaction,
+      generation,
+      requestId: request.id,
+      timer,
+    });
+    this.parkedKeys.add(key);
+    this.counts.interactionsPresented += 1;
+    return true;
+  }
+
+  private async settleInteraction(
+    parked: PendingInteraction,
+    answer: InteractionAnswer,
+    resolution: InteractionResolution,
+    options: { skipSend?: boolean } = {},
+  ): Promise<void> {
+    if (!this.parkedInteractions.delete(parked.request.interactionId)) return;
+    clearTimeout(parked.timer);
+    this.parkedKeys.delete(parked.key);
+    if (resolution === "answered") this.counts.interactionsAnswered += 1;
+
+    try {
+      this.options.onInteractionResolved?.(parked.request, answer, resolution);
+    } catch (error) {
+      console.error("[codex-bridge] onInteractionResolved threw:", error);
+    }
+
+    if (options.skipSend) {
+      this.pending.delete(parked.key);
+      this.sendStarted.delete(parked.key);
+      parked.record.resolution =
+        resolution === "answered" ? "user-answered" : "cancelled";
+      parked.record.resolvedAt = this.now();
+      this.pushHistory(parked.record);
+      return;
+    }
+
+    await this.finish(
+      parked.key,
+      parked.record,
+      resolution === "answered" ? "user-answered" : "cancelled",
+      () => this.options.respond(
+        parked.generation,
+        parked.requestId,
+        buildInteractionResponse(parked.request, answer),
+      ),
     );
   }
 

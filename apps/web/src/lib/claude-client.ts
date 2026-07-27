@@ -15,6 +15,7 @@ import {
   StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
+import type { ContextUsageSnapshot } from "@/lib/context-usage";
 
 export type { ClaudeModelCatalogSnapshot };
 export type {
@@ -109,6 +110,269 @@ export interface SessionInitData {
   mcpServers: McpServerRuntimeStatus[];
   plugins: PluginRuntimeStatus[];
   slashCommands?: string[];
+  agents?: ClaudeAgentProfile[];
+}
+
+export interface ClaudeAgentProfile {
+  name: string;
+  description?: string;
+  model?: string;
+  color?: string;
+}
+
+export interface ClaudeBackgroundTask {
+  id: string;
+  description?: string;
+  status: "pending" | "running" | "completed" | "failed" | "killed" | "paused";
+  isBackgrounded?: boolean;
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
+}
+
+const CLAUDE_BACKGROUND_TASK_STATUSES = new Set<ClaudeBackgroundTask["status"]>([
+  "pending",
+  "running",
+  "completed",
+  "failed",
+  "killed",
+  "paused",
+]);
+
+const CONTEXT_USAGE_SOURCES = new Set<NonNullable<ContextUsageSnapshot["source"]>>([
+  "claude",
+  "opencode",
+  "codex",
+  "heuristic",
+  "provider",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isOptionalFiniteNumber(value: unknown): value is number | undefined {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isOptionalNonNegativeNumber(value: unknown): value is number | undefined {
+  return isOptionalFiniteNumber(value) && (value === undefined || value >= 0);
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+const OPTIONAL_USAGE_NUMBER_KEYS = [
+  "inputTokens",
+  "outputTokens",
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "reasoningTokens",
+  "lastTurnTokens",
+  "sessionTokens",
+  "costUsd",
+  "durationMs",
+  "apiDurationMs",
+  "permissionDenials",
+  "linesAdded",
+  "linesRemoved",
+] as const satisfies readonly (keyof ContextUsageSnapshot)[];
+
+/**
+ * Validate exact provider usage snapshots before they cross the REST/SSE trust
+ * boundary into Zustand. UI formatters assume finite numeric fields.
+ *
+ * Same policy as the sibling `parseContextUsage` in codex-client.ts: rejection
+ * is reserved for the required numeric triple, and every optional decoration is
+ * kept only when it is the right shape — one malformed extra (a rate-limit
+ * window the bridge forwarded unclamped, a stray string where a count belongs)
+ * never costs the reading itself. Dropped optional fields are reported by name
+ * through `droppedFields` so callers can surface them the way they surface a
+ * rejected snapshot (`invalidMetadataFields`).
+ */
+export function parseClaudeContextUsage(
+  value: unknown,
+  droppedFields?: string[],
+): ContextUsageSnapshot | undefined {
+  if (!isRecord(value)) return undefined;
+  const { usedTokens, totalTokens, percentUsed } = value;
+
+  // The required triple: anything wrong here means there is no usable reading.
+  if (
+    typeof usedTokens !== "number"
+    || !Number.isFinite(usedTokens)
+    || usedTokens < 0
+    || typeof totalTokens !== "number"
+    || !Number.isFinite(totalTokens)
+    || totalTokens <= 0
+    || usedTokens > totalTokens
+    || typeof percentUsed !== "number"
+    || !Number.isFinite(percentUsed)
+    || percentUsed < 0
+    || percentUsed > 100
+  ) {
+    return undefined;
+  }
+
+  const drop = (field: string) => {
+    if (droppedFields && !droppedFields.includes(field)) droppedFields.push(field);
+  };
+  const result: ContextUsageSnapshot = { usedTokens, totalTokens, percentUsed };
+  const extras = result as unknown as Record<string, unknown>;
+
+  for (const key of OPTIONAL_USAGE_NUMBER_KEYS) {
+    const candidate = value[key];
+    if (candidate === undefined) continue;
+    if (isOptionalNonNegativeNumber(candidate)) extras[key] = candidate;
+    else drop(key);
+  }
+
+  for (const key of ["modelId", "updatedAt"] as const) {
+    const candidate = value[key];
+    if (candidate === undefined) continue;
+    if (typeof candidate === "string") extras[key] = candidate;
+    else drop(key);
+  }
+
+  if (value.estimated !== undefined) {
+    if (typeof value.estimated === "boolean") result.estimated = value.estimated;
+    else drop("estimated");
+  }
+
+  if (value.source !== undefined) {
+    if (
+      typeof value.source === "string"
+      && CONTEXT_USAGE_SOURCES.has(value.source as NonNullable<ContextUsageSnapshot["source"]>)
+    ) {
+      result.source = value.source as ContextUsageSnapshot["source"];
+    } else {
+      drop("source");
+    }
+  }
+
+  if (value.rateLimits !== undefined) {
+    if (Array.isArray(value.rateLimits)) {
+      const windows = value.rateLimits.flatMap((entry) => {
+        if (
+          isRecord(entry)
+          && typeof entry.label === "string"
+          && isOptionalNonNegativeNumber(entry.usedPercent)
+          && (entry.usedPercent === undefined || entry.usedPercent <= 100)
+          && isOptionalString(entry.resetsAt)
+          && isOptionalNonNegativeNumber(entry.windowMinutes)
+        ) {
+          return [{
+            label: entry.label,
+            ...(entry.usedPercent !== undefined ? { usedPercent: entry.usedPercent } : {}),
+            ...(entry.resetsAt !== undefined ? { resetsAt: entry.resetsAt } : {}),
+            ...(entry.windowMinutes !== undefined
+              ? { windowMinutes: entry.windowMinutes }
+              : {}),
+          }];
+        }
+        // e.g. `usedPercent > 100`: the bridge forwards utilization unclamped,
+        // so an overdrawn window is dropped rather than costing the reading.
+        drop("rateLimits");
+        return [];
+      });
+      if (windows.length > 0) result.rateLimits = windows;
+    } else {
+      drop("rateLimits");
+    }
+  }
+
+  if (value.credits !== undefined) {
+    const credits = value.credits;
+    if (
+      isRecord(credits)
+      && (credits.hasCredits === undefined || typeof credits.hasCredits === "boolean")
+      && (credits.unlimited === undefined || typeof credits.unlimited === "boolean")
+      && isOptionalString(credits.balance)
+    ) {
+      result.credits = {
+        ...(credits.hasCredits !== undefined ? { hasCredits: credits.hasCredits } : {}),
+        ...(credits.unlimited !== undefined ? { unlimited: credits.unlimited } : {}),
+        ...(credits.balance !== undefined ? { balance: credits.balance } : {}),
+      };
+    } else {
+      drop("credits");
+    }
+  }
+
+  if (value.contextCategories !== undefined) {
+    if (Array.isArray(value.contextCategories)) {
+      const categories = value.contextCategories.flatMap((entry) => {
+        if (
+          isRecord(entry)
+          && typeof entry.name === "string"
+          && typeof entry.tokens === "number"
+          && Number.isFinite(entry.tokens)
+          && entry.tokens >= 0
+          && isOptionalString(entry.color)
+        ) {
+          return [{
+            name: entry.name,
+            tokens: entry.tokens,
+            ...(entry.color !== undefined ? { color: entry.color } : {}),
+          }];
+        }
+        drop("contextCategories");
+        return [];
+      });
+      if (categories.length > 0) result.contextCategories = categories;
+    } else {
+      drop("contextCategories");
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Validate the background-task record with the same drop-not-reject policy:
+ * one malformed task loses that task, not the whole record. Only a value that
+ * is not a record at all is rejected outright. Dropped task ids are reported
+ * through `droppedTasks`.
+ */
+export function parseClaudeBackgroundTasks(
+  value: unknown,
+  droppedTasks?: string[],
+): Record<string, ClaudeBackgroundTask> | undefined {
+  if (!isRecord(value)) return undefined;
+  const parsed: Record<string, ClaudeBackgroundTask> = {};
+  for (const [taskId, taskValue] of Object.entries(value)) {
+    if (!isRecord(taskValue)) {
+      droppedTasks?.push(taskId);
+      continue;
+    }
+    const {
+      id,
+      description,
+      status,
+      isBackgrounded,
+      startedAt,
+      endedAt,
+      error,
+    } = taskValue;
+    if (
+      typeof id !== "string"
+      || id.length === 0
+      || id !== taskId
+      || typeof status !== "string"
+      || !CLAUDE_BACKGROUND_TASK_STATUSES.has(status as ClaudeBackgroundTask["status"])
+      || !isOptionalString(description)
+      || (isBackgrounded !== undefined && typeof isBackgrounded !== "boolean")
+      || !isOptionalFiniteNumber(startedAt)
+      || !isOptionalFiniteNumber(endedAt)
+      || !isOptionalString(error)
+    ) {
+      droppedTasks?.push(taskId);
+      continue;
+    }
+    parsed[taskId] = taskValue as unknown as ClaudeBackgroundTask;
+  }
+  return parsed;
 }
 
 export interface ClaudeMessage {
@@ -237,6 +501,18 @@ export interface ClaudeSession {
   createdAt: string;
   lastActivity: string;
   error?: string;
+  contextUsage?: ContextUsageSnapshot;
+  promptSuggestion?: string;
+  backgroundTasks?: Record<string, ClaudeBackgroundTask>;
+  /**
+   * Optional fields omitted because their wire values failed validation.
+   *
+   * A whole-field rejection is reported as the bare field name
+   * (`"contextUsage"`, `"promptSuggestion"`, `"backgroundTasks"`); a dropped
+   * optional decoration or task inside an otherwise-valid field is reported as
+   * a dotted path (`"contextUsage.rateLimits"`, `"backgroundTasks.<taskId>"`).
+   */
+  invalidMetadataFields?: string[];
 }
 
 export type ClaudeSessionLookupResult =
@@ -483,7 +759,7 @@ export async function lookupSession(
         error: new Error(`Failed to get Claude session: HTTP ${response.status}`),
       };
     }
-    const session = (await response.json()) as Partial<ClaudeSession>;
+    const session = (await response.json()) as Record<string, unknown>;
     if (
       typeof session.id !== "string"
       || (
@@ -493,15 +769,63 @@ export async function lookupSession(
       )
       || typeof session.createdAt !== "string"
       || typeof session.lastActivity !== "string"
+      || !isOptionalString(session.title)
+      || !isOptionalString(session.error)
     ) {
       return {
         kind: "unavailable",
         error: new Error("Claude session response was malformed"),
       };
     }
+    const droppedUsageFields: string[] = [];
+    const contextUsage = parseClaudeContextUsage(
+      session.contextUsage,
+      droppedUsageFields,
+    );
+    const droppedTaskIds: string[] = [];
+    const backgroundTasks = parseClaudeBackgroundTasks(
+      session.backgroundTasks,
+      droppedTaskIds,
+    );
+    const invalidMetadataFields: string[] = [];
+    if (session.contextUsage !== undefined && contextUsage === undefined) {
+      invalidMetadataFields.push("contextUsage");
+    } else {
+      for (const field of droppedUsageFields) {
+        invalidMetadataFields.push(`contextUsage.${field}`);
+      }
+    }
+    if (
+      session.promptSuggestion !== undefined
+      && typeof session.promptSuggestion !== "string"
+    ) {
+      invalidMetadataFields.push("promptSuggestion");
+    }
+    if (session.backgroundTasks !== undefined && backgroundTasks === undefined) {
+      invalidMetadataFields.push("backgroundTasks");
+    } else {
+      for (const taskId of droppedTaskIds) {
+        invalidMetadataFields.push(`backgroundTasks.${taskId}`);
+      }
+    }
+
     return {
       kind: "found",
-      session: session as ClaudeSession,
+      session: {
+        id: session.id,
+        title: session.title as string | undefined,
+        status: session.status,
+        createdAt: session.createdAt,
+        lastActivity: session.lastActivity,
+        error: session.error as string | undefined,
+        contextUsage,
+        promptSuggestion:
+          typeof session.promptSuggestion === "string"
+            ? session.promptSuggestion
+            : undefined,
+        backgroundTasks,
+        ...(invalidMetadataFields.length > 0 ? { invalidMetadataFields } : {}),
+      },
     };
   } catch (error) {
     return {
@@ -588,6 +912,9 @@ export async function sendPrompt(
     effort?: ClaudeEffortLevel;
     permissionMode?: PermissionMode;
     fastMode?: boolean;
+    agent?: string;
+    includeLocalSettings?: boolean;
+    promptSuggestions?: boolean;
     outputSchema?: JsonSchema;
     requestId?: string;
   }
@@ -613,6 +940,9 @@ export async function sendPrompt(
         effort: options?.effort,
         permissionMode: options?.permissionMode,
         fastMode: options?.fastMode,
+        agent: options?.agent,
+        includeLocalSettings: options?.includeLocalSettings,
+        promptSuggestions: options?.promptSuggestions,
         outputSchema: options?.outputSchema,
         requestId: options?.requestId,
       }),
@@ -770,6 +1100,83 @@ export async function deleteSession(
     return response.ok;
   } catch (error) {
     console.error("[claude-client] Failed to delete session:", error);
+    return false;
+  }
+}
+
+export async function forkClaudeSession(
+  client: ClaudeClient,
+  sessionId: string,
+  options: { upToMessageId?: string; title?: string } = {},
+): Promise<{ sessionId: string; title?: string }> {
+  const response = await fetch(`${client.baseUrl}/session/${sessionId}/fork`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fork Claude session: HTTP ${response.status}`);
+  }
+  // A `200 {}` would otherwise bind the new tab to `sessionId: undefined`, which
+  // every subsequent request then addresses as the literal string "undefined".
+  const body = (await response.json().catch(() => ({}))) as {
+    sessionId?: unknown;
+    title?: unknown;
+  };
+  if (typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+    throw new Error("Claude fork response did not include a session id");
+  }
+  return {
+    sessionId: body.sessionId,
+    ...(typeof body.title === "string" ? { title: body.title } : {}),
+  };
+}
+
+export async function compactClaudeSession(
+  client: ClaudeClient,
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${client.baseUrl}/session/${sessionId}/compact`, {
+      method: "POST",
+    });
+    return response.ok;
+  } catch (error) {
+    console.error("[claude-client] Failed to compact session:", error);
+    return false;
+  }
+}
+
+export async function rewindClaudeFiles(
+  client: ClaudeClient,
+  sessionId: string,
+  messageId: string,
+  dryRun = false,
+): Promise<unknown> {
+  const response = await fetch(`${client.baseUrl}/session/${sessionId}/rewind`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messageId, dryRun }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to rewind Claude files: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function stopClaudeBackgroundTask(
+  client: ClaudeClient,
+  sessionId: string,
+  taskId: string,
+): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `${client.baseUrl}/session/${sessionId}/tasks/${encodeURIComponent(taskId)}/stop`,
+      { method: "POST" },
+    );
+    return response.ok;
+  } catch (error) {
+    console.error("[claude-client] Failed to stop background task:", error);
     return false;
   }
 }

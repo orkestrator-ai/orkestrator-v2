@@ -13,6 +13,10 @@ import {
   sendStructuredPrompt,
   abortSession,
   deleteSession,
+  forkClaudeSession,
+  compactClaudeSession,
+  rewindClaudeFiles,
+  stopClaudeBackgroundTask,
   getPendingQuestions,
   getPendingPlanApprovals,
   answerQuestion,
@@ -23,6 +27,8 @@ import {
   SessionNotFoundError,
   applyClaudeMessagePatch,
   contentFromParts,
+  parseClaudeBackgroundTasks,
+  parseClaudeContextUsage,
   type ClaudeClient,
   type ClaudeMessage,
   type ClaudeMessagePart,
@@ -205,6 +211,183 @@ describe("claude-client", () => {
         expect(unavailableMalformed.error.message).toContain("malformed");
       }
     });
+
+    test("sanitizes malformed optional metadata without rejecting the core session", async () => {
+      const base = {
+        id: "s-1",
+        status: "idle",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+      };
+
+      // Whole-field rejections: the required usage triple is broken, the
+      // suggestion is not a string, the task record is not a record.
+      for (const [malformed, expectedField] of [
+        [
+          { contextUsage: { usedTokens: 1, totalTokens: 10, percentUsed: Number.NaN } },
+          "contextUsage",
+        ],
+        [{ promptSuggestion: { text: "not a string" } }, "promptSuggestion"],
+        [{ backgroundTasks: "none" }, "backgroundTasks"],
+      ] as const) {
+        mockFetchJson({ ...base, ...malformed });
+        const result = await lookupSession(client, "s-1");
+        expect(result.kind).toBe("found");
+        if (result.kind === "found") {
+          expect(result.session).toMatchObject(base);
+          expect(result.session.contextUsage).toBeUndefined();
+          expect(result.session.promptSuggestion).toBeUndefined();
+          expect(result.session.backgroundTasks).toBeUndefined();
+          expect(result.session.invalidMetadataFields).toEqual([expectedField]);
+        }
+      }
+    });
+
+    test("keeps the core usage reading and names a dropped optional decoration", async () => {
+      mockFetchJson({
+        id: "s-1",
+        status: "idle",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+        contextUsage: {
+          usedTokens: 1,
+          totalTokens: 10,
+          percentUsed: 10,
+          // The bridge forwards utilization unclamped, so this can exceed 100.
+          rateLimits: [{ label: "five hour", usedPercent: 120 }],
+        },
+        backgroundTasks: {
+          build: { id: "build", status: "running" },
+          broken: { id: "mismatch", status: "running" },
+        },
+      });
+
+      const result = await lookupSession(client, "s-1");
+      expect(result.kind).toBe("found");
+      if (result.kind === "found") {
+        expect(result.session.contextUsage).toEqual({
+          usedTokens: 1,
+          totalTokens: 10,
+          percentUsed: 10,
+        });
+        expect(result.session.backgroundTasks).toEqual({
+          build: { id: "build", status: "running" },
+        });
+        expect(result.session.invalidMetadataFields).toEqual([
+          "contextUsage.rateLimits",
+          "backgroundTasks.broken",
+        ]);
+      }
+    });
+  });
+
+  describe("Claude metadata validators", () => {
+    const usage = {
+      usedTokens: 25,
+      totalTokens: 100,
+      percentUsed: 25,
+      inputTokens: 20,
+      outputTokens: 5,
+      source: "claude" as const,
+      rateLimits: [{ label: "five hour", usedPercent: 50 }],
+      credits: { hasCredits: true, balance: "10.00" },
+      contextCategories: [{ name: "system", tokens: 10 }],
+    };
+
+    test("accepts complete finite usage", () => {
+      expect(parseClaudeContextUsage(usage)).toEqual(usage);
+    });
+
+    test("rejects only the required numeric triple", () => {
+      expect(parseClaudeContextUsage({ ...usage, percentUsed: Number.POSITIVE_INFINITY }))
+        .toBeUndefined();
+      expect(parseClaudeContextUsage({ ...usage, percentUsed: 101 })).toBeUndefined();
+      expect(parseClaudeContextUsage({ ...usage, usedTokens: -1 })).toBeUndefined();
+      // An overdrawn core reading is a broken triple, not a droppable extra:
+      // the meter itself would be lying.
+      expect(parseClaudeContextUsage({ ...usage, usedTokens: 101 })).toBeUndefined();
+      expect(parseClaudeContextUsage({ ...usage, totalTokens: 0 })).toBeUndefined();
+    });
+
+    test("accepts the boundary values the bridge legitimately reports", () => {
+      expect(parseClaudeContextUsage({ ...usage, percentUsed: 100 })).toMatchObject({
+        percentUsed: 100,
+      });
+      expect(parseClaudeContextUsage({
+        ...usage,
+        rateLimits: [{ label: "five hour", usedPercent: 100 }],
+      })).toMatchObject({
+        rateLimits: [{ label: "five hour", usedPercent: 100 }],
+      });
+      // usedTokens === totalTokens is a full-but-valid window.
+      expect(parseClaudeContextUsage({ ...usage, usedTokens: 100 })).toMatchObject({
+        usedTokens: 100,
+        totalTokens: 100,
+      });
+    });
+
+    test("drops an out-of-range rate-limit window but keeps the reading", () => {
+      const dropped: string[] = [];
+      // The bridge forwards utilization unclamped, so >100 does happen.
+      expect(parseClaudeContextUsage({
+        ...usage,
+        rateLimits: [
+          { label: "five hour", usedPercent: 101 },
+          { label: "weekly", usedPercent: 20 },
+        ],
+      }, dropped)).toEqual({
+        ...usage,
+        rateLimits: [{ label: "weekly", usedPercent: 20 }],
+      });
+      expect(dropped).toEqual(["rateLimits"]);
+    });
+
+    test("drops other malformed optional decorations individually", () => {
+      const dropped: string[] = [];
+      expect(parseClaudeContextUsage({
+        ...usage,
+        inputTokens: "20",
+        contextCategories: [{ name: "system", tokens: -1 }],
+        credits: { hasCredits: "yes" },
+        source: "telepathy",
+      }, dropped)).toEqual({
+        usedTokens: 25,
+        totalTokens: 100,
+        percentUsed: 25,
+        outputTokens: 5,
+        rateLimits: usage.rateLimits,
+      });
+      expect(dropped.sort()).toEqual([
+        "contextCategories",
+        "credits",
+        "inputTokens",
+        "source",
+      ]);
+    });
+
+    test("keeps valid background tasks while dropping malformed ones", () => {
+      const tasks = {
+        build: {
+          id: "build",
+          description: "Run build",
+          status: "running" as const,
+          startedAt: 100,
+        },
+      };
+      expect(parseClaudeBackgroundTasks(tasks)).toEqual(tasks);
+
+      const dropped: string[] = [];
+      expect(parseClaudeBackgroundTasks({
+        ...tasks,
+        mismatch: { id: "other", status: "running" },
+        clock: { id: "clock", status: "running", startedAt: Number.NaN },
+      }, dropped)).toEqual(tasks);
+      expect(dropped.sort()).toEqual(["clock", "mismatch"]);
+
+      // Only a value that is not a record at all rejects the snapshot.
+      expect(parseClaudeBackgroundTasks("none")).toBeUndefined();
+      expect(parseClaudeBackgroundTasks(null)).toBeUndefined();
+    });
   });
 
   describe("getSessionMessages", () => {
@@ -271,23 +454,57 @@ describe("claude-client", () => {
       expect(result).toBe(true);
     });
 
-    test("sends effort and permissionMode in request body", async () => {
+    /**
+     * Asserted as a whole body rather than field by field: this is the only
+     * place the prompt wire shape is pinned, so a per-field assertion silently
+     * tolerates an option being dropped from the request builder.
+     */
+    test("forwards every prompt option verbatim in the request body", async () => {
       let capturedBody: string | undefined;
       globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
         capturedBody = init?.body as string;
         return new Response(JSON.stringify({ status: "processing" }), { status: 202 });
       }) as unknown as typeof fetch;
 
+      const outputSchema = { type: "object" as const, properties: {} };
       await sendPrompt(client, "s-1", "Hello", {
         effort: "xhigh",
         permissionMode: "auto",
         model: "opus",
+        fastMode: true,
+        agent: "reviewer",
+        includeLocalSettings: true,
+        promptSuggestions: true,
+        attachments: [{ type: "image", path: "/tmp/a.png", filename: "a.png" }],
+        outputSchema,
+        requestId: "req-1",
       });
 
-      const body = JSON.parse(capturedBody!);
-      expect(body.effort).toBe("xhigh");
-      expect(body.permissionMode).toBe("auto");
-      expect(body.model).toBe("opus");
+      expect(JSON.parse(capturedBody!)).toEqual({
+        prompt: "Hello",
+        model: "opus",
+        attachments: [{ type: "image", path: "/tmp/a.png", filename: "a.png" }],
+        effort: "xhigh",
+        permissionMode: "auto",
+        fastMode: true,
+        agent: "reviewer",
+        includeLocalSettings: true,
+        promptSuggestions: true,
+        outputSchema,
+        requestId: "req-1",
+      });
+    });
+
+    test("omits unset options rather than sending nulls", async () => {
+      let capturedBody: string | undefined;
+      globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+        capturedBody = init?.body as string;
+        return new Response(JSON.stringify({ status: "processing" }), { status: 202 });
+      }) as unknown as typeof fetch;
+
+      await sendPrompt(client, "s-1", "Hello");
+
+      expect(JSON.parse(capturedBody!)).toEqual({ prompt: "Hello" });
     });
 
     test("returns false on server error", async () => {
@@ -432,6 +649,154 @@ describe("claude-client", () => {
     });
   });
 
+  describe("session management", () => {
+    /** Records `[url, init]` for every call and answers with `response()`. */
+    function captureFetch(response: () => Response) {
+      const calls: Array<[string, RequestInit | undefined]> = [];
+      globalThis.fetch = mock(async (url: string, init?: RequestInit) => {
+        calls.push([url, init]);
+        return response();
+      }) as unknown as typeof fetch;
+      return calls;
+    }
+
+    describe("forkClaudeSession", () => {
+      test("returns the forked session id and title", async () => {
+        const calls = captureFetch(() =>
+          Response.json({ sessionId: "s-2", title: "Fork" }),
+        );
+
+        expect(
+          await forkClaudeSession(client, "s-1", {
+            upToMessageId: "msg-3",
+            title: "Fork",
+          }),
+        ).toEqual({ sessionId: "s-2", title: "Fork" });
+        expect(calls[0]?.[0]).toBe("http://127.0.0.1:4001/session/s-1/fork");
+        expect(JSON.parse(calls[0]?.[1]?.body as string)).toEqual({
+          upToMessageId: "msg-3",
+          title: "Fork",
+        });
+      });
+
+      test("omits a title the bridge did not report", async () => {
+        mockFetchJson({ sessionId: "s-2" });
+        expect(await forkClaudeSession(client, "s-1")).toEqual({
+          sessionId: "s-2",
+        });
+      });
+
+      test("throws rather than binding a tab to an absent session id", async () => {
+        // A `200 {}` used to resolve to `{ sessionId: undefined }`, and every
+        // later request then addressed the literal string "undefined".
+        mockFetchJson({});
+        await expect(forkClaudeSession(client, "s-1")).rejects.toThrow(
+          "did not include a session id",
+        );
+
+        mockFetchJson({ sessionId: "" });
+        await expect(forkClaudeSession(client, "s-1")).rejects.toThrow(
+          "did not include a session id",
+        );
+
+        mockFetchJson({ sessionId: 7 });
+        await expect(forkClaudeSession(client, "s-1")).rejects.toThrow(
+          "did not include a session id",
+        );
+      });
+
+      test("throws on a non-2xx response", async () => {
+        mockFetchStatus(500);
+        await expect(forkClaudeSession(client, "s-1")).rejects.toThrow("HTTP 500");
+      });
+
+      test("throws rather than surfacing a malformed body", async () => {
+        globalThis.fetch = mock(async () =>
+          new Response("not json", { status: 200 }),
+        ) as unknown as typeof fetch;
+        await expect(forkClaudeSession(client, "s-1")).rejects.toThrow(
+          "did not include a session id",
+        );
+      });
+    });
+
+    describe("compactClaudeSession", () => {
+      test("posts to the compact endpoint", async () => {
+        const calls = captureFetch(() => new Response(null, { status: 200 }));
+
+        expect(await compactClaudeSession(client, "s-1")).toBe(true);
+        expect(calls[0]?.[0]).toBe("http://127.0.0.1:4001/session/s-1/compact");
+        expect(calls[0]?.[1]?.method).toBe("POST");
+      });
+
+      test("reports failure without throwing", async () => {
+        mockFetchStatus(409);
+        expect(await compactClaudeSession(client, "s-1")).toBe(false);
+
+        mockFetchError();
+        expect(await compactClaudeSession(client, "s-1")).toBe(false);
+      });
+    });
+
+    describe("rewindClaudeFiles", () => {
+      test("posts the message id and defaults dryRun to false", async () => {
+        const calls = captureFetch(() => Response.json({ reverted: ["a.ts"] }));
+
+        expect(await rewindClaudeFiles(client, "s-1", "msg-3")).toEqual({
+          reverted: ["a.ts"],
+        });
+        expect(calls[0]?.[0]).toBe("http://127.0.0.1:4001/session/s-1/rewind");
+        expect(JSON.parse(calls[0]?.[1]?.body as string)).toEqual({
+          messageId: "msg-3",
+          dryRun: false,
+        });
+      });
+
+      test("forwards an explicit dry run", async () => {
+        const calls = captureFetch(() => Response.json({}));
+        await rewindClaudeFiles(client, "s-1", "msg-3", true);
+        expect(JSON.parse(calls[0]?.[1]?.body as string).dryRun).toBe(true);
+      });
+
+      test("throws on a non-2xx response", async () => {
+        mockFetchStatus(500);
+        await expect(rewindClaudeFiles(client, "s-1", "msg-3")).rejects.toThrow(
+          "HTTP 500",
+        );
+      });
+    });
+
+    describe("stopClaudeBackgroundTask", () => {
+      test("posts to the task stop endpoint", async () => {
+        const calls = captureFetch(() => new Response(null, { status: 200 }));
+
+        expect(await stopClaudeBackgroundTask(client, "s-1", "task-1")).toBe(true);
+        expect(calls[0]?.[0]).toBe(
+          "http://127.0.0.1:4001/session/s-1/tasks/task-1/stop",
+        );
+        expect(calls[0]?.[1]?.method).toBe("POST");
+      });
+
+      test("escapes a task id that would otherwise change the route", async () => {
+        const calls = captureFetch(() => new Response(null, { status: 200 }));
+
+        await stopClaudeBackgroundTask(client, "s-1", "task/../../danger?x=1");
+
+        expect(calls[0]?.[0]).toBe(
+          "http://127.0.0.1:4001/session/s-1/tasks/task%2F..%2F..%2Fdanger%3Fx%3D1/stop",
+        );
+      });
+
+      test("reports failure without throwing", async () => {
+        mockFetchStatus(404);
+        expect(await stopClaudeBackgroundTask(client, "s-1", "task-1")).toBe(false);
+
+        mockFetchError();
+        expect(await stopClaudeBackgroundTask(client, "s-1", "task-1")).toBe(false);
+      });
+    });
+  });
+
   describe("getPendingQuestions", () => {
     test("returns questions array on success", async () => {
       const questions = [{ id: "q-1", sessionId: "s-1", questions: [{ question: "Continue?", header: "", options: [] }] }];
@@ -455,6 +820,13 @@ describe("claude-client", () => {
       await expect(
         getPendingQuestions(client, "s-1", { throwOnError: true }),
       ).rejects.toThrow("HTTP 500");
+
+      globalThis.fetch = mock(async () => {
+        throw "non-error question rejection";
+      }) as unknown as typeof fetch;
+      await expect(
+        getPendingQuestions(client, "s-1", { throwOnError: true }),
+      ).rejects.toThrow("Failed to get pending Claude questions");
     });
   });
 
@@ -478,6 +850,13 @@ describe("claude-client", () => {
       await expect(
         getPendingPlanApprovals(client, "s-1", { throwOnError: true }),
       ).rejects.toThrow("network error");
+
+      globalThis.fetch = mock(async () => {
+        throw { reason: "non-error approval rejection" };
+      }) as unknown as typeof fetch;
+      await expect(
+        getPendingPlanApprovals(client, "s-1", { throwOnError: true }),
+      ).rejects.toThrow("Failed to get pending Claude plan approvals");
     });
   });
 

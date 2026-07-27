@@ -51,6 +51,7 @@ async function run(env: Record<string, string>): Promise<HarnessOutput> {
       CODEX_PATH: fakeCodex,
       CODEX_HOME: codexHome,
       CWD: workspace,
+      CODEX_BRIDGE_TOKEN: "http-harness-token",
       FAKE_CODEX_SCRIPT: "auto-complete",
       ...env,
     },
@@ -92,7 +93,7 @@ describe("app-server engine over HTTP", () => {
       engine: "app-server",
       appServer: { state: "ready", generation: 1, codexVersion: "0.145.0" },
     });
-    expect((health.body.appServer as Record<string, unknown>).pid).toBeGreaterThan(0);
+    expect((health.body.appServer as Record<string, unknown>).pid).toBeUndefined();
 
     // Models come from model/list, with the server's ordering preserved.
     const models = step(output, "models");

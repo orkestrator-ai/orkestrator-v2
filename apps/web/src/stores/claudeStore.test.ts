@@ -23,6 +23,16 @@ function resetClaudeStore() {
     pendingPlanApprovals: new Map(),
     models: [],
     modelCatalogs: new Map(),
+    // Every map the store owns has to be reset here. A map left out is a map
+    // that carries state between test files, which makes the first test anyone
+    // writes for that action order-dependent.
+    fastMode: new Map(),
+    selectedAgent: new Map(),
+    includeLocalSettings: new Map(),
+    promptSuggestionOptIn: new Map(),
+    promptSuggestions: new Map(),
+    dismissedPromptSuggestions: new Map(),
+    backgroundTasks: new Map(),
   });
 }
 
@@ -197,6 +207,50 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(useClaudeStore.getState().models.map((model) => model.id)).toEqual([
       "legacy",
     ]);
+  });
+
+  test("covers environment model updates, nullable init data, and pending selectors", () => {
+    const store = useClaudeStore.getState();
+    store.setModels([{ id: "env-model", name: "Environment model" }], "env-1");
+    expect(store.getModelCatalog("env-1")).toMatchObject({
+      environmentId: "env-1",
+      source: "sdk",
+      stale: false,
+    });
+    expect(store.getModels("env-1").map((model) => model.id)).toEqual(["env-model"]);
+
+    store.setSessionInitData("env-1", {
+      mcpServers: [],
+      plugins: [],
+      slashCommands: ["/review"],
+    });
+    expect(store.getSessionInitData("env-1")?.slashCommands).toEqual(["/review"]);
+    store.setSessionInitData("env-1", null);
+    expect(store.getSessionInitData("env-1")).toBeUndefined();
+
+    store.setSession(SESSION_KEY, {
+      sessionId: "sdk-session-1",
+      messages: [],
+      isLoading: false,
+    });
+    store.addPendingQuestion({
+      id: "question-1",
+      sessionId: "sdk-session-1",
+      questions: [],
+    });
+    store.addPendingPlanApproval({
+      id: "approval-1",
+      sessionId: "sdk-session-1",
+    });
+    expect(store.getPendingQuestionsForSession("sdk-session-1")).toHaveLength(1);
+    expect(store.getPendingPlanApprovalsForSession("sdk-session-1")).toHaveLength(1);
+    expect(store.getSessionKeyBySdkSessionId("sdk-session-1")).toBe(SESSION_KEY);
+    expect(store.getSessionKeyBySdkSessionId("missing-session")).toBeNull();
+
+    store.removePendingQuestion("question-1");
+    store.removePendingPlanApproval("approval-1");
+    expect(store.getPendingQuestion("question-1")).toBeUndefined();
+    expect(store.getPendingPlanApproval("approval-1")).toBeUndefined();
   });
 
   test("queues prompts in FIFO order and clears only the targeted session queue", () => {
@@ -432,5 +486,293 @@ describe("claudeStore message patching", () => {
       },
     ]);
     expect(store().patchMessage(SESSION_KEY, patch({ revision: 4 }))).toBe(true);
+  });
+});
+
+describe("claudeStore per-session turn options", () => {
+  beforeEach(resetClaudeStore);
+
+  describe("selectedAgent", () => {
+    test("stores and reads an agent per session", () => {
+      const store = useClaudeStore.getState();
+      const otherKey = createClaudeSessionKey("env-1", "tab-2");
+
+      store.setSelectedAgent(SESSION_KEY, "reviewer");
+
+      expect(useClaudeStore.getState().getSelectedAgent(SESSION_KEY)).toBe("reviewer");
+      expect(useClaudeStore.getState().getSelectedAgent(otherKey)).toBeUndefined();
+    });
+
+    test("clears the key rather than storing an empty selection", () => {
+      // The absence of a key is what the prompt builder reads as "no agent", so
+      // storing `undefined` under the key would send `agent: undefined`.
+      const store = useClaudeStore.getState();
+      store.setSelectedAgent(SESSION_KEY, "reviewer");
+
+      store.setSelectedAgent(SESSION_KEY, undefined);
+
+      expect(useClaudeStore.getState().getSelectedAgent(SESSION_KEY)).toBeUndefined();
+      expect(useClaudeStore.getState().selectedAgent.has(SESSION_KEY)).toBe(false);
+
+      store.setSelectedAgent(SESSION_KEY, "reviewer");
+      store.setSelectedAgent(SESSION_KEY, "");
+      expect(useClaudeStore.getState().selectedAgent.has(SESSION_KEY)).toBe(false);
+    });
+  });
+
+  describe("includeLocalSettings", () => {
+    test("defaults to false for a session that never opted in", () => {
+      expect(useClaudeStore.getState().includesLocalSettings(SESSION_KEY)).toBe(false);
+    });
+
+    test("stores the opt-in and deletes the key when turned back off", () => {
+      const store = useClaudeStore.getState();
+
+      store.setIncludeLocalSettings(SESSION_KEY, true);
+      expect(useClaudeStore.getState().includesLocalSettings(SESSION_KEY)).toBe(true);
+      expect(useClaudeStore.getState().includeLocalSettings.get(SESSION_KEY)).toBe(true);
+
+      store.setIncludeLocalSettings(SESSION_KEY, false);
+      expect(useClaudeStore.getState().includesLocalSettings(SESSION_KEY)).toBe(false);
+      // Stored as absence rather than `false`, so the map only ever holds `true`.
+      expect(useClaudeStore.getState().includeLocalSettings.has(SESSION_KEY)).toBe(false);
+    });
+
+    test("is scoped per session", () => {
+      const store = useClaudeStore.getState();
+      const otherKey = createClaudeSessionKey("env-1", "tab-2");
+
+      store.setIncludeLocalSettings(SESSION_KEY, true);
+
+      expect(useClaudeStore.getState().includesLocalSettings(otherKey)).toBe(false);
+    });
+  });
+
+  describe("promptSuggestionOptIn", () => {
+    test("records both sides of the toggle", () => {
+      const store = useClaudeStore.getState();
+
+      store.setPromptSuggestionOptIn(SESSION_KEY, true);
+      expect(useClaudeStore.getState().promptSuggestionOptIn.get(SESSION_KEY)).toBe(true);
+
+      // Unlike `includeLocalSettings`, an explicit `false` is retained: it is the
+      // difference between "declined" and "never asked".
+      store.setPromptSuggestionOptIn(SESSION_KEY, false);
+      expect(useClaudeStore.getState().promptSuggestionOptIn.get(SESSION_KEY)).toBe(false);
+      expect(useClaudeStore.getState().promptSuggestionOptIn.has(SESSION_KEY)).toBe(true);
+    });
+  });
+
+  describe("promptSuggestions", () => {
+    test("stores a suggestion and clears it on a falsy value", () => {
+      const store = useClaudeStore.getState();
+
+      store.setPromptSuggestion(SESSION_KEY, "Try running the tests");
+      expect(useClaudeStore.getState().promptSuggestions.get(SESSION_KEY)).toBe(
+        "Try running the tests",
+      );
+
+      store.setPromptSuggestion(SESSION_KEY, undefined);
+      expect(useClaudeStore.getState().promptSuggestions.has(SESSION_KEY)).toBe(false);
+
+      store.setPromptSuggestion(SESSION_KEY, "Try running the tests");
+      // An empty suggestion is nothing to show, so it clears rather than
+      // rendering an empty chip.
+      store.setPromptSuggestion(SESSION_KEY, "");
+      expect(useClaudeStore.getState().promptSuggestions.has(SESSION_KEY)).toBe(false);
+    });
+  });
+
+  describe("dismissedPromptSuggestions", () => {
+    test("remembers the exact consumed string and clears on a falsy value", () => {
+      /*
+       * The bridge only clears `session.promptSuggestion` when the *next*
+       * prompt runs, so every snapshot replays it. This latch is what stops a
+       * consumed chip from coming back, and it has to be the string rather than
+       * a boolean so a genuinely new suggestion still gets through.
+       */
+      const store = useClaudeStore.getState();
+
+      store.setDismissedPromptSuggestion(SESSION_KEY, "Add a regression test");
+      expect(useClaudeStore.getState().getDismissedPromptSuggestion(SESSION_KEY))
+        .toBe("Add a regression test");
+
+      store.setDismissedPromptSuggestion(SESSION_KEY, undefined);
+      expect(useClaudeStore.getState().dismissedPromptSuggestions.has(SESSION_KEY)).toBe(false);
+
+      store.setDismissedPromptSuggestion(SESSION_KEY, "Add a regression test");
+      store.setDismissedPromptSuggestion(SESSION_KEY, "");
+      expect(useClaudeStore.getState().dismissedPromptSuggestions.has(SESSION_KEY)).toBe(false);
+    });
+
+    test("is scoped per session and independent of the live suggestion", () => {
+      const store = useClaudeStore.getState();
+      const otherKey = createClaudeSessionKey("env-1", "tab-2");
+
+      store.setPromptSuggestion(SESSION_KEY, "Run the tests");
+      store.setDismissedPromptSuggestion(SESSION_KEY, "Run the tests");
+
+      const state = useClaudeStore.getState();
+      // Latching what was consumed does not itself hide the chip; the tab
+      // clears the live suggestion separately.
+      expect(state.promptSuggestions.get(SESSION_KEY)).toBe("Run the tests");
+      expect(state.dismissedPromptSuggestions.has(otherKey)).toBe(false);
+      expect(state.getDismissedPromptSuggestion(otherKey)).toBeUndefined();
+    });
+  });
+
+  describe("backgroundTasks", () => {
+    const task = { id: "task-1", status: "running" } as never;
+
+    test("stores a non-empty task record", () => {
+      const store = useClaudeStore.getState();
+
+      store.setBackgroundTasks(SESSION_KEY, { "task-1": task });
+
+      expect(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)).toEqual({
+        "task-1": task,
+      });
+    });
+
+    test("deletes the key when the bridge reports no tasks", () => {
+      // The bridge is authoritative and reports the whole set each time, so an
+      // empty record means "none left" and must not linger as an empty object a
+      // selector would treat as a fresh reference on every read.
+      const store = useClaudeStore.getState();
+      store.setBackgroundTasks(SESSION_KEY, { "task-1": task });
+
+      store.setBackgroundTasks(SESSION_KEY, {});
+
+      expect(useClaudeStore.getState().backgroundTasks.has(SESSION_KEY)).toBe(false);
+    });
+
+    test("replaces rather than merges the previous record", () => {
+      const store = useClaudeStore.getState();
+      store.setBackgroundTasks(SESSION_KEY, { "task-1": task, "task-2": task });
+
+      store.setBackgroundTasks(SESSION_KEY, { "task-2": task });
+
+      expect(
+        Object.keys(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY) ?? {}),
+      ).toEqual(["task-2"]);
+    });
+
+    test("is scoped per session", () => {
+      const store = useClaudeStore.getState();
+      const otherKey = createClaudeSessionKey("env-1", "tab-2");
+
+      store.setBackgroundTasks(SESSION_KEY, { "task-1": task });
+
+      expect(useClaudeStore.getState().backgroundTasks.has(otherKey)).toBe(false);
+    });
+  });
+
+  describe("contextUsage", () => {
+    const usage = {
+      usedTokens: 12_500,
+      totalTokens: 200_000,
+      percentUsed: 6.25,
+      modelId: "claude-sonnet-4",
+      inputTokens: 10_000,
+      outputTokens: 2_000,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 100,
+      sessionTokens: 12_500,
+      costUsd: 0.42,
+      estimated: false,
+      source: "claude" as const,
+      updatedAt: "2026-07-26T00:00:00.000Z",
+      rateLimits: [{ label: "5h", usedPercent: 12 }],
+    };
+
+    test("round-trips a full provider-exact snapshot and clears on null", () => {
+      const store = useClaudeStore.getState();
+
+      store.setContextUsage(SESSION_KEY, usage);
+      expect(useClaudeStore.getState().getContextUsage(SESSION_KEY)).toEqual(usage);
+
+      store.setContextUsage(SESSION_KEY, null);
+      expect(useClaudeStore.getState().getContextUsage(SESSION_KEY)).toBeUndefined();
+      expect(useClaudeStore.getState().contextUsage.has(SESSION_KEY)).toBe(false);
+    });
+
+    test("replaces rather than merges an earlier snapshot", () => {
+      const store = useClaudeStore.getState();
+      store.setContextUsage(SESSION_KEY, usage);
+
+      store.setContextUsage(SESSION_KEY, {
+        usedTokens: 1,
+        totalTokens: 2,
+        percentUsed: 50,
+      });
+
+      expect(useClaudeStore.getState().getContextUsage(SESSION_KEY)).toEqual({
+        usedTokens: 1,
+        totalTokens: 2,
+        percentUsed: 50,
+      });
+    });
+  });
+
+  test("clearEnvironment prunes every session-scoped map for that environment only", () => {
+    const store = useClaudeStore.getState();
+    const otherEnvKey = createClaudeSessionKey("env-2", "tab-1");
+
+    for (const key of [SESSION_KEY, otherEnvKey]) {
+      store.setSelectedAgent(key, "reviewer");
+      store.setIncludeLocalSettings(key, true);
+      store.setPromptSuggestionOptIn(key, true);
+      store.setPromptSuggestion(key, "Run the tests");
+      store.setDismissedPromptSuggestion(key, "Already used this one");
+      store.setBackgroundTasks(key, { "task-1": { id: "task-1" } as never });
+      store.setFastMode(key, true);
+      store.setContextUsage(key, { usedTokens: 1, totalTokens: 2, percentUsed: 50 });
+      store.setEffort(key, "low");
+      store.setPlanMode(key, true);
+      store.setComposing(key, true);
+      store.setSelectedModel(key, "claude-sonnet-4");
+      store.setDraftText(key, "half-written prompt");
+      store.setDraftMentions(key, ["src/index.ts"] as never);
+      store.addToQueue(key, { id: "queued-1", text: "later" } as never);
+    }
+
+    store.clearEnvironment("env-1");
+
+    const state = useClaudeStore.getState();
+    expect(state.selectedAgent.has(SESSION_KEY)).toBe(false);
+    expect(state.includeLocalSettings.has(SESSION_KEY)).toBe(false);
+    expect(state.promptSuggestionOptIn.has(SESSION_KEY)).toBe(false);
+    expect(state.promptSuggestions.has(SESSION_KEY)).toBe(false);
+    expect(state.dismissedPromptSuggestions.has(SESSION_KEY)).toBe(false);
+    expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
+    expect(state.fastMode.has(SESSION_KEY)).toBe(false);
+    expect(state.contextUsage.has(SESSION_KEY)).toBe(false);
+    expect(state.effort.has(SESSION_KEY)).toBe(false);
+    expect(state.planMode.has(SESSION_KEY)).toBe(false);
+    expect(state.isComposing.has(SESSION_KEY)).toBe(false);
+    expect(state.selectedModel.has(SESSION_KEY)).toBe(false);
+    expect(state.draftText.has(SESSION_KEY)).toBe(false);
+    expect(state.draftMentions.has(SESSION_KEY)).toBe(false);
+    expect(state.messageQueue.has(SESSION_KEY)).toBe(false);
+
+    // A second environment's tabs are untouched: clearing one environment must
+    // not disturb work still running in another. Asserted map by map — a shared
+    // "nothing leaked" assertion would pass while one prune quietly took the
+    // wrong prefix.
+    expect(state.selectedAgent.get(otherEnvKey)).toBe("reviewer");
+    expect(state.includeLocalSettings.get(otherEnvKey)).toBe(true);
+    expect(state.promptSuggestionOptIn.get(otherEnvKey)).toBe(true);
+    expect(state.promptSuggestions.get(otherEnvKey)).toBe("Run the tests");
+    expect(state.dismissedPromptSuggestions.get(otherEnvKey)).toBe("Already used this one");
+    expect(state.backgroundTasks.has(otherEnvKey)).toBe(true);
+    expect(state.fastMode.get(otherEnvKey)).toBe(true);
+    expect(state.contextUsage.has(otherEnvKey)).toBe(true);
+    expect(state.effort.get(otherEnvKey)).toBe("low");
+    expect(state.planMode.get(otherEnvKey)).toBe(true);
+    expect(state.isComposing.get(otherEnvKey)).toBe(true);
+    expect(state.selectedModel.get(otherEnvKey)).toBe("claude-sonnet-4");
+    expect(state.draftText.get(otherEnvKey)).toBe("half-written prompt");
+    expect(state.draftMentions.get(otherEnvKey)).toEqual(["src/index.ts"] as never);
+    expect(state.messageQueue.get(otherEnvKey)).toHaveLength(1);
   });
 });

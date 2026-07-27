@@ -7,6 +7,7 @@ import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import * as realOpenCodeClient from "@/lib/opencode-client";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 // Snapshot the real sibling modules before we install stubs so we can restore
 // them when this file finishes. Without this, Bun's global mock.module cache
@@ -65,6 +66,33 @@ const mockSubscribeToEvents = mock(
 );
 const mockGetAvailableSlashCommands = mock(async () => [] as any[]);
 const mockCreateClient = mock(() => MOCK_CLIENT as any);
+function emptyRuntimeHealth(overrides: Record<string, unknown> = {}) {
+  return {
+    agents: [],
+    skills: [],
+    mcpServers: [],
+    lspServers: [],
+    formatters: [],
+    todos: [],
+    diffs: [],
+    fetchedAt: "2026-04-15T00:00:00.000Z",
+    ...overrides,
+  };
+}
+const mockGetOpenCodeRuntimeHealth = mock<
+  (
+    _client: unknown,
+    _directory?: string,
+    _sessionId?: string,
+  ) => Promise<ReturnType<typeof emptyRuntimeHealth>>
+>(async () => emptyRuntimeHealth());
+const mockForkOpenCodeSession = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _messageId?: string,
+  ) => Promise<{ id: string; title?: string }>
+>(async () => ({ id: "fork-session", title: "OpenCode fork" }));
 const mockStartOpenCodeServer = mock(async () => ({ hostPort: 9999 }));
 const mockGetOpenCodeServerStatus = mock(async () => ({ running: true, hostPort: 9999 }));
 const mockGetOpenCodeServerLog = mock(async () => "");
@@ -127,6 +155,11 @@ mock.module("@/lib/opencode-client", () => ({
   formatOpenCodeError: mock((error) => String(error)),
   abortSession: mockAbortSession,
   subscribeToEvents: mockSubscribeToEvents,
+  // Both hit the network. `getOpenCodeRuntimeHealth` ran for real against the
+  // fake client in every test with its rejection swallowed, and a fork click
+  // would have attempted a live SDK call.
+  getOpenCodeRuntimeHealth: mockGetOpenCodeRuntimeHealth,
+  forkOpenCodeSession: mockForkOpenCodeSession,
   ERROR_MESSAGE_PREFIX: "error-",
   SYSTEM_MESSAGE_PREFIX: "system-",
 }));
@@ -384,6 +417,8 @@ function resetStores(name = "20260415-123456") {
     pendingPermissions: new Map(),
     eventSubscriptions: new Map(),
     contextUsage: new Map(),
+    runtimeHealth: new Map(),
+    selectedAgent: new Map(),
   });
 
   useEnvironmentStore.setState({
@@ -530,6 +565,13 @@ describe("OpenCodeChatTab", () => {
     mockGetAvailableSlashCommands.mockResolvedValue([]);
     mockCreateClient.mockReset();
     mockCreateClient.mockImplementation(() => MOCK_CLIENT as any);
+    mockGetOpenCodeRuntimeHealth.mockClear();
+    mockGetOpenCodeRuntimeHealth.mockImplementation(async () => emptyRuntimeHealth());
+    mockForkOpenCodeSession.mockClear();
+    mockForkOpenCodeSession.mockImplementation(async () => ({
+      id: "fork-session",
+      title: "OpenCode fork",
+    }));
     mockStartOpenCodeServer.mockReset();
     mockStartOpenCodeServer.mockResolvedValue({ hostPort: 9999 });
     mockGetOpenCodeServerStatus.mockReset();
@@ -558,6 +600,7 @@ describe("OpenCodeChatTab", () => {
       variant: {},
     }));
     mockScrollToBottom.mockClear();
+    mockToastError.mockClear();
     mockIsAtBottom = true;
     lastVirtualizedMessages = [];
     resetStores();
@@ -1130,6 +1173,54 @@ describe("OpenCodeChatTab", () => {
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.openCodeNativeData?.sessionId)
         .toBe("resumed-opencode");
     });
+  });
+
+  test("atomically replaces stale metadata when resuming another session", async () => {
+    /*
+     * The tab key survives a resume, and the usage effect only ever writes a
+     * *truthy* summary — so a resumed session whose transcript reports no usage
+     * yet kept displaying the previous session's context meter, and the
+     * session-keyed runtime health kept the previous session's todos and diffs
+     * if the health refetch failed. Claude and Codex both replace this metadata
+     * in the same update that publishes the new session.
+     */
+    useOpenCodeStore.getState().setContextUsage(SESSION_KEY, {
+      usedTokens: 9_000,
+      totalTokens: 10_000,
+      percentUsed: 90,
+      estimated: false,
+      source: "opencode",
+      updatedAt: "2026-04-15T09:00:00.000Z",
+    });
+    useOpenCodeStore.getState().setRuntimeHealth(
+      SESSION_KEY,
+      emptyRuntimeHealth({
+        todos: [{ content: "From the old session", status: "pending", priority: "high" }],
+      }) as never,
+    );
+    mockGetOpenCodeRuntimeHealth.mockRejectedValue(new Error("health unavailable"));
+    mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
+      sessionId === "resumed-opencode" ? [] : []
+    );
+
+    const originalWarn = console.warn;
+    console.warn = mock(() => {}) as unknown as typeof console.warn;
+    try {
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+      fireEvent.click(await screen.findByTestId("opencode-resume-choice"));
+
+      await waitFor(() =>
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId)
+          .toBe("resumed-opencode"),
+      );
+      const state = useOpenCodeStore.getState();
+      expect(state.contextUsage.has(SESSION_KEY)).toBe(false);
+      expect(state.runtimeHealth.has(SESSION_KEY)).toBe(false);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   test("keeps the current session and resume dialog open when manual resume fails", async () => {
@@ -2102,6 +2193,167 @@ describe("OpenCodeChatTab", () => {
     }
   });
 
+  describe("native session actions", () => {
+    function seedForkableMessage() {
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [{
+        id: "user-message-1",
+        role: "user",
+        content: "Start here",
+        parts: [{ type: "text", content: "Start here" }],
+        createdAt: "2026-07-16T12:00:00.000Z",
+      }]);
+    }
+
+    test("forks from a user message and opens the returned session in a new tab", async () => {
+      seedForkableMessage();
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      fireEvent.click(screen.getByRole("button", {
+        name: "Fork OpenCode session from this message",
+      }));
+
+      await waitFor(() => {
+        expect(mockForkOpenCodeSession).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          "session-1",
+          "user-message-1",
+        );
+        const tabs = usePaneLayoutStore.getState().getPane(
+          "default",
+          ENVIRONMENT_ID,
+        )?.tabs ?? [];
+        expect(tabs).toHaveLength(2);
+        expect(tabs[1]).toMatchObject({
+          type: "opencode-native",
+          displayTitle: "OpenCode fork",
+          openCodeNativeData: {
+            environmentId: ENVIRONMENT_ID,
+            sessionId: "fork-session",
+          },
+        });
+      });
+    });
+
+    test("reports a fork failure without adding a tab", async () => {
+      seedForkableMessage();
+      mockForkOpenCodeSession.mockRejectedValue(new Error("fork endpoint unavailable"));
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      fireEvent.click(screen.getByRole("button", {
+        name: "Fork OpenCode session from this message",
+      }));
+
+      await waitFor(() => {
+        expect(mockToastError).toHaveBeenCalledWith("fork endpoint unavailable");
+        expect(
+          usePaneLayoutStore.getState().getPane("default", ENVIRONMENT_ID)?.tabs,
+        ).toHaveLength(1);
+      });
+    });
+
+    test("coalesces double-clicks while a fork is in flight", async () => {
+      seedForkableMessage();
+      const pendingFork = deferred<{ id: string; title?: string }>();
+      mockForkOpenCodeSession.mockImplementation(() => pendingFork.promise);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+      const button = screen.getByRole("button", {
+        name: "Fork OpenCode session from this message",
+      });
+
+      fireEvent.click(button);
+      fireEvent.click(button);
+      expect(mockForkOpenCodeSession).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        pendingFork.resolve({ id: "fork-once", title: "One fork" });
+        await pendingFork.promise;
+      });
+      expect(
+        usePaneLayoutStore.getState().getPane("default", ENVIRONMENT_ID)?.tabs,
+      ).toHaveLength(2);
+    });
+
+    test("shapes a discovered slash command for native dispatch", async () => {
+      resetStores("named-environment");
+      composeText = "/review main --verbose";
+      useOpenCodeStore.getState().setSlashCommands(ENVIRONMENT_ID, [{
+        name: "/review",
+        description: "Review the branch",
+      }]);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      fireEvent.click(screen.getByTestId("opencode-send"));
+
+      await waitFor(() => {
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          "session-1",
+          "/review main --verbose",
+          expect.objectContaining({
+            command: {
+              name: "/review",
+              arguments: "main --verbose",
+            },
+          }),
+        );
+      });
+    });
+
+    test("keeps multi-line slash-command arguments intact", async () => {
+      /*
+       * The arguments used to be rebuilt from `split(/\s+/).join(" ")`, which
+       * flattened every newline and indent — so a command invoked with a pasted
+       * diff or a multi-line spec reached the server as one unreadable line.
+       */
+      resetStores("named-environment");
+      const argument = "first line\n  indented second\n\nfinal line";
+      composeText = `/review ${argument}`;
+      useOpenCodeStore.getState().setSlashCommands(ENVIRONMENT_ID, [{
+        name: "/review",
+        description: "Review the branch",
+      }]);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      fireEvent.click(screen.getByTestId("opencode-send"));
+
+      await waitFor(() => {
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          "session-1",
+          composeText,
+          expect.objectContaining({
+            command: { name: "/review", arguments: argument },
+          }),
+        );
+      });
+    });
+
+    test("keeps the existing runtime snapshot when a health refresh fails", async () => {
+      const previousHealth = emptyRuntimeHealth({
+        todos: [{ content: "Keep me", status: "pending", priority: "high" }],
+      });
+      useOpenCodeStore.getState().setRuntimeHealth(SESSION_KEY, previousHealth);
+      mockGetOpenCodeRuntimeHealth.mockRejectedValue(new Error("health unavailable"));
+      const originalWarn = console.warn;
+      const warning = mock(() => {});
+      console.warn = warning as unknown as typeof console.warn;
+
+      try {
+        render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+        await waitFor(() => {
+          expect(warning).toHaveBeenCalledWith(
+            "[OpenCodeChatTab] Failed to load runtime health:",
+            expect.any(Error),
+          );
+        });
+        expect(useOpenCodeStore.getState().runtimeHealth.get(SESSION_KEY))
+          .toEqual(previousHealth);
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
+  });
+
   describe("shared SSE event handling", () => {
     function seedSubagent(state: "pending" | "success" | "failure" = "pending") {
       const parent: NativeMessage = {
@@ -2183,6 +2435,9 @@ describe("OpenCodeChatTab", () => {
           totalTokens: 1_000,
           percentUsed: 5,
           modelId: "openai/gpt-5",
+          estimated: true,
+          source: "heuristic",
+          updatedAt: expect.any(String),
         });
       });
 
@@ -2252,6 +2507,94 @@ describe("OpenCodeChatTab", () => {
       await waitFor(() => {
         expect(useOpenCodeStore.getState().pendingQuestions.has("question-rejected")).toBe(false);
       });
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("uses one environment stream and routes todo and diff events to sibling sessions", async () => {
+      const secondTabId = "tab-2";
+      const secondSessionKey = createOpenCodeSessionKey(
+        ENVIRONMENT_ID,
+        secondTabId,
+      );
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      useOpenCodeStore.getState().setSession(secondSessionKey, {
+        sessionId: "session-2",
+        messages: [],
+        isLoading: false,
+      });
+      usePaneLayoutStore.getState().addTab(
+        "default",
+        {
+          id: secondTabId,
+          type: "opencode-native",
+          openCodeNativeData: createData({ sessionId: "session-2" }),
+        },
+        ENVIRONMENT_ID,
+      );
+
+      render(
+        <>
+          <OpenCodeChatTab
+            tabId={TAB_ID}
+            data={createData({ sessionId: "session-1" })}
+            isActive
+          />
+          <OpenCodeChatTab
+            tabId={secondTabId}
+            data={createData({ sessionId: "session-2" })}
+            isActive
+          />
+        </>,
+      );
+
+      await waitFor(() => {
+        expect(mockSubscribeToEvents).toHaveBeenCalledTimes(1);
+        expect(useOpenCodeStore.getState().runtimeHealth.has(SESSION_KEY)).toBe(true);
+        expect(useOpenCodeStore.getState().runtimeHealth.has(secondSessionKey)).toBe(true);
+      });
+      // Older persisted state may have only the environment-scoped inventory.
+      // The first live session event should seed the missing session snapshot
+      // from that fallback rather than dropping the update.
+      useOpenCodeStore.getState().setRuntimeHealth(secondSessionKey, null);
+
+      channel.push({
+        type: "todo.updated",
+        properties: {
+          sessionID: "session-2",
+          todos: [{ content: "Sibling task", status: "pending", priority: "high" }],
+        },
+      });
+      channel.push({
+        type: "session.diff",
+        properties: {
+          sessionID: "session-2",
+          diff: [{
+            file: "sibling.ts",
+            patch: "@@ -1 +1 @@",
+            additions: 1,
+            deletions: 1,
+            status: "modified",
+          }],
+        },
+      });
+
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().runtimeHealth.get(secondSessionKey),
+        ).toMatchObject({
+          todos: [{ content: "Sibling task", status: "pending", priority: "high" }],
+          diffs: [{
+            file: "sibling.ts",
+            additions: 1,
+            deletions: 1,
+          }],
+        });
+      });
+      expect(useOpenCodeStore.getState().runtimeHealth.get(SESSION_KEY))
+        .toMatchObject({ todos: [], diffs: [] });
+
       useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
       channel.close();
     });

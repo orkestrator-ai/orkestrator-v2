@@ -23,12 +23,15 @@ import {
   type CodexPromptSendOutcome,
   type CodexReasoningEffort,
   type CodexSessionConfigUpdateOutcome,
+  CodexForkError,
   DEFAULT_CODEX_MODEL,
   abortSession,
   checkHealth,
   createClient,
   createSession,
   fetchPendingApprovals,
+  fetchPendingInteractions,
+  forkCodexSession,
   getModels,
   getSlashCommands,
   getSessionMessages,
@@ -36,6 +39,8 @@ import {
   isCodexSessionPhase,
   lookupSessionStatus,
   parseApproval,
+  parseContextUsage,
+  parseInteraction,
   resumeSession,
   sendPrompt,
   subscribeToEvents,
@@ -52,9 +57,11 @@ import {
 } from "@/lib/backend";
 import { SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { useMessageForkAction } from "@/components/chat/MessageForkAction";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { CodexComposeBar } from "./CodexComposeBar";
 import { CodexApprovalCard } from "./CodexApprovalCard";
+import { CodexInteractionCard } from "./CodexInteractionCard";
 import { CodexPlanModeCard } from "./CodexPlanModeCard";
 import { CodexResumeSessionDialog } from "./CodexResumeSessionDialog";
 import { hasPendingInitialPrompt } from "./reconcile-guards";
@@ -187,6 +194,10 @@ export function CodexChatTab({
   const dispatchInFlightRef = useRef(0);
   const approvalSnapshotSequenceRef = useRef(0);
   const approvalActivitySequenceRef = useRef(0);
+  const interactionSnapshotSequenceRef = useRef(0);
+  const interactionActivitySequenceRef = useRef(0);
+  const forkInFlightRef = useRef(false);
+  const [forkInFlight, setForkInFlight] = useState(false);
   const reconcileSessionStateRef = useRef<
     (options?: ReconcileSessionOptions) => Promise<ReconcileSessionResult>
   >(async () => "unavailable");
@@ -279,9 +290,13 @@ export function CodexChatTab({
   const setSessionError = useCodexStore((state) => state.setSessionError);
   const setSessionTitle = useCodexStore((state) => state.setSessionTitle);
   const setSessionPhase = useCodexStore((state) => state.setSessionPhase);
+  const setContextUsage = useCodexStore((state) => state.setContextUsage);
   const setPendingApprovals = useCodexStore((state) => state.setPendingApprovals);
   const addPendingApproval = useCodexStore((state) => state.addPendingApproval);
   const removePendingApproval = useCodexStore((state) => state.removePendingApproval);
+  const setPendingInteractions = useCodexStore((state) => state.setPendingInteractions);
+  const addPendingInteraction = useCodexStore((state) => state.addPendingInteraction);
+  const removePendingInteraction = useCodexStore((state) => state.removePendingInteraction);
   const setSelectedModel = useCodexStore((state) => state.setSelectedModel);
   const setSelectedMode = useCodexStore((state) => state.setSelectedMode);
   const setSelectedReasoningEffort = useCodexStore((state) => state.setSelectedReasoningEffort);
@@ -300,6 +315,10 @@ export function CodexChatTab({
     useCallback((state) => state.pendingApprovals.get(sessionKey), [sessionKey]),
   );
   const pendingApprovals = storedPendingApprovals ?? [];
+  const storedPendingInteractions = useCodexStore(
+    useCallback((state) => state.pendingInteractions.get(sessionKey), [sessionKey]),
+  );
+  const pendingInteractions = storedPendingInteractions ?? [];
   const selectedModel = useCodexStore(
     useCallback(
       (state) => state.selectedModel.get(sessionKey) ?? DEFAULT_CODEX_MODEL,
@@ -481,6 +500,8 @@ export function CodexChatTab({
     refreshControllerRef.current.markActivity();
     approvalSnapshotSequenceRef.current += 1;
     approvalActivitySequenceRef.current += 1;
+    interactionSnapshotSequenceRef.current += 1;
+    interactionActivitySequenceRef.current += 1;
     retryablePromptRef.current = null;
     unconfirmedDispatchRef.current = null;
   }, [sessionKey, session?.sessionId]);
@@ -910,11 +931,43 @@ export function CodexChatTab({
         return;
       }
 
-      setSession(sessionKey, {
-        sessionId: resumed.session.sessionId,
-        messages: resumed.messages,
-        isLoading: false,
-        title: resumed.session.title,
+      // Invalidate every request tied to the previous bridge session before
+      // publishing the new identity. This includes manual reconciles, whose
+      // completion deliberately ignores ordinary live-event invalidation.
+      reconcileSequenceRef.current += 1;
+      manualReconcileSequenceRef.current += 1;
+      approvalSnapshotSequenceRef.current += 1;
+      approvalActivitySequenceRef.current += 1;
+      interactionSnapshotSequenceRef.current += 1;
+      interactionActivitySequenceRef.current += 1;
+      refreshControllerRef.current = createCodexSessionRefreshController();
+
+      // The tab key is stable across resume, while approvals/interactions are
+      // bridge-session scoped. Replace the session and clear both collections
+      // atomically so no render can post an old request to the resumed session.
+      useCodexStore.setState((state) => {
+        const sessions = new Map(state.sessions);
+        sessions.set(sessionKey, {
+          sessionId: resumed.session.sessionId,
+          messages: resumed.messages,
+          isLoading: false,
+          title: resumed.session.title,
+        });
+        const pendingApprovals = new Map(state.pendingApprovals);
+        pendingApprovals.delete(sessionKey);
+        const pendingInteractions = new Map(state.pendingInteractions);
+        pendingInteractions.delete(sessionKey);
+        const sessionPhase = new Map(state.sessionPhase);
+        sessionPhase.delete(sessionKey);
+        const contextUsage = new Map(state.contextUsage);
+        contextUsage.delete(sessionKey);
+        return {
+          sessions,
+          pendingApprovals,
+          pendingInteractions,
+          sessionPhase,
+          contextUsage,
+        };
       });
       updateTabNativeSessionId(tabId, resumed.session.sessionId, environmentId);
       setResumeDialogOpen(false);
@@ -926,12 +979,62 @@ export function CodexChatTab({
       selectedMode,
       selectedReasoningEffort,
       sessionKey,
-      setSession,
       tabId,
       updateTabNativeSessionId,
       environmentId,
     ],
   );
+
+  const handleForkFromMessage = useCallback(async (messageId: string) => {
+    if (!client || !session?.sessionId) return;
+    // A fork POSTs then opens a tab with a freshly generated id, so the pane
+    // store's existing-id dedupe cannot collapse a double click: it would
+    // create two server-side forks and two tabs. The ref latches synchronously
+    // (before React has re-rendered the disabled button) and the state drives
+    // the disabled attribute.
+    if (forkInFlightRef.current) return;
+    forkInFlightRef.current = true;
+    setForkInFlight(true);
+    try {
+      const fork = await forkCodexSession(client, session.sessionId, messageId);
+      const paneStore = usePaneLayoutStore.getState();
+      paneStore.addTab(
+        paneStore.getActivePaneId(environmentId),
+        {
+          id: createUuid(),
+          type: "codex-native",
+          displayTitle: fork.title ?? "Codex fork",
+          codexNativeData: { ...data, sessionId: fork.sessionId },
+        },
+        environmentId,
+      );
+    } catch (error) {
+      /*
+       * The bridge answers a fork refusal with a differentiated status and its
+       * own message (404 missing, 409 the turn is still running, 422 not a
+       * usable fork point, 503 engine unavailable). Surfacing that verbatim is
+       * the only way the user learns which one happened; the single "cannot be
+       * used as a fork boundary" line used to blame the message even when the
+       * real answer was "wait for the turn to finish".
+       */
+      toast.error(
+        error instanceof CodexForkError
+          ? error.message
+          : "Failed to fork Codex session",
+      );
+    } finally {
+      forkInFlightRef.current = false;
+      setForkInFlight(false);
+    }
+  }, [client, data, environmentId, session?.sessionId]);
+
+  // Referentially stable per message id, so `memo(NativeMessage)` still holds
+  // for every visible message while an answer streams in.
+  const forkAction = useMessageForkAction({
+    label: "Fork Codex session from this message",
+    disabled: forkInFlight,
+    onFork: handleForkFromMessage,
+  });
 
   useEffect(() => {
     persistedPreferencesRef.current = getPersistedCodexPreferences(config);
@@ -1064,33 +1167,48 @@ export function CodexChatTab({
         setErrorMessage(null);
 
         let port: number | null = null;
+        let authToken: string | undefined;
         if (isLocal) {
           let status = await getLocalCodexServerStatus(environmentId);
-          if (!status.running) {
+          if (!status.running || !status.authToken) {
             const result = await startLocalCodexServer(environmentId);
-            status = { running: true, port: result.port, pid: result.pid };
+            status = {
+              running: true,
+              port: result.port,
+              pid: result.pid,
+              authToken: result.authToken,
+            };
           }
           if (!mounted) return;
           port = status.port;
+          authToken = status.authToken;
         } else {
           if (!containerId) {
             throw new Error("Container ID is required for containerized Codex");
           }
           let status = await getCodexServerStatus(containerId);
-          if (!status.running) {
+          if (!status.running || !status.authToken) {
             const result = await startCodexServer(containerId);
-            status = { running: true, hostPort: result.hostPort };
+            status = {
+              running: true,
+              hostPort: result.hostPort,
+              authToken: result.authToken,
+            };
           }
           if (!mounted) return;
           port = status.hostPort;
+          authToken = status.authToken;
         }
 
         if (!port) {
           throw new Error("Failed to resolve Codex bridge port");
         }
+        if (!authToken) {
+          throw new Error("Failed to resolve Codex bridge authentication");
+        }
 
         setServerStatus(environmentId, { running: true, hostPort: port });
-        const nextClient = createClient(`http://127.0.0.1:${port}`);
+        const nextClient = createClient(`http://127.0.0.1:${port}`, authToken);
         setClient(environmentId, nextClient);
 
         if (!(await checkHealth(nextClient))) {
@@ -1451,6 +1569,8 @@ export function CodexChatTab({
    */
   const showApprovals =
     pendingApprovals.length > 0 && !!client && !!session?.sessionId;
+  const showInteractions =
+    pendingInteractions.length > 0 && !!client && !!session?.sessionId;
 
   const reconcileSessionState = useCallback(async (
     options?: ReconcileSessionOptions,
@@ -1551,8 +1671,26 @@ export function CodexChatTab({
         console.error("[CodexChatTab] Failed to rehydrate approvals:", error);
       });
 
+    const interactionSnapshotSequence = ++interactionSnapshotSequenceRef.current;
+    const interactionActivitySequence = interactionActivitySequenceRef.current;
+    void fetchPendingInteractions(client, session.sessionId)
+      .then((interactions) => {
+        if (
+          interactionSnapshotSequence === interactionSnapshotSequenceRef.current
+          && interactionActivitySequence === interactionActivitySequenceRef.current
+        ) {
+          setPendingInteractions(sessionKey, interactions);
+        }
+      })
+      .catch((error: unknown) => {
+        console.error("[CodexChatTab] Failed to rehydrate interactions:", error);
+      });
+
     if (typeof status.title === "string" && status.title.trim().length > 0) {
       setSessionTitle(sessionKey, status.title);
+    }
+    if (status.contextUsage) {
+      setContextUsage(sessionKey, status.contextUsage);
     }
 
     /**
@@ -1608,6 +1746,8 @@ export function CodexChatTab({
     session?.sessionId,
     sessionKey,
     setPendingApprovals,
+    setPendingInteractions,
+    setContextUsage,
     setSessionError,
     setSessionLoading,
     setSessionPhase,
@@ -1774,6 +1914,24 @@ export function CodexChatTab({
               continue;
             }
 
+            if (event.type === "session.interaction-requested") {
+              const interaction = parseInteraction(event.data?.interaction);
+              if (interaction) {
+                interactionActivitySequenceRef.current += 1;
+                addPendingInteraction(sessionKey, interaction);
+              }
+              continue;
+            }
+
+            if (event.type === "session.interaction-resolved") {
+              const interactionId = event.data?.interactionId;
+              if (typeof interactionId === "string") {
+                interactionActivitySequenceRef.current += 1;
+                removePendingInteraction(sessionKey, interactionId);
+              }
+              continue;
+            }
+
             if (event.type === "message.updated") {
               const message = event.data?.message as CodexMessage | undefined;
               if (message?.id) {
@@ -1785,6 +1943,13 @@ export function CodexChatTab({
             }
 
             if (event.type === "session.updated") {
+              // Validate exactly like the HTTP path does. A bare cast here let a
+              // malformed frame reach `usage.percentUsed.toFixed(...)` in the
+              // agent-info popover and throw inside render.
+              const usageFromEvent = parseContextUsage(event.data?.contextUsage);
+              if (usageFromEvent) {
+                setContextUsage(sessionKey, usageFromEvent);
+              }
               const phase = event.data?.phase;
               if (isCodexSessionPhase(phase)) {
                 const terminal = phase === "idle" || phase === "failed";
@@ -2046,6 +2211,9 @@ export function CodexChatTab({
               message={message}
               previousMessage={prev}
               assistantLabel="Codex"
+              actions={message.role === "user" && message.turnId
+                ? forkAction(message.id)
+                : undefined}
             />
           )}
           footer={
@@ -2100,7 +2268,7 @@ export function CodexChatTab({
       <NativeComposeDock
         centered={centerCompose}
         topAccessory={
-          !isAtBottom || showPlanModeCard || showApprovals ? (
+          !isAtBottom || showPlanModeCard || showApprovals || showInteractions ? (
             <div className="flex w-full flex-col gap-2">
               {/*
                 * Pinned directly above the composer rather than placed in the
@@ -2113,6 +2281,18 @@ export function CodexChatTab({
                     <CodexApprovalCard
                       key={approval.approvalId}
                       approval={approval}
+                      client={client!}
+                      sessionId={session!.sessionId!}
+                      sessionKey={sessionKey}
+                    />
+                  ))
+                : null}
+
+              {showInteractions
+                ? pendingInteractions.map((interaction) => (
+                    <CodexInteractionCard
+                      key={interaction.interactionId}
+                      interaction={interaction}
                       client={client!}
                       sessionId={session!.sessionId!}
                       sessionKey={sessionKey}

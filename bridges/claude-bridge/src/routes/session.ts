@@ -4,7 +4,6 @@ import {
   createSession,
   getSession,
   listSessions,
-  deleteSession,
   getSessionMessages,
   sendPrompt,
   abortSession,
@@ -15,6 +14,14 @@ import {
   getStructuredPromptDispatchState,
   respondToPlanApproval,
   getPendingPlanApprovals,
+  reconcilePersistedSessions,
+  ensurePersistedSession,
+  hydratePersistedSessionMessages,
+  deleteSessionDurably,
+  renameSessionDurably,
+  forkPersistedSession,
+  rewindSessionFiles,
+  stopBackgroundTask,
 } from "../services/session-manager.js";
 import type {
   CreateSessionResponse,
@@ -25,6 +32,26 @@ import { isJsonSchema } from "@orkestrator/protocol/structured-output";
 
 const session = new Hono();
 const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Map a session-manager refusal onto a status code.
+ *
+ * Reads a plain `code` property rather than testing `instanceof`: this module
+ * reaches the session manager through an import boundary that tests replace
+ * wholesale, so class identity is not stable across it but a string is. An
+ * error with no code is a genuine fault and stays a 500.
+ */
+function sessionErrorStatus(error: unknown): 400 | 404 | 409 | 500 {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === "not_found") return 404;
+  if (code === "conflict") return 409;
+  if (code === "invalid") return 400;
+  return 500;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
 
 function isValidImageDataUrl(value: string): boolean {
   const match = /^data:image\/(?:jpeg|png|gif|webp);base64,([\s\S]+)$/.exec(value);
@@ -67,7 +94,15 @@ session.post("/create", async (c) => {
 });
 
 // List all sessions
-session.get("/list", (c) => {
+session.get("/list", async (c) => {
+  // Best effort. Adopting on-disk sessions is an enrichment; a failing SDK or
+  // an unreadable Claude home must not turn a previously infallible listing
+  // into a 500 that also hides the in-memory sessions the user is working in.
+  try {
+    await reconcilePersistedSessions();
+  } catch (error) {
+    console.error("[session] Failed to reconcile persisted sessions:", error);
+  }
   const sessions = listSessions();
 
   const response: SessionListResponse = {
@@ -83,10 +118,39 @@ session.get("/list", (c) => {
   return c.json(response);
 });
 
+/**
+ * Materialize a session, turning a session-manager refusal into the same
+ * structured body every other route returns.
+ *
+ * Without this the route fell through to Hono's default 500 — an empty body the
+ * client cannot distinguish from a crash, for what is usually a conflict or a
+ * missing rollout.
+ */
+async function resolveSession(
+  id: string,
+  failureMessage: string,
+): Promise<
+  | { ok: true; session: Awaited<ReturnType<typeof ensurePersistedSession>> }
+  | { ok: false; body: { error: string }; status: 400 | 404 | 409 | 500 }
+> {
+  try {
+    return { ok: true, session: getSession(id) ?? await ensurePersistedSession(id) };
+  } catch (error) {
+    console.error(`[session] ${failureMessage}:`, error);
+    return {
+      ok: false,
+      body: { error: errorMessage(error, failureMessage) },
+      status: sessionErrorStatus(error),
+    };
+  }
+}
+
 // Get session details
-session.get("/:id", (c) => {
+session.get("/:id", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id);
+  const resolved = await resolveSession(id, "Failed to load session");
+  if (!resolved.ok) return c.json(resolved.body, resolved.status);
+  const sessionData = resolved.session;
 
   if (!sessionData) {
     return c.json({ error: "Session not found" }, 404);
@@ -101,6 +165,13 @@ session.get("/:id", (c) => {
     error: sessionData.error,
     structuredOutputRequestId: sessionData.structuredOutputRequestId,
     structuredOutput: sessionData.structuredOutput,
+    contextUsage: sessionData.usage,
+    // Authoritative even before the first turn completes: rate-limit events
+    // arrive mid-turn, long before there is a usage snapshot to carry them.
+    rateLimits: sessionData.rateLimits,
+    promptSuggestion: sessionData.promptSuggestion,
+    backgroundTasks: sessionData.backgroundTasks ?? {},
+    rewindInProgress: sessionData.rewindInProgress === true,
   });
 });
 
@@ -130,12 +201,16 @@ session.get("/:id/structured-output", (c) => {
 // The bridge owns this state, so a tab that was unmounted while tasks changed
 // rehydrates from here rather than replaying the transcript and hoping the last
 // task tool part is still present.
-session.get("/:id/tasks", (c) => {
+session.get("/:id/tasks", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id);
+  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
 
   if (!sessionData) {
     return c.json({ error: "Session not found" }, 404);
+  }
+
+  if (sessionData.persistedMessagesLoaded === false) {
+    await hydratePersistedSessionMessages(id);
   }
 
   // A session that has never run a task tool has an empty, and complete, list.
@@ -143,15 +218,20 @@ session.get("/:id/tasks", (c) => {
 });
 
 // Get session messages
-session.get("/:id/messages", (c) => {
+session.get("/:id/messages", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id);
+  const resolved = await resolveSession(id, "Failed to load session messages");
+  if (!resolved.ok) return c.json(resolved.body, resolved.status);
+  const sessionData = resolved.session;
 
   if (!sessionData) {
     return c.json({ error: "Session not found" }, 404);
   }
 
-  const messages = getSessionMessages(id);
+  const messages =
+    sessionData.persistedMessagesLoaded === false
+      ? await hydratePersistedSessionMessages(id)
+      : getSessionMessages(id);
   const response: MessagesResponse = { messages };
 
   return c.json(response);
@@ -160,7 +240,9 @@ session.get("/:id/messages", (c) => {
 // Send a prompt to a session
 session.post("/:id/prompt", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id);
+  const resolved = await resolveSession(id, "Failed to send prompt");
+  if (!resolved.ok) return c.json(resolved.body, resolved.status);
+  const sessionData = resolved.session;
 
   if (!sessionData) {
     return c.json({ error: "Session not found" }, 404);
@@ -187,6 +269,18 @@ session.post("/:id/prompt", async (c) => {
         }>
       | undefined;
     const fastMode = typeof body.fastMode === "boolean" ? body.fastMode : undefined;
+    const agent =
+      typeof body.agent === "string" && body.agent.trim()
+        ? body.agent.trim()
+        : undefined;
+    const includeLocalSettings =
+      typeof body.includeLocalSettings === "boolean"
+        ? body.includeLocalSettings
+        : undefined;
+    const promptSuggestions =
+      typeof body.promptSuggestions === "boolean"
+        ? body.promptSuggestions
+        : undefined;
     const outputSchema = body.outputSchema;
     const requestId = typeof body.requestId === "string" && body.requestId.trim().length > 0
       ? body.requestId.trim()
@@ -245,6 +339,9 @@ session.post("/:id/prompt", async (c) => {
     if (sessionData.status === "running") {
       return c.json({ error: "Session is already processing a prompt" }, 409);
     }
+    if (sessionData.rewindInProgress === true) {
+      return c.json({ error: "Session is restoring files from a checkpoint" }, 409);
+    }
 
     console.debug("[session] Prompt received", {
       sessionId: id,
@@ -253,6 +350,8 @@ session.post("/:id/prompt", async (c) => {
       effort,
       permissionMode,
       fastMode,
+      agent,
+      includeLocalSettings,
       attachmentsCount: attachments?.length ?? 0,
     });
 
@@ -263,6 +362,9 @@ session.post("/:id/prompt", async (c) => {
       effort,
       permissionMode,
       fastMode,
+      agent,
+      includeLocalSettings,
+      promptSuggestions,
       outputSchema,
       requestId,
     }).catch((error) => {
@@ -316,15 +418,130 @@ session.post("/:id/abort", (c) => {
 });
 
 // Delete a session
-session.delete("/:id", (c) => {
+session.delete("/:id", async (c) => {
   const id = c.req.param("id");
-
-  const deleted = deleteSession(id);
-
-  if (deleted) {
-    return c.json({ status: "deleted" });
-  } else {
+  try {
+    const deleted = await deleteSessionDurably(id);
+    if (deleted) {
+      return c.json({ status: "deleted" });
+    }
     return c.json({ error: "Session not found" }, 404);
+  } catch (error) {
+    console.error("[session] Failed to delete session:", error);
+    return c.json(
+      { error: errorMessage(error, "Failed to delete session") },
+      sessionErrorStatus(error),
+    );
+  }
+});
+
+session.post("/:id/rename", async (c) => {
+  const id = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  if (!title) return c.json({ error: "Title is required" }, 400);
+  try {
+    const renamed = await renameSessionDurably(id, title);
+    return renamed
+      ? c.json({ status: "renamed", title })
+      : c.json({ error: "Session not found" }, 404);
+  } catch (error) {
+    console.error("[session] Failed to rename session:", error);
+    return c.json(
+      { error: errorMessage(error, "Failed to rename session") },
+      sessionErrorStatus(error),
+    );
+  }
+});
+
+session.post("/:id/fork", async (c) => {
+  const id = c.req.param("id");
+  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
+  if (!sessionData) return c.json({ error: "Session not found" }, 404);
+
+  const body = await c.req.json().catch(() => ({}));
+  const upToMessageId =
+    typeof body.upToMessageId === "string" && body.upToMessageId.trim()
+      ? body.upToMessageId.trim()
+      : undefined;
+  const title =
+    typeof body.title === "string" && body.title.trim()
+      ? body.title.trim()
+      : undefined;
+  try {
+    const forked = await forkPersistedSession(id, { upToMessageId, title });
+    return c.json({
+      sessionId: forked.id,
+      title: forked.title,
+    }, 201);
+  } catch (error) {
+    console.error("[session] Failed to fork session:", error);
+    return c.json(
+      { error: errorMessage(error, "Failed to fork session") },
+      sessionErrorStatus(error),
+    );
+  }
+});
+
+session.post("/:id/compact", async (c) => {
+  const id = c.req.param("id");
+  const resolved = await resolveSession(id, "Failed to compact session");
+  if (!resolved.ok) return c.json(resolved.body, resolved.status);
+  const sessionData = resolved.session;
+  if (!sessionData) return c.json({ error: "Session not found" }, 404);
+  if (sessionData.status === "running") {
+    return c.json({ error: "Session is already processing a prompt" }, 409);
+  }
+  if (sessionData.rewindInProgress === true) {
+    return c.json({ error: "Session is restoring files from a checkpoint" }, 409);
+  }
+  void sendPrompt(id, "/compact").catch((error) => {
+    console.error("[session] Claude compaction failed:", error);
+  });
+  return c.json({ status: "processing" }, 202);
+});
+
+session.post("/:id/rewind", async (c) => {
+  const id = c.req.param("id");
+  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
+  if (!sessionData) return c.json({ error: "Session not found" }, 404);
+
+  const body = await c.req.json().catch(() => ({}));
+  const messageId =
+    typeof body.messageId === "string" ? body.messageId.trim() : "";
+  if (!messageId) return c.json({ error: "messageId is required" }, 400);
+  const dryRun = body.dryRun === true;
+  try {
+    const result = await rewindSessionFiles(id, messageId, dryRun);
+    return c.json({ status: dryRun ? "previewed" : "rewound", result });
+  } catch (error) {
+    console.error("[session] Failed to rewind session files:", error);
+    return c.json(
+      { error: errorMessage(error, "Failed to rewind session files") },
+      sessionErrorStatus(error),
+    );
+  }
+});
+
+session.post("/:id/tasks/:taskId/stop", async (c) => {
+  try {
+    const stopped = await stopBackgroundTask(
+      c.req.param("id"),
+      c.req.param("taskId"),
+    );
+    if (stopped.ok) return c.json({ status: "stopped" });
+    // "No control channel" is a conflict, not a 404: the task exists and the
+    // user can see it — nothing live can currently reach it.
+    return c.json(
+      { error: stopped.message },
+      stopped.reason === "no_control_channel" ? 409 : 404,
+    );
+  } catch (error) {
+    console.error("[session] Failed to stop background task:", error);
+    return c.json(
+      { error: errorMessage(error, "Failed to stop background task") },
+      sessionErrorStatus(error),
+    );
   }
 });
 

@@ -6,6 +6,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { spawnCommand } from "../../../apps/backend/src/core/shell";
 import type { Environment, RepositoryConfig } from "../../../apps/backend/src/core/models";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import { APP_SLUG, APP_VERSION } from "../../../apps/backend/src/core/constants";
@@ -448,6 +449,37 @@ async function writeBridgeServer(
       }).listen(port, "127.0.0.1");
     `,
   );
+}
+
+/**
+ * Stands in for an in-container bridge on a fixed port. `isHealthy` is consulted
+ * per request so a test can flip health between the handler's own check and the
+ * one inside `startContainerServer`.
+ */
+async function startControllableHealthServer(
+  port: number,
+  isHealthy: () => boolean,
+): Promise<{ close: () => Promise<void> }> {
+  const server = http.createServer((request, response) => {
+    response.writeHead(request.url === "/global/health" && isHealthy() ? 200 : 503);
+    response.end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+  return {
+    close: () => new Promise<void>((resolve, reject) => {
+      // Dropping keep-alive sockets can already stop the listener, so a
+      // "not running" close is success rather than a leaked port.
+      server.closeAllConnections();
+      server.close((error) => (
+        !error || (error as NodeJS.ErrnoException).code === "ERR_SERVER_NOT_RUNNING"
+          ? resolve()
+          : reject(error)
+      ));
+    }),
+  };
 }
 
 async function requestOk(port: number, requestPath: string): Promise<boolean> {
@@ -4997,18 +5029,41 @@ exit 0
       port: number;
       pid: number;
       wasRunning: boolean;
+      authToken: string;
     };
 
     expect(result.wasRunning).toBe(false);
     expect(result.port).toBeGreaterThan(0);
     expect(result.pid).toBeGreaterThan(0);
+    expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(updates).toContainEqual({ localCodexPort: result.port, codexBridgePid: result.pid });
+    await expect(
+      commands.get("get_local_codex_server_status")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ).resolves.toMatchObject({
+      running: true,
+      port: result.port,
+      pid: result.pid,
+      authToken: result.authToken,
+    });
     await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
     expect(await fs.readFile(markerPath, "utf8")).toBe(managedCodexPath);
     expect(await fs.readFile(versionMarkerPath, "utf8")).toBe(APP_VERSION);
     expect(await fs.readFile(maxConcurrentThreadsMarkerPath, "utf8")).toBe("8");
 
     await commands.get("stop_local_codex_server_cmd")?.({ environmentId: environment.id }, context);
+    await expect(
+      commands.get("get_local_codex_server_status")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ).resolves.toEqual({
+      running: false,
+      port: null,
+      pid: null,
+    });
 
     const fallbackEnvironment = createEnvironment({
       id: "env-local-codex-fallback",
@@ -5839,8 +5894,11 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
 
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
     const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
+    const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
+    const tokenFile = path.join(path.dirname(pidFile), "token");
     process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
     process.env.FAKE_BRIDGE_PID_FILE = pidFile;
+    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
 
     // Fake docker: report the container running, map the bridge port to our host
     // port, and on `exec -d` spin up a real health endpoint so waitForHealth
@@ -5853,6 +5911,13 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/codex-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+    esac
+    token=$(printf '%s' "$*" | sed -n "s/.*CODEX_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
     exit 0 ;;
@@ -5862,10 +5927,27 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
-        const result = await commands.get("start_codex_server")?.({ containerId: "container-1" }, context);
-        expect(result).toEqual({ hostPort, wasRunning: false });
+        const [first, second] = await Promise.all([
+          commands.get("start_codex_server")?.(
+            { containerId: "container-1" },
+            context,
+          ),
+          commands.get("start_codex_server")?.(
+            { containerId: "container-1" },
+            context,
+          ),
+        ]) as Array<{ hostPort: number; wasRunning: boolean; authToken: string }>;
+        expect(first).toMatchObject({ hostPort, wasRunning: false });
+        expect(second).toMatchObject({ hostPort, wasRunning: true });
+        expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(second.authToken).toBe(first.authToken);
 
         const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(
+          execLog.split("\n").filter((line) => line.startsWith("exec -d ")),
+        ).toHaveLength(1);
+        expect(execLog).toContain("/tmp/codex-bridge-token");
+        expect(execLog).toContain("export CODEX_BRIDGE_TOKEN=");
         expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=9");
         expect(execLog).toContain("setsid bun /opt/codex-bridge/dist/index.js");
         expect(execLog).not.toContain("setsid node");
@@ -5883,6 +5965,8 @@ exit 0
       else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
       if (previousPidFile === undefined) delete process.env.FAKE_BRIDGE_PID_FILE;
       else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
+      if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
+      else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
     }
   });
 
@@ -6002,6 +6086,212 @@ exit 0
     }
   });
 
+  test("replaces an in-container Codex bridge that has no usable persisted token", async () => {
+    const hostPort = await reserveFreePort();
+    const stateDir = await createTempDir("ork-codex-legacy-bridge-");
+    const tokenFile = path.join(stateDir, "token");
+    const killedFile = path.join(stateDir, "killed");
+    // A bridge from before per-process authentication: healthy, but its token
+    // file holds something the renderer cannot use.
+    await fs.writeFile(tokenFile, "legacy");
+
+    const environment = createEnvironment({
+      id: "env-container-codex-legacy",
+      environmentType: "containerized",
+      containerId: "container-codex-legacy",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+    const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
+    const previousKilledFile = process.env.FAKE_BRIDGE_KILLED_FILE;
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+    process.env.FAKE_BRIDGE_KILLED_FILE = killedFile;
+
+    // The bridge is healthy until `pkill` drops the marker, and healthy again
+    // once the start script has run.
+    const bridge = await startControllableHealthServer(hostPort, () => !existsSync(killedFile));
+
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/codex-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *"pkill -f '[c]odex-bridge/dist/index.js'"*)
+        : > "$FAKE_BRIDGE_KILLED_FILE"
+        exit 0 ;;
+    esac
+    token=$(printf '%s' "$*" | sed -n "s/.*CODEX_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
+    rm -f "$FAKE_BRIDGE_KILLED_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        const result = await commands.get("start_codex_server")?.(
+          { containerId: "container-codex-legacy" },
+          context,
+        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+
+        expect(result).toMatchObject({ hostPort, wasRunning: false });
+        expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(await fs.readFile(tokenFile, "utf8")).toBe(result.authToken);
+
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).toContain("pkill -f '[c]odex-bridge/dist/index.js'");
+        expect(
+          execLog.split("\n").filter((line) => line.startsWith("exec -d ")),
+        ).toHaveLength(1);
+      });
+    } finally {
+      await bridge.close();
+      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+      if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
+      else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
+      if (previousKilledFile === undefined) delete process.env.FAKE_BRIDGE_KILLED_FILE;
+      else process.env.FAKE_BRIDGE_KILLED_FILE = previousKilledFile;
+    }
+  });
+
+  test("returns the container's persisted token when a bridge arrives after the health check", async () => {
+    const hostPort = await reserveFreePort();
+    const stateDir = await createTempDir("ork-codex-late-bridge-");
+    const tokenFile = path.join(stateDir, "token");
+    const persistedToken = "L".repeat(43);
+    await fs.writeFile(tokenFile, persistedToken);
+
+    const environment = createEnvironment({
+      id: "env-container-codex-late",
+      environmentType: "containerized",
+      containerId: "container-codex-late",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+    const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+
+    // Unhealthy for the handler's own check and healthy by the time
+    // startContainerServer re-checks: a prior start whose health wait timed out
+    // but whose bridge came up late.
+    let healthChecks = 0;
+    const bridge = await startControllableHealthServer(hostPort, () => (healthChecks += 1) > 1);
+
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/codex-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+    esac
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        const result = await commands.get("start_codex_server")?.(
+          { containerId: "container-codex-late" },
+          context,
+        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+
+        expect(result).toEqual({ hostPort, wasRunning: true, authToken: persistedToken });
+        expect(await fs.readFile(tokenFile, "utf8")).toBe(persistedToken);
+
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).not.toContain("exec -d ");
+      });
+    } finally {
+      await bridge.close();
+      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+      if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
+      else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
+    }
+  });
+
+  test("keeps the Codex bridge token out of a failed docker exec error", async () => {
+    const hostPort = await reserveFreePort();
+    const environment = createEnvironment({
+      id: "env-container-codex-redaction",
+      environmentType: "containerized",
+      containerId: "container-codex-redaction",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+
+    // The start exec fails without writing anything, so the only material left
+    // for an error message is the argv that carries the token.
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/codex-bridge-token"*) exit 0 ;;
+    esac
+    exit 9 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        const failure = await commands.get("start_codex_server")?.(
+          { containerId: "container-codex-redaction" },
+          context,
+        ).then(() => null, (error: unknown) => error as Error);
+
+        expect(failure).toBeInstanceOf(Error);
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        const token = execLog.match(/CODEX_BRIDGE_TOKEN='([^']+)'/)?.[1];
+        expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(failure!.message).not.toContain(token!);
+        expect(failure!.message).toContain("[REDACTED]");
+      });
+    } finally {
+      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+    }
+  });
+
+  test("fails a bridge replacement whose port never stops answering health checks", async () => {
+    const hostPort = await reserveFreePort();
+    const bridge = await startControllableHealthServer(hostPort, () => true);
+    try {
+      await expect(commandTesting.waitForUnhealthy(hostPort, 2)).rejects.toThrow(
+        `Server on port ${hostPort} did not stop`,
+      );
+    } finally {
+      await bridge.close();
+    }
+  });
+
   test("does not persist local bridge process state when the bridge entrypoint is missing", async () => {
     const appRoot = await createTempDir("ork-electron-app-missing-");
     const worktreePath = await createTempDir("ork-electron-worktree-missing-");
@@ -6074,6 +6364,74 @@ exit 0
         { environmentId: environment.id },
         context,
       );
+    }
+  });
+
+  test("restarts a healthy local Codex bridge whose auth token this process no longer holds", async () => {
+    const appRoot = await createTempDir("ork-electron-app-tokenless-bridge-");
+    const worktreePath = await createTempDir("ork-electron-worktree-tokenless-bridge-");
+    await writeBridgeServer(appRoot, "codex-bridge");
+
+    const environment = createEnvironment({ id: "env-local-tokenless", worktreePath });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    const first = await commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as { port: number; pid: number; authToken: string };
+    expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+    // A bridge inherited from a previous backend process: still healthy, but its
+    // token was never handed to us, so the renderer could not authenticate.
+    commandTesting.deleteLocalCodexBridgeToken(environment.id);
+
+    const second = await commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as { port: number; pid: number; wasRunning: boolean; authToken: string };
+    try {
+      expect(second.wasRunning).toBe(false);
+      expect(second.pid).not.toBe(first.pid);
+      expect(second.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(second.authToken).not.toBe(first.authToken);
+      expect(isProcessRunning(first.pid)).toBe(false);
+      await expect(requestOk(second.port, "/global/health")).resolves.toBe(true);
+    } finally {
+      await commands.get("stop_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
+    }
+  });
+
+  test("forgets the local Codex bridge token when the process cannot be spawned", async () => {
+    const appRoot = await createTempDir("ork-electron-app-spawn-failure-");
+    const worktreePath = await createTempDir("ork-electron-worktree-spawn-failure-");
+    await writeBridgeServer(appRoot, "codex-bridge");
+
+    const environment = createEnvironment({ id: "env-local-spawn-failure", worktreePath });
+    const { context, updates } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+    commandTesting.setSpawnLocalServerCommand(() => {
+      throw new Error("spawn refused");
+    });
+
+    try {
+      await expect(
+        commands.get("start_local_codex_server_cmd")?.(
+          { environmentId: environment.id },
+          context,
+        ),
+      ).rejects.toThrow("spawn refused");
+      expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
+      expect(updates).toHaveLength(0);
+    } finally {
+      commandTesting.setSpawnLocalServerCommand(spawnCommand);
     }
   });
 

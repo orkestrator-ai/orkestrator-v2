@@ -15,6 +15,7 @@ import {
   type ClaudeSdkSessionId,
   type ClaudeEffortLevel,
   type ClaudeModelCatalogSnapshot,
+  type ClaudeBackgroundTask,
 } from "@/lib/claude-client";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import { createSessionKey } from "@/lib/utils";
@@ -118,6 +119,22 @@ interface ClaudeState extends ClaudeChatSlice {
   selectedModel: Map<ClaudeSessionKey, string>;
   sessionInitData: Map<string, SessionInitData>;
   contextUsage: Map<ClaudeSessionKey, ContextUsageSnapshot>;
+  selectedAgent: Map<ClaudeSessionKey, string>;
+  includeLocalSettings: Map<ClaudeSessionKey, boolean>;
+  promptSuggestionOptIn: Map<ClaudeSessionKey, boolean>;
+  promptSuggestions: Map<ClaudeSessionKey, string>;
+  /**
+   * The suggestion each session has already used or dismissed.
+   *
+   * The bridge clears `session.promptSuggestion` only when the *next* prompt
+   * runs, and `GET /session/:id` replays it on every mount, restore, reconnect
+   * and `session.idle`. This latch has to outlive the component or the chip a
+   * user just consumed comes back the moment they switch environments and
+   * return. The exact string is remembered rather than a boolean so a
+   * genuinely new suggestion still gets through.
+   */
+  dismissedPromptSuggestions: Map<ClaudeSessionKey, string>;
+  backgroundTasks: Map<ClaudeSessionKey, Record<string, ClaudeBackgroundTask>>;
   pendingQuestions: Map<string, ClaudeQuestionRequest>;
   pendingPlanApprovals: Map<string, ClaudePlanApprovalRequest>;
 
@@ -148,6 +165,21 @@ interface ClaudeState extends ClaudeChatSlice {
   setContextUsage: (
     sessionKey: ClaudeSessionKey,
     usage: ContextUsageSnapshot | null,
+  ) => void;
+  setSelectedAgent: (sessionKey: ClaudeSessionKey, agent: string | undefined) => void;
+  setIncludeLocalSettings: (sessionKey: ClaudeSessionKey, enabled: boolean) => void;
+  setPromptSuggestionOptIn: (sessionKey: ClaudeSessionKey, enabled: boolean) => void;
+  setPromptSuggestion: (
+    sessionKey: ClaudeSessionKey,
+    suggestion: string | undefined,
+  ) => void;
+  setDismissedPromptSuggestion: (
+    sessionKey: ClaudeSessionKey,
+    suggestion: string | undefined,
+  ) => void;
+  setBackgroundTasks: (
+    sessionKey: ClaudeSessionKey,
+    tasks: Record<string, ClaudeBackgroundTask>,
   ) => void;
   clearEnvironment: (environmentId: string) => void;
 
@@ -180,6 +212,11 @@ interface ClaudeState extends ClaudeChatSlice {
   getContextUsage: (
     sessionKey: ClaudeSessionKey,
   ) => ContextUsageSnapshot | undefined;
+  getDismissedPromptSuggestion: (
+    sessionKey: ClaudeSessionKey,
+  ) => string | undefined;
+  getSelectedAgent: (sessionKey: ClaudeSessionKey) => string | undefined;
+  includesLocalSettings: (sessionKey: ClaudeSessionKey) => boolean;
   getPendingQuestionsForSession: (
     sdkSessionId: ClaudeSdkSessionId,
   ) => ClaudeQuestionRequest[];
@@ -220,6 +257,12 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   selectedModel: new Map(),
   sessionInitData: new Map(),
   contextUsage: new Map(),
+  selectedAgent: new Map(),
+  includeLocalSettings: new Map(),
+  promptSuggestionOptIn: new Map(),
+  promptSuggestions: new Map(),
+  dismissedPromptSuggestions: new Map(),
+  backgroundTasks: new Map(),
   pendingQuestions: new Map(),
   pendingPlanApprovals: new Map(),
 
@@ -335,6 +378,52 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       return { contextUsage: next };
     }),
 
+  setSelectedAgent: (sessionKey, agent) =>
+    set((state) => {
+      const next = new Map(state.selectedAgent);
+      if (agent) next.set(sessionKey, agent);
+      else next.delete(sessionKey);
+      return { selectedAgent: next };
+    }),
+
+  setIncludeLocalSettings: (sessionKey, enabled) =>
+    set((state) => {
+      const next = new Map(state.includeLocalSettings);
+      if (enabled) next.set(sessionKey, true);
+      else next.delete(sessionKey);
+      return { includeLocalSettings: next };
+    }),
+  setPromptSuggestionOptIn: (sessionKey, enabled) =>
+    set((state) => {
+      const next = new Map(state.promptSuggestionOptIn);
+      next.set(sessionKey, enabled);
+      return { promptSuggestionOptIn: next };
+    }),
+
+  setPromptSuggestion: (sessionKey, suggestion) =>
+    set((state) => {
+      const next = new Map(state.promptSuggestions);
+      if (suggestion) next.set(sessionKey, suggestion);
+      else next.delete(sessionKey);
+      return { promptSuggestions: next };
+    }),
+
+  setDismissedPromptSuggestion: (sessionKey, suggestion) =>
+    set((state) => {
+      const next = new Map(state.dismissedPromptSuggestions);
+      if (suggestion) next.set(sessionKey, suggestion);
+      else next.delete(sessionKey);
+      return { dismissedPromptSuggestions: next };
+    }),
+
+  setBackgroundTasks: (sessionKey, tasks) =>
+    set((state) => {
+      const next = new Map(state.backgroundTasks);
+      if (Object.keys(tasks).length > 0) next.set(sessionKey, tasks);
+      else next.delete(sessionKey);
+      return { backgroundTasks: next };
+    }),
+
   clearEnvironment: (environmentId) => {
     // First close the event subscription if it exists
     const subscription = get().eventSubscriptions.get(environmentId);
@@ -405,6 +494,24 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
         fastMode: pruneSessionKeyedMap(state.fastMode, prefix),
         messageQueue: pruneSessionKeyedMap(state.messageQueue, prefix),
         contextUsage: pruneSessionKeyedMap(state.contextUsage, prefix),
+        selectedAgent: pruneSessionKeyedMap(state.selectedAgent, prefix),
+        includeLocalSettings: pruneSessionKeyedMap(
+          state.includeLocalSettings,
+          prefix,
+        ),
+        promptSuggestionOptIn: pruneSessionKeyedMap(
+          state.promptSuggestionOptIn,
+          prefix,
+        ),
+        promptSuggestions: pruneSessionKeyedMap(
+          state.promptSuggestions,
+          prefix,
+        ),
+        dismissedPromptSuggestions: pruneSessionKeyedMap(
+          state.dismissedPromptSuggestions,
+          prefix,
+        ),
+        backgroundTasks: pruneSessionKeyedMap(state.backgroundTasks, prefix),
         pendingQuestions: nextPendingQuestions,
         pendingPlanApprovals: nextPendingPlanApprovals,
         eventSubscriptions: nextEventSubscriptions,
@@ -525,6 +632,11 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   getSessionInitData: (environmentId) =>
     get().sessionInitData.get(environmentId),
   getContextUsage: (sessionKey) => get().contextUsage.get(sessionKey),
+  getDismissedPromptSuggestion: (sessionKey) =>
+    get().dismissedPromptSuggestions.get(sessionKey),
+  getSelectedAgent: (sessionKey) => get().selectedAgent.get(sessionKey),
+  includesLocalSettings: (sessionKey) =>
+    get().includeLocalSettings.get(sessionKey) ?? false,
 
   getPendingQuestionsForSession: (sdkSessionId) => {
     const questions: ClaudeQuestionRequest[] = [];

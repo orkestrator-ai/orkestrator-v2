@@ -2,6 +2,8 @@ import { create } from "zustand";
 import {
   type OpenCodeMessage,
   type OpenCodeModel,
+  type OpenCodeAgent,
+  type OpenCodeRuntimeHealth,
   type OpenCodeSlashCommand,
   type OpenCodeConversationMode,
   type OpencodeClient,
@@ -72,6 +74,8 @@ interface OpenCodeState extends OpenCodeChatSlice {
   // Agent-specific state (per-session)
   selectedMode: Map<string, OpenCodeConversationMode>;
   contextUsage: Map<string, ContextUsageSnapshot>;
+  runtimeHealth: Map<string, OpenCodeRuntimeHealth>;
+  selectedAgent: Map<string, string>;
 
   // Agent-specific state (per-request)
   pendingQuestions: Map<string, QuestionRequest>;
@@ -99,6 +103,11 @@ interface OpenCodeState extends OpenCodeChatSlice {
     sessionKey: string,
     usage: ContextUsageSnapshot | null,
   ) => void;
+  setRuntimeHealth: (
+    environmentId: string,
+    health: OpenCodeRuntimeHealth | null,
+  ) => void;
+  setSelectedAgent: (sessionKey: string, agent: string | undefined) => void;
 
   // Agent-specific actions (per-request)
   addPendingQuestion: (question: QuestionRequest) => void;
@@ -131,6 +140,9 @@ interface OpenCodeState extends OpenCodeChatSlice {
   getPendingPermissionsForSession: (sessionId: string) => PermissionRequest[];
   getPendingPermission: (requestId: string) => PermissionRequest | undefined;
   getContextUsage: (sessionKey: string) => ContextUsageSnapshot | undefined;
+  getRuntimeHealth: (environmentId: string) => OpenCodeRuntimeHealth | undefined;
+  getAgents: (environmentId: string) => OpenCodeAgent[];
+  getSelectedAgent: (sessionKey: string) => string | undefined;
 }
 
 // Stable empty arrays to prevent infinite render loops with useSyncExternalStore.
@@ -139,6 +151,7 @@ const EMPTY_MODELS: OpenCodeModel[] = [];
 const EMPTY_COMMANDS: OpenCodeSlashCommand[] = [];
 const EMPTY_QUESTIONS: QuestionRequest[] = [];
 const EMPTY_PERMISSIONS: PermissionRequest[] = [];
+const EMPTY_AGENTS: OpenCodeAgent[] = [];
 
 export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   ...createNativeChatStoreSlice<
@@ -157,6 +170,8 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   eventSubscriptions: new Map(),
   selectedMode: new Map(),
   contextUsage: new Map(),
+  runtimeHealth: new Map(),
+  selectedAgent: new Map(),
   pendingQuestions: new Map(),
   pendingPermissions: new Map(),
 
@@ -218,6 +233,22 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       return { contextUsage: next };
     }),
 
+  setRuntimeHealth: (environmentId, health) =>
+    set((state) => {
+      const next = new Map(state.runtimeHealth);
+      if (health) next.set(environmentId, health);
+      else next.delete(environmentId);
+      return { runtimeHealth: next };
+    }),
+
+  setSelectedAgent: (sessionKey, agent) =>
+    set((state) => {
+      const next = new Map(state.selectedAgent);
+      if (agent) next.set(sessionKey, agent);
+      else next.delete(sessionKey);
+      return { selectedAgent: next };
+    }),
+
   clearEnvironment: (environmentId) => {
     const subscription = get().eventSubscriptions.get(environmentId);
     if (subscription) {
@@ -255,8 +286,9 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       newSelectedVariant.delete(environmentId);
       newIsComposing.delete(environmentId);
       newEventSubscriptions.delete(environmentId);
-
       const prefix = `env-${environmentId}:`;
+      const newRuntimeHealth = pruneSessionKeyedMap(state.runtimeHealth, prefix);
+      newRuntimeHealth.delete(environmentId);
 
       // Collect session IDs before pruning so we can clean up pending requests
       const environmentSessionIds = new Set<string>();
@@ -302,6 +334,8 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
         pendingPermissions: newPendingPermissions,
         eventSubscriptions: newEventSubscriptions,
         contextUsage: pruneSessionKeyedMap(state.contextUsage, prefix),
+        runtimeHealth: newRuntimeHealth,
+        selectedAgent: pruneSessionKeyedMap(state.selectedAgent, prefix),
       };
     });
   },
@@ -440,4 +474,8 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   getPendingPermission: (requestId) => get().pendingPermissions.get(requestId),
 
   getContextUsage: (sessionKey) => get().contextUsage.get(sessionKey),
+  getRuntimeHealth: (environmentId) => get().runtimeHealth.get(environmentId),
+  getAgents: (environmentId) =>
+    get().runtimeHealth.get(environmentId)?.agents ?? EMPTY_AGENTS,
+  getSelectedAgent: (sessionKey) => get().selectedAgent.get(sessionKey),
 }));

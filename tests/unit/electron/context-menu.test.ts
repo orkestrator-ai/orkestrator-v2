@@ -161,6 +161,42 @@ describe("Electron context menu", () => {
     expect(template.some((item) => item.label === "Add to Dictionary")).toBe(false);
   });
 
+  test("does not add spelling actions when handlers are unavailable", () => {
+    const template = createContextMenuTemplate(createParams({
+      isEditable: true,
+      formControlType: "text-area",
+      misspelledWord: "mispelled",
+      dictionarySuggestions: ["misspelled"],
+    }));
+
+    expect(template[0]?.role).toBe("undo");
+    expect(template.some((item) => item.label === "misspelled")).toBe(false);
+    expect(template.some((item) => item.label === "Add to Dictionary")).toBe(false);
+  });
+
+  test("offers Add to Dictionary when there are no replacement suggestions", () => {
+    const replaceMisspelling = mock((_suggestion: string) => undefined);
+    const addToDictionary = mock((_word: string) => undefined);
+    const template = createContextMenuTemplate(createParams({
+      isEditable: true,
+      formControlType: "text-area",
+      misspelledWord: "orkestrator",
+      dictionarySuggestions: [],
+    }), {
+      replaceMisspelling,
+      addToDictionary,
+    });
+
+    expect(template.slice(0, 2).map((item) => item.label ?? item.type)).toEqual([
+      "Add to Dictionary",
+      "separator",
+    ]);
+    expect(template[2]?.role).toBe("undo");
+    template[0]?.click?.(undefined as never, undefined as never, undefined as never);
+    expect(replaceMisspelling).not.toHaveBeenCalled();
+    expect(addToDictionary).toHaveBeenCalledWith("orkestrator");
+  });
+
   test("builds copy actions for selected non-editable text", () => {
     const template = createContextMenuTemplate(createParams({
       selectionText: "agent transcript",

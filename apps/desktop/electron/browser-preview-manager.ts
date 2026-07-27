@@ -102,10 +102,11 @@ function browserTabUrlFromPreviewLink(value: string, sourcePreviewUrl: string): 
   }
 
   try {
-    return new URL(
-      `${gatewayMatch[2] ?? "/"}${url.search}${url.hash}`,
-      `http://localhost:${gatewayMatch[1]}`,
-    ).toString();
+    const destination = new URL(`http://localhost:${gatewayMatch[1]}`);
+    destination.pathname = gatewayMatch[2] ?? "/";
+    destination.search = url.search;
+    destination.hash = url.hash;
+    return destination.toString();
   } catch {
     return null;
   }

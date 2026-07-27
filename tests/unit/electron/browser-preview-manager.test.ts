@@ -48,7 +48,10 @@ class FakeWebContents extends EventEmitter {
   }
 }
 
-function createHarness() {
+function createHarness(options: {
+  loadURLImplementation?: (url: string) => Promise<void>;
+} = {}) {
+  const createHarnessOptions = options;
   const views: FakeView[] = [];
   class FakeView {
     readonly webContents = new FakeWebContents();
@@ -65,6 +68,9 @@ function createHarness() {
     readonly getVisible = mock(() => this.visible);
 
     constructor(readonly options: unknown) {
+      if (typeof createHarnessOptions.loadURLImplementation === "function") {
+        this.webContents.loadURLImplementation = createHarnessOptions.loadURLImplementation;
+      }
       views.push(this);
     }
   }
@@ -328,6 +334,8 @@ describe("BrowserPreviewManager", () => {
     for (const ignoredInput of [
       { type: "keyUp", key: "l", meta: true, control: false, alt: false, shift: false },
       { type: "keyDown", key: "l", meta: true, control: false, alt: false, shift: true },
+      { type: "keyDown", key: "l", meta: true, control: false, alt: true, shift: false },
+      { type: "keyDown", key: "l", meta: false, control: false, alt: false, shift: false },
       { type: "keyDown", key: "k", meta: true, control: false, alt: false, shift: false },
     ]) {
       const event = { preventDefault: mock(() => undefined) };
@@ -385,6 +393,29 @@ describe("BrowserPreviewManager", () => {
     expect(harness.emitOpenLink).toHaveBeenCalledWith({
       tabId: input.tabId,
       url: "http://localhost:3000/docs?q=1#intro",
+    });
+  });
+
+  test("keeps network-path-looking gateway suffixes on the loopback host", async () => {
+    const harness = createHarness();
+    await harness.manager.attach({
+      ...input,
+      url: "https://desk.example/__orkestrator/browser/loopback/3000/",
+    });
+    const contents = harness.views[0]!.webContents;
+    const linkURL =
+      "https://desk.example/__orkestrator/browser/loopback/3000//evil.example/p?q=1#safe";
+
+    contents.emit("context-menu", {}, createContextMenuParams({ linkURL }));
+    const openInTab = harness.menuTemplates[0]!.find(
+      (item) => item.label === "Open Link in New Tab",
+    );
+
+    expect(openInTab?.enabled).toBe(true);
+    openInTab?.click?.(undefined as never, undefined as never, undefined as never);
+    expect(harness.emitOpenLink).toHaveBeenCalledWith({
+      tabId: input.tabId,
+      url: "http://localhost:3000//evil.example/p?q=1#safe",
     });
   });
 
@@ -723,6 +754,60 @@ describe("BrowserPreviewManager", () => {
     expect(view.visible).toBe(false);
   });
 
+  test("clears clipboard activation when reattaching changes URL or makes the preview unusable", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+
+    contents.emit("input-event", {}, { type: "mouseDown" });
+    await harness.manager.attach({
+      ...input,
+      url: "http://127.0.0.1:4000/changed",
+    });
+    expect(
+      harness.manager.consumeClipboardWriteUserActivation(
+        contents as never,
+        "http://127.0.0.1:4000/changed",
+      ),
+    ).toBe(false);
+
+    contents.emit("input-event", {}, { type: "pointerDown" });
+    await harness.manager.attach({
+      ...input,
+      url: "http://127.0.0.1:4000/changed",
+      visible: false,
+    });
+    await harness.manager.attach({
+      ...input,
+      url: "http://127.0.0.1:4000/changed",
+      visible: true,
+    });
+    expect(
+      harness.manager.consumeClipboardWriteUserActivation(
+        contents as never,
+        "http://127.0.0.1:4000/hidden",
+      ),
+    ).toBe(false);
+
+    contents.emit("input-event", {}, { type: "touchStart" });
+    await harness.manager.attach({
+      ...input,
+      url: "http://127.0.0.1:4000/changed",
+      bounds: { ...input.bounds, width: 0 },
+      visible: true,
+    });
+    await harness.manager.attach({
+      ...input,
+      url: "http://127.0.0.1:4000/changed",
+    });
+    expect(
+      harness.manager.consumeClipboardWriteUserActivation(
+        contents as never,
+        "http://127.0.0.1:4000/zero-area",
+      ),
+    ).toBe(false);
+  });
+
   test("updates bounds and visibility and returns null for visibility of a missing preview", async () => {
     const harness = createHarness();
     await harness.manager.attach(input);
@@ -785,6 +870,47 @@ describe("BrowserPreviewManager", () => {
         harness.manager.consumeClipboardWriteUserActivation(
           contents as never,
           "http://localhost:3000/reuse",
+        ),
+      ).toBe(false);
+
+      contents.emit("input-event", {}, { type: "mouseDown" });
+      contents.currentUrl = "http://localhost:4000/wrong-current-scope";
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:3000/copy",
+        ),
+      ).toBe(false);
+      contents.currentUrl = input.url;
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:3000/copy",
+        ),
+      ).toBe(true);
+
+      contents.emit("input-event", {}, { type: "keyDown" });
+      now += 5_000;
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:3000/boundary",
+        ),
+      ).toBe(true);
+
+      contents.emit("input-event", {}, { type: "keyDown" });
+      now -= 1;
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:3000/clock-rollback",
+        ),
+      ).toBe(false);
+      now += 1;
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:3000/clock-rollback-reuse",
         ),
       ).toBe(false);
 
@@ -943,7 +1069,17 @@ describe("BrowserPreviewManager", () => {
     const state = harness.manager.goBack(input.tabId);
 
     expect(contents.navigationHistory.goBack).not.toHaveBeenCalled();
+    expect(contents.navigationHistory.goForward).not.toHaveBeenCalled();
     expect(state.error).toBe("Blocked browser history navigation outside preview scope");
+
+    contents.activeIndex = 0;
+    contents.historyEntries = [];
+    const missingDestination = harness.manager.goBack(input.tabId);
+    expect(contents.navigationHistory.getEntryAtIndex).toHaveBeenLastCalledWith(-1);
+    expect(contents.navigationHistory.goBack).not.toHaveBeenCalled();
+    expect(missingDestination.error).toBe(
+      "Blocked browser history navigation outside preview scope",
+    );
   });
 
   test("prevents out-of-scope main-frame redirects but ignores subframe redirects", async () => {
@@ -1071,6 +1207,25 @@ describe("BrowserPreviewManager", () => {
     expect(harness.emitState).toHaveBeenLastCalledWith(expect.objectContaining({ error: "plain failure" }));
   });
 
+  test("records an initial fire-and-forget load rejection", async () => {
+    const harness = createHarness({
+      loadURLImplementation: async () => {
+        throw new Error("initial connection failed");
+      },
+    });
+
+    await harness.manager.attach(input);
+    await flushPromises();
+
+    expect(harness.emitState).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        tabId: input.tabId,
+        loading: false,
+        error: "initial connection failed",
+      }),
+    );
+  });
+
   test("ignores errors from superseded loads", async () => {
     const harness = createHarness();
     await harness.manager.attach(input);
@@ -1169,6 +1324,18 @@ describe("BrowserPreviewManager", () => {
     expect(harness.contentView.removeChildView).not.toHaveBeenCalled();
     expect(first.webContents.close).not.toHaveBeenCalled();
     expect(() => harness.manager.destroy("")).toThrow("browser preview tab ID");
+
+    const unavailable = createHarness();
+    await unavailable.manager.attach(input);
+    const unavailableContents = unavailable.views[0]!.webContents;
+    unavailable.setWindowAvailable(false);
+    unavailable.manager.destroy(input.tabId);
+    unavailable.manager.destroy(input.tabId);
+    expect(unavailable.contentView.removeChildView).not.toHaveBeenCalled();
+    expect(unavailableContents.close).toHaveBeenCalledWith({
+      waitForBeforeUnload: false,
+    });
+    expect(unavailableContents.close).toHaveBeenCalledTimes(1);
   });
 
   test("destroyAll closes every remaining preview and destroyed snapshots are inert", async () => {

@@ -12,7 +12,7 @@ afterEach(() => {
   listenMock.mockReset();
   listenMock.mockImplementation(() => Promise.resolve(() => undefined));
   useAgentActivityStore.setState({
-    tabStates: {}, containerStates: {}, containerRefCounts: {}, stateChangeCallbacks: new Map(),
+    tabStates: {}, containerStates: {}, containerStateUpdatedAt: {}, containerRefCounts: {}, stateChangeCallbacks: new Map(),
   });
 });
 

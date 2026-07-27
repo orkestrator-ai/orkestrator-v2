@@ -135,7 +135,10 @@ mock.module("@/lib/backend", () => ({
   readFileBase64: async () => "",
 }));
 
-import { EnvironmentItem } from "../../../apps/web/src/components/environments/EnvironmentItem";
+import {
+  EnvironmentItem,
+  resolveEnvironmentAgentActivity,
+} from "../../../apps/web/src/components/environments/EnvironmentItem";
 import { useAgentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
 import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
@@ -222,6 +225,7 @@ beforeEach(() => {
   useAgentActivityStore.setState({
     tabStates: {},
     containerStates: {},
+    containerStateUpdatedAt: {},
     containerRefCounts: {},
     stateChangeCallbacks: new Map(),
   });
@@ -346,6 +350,199 @@ describe("EnvironmentItem activity icon", () => {
     const icon = container.querySelector('div[role="button"] svg');
     expect(icon?.getAttribute("class")).toContain("text-blue-500");
     expect(icon?.getAttribute("class")).toContain("animate-pulse");
+  });
+
+  test("hydrates a working icon from the backend-owned environment snapshot", () => {
+    const { container } = renderItem(makeEnvironment({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+    }));
+
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).toContain("text-blue-500");
+  });
+
+  test("keeps a newer runtime observation over an older backend snapshot", () => {
+    useAgentActivityStore.getState().setContainerState(
+      "env-1",
+      "waiting",
+      "2026-07-27T12:00:01.000Z",
+    );
+    const { container } = renderItem(makeEnvironment({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+    }));
+
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).toContain("text-amber-500");
+  });
+
+  test("prefers a persisted observation when it is newer or equally recent", () => {
+    const environment = makeEnvironment({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: "2026-07-27T12:00:01.000Z",
+    });
+
+    expect(resolveEnvironmentAgentActivity(
+      environment,
+      { "env-1": "waiting" },
+      { "env-1": "2026-07-27T12:00:00.000Z" },
+    )).toBe("working");
+    expect(resolveEnvironmentAgentActivity(
+      environment,
+      { "env-1": "waiting" },
+      { "env-1": "2026-07-27T12:00:01.000Z" },
+    )).toBe("working");
+  });
+
+  test("uses a runtime observation keyed by the legacy container ID", () => {
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment(),
+      { "container-1": "waiting" },
+      { "container-1": "2026-07-27T12:00:00.000Z" },
+    )).toBe("waiting");
+  });
+
+  test("selects the freshest of conflicting environment and container observations", () => {
+    const environment = makeEnvironment();
+    expect(resolveEnvironmentAgentActivity(
+      environment,
+      { "env-1": "working", "container-1": "waiting" },
+      {
+        "env-1": "2026-07-27T12:00:00.000Z",
+        "container-1": "2026-07-27T12:00:01.000Z",
+      },
+    )).toBe("waiting");
+
+    // Equal timestamps resolve deterministically to the environment ID, the
+    // current canonical key, rather than depending on object insertion order.
+    expect(resolveEnvironmentAgentActivity(
+      environment,
+      { "container-1": "waiting", "env-1": "working" },
+      {
+        "container-1": "2026-07-27T12:00:01.000Z",
+        "env-1": "2026-07-27T12:00:01.000Z",
+      },
+    )).toBe("working");
+  });
+
+  test("does not let a malformed timestamp beat a valid observation", () => {
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment({
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "not-a-date",
+      }),
+      { "env-1": "waiting" },
+      { "env-1": "2026-07-27T12:00:00.000Z" },
+    )).toBe("waiting");
+
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment({
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+      }),
+      { "env-1": "waiting" },
+      { "env-1": "not-a-date" },
+    )).toBe("working");
+  });
+
+  test("falls back to idle and ignores poisoned future ordering tokens", () => {
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment(),
+      {},
+      {},
+    )).toBe("idle");
+
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment({
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "+275760-09-13T00:00:00.000Z",
+      }),
+      { "env-1": "waiting" },
+      { "env-1": new Date().toISOString() },
+    )).toBe("waiting");
+
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment({
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "not-a-date",
+      }),
+      { "env-1": "waiting" },
+      { "env-1": "also-not-a-date" },
+    )).toBe("idle");
+  });
+
+  test("ignores a leftover container-keyed observation for a local environment", () => {
+    // A local environment has no container, so runtime state under a container
+    // id belongs to some earlier containerized incarnation and must not leak
+    // into this one's icon.
+    const local = makeEnvironment({
+      environmentType: "local",
+      containerId: null,
+    });
+
+    expect(resolveEnvironmentAgentActivity(
+      local,
+      { "container-1": "working" },
+      { "container-1": new Date().toISOString() },
+    )).toBe("idle");
+
+    expect(resolveEnvironmentAgentActivity(
+      local,
+      { "container-1": "working", "env-1": "waiting" },
+      {
+        "container-1": new Date().toISOString(),
+        "env-1": "2026-07-27T12:00:00.000Z",
+      },
+    )).toBe("waiting");
+  });
+
+  test("discards a persisted state that carries no ordering token", () => {
+    // Legacy environments persisted before the token existed, and a backend
+    // that answers without one gives no way to order against runtime state.
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment({ agentActivityState: "working" }),
+      { "env-1": "waiting" },
+      { "env-1": "2026-07-27T12:00:00.000Z" },
+    )).toBe("waiting");
+
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment({ agentActivityState: "working" }),
+      {},
+      {},
+    )).toBe("idle");
+  });
+
+  test("clears a stale runtime spinner from the backend snapshot", () => {
+    // This is the case the whole feature exists for: another window finished
+    // the turn, so the persisted idle must win over this window's last-seen
+    // working and turn the icon green rather than leaving it pulsing blue.
+    useAgentActivityStore.getState().setContainerState(
+      "env-1",
+      "working",
+      "2026-07-27T12:00:00.000Z",
+    );
+
+    const { container } = renderItem(makeEnvironment({
+      agentActivityState: "idle",
+      agentActivityUpdatedAt: "2026-07-27T12:00:05.000Z",
+    }));
+
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).toContain("text-green-500");
+    expect(icon?.getAttribute("class")).not.toContain("animate-pulse");
+  });
+
+  test("shows no activity colour at all while the environment is not running", () => {
+    const { container } = renderItem(makeEnvironment({
+      status: "stopped",
+      agentActivityState: "working",
+      agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+    }));
+
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).toContain("text-muted-foreground");
+    expect(icon?.getAttribute("class")).not.toContain("text-blue-500");
   });
 });
 

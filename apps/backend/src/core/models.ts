@@ -1,3 +1,17 @@
+// Re-exported rather than redeclared: the renderer orders activity reports
+// against the same vocabulary, and two copies of it drift silently.
+import type {
+  AgentActivitySource,
+  AgentActivitySourceSnapshot,
+  AgentActivityState,
+} from "@orkestrator/protocol/agent-activity";
+
+export type {
+  AgentActivitySource,
+  AgentActivitySourceSnapshot,
+  AgentActivityState,
+};
+
 export interface Project {
   id: string;
   name: string;
@@ -74,6 +88,14 @@ export interface Environment {
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;
+  /** Backend-owned aggregate agent activity shared by every frontend. */
+  agentActivityState?: AgentActivityState;
+  /** Last-write-wins timestamp for the aggregate activity snapshot. */
+  agentActivityUpdatedAt?: string;
+  /** Backend-internal observations used to derive the aggregate state. */
+  agentActivitySources?: Partial<
+    Record<AgentActivitySource, AgentActivitySourceSnapshot>
+  >;
   createdFromCommit?: string;
   networkAccessMode: NetworkAccessMode;
   allowedDomains?: string[];

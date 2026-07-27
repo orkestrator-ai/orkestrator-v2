@@ -47,6 +47,9 @@ const {
   openInBrowser,
   recordEnvironmentActivity,
   recordEnvironmentCompletion,
+  setEnvironmentAgentActivity,
+  startClaudeStatePolling,
+  stopClaudeStatePolling,
   runEnvironmentSetup,
   resetWebClientServe,
   savePaneLayout,
@@ -289,6 +292,35 @@ describe("backend setup wrappers", () => {
 
     expect(invokeMock.mock.calls).toEqual([
       ["record_environment_activity", { environmentId: "env-1", occurredAt }],
+    ]);
+  });
+
+  test("persists aggregate agent activity with its observation time", async () => {
+    const occurredAt = "2026-07-23T11:12:13.500Z";
+    await setEnvironmentAgentActivity("env-1", "waiting", occurredAt);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_environment_agent_activity", {
+        environmentId: "env-1",
+        state: "waiting",
+        occurredAt,
+      }],
+    ]);
+  });
+
+  test("uses an idempotent subscription token for Claude state polling", async () => {
+    await startClaudeStatePolling("container-1", "subscription-1");
+    await stopClaudeStatePolling("container-1", "subscription-1");
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["start_claude_state_polling", {
+        containerId: "container-1",
+        subscriptionId: "subscription-1",
+      }],
+      ["stop_claude_state_polling", {
+        containerId: "container-1",
+        subscriptionId: "subscription-1",
+      }],
     ]);
   });
 

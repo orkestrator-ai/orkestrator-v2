@@ -39,6 +39,13 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
+    // No renderer can be alive yet, so every persisted `frontend` activity
+    // snapshot belongs to a process that is gone. They cannot be retracted
+    // later — the aggregate is a max — so a renderer that quit mid-turn would
+    // otherwise leave its environment showing "working" forever.
+    await this.context.storage.clearFrontendAgentActivity().catch((error) => {
+      console.warn("[backend] Failed to clear stale agent activity:", error);
+    });
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
     // pidfile they still hold blocks this instance's app-server ownership.

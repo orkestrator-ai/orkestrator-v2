@@ -10,6 +10,7 @@ import type {
   WebClientStatus,
   RepositoryConfig,
   EnvironmentStatus,
+  AgentActivityState,
   NetworkAccessMode,
   DomainTestResult,
   PreferredEditor,
@@ -112,6 +113,19 @@ export async function recordEnvironmentActivity(
   occurredAt: string,
 ): Promise<Environment> {
   return invoke<Environment>("record_environment_activity", { environmentId, occurredAt });
+}
+
+/** Persist the aggregate agent state for cross-frontend synchronization. */
+export async function setEnvironmentAgentActivity(
+  environmentId: string,
+  state: AgentActivityState,
+  occurredAt: string,
+): Promise<Environment> {
+  return invoke<Environment>("set_environment_agent_activity", {
+    environmentId,
+    state,
+    occurredAt,
+  });
 }
 
 /** Atomically records a completed turn and marks its environment unread. */
@@ -988,12 +1002,18 @@ export async function updateEnvironmentAllowedDomains(
 
 // --- Claude State Commands ---
 
-export async function startClaudeStatePolling(containerId: string): Promise<void> {
-  return invoke("start_claude_state_polling", { containerId });
+export async function startClaudeStatePolling(
+  containerId: string,
+  subscriptionId: string,
+): Promise<void> {
+  return invoke("start_claude_state_polling", { containerId, subscriptionId });
 }
 
-export async function stopClaudeStatePolling(containerId: string): Promise<void> {
-  return invoke("stop_claude_state_polling", { containerId });
+export async function stopClaudeStatePolling(
+  containerId: string,
+  subscriptionId: string,
+): Promise<void> {
+  return invoke("stop_claude_state_polling", { containerId, subscriptionId });
 }
 
 // --- Editor Commands ---

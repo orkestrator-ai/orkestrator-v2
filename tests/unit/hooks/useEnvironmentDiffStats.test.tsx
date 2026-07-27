@@ -1,1124 +1,262 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  DIFF_STATS_CHANGED_EVENT,
+  type EnvironmentDiffStatsChange,
+} from "@orkestrator/protocol/diff-stats";
 import * as realBackend from "@/lib/backend";
-import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useEnvironmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
-import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
-import type { GitFileChange } from "../../../apps/web/src/lib/backend";
-import type { Environment, RepositoryConfig } from "../../../apps/web/src/types";
-import { createMockEnvironment } from "../utils/testFactories";
 
 const realBackendSnapshot = { ...realBackend };
 
-const mockGetGitStatus = mock<(containerId: string, targetBranch?: string, includeUncommitted?: boolean) => Promise<GitFileChange[]>>(
-  () => Promise.resolve([]),
-);
-const mockGetLocalGitStatus = mock<(worktreePath: string, targetBranch?: string, includeUncommitted?: boolean) => Promise<GitFileChange[]>>(
-  () => Promise.resolve([]),
+const mockGetEnvironmentDiffStats = mock<() => Promise<{ entries: EnvironmentDiffStatsChange[] }>>(
+  () => Promise.resolve({ entries: [] }),
 );
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
-  getGitStatus: mockGetGitStatus,
-  getLocalGitStatus: mockGetLocalGitStatus,
+  getEnvironmentDiffStats: mockGetEnvironmentDiffStats,
 }));
 
-const { useEnvironmentDiffStats, POLL_INTERVAL } = await import("../../../apps/web/src/hooks/useEnvironmentDiffStats");
+/**
+ * Drives the event stream by hand.
+ *
+ * The shared `@/lib/native/events` mock in tests/setup.ts returns a listener that
+ * never fires, which is right for suites that only need the hook not to explode.
+ * This file is specifically about what arrives on that stream, so it installs a
+ * registry it can emit into and restores the shared mock afterwards.
+ */
+const listeners = new Map<string, Set<(payload: unknown) => void>>();
+const NATIVE_EVENT_STREAM_CONNECTED_EVENT = "native-event-stream-connected";
 
-function resetStores(
-  environments: Environment[] = [],
-  repositoryConfigByProject: Record<string, RepositoryConfig> = {
-    "project-1": {
-      defaultBranch: "main",
-      prBaseBranch: "release",
-    },
-  },
-) {
-  useEnvironmentStore.setState({
-    environments,
-    isLoading: false,
-    error: null,
-    workspaceReadyEnvironments: new Set(),
-    deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning: new Set(),
-    sessionActivated: new Set(),
-  });
+mock.module("@/lib/native/events", () => ({
+  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+  emit: mock(() => Promise.resolve()),
+  listen: mock((event: string, handler: (event: { payload: unknown }) => void) => {
+    const wrapped = (payload: unknown) => handler({ payload });
+    const existing = listeners.get(event) ?? new Set();
+    existing.add(wrapped);
+    listeners.set(event, existing);
+    return Promise.resolve(() => {
+      existing.delete(wrapped);
+    });
+  }),
+}));
 
-  useEnvironmentDiffStore.setState({
-    stats: new Map(),
-  });
+const { useEnvironmentDiffStats } = await import("../../../apps/web/src/hooks/useEnvironmentDiffStats");
 
-  useConfigStore.setState({
-    config: {
-      version: "1.0",
-      global: {
-        containerResources: { cpuCores: 2, memoryGb: 4 },
-        envFilePatterns: [".env.local", ".env"],
-        allowedDomains: [],
-        defaultAgent: "claude",
-        opencodeModel: "opencode/grok-code",
-        codexModel: "gpt-5.3-codex",
-        codexReasoningEffort: "medium",
-        opencodeMode: "terminal",
-        claudeMode: "terminal",
-        claudeNativeBackend: "sdk",
-        claudeNativeFastModeDefault: false,
-        codexMode: "native",
-        codexNativeFastModeDefault: false,
-        experimentalCodexRawEventLogging: true,
-      },
-      repositories: repositoryConfigByProject,
-    },
-    isLoading: false,
-    error: null,
-  });
+function emitEvent(event: string, payload: unknown) {
+  for (const handler of listeners.get(event) ?? []) handler(payload);
 }
 
-/**
- * Replaces the poll timer with one the test drives by hand.
- *
- * Matches on the hook's own POLL_INTERVAL rather than a literal, so changing the
- * interval fails these tests loudly instead of quietly capturing nothing and
- * leaving them to pass without ever exercising a tick.
- */
-function capturePollInterval(intervalId: number) {
-  const originalSetInterval = globalThis.setInterval;
-  const originalClearInterval = globalThis.clearInterval;
-  const fakeIntervalId = intervalId as unknown as Parameters<typeof clearInterval>[0];
-  let intervalCallback: (() => void) | undefined;
-  let clearedIntervalIds: number[] = [];
+function listenerCount(event: string): number {
+  return listeners.get(event)?.size ?? 0;
+}
 
-  globalThis.setInterval = ((callback: TimerHandler, timeout?: number, ...args: unknown[]) => {
-    if (timeout === POLL_INTERVAL) {
-      intervalCallback = callback as () => void;
-      return intervalId as unknown as ReturnType<typeof setInterval>;
-    }
-    return originalSetInterval(callback, timeout, ...args);
-  }) as typeof setInterval;
-  globalThis.clearInterval = ((currentIntervalId: Parameters<typeof clearInterval>[0]) => {
-    if (currentIntervalId === fakeIntervalId) {
-      clearedIntervalIds.push(intervalId);
-      return;
-    }
-    originalClearInterval(currentIntervalId);
-  }) as typeof clearInterval;
-
+function change(
+  environmentId: string,
+  overrides: Partial<EnvironmentDiffStatsChange["stats"]> = {},
+  comparisonRef = "main",
+): EnvironmentDiffStatsChange {
   return {
-    tick() {
-      if (!intervalCallback) throw new Error("Diff poll interval was not installed");
-      intervalCallback();
-    },
-    get cleared() {
-      return clearedIntervalIds;
-    },
-    restore() {
-      globalThis.setInterval = originalSetInterval;
-      globalThis.clearInterval = originalClearInterval;
-      if (!intervalCallback) {
-        throw new Error(
-          `No setInterval was installed at POLL_INTERVAL (${POLL_INTERVAL}ms); the poll timer changed`,
-        );
-      }
-    },
+    environmentId,
+    comparisonRef,
+    computedAt: "2026-07-27T12:00:00.000Z",
+    stats: { additions: 3, deletions: 1, filesChanged: 2, truncated: false, ...overrides },
   };
+}
+
+/** Waits for the hook's async subscribe/rehydrate to settle. */
+async function flush() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 }
 
 describe("useEnvironmentDiffStats", () => {
   beforeEach(() => {
-    mockGetGitStatus.mockClear();
-    mockGetLocalGitStatus.mockClear();
-    mockGetGitStatus.mockImplementation(() => Promise.resolve([]));
-    mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([]));
+    listeners.clear();
+    mockGetEnvironmentDiffStats.mockClear();
+    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({ entries: [] }));
+    useEnvironmentDiffStore.setState({ stats: new Map() });
   });
 
   afterEach(() => {
     cleanup();
-    resetStores();
   });
 
   afterAll(() => {
     mock.module("@/lib/backend", () => realBackendSnapshot);
   });
 
-  test("polls available environments including working-tree changes and stores aggregate diff stats", async () => {
-    const localEnvironment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      status: "stopped",
-    });
-    const containerEnvironment = createMockEnvironment({
-      id: "env-container",
-      projectId: "project-1",
-      environmentType: "containerized",
-      containerId: "container-1",
-      status: "running",
-    });
-    const stoppedContainer = createMockEnvironment({
-      id: "env-stopped",
-      projectId: "project-1",
-      environmentType: "containerized",
-      containerId: "container-2",
-      status: "stopped",
-    });
-    resetStores([localEnvironment, containerEnvironment, stoppedContainer]);
-
-    mockGetLocalGitStatus.mockImplementation(() =>
-      Promise.resolve([
-        {
-          path: "src/local.ts",
-          filename: "local.ts",
-          directory: "src",
-          status: "M",
-          additions: 3,
-          deletions: 1,
-        },
-      ]),
-    );
-    mockGetGitStatus.mockImplementation(() =>
-      Promise.resolve([
-        {
-          path: "src/container.ts",
-          filename: "container.ts",
-          directory: "src",
-          status: "A",
-          additions: 10,
-          deletions: 0,
-        },
-        {
-          path: "README.md",
-          filename: "README.md",
-          directory: "",
-          status: "M",
-          additions: 2,
-          deletions: 4,
-        },
-      ]),
-    );
+  test("rehydrates from the authoritative snapshot on mount", async () => {
+    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({
+      entries: [change("env-1"), change("env-2", { additions: 9, deletions: 0, filesChanged: 1 })],
+    }));
 
     renderHook(() => useEnvironmentDiffStats());
 
     await waitFor(() => {
-      const stats = useEnvironmentDiffStore.getState().stats;
-      expect(stats.get("env-local")).toEqual({
-        additions: 3,
-        deletions: 1,
-        filesChanged: 1,
-      });
-      expect(stats.get("env-container")).toEqual({
+      expect(useEnvironmentDiffStore.getState().stats.size).toBe(2);
+    });
+    expect(useEnvironmentDiffStore.getState().stats.get("env-2")).toEqual({
+      additions: 9,
+      deletions: 0,
+      filesChanged: 1,
+      truncated: false,
+    });
+  });
+
+  test("applies incremental changes announced by the backend", async () => {
+    renderHook(() => useEnvironmentDiffStats());
+    await flush();
+
+    act(() => {
+      emitEvent(DIFF_STATS_CHANGED_EVENT, change("env-1", { additions: 12, deletions: 4, filesChanged: 3 }));
+    });
+
+    await waitFor(() => {
+      expect(useEnvironmentDiffStore.getState().stats.get("env-1")).toEqual({
         additions: 12,
         deletions: 4,
-        filesChanged: 2,
-      });
-    });
-
-    expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "release", true);
-    expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "release", true);
-    expect(mockGetGitStatus).not.toHaveBeenCalledWith("container-2", "release", true);
-    expect(useEnvironmentDiffStore.getState().stats.has("env-stopped")).toBe(false);
-  });
-
-  test("polls diff stats against the environment creation commit when available", async () => {
-    const environment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      status: "stopped",
-      createdFromCommit: "abc123def456",
-    });
-    resetStores([environment]);
-
-    renderHook(() => useEnvironmentDiffStats());
-
-    await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "abc123def456", true);
-    });
-  });
-
-  test("prunes stale stats when environments disappear", async () => {
-    const environment = createMockEnvironment({
-      id: "env-current",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: "/tmp/current",
-      status: "stopped",
-    });
-    resetStores([environment]);
-    useEnvironmentDiffStore.setState({
-      stats: new Map([
-        ["env-current", { additions: 1, deletions: 1, filesChanged: 1 }],
-        ["env-stale", { additions: 99, deletions: 99, filesChanged: 9 }],
-      ]),
-    });
-
-    renderHook(() => useEnvironmentDiffStats());
-
-    await waitFor(() => {
-      const stats = useEnvironmentDiffStore.getState().stats;
-      expect(stats.has("env-current")).toBe(true);
-      expect(stats.has("env-stale")).toBe(false);
-    });
-  });
-
-  test("drops stats for a local environment that loses its worktree", async () => {
-    const localEnvironment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      status: "stopped",
-    });
-    resetStores([localEnvironment]);
-    mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([{
-      path: "local.ts",
-      filename: "local.ts",
-      directory: "",
-      status: "M",
-      additions: 2,
-      deletions: 0,
-    }]));
-
-    renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.size).toBe(1);
-    });
-
-    act(() => {
-      useEnvironmentStore.setState({
-        environments: [{ ...localEnvironment, worktreePath: undefined }],
-      });
-    });
-
-    await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
-    });
-    expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1);
-  });
-
-  // The counts are the last true reading of work that is still on disk, and they
-  // are what a user needs when deciding whether to resume or delete a stopped
-  // environment. Every non-running status is unpollable, so dropping on
-  // "unpollable" would also blank the badge for the whole of a restart.
-  test.each(["stopped", "stopping", "creating", "error"] as const)(
-    "keeps the last known stats for a container in %s",
-    async (status) => {
-      const containerEnvironment = createMockEnvironment({
-        id: "env-container",
-        projectId: "project-1",
-        environmentType: "containerized",
-        containerId: "container-1",
-        status: "running",
-      });
-      resetStores([containerEnvironment]);
-      mockGetGitStatus.mockImplementation(() => Promise.resolve([{
-        path: "container.ts",
-        filename: "container.ts",
-        directory: "",
-        status: "M",
-        additions: 3,
-        deletions: 1,
-      }]));
-
-      renderHook(() => useEnvironmentDiffStats());
-      await waitFor(() => {
-        expect(useEnvironmentDiffStore.getState().stats.get("env-container")).toEqual({
-          additions: 3,
-          deletions: 1,
-          filesChanged: 1,
-        });
-      });
-
-      act(() => {
-        useEnvironmentStore.setState({
-          environments: [{ ...containerEnvironment, status }],
-        });
-      });
-
-      await waitFor(() => {
-        expect(mockGetGitStatus).toHaveBeenCalledTimes(1);
-      });
-      expect(useEnvironmentDiffStore.getState().stats.get("env-container")).toEqual({
-        additions: 3,
-        deletions: 1,
-        filesChanged: 1,
-      });
-    },
-  );
-
-  test("keeps stats across a container restart and refreshes them on the way back", async () => {
-    const containerEnvironment = createMockEnvironment({
-      id: "env-container",
-      projectId: "project-1",
-      environmentType: "containerized",
-      containerId: "container-1",
-      status: "running",
-    });
-    resetStores([containerEnvironment]);
-    mockGetGitStatus
-      .mockImplementationOnce(() => Promise.resolve([{
-        path: "before.ts",
-        filename: "before.ts",
-        directory: "",
-        status: "M",
-        additions: 3,
-        deletions: 1,
-      }]))
-      .mockImplementationOnce(() => Promise.resolve([{
-        path: "after.ts",
-        filename: "after.ts",
-        directory: "",
-        status: "M",
-        additions: 8,
-        deletions: 2,
-      }]));
-
-    renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(mockGetGitStatus).toHaveBeenCalledTimes(1));
-
-    act(() => {
-      useEnvironmentStore.setState({
-        environments: [{ ...containerEnvironment, status: "stopping" }],
-      });
-    });
-    // The badge must not blank out mid-restart.
-    expect(useEnvironmentDiffStore.getState().stats.get("env-container")).toEqual({
-      additions: 3,
-      deletions: 1,
-      filesChanged: 1,
-    });
-
-    act(() => {
-      useEnvironmentStore.setState({
-        environments: [{ ...containerEnvironment, status: "running" }],
-      });
-    });
-
-    await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.get("env-container")).toEqual({
-        additions: 8,
-        deletions: 2,
-        filesChanged: 1,
-      });
-    });
-  });
-
-  test("drops stats for an environment that leaves the list entirely", async () => {
-    const containerEnvironment = createMockEnvironment({
-      id: "env-container",
-      projectId: "project-1",
-      environmentType: "containerized",
-      containerId: "container-1",
-      status: "stopped",
-    });
-    resetStores([containerEnvironment]);
-    useEnvironmentDiffStore.setState({
-      stats: new Map([["env-container", {
-        additions: 3,
-        deletions: 1,
-        filesChanged: 1,
-      }]]),
-    });
-
-    renderHook(() => useEnvironmentDiffStats());
-    // Retained while it is still listed, even though it cannot be polled.
-    await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.size).toBe(1);
-    });
-
-    act(() => {
-      useEnvironmentStore.setState({ environments: [] });
-    });
-
-    await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
-    });
-  });
-
-  test("does not clear existing stats when a non-critical diff request fails", async () => {
-    const environment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      status: "stopped",
-    });
-    resetStores([environment]);
-    useEnvironmentDiffStore.setState({
-      stats: new Map([["env-local", { additions: 7, deletions: 2, filesChanged: 3 }]]),
-    });
-    mockGetLocalGitStatus.mockImplementation(() => Promise.reject(new Error("git failed")));
-
-    renderHook(() => useEnvironmentDiffStats());
-
-    await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "release", true);
-    });
-
-    expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toEqual({
-      additions: 7,
-      deletions: 2,
-      filesChanged: 3,
-    });
-  });
-
-  test("retries a failed poll on the next interval", async () => {
-    const pollInterval = capturePollInterval(9);
-    try {
-      const environment = createMockEnvironment({
-        id: "env-local",
-        projectId: "project-1",
-        environmentType: "local",
-        worktreePath: "/tmp/worktree",
-        status: "stopped",
-      });
-      resetStores([environment]);
-      let rejectRequest: (error: Error) => void = () => {};
-      mockGetLocalGitStatus
-        .mockImplementationOnce(() => new Promise((_resolve, reject) => {
-          rejectRequest = reject;
-        }))
-        .mockImplementationOnce(() => Promise.resolve([{
-          path: "recovered.ts",
-          filename: "recovered.ts",
-          directory: "",
-          status: "M",
-          additions: 5,
-          deletions: 2,
-        }]));
-
-      renderHook(() => useEnvironmentDiffStats());
-      await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
-
-      await act(async () => {
-        rejectRequest(new Error("git failed"));
-        await Promise.resolve();
-      });
-      act(() => pollInterval.tick());
-
-      await waitFor(() => {
-        expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(2);
-        expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toEqual({
-          additions: 5,
-          deletions: 2,
-          filesChanged: 1,
-        });
-      });
-    } finally {
-      pollInterval.restore();
-    }
-  });
-
-  test("refetches the latest snapshot after an earlier snapshot fails", async () => {
-    const environment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      status: "stopped",
-    });
-    resetStores([environment]);
-    let rejectRequest: (error: Error) => void = () => {};
-    mockGetLocalGitStatus
-      .mockImplementationOnce(() => new Promise((_resolve, reject) => {
-        rejectRequest = reject;
-      }))
-      .mockImplementationOnce(() => Promise.resolve([]));
-
-    renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
-
-    const latestCommit = "d".repeat(40);
-    act(() => {
-      useEnvironmentStore.setState({
-        environments: [{ ...environment, createdFromCommit: latestCommit }],
-      });
-    });
-    expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      rejectRequest(new Error("git failed"));
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(2);
-      expect(mockGetLocalGitStatus.mock.calls[1]?.[1]).toBe(latestCommit);
-    });
-  });
-
-  test("falls back to main when repository config is missing", async () => {
-    const environment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-missing",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      status: "stopped",
-    });
-    resetStores([environment], {});
-    mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([{
-      path: "README.md",
-      filename: "README.md",
-      directory: "",
-      status: "M",
-      additions: 1,
-      deletions: 0,
-    }]));
-
-    renderHook(() => useEnvironmentDiffStats());
-
-    await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "main", true);
-      expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toEqual({
-        additions: 1,
-        deletions: 0,
-        filesChanged: 1,
-      });
-    });
-  });
-
-  test("immediately uses updated repository baseline configuration", async () => {
-    const environment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      status: "stopped",
-    });
-    resetStores([environment], {
-      "project-1": {
-        defaultBranch: "trunk",
-        prBaseBranch: "",
-      },
-    });
-
-    renderHook(() => useEnvironmentDiffStats());
-    // Falls through to the repository's own default branch rather than a literal
-    // "main", which would not exist in this repository.
-    await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "trunk", true);
-    });
-
-    act(() => {
-      const config = useConfigStore.getState().config;
-      if (!config) throw new Error("Expected test config");
-      useConfigStore.setState({
-        config: {
-          ...config,
-          repositories: {
-            ...config.repositories,
-            "project-1": {
-              defaultBranch: "trunk",
-              prBaseBranch: "develop",
-            },
-          },
-        },
-      });
-    });
-
-    await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
-    });
-  });
-
-  // The hook subscribes to the whole `repositories` object, so a config refresh
-  // hands it a new object identity on every backend change-feed tick. Only a
-  // change to a baseline it actually uses may cost a `git fetch`.
-  test("does not re-poll for config updates that leave the baseline unchanged", async () => {
-    const environment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      status: "stopped",
-    });
-    resetStores([environment]);
-    mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([]));
-
-    renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
-
-    // A global-only edit, and a whole-config replacement that rebuilds
-    // `repositories` with identical values.
-    act(() => {
-      useConfigStore.getState().updateGlobalConfig({ claudeNativeFastModeDefault: true });
-    });
-    act(() => {
-      const config = useConfigStore.getState().config;
-      useConfigStore.setState({
-        config: {
-          ...config,
-          repositories: {
-            "project-1": { defaultBranch: "main", prBaseBranch: "release" },
-          },
-        },
-      });
-    });
-    act(() => {
-      useConfigStore.setState({
-        config: {
-          ...useConfigStore.getState().config,
-          repositories: {
-            "project-1": { defaultBranch: "main", prBaseBranch: "release" },
-            "project-untouched": { defaultBranch: "main", prBaseBranch: "main" },
-          },
-        },
-      });
-    });
-
-    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
-    expect(mockGetLocalGitStatus.mock.calls[0]?.[1]).toBe("release");
-  });
-
-  test("stops refetching once the snapshot settles after repeated baseline changes", async () => {
-    const environment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      status: "stopped",
-    });
-    resetStores([environment]);
-
-    const pending: Array<(changes: GitFileChange[]) => void> = [];
-    mockGetLocalGitStatus.mockImplementation(() => new Promise((resolve) => {
-      pending.push(resolve);
-    }));
-
-    const setBaseline = (prBaseBranch: string) => {
-      useConfigStore.setState({
-        config: {
-          ...useConfigStore.getState().config,
-          repositories: {
-            "project-1": { defaultBranch: "main", prBaseBranch },
-          },
-        },
-      });
-    };
-
-    renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
-
-    // Two changes land while the first request is still open, so the refetch
-    // chain has to reconcile against the newest snapshot, not each one in turn.
-    act(() => setBaseline("develop"));
-    act(() => setBaseline("staging"));
-    expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      pending[0]?.([]);
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(2));
-    expect(mockGetLocalGitStatus.mock.calls[1]?.[1]).toBe("staging");
-
-    await act(async () => {
-      pending[1]?.([]);
-      await Promise.resolve();
-    });
-
-    // The chain terminates: the snapshot now matches what was just fetched.
-    await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toEqual({
-        additions: 0,
-        deletions: 0,
-        filesChanged: 0,
-      });
-    });
-    expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(2);
-  });
-
-  test("discards an in-flight result after repository baseline configuration changes", async () => {
-    const environment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      status: "stopped",
-    });
-    resetStores([environment]);
-
-    const pending: Array<(changes: GitFileChange[]) => void> = [];
-    mockGetLocalGitStatus.mockImplementation(() => new Promise((resolve) => {
-      pending.push(resolve);
-    }));
-
-    renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
-    expect(mockGetLocalGitStatus.mock.calls[0]?.[1]).toBe("release");
-
-    act(() => {
-      const config = useConfigStore.getState().config;
-      if (!config) throw new Error("Expected test config");
-      useConfigStore.setState({
-        config: {
-          ...config,
-          repositories: {
-            ...config.repositories,
-            "project-1": {
-              defaultBranch: "main",
-              prBaseBranch: "develop",
-            },
-          },
-        },
-      });
-    });
-    expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      pending[0]?.([{
-        path: "stale.ts",
-        filename: "stale.ts",
-        directory: "",
-        status: "M",
-        additions: 99,
-        deletions: 0,
-      }]);
-      await Promise.resolve();
-    });
-
-    expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toBeUndefined();
-    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(2));
-    expect(mockGetLocalGitStatus.mock.calls[1]?.[1]).toBe("develop");
-
-    await act(async () => {
-      pending[1]?.([{
-        path: "fresh.ts",
-        filename: "fresh.ts",
-        directory: "",
-        status: "M",
-        additions: 4,
-        deletions: 1,
-      }]);
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toEqual({
-        additions: 4,
-        deletions: 1,
-        filesChanged: 1,
-      });
-    });
-  });
-
-  test("skips local environments without a worktree path", async () => {
-    const environment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: undefined,
-      status: "stopped",
-    });
-    resetStores([environment]);
-
-    renderHook(() => useEnvironmentDiffStats());
-
-    await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
-    });
-    expect(mockGetLocalGitStatus).not.toHaveBeenCalled();
-    expect(mockGetGitStatus).not.toHaveBeenCalled();
-  });
-
-  test("skips running container environments without a container id", async () => {
-    const environment = createMockEnvironment({
-      id: "env-container",
-      projectId: "project-1",
-      environmentType: "containerized",
-      containerId: undefined,
-      status: "running",
-    });
-    resetStores([environment]);
-
-    renderHook(() => useEnvironmentDiffStats());
-
-    await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
-    });
-    expect(mockGetLocalGitStatus).not.toHaveBeenCalled();
-    expect(mockGetGitStatus).not.toHaveBeenCalled();
-  });
-
-  test("replaces existing stats with zeroes when a poll finds no changes", async () => {
-    const environment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      status: "stopped",
-    });
-    resetStores([environment]);
-    useEnvironmentDiffStore.setState({
-      stats: new Map([["env-local", {
-        additions: 7,
-        deletions: 2,
         filesChanged: 3,
-      }]]),
+        truncated: false,
+      });
     });
-    mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([]));
+  });
 
+  test("carries the truncated flag through to the store", async () => {
     renderHook(() => useEnvironmentDiffStats());
+    await flush();
+
+    act(() => {
+      emitEvent(DIFF_STATS_CHANGED_EVENT, change("env-1", { truncated: true }));
+    });
 
     await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toEqual({
-        additions: 0,
-        deletions: 0,
-        filesChanged: 0,
-      });
+      expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.truncated).toBe(true);
     });
   });
 
-  test("polling interval refreshes stats with the latest environment snapshot", async () => {
-    const pollInterval = capturePollInterval(7);
+  // The payload crosses a process boundary and is the only thing driving the
+  // badge, so a malformed frame must be dropped rather than written through.
+  test.each([
+    ["missing stats", { environmentId: "env-1", comparisonRef: "main", computedAt: "now" }],
+    ["wrong stats shape", { environmentId: "env-1", comparisonRef: "main", computedAt: "now", stats: { additions: "3" } }],
+    ["missing environmentId", { comparisonRef: "main", computedAt: "now", stats: { additions: 1, deletions: 0, filesChanged: 1, truncated: false } }],
+    ["not an object", "nonsense"],
+    ["null", null],
+  ])("ignores a malformed change event (%s)", async (_label, payload) => {
+    renderHook(() => useEnvironmentDiffStats());
+    await flush();
 
-    try {
-      const environment = createMockEnvironment({
-        id: "env-local",
-        projectId: "project-1",
-        environmentType: "local",
-        worktreePath: "/tmp/worktree",
-        status: "stopped",
-      });
-      resetStores([environment]);
-      mockGetLocalGitStatus
-        .mockImplementationOnce(() => Promise.resolve([{
-          path: "first.ts",
-          filename: "first.ts",
-          directory: "",
-          status: "M",
-          additions: 1,
-          deletions: 0,
-        }]))
-        .mockImplementationOnce(() => Promise.resolve([{
-          path: "second.ts",
-          filename: "second.ts",
-          directory: "",
-          status: "M",
-          additions: 4,
-          deletions: 2,
-        }]));
+    act(() => {
+      emitEvent(DIFF_STATS_CHANGED_EVENT, payload);
+    });
+    await flush();
 
-      const { unmount } = renderHook(() => useEnvironmentDiffStats());
-
-      await waitFor(() => {
-        expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toEqual({
-          additions: 1,
-          deletions: 0,
-          filesChanged: 1,
-        });
-      });
-      pollInterval.tick();
-
-      await waitFor(() => {
-        expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toEqual({
-          additions: 4,
-          deletions: 2,
-          filesChanged: 1,
-        });
-      });
-      expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(2);
-
-      unmount();
-      expect(pollInterval.cleared).toEqual([7]);
-    } finally {
-      pollInterval.restore();
-    }
+    expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
   });
 
-  test("does not overlap polls for the same environment snapshot", async () => {
-    const pollInterval = capturePollInterval(8);
+  // The stream has no replay buffer, so anything that happened while this client
+  // was disconnected exists only in the snapshot.
+  test("re-reads the snapshot when the event stream reconnects", async () => {
+    renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
 
-    try {
-      const environment = createMockEnvironment({
-        id: "env-local",
-        projectId: "project-1",
-        environmentType: "local",
-        worktreePath: "/tmp/worktree",
-        status: "stopped",
-      });
-      resetStores([environment]);
-      let resolveRequest: (changes: GitFileChange[]) => void = () => {};
-      mockGetLocalGitStatus.mockImplementation(() => new Promise((resolve) => {
-        resolveRequest = resolve;
-      }));
-
-      renderHook(() => useEnvironmentDiffStats());
-      await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
-
-      act(() => {
-        pollInterval.tick();
-        pollInterval.tick();
-      });
-      expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1);
-
-      await act(async () => {
-        resolveRequest([]);
-        await Promise.resolve();
-      });
-    } finally {
-      pollInterval.restore();
-    }
-  });
-
-  test("does not restore stats when an environment is removed while its poll is in flight", async () => {
-    const environment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      status: "stopped",
-    });
-    resetStores([environment]);
-    useEnvironmentDiffStore.setState({
-      stats: new Map([["env-local", { additions: 1, deletions: 1, filesChanged: 1 }]]),
-    });
-    let resolveRequest: (changes: GitFileChange[]) => void = () => {};
-    mockGetLocalGitStatus.mockImplementation(() => new Promise((resolve) => {
-      resolveRequest = resolve;
+    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({
+      entries: [change("env-late", { additions: 5, deletions: 5, filesChanged: 2 })],
     }));
 
-    renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
-
     act(() => {
-      useEnvironmentStore.setState({ environments: [] });
-    });
-    await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.has("env-local")).toBe(false);
-    });
-
-    await act(async () => {
-      resolveRequest([{
-        path: "late.ts",
-        filename: "late.ts",
-        directory: "",
-        status: "M",
-        additions: 99,
-        deletions: 0,
-      }]);
-      await Promise.resolve();
-    });
-
-    expect(useEnvironmentDiffStore.getState().stats.has("env-local")).toBe(false);
-  });
-
-  // The snapshot key exists for this case, not just for removal: the baseline
-  // commit being recorded changes the ref the stats are measured against, so a
-  // result computed before that lands describes a comparison nobody asked for.
-  test("discards an in-flight result when the environment's snapshot changes", async () => {
-    const environment = createMockEnvironment({
-      id: "env-local",
-      projectId: "project-1",
-      environmentType: "local",
-      worktreePath: "/tmp/worktree",
-      status: "stopped",
-    });
-    resetStores([environment]);
-
-    const pending: Array<(changes: GitFileChange[]) => void> = [];
-    const refs: Array<string | undefined> = [];
-    mockGetLocalGitStatus.mockImplementation((_worktreePath, targetBranch) => {
-      refs.push(targetBranch);
-      return new Promise((resolve) => {
-        pending.push(resolve);
-      });
-    });
-
-    renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
-    expect(refs[0]).toBe("release");
-
-    // The baseline arrives while the first request is still open.
-    act(() => {
-      useEnvironmentStore.setState({
-        environments: [{ ...environment, createdFromCommit: "a".repeat(40) }],
-      });
-    });
-    // Still one request: polls are serialised per environment, so the snapshot
-    // change must not open a second concurrent request against the same worktree.
-    expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      pending[0]?.([{
-        path: "stale.ts",
-        filename: "stale.ts",
-        directory: "",
-        status: "M",
-        additions: 99,
-        deletions: 0,
-      }]);
-      await Promise.resolve();
-    });
-
-    // The stale result is dropped, and a fresh request goes out for the new
-    // baseline rather than waiting out the remaining poll interval.
-    expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toBeUndefined();
-    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(2));
-    expect(refs[1]).toBe("a".repeat(40));
-
-    await act(async () => {
-      pending[1]?.([{
-        path: "fresh.ts",
-        filename: "fresh.ts",
-        directory: "",
-        status: "M",
-        additions: 4,
-        deletions: 1,
-      }]);
-      await Promise.resolve();
+      emitEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
     });
 
     await waitFor(() => {
-      expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toEqual({
-        additions: 4,
-        deletions: 1,
-        filesChanged: 1,
+      expect(useEnvironmentDiffStore.getState().stats.get("env-late")).toEqual({
+        additions: 5,
+        deletions: 5,
+        filesChanged: 2,
+        truncated: false,
       });
     });
   });
 
-  test("serialises polls per environment even as the snapshot changes", async () => {
-    const environment = createMockEnvironment({
-      id: "env-container",
-      projectId: "project-1",
-      environmentType: "docker",
-      containerId: "container-1",
-      status: "running",
-    });
-    resetStores([environment]);
+  test("drops environments missing from a later snapshot", async () => {
+    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({
+      entries: [change("env-1"), change("env-2")],
+    }));
+    renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.size).toBe(2));
 
-    const pending: Array<(changes: GitFileChange[]) => void> = [];
-    mockGetGitStatus.mockImplementation(() => new Promise((resolve) => {
-      pending.push(resolve);
+    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({
+      entries: [change("env-1")],
+    }));
+    act(() => {
+      emitEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
+    });
+
+    await waitFor(() => {
+      expect([...useEnvironmentDiffStore.getState().stats.keys()]).toEqual(["env-1"]);
+    });
+  });
+
+  test("keeps existing stats when the snapshot request fails", async () => {
+    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({ entries: [change("env-1")] }));
+    renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.size).toBe(1));
+
+    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.reject(new Error("backend down")));
+    act(() => {
+      emitEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
+    });
+    await flush();
+
+    expect(useEnvironmentDiffStore.getState().stats.get("env-1")).toBeDefined();
+  });
+
+  test("unsubscribes from both streams on unmount", async () => {
+    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => {
+      expect(listenerCount(DIFF_STATS_CHANGED_EVENT)).toBe(1);
+      expect(listenerCount(NATIVE_EVENT_STREAM_CONNECTED_EVENT)).toBe(1);
+    });
+
+    unmount();
+
+    await waitFor(() => {
+      expect(listenerCount(DIFF_STATS_CHANGED_EVENT)).toBe(0);
+      expect(listenerCount(NATIVE_EVENT_STREAM_CONNECTED_EVENT)).toBe(0);
+    });
+  });
+
+  // `listen` resolves asynchronously, so an unmount can land before the
+  // subscription exists. It still has to be torn down.
+  test("does not leak a listener when unmounted before subscribing resolves", async () => {
+    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    unmount();
+    await flush();
+
+    expect(listenerCount(DIFF_STATS_CHANGED_EVENT)).toBe(0);
+    expect(listenerCount(NATIVE_EVENT_STREAM_CONNECTED_EVENT)).toBe(0);
+  });
+
+  test("does not write a snapshot that resolves after unmount", async () => {
+    let resolveSnapshot: (value: { entries: EnvironmentDiffStatsChange[] }) => void = () => {};
+    mockGetEnvironmentDiffStats.mockImplementation(() => new Promise((resolve) => {
+      resolveSnapshot = resolve;
     }));
 
-    renderHook(() => useEnvironmentDiffStats());
-    await waitFor(() => expect(mockGetGitStatus).toHaveBeenCalledTimes(1));
-
-    // Each request runs a `git fetch` inside the container, so repeated snapshot
-    // churn must not fan out into concurrent execs against the same container.
-    act(() => {
-      useEnvironmentStore.setState({
-        environments: [{ ...environment, createdFromCommit: "b".repeat(40) }],
-      });
-    });
-    act(() => {
-      useEnvironmentStore.setState({
-        environments: [{ ...environment, createdFromCommit: "c".repeat(40) }],
-      });
-    });
-    expect(mockGetGitStatus).toHaveBeenCalledTimes(1);
+    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
+    unmount();
 
     await act(async () => {
-      pending[0]?.([]);
+      resolveSnapshot({ entries: [change("env-late")] });
       await Promise.resolve();
     });
 
-    await waitFor(() => expect(mockGetGitStatus).toHaveBeenCalledTimes(2));
-    expect(mockGetGitStatus.mock.calls[1]?.[1]).toBe("c".repeat(40));
+    expect(useEnvironmentDiffStore.getState().stats.size).toBe(0);
   });
 });

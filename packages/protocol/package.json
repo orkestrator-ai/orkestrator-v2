@@ -7,6 +7,7 @@
     "./agent-activity": "./src/agent-activity.ts",
     "./browser-preview": "./src/browser-preview.ts",
     "./connections": "./src/connections.ts",
+    "./diff-stats": "./src/diff-stats.ts",
     "./gateway-token": "./src/gateway-token.ts",
     "./parent-watchdog": "./src/parent-watchdog.ts",
     "./resource-events": "./src/resource-events.ts",

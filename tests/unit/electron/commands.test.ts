@@ -3677,6 +3677,226 @@ exit 0
     });
   });
 
+  describe("backend-owned diff statistics", () => {
+    function localDiffEnvironment(worktree: string) {
+      const environment = createEnvironment({
+        status: "stopped",
+        environmentType: "local",
+        worktreePath: worktree,
+      });
+      return { environment, ...createContext(environment) };
+    }
+
+    test("computes counts for a tracked local environment and announces them", async () => {
+      const { worktree } = await createGitWorktreeWithOrigin();
+      await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
+      await fs.writeFile(path.join(worktree, "brand-new.txt"), "one\ntwo\n");
+      const { environment, context, emitted } = localDiffEnvironment(worktree);
+      const commands = createCommandRegistry();
+
+      try {
+        const snapshot = await commands.get("get_environment_diff_stats")?.({}, context) as {
+          entries: Array<{ environmentId: string; comparisonRef: string; stats: Record<string, unknown> }>;
+        };
+
+        // The first call arms tracking, so the counts arrive with the scan that
+        // follows rather than in the response itself.
+        await waitForCondition(
+          () => emitted.some((entry) => entry.event === "environment-diff-stats-changed"),
+          "diff stats to be announced",
+        );
+
+        const change = emitted.find((entry) => entry.event === "environment-diff-stats-changed")
+          ?.payload as { environmentId: string; comparisonRef: string; stats: Record<string, unknown> };
+        expect(change.environmentId).toBe(environment.id);
+        expect(change.comparisonRef).toBe("main");
+        expect(change.stats).toEqual({
+          additions: 3,
+          deletions: 0,
+          filesChanged: 2,
+          truncated: false,
+        });
+        expect(Array.isArray(snapshot.entries)).toBe(true);
+
+        // The snapshot is the rehydration path, so it must carry the same counts
+        // a client would otherwise only have learned from the event.
+        const rehydrated = await commands.get("get_environment_diff_stats")?.({}, context) as {
+          entries: Array<{ environmentId: string; stats: Record<string, unknown> }>;
+        };
+        expect(rehydrated.entries).toContainEqual(expect.objectContaining({
+          environmentId: environment.id,
+          stats: { additions: 3, deletions: 0, filesChanged: 2, truncated: false },
+        }));
+      } finally {
+        await commands.get("delete_environment")?.({ environmentId: environment.id }, context)
+          .catch(() => undefined);
+      }
+    });
+
+    // The sidebar badge and the Files panel used to ask for the same environment
+    // separately; whichever arrives first now pays for the scan.
+    test("serves the Files panel from the scan the badge already ran", async () => {
+      const { worktree } = await createGitWorktreeWithOrigin();
+      await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
+      const { environment, context, emitted } = localDiffEnvironment(worktree);
+      const commands = createCommandRegistry();
+
+      try {
+        await commands.get("get_environment_diff_stats")?.({}, context);
+        await waitForCondition(
+          () => emitted.some((entry) => entry.event === "environment-diff-stats-changed"),
+          "diff stats to be announced",
+        );
+
+        await withGitSubcommandLog("status", async (logPath) => {
+          const changes = await commands.get("get_local_git_status")?.(
+            { worktreePath: worktree, targetBranch: "main" },
+            context,
+          ) as Array<{ path: string }>;
+
+          expect(changes.some((change) => change.path === "tracked.txt")).toBe(true);
+          await expect(fs.readFile(logPath, "utf8").catch(() => "")).resolves.toBe("");
+        });
+      } finally {
+        await commands.get("delete_environment")?.({ environmentId: environment.id }, context)
+          .catch(() => undefined);
+      }
+    });
+
+    test("reads for itself when no recent scan is cached", async () => {
+      const { worktree } = await createGitWorktreeWithOrigin();
+      await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
+      const { context } = localDiffEnvironment(worktree);
+      const commands = createCommandRegistry();
+
+      // Nothing armed tracking, so there is no cache to serve from.
+      await withGitSubcommandLog("status", async (logPath) => {
+        await commands.get("get_local_git_status")?.(
+          { worktreePath: worktree, targetBranch: "main" },
+          context,
+        );
+
+        await expect(fs.readFile(logPath, "utf8")).resolves.toContain("status");
+      });
+    });
+
+    test("marks the counts approximate when the untracked scan is capped", async () => {
+      const { worktree } = await createGitWorktreeWithOrigin();
+      const overflow = path.join(worktree, "generated");
+      await fs.mkdir(overflow, { recursive: true });
+      // One past the 2000-file cap the scanner applies.
+      await Promise.all(Array.from({ length: 2_001 }, (_, index) =>
+        fs.writeFile(path.join(overflow, `file-${index}.txt`), "one\n")
+      ));
+      const { environment, context, emitted } = localDiffEnvironment(worktree);
+      const commands = createCommandRegistry();
+
+      try {
+        await commands.get("get_environment_diff_stats")?.({}, context);
+        await waitForCondition(
+          () => emitted.some((entry) => entry.event === "environment-diff-stats-changed"),
+          "capped diff stats to be announced",
+          15_000,
+        );
+
+        const change = emitted.find((entry) => entry.event === "environment-diff-stats-changed")
+          ?.payload as { stats: { truncated: boolean; filesChanged: number; additions: number } };
+        expect(change.stats.truncated).toBe(true);
+        // Every file is still listed; only the line counts past the cap are missing.
+        expect(change.stats.filesChanged).toBe(2_001);
+        expect(change.stats.additions).toBe(2_000);
+      } finally {
+        await commands.get("delete_environment")?.({ environmentId: environment.id }, context)
+          .catch(() => undefined);
+      }
+    }, 30_000);
+
+    test("does not mark the counts approximate for an ordinary worktree", async () => {
+      const { worktree } = await createGitWorktreeWithOrigin();
+      await fs.writeFile(path.join(worktree, "brand-new.txt"), "one\n");
+      const { environment, context, emitted } = localDiffEnvironment(worktree);
+      const commands = createCommandRegistry();
+
+      try {
+        await commands.get("get_environment_diff_stats")?.({}, context);
+        await waitForCondition(
+          () => emitted.some((entry) => entry.event === "environment-diff-stats-changed"),
+          "diff stats to be announced",
+        );
+
+        const change = emitted.find((entry) => entry.event === "environment-diff-stats-changed")
+          ?.payload as { stats: { truncated: boolean } };
+        expect(change.stats.truncated).toBe(false);
+      } finally {
+        await commands.get("delete_environment")?.({ environmentId: environment.id }, context)
+          .catch(() => undefined);
+      }
+    });
+
+    // git status is dominated by walking and stat'ing the tree, and the
+    // untracked cache is what stops it re-reading directories it has already
+    // seen to be clean.
+    test("enables git's scan caches on a newly created worktree", async () => {
+      const { worktree, remote } = await createGitWorktreeWithOrigin();
+      const suffix = randomUUID().slice(0, 8);
+      const environment = createEnvironment({
+        status: "stopped",
+        worktreePath: undefined,
+        branch: `feature/scan-caches-${suffix}`,
+        environmentType: "local",
+      });
+      const { context } = createContext(environment, {
+        project: {
+          id: environment.projectId,
+          name: `Scan Caches ${suffix}`,
+          gitUrl: remote,
+          localPath: worktree,
+          addedAt: new Date(0).toISOString(),
+          order: 0,
+        },
+        repositoryConfig: { defaultBranch: "main", prBaseBranch: "main" },
+      });
+      const commands = createCommandRegistry();
+
+      try {
+        await commands.get("start_environment")?.({ environmentId: environment.id }, context);
+        const worktreePath = environment.worktreePath!;
+
+        await expect(gitOutput(worktreePath, ["config", "--get", "core.untrackedCache"]))
+          .resolves.toBe("true");
+        // Scoped to this worktree, never to the shared config: these worktrees
+        // hang off a clone the user also drives by hand.
+        await expect(gitOutput(worktreePath, ["config", "--worktree", "--get", "core.fsmonitor"]))
+          .resolves.toBe("true");
+        await expect(gitOutput(worktree, ["config", "--get", "core.fsmonitor"]).catch(() => ""))
+          .resolves.not.toBe("true");
+      } finally {
+        await commands.get("delete_environment")?.({ environmentId: environment.id }, context)
+          .catch(() => undefined);
+      }
+    });
+
+    test("deleting an environment drops its counts from the snapshot", async () => {
+      const { worktree } = await createGitWorktreeWithOrigin();
+      await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
+      const { environment, context, emitted } = localDiffEnvironment(worktree);
+      const commands = createCommandRegistry();
+
+      await commands.get("get_environment_diff_stats")?.({}, context);
+      await waitForCondition(
+        () => emitted.some((entry) => entry.event === "environment-diff-stats-changed"),
+        "diff stats to be announced",
+      );
+
+      await commands.get("delete_environment")?.({ environmentId: environment.id }, context);
+
+      const snapshot = await commands.get("get_environment_diff_stats")?.({}, context) as {
+        entries: Array<{ environmentId: string }>;
+      };
+      expect(snapshot.entries.some((entry) => entry.environmentId === environment.id)).toBe(false);
+    });
+  });
+
   test("reports local git stats against an environment creation commit", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
     const creationCommit = await currentGitCommit(worktree);

@@ -229,7 +229,11 @@ function createData(overrides: Partial<ClaudeNativeData> = {}): ClaudeNativeData
   };
 }
 
-function seedPaneLayout(sessionId?: string, initialPrompt?: string) {
+function seedPaneLayout(
+  sessionId?: string,
+  initialPrompt?: string,
+  launchOptions?: { initialAgentModel?: string; initialReasoningEffort?: string },
+) {
   usePaneLayoutStore.setState({
     environments: new Map([
       [
@@ -244,6 +248,8 @@ function seedPaneLayout(sessionId?: string, initialPrompt?: string) {
                 type: "claude-native",
                 claudeNativeData: createData({ sessionId }),
                 initialPrompt,
+                initialAgentModel: launchOptions?.initialAgentModel,
+                initialReasoningEffort: launchOptions?.initialReasoningEffort,
               },
             ],
             activeTabId: TAB_ID,
@@ -475,6 +481,81 @@ describe("ClaudeChatTab", () => {
     mockReadFileBase64.mockImplementation(async () => "chat-local-base64");
     mockToastError.mockClear();
     lastVirtualizedMessages = [];
+  });
+
+  test("retains one-shot launch options while the model catalog is empty", async () => {
+    // The tab is the durable carrier of the create dialog's model choice once
+    // `TerminalContainer` has flushed the layout, so it must not discard the
+    // options before it could apply them: an empty catalog means "nothing to
+    // apply yet", and a later mount (or a Retry) has to be able to try again.
+    useClaudeStore.setState((state) => ({
+      ...state,
+      sessions: new Map(),
+      selectedModel: new Map(),
+      models: [],
+    }));
+    seedPaneLayout(undefined, undefined, {
+      initialAgentModel: "claude-review",
+      initialReasoningEffort: "xhigh",
+    });
+    mockGetModels.mockResolvedValueOnce([]);
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="claude-review"
+        initialReasoningEffort="xhigh"
+      />,
+    );
+
+    // The effort is applied regardless — it needs no catalog to validate it.
+    await waitFor(() => {
+      expect(useClaudeStore.getState().effort.get(SESSION_KEY)).toBe("xhigh");
+    });
+    const tab = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)
+      .find((candidate) => candidate.id === TAB_ID);
+    expect(tab?.initialAgentModel).toBe("claude-review");
+    expect(tab?.initialReasoningEffort).toBe("xhigh");
+  });
+
+  test("clears one-shot launch options once the catalog resolves them", async () => {
+    useClaudeStore.setState((state) => ({
+      ...state,
+      sessions: new Map(),
+      selectedModel: new Map(),
+      models: [],
+    }));
+    seedPaneLayout(undefined, undefined, {
+      initialAgentModel: "claude-review",
+      initialReasoningEffort: "xhigh",
+    });
+    mockGetModels.mockResolvedValueOnce([{
+      id: "claude-review",
+      name: "Claude Review",
+      description: "Review model",
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "xhigh"],
+    } as any]);
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="claude-review"
+        initialReasoningEffort="xhigh"
+      />,
+    );
+
+    await waitFor(() => {
+      const tab = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)
+        .find((candidate) => candidate.id === TAB_ID);
+      expect(tab?.initialAgentModel).toBeUndefined();
+      expect(tab?.initialReasoningEffort).toBeUndefined();
+    });
+    expect(useClaudeStore.getState().selectedModel.get(SESSION_KEY)).toBe("claude-review");
   });
 
   test("does not reapply one-shot review options after the tab remounts", async () => {

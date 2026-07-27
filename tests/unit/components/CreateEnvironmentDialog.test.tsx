@@ -644,6 +644,107 @@ describe("resolveAgentDefaults", () => {
     });
   });
 
+  test("submits the synthetic OpenCode default as no explicit model", async () => {
+    // With no cached OpenCode catalog the model select only offers the
+    // synthetic `{ id: "default" }` placeholder. Submitting that id would pin a
+    // model no OpenCode server knows and — because a one-shot launch option is
+    // treated as authoritative downstream — suppress the user's own saved
+    // OpenCode preferences. It has to submit as "no explicit choice".
+    useOpenCodeStore.setState({ models: new Map() });
+    // No configured default either, so nothing real gets injected into the
+    // catalog and the placeholder is genuinely all there is.
+    const config = structuredClone(defaultConfig);
+    config.global.opencodeModel = undefined;
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ agentType: "opencode", model: undefined }),
+      );
+    });
+  });
+
+  test("keeps Claude's real 'default' model id, which is not a placeholder", async () => {
+    // The mirror of the test above: `CLAUDE_FALLBACK_MODELS` genuinely contains
+    // an id of "default", so it must keep flowing through untouched.
+    useClaudeStore.setState({ models: [] });
+    const onCreate = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "Claude" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Default (recommended)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ agentType: "claude", model: "default" }),
+      );
+    });
+  });
+
+  test("submits an unset reasoning effort as undefined", async () => {
+    const onCreate = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Reasoning effort" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Default" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ agentType: "codex", reasoningEffort: undefined }),
+      );
+    });
+  });
+
+  test("disables the reasoning effort select when the model supports none", async () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("combobox", { name: "Reasoning effort" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+    });
+    // The model select stays usable — only the dependent control is disabled.
+    expect(
+      screen.getByRole("combobox", { name: "Model" }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
   test("honors project mode defaults in the checkbox and submission", async () => {
     const config = structuredClone(defaultConfig);
     config.global.defaultAgent = "claude";

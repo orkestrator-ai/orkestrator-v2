@@ -221,6 +221,12 @@ function resolveTmuxModelPreference(
     : DEFAULT_MODEL;
 }
 
+/** Whether `modelId` is one this catalog can actually honour. */
+function tmuxModelIsAvailable(modelId: string, models: ClaudeModel[]): boolean {
+  const normalized = LEGACY_TMUX_MODEL_ALIASES[modelId] ?? modelId;
+  return models.some((model) => model.id === normalized);
+}
+
 function getTmuxModel(id: string, models: ClaudeModel[]): ClaudeModel {
   return (
     models.find((m) => m.id === id) ??
@@ -521,16 +527,31 @@ export function ClaudeTmuxChatTab({
     setSelectedModel(
       resolveTmuxModelPreference(preferredModel, availableModels),
     );
-    initialLaunchModelPendingRef.current = false;
-    if (!initialLaunchModel || availableModels.length > 0) {
-      acknowledgeInitialLaunchOptions();
+    // `availableModels` can never be empty — `tmuxModelList` substitutes the
+    // bundled fallback list — so its length cannot signal "the live catalog has
+    // not arrived yet". A one-shot model that exists only in the SDK catalog
+    // would resolve to DEFAULT_MODEL against the fallback list, and consuming it
+    // there is unrecoverable: the next run (with the real catalog) prefers
+    // `persistedClaudeModel` and silently overwrites the user's choice. So hold
+    // the pending flag until either the model is honourable or the live catalog
+    // has actually landed.
+    if (
+      initialLaunchModelPendingRef.current
+      && initialLaunchModel
+      && sdkModels.length === 0
+      && !tmuxModelIsAvailable(initialLaunchModel, availableModels)
+    ) {
+      return;
     }
+    initialLaunchModelPendingRef.current = false;
+    acknowledgeInitialLaunchOptions();
   }, [
     acknowledgeInitialLaunchOptions,
     availableModels,
     hasStarted,
     initialLaunchModel,
     persistedClaudeModel,
+    sdkModels,
   ]);
 
   const persistSelectedModel = useCallback(

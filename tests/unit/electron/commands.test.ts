@@ -147,6 +147,35 @@ function createEnvironment(overrides: Partial<Environment> = {}): Environment {
 }
 
 /**
+ * Assert that an update issued to `StorageService.updateEnvironment` clears the
+ * durable agent-launch intent along with both one-shot launch options.
+ *
+ * Asserting `toEqual({..., initialAgentModel: undefined})` would be vacuous:
+ * Bun's `toEqual`/`toContainEqual` ignore properties whose value is `undefined`,
+ * so such an assertion passes even when the keys are absent entirely. Key
+ * *presence* is the clearing mechanism — `updateEnvironment` only writes a field
+ * when `field in updates` (storage.ts) — so check the keys explicitly.
+ */
+function expectClearsPendingAgentLaunch(update: unknown): void {
+  const keys = Object.keys(update as Record<string, unknown>);
+  expect(keys).toContain("pendingAgentLaunch");
+  expect(keys).toContain("initialAgentModel");
+  expect(keys).toContain("initialReasoningEffort");
+  const record = update as Record<string, unknown>;
+  expect(record.pendingAgentLaunch).toBe(false);
+  expect(record.initialAgentModel).toBeUndefined();
+  expect(record.initialReasoningEffort).toBeUndefined();
+}
+
+/** The `updateEnvironment` updates recorded for a given status, in order. */
+function updatesWithStatus(
+  updates: Record<string, unknown>[],
+  status: string,
+): Record<string, unknown>[] {
+  return updates.filter((update) => update.status === status);
+}
+
+/**
  * A local worktree sitting one commit ahead of `origin/main`, with the round's
  * Git-excluded artifact directory created but empty. Each caller writes only the
  * validation evidence its own scenario needs.
@@ -1776,6 +1805,11 @@ exit 1
       worktreePath: undefined,
       containerId: "container-1",
       status: "running",
+      // Seed the launch intent *and* both one-shot options, otherwise the
+      // "must not survive" assertions below are vacuously true.
+      pendingAgentLaunch: true,
+      initialAgentModel: "claude-fable-5[1m]",
+      initialReasoningEffort: "max",
     });
     const { context, emitted } = createContext(environment);
     const commands = createCommandRegistry();
@@ -7651,12 +7685,14 @@ exit 1
     await commands.get("stop_environment")?.({ environmentId: local.id }, context);
     // A stopped environment cannot honour a post-setup agent launch, and the
     // renderer no longer mounts it, so the intent is dropped here.
-    expect(updates).toContainEqual({
-      status: "stopped",
-      pendingAgentLaunch: false,
-      initialAgentModel: undefined,
-      initialReasoningEffort: undefined,
-    });
+    const localStopUpdates = updatesWithStatus(updates, "stopped");
+    expect(localStopUpdates).toHaveLength(1);
+    expectClearsPendingAgentLaunch(localStopUpdates[0]);
+    // The update actually lands on the stored environment, so a restart cannot
+    // resurrect the previous run's model.
+    expect(local.pendingAgentLaunch).toBe(false);
+    expect(local.initialAgentModel).toBeUndefined();
+    expect(local.initialReasoningEffort).toBeUndefined();
     await withFakeDocker(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 exit 0
@@ -7665,15 +7701,12 @@ exit 0
       expect(await fs.readFile(logs.all, "utf8")).toContain("stop container-1");
     });
     // Both lanes clear it, containerized as well as local.
-    expect(
-      updates.filter((update) => (update as { status?: string }).status === "stopped"),
-    ).toHaveLength(2);
-    expect(updates).toContainEqual({
-      status: "stopped",
-      pendingAgentLaunch: false,
-      initialAgentModel: undefined,
-      initialReasoningEffort: undefined,
-    });
+    const allStopUpdates = updatesWithStatus(updates, "stopped");
+    expect(allStopUpdates).toHaveLength(2);
+    expectClearsPendingAgentLaunch(allStopUpdates[1]);
+    expect(container.pendingAgentLaunch).toBe(false);
+    expect(container.initialAgentModel).toBeUndefined();
+    expect(container.initialReasoningEffort).toBeUndefined();
     await expect(commands.get("recreate_environment")?.({ environmentId: local.id }, context)).resolves.toBeUndefined();
   });
 
@@ -7791,6 +7824,9 @@ exit 0
       initialAgentModel: "must-not-survive",
       initialReasoningEffort: "ultra",
     }, context);
+    // Clearing the flag must emit both option keys explicitly: `updateEnvironment`
+    // only clears a stored field when the key is present, so dropping the keys
+    // here would leave the previous run's model on the environment.
     expect(updates.at(-1)).toEqual({
       defaultAgent: "codex",
       claudeMode: null,
@@ -7801,6 +7837,11 @@ exit 0
       initialAgentModel: undefined,
       initialReasoningEffort: undefined,
     });
+    expectClearsPendingAgentLaunch(updates.at(-1));
+    // ...and the stored environment really loses the model it had from the first
+    // call in this test, rather than silently keeping "gpt-5.6-sol".
+    expect(environment.initialAgentModel).toBeUndefined();
+    expect(environment.initialReasoningEffort).toBeUndefined();
     await commands.get("update_environment_agent_settings")?.({
       environmentId: environment.id,
       defaultAgent: "codex",
@@ -7869,20 +7910,37 @@ exit 0
     }, context);
     expect(updates.at(-1)).not.toHaveProperty("pendingAgentLaunch");
 
+    // Re-arm a launch with options so the clear below has something to destroy.
+    await commands.get("update_environment_agent_settings")?.({
+      environmentId: environment.id,
+      defaultAgent: "codex",
+      claudeMode: null,
+      claudeNativeBackend: null,
+      opencodeMode: null,
+      codexMode: "native",
+      pendingAgentLaunch: true,
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "high",
+    }, context);
+    expect(environment.initialAgentModel).toBe("gpt-5.6-sol");
+
     await commands.get("set_environment_pending_agent_launch")?.({
       environmentId: environment.id,
       pending: false,
     }, context);
-    expect(updates).toContainEqual({
-      pendingAgentLaunch: false,
-      initialAgentModel: undefined,
-      initialReasoningEffort: undefined,
-    });
+    expectClearsPendingAgentLaunch(updates.at(-1));
+    expect(environment.initialAgentModel).toBeUndefined();
+    expect(environment.initialReasoningEffort).toBeUndefined();
     await commands.get("set_environment_pending_agent_launch")?.({
       environmentId: environment.id,
       pending: true,
     }, context);
-    expect(updates).toContainEqual({ pendingAgentLaunch: true });
+    // Arming must not touch the options: the renderer sets the model through
+    // `update_environment_agent_settings`, and clobbering it here would drop a
+    // choice that had already been recorded.
+    expect(updates.at(-1)).toEqual({ pendingAgentLaunch: true });
+    expect(updates.at(-1)).not.toHaveProperty("initialAgentModel");
+    expect(updates.at(-1)).not.toHaveProperty("initialReasoningEffort");
     // A malformed call must fail rather than silently destroying the intent by
     // reading a missing/garbage value as `false`.
     expect(() => commands.get("set_environment_pending_agent_launch")?.({

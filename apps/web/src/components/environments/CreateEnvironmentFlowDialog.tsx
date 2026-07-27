@@ -120,8 +120,11 @@ export function CreateEnvironmentFlowDialog({
         agentType: options.agentType,
         initialPrompt: options.initialPrompt,
         initialPromptAttachments: options.initialPromptAttachments,
-        model: options.model,
-        reasoningEffort: options.reasoningEffort,
+        // Mirror the backend write above: a one-shot model only means anything
+        // for a launch, and storing it when `launchAgent` is false would leave a
+        // stale model in the transient options store for the next reader.
+        model: options.launchAgent ? options.model : undefined,
+        reasoningEffort: options.launchAgent ? options.reasoningEffort : undefined,
       });
 
       setProjectCollapsed(projectId, false);

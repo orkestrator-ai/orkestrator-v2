@@ -132,6 +132,53 @@ describe("CreateEnvironmentFlowDialog", () => {
     }));
   });
 
+  test("keeps the transient options store free of a model when the agent is off", async () => {
+    // The transient store must mirror the backend write: a one-shot model only
+    // means anything for a launch, and leaving one here would hand the next
+    // reader a model the user never asked to run.
+    const created = { id: "env-agent-off" } as Environment;
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={mock(async () => created)}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: /Launch agent/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled());
+    const stored = useClaudeOptionsStore.getState().getOptions("env-agent-off");
+    expect(stored?.launchAgent).toBe(false);
+    expect(stored?.model).toBeUndefined();
+    expect(stored?.reasoningEffort).toBeUndefined();
+  });
+
+  test("falls back to no project name when the id matches no known project", () => {
+    useProjectStore.setState({ projects: [] });
+    const operations = {
+      createEnvironment: mock(async () => ({ id: "unused" }) as Environment),
+      updateEnvironment: () => {},
+      startEnvironment: async () => {},
+    };
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-missing"
+        {...operations}
+      />,
+    );
+
+    // The title renders bare rather than with a stray separator or "undefined".
+    expect(screen.getByText("Create Ork (Environment)")).toBeTruthy();
+  });
+
   test("uses the stored project name unless an explicit name is provided", () => {
     useProjectStore.setState({
       projects: [{

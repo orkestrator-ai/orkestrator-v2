@@ -162,16 +162,6 @@ function hasStartupAgentTab(state: { root: PaneNode }): boolean {
     .some((leaf) => leaf.tabs.some((tab) => STARTUP_AGENT_TAB_TYPES[tab.type] === true));
 }
 
-function hasUnconsumedStartupAgentOptions(state: { root: PaneNode }): boolean {
-  return getAllLeaves(state.root).some((leaf) =>
-    leaf.tabs.some(
-      (tab) =>
-        STARTUP_AGENT_TAB_TYPES[tab.type] === true
-        && Boolean(tab.initialAgentModel || tab.initialReasoningEffort),
-    )
-  );
-}
-
 type TerminalTabDragEndAction =
   | { type: "none" }
   | {
@@ -709,11 +699,6 @@ export function TerminalContainer({
     if (!environment?.pendingAgentLaunch || !currentEnvState) return;
 
     if (hasStartupAgentTab(currentEnvState)) {
-      // The tab exists, but its agent surface may still be resolving a live
-      // model catalog or waiting for a terminal connection. Keep the backend
-      // intent and the persisted tab options authoritative until that consumer
-      // acknowledges them by clearing the tab fields.
-      if (hasUnconsumedStartupAgentOptions(currentEnvState)) return;
       if (durableLaunchClearInFlightRef.current) return;
       durableLaunchClearInFlightRef.current = true;
       // Persist the tab before clearing the launch intent. If the page is
@@ -723,6 +708,17 @@ export function TerminalContainer({
       // save_pane_layout is last-writer-wins, so an unsynchronized write here
       // could be overtaken by an older debounced one and lose the agent tab
       // after the flag had already been cleared.
+      //
+      // This flush is also what makes it safe to drop the backend's one-shot
+      // `initialAgentModel`/`initialReasoningEffort` here even though the agent
+      // surface may still be resolving a live model catalog: the flushed layout
+      // carries those options on the tab, and `pane-layout-restore` reads them
+      // back, so the tab is the durable carrier from this point on. Blocking the
+      // clear until a consumer acknowledged instead would strand
+      // `pendingAgentLaunch` forever whenever a surface reaches a steady state
+      // without applying them (background mount, empty catalog, init error),
+      // which keeps the environment hidden-mounted and polled for the life of
+      // the app.
       void flushPaneLayoutNow(
         environmentId,
         createPersistedPaneLayoutInput(currentEnvState),

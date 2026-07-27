@@ -3359,6 +3359,93 @@ Running 1 Explore agent...
     expect(screen.getByRole("button", { name: "Low" })).toBeTruthy();
   });
 
+  test("holds a one-shot model that only the live SDK catalog knows, then applies it", async () => {
+    // `tmuxModelList` substitutes the bundled fallback list when the SDK catalog
+    // has not arrived, so "not loaded yet" and "loaded" are indistinguishable by
+    // length. Resolving the one-shot model against the fallback list would
+    // collapse it to the Default sentinel and consume it — after which the live
+    // catalog arriving would prefer the persisted global model instead.
+    useClaudeStore.setState({ models: [], modelCatalogs: new Map() });
+    seedPane(undefined, "claude-newer-opus", "high");
+
+    const view = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        initialAgentModel="claude-newer-opus"
+        initialReasoningEffort="high"
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+    // Still unconsumed: the tab keeps the option so a remount can retry.
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+      initialAgentModel: "claude-newer-opus",
+    });
+
+    // Publish through the env-scoped catalog: the tab reads
+    // `modelCatalogs.get(env)?.models ?? models`, and the backend catalog fetch
+    // has already written an empty entry for this environment.
+    await waitFor(() => {
+      expect(getClaudeModelCatalogMock).toHaveBeenCalledWith("env-1", false);
+      expect(useClaudeStore.getState().getModelCatalog("env-1")?.models).toEqual([]);
+    });
+    await act(async () => {
+      useClaudeStore.getState().setModelCatalog({
+        environmentId: "env-1",
+        models: [
+          {
+            id: "claude-newer-opus",
+            name: "Newer Opus",
+            description: "from the SDK",
+            supportsEffort: true,
+            supportedEffortLevels: ["low", "medium", "high"],
+          },
+        ],
+        source: "sdk",
+        fetchedAt: "2026-07-25T12:00:00.000Z",
+        stale: false,
+      });
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByRole("button", { name: /Newer Opus/ })).toBeTruthy();
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+        initialAgentModel: undefined,
+        initialReasoningEffort: undefined,
+      });
+    });
+    view.unmount();
+  });
+
+  test("consumes a one-shot model the fallback catalog can already honour", async () => {
+    // The mirror of the test above: no need to wait for the SDK when the
+    // bundled list can honour the choice, otherwise every offline tmux launch
+    // would hold its options forever.
+    useClaudeStore.setState({ models: [], modelCatalogs: new Map() });
+    seedPane(undefined, "claude-fable-5[1m]", "max");
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        initialAgentModel="claude-fable-5[1m]"
+        initialReasoningEffort="max"
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /Fable/ })).toBeTruthy();
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+        initialAgentModel: undefined,
+        initialReasoningEffort: undefined,
+      });
+    });
+  });
+
   test("switches the running session effort through Claude's /effort command", async () => {
     useClaudeTmuxStore
       .getState()

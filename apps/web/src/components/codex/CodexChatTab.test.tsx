@@ -586,7 +586,10 @@ function seedEnvironment(name = "20260415-123456") {
   });
 }
 
-function seedPaneLayout(initialPrompt?: string) {
+function seedPaneLayout(
+  initialPrompt?: string,
+  launchOptions?: { initialAgentModel?: string; initialReasoningEffort?: string },
+) {
   usePaneLayoutStore.setState({
     environments: new Map([
       [
@@ -601,6 +604,8 @@ function seedPaneLayout(initialPrompt?: string) {
                 type: "codex-native" as any,
                 codexNativeData: createData(),
                 initialPrompt,
+                initialAgentModel: launchOptions?.initialAgentModel,
+                initialReasoningEffort: launchOptions?.initialReasoningEffort,
               },
             ],
             activeTabId: TAB_ID,
@@ -1160,6 +1165,78 @@ describe("CodexChatTab", () => {
     } finally {
       console.error = originalError;
     }
+  });
+
+  test("retains one-shot launch options through an init failure so the retry can apply them", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    seedPaneLayout(undefined, {
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "high",
+    });
+    mockGetCodexServerStatus.mockRejectedValueOnce(new Error("container bridge unavailable"));
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="gpt-5.6-sol"
+        initialReasoningEffort="high"
+      />,
+    );
+
+    expect(await screen.findByText("container bridge unavailable")).toBeTruthy();
+    // The error screen is a retryable state, not a completed launch, so the
+    // durable options must survive it.
+    const erroredTab = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)
+      .find((candidate) => candidate.id === TAB_ID);
+    expect(erroredTab?.initialAgentModel).toBe("gpt-5.6-sol");
+    expect(erroredTab?.initialReasoningEffort).toBe("high");
+
+    fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
+    await waitFor(() => {
+      const tab = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)
+        .find((candidate) => candidate.id === TAB_ID);
+      expect(tab?.initialAgentModel).toBeUndefined();
+      expect(tab?.initialReasoningEffort).toBeUndefined();
+    });
+  });
+
+  test("does not consume one-shot launch options for a background tab with nothing to dispatch", async () => {
+    // An inactive tab with no prompt never initializes, so it has not applied
+    // anything. `TerminalContainer` no longer waits on this acknowledgement, so
+    // holding the options here is free — and it is what lets the tab honour them
+    // when the user finally activates it.
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    seedPaneLayout(undefined, {
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "high",
+    });
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialAgentModel="gpt-5.6-sol"
+        initialReasoningEffort="high"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
+    });
+    const tab = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)
+      .find((candidate) => candidate.id === TAB_ID);
+    expect(tab?.initialAgentModel).toBe("gpt-5.6-sol");
   });
 
   test("surfaces cold initialization errors with the container bridge log and retries", async () => {

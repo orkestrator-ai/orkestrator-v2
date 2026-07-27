@@ -262,6 +262,32 @@ describe("Electron StorageService", () => {
     expect(environment.name).toMatch(/^\d{8}-\d{6}$/);
     expect(environment.branch).toBe(environment.name);
     expect(environment.lastActivityAt).toBe(environment.createdAt);
+    // A freshly minted environment carries no launch intent; the renderer
+    // records one right after creation via update_environment_agent_settings.
+    expect(environment.pendingAgentLaunch).toBe(false);
+    expect(environment.initialAgentModel).toBeUndefined();
+    expect(environment.initialReasoningEffort).toBeUndefined();
+  });
+
+  test("persists one-shot agent launch options added at insert time", async () => {
+    // There is no load-time whitelist to re-add a field the writer dropped, so
+    // pin the insert + JSON read-back path directly rather than only the update
+    // path that the CRUD test covers.
+    const storage = new StorageService(await createTempDir("ork-storage-launch-options-"));
+    await storage.init();
+    const project = await storage.addProject(createProject("https://github.com/acme/seed.git"));
+    const seeded = await storage.addEnvironment({
+      ...createEnvironment(project.id, { name: "seeded" }),
+      pendingAgentLaunch: true,
+      initialAgentModel: "claude-fable-5[1m]",
+      initialReasoningEffort: "max",
+    });
+
+    expect(await storage.getEnvironment(seeded.id)).toMatchObject({
+      pendingAgentLaunch: true,
+      initialAgentModel: "claude-fable-5[1m]",
+      initialReasoningEffort: "max",
+    });
   });
 
   test("recovers JSON from a rotated backup when the primary file is malformed", async () => {

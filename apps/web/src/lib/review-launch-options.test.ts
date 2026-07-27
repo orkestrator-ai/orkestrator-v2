@@ -88,6 +88,37 @@ describe("buildReviewModelCatalog", () => {
     );
   });
 
+  test("keeps the environment-scoped catalog isolated from other environments", () => {
+    // Only the no-environment (create-dialog) call aggregates. A review launched
+    // inside an environment must never be offered a model that environment's own
+    // OpenCode server does not serve.
+    useOpenCodeStore.setState({ models: new Map() });
+    useOpenCodeStore.getState().setModels("env-a", [
+      { id: "provider/only-a", name: "Only A", provider: "Provider A", variants: [] } as any,
+    ]);
+    useOpenCodeStore.getState().setModels("env-b", [
+      { id: "provider/only-b", name: "Only B", provider: "Provider B", variants: [] } as any,
+    ]);
+
+    expect(buildReviewModelCatalog("env-a").opencode.map((model) => model.id))
+      .toEqual(["provider/only-a"]);
+    expect(buildReviewModelCatalog("env-b").opencode.map((model) => model.id))
+      .toEqual(["provider/only-b"]);
+    // An environment with no cached catalog still falls back to the placeholder
+    // rather than borrowing a sibling's models.
+    expect(buildReviewModelCatalog("env-unknown").opencode)
+      .toEqual([{ id: "default", name: "Default", reasoningEfforts: [] }]);
+  });
+
+  test("falls back to the placeholder when every cached catalog is empty", () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    useOpenCodeStore.getState().setModels("env-a", []);
+    useOpenCodeStore.getState().setModels("env-b", []);
+
+    expect(buildReviewModelCatalog(undefined).opencode)
+      .toEqual([{ id: "default", name: "Default", reasoningEfforts: [] }]);
+  });
+
   test("aggregates and deduplicates cached OpenCode catalogs before an environment exists", () => {
     useOpenCodeStore.setState({ models: new Map() });
     useOpenCodeStore.getState().setModels("env-a", [

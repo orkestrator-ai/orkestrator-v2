@@ -196,5 +196,8 @@ describe("ProjectLauncher", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close create flow" }));
     expect(screen.queryByRole("button", { name: "Close create flow" })).toBeNull();
     expect(flowProps?.projectId).toBeNull();
+    // Closing resets the id, so the name lookup must resolve to nothing rather
+    // than to a stale project's name.
+    expect(flowProps?.projectName).toBeUndefined();
   });
 });

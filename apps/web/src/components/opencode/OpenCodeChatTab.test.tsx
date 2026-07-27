@@ -365,7 +365,10 @@ function createData(overrides: Partial<OpenCodeNativeData> = {}): OpenCodeNative
   };
 }
 
-function seedPaneLayout(sessionId?: string) {
+function seedPaneLayout(
+  sessionId?: string,
+  launchOptions?: { initialAgentModel?: string; initialReasoningEffort?: string },
+) {
   usePaneLayoutStore.setState({
     environments: new Map([
       [
@@ -379,6 +382,8 @@ function seedPaneLayout(sessionId?: string) {
                 id: TAB_ID,
                 type: "opencode-native",
                 openCodeNativeData: createData({ sessionId }),
+                initialAgentModel: launchOptions?.initialAgentModel,
+                initialReasoningEffort: launchOptions?.initialReasoningEffort,
               },
             ],
             activeTabId: TAB_ID,
@@ -2055,6 +2060,72 @@ describe("OpenCodeChatTab", () => {
         expect.objectContaining({ model: undefined, variant: undefined }),
       );
     });
+  });
+
+  test("retains one-shot launch options when the catalog comes back empty", async () => {
+    // An empty catalog means the choice could not be validated, let alone
+    // applied. Clearing here would destroy the tab's copy — the only durable
+    // one left once `TerminalContainer` has handed ownership over — so a later
+    // mount could never honour it.
+    useOpenCodeStore.setState((state) => ({ ...state, clients: new Map(), models: new Map() }));
+    seedPaneLayout(undefined, {
+      initialAgentModel: "openai/gpt-5",
+      initialReasoningEffort: "high",
+    });
+    mockGetModelsWithDefaults.mockImplementationOnce(async () => ({
+      models: [],
+      defaults: {},
+    } as never));
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="openai/gpt-5"
+        initialReasoningEffort="high"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetModelsWithDefaults).toHaveBeenCalled();
+    });
+    const tab = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)
+      .find((candidate) => candidate.id === TAB_ID);
+    expect(tab?.initialAgentModel).toBe("openai/gpt-5");
+    expect(tab?.initialReasoningEffort).toBe("high");
+  });
+
+  test("clears one-shot launch options once the cold path resolves them", async () => {
+    useOpenCodeStore.setState((state) => ({ ...state, clients: new Map(), models: new Map() }));
+    seedPaneLayout(undefined, {
+      initialAgentModel: "openai/gpt-5",
+      initialReasoningEffort: "high",
+    });
+    mockGetModelsWithDefaults.mockImplementationOnce(async () => ({
+      models: [
+        { id: "openai/gpt-5", name: "GPT-5", provider: "OpenAI", variants: ["high"] },
+      ],
+      defaults: {},
+    } as never));
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="openai/gpt-5"
+        initialReasoningEffort="high"
+      />,
+    );
+
+    await waitFor(() => {
+      const tab = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)
+        .find((candidate) => candidate.id === TAB_ID);
+      expect(tab?.initialAgentModel).toBeUndefined();
+      expect(tab?.initialReasoningEffort).toBeUndefined();
+    });
+    expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe("openai/gpt-5");
   });
 
   test("seeds a model for a second tab that reuses a warm client", async () => {

@@ -129,7 +129,11 @@ export interface ClaudeOptions {
   claudeMode: ClaudeMode;
   opencodeMode: OpenCodeMode;
   codexMode: CodexMode;
-  model: string;
+  /**
+   * One-shot model for the launched agent tab. `undefined` means "no explicit
+   * choice" — the agent surface falls back to the user's configured defaults.
+   */
+  model?: string;
   reasoningEffort?: string;
   initialPrompt: string;
   initialPromptAttachments: InitialPromptImageAttachment[];
@@ -180,6 +184,19 @@ export function CreateEnvironmentDialog({
     ?? config.global.opencodeModel;
   const configuredOpenCodeEffort =
     configDefaultAgent === "opencode" ? repoConfig?.defaultEffort : undefined;
+  /**
+   * `buildReviewModelCatalog` synthesises a single `{ id: "default" }` OpenCode
+   * entry when no environment has cached a live catalog yet. That id is a UI
+   * placeholder, not a model any OpenCode server knows, so submitting it would
+   * pin a bogus one-shot model — and because a pending launch option is treated
+   * as authoritative downstream, it would also suppress the user's own saved
+   * OpenCode model preferences. Claude's `"default"` is a real catalog id and
+   * must keep flowing through untouched.
+   */
+  const hasLiveOpenCodeModels = useMemo(
+    () => Array.from(openCodeModels.values()).some((models) => models.length > 0),
+    [openCodeModels],
+  );
   const modelCatalog = useMemo(
     () => {
       const catalog = buildReviewModelCatalog(undefined);
@@ -625,7 +642,10 @@ export function CreateEnvironmentDialog({
           claudeMode,
           opencodeMode,
           codexMode,
-          model,
+          model:
+            agentType === "opencode" && model === "default" && !hasLiveOpenCodeModels
+              ? undefined
+              : model,
           reasoningEffort:
             reasoningEffort === "default" ? undefined : reasoningEffort,
           initialPrompt: initialPrompt.trim(),
@@ -644,7 +664,7 @@ export function CreateEnvironmentDialog({
         console.error("Failed to create environment:", err);
       }
     },
-    [environmentType, environmentName, launchAgent, agentType, claudeMode, opencodeMode, codexMode, model, reasoningEffort, initialPrompt, initialPromptAttachments, networkAccessMode, portMappings, onCreate, resetForm, onOpenChange, projectId, validatePortMappings]
+    [environmentType, environmentName, launchAgent, agentType, claudeMode, opencodeMode, codexMode, model, hasLiveOpenCodeModels, reasoningEffort, initialPrompt, initialPromptAttachments, networkAccessMode, portMappings, onCreate, resetForm, onOpenChange, projectId, validatePortMappings]
   );
 
   const handlePromptKeyDown = useCallback(

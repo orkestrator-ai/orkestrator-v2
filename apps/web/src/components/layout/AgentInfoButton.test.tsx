@@ -30,6 +30,19 @@ const mockForkClaudeSession = mock<
   (_client: unknown, _sessionId: string) => Promise<{ sessionId: string; title?: string }>
 >(async () => ({ sessionId: "claude-fork", title: "Claude fork title" }));
 const mockCompactClaudeSession = mock(async () => true);
+const mockGetClaudeSession = mock(async () => ({
+  id: "claude-session-1",
+  status: "idle" as const,
+  createdAt: "2026-07-27T10:00:00.000Z",
+  lastActivity: "2026-07-27T10:01:00.000Z",
+}));
+const mockGetClaudeSessionMessages = mock(async () => [{
+  id: "m1",
+  role: "user" as const,
+  content: "continue this",
+  parts: [{ type: "text" as const, content: "continue this" }],
+  timestamp: "2026-07-27T10:00:00.000Z",
+}]);
 const mockRewindClaudeFiles = mock<
   (
     _client: unknown,
@@ -78,6 +91,8 @@ mock.module("@/lib/claude-client", () => ({
   ...realClaudeClientSnapshot,
   compactClaudeSession: mockCompactClaudeSession,
   forkClaudeSession: mockForkClaudeSession,
+  getSession: mockGetClaudeSession,
+  getSessionMessages: mockGetClaudeSessionMessages,
   rewindClaudeFiles: mockRewindClaudeFiles,
   stopClaudeBackgroundTask: mockStopClaudeBackgroundTask,
 }));
@@ -263,6 +278,8 @@ beforeEach(() => {
 
   mockForkClaudeSession.mockClear();
   mockCompactClaudeSession.mockClear();
+  mockGetClaudeSession.mockClear();
+  mockGetClaudeSessionMessages.mockClear();
   mockRewindClaudeFiles.mockClear();
   mockStopClaudeBackgroundTask.mockClear();
   mockCompactOpenCodeSession.mockClear();
@@ -282,6 +299,19 @@ beforeEach(() => {
     title: "Claude fork title",
   }));
   mockCompactClaudeSession.mockImplementation(async () => true);
+  mockGetClaudeSession.mockImplementation(async () => ({
+    id: "claude-session-1",
+    status: "idle",
+    createdAt: "2026-07-27T10:00:00.000Z",
+    lastActivity: "2026-07-27T10:01:00.000Z",
+  }));
+  mockGetClaudeSessionMessages.mockImplementation(async () => [{
+    id: "m1",
+    role: "user",
+    content: "continue this",
+    parts: [{ type: "text", content: "continue this" }],
+    timestamp: "2026-07-27T10:00:00.000Z",
+  }]);
   mockRewindClaudeFiles.mockImplementation(async () => ({ files: [] }));
   mockStopClaudeBackgroundTask.mockImplementation(async () => true);
   mockCompactOpenCodeSession.mockImplementation(async () => undefined);
@@ -1102,6 +1132,75 @@ describe("AgentInfoButton session actions", () => {
     open();
     expect(screen.getByRole("button", { name: /Fork session/ }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: /Compact/ }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: /Continue in/ }).hasAttribute("disabled")).toBe(true);
+  });
+
+  test("reveals only the two other providers and explains the copy boundary", () => {
+    seedClaudeSession([{ id: "m1", role: "user", content: "continue this" }]);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const continueButton = screen.getByRole("button", { name: /Continue in/ });
+    expect(continueButton.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(continueButton);
+
+    expect(continueButton.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: "Codex" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "OpenCode" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Claude" })).toBeNull();
+    expect(screen.getByText(/source session stays intact/)).toBeTruthy();
+  });
+
+  test("persists an authoritative Claude handoff and opens a Codex native tab", async () => {
+    seedClaudeSession([{ id: "optimistic", role: "user", content: "stale renderer copy" }]);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+    );
+    expect(mockGetClaudeSession).toHaveBeenCalledWith(
+      CLAUDE_CLIENT,
+      "claude-session-1",
+    );
+    expect(mockGetClaudeSessionMessages).toHaveBeenCalledWith(
+      CLAUDE_CLIENT,
+      "claude-session-1",
+      { throwOnError: true },
+    );
+    const handoffTab = usePaneLayoutStore
+      .getState()
+      .getAllTabs(ENVIRONMENT_ID)
+      .find((tab) => tab.id !== TAB_ID)!;
+    expect(handoffTab.type).toBe("codex-native");
+    expect(handoffTab.agentHandoffId).toBeTruthy();
+    expect(handoffTab.codexNativeData).toMatchObject({
+      environmentId: ENVIRONMENT_ID,
+    });
+    expect(handoffTab.initialPrompt).toBeUndefined();
+    expect(mockToastSuccess).toHaveBeenCalledWith(
+      "Continuing in Codex with 1 message and 0 tool calls",
+    );
+  });
+
+  test("does not allow a handoff while the source turn is running", () => {
+    useClaudeStore.setState({
+      clients: new Map([[ENVIRONMENT_ID, CLAUDE_CLIENT]]),
+      sessions: new Map([[
+        CLAUDE_KEY,
+        {
+          sessionId: "claude-session-1",
+          messages: [{ id: "m1", role: "user", content: "working" }],
+          isLoading: true,
+        },
+      ]]),
+    } as never);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+    expect(screen.getByRole("button", { name: /Continue in/ }).hasAttribute("disabled"))
+      .toBe(true);
   });
 
   test.each([["claude"], ["opencode"], ["codex"]])(

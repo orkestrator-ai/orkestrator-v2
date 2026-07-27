@@ -9,6 +9,7 @@ import {
 } from "@/hooks/useManualSessionRefresh";
 import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
+import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
@@ -110,6 +111,7 @@ interface ClaudeChatTabProps {
   isReviewTab?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
+  agentHandoffId?: string;
   refreshRequestId?: number;
 }
 type ConnectionState = "connecting" | "connected" | "error";
@@ -132,6 +134,7 @@ export function ClaudeChatTab({
   isReviewTab = false,
   initialAgentModel,
   initialReasoningEffort,
+  agentHandoffId,
   refreshRequestId = 0,
 }: ClaudeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
@@ -232,7 +235,11 @@ export function ClaudeChatTab({
   );
 
   // Pane layout store - for clearing initialPrompt after it's been sent
-  const { clearTabInitialPrompt, updateTabNativeSessionId } = usePaneLayoutStore();
+  const {
+    clearTabInitialPrompt,
+    clearTabAgentHandoff,
+    updateTabNativeSessionId,
+  } = usePaneLayoutStore();
 
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
@@ -561,14 +568,22 @@ export function ClaudeChatTab({
   // Memoize messages separately to provide stable reference for child components
   // This prevents unnecessary recalculations when other session properties change
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
-  const displayMessages = useMemo(
+  const providerDisplayMessages = useMemo(
     () => pinActiveNativeAgentParts(
       normalizeClaudeMessagesForDisplay(sessionMessages),
     ),
     [sessionMessages],
   );
+  const handoff = useAgentHandoff(
+    agentHandoffId,
+    "claude",
+    environmentId,
+    providerDisplayMessages,
+  );
+  const displayMessages = handoff.displayMessages;
+  const launchPrompt = initialPrompt ?? handoff.initialPrompt;
   const forkPlan = useMemo(
-    () => buildMessageForkPlan(displayMessages, {
+    () => buildMessageForkPlan(providerDisplayMessages, {
       responseInProgress: session?.isLoading ?? false,
       // Claude's boundary is inclusive, so branching *before* a prompt means
       // forking at the message before it; the first prompt has nothing to fork
@@ -589,14 +604,14 @@ export function ClaudeChatTab({
         messageId: getClaudeSourceMessageId(message.id),
       }),
     }),
-    [displayMessages, session?.isLoading],
+    [providerDisplayMessages, session?.isLoading],
   );
   // Read by the fork handler so it does not have to depend on the transcript:
   // `displayMessages` is a fresh array on every streaming tick, and a handler
   // that changed with it would rebuild every fork button on every tick.
   const forkPlanRef = useRef(forkPlan);
   forkPlanRef.current = forkPlan;
-  const hasMessageHistory = sessionMessages.length > 0;
+  const hasMessageHistory = displayMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
 
   // Queue length for this session - use selector to only re-render when this specific queue changes
@@ -1037,7 +1052,7 @@ export function ClaudeChatTab({
           // Check if we have an initial prompt to send
           // We send it BEFORE starting SSE to avoid race conditions where
           // SSE events could wipe locally-added messages before they're synced
-          const shouldSendInitialPrompt = initialPrompt && !initialPromptSentRef.current;
+          const shouldSendInitialPrompt = launchPrompt && !initialPromptSentRef.current;
 
           if (shouldSendInitialPrompt) {
             // Mark as sent immediately to prevent double-sending
@@ -1049,15 +1064,15 @@ export function ClaudeChatTab({
             const userMessage = {
               id: createUuid(),
               role: "user" as const,
-              content: initialPrompt,
-              parts: [{ type: "text" as const, content: initialPrompt }],
+              content: launchPrompt,
+              parts: [{ type: "text" as const, content: launchPrompt }],
               timestamp: new Date().toISOString(),
             };
 
             console.debug("[ClaudeChatTab] Sending initial prompt during initialization", {
               tabId,
               sessionId: newSession.sessionId,
-              promptLength: initialPrompt.length,
+              promptLength: launchPrompt.length,
             });
 
             // Set session with the user message already included and loading state
@@ -1084,7 +1099,7 @@ export function ClaudeChatTab({
             startSharedEventSubscription(bridgeClient);
 
             // Now send the prompt
-            const success = await sendPrompt(bridgeClient, newSession.sessionId, initialPrompt, {
+            const success = await sendPrompt(bridgeClient, newSession.sessionId, launchPrompt, {
               model: selectedModel,
               effort: effortLevel,
               permissionMode,
@@ -1703,7 +1718,7 @@ export function ClaudeChatTab({
       connectionState === "connected" &&
       client &&
       session &&
-      initialPrompt &&
+      launchPrompt &&
       !setupPending &&
       !initialPromptSentRef.current &&
       !sessionHasMessages
@@ -1712,9 +1727,9 @@ export function ClaudeChatTab({
       // Also clear the initialPrompt from the pane store to prevent re-submission on remount
       clearTabInitialPrompt(tabId, environmentId);
       console.debug("[ClaudeChatTab] Sending initial prompt on reconnection for tab:", tabId);
-      handleSendRef.current?.(initialPrompt, [], effortValue, planModeEnabledValue, fastModeEnabledValue);
+      handleSendRef.current?.(launchPrompt, [], effortValue, planModeEnabledValue, fastModeEnabledValue);
     }
-  }, [connectionState, client, session, initialPrompt, setupPending, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
+  }, [connectionState, client, session, launchPrompt, setupPending, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
 
   useNativeMessageQueue({
     agentLabel: "Claude",
@@ -1838,6 +1853,7 @@ export function ClaudeChatTab({
         });
         tabSessionIdRef.current = sessionId;
         updateTabNativeSessionId(tabId, sessionId, environmentId);
+        clearTabAgentHandoff(tabId, environmentId);
 
         console.debug("[ClaudeChatTab] Session state updated:", {
           sessionKey,
@@ -1850,7 +1866,14 @@ export function ClaudeChatTab({
         console.error("[ClaudeChatTab] Failed to resume session:", error);
       }
     },
-    [client, environmentId, sessionKey, tabId, updateTabNativeSessionId]
+    [
+      clearTabAgentHandoff,
+      client,
+      environmentId,
+      sessionKey,
+      tabId,
+      updateTabNativeSessionId,
+    ]
   );
 
   const handleForkFromMessage = useCallback(async (

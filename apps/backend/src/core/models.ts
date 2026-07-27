@@ -227,6 +227,21 @@ export interface PersistedPromptQueue {
   revision: number;
 }
 
+/**
+ * Immutable provider-to-provider conversation handoff.
+ *
+ * The backend owns the sensitive, durable envelope while the renderer owns and
+ * validates the provider-neutral snapshot schema. Keeping the snapshot opaque
+ * avoids coupling backend storage to the three native message wire formats.
+ */
+export interface PersistedAgentHandoff {
+  version: number;
+  id: string;
+  environmentId: string;
+  snapshot: unknown;
+  createdAt: string;
+}
+
 export interface RepositoryConfig {
   defaultBranch: string;
   prBaseBranch: string;

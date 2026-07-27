@@ -71,6 +71,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     isReviewTab: optionalBoolean(value.isReviewTab),
     initialAgentModel: optionalString(value.initialAgentModel),
     initialReasoningEffort: optionalString(value.initialReasoningEffort),
+    agentHandoffId: optionalString(value.agentHandoffId),
   };
 
   if (value.isSetupTab === true) {

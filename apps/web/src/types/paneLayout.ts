@@ -149,6 +149,12 @@ export interface TabInfo {
   initialAgentModel?: string;
   /** One-shot reasoning effort or provider variant selected at creation. */
   initialReasoningEffort?: string;
+  /**
+   * Durable provider-to-provider conversation handoff rendered ahead of this
+   * tab's native transcript. The pane layout stores only this small reference;
+   * the sensitive transcript lives in backend handoff storage.
+   */
+  agentHandoffId?: string;
   /** Whether this tab runs setup scripts (used to track completion) */
   isSetupTab?: boolean;
 }

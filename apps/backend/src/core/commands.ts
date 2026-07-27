@@ -3371,6 +3371,7 @@ async function deleteEnvironment(
       );
       // Queued prompts for a deleted environment can never be dispatched.
       await storage.deletePromptQueuesByEnvironment(environmentId);
+      await storage.deleteAgentHandoffsByEnvironment(environmentId);
       await storage.removeEnvironment(environmentId);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);
       cleanupEnvironmentSetupState(environmentId);
@@ -5622,6 +5623,19 @@ export function createCommandRegistry(
         asString(environmentId, "environmentId"),
         asString(expectedMessageId, "expectedMessageId"),
         candidateMessages as unknown[],
+      ),
+  );
+  register("get_agent_handoff", ({ handoffId }, { storage }) =>
+    storage.getAgentHandoff(asString(handoffId, "handoffId")),
+  );
+  register(
+    "save_agent_handoff",
+    ({ handoffId, environmentId, version, snapshot }, { storage }) =>
+      storage.saveAgentHandoff(
+        asString(handoffId, "handoffId"),
+        asString(environmentId, "environmentId"),
+        asNumber(version, "version"),
+        snapshot,
       ),
   );
 

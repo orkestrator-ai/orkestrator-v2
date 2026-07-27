@@ -32,6 +32,7 @@ import type {
   PersistedLoopedReviewWorkflow,
   PersistedBuildPipeline,
   PersistedPromptQueue,
+  PersistedAgentHandoff,
 } from "@/types";
 import type {
   LinearCompletionCommentResult,
@@ -1581,6 +1582,28 @@ export async function claimPromptQueueHead<T>(
     environmentId,
     expectedMessageId,
     candidateMessages,
+  });
+}
+
+// --- Agent Handoffs ---
+
+export async function getAgentHandoff<T = unknown>(
+  handoffId: string,
+): Promise<PersistedAgentHandoff<T> | null> {
+  return invoke<PersistedAgentHandoff<T> | null>("get_agent_handoff", { handoffId });
+}
+
+export async function saveAgentHandoff<T extends Record<string, unknown>>(
+  handoffId: string,
+  environmentId: string,
+  version: number,
+  snapshot: T,
+): Promise<PersistedAgentHandoff<T>> {
+  return invoke<PersistedAgentHandoff<T>>("save_agent_handoff", {
+    handoffId,
+    environmentId,
+    version,
+    snapshot,
   });
 }
 

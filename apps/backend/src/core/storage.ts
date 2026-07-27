@@ -40,6 +40,7 @@ import type {
   PersistedLoopedReviewWorkflow,
   PersistedBuildPipeline,
   PersistedPromptQueue,
+  PersistedAgentHandoff,
   RepositoryConfig,
   Session,
   SessionType,
@@ -294,6 +295,20 @@ function isPersistedPromptQueue(
     && typeof value.updatedAt === "string"
     && Number.isFinite(Date.parse(value.updatedAt))
     && isPositiveInteger(value.revision);
+}
+
+function isPersistedAgentHandoff(
+  value: unknown,
+  expectedId?: string,
+): value is PersistedAgentHandoff {
+  return isRecord(value)
+    && isPositiveInteger(value.version)
+    && isNonBlankString(value.id)
+    && (expectedId === undefined || value.id === expectedId)
+    && isNonBlankString(value.environmentId)
+    && isRecord(value.snapshot)
+    && typeof value.createdAt === "string"
+    && Number.isFinite(Date.parse(value.createdAt));
 }
 
 function isPersistedBuildPipeline(
@@ -663,6 +678,7 @@ export class StorageService {
   private loopedReviewMutation: Promise<unknown> = Promise.resolve();
   private buildPipelineMutation: Promise<unknown> = Promise.resolve();
   private promptQueueMutation: Promise<unknown> = Promise.resolve();
+  private agentHandoffMutation: Promise<unknown> = Promise.resolve();
   private changeListener: ResourceChangeListener | null = null;
   private changeRevision = 0;
 
@@ -739,6 +755,10 @@ export class StorageService {
 
   private promptQueuesFile(): string {
     return this.file("prompt-queues.json");
+  }
+
+  private agentHandoffsFile(): string {
+    return this.file("agent-handoffs.json");
   }
 
   private kanbanFile(): string {
@@ -2078,6 +2098,119 @@ export class StorageService {
           && queue.environmentId !== environmentId,
       );
       return removedKeys;
+    });
+  }
+
+  private enqueueAgentHandoffMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.agentHandoffsFile(),
+        "agent handoff storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.agentHandoffMutation.then(run, run);
+    this.agentHandoffMutation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async loadAgentHandoffs(): Promise<Record<string, PersistedAgentHandoff>> {
+    const stored = await this.loadJson<Record<string, PersistedAgentHandoff>>(
+      this.agentHandoffsFile(),
+      () => ({}),
+    );
+    return Object.fromEntries(
+      Object.entries(stored).filter(([storedId, handoff]) =>
+        isPersistedAgentHandoff(handoff, storedId)
+      ),
+    ) as Record<string, PersistedAgentHandoff>;
+  }
+
+  async getAgentHandoff(handoffId: string): Promise<PersistedAgentHandoff | null> {
+    if (!isNonBlankString(handoffId)) {
+      throw new Error("Agent handoff ID must not be blank");
+    }
+    return (await this.loadAgentHandoffs())[handoffId] ?? null;
+  }
+
+  async saveAgentHandoff(
+    handoffId: string,
+    environmentId: string,
+    version: number,
+    snapshot: unknown,
+  ): Promise<PersistedAgentHandoff> {
+    if (!isNonBlankString(handoffId)) {
+      throw new Error("Agent handoff ID must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Agent handoff environment ID must not be blank");
+    }
+    if (!isPositiveInteger(version)) {
+      throw new Error("Agent handoff version must be a positive integer");
+    }
+    if (!isRecord(snapshot)) {
+      throw new Error("Agent handoff snapshot must be an object");
+    }
+
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(snapshot);
+    } catch {
+      throw new Error("Agent handoff snapshot must be JSON serializable");
+    }
+    if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
+      throw new Error("Agent handoff exceeds the 32 MB limit");
+    }
+
+    return this.enqueueAgentHandoffMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Agent handoff");
+      const handoffs = await this.loadAgentHandoffs();
+      const previous = handoffs[handoffId];
+      if (previous) {
+        if (previous.environmentId !== environmentId) {
+          throw new Error("Agent handoff belongs to another environment");
+        }
+        // Handoffs are immutable. Returning the committed record makes a retry
+        // idempotent without allowing a second client to replace its contents.
+        return previous;
+      }
+      const saved: PersistedAgentHandoff = {
+        version,
+        id: handoffId,
+        environmentId,
+        snapshot,
+        createdAt: nowIso(),
+      };
+      handoffs[handoffId] = saved;
+      await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      return saved;
+    });
+  }
+
+  async deleteAgentHandoffsByEnvironment(environmentId: string): Promise<string[]> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Agent handoff environment ID must not be blank");
+    }
+    return this.enqueueAgentHandoffMutation(async () => {
+      const handoffs = await this.loadAgentHandoffs();
+      const removedIds = Object.values(handoffs)
+        .filter((handoff) => handoff.environmentId === environmentId)
+        .map((handoff) => handoff.id);
+      if (removedIds.length > 0) {
+        for (const id of removedIds) delete handoffs[id];
+        await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.agentHandoffsFile(),
+        (storedId, handoff) =>
+          isPersistedAgentHandoff(handoff, storedId)
+          && handoff.environmentId !== environmentId,
+      );
+      return removedIds;
     });
   }
 

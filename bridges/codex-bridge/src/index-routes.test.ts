@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 
 process.env.CODEX_BRIDGE_NO_ENGINE = "1";
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
+process.env.CODEX_BRIDGE_AUTH_DISABLED_FOR_TESTING = "1";
 
 const { app, __testing } = await import("./index.js");
 const runtime = __testing.runtimeForTesting();
 const runtimeMethods = runtime as unknown as Record<string, unknown>;
+const AUTH_TOKEN = "test-codex-bridge-token";
 
 async function withRuntimeMethod(
   name: string,
@@ -60,6 +62,43 @@ describe("global route outcomes", () => {
       commands: expect.any(Array),
       cwd: expect.any(String),
     });
+  });
+});
+
+describe("bridge authentication and origin policy", () => {
+  test("protects data routes while leaving only the minimal process health public", async () => {
+    __testing.setBridgeAuthForTesting(AUTH_TOKEN);
+    try {
+      expect((await app.request("/global/auth-check")).status).toBe(401);
+      expect((await app.request("/global/auth-check", {
+        headers: { Authorization: "Bearer wrong" },
+      })).status).toBe(401);
+      expect((await app.request("/global/auth-check", {
+        headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
+      })).status).toBe(200);
+      expect((await app.request("/global/auth-check", {
+        headers: { "X-Orkestrator-Codex-Token": AUTH_TOKEN },
+      })).status).toBe(200);
+
+      const health = await app.request("/global/health");
+      expect([200, 503]).toContain(health.status);
+      const payload = await health.json() as Record<string, unknown>;
+      const serialized = JSON.stringify(payload);
+      expect(serialized).not.toContain('"pid"');
+      expect(serialized).not.toContain("codexHome");
+      expect(serialized).not.toContain("lastError");
+    } finally {
+      __testing.setBridgeAuthForTesting();
+    }
+  });
+
+  test("allows only local, file, and explicitly configured origins", () => {
+    expect(__testing.isTrustedBridgeOriginForTesting("https://attacker.example"))
+      .toBe(false);
+    expect(__testing.isTrustedBridgeOriginForTesting("http://127.0.0.1:5173"))
+      .toBe(true);
+    expect(__testing.isTrustedBridgeOriginForTesting("file://")).toBe(true);
+    expect(__testing.isTrustedBridgeOriginForTesting("null")).toBe(true);
   });
 });
 
@@ -792,5 +831,13 @@ describe("runtime-health route", () => {
       },
     );
     expect(calls).toEqual(["session-42"]);
+  });
+
+  test("returns 404 for an unknown session instead of environment-wide health", async () => {
+    await withRuntimeMethod("getRuntimeHealth", async () => null, async () => {
+      const response = await app.request("/session/missing/runtime-health");
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "Session not found" });
+    });
   });
 });

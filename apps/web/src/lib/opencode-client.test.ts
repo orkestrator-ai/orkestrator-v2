@@ -1437,6 +1437,37 @@ describe("opencode-client sendPrompt", () => {
       requestId: "structured-6",
       error: { code: "malformed_output" },
     });
+
+    const malformedTiming = {
+      session: {
+        messages: async () => ({
+          data: [{
+            info: {
+              id: "assistant-invalid-time",
+              role: "assistant",
+              parentID: "structured-invalid-time",
+              time: "completed yesterday",
+              structured: { summary: "Must not be accepted" },
+            },
+            parts: [],
+          }],
+        }),
+      },
+    } as unknown as OpencodeClient;
+    await expect(
+      getStructuredOutput(
+        malformedTiming,
+        "session-1",
+        "structured-invalid-time",
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      requestId: "structured-invalid-time",
+      error: {
+        code: "malformed_output",
+        message: "OpenCode returned malformed assistant timing data.",
+      },
+    });
   });
 });
 
@@ -2633,6 +2664,17 @@ describe("opencode-client events and pending requests", () => {
     await expect(
       getPendingPermissions(resolvedFailure, { throwOnError: true }),
     ).rejects.toThrow("permission endpoint unavailable");
+
+    const primitiveFailure = {
+      question: { list: async () => { throw "question offline"; } },
+      permission: { list: async () => { throw 503; } },
+    } as unknown as OpencodeClient;
+    await expect(
+      getPendingQuestions(primitiveFailure, { throwOnError: true }),
+    ).rejects.toThrow("Failed to get pending OpenCode questions");
+    await expect(
+      getPendingPermissions(primitiveFailure, { throwOnError: true }),
+    ).rejects.toThrow("Failed to get pending OpenCode permissions");
   });
 
   test("replies to and rejects requests with the v2 SDK shape", async () => {

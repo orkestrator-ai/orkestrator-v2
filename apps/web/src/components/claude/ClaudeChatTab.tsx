@@ -31,6 +31,8 @@ import {
   SYSTEM_MESSAGE_PREFIX,
   SessionNotFoundError,
   USAGE_SCAN_EXEMPT_EVENT_TYPES,
+  parseClaudeBackgroundTasks,
+  parseClaudeContextUsage,
   type ClaudeMessage as ClaudeMessageType,
   type ClaudeMessagePatch,
   type ClaudeQuestionRequest,
@@ -42,7 +44,6 @@ import {
 } from "@/lib/claude-client";
 import {
   extractContextUsage,
-  type ContextUsageSnapshot,
 } from "@/lib/context-usage";
 import {
   startClaudeServer,
@@ -145,6 +146,7 @@ export function ClaudeChatTab({
   const slashCmdCleanupRef = useRef<(() => void) | null>(null);
   const lastHandledRefreshRequestIdRef = useRef(0);
   const manualRefreshSequenceRef = useRef(0);
+  const resumeSequenceRef = useRef(0);
   const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => Promise<void>) | null>(null);
 
   const {
@@ -299,11 +301,36 @@ export function ClaudeChatTab({
       serverSession: Awaited<ReturnType<typeof getSession>>,
     ) => {
       if (!serverSession) return;
-      if (serverSession.contextUsage) {
-        setContextUsage(key, serverSession.contextUsage);
+      const invalidFields = new Set(serverSession.invalidMetadataFields ?? []);
+      const contextUsage = parseClaudeContextUsage(serverSession.contextUsage);
+      if (invalidFields.has("contextUsage")) {
+        // Preserve the last valid snapshot when only this optional wire field
+        // was malformed.
+      } else if (contextUsage) {
+        setContextUsage(key, contextUsage);
+      } else {
+        setContextUsage(key, null);
       }
-      applyPromptSuggestion(key, serverSession.promptSuggestion);
-      setBackgroundTasks(key, serverSession.backgroundTasks ?? {});
+      if (
+        !invalidFields.has("promptSuggestion")
+        && (
+          serverSession.promptSuggestion === undefined
+          || typeof serverSession.promptSuggestion === "string"
+        )
+      ) {
+        applyPromptSuggestion(key, serverSession.promptSuggestion);
+      }
+      if (invalidFields.has("backgroundTasks")) {
+        // Preserve the last valid snapshot when only this optional wire field
+        // was malformed.
+      } else if (serverSession.backgroundTasks === undefined) {
+        setBackgroundTasks(key, {});
+      } else {
+        const backgroundTasks = parseClaudeBackgroundTasks(serverSession.backgroundTasks);
+        if (backgroundTasks) {
+          setBackgroundTasks(key, backgroundTasks);
+        }
+      }
     },
     [applyPromptSuggestion, setBackgroundTasks, setContextUsage],
   );
@@ -1095,7 +1122,19 @@ export function ClaudeChatTab({
 
           const eventType = event?.type;
           const eventSessionId = event?.sessionId;
-          const usageFromEvent = USAGE_SCAN_EXEMPT_EVENT_TYPES.has(eventType || "")
+          const eventDataRecord =
+            event.data
+            && typeof event.data === "object"
+            && !Array.isArray(event.data)
+              ? event.data as Record<string, unknown>
+              : null;
+          const hasExactSessionUsage =
+            eventType === "session.updated"
+            && eventDataRecord !== null
+            && "contextUsage" in eventDataRecord;
+          const usageFromEvent =
+            USAGE_SCAN_EXEMPT_EVENT_TYPES.has(eventType || "")
+            || hasExactSessionUsage
             ? null
             : extractContextUsage(event.data);
 
@@ -1149,22 +1188,29 @@ export function ClaudeChatTab({
             }
 
             if (eventType === "session.updated") {
-              const sessionUpdate = event.data as {
-                contextUsage?: ContextUsageSnapshot;
-                promptSuggestion?: string;
-                backgroundTasks?: Record<
-                  string,
-                  import("@/lib/claude-client").ClaudeBackgroundTask
-                >;
-              };
-              if (sessionUpdate.contextUsage) {
-                setContextUsage(sessionTabId, sessionUpdate.contextUsage);
+              const sessionUpdate = eventDataRecord;
+              const exactUsage = parseClaudeContextUsage(sessionUpdate?.contextUsage);
+              if (exactUsage) {
+                setContextUsage(sessionTabId, exactUsage);
               }
-              if ("promptSuggestion" in sessionUpdate) {
-                applyPromptSuggestion(sessionTabId, sessionUpdate.promptSuggestion);
+              if (
+                sessionUpdate
+                && "promptSuggestion" in sessionUpdate
+                && (
+                  sessionUpdate.promptSuggestion === undefined
+                  || typeof sessionUpdate.promptSuggestion === "string"
+                )
+              ) {
+                applyPromptSuggestion(
+                  sessionTabId,
+                  sessionUpdate.promptSuggestion as string | undefined,
+                );
               }
-              if (sessionUpdate.backgroundTasks) {
-                setBackgroundTasks(sessionTabId, sessionUpdate.backgroundTasks);
+              if (sessionUpdate && "backgroundTasks" in sessionUpdate) {
+                const tasks = parseClaudeBackgroundTasks(sessionUpdate.backgroundTasks);
+                if (tasks) {
+                  setBackgroundTasks(sessionTabId, tasks);
+                }
               }
             }
 
@@ -1650,26 +1696,71 @@ export function ClaudeChatTab({
     async (sessionId: string) => {
       if (!client) return;
 
+      const resumeSequence = ++resumeSequenceRef.current;
       try {
-        // Fetch messages for the selected session
         console.debug("[ClaudeChatTab] Resuming session:", sessionId);
-        const messages = await getSessionMessages(client, sessionId);
+        const [serverSession, messages] = await Promise.all([
+          getSession(client, sessionId),
+          getSessionMessages(client, sessionId, { throwOnError: true }),
+        ]);
+        if (resumeSequence !== resumeSequenceRef.current) return;
+        if (!serverSession || serverSession.id !== sessionId) {
+          throw new Error("The selected Claude session is no longer available");
+        }
         console.debug("[ClaudeChatTab] Fetched messages for resumed session:", {
           sessionId,
           messageCount: messages.length,
           messages,
         });
 
-        // Update the component's session reference
+        const contextUsage = parseClaudeContextUsage(serverSession.contextUsage);
+        const backgroundTasks =
+          parseClaudeBackgroundTasks(serverSession.backgroundTasks) ?? {};
+        dismissedPromptSuggestionRef.current = null;
+
+        // Publish the new identity, transcript, and all session-scoped metadata
+        // in one store update. No render can pair the resumed session with the
+        // previous session's usage, suggestion, or task controls.
+        useClaudeStore.setState((state) => {
+          const sessions = new Map(state.sessions);
+          sessions.set(sessionKey, {
+            sessionId,
+            messages,
+            isLoading: serverSession.status === "running",
+            error:
+              serverSession.status === "error"
+                ? serverSession.error?.trim() || "Claude session failed"
+                : undefined,
+            title: serverSession.title,
+          });
+
+          const contextUsageBySession = new Map(state.contextUsage);
+          if (contextUsage) contextUsageBySession.set(sessionKey, contextUsage);
+          else contextUsageBySession.delete(sessionKey);
+
+          const promptSuggestions = new Map(state.promptSuggestions);
+          if (typeof serverSession.promptSuggestion === "string") {
+            promptSuggestions.set(sessionKey, serverSession.promptSuggestion);
+          } else {
+            promptSuggestions.delete(sessionKey);
+          }
+
+          const tasksBySession = new Map(state.backgroundTasks);
+          if (Object.keys(backgroundTasks).length > 0) {
+            tasksBySession.set(sessionKey, backgroundTasks);
+          } else {
+            tasksBySession.delete(sessionKey);
+          }
+
+          return {
+            sessions,
+            contextUsage: contextUsageBySession,
+            promptSuggestions,
+            backgroundTasks: tasksBySession,
+          };
+        });
         tabSessionIdRef.current = sessionId;
         updateTabNativeSessionId(tabId, sessionId, environmentId);
-
-        // Update the store with the resumed session
-        setSession(sessionKey, {
-          sessionId,
-          messages,
-          isLoading: false,
-        });
 
         console.debug("[ClaudeChatTab] Session state updated:", {
           sessionKey,
@@ -1682,7 +1773,7 @@ export function ClaudeChatTab({
         console.error("[ClaudeChatTab] Failed to resume session:", error);
       }
     },
-    [client, environmentId, sessionKey, setSession, tabId, updateTabNativeSessionId]
+    [client, environmentId, sessionKey, tabId, updateTabNativeSessionId]
   );
 
   const handleForkFromMessage = useCallback(async (messageId: string) => {

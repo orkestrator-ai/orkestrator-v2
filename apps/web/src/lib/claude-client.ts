@@ -130,6 +130,191 @@ export interface ClaudeBackgroundTask {
   error?: string;
 }
 
+const CLAUDE_BACKGROUND_TASK_STATUSES = new Set<ClaudeBackgroundTask["status"]>([
+  "pending",
+  "running",
+  "completed",
+  "failed",
+  "killed",
+  "paused",
+]);
+
+const CONTEXT_USAGE_SOURCES = new Set<NonNullable<ContextUsageSnapshot["source"]>>([
+  "claude",
+  "opencode",
+  "codex",
+  "heuristic",
+  "provider",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isOptionalFiniteNumber(value: unknown): value is number | undefined {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isOptionalNonNegativeNumber(value: unknown): value is number | undefined {
+  return isOptionalFiniteNumber(value) && (value === undefined || value >= 0);
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+/**
+ * Validate exact provider usage snapshots before they cross the REST/SSE trust
+ * boundary into Zustand. UI formatters assume finite numeric fields.
+ */
+export function parseClaudeContextUsage(value: unknown): ContextUsageSnapshot | undefined {
+  if (!isRecord(value)) return undefined;
+  const {
+    usedTokens,
+    totalTokens,
+    percentUsed,
+    modelId,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    reasoningTokens,
+    lastTurnTokens,
+    sessionTokens,
+    costUsd,
+    durationMs,
+    apiDurationMs,
+    estimated,
+    source,
+    updatedAt,
+    rateLimits,
+    credits,
+    contextCategories,
+    permissionDenials,
+    linesAdded,
+    linesRemoved,
+  } = value;
+
+  if (
+    typeof usedTokens !== "number"
+    || !Number.isFinite(usedTokens)
+    || usedTokens < 0
+    || typeof totalTokens !== "number"
+    || !Number.isFinite(totalTokens)
+    || totalTokens <= 0
+    || usedTokens > totalTokens
+    || typeof percentUsed !== "number"
+    || !Number.isFinite(percentUsed)
+    || percentUsed < 0
+    || percentUsed > 100
+    || !isOptionalString(modelId)
+    || !isOptionalNonNegativeNumber(inputTokens)
+    || !isOptionalNonNegativeNumber(outputTokens)
+    || !isOptionalNonNegativeNumber(cacheReadTokens)
+    || !isOptionalNonNegativeNumber(cacheWriteTokens)
+    || !isOptionalNonNegativeNumber(reasoningTokens)
+    || !isOptionalNonNegativeNumber(lastTurnTokens)
+    || !isOptionalNonNegativeNumber(sessionTokens)
+    || !isOptionalNonNegativeNumber(costUsd)
+    || !isOptionalNonNegativeNumber(durationMs)
+    || !isOptionalNonNegativeNumber(apiDurationMs)
+    || (estimated !== undefined && typeof estimated !== "boolean")
+    || (source !== undefined && (
+      typeof source !== "string"
+      || !CONTEXT_USAGE_SOURCES.has(source as NonNullable<ContextUsageSnapshot["source"]>)
+    ))
+    || !isOptionalString(updatedAt)
+    || !isOptionalNonNegativeNumber(permissionDenials)
+    || !isOptionalNonNegativeNumber(linesAdded)
+    || !isOptionalNonNegativeNumber(linesRemoved)
+  ) {
+    return undefined;
+  }
+
+  if (
+    rateLimits !== undefined
+    && (
+      !Array.isArray(rateLimits)
+      || !rateLimits.every((entry) =>
+        isRecord(entry)
+        && typeof entry.label === "string"
+        && isOptionalNonNegativeNumber(entry.usedPercent)
+        && (entry.usedPercent === undefined || entry.usedPercent <= 100)
+        && isOptionalString(entry.resetsAt)
+        && isOptionalNonNegativeNumber(entry.windowMinutes)
+      )
+    )
+  ) {
+    return undefined;
+  }
+
+  if (
+    credits !== undefined
+    && (
+      !isRecord(credits)
+      || (credits.hasCredits !== undefined && typeof credits.hasCredits !== "boolean")
+      || (credits.unlimited !== undefined && typeof credits.unlimited !== "boolean")
+      || !isOptionalString(credits.balance)
+    )
+  ) {
+    return undefined;
+  }
+
+  if (
+    contextCategories !== undefined
+    && (
+      !Array.isArray(contextCategories)
+      || !contextCategories.every((entry) =>
+        isRecord(entry)
+        && typeof entry.name === "string"
+        && typeof entry.tokens === "number"
+        && Number.isFinite(entry.tokens)
+        && entry.tokens >= 0
+        && isOptionalString(entry.color)
+      )
+    )
+  ) {
+    return undefined;
+  }
+
+  return value as unknown as ContextUsageSnapshot;
+}
+
+export function parseClaudeBackgroundTasks(
+  value: unknown,
+): Record<string, ClaudeBackgroundTask> | undefined {
+  if (!isRecord(value)) return undefined;
+  const parsed: Record<string, ClaudeBackgroundTask> = {};
+  for (const [taskId, taskValue] of Object.entries(value)) {
+    if (!isRecord(taskValue)) return undefined;
+    const {
+      id,
+      description,
+      status,
+      isBackgrounded,
+      startedAt,
+      endedAt,
+      error,
+    } = taskValue;
+    if (
+      typeof id !== "string"
+      || id.length === 0
+      || id !== taskId
+      || typeof status !== "string"
+      || !CLAUDE_BACKGROUND_TASK_STATUSES.has(status as ClaudeBackgroundTask["status"])
+      || !isOptionalString(description)
+      || (isBackgrounded !== undefined && typeof isBackgrounded !== "boolean")
+      || !isOptionalFiniteNumber(startedAt)
+      || !isOptionalFiniteNumber(endedAt)
+      || !isOptionalString(error)
+    ) {
+      return undefined;
+    }
+    parsed[taskId] = taskValue as unknown as ClaudeBackgroundTask;
+  }
+  return parsed;
+}
+
 export interface ClaudeMessage {
   id: string;
   role: "user" | "assistant" | "system";
@@ -259,6 +444,10 @@ export interface ClaudeSession {
   contextUsage?: ContextUsageSnapshot;
   promptSuggestion?: string;
   backgroundTasks?: Record<string, ClaudeBackgroundTask>;
+  /** Optional fields omitted because their wire values failed validation. */
+  invalidMetadataFields?: Array<
+    "contextUsage" | "promptSuggestion" | "backgroundTasks"
+  >;
 }
 
 export type ClaudeSessionLookupResult =
@@ -505,7 +694,7 @@ export async function lookupSession(
         error: new Error(`Failed to get Claude session: HTTP ${response.status}`),
       };
     }
-    const session = (await response.json()) as Partial<ClaudeSession>;
+    const session = (await response.json()) as Record<string, unknown>;
     if (
       typeof session.id !== "string"
       || (
@@ -515,15 +704,47 @@ export async function lookupSession(
       )
       || typeof session.createdAt !== "string"
       || typeof session.lastActivity !== "string"
+      || !isOptionalString(session.title)
+      || !isOptionalString(session.error)
     ) {
       return {
         kind: "unavailable",
         error: new Error("Claude session response was malformed"),
       };
     }
+    const contextUsage = parseClaudeContextUsage(session.contextUsage);
+    const backgroundTasks = parseClaudeBackgroundTasks(session.backgroundTasks);
+    const invalidMetadataFields: ClaudeSession["invalidMetadataFields"] = [];
+    if (session.contextUsage !== undefined && contextUsage === undefined) {
+      invalidMetadataFields.push("contextUsage");
+    }
+    if (
+      session.promptSuggestion !== undefined
+      && typeof session.promptSuggestion !== "string"
+    ) {
+      invalidMetadataFields.push("promptSuggestion");
+    }
+    if (session.backgroundTasks !== undefined && backgroundTasks === undefined) {
+      invalidMetadataFields.push("backgroundTasks");
+    }
+
     return {
       kind: "found",
-      session: session as ClaudeSession,
+      session: {
+        id: session.id,
+        title: session.title as string | undefined,
+        status: session.status,
+        createdAt: session.createdAt,
+        lastActivity: session.lastActivity,
+        error: session.error as string | undefined,
+        contextUsage,
+        promptSuggestion:
+          typeof session.promptSuggestion === "string"
+            ? session.promptSuggestion
+            : undefined,
+        backgroundTasks,
+        ...(invalidMetadataFields.length > 0 ? { invalidMetadataFields } : {}),
+      },
     };
   } catch (error) {
     return {

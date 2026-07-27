@@ -19,6 +19,15 @@ interface StepResult {
 
 async function main(): Promise<void> {
   const results: StepResult[] = [];
+  const bridgeToken = process.env.CODEX_BRIDGE_TOKEN;
+  if (!bridgeToken) {
+    throw new Error("CODEX_BRIDGE_TOKEN is required by the HTTP harness");
+  }
+  const request = (path: string, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    headers.set("X-Orkestrator-Codex-Token", bridgeToken);
+    return app.request(path, { ...init, headers });
+  };
   const record = async (step: string, response: Response) => {
     const text = await response.text();
     let body: unknown = text;
@@ -57,11 +66,11 @@ async function main(): Promise<void> {
   }
 
   await record("health", await app.request("/global/health"));
-  await record("models", await app.request("/global/models"));
+  await record("models", await request("/global/models"));
 
   const created = await record(
     "create",
-    await app.request("/session/create", {
+    await request("/session/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode: "build" }),
@@ -74,7 +83,7 @@ async function main(): Promise<void> {
 
   await record(
     "prompt",
-    await app.request(`/session/${sessionId}/prompt`, {
+    await request(`/session/${sessionId}/prompt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt: "hello from the harness", requestId: "req-http-1" }),
@@ -84,11 +93,11 @@ async function main(): Promise<void> {
   // Let the scripted turn's notifications land.
   await new Promise((resolve) => setTimeout(resolve, 250));
 
-  await record("messages", await app.request(`/session/${sessionId}/messages`));
-  await record("status", await app.request(`/session/${sessionId}/status`));
+  await record("messages", await request(`/session/${sessionId}/messages`));
+  await record("status", await request(`/session/${sessionId}/status`));
   await record(
     "config-update",
-    await app.request(`/session/${sessionId}/config`, {
+    await request(`/session/${sessionId}/config`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -99,19 +108,19 @@ async function main(): Promise<void> {
       }),
     }),
   );
-  await record("config-read", await app.request(`/session/${sessionId}/config`));
+  await record("config-read", await request(`/session/${sessionId}/config`));
 
   // A duplicate request id must not run a second turn.
   await record(
     "duplicate-prompt",
-    await app.request(`/session/${sessionId}/prompt`, {
+    await request(`/session/${sessionId}/prompt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt: "hello from the harness", requestId: "req-http-1" }),
     }),
   );
 
-  await record("delete", await app.request(`/session/${sessionId}`, { method: "DELETE" }));
+  await record("delete", await request(`/session/${sessionId}`, { method: "DELETE" }));
 
   process.stdout.write(`${JSON.stringify({ engine: "app-server", results })}\n`);
   process.exit(0);

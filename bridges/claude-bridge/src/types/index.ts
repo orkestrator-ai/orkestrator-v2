@@ -174,6 +174,17 @@ export interface NormalizedMessage {
   revision?: number;
 }
 
+export interface ClaudeQueryControl {
+  stopTask?: (taskId: string) => Promise<void>;
+  backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
+  getContextUsage?: () => Promise<unknown>;
+  rewindFiles?: (
+    userMessageId: string,
+    options?: { dryRun?: boolean },
+  ) => Promise<unknown>;
+  close?: () => void | Promise<void>;
+}
+
 /** Session state */
 export interface SessionState {
   id: string;
@@ -224,16 +235,22 @@ export interface SessionState {
    * that are being rewritten underneath it.
    */
   rewindInProgress?: boolean;
-  queryControl?: {
-    stopTask?: (taskId: string) => Promise<void>;
-    backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
-    getContextUsage?: () => Promise<unknown>;
-    rewindFiles?: (
-      userMessageId: string,
-      options?: { dryRun?: boolean },
-    ) => Promise<unknown>;
-    close?: () => void | Promise<void>;
-  };
+  /** True after durable deletion has claimed the session and before removal. */
+  deleting?: boolean;
+  /** Single in-flight persisted transcript read shared by mounts and prompts. */
+  persistedHydration?: Promise<{
+    messages: NormalizedMessage[];
+    taskRegistry: TaskRegistry;
+  } | undefined>;
+  /** Control for the currently executing (or most recently completed) turn. */
+  queryControl?: ClaudeQueryControl;
+  /**
+   * Control that owns each live background task.
+   *
+   * A follow-up turn installs a new `queryControl`; these per-task handles keep
+   * older provider processes addressable until their tasks settle.
+   */
+  backgroundTaskControls?: Map<string, ClaudeQueryControl>;
 }
 
 export interface SessionRateLimitWindow {

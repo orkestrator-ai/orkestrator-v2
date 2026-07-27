@@ -125,6 +125,7 @@ interface CodexSessionStatusResponse {
 
 export interface CodexClient {
   baseUrl: string;
+  authToken?: string;
 }
 
 export interface CodexMessage {
@@ -502,13 +503,33 @@ async function fetchWithTimeout(
   }
 }
 
-export function createClient(baseUrl: string): CodexClient {
-  return { baseUrl: resolveGatewayLoopbackBaseUrl(baseUrl) };
+function fetchCodex(
+  client: CodexClient,
+  path: string,
+  options: RequestInit = {},
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<Response> {
+  const headers = new Headers(options.headers);
+  // The desktop gateway consumes its own Authorization header before proxying.
+  // Keep bridge authentication in a dedicated header so it survives that hop.
+  if (client.authToken) headers.set("X-Orkestrator-Codex-Token", client.authToken);
+  return fetchWithTimeout(
+    `${client.baseUrl}${path}`,
+    { ...options, headers },
+    timeoutMs,
+  );
+}
+
+export function createClient(baseUrl: string, authToken?: string): CodexClient {
+  return {
+    baseUrl: resolveGatewayLoopbackBaseUrl(baseUrl),
+    ...(authToken ? { authToken } : {}),
+  };
 }
 
 export async function checkHealth(client: CodexClient): Promise<boolean> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/global/health`);
+    const response = await fetchCodex(client, "/global/auth-check");
     return response.ok;
   } catch {
     return false;
@@ -540,7 +561,7 @@ export interface CodexBridgeHealth {
  */
 export async function getBridgeHealth(client: CodexClient): Promise<CodexBridgeHealth | null> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/global/health`);
+    const response = await fetchCodex(client, "/global/health");
     if (!response.ok) return null;
     return (await response.json()) as CodexBridgeHealth;
   } catch {
@@ -550,7 +571,7 @@ export async function getBridgeHealth(client: CodexClient): Promise<CodexBridgeH
 
 export async function getModels(client: CodexClient): Promise<CodexModelsResponse> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/global/models`);
+    const response = await fetchCodex(client, "/global/models");
     if (!response.ok) {
       return { models: CODEX_MODELS, source: "fallback" };
     }
@@ -573,7 +594,7 @@ export async function getModels(client: CodexClient): Promise<CodexModelsRespons
 
 export async function getSlashCommands(client: CodexClient): Promise<CodexSlashCommand[]> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/global/slash-commands`);
+    const response = await fetchCodex(client, "/global/slash-commands");
     if (!response.ok) {
       return [];
     }
@@ -596,7 +617,7 @@ export async function createSession(
     fastMode?: boolean;
   },
 ): Promise<CodexSession> {
-  const response = await fetchWithTimeout(`${client.baseUrl}/session/create`, {
+  const response = await fetchCodex(client, "/session/create", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -620,7 +641,7 @@ export async function createSession(
 
 export async function listSessions(client: CodexClient): Promise<CodexStoredSession[]> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/session/list`);
+    const response = await fetchCodex(client, "/session/list");
     if (!response.ok) return [];
     const data = (await response.json()) as Partial<CodexSessionListResponse>;
     return Array.isArray(data.sessions) ? data.sessions : [];
@@ -641,7 +662,7 @@ export async function resumeSession(
   },
 ): Promise<{ session: CodexSession; messages: CodexMessage[] } | null> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/session/resume`, {
+    const response = await fetchCodex(client, "/session/resume", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(options),
@@ -672,8 +693,9 @@ export async function updateSessionConfig(
   },
 ): Promise<CodexSessionConfigUpdateOutcome> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/config`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/config`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -698,8 +720,9 @@ export async function updateSessionConfig(
     // A timeout or reset after the bridge handled the request is ambiguous.
     // Re-read the authoritative bridge config before asking the UI to roll back.
     try {
-      const reconciliation = await fetchWithTimeout(
-        `${client.baseUrl}/session/${sessionId}/config`,
+      const reconciliation = await fetchCodex(
+        client,
+        `/session/${sessionId}/config`,
       );
       if (reconciliation.ok) {
         const current = (await reconciliation.json()) as {
@@ -742,8 +765,9 @@ export async function getSessionMessages(
   options: { throwOnError?: boolean } = {},
 ): Promise<CodexMessage[]> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/messages`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/messages`,
     );
     if (!response.ok) {
       throw new Error(`Failed to get Codex session messages: HTTP ${response.status}`);
@@ -915,8 +939,9 @@ export async function lookupSessionStatus(
   sessionId: string,
 ): Promise<CodexSessionStatusLookupResult> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/status`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/status`,
     );
     if (response.status === 404) return { kind: "missing" };
     if (!response.ok) {
@@ -1051,8 +1076,9 @@ export async function sendPrompt(
 ): Promise<CodexPromptSendOutcome> {
   const requestId = options?.requestId ?? crypto.randomUUID();
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/prompt`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/prompt`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1095,8 +1121,9 @@ export async function getStructuredOutput<T = unknown>(
   let response: Response;
   try {
     const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
-    response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/structured-output${query}`,
+    response = await fetchCodex(
+      client,
+      `/session/${sessionId}/structured-output${query}`,
     );
   } catch (error) {
     throw new StructuredOutputReadUnavailableError(
@@ -1153,8 +1180,9 @@ export async function abortSession(
   sessionId: string,
 ): Promise<CodexAbortOutcome> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/abort`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/abort`,
       { method: "POST" },
     );
     return response.ok
@@ -1180,8 +1208,9 @@ export async function fetchPendingApprovals(
   client: CodexClient,
   sessionId: string,
 ): Promise<CodexApproval[]> {
-  const response = await fetchWithTimeout(
-    `${client.baseUrl}/session/${sessionId}/approvals`,
+  const response = await fetchCodex(
+    client,
+    `/session/${sessionId}/approvals`,
   );
   if (!response.ok) {
     throw new Error(`Failed to fetch pending Codex approvals: HTTP ${response.status}`);
@@ -1208,8 +1237,9 @@ export async function respondToApproval(
   decision: CodexApprovalDecision,
 ): Promise<CodexApprovalResponseResult> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/approvals/${encodeURIComponent(approvalId)}`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/approvals/${encodeURIComponent(approvalId)}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1230,8 +1260,9 @@ export async function fetchPendingInteractions(
   client: CodexClient,
   sessionId: string,
 ): Promise<CodexInteraction[]> {
-  const response = await fetchWithTimeout(
-    `${client.baseUrl}/session/${sessionId}/interactions`,
+  const response = await fetchCodex(
+    client,
+    `/session/${sessionId}/interactions`,
   );
   if (!response.ok) {
     throw new Error(`Failed to fetch pending Codex interactions: HTTP ${response.status}`);
@@ -1252,8 +1283,9 @@ export async function respondToInteraction(
   answer: CodexInteractionAnswer,
 ): Promise<CodexApprovalResponseResult> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/interactions/${encodeURIComponent(interactionId)}`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/interactions/${encodeURIComponent(interactionId)}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1275,8 +1307,9 @@ export async function forkCodexSession(
   sessionId: string,
   lastMessageId?: string,
 ): Promise<CodexSession | null> {
-  const response = await fetchWithTimeout(
-    `${client.baseUrl}/session/${sessionId}/fork`,
+  const response = await fetchCodex(
+    client,
+    `/session/${sessionId}/fork`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1297,8 +1330,9 @@ export async function compactCodexSession(
   client: CodexClient,
   sessionId: string,
 ): Promise<boolean> {
-  const response = await fetchWithTimeout(
-    `${client.baseUrl}/session/${sessionId}/compact`,
+  const response = await fetchCodex(
+    client,
+    `/session/${sessionId}/compact`,
     { method: "POST" },
   );
   return response.ok;
@@ -1310,8 +1344,9 @@ export async function steerCodexSession(
   input: string,
   requestId: string,
 ): Promise<boolean> {
-  const response = await fetchWithTimeout(
-    `${client.baseUrl}/session/${sessionId}/steer`,
+  const response = await fetchCodex(
+    client,
+    `/session/${sessionId}/steer`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1330,8 +1365,9 @@ export async function startCodexNativeReview(
     | { type: "commit"; sha: string; title?: string }
     | { type: "custom"; instructions: string } = { type: "uncommittedChanges" },
 ): Promise<boolean> {
-  const response = await fetchWithTimeout(
-    `${client.baseUrl}/session/${sessionId}/review`,
+  const response = await fetchCodex(
+    client,
+    `/session/${sessionId}/review`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1345,8 +1381,9 @@ export async function getCodexRuntimeHealth(
   client: CodexClient,
   sessionId: string,
 ): Promise<unknown> {
-  const response = await fetchWithTimeout(
-    `${client.baseUrl}/session/${sessionId}/runtime-health`,
+  const response = await fetchCodex(
+    client,
+    `/session/${sessionId}/runtime-health`,
   );
   if (!response.ok) throw new Error(`Codex runtime health failed: HTTP ${response.status}`);
   return response.json();
@@ -1357,8 +1394,9 @@ export async function deleteSession(
   sessionId: string,
 ): Promise<boolean> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}`,
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}`,
       { method: "DELETE" },
     );
     return response.ok;
@@ -1444,6 +1482,11 @@ export function subscribeToEvents(
         }
         if (sessionId) {
           url.searchParams.set("sessionId", sessionId);
+        }
+        // Native EventSource cannot set Authorization headers. The bridge
+        // accepts its per-process bearer token only on this SSE query path.
+        if (client.authToken) {
+          url.searchParams.set("token", client.authToken);
         }
 
         eventSource = new EventSource(url.toString());

@@ -338,6 +338,7 @@ const {
   forkPersistedSession,
   rewindSessionFiles,
   stopBackgroundTask,
+  getStructuredPromptDispatchState,
 } = sessionManager;
 
 // ---------------------------------------------------------------------------
@@ -613,6 +614,64 @@ describe("sendPrompt", () => {
       expect(eventTypes).toContain("session.idle");
     } finally {
       stop();
+    }
+  });
+
+  test("maps supported agents into the authoritative init snapshot", async () => {
+    queryControlOverrides.supportedAgents = async () => [
+      {
+        name: "reviewer",
+        description: "Reviews changes",
+        model: "claude-opus-mock",
+        ignoredProviderField: true,
+      },
+    ];
+
+    const { session } = await runPromptWithMessages([
+      {
+        type: "system",
+        subtype: "init",
+        session_id: "sdk-agents",
+        mcp_servers: [],
+        plugins: [],
+        slash_commands: [],
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    expect(getSessionInitData(session.id)?.agents).toEqual([
+      {
+        name: "reviewer",
+        description: "Reviews changes",
+        model: "claude-opus-mock",
+      },
+    ]);
+  });
+
+  test("warns when a provider turn produces no messages or heartbeat", async () => {
+    jest.useFakeTimers();
+    const warn = mock(() => {});
+    const originalWarn = console.warn;
+    console.warn = warn;
+    try {
+      const session = createSession("quiet provider");
+      track(session.id);
+      const promptPromise = sendPrompt(session.id, "hello?");
+      const call = await nextQueryCall();
+
+      jest.advanceTimersByTime(30_001);
+      expect(warn.mock.calls.some(
+        ([message]) => String(message).includes("has not responded after 5 seconds"),
+      )).toBe(true);
+      expect(warn.mock.calls.some(
+        ([message]) => String(message).includes("No SDK messages yet"),
+      )).toBe(true);
+
+      call.finish();
+      await promptPromise;
+    } finally {
+      console.warn = originalWarn;
+      jest.useRealTimers();
     }
   });
 
@@ -2695,6 +2754,27 @@ describe("sendPrompt", () => {
     });
   });
 
+  test("reports every structured prompt dispatch state", async () => {
+    expect(getStructuredPromptDispatchState("missing", "request")).toBe("not-found");
+    const session = createSession("dispatch state");
+    track(session.id);
+    expect(getStructuredPromptDispatchState(session.id, "request")).toBe("new");
+
+    session.structuredOutputRequestId = "request";
+    session.status = "running";
+    expect(getStructuredPromptDispatchState(session.id, "request")).toBe("processing");
+
+    session.status = "idle";
+    session.structuredOutput = {
+      ok: true,
+      provider: "claude",
+      requestId: "request",
+      value: { done: true },
+    };
+    expect(getStructuredPromptDispatchState(session.id, "request")).toBe("already-processed");
+    expect(getStructuredPromptDispatchState(session.id, "other")).toBe("new");
+  });
+
   test("forwards query configuration and captures init, compact, generic system, and context events", async () => {
     mockGetMcpServersForSdk.mockImplementationOnce(async () => ({
       local: { command: "safe-command", args: [] },
@@ -3929,6 +4009,32 @@ describe("hydratePersistedSessionMessages", () => {
     expect(getSessionMessages(state.id).at(-1)?.content).toBe("third prompt");
   });
 
+  test("shares an in-flight hydration with a prompt without overwriting the live turn", async () => {
+    let resolveTranscript: ((messages: SdkSessionMessage[]) => void) | undefined;
+    mockSdkGetSessionMessages.mockImplementation(
+      async () => new Promise<SdkSessionMessage[]>((resolve) => {
+        resolveTranscript = resolve;
+      }),
+    );
+    const state = await materializePersistedSession();
+
+    const mountHydration = hydratePersistedSessionMessages(state.id);
+    await waitFor(() => resolveTranscript !== undefined);
+    const promptPromise = sendPrompt(state.id, "live prompt");
+
+    resolveTranscript!(transcriptWithToolResult());
+    const call = await nextQueryCall();
+    expect(mockSdkGetSessionMessages).toHaveBeenCalledTimes(1);
+    await mountHydration;
+    expect(getSessionMessages(state.id).some(
+      (message) => message.content === "live prompt",
+    )).toBe(true);
+
+    call.finish();
+    await promptPromise;
+    expect(getSessionMessages(state.id).at(-1)?.content).toBe("live prompt");
+  });
+
   test("survives an SDK that cannot read the transcript before a prompt", async () => {
     mockSdkGetSessionMessages.mockImplementation(async () => {
       throw new Error("transcript unreadable");
@@ -4146,6 +4252,55 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
     });
     expect(getSession(state.id)).toBeUndefined();
   });
+
+  test("stops the active writer before deleting its rollout and serializes deletion", async () => {
+    const state = await materializePersistedSession();
+    const close = mock(async () => {});
+    const abort = new AbortController();
+    state.abortController = abort;
+    state.status = "running";
+    state.queryControl = { close };
+    let finishDelete: (() => void) | undefined;
+    mockSdkDeleteSession.mockImplementation(
+      async () => new Promise<void>((resolve) => {
+        finishDelete = resolve;
+      }),
+    );
+
+    const deletion = deleteSessionDurably(state.id);
+    await expect(sendPrompt(state.id, "too late")).rejects.toMatchObject({
+      code: "conflict",
+      message: "Session is being deleted",
+    });
+    await waitFor(() => finishDelete !== undefined);
+    expect(abort.signal.aborted).toBe(true);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(state.deleting).toBe(true);
+    await expect(deleteSessionDurably(state.id)).rejects.toMatchObject({
+      code: "conflict",
+    });
+
+    finishDelete!();
+    await expect(deletion).resolves.toBe(true);
+    expect(getSession(state.id)).toBeUndefined();
+  });
+
+  test("restores the stopped session when durable deletion fails", async () => {
+    const state = await materializePersistedSession();
+    state.queryControl = {
+      close: async () => {
+        throw new Error("close failed");
+      },
+    };
+    mockSdkDeleteSession.mockImplementation(async () => {
+      throw new Error("disk busy");
+    });
+
+    await expect(deleteSessionDurably(state.id)).rejects.toThrow("disk busy");
+    expect(getSession(state.id)).toBe(state);
+    expect(state).toMatchObject({ deleting: false, status: "idle" });
+    expect(state.queryControl).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -4204,13 +4359,38 @@ describe("rewindSessionFiles", () => {
     state.queryControl = undefined;
   });
 
-  test("forwards dryRun to the control handle", async () => {
+  test("forwards dryRun to the control handle for a user checkpoint", async () => {
     const state = await rewindableSession();
     const liveRewind = mock(async () => ({ canRewind: true, insertions: 0, deletions: 0 }));
     state.queryControl = { rewindFiles: liveRewind };
 
-    await rewindSessionFiles(state.id, A2, true);
-    expect(liveRewind).toHaveBeenCalledWith(A2, { dryRun: true });
+    await rewindSessionFiles(state.id, U2, true);
+    expect(liveRewind).toHaveBeenCalledWith(U2, { dryRun: true });
+    state.queryControl = undefined;
+  });
+
+  test("rejects assistant records because the SDK only accepts user checkpoints", async () => {
+    const state = await rewindableSession();
+    const liveRewind = mock(async () => ({ canRewind: true }));
+    state.queryControl = { rewindFiles: liveRewind };
+
+    await expect(rewindSessionFiles(state.id, A2)).rejects.toMatchObject({
+      code: "invalid",
+    });
+    expect(liveRewind).not.toHaveBeenCalled();
+    state.queryControl = undefined;
+  });
+
+  test("fails when the SDK reports that the checkpoint cannot be rewound", async () => {
+    const state = await rewindableSession();
+    state.queryControl = {
+      rewindFiles: async () => ({ canRewind: false, error: "Checkpoint expired" }),
+    };
+
+    await expect(rewindSessionFiles(state.id, U1)).rejects.toMatchObject({
+      code: "conflict",
+      message: "Checkpoint expired",
+    });
     state.queryControl = undefined;
   });
 
@@ -4493,6 +4673,58 @@ describe("stopBackgroundTask", () => {
     expect(session.status).toBe("idle");
     expect(await stopBackgroundTask(session.id, "task-1")).toEqual({ ok: true });
     expect(stopTask).toHaveBeenCalledWith("task-1");
+  });
+
+  test("keeps the first turn's task control after a follow-up installs a new control", async () => {
+    const firstStop = mock(async () => {});
+    const secondStop = mock(async () => {});
+    queryControlOverrides.stopTask = firstStop;
+    const session = createSession("follow-up");
+    track(session.id);
+
+    const firstPrompt = sendPrompt(session.id, "start task");
+    const firstCall = await nextQueryCall();
+    firstCall.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "task-old",
+      description: "Old build",
+    });
+    firstCall.finish();
+    await firstPrompt;
+
+    queryControlOverrides.stopTask = secondStop;
+    const secondPrompt = sendPrompt(session.id, "follow up");
+    const secondCall = await nextQueryCall();
+    secondCall.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "task-new",
+      description: "New build",
+    });
+    secondCall.finish();
+    await secondPrompt;
+
+    expect(await stopBackgroundTask(session.id, "task-old")).toEqual({ ok: true });
+    expect(firstStop).toHaveBeenCalledWith("task-old");
+    expect(secondStop).not.toHaveBeenCalledWith("task-old");
+    expect(await stopBackgroundTask(session.id, "task-new")).toEqual({ ok: true });
+    expect(secondStop).toHaveBeenCalledWith("task-new");
+  });
+
+  test("tolerates a rejected query-control close during deletion", async () => {
+    const session = createSession("close rejection");
+    track(session.id);
+    const close = mock(async () => {
+      throw new Error("already closed");
+    });
+    session.queryControl = { close };
+
+    expect(deleteSession(session.id)).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(getSession(session.id)).toBeUndefined();
   });
 
   test("releases the control handle once every task has settled", async () => {

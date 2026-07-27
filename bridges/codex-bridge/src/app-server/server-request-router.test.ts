@@ -78,6 +78,28 @@ describe("exhaustiveness", () => {
     expect(unknown).toEqual(["orkestrator/from/the/future"]);
     expect(h.router.getMetrics().unknown).toBe(1);
   });
+
+  test("the final backstop answers when no routing branch attempts a response", async () => {
+    const h = harness({ responseTimeoutMs: 5 });
+    const internals = h.router as unknown as {
+      route: () => Promise<void>;
+    };
+    internals.route = () => new Promise<void>(() => undefined);
+
+    h.router.handle(request("future/request"), 7);
+    await Bun.sleep(25);
+
+    expect(h.answers).toEqual([{
+      generation: 7,
+      id: "srv-1",
+      error: {
+        code: -32601,
+        message: "Orkestrator did not produce a response in time",
+      },
+    }]);
+    expect(h.router.getMetrics().timedOut).toBe(1);
+    expect(h.router.getPending()).toHaveLength(0);
+  });
 });
 
 describe("approval requests", () => {

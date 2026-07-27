@@ -3,6 +3,7 @@ import { Check, Circle, ExternalLink, HelpCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { openInBrowser } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import {
   respondToInteraction,
@@ -91,6 +92,19 @@ export function CodexInteractionCard({
     }
     return Boolean(externalUrl);
   }, [externalUrl, form, interaction.kind, interaction.questions, required, resolvedAnswers]);
+
+  const openExternalForm = async () => {
+    if (!externalUrl) return;
+    setError(null);
+    try {
+      await openInBrowser(externalUrl);
+    } catch {
+      const message =
+        "Could not open the MCP form in your browser. Check the desktop connection and try again.";
+      setError(message);
+      toast.error(message);
+    }
+  };
 
   const submit = async (action: "accept" | "decline" | "cancel") => {
     setSubmitting(true);
@@ -277,7 +291,7 @@ export function CodexInteractionCard({
           <Button
             variant="outline"
             className="w-full justify-between"
-            onClick={() => window.open(externalUrl, "_blank", "noopener,noreferrer")}
+            onClick={() => void openExternalForm()}
           >
             Open secure form
             <ExternalLink className="h-4 w-4" />

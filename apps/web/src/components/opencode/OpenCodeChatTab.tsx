@@ -1449,19 +1449,19 @@ export function OpenCodeChatTab({
           ) {
             const state = useOpenCodeStore.getState();
             /*
-             * Todos and diffs belong to one session. Every mounted OpenCode tab
-             * runs this handler, so an unguarded write here published another
-             * session's todos under this environment's key and the agent-info
-             * popover showed them as the active session's counts. Two guards:
-             * the event must be for *this* tab's session, and the write is
-             * keyed by session rather than environment.
+             * The subscription is shared by the entire environment and only
+             * the component that created it consumes the stream. Route the
+             * update through the authoritative session map rather than the
+             * owner's captured session key so sibling tabs stay current too.
+             * A provider session may intentionally be visible in more than one
+             * tab, so update every matching key.
              */
-            const ownSessionId = state.sessions.get(sessionKey)?.sessionId;
-            if (ownSessionId && eventSessionId === ownSessionId) {
-              const current = state.runtimeHealth.get(sessionKey)
+            for (const [matchingSessionKey, matchingSession] of state.sessions) {
+              if (matchingSession.sessionId !== eventSessionId) continue;
+              const current = state.runtimeHealth.get(matchingSessionKey)
                 ?? state.runtimeHealth.get(environmentId);
               if (current) {
-                state.setRuntimeHealth(sessionKey, {
+                state.setRuntimeHealth(matchingSessionKey, {
                   ...current,
                   ...(eventType === "todo.updated"
                     && Array.isArray(event.properties?.todos)
@@ -1580,7 +1580,6 @@ export function OpenCodeChatTab({
     },
     [
       environmentId,
-      sessionKey,
       hasActiveEventSubscription,
       getOrCreateEventSubscription,
       setEventStream,

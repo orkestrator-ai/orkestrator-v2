@@ -286,10 +286,9 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       newSelectedVariant.delete(environmentId);
       newIsComposing.delete(environmentId);
       newEventSubscriptions.delete(environmentId);
-      const newRuntimeHealth = new Map(state.runtimeHealth);
-      newRuntimeHealth.delete(environmentId);
-
       const prefix = `env-${environmentId}:`;
+      const newRuntimeHealth = pruneSessionKeyedMap(state.runtimeHealth, prefix);
+      newRuntimeHealth.delete(environmentId);
 
       // Collect session IDs before pruning so we can clean up pending requests
       const environmentSessionIds = new Set<string>();

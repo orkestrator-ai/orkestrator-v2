@@ -254,6 +254,47 @@ describe("session routes", () => {
     });
   });
 
+  describe("GET /session/:id/structured-output", () => {
+    test("serves the latest result and isolates mismatched request ids", async () => {
+      mockGetSession.mockImplementationOnce(() => ({
+        id: "s-1",
+        title: "Test",
+        status: "idle" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+        structuredOutputRequestId: "structured-1",
+        structuredOutput: {
+          ok: true as const,
+          provider: "claude" as const,
+          requestId: "structured-1",
+          value: { summary: "done" },
+        },
+      }));
+      const latest = await app.request("/session/s-1/structured-output");
+      expect(await jsonBody(latest)).toMatchObject({
+        requestId: "structured-1",
+        structuredOutput: { ok: true, value: { summary: "done" } },
+      });
+
+      mockGetSession.mockImplementationOnce(() => ({
+        id: "s-1",
+        title: "Test",
+        status: "idle" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+        structuredOutputRequestId: "structured-1",
+      }));
+      const mismatch = await app.request(
+        "/session/s-1/structured-output?requestId=structured-2",
+      );
+      expect(await jsonBody(mismatch)).toEqual({
+        structuredOutput: null,
+        requestId: "structured-2",
+      });
+      expect((await app.request("/session/s-unknown/structured-output")).status).toBe(404);
+    });
+  });
+
   // --- GET /session/:id/messages ---
   describe("GET /session/:id/messages", () => {
     test("returns messages for existing session", async () => {
@@ -284,6 +325,38 @@ describe("session routes", () => {
       const res = await app.request("/session/s-1/tasks");
       expect(res.status).toBe(200);
       expect(await jsonBody(res)).toEqual({ items: [], complete: true });
+    });
+
+    test("hydrates a persisted session before serving its reconstructed tasks", async () => {
+      const persistedRegistry = new TaskRegistry();
+      const persisted = {
+        id: "s-persisted",
+        title: "From disk",
+        status: "idle" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+        persistedMessagesLoaded: false,
+        taskRegistry: undefined as TaskRegistry | undefined,
+      };
+      mockEnsurePersistedSession.mockImplementationOnce(async () => persisted);
+      mockHydratePersistedSessionMessages.mockImplementationOnce(async () => {
+        persistedRegistry.apply(
+          "TaskCreate",
+          { subject: "Recovered task" },
+          "Task #1 created successfully: Recovered task",
+        );
+        persisted.taskRegistry = persistedRegistry;
+        persisted.persistedMessagesLoaded = true;
+        return [];
+      });
+
+      const res = await app.request("/session/s-persisted/tasks");
+      expect(res.status).toBe(200);
+      expect(mockHydratePersistedSessionMessages).toHaveBeenCalledWith("s-persisted");
+      expect(await jsonBody(res)).toEqual({
+        items: [{ id: "1", subject: "Recovered task", status: "pending" }],
+        complete: true,
+      });
     });
 
     test("returns 404 for unknown session", async () => {
@@ -343,6 +416,41 @@ describe("session routes", () => {
         duplicate: true,
       });
       expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("rejects oversized request ids and reports completed duplicates", async () => {
+      const tooLong = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Review",
+        outputSchema: { type: "object" },
+        requestId: "x".repeat(201),
+      });
+      expect(tooLong.status).toBe(400);
+
+      mockGetStructuredPromptDispatchState.mockReturnValueOnce("already-processed");
+      const completed = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Review",
+        outputSchema: { type: "object" },
+        requestId: "complete-1",
+      });
+      expect(completed.status).toBe(200);
+      expect(await jsonBody(completed)).toEqual({
+        status: "already-processed",
+        requestId: "complete-1",
+        duplicate: true,
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("accepts the request even when background processing later rejects", async () => {
+      mockSendPrompt.mockImplementationOnce(async () => {
+        throw new Error("provider disconnected");
+      });
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Hello",
+      });
+      expect(res.status).toBe(202);
+      await Promise.resolve();
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
     });
 
     test("returns 404 for unknown session", async () => {
@@ -602,6 +710,13 @@ describe("session routes", () => {
       const res = await jsonRequest("POST", "/session/s-unknown/abort");
       expect(res.status).toBe(404);
     });
+
+    test("returns not_running when the session has no active query", async () => {
+      mockAbortSession.mockReturnValueOnce(false);
+      const res = await jsonRequest("POST", "/session/s-1/abort");
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({ status: "not_running" });
+    });
   });
 
   // --- DELETE /session/:id ---
@@ -616,6 +731,24 @@ describe("session routes", () => {
     test("returns 404 for unknown session", async () => {
       const res = await jsonRequest("DELETE", "/session/s-unknown");
       expect(res.status).toBe(404);
+    });
+
+    test("maps concurrent deletion and unexpected storage failures", async () => {
+      mockDeleteSessionDurably.mockImplementationOnce(async () => {
+        throw refusal("conflict", "Session deletion is already in progress");
+      });
+      const conflict = await jsonRequest("DELETE", "/session/s-1");
+      expect(conflict.status).toBe(409);
+      expect(await jsonBody(conflict)).toEqual({
+        error: "Session deletion is already in progress",
+      });
+
+      mockDeleteSessionDurably.mockImplementationOnce(async () => {
+        throw new Error("disk busy");
+      });
+      const failure = await jsonRequest("DELETE", "/session/s-1");
+      expect(failure.status).toBe(500);
+      expect(await jsonBody(failure)).toEqual({ error: "disk busy" });
     });
   });
 

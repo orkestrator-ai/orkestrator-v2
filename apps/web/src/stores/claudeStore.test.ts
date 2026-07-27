@@ -208,6 +208,50 @@ describe("claudeStore cleanup and queue helpers", () => {
     ]);
   });
 
+  test("covers environment model updates, nullable init data, and pending selectors", () => {
+    const store = useClaudeStore.getState();
+    store.setModels([{ id: "env-model", name: "Environment model" }], "env-1");
+    expect(store.getModelCatalog("env-1")).toMatchObject({
+      environmentId: "env-1",
+      source: "sdk",
+      stale: false,
+    });
+    expect(store.getModels("env-1").map((model) => model.id)).toEqual(["env-model"]);
+
+    store.setSessionInitData("env-1", {
+      mcpServers: [],
+      plugins: [],
+      slashCommands: ["/review"],
+    });
+    expect(store.getSessionInitData("env-1")?.slashCommands).toEqual(["/review"]);
+    store.setSessionInitData("env-1", null);
+    expect(store.getSessionInitData("env-1")).toBeUndefined();
+
+    store.setSession(SESSION_KEY, {
+      sessionId: "sdk-session-1",
+      messages: [],
+      isLoading: false,
+    });
+    store.addPendingQuestion({
+      id: "question-1",
+      sessionId: "sdk-session-1",
+      questions: [],
+    });
+    store.addPendingPlanApproval({
+      id: "approval-1",
+      sessionId: "sdk-session-1",
+    });
+    expect(store.getPendingQuestionsForSession("sdk-session-1")).toHaveLength(1);
+    expect(store.getPendingPlanApprovalsForSession("sdk-session-1")).toHaveLength(1);
+    expect(store.getSessionKeyBySdkSessionId("sdk-session-1")).toBe(SESSION_KEY);
+    expect(store.getSessionKeyBySdkSessionId("missing-session")).toBeNull();
+
+    store.removePendingQuestion("question-1");
+    store.removePendingPlanApproval("approval-1");
+    expect(store.getPendingQuestion("question-1")).toBeUndefined();
+    expect(store.getPendingPlanApproval("approval-1")).toBeUndefined();
+  });
+
   test("queues prompts in FIFO order and clears only the targeted session queue", () => {
     const queueA = createClaudeSessionKey("env-1", "tab-1");
     const queueB = createClaudeSessionKey("env-1", "tab-2");

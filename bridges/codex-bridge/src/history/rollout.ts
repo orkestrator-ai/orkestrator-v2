@@ -224,16 +224,8 @@ export async function getSessionMetaFromTranscriptPath(
   fallbackTitle?: string,
   fallbackUpdatedAt?: string,
 ): Promise<PersistedSessionMeta | null> {
-  let { records, truncated } = await readTranscriptHead(transcriptPath);
-  let sessionMetaRecord = records.find((record) => record.type === "session_meta");
-
-  // `session_meta` is normally the first record, so a miss means an unusually
-  // large leading record rather than a malformed file. Pay for one full read in
-  // that case instead of dropping the session from history.
-  if (!sessionMetaRecord?.payload && truncated) {
-    records = (await readCachedTranscript(transcriptPath)).records;
-    sessionMetaRecord = records.find((record) => record.type === "session_meta");
-  }
+  const { records } = await readTranscriptHead(transcriptPath);
+  const sessionMetaRecord = records.find((record) => record.type === "session_meta");
 
   if (!sessionMetaRecord?.payload) {
     return null;
@@ -585,4 +577,3 @@ export async function hydrateMessagesFromPersistedSession(
     titleSource: meta.titleSource,
   };
 }
-

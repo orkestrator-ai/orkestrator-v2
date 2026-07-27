@@ -1028,15 +1028,30 @@ describe("remote gateway", () => {
     )).rejects.toThrow("Response aborted");
   });
 
-  test("proxies authenticated loopback requests without leaking gateway credentials", async () => {
-    const targetRequests: { authorization?: string; cookie?: string }[] = [];
+  test("proxies authenticated loopback POSTs without leaking gateway credentials or browser origin", async () => {
+    const targetRequests: Array<{
+      authorization?: string;
+      codexToken?: string;
+      cookie?: string;
+      origin?: string;
+      method?: string;
+      body: string;
+    }> = [];
     const target = createServer((request, response) => {
-      targetRequests.push({
-        authorization: request.headers.authorization,
-        cookie: request.headers.cookie,
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        targetRequests.push({
+          authorization: request.headers.authorization,
+          codexToken: request.headers["x-orkestrator-codex-token"] as string | undefined,
+          cookie: request.headers.cookie,
+          origin: request.headers.origin,
+          method: request.method,
+          body: Buffer.concat(chunks).toString("utf8"),
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true, url: request.url }));
       });
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ok: true, url: request.url }));
     });
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
     const targetAddress = target.address();
@@ -1062,14 +1077,26 @@ describe("remote gateway", () => {
 
     try {
       const response = await requestUrl(`${info!.url}__orkestrator/proxy/loopback/${targetAddress.port}/hello?x=1`, {
+        method: "POST",
         headers: {
           authorization: `Bearer ${info!.token}`,
           cookie: "orkestrator_gateway_auth=test-token-123456; app_session=abc123",
+          origin: new URL(info!.url).origin,
+          "content-type": "application/json",
+          "x-orkestrator-codex-token": "codex-bridge-token",
         },
+        body: JSON.stringify({ prompt: "review" }),
       });
       expect(response.status).toBe(200);
       expect(response.json()).toEqual({ ok: true, url: "/hello?x=1" });
-      expect(targetRequests).toEqual([{ authorization: undefined, cookie: "app_session=abc123" }]);
+      expect(targetRequests).toEqual([{
+        authorization: undefined,
+        codexToken: "codex-bridge-token",
+        cookie: "app_session=abc123",
+        origin: undefined,
+        method: "POST",
+        body: JSON.stringify({ prompt: "review" }),
+      }]);
     } finally {
       await new Promise<void>((resolve) => target.close(() => resolve()));
     }

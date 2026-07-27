@@ -300,6 +300,7 @@ async function harness(
     sweepIntervalMs?: number;
     environmentDrainTimeoutMs?: number;
     ambiguousRecoveryTimeoutMs?: number;
+    compactionTimeoutMs?: number;
     fingerprintEnvironment?: () => string;
     /** Uses the production adaptive cadence instead of deterministic immediate publishes. */
     adaptiveCoalesce?: boolean;
@@ -370,6 +371,9 @@ async function harness(
       : {}),
     ...(options.ambiguousRecoveryTimeoutMs !== undefined
       ? { ambiguousRecoveryTimeoutMs: options.ambiguousRecoveryTimeoutMs }
+      : {}),
+    ...(options.compactionTimeoutMs !== undefined
+      ? { compactionTimeoutMs: options.compactionTimeoutMs }
       : {}),
   });
   if (options.deferStart !== true) await runtime.start();
@@ -2985,6 +2989,30 @@ describe("crash recovery", () => {
     });
   });
 
+  test("a generation reconciliation read failure terminates recovery as failed", async () => {
+    const h = await harness({
+      "thread/read": () => {
+        throw new Error("replacement read failed");
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "x",
+      requestId: "req-1",
+      attachments: [],
+    });
+
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "error",
+      phase: "failed",
+      error: expect.stringContaining("replacement read failed"),
+    });
+  });
+
   /**
    * Two restarts in quick succession are ordinary (a crash during a controlled
    * restart). Both recovery passes walk the same registry and rebind the same
@@ -3795,6 +3823,26 @@ describe("titles", () => {
 
     expect(h.events.some((event) => event.type === "session.title-updated")).toBe(true);
   });
+
+  test("a rejected title generation keeps the prompt fallback and clears its token", async () => {
+    const h = await harness({}, {
+      generateTitle: async () => {
+        throw new Error("title service unavailable");
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Fix the parser",
+      requestId: "req-title-failure",
+      attachments: [],
+    });
+    await Bun.sleep(10);
+
+    const session = h.runtime.getRegistry().getSession(sessionId)!;
+    expect(session.title).toBe("Fix the parser");
+    expect(session.titleSource).toBe("prompt");
+    expect(session.titleGenerationToken).toBeUndefined();
+  });
 });
 
 describe("slash commands", () => {
@@ -4097,6 +4145,43 @@ describe("interactive approvals", () => {
 
     expect(h.child().requests.some((request) => request.method === "turn/interrupt"))
       .toBe(true);
+  });
+
+  test("a failed interrupt after cancelling an approval surfaces a terminal error", async () => {
+    const h = await harness({
+      "turn/interrupt": () => {
+        throw new Error("interrupt transport failed");
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "go",
+      requestId: "req-1",
+      attachments: [],
+    });
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 9004,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "touch file",
+        cwd: "/tmp/ws",
+      },
+    });
+    await h.drain();
+
+    const approvalId = h.runtime.listApprovals(sessionId)[0]!.approvalId;
+    expect(h.runtime.respondToApproval(sessionId, approvalId, "cancel")).toBe("applied");
+    await Bun.sleep(90);
+
+    expect(h.runtime.listApprovals(sessionId)).toHaveLength(0);
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "error",
+      phase: "failed",
+    });
   });
 
   test("v2 file-change approvals are enriched from the active item", async () => {
@@ -4578,6 +4663,30 @@ describe("compaction", () => {
     })).toMatchObject({ ok: true });
   });
 
+  test("a missing compacted notification is released by the deadline", async () => {
+    const h = await harness(COMPACT_HANDLERS, { compactionTimeoutMs: 15 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "go",
+      requestId: "req-1",
+      attachments: [],
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    expect(await h.runtime.compactSession(sessionId)).toBe("accepted");
+    await Bun.sleep(35);
+
+    expect(h.runtime.getRegistry().getThread("thread-1")?.compacting).toBe(false);
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("never reported"),
+    });
+  });
+
   test("abort releases a compaction hold so a lost notification cannot wedge it", async () => {
     const { h, sessionId } = await compactableSession();
     await h.runtime.compactSession(sessionId);
@@ -4842,6 +4951,45 @@ describe("native review", () => {
       attachments: [],
     })).toMatchObject({ ok: true });
   });
+
+  test("a native review reattaches by turn id after an app-server restart", async () => {
+    const { h, sessionId } = await reviewableSession({
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [{ id: "turn-review", status: "inProgress", items: [] }],
+        }),
+      }),
+    });
+    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" }))
+      .toEqual({ outcome: "accepted", turnId: "turn-review" });
+
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "running",
+      turnId: "turn-review",
+    });
+    expect(h.runtime.getJournal().get("review-turn-review")).toBeUndefined();
+  });
+
+  test("review-start rejection after a child crash preserves the recovering phase", async () => {
+    const { h, sessionId } = await reviewableSession({
+      "review/start": () => NO_RESPONSE,
+    });
+    const review = h.runtime.startNativeReview(sessionId, {
+      type: "uncommittedChanges",
+    });
+    await Bun.sleep(5);
+    h.child().exit(1);
+
+    expect(await review).toEqual({ outcome: "unavailable" });
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "running",
+      phase: "recovering",
+    });
+  });
 });
 
 describe("runtime health", () => {
@@ -4861,7 +5009,7 @@ describe("runtime health", () => {
       .toMatchObject({ threadId: "thread-1" });
   });
 
-  test("an unknown session still returns the environment-wide snapshot", async () => {
+  test("an unknown session is rejected instead of returning environment-wide data", async () => {
     const h = await harness({
       "mcpServerStatus/list": () => ({ data: [] }),
       "skills/list": () => ({ data: [] }),
@@ -4869,12 +5017,10 @@ describe("runtime health", () => {
       "account/rateLimits/read": () => ({ rateLimits: {} }),
     });
 
-    const health = await h.runtime.getRuntimeHealth("session-nope") as Record<string, unknown>;
-    expect(health.engine).toBeDefined();
-    const params = h.child().requests.find(
-      (request) => request.method === "mcpServerStatus/list",
-    )?.params;
-    expect(params && "threadId" in params).toBe(false);
+    expect(await h.runtime.getRuntimeHealth("session-nope")).toBeNull();
+    expect(
+      h.child().requests.some((request) => request.method === "mcpServerStatus/list"),
+    ).toBe(false);
   });
 });
 

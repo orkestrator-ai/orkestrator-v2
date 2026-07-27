@@ -1459,12 +1459,12 @@ describe("AgentInfoButton rewind confirmation", () => {
 });
 
 describe("AgentInfoButton OpenCode sharing", () => {
-  function seedShareableSession() {
+  function seedShareableSession(sessionId = "opencode-session-1") {
     useOpenCodeStore.setState({
       clients: new Map([[ENVIRONMENT_ID, openCodeClient]]),
       sessions: new Map([[
         OPENCODE_KEY,
-        { sessionId: "opencode-session-1", messages: [], isLoading: false },
+        { sessionId, messages: [], isLoading: false },
       ]]),
     } as never);
   }
@@ -1574,6 +1574,25 @@ describe("AgentInfoButton OpenCode sharing", () => {
     expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy();
   });
 
+  test("an authoritative unshared snapshot clears a formerly shared session", async () => {
+    seedShareableSession();
+    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
+
+    // A share can be revoked from another client. A successful provider read
+    // with no URL is authoritative and must remove the stale local action.
+    openCodeSessionGet.mockImplementation(async () => ({
+      data: { id: "opencode-session-1" },
+    }));
+    reopen();
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull(),
+    );
+  });
+
   test("a client without a session.get surface reports not shared rather than throwing", async () => {
     openCodeClient = {};
     seedShareableSession();
@@ -1611,6 +1630,77 @@ describe("AgentInfoButton OpenCode sharing", () => {
     rerender(<AgentInfoButton activeTab={openCodeTab({ id: "tab-9" })} />);
     reopen();
     expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull();
+  });
+
+  test("a delayed share cannot mark a resumed session as shared", async () => {
+    seedShareableSession("opencode-session-a");
+    let releaseShare: (url: string) => void = () => {};
+    mockShareOpenCodeSession.mockImplementation(
+      () => new Promise((resolve) => {
+        releaseShare = resolve;
+      }),
+    );
+    const { rerender } = render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
+    await waitFor(() =>
+      expect(mockShareOpenCodeSession).toHaveBeenCalledWith(
+        openCodeClient,
+        "opencode-session-a",
+      ),
+    );
+
+    act(() => {
+      seedShareableSession("opencode-session-b");
+    });
+    rerender(<AgentInfoButton activeTab={openCodeTab()} />);
+    reopen();
+
+    await act(async () => {
+      releaseShare("https://share.opencode.test/session-a");
+    });
+    expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull();
+    expect(clipboardWrites).toEqual([]);
+    expect(mockToastSuccess).not.toHaveBeenCalledWith("Share link copied");
+  });
+
+  test("an old action finishing cannot clear the new session's busy latch", async () => {
+    seedShareableSession("opencode-session-a");
+    let releaseShare: (url: string) => void = () => {};
+    let releaseCompact: (value?: undefined) => void = () => {};
+    mockShareOpenCodeSession.mockImplementation(
+      () => new Promise((resolve) => {
+        releaseShare = resolve;
+      }),
+    );
+    mockCompactOpenCodeSession.mockImplementation(
+      () => new Promise<undefined>((resolve) => {
+        releaseCompact = resolve;
+      }),
+    );
+    const { rerender } = render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
+
+    act(() => {
+      seedShareableSession("opencode-session-b");
+    });
+    rerender(<AgentInfoButton activeTab={openCodeTab()} />);
+    reopen();
+    const compact = screen.getByRole("button", { name: /Compact/ });
+    expect(compact.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(compact);
+    await waitFor(() => expect(compact.hasAttribute("disabled")).toBe(true));
+
+    await act(async () => {
+      releaseShare("https://share.opencode.test/session-a");
+    });
+    expect(compact.hasAttribute("disabled")).toBe(true);
+
+    await act(async () => {
+      releaseCompact();
+    });
+    await waitFor(() => expect(compact.hasAttribute("disabled")).toBe(false));
   });
 });
 
@@ -1708,6 +1798,68 @@ describe("AgentInfoButton Codex steering", () => {
     expect(input.value).toBe("");
     expect(screen.getByRole("button", { name: "Send now" }).hasAttribute("disabled")).toBe(true);
     expect(mockSteerCodexSession).not.toHaveBeenCalled();
+  });
+
+  test("same-tab resume clears unsent steering text", () => {
+    seedRunningCodex();
+    const { rerender } = render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
+      target: { value: "belongs to the old rollout" },
+    });
+
+    act(() => {
+      useCodexStore.setState({
+        sessions: new Map([[
+          CODEX_KEY,
+          { sessionId: "codex-resumed", messages: [], isLoading: true },
+        ]]),
+      } as never);
+    });
+    rerender(<AgentInfoButton activeTab={codexTab()} />);
+    reopen();
+
+    expect(
+      (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,
+    ).toBe("");
+  });
+
+  test("a delayed steer completion cannot clear the resumed session's draft", async () => {
+    seedRunningCodex();
+    let releaseSteer: (sent: boolean) => void = () => {};
+    mockSteerCodexSession.mockImplementation(
+      () => new Promise((resolve) => {
+        releaseSteer = resolve;
+      }),
+    );
+    const { rerender } = render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
+      target: { value: "old session text" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+
+    act(() => {
+      useCodexStore.setState({
+        sessions: new Map([[
+          CODEX_KEY,
+          { sessionId: "codex-resumed", messages: [], isLoading: true },
+        ]]),
+      } as never);
+    });
+    rerender(<AgentInfoButton activeTab={codexTab()} />);
+    reopen();
+    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
+      target: { value: "new session text" },
+    });
+
+    await act(async () => {
+      releaseSteer(true);
+    });
+    expect(
+      (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,
+    ).toBe("new session text");
+    expect(mockToastSuccess).not.toHaveBeenCalledWith("Sent to the active turn");
   });
 });
 

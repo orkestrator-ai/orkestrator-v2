@@ -139,10 +139,31 @@ const mockResumeSession = mock(async () => null as null | {
 });
 const mockCheckHealth = mock(async () => true);
 const mockGetCodexServerLog = mock(async () => "");
-const mockGetCodexServerStatus = mock(async () => ({ running: true, hostPort: 9999 }));
-const mockGetLocalCodexServerStatus = mock(async () => ({ running: true, port: 9999, pid: 1234 }));
-const mockStartCodexServer = mock(async () => ({ hostPort: 9999 }));
-const mockStartLocalCodexServer = mock(async () => ({ port: 9999, pid: 1234 }));
+const mockGetCodexServerStatus = mock(async () => ({
+  running: true,
+  hostPort: 9999,
+  authToken: "container-test-token",
+}));
+const mockGetLocalCodexServerStatus = mock(async () => ({
+  running: true,
+  port: 9999,
+  pid: 1234,
+  authToken: "local-test-token",
+}));
+const mockStartCodexServer = mock(async () => ({
+  hostPort: 9999,
+  authToken: "container-start-token",
+}));
+const mockStartLocalCodexServer = mock(async () => ({
+  port: 9999,
+  pid: 1234,
+  authToken: "local-start-token",
+}));
+const mockCreateClient = mock(
+  (_baseUrl: string, _authToken?: string) => ({
+    baseUrl: "http://127.0.0.1:9999",
+  }),
+);
 const mockUpdateGlobalConfig = mock(async (config: any) => ({
   ...useConfigStore.getState().config,
   global: config,
@@ -189,7 +210,7 @@ mock.module("@/lib/codex-client", () => ({
   DEFAULT_CODEX_MODEL: MOCK_MODELS[0]!.id,
   abortSession: mockAbortSession,
   checkHealth: mockCheckHealth,
-  createClient: mock(() => ({ baseUrl: "http://127.0.0.1:9999" })),
+  createClient: mockCreateClient,
   createSession: mockCreateSession,
   // Called on every reconcile. Stubbed so the suite does not attempt a real fetch
   // to the fake bridge port on each state refresh.
@@ -469,6 +490,16 @@ function createApproval(approvalId = "approval-1"): CodexApproval {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function createData(overrides: Partial<CodexNativeData> = {}): CodexNativeData {
   return {
     environmentId: ENVIRONMENT_ID,
@@ -696,13 +727,30 @@ describe("CodexChatTab", () => {
     mockGetCodexServerLog.mockReset();
     mockGetCodexServerLog.mockResolvedValue("");
     mockGetCodexServerStatus.mockReset();
-    mockGetCodexServerStatus.mockResolvedValue({ running: true, hostPort: 9999 });
+    mockGetCodexServerStatus.mockResolvedValue({
+      running: true,
+      hostPort: 9999,
+      authToken: "container-test-token",
+    });
     mockGetLocalCodexServerStatus.mockReset();
-    mockGetLocalCodexServerStatus.mockResolvedValue({ running: true, port: 9999, pid: 1234 });
+    mockGetLocalCodexServerStatus.mockResolvedValue({
+      running: true,
+      port: 9999,
+      pid: 1234,
+      authToken: "local-test-token",
+    });
     mockStartCodexServer.mockReset();
-    mockStartCodexServer.mockResolvedValue({ hostPort: 9999 });
+    mockStartCodexServer.mockResolvedValue({
+      hostPort: 9999,
+      authToken: "container-start-token",
+    });
     mockStartLocalCodexServer.mockReset();
-    mockStartLocalCodexServer.mockResolvedValue({ port: 9999, pid: 1234 });
+    mockStartLocalCodexServer.mockResolvedValue({
+      port: 9999,
+      pid: 1234,
+      authToken: "local-start-token",
+    });
+    mockCreateClient.mockClear();
     mockUpdateGlobalConfig.mockReset();
     mockUpdateGlobalConfig.mockImplementation(async (global) => ({
       ...useConfigStore.getState().config,
@@ -1033,6 +1081,50 @@ describe("CodexChatTab", () => {
     });
   });
 
+  test("clears old requests and ignores delayed rehydration after resume", async () => {
+    const staleApprovals = deferred<CodexApproval[]>();
+    const staleInteractions = deferred<CodexInteraction[]>();
+    mockFetchPendingApprovals.mockImplementationOnce(() => staleApprovals.promise);
+    mockFetchPendingInteractions.mockImplementationOnce(() => staleInteractions.promise);
+    mockResumeSession.mockResolvedValue({
+      session: { sessionId: "resumed-codex", title: "Resumed" },
+      messages: [],
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => {
+      expect(mockFetchPendingApprovals).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
+      expect(mockFetchPendingInteractions).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
+    });
+    act(() => {
+      useCodexStore.getState().setPendingApprovals(
+        SESSION_KEY,
+        [createApproval("old-approval")],
+      );
+      useCodexStore.getState().setPendingInteractions(
+        SESSION_KEY,
+        [createInteraction("old-interaction")],
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(await screen.findByTestId("codex-resume-choice"));
+    await waitFor(() =>
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId)
+        .toBe("resumed-codex"),
+    );
+    expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false);
+    expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
+
+    await act(async () => {
+      staleApprovals.resolve([createApproval("late-old-approval")]);
+      staleInteractions.resolve([createInteraction("late-old-interaction")]);
+      await Promise.all([staleApprovals.promise, staleInteractions.promise]);
+    });
+    expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false);
+    expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
+  });
+
   test("keeps the resume dialog open and logs when a manual resume fails", async () => {
     const originalError = console.error;
     const consoleError = mock(() => {});
@@ -1090,6 +1182,47 @@ describe("CodexChatTab", () => {
     expect(await screen.findByText("local bridge offline")).toBeTruthy();
     expect(screen.getByText("Local Codex bridge error: local bridge offline")).toBeTruthy();
     expect(mockGetCodexServerLog).not.toHaveBeenCalled();
+  });
+
+  test("constructs a cold container client with the bridge status token", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        "container-test-token",
+      );
+    });
+    expect(mockStartCodexServer).not.toHaveBeenCalled();
+  });
+
+  test("restarts a legacy running bridge whose status has no auth token", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    mockGetCodexServerStatus.mockResolvedValueOnce({
+      running: true,
+      hostPort: 9999,
+      authToken: undefined as any,
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(mockStartCodexServer).toHaveBeenCalledWith(CONTAINER_ID);
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        "container-start-token",
+      );
+    });
   });
 
   test("turns a failed cached-client health check into a reconnectable error", async () => {

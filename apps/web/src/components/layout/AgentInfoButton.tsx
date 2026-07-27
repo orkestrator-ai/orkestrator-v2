@@ -63,6 +63,17 @@ interface AgentInfoButtonProps {
   mobile?: boolean;
 }
 
+interface SessionActionState {
+  actionId: number;
+  name: string;
+  sessionIdentity: string;
+}
+
+interface SessionValueState<T> {
+  sessionIdentity: string | null;
+  value: T;
+}
+
 const EMPTY_CLAUDE_TASKS: Record<string, never> = {};
 
 interface ActiveNativeSession {
@@ -437,12 +448,20 @@ export function AgentInfoButton({
   mobile = false,
 }: AgentInfoButtonProps) {
   const [open, setOpen] = useState(false);
-  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [busyState, setBusyState] = useState<SessionActionState | null>(null);
   const [codexHealth, setCodexHealth] = useState<unknown>(null);
-  const [steerText, setSteerText] = useState("");
-  const [openCodeShared, setOpenCodeShared] = useState(false);
+  const [steerState, setSteerState] = useState<SessionValueState<string>>({
+    sessionIdentity: null,
+    value: "",
+  });
+  const [shareState, setShareState] = useState<SessionValueState<boolean>>({
+    sessionIdentity: null,
+    value: false,
+  });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef(false);
+  const actionIdRef = useRef(0);
+  const shareVersionRef = useRef(0);
   const activeSession = useMemo(
     () => resolveActiveNativeSession(activeTab),
     [activeTab],
@@ -580,6 +599,22 @@ export function AgentInfoButton({
         : activeSession?.provider === "codex"
           ? codexSession?.sessionId
           : undefined;
+  /*
+   * The tab key is not enough: resume replaces the provider session beneath
+   * the same tab. Including the provider session id makes transient controls
+   * change ownership immediately on both tab switches and same-tab resumes.
+   */
+  const sessionIdentity = activeSession
+    ? `${activeSession.provider}:${activeSession.sessionKey}:${currentSessionId ?? "pending"}`
+    : null;
+  const currentSessionIdentityRef = useRef(sessionIdentity);
+  currentSessionIdentityRef.current = sessionIdentity;
+  const busyAction =
+    busyState?.sessionIdentity === sessionIdentity ? busyState.name : null;
+  const steerText =
+    steerState.sessionIdentity === sessionIdentity ? steerState.value : "";
+  const openCodeShared =
+    shareState.sessionIdentity === sessionIdentity && shareState.value;
 
   useEffect(() => {
     if (
@@ -617,7 +652,11 @@ export function AgentInfoButton({
     };
   }, [activeSession?.provider, codexClient, currentSessionId, open]);
 
-  const openForkTab = (sessionId: string, title?: string) => {
+  const openForkTab = (
+    sessionId: string,
+    title: string | undefined,
+    closeCurrentPanel: boolean,
+  ) => {
     if (!activeTab || !activeSession) return;
     const id = createUuid();
     /*
@@ -659,32 +698,46 @@ export function AgentInfoButton({
       tab,
       activeSession.environmentId,
     );
-    setOpen(false);
+    if (closeCurrentPanel) setOpen(false);
   };
 
-  const runAction = async (name: string, action: () => Promise<void>) => {
-    setBusyAction(name);
+  const runAction = async (
+    name: string,
+    action: (scope: { isCurrent: () => boolean; sessionIdentity: string }) => Promise<void>,
+  ) => {
+    if (!sessionIdentity) return;
+    const actionId = ++actionIdRef.current;
+    const actionState = { actionId, name, sessionIdentity };
+    const isCurrent = () => currentSessionIdentityRef.current === sessionIdentity;
+    setBusyState(actionState);
     try {
-      await action();
+      await action({ isCurrent, sessionIdentity });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : `${name} failed`);
+      if (isCurrent()) {
+        toast.error(error instanceof Error ? error.message : `${name} failed`);
+      }
     } finally {
-      setBusyAction(null);
+      setBusyState((current) =>
+        current?.actionId === actionId
+          && current.sessionIdentity === sessionIdentity
+          ? null
+          : current,
+      );
     }
   };
 
-  const forkCurrent = () => runAction("fork", async () => {
+  const forkCurrent = () => runAction("fork", async ({ isCurrent }) => {
     if (!activeSession || !currentSessionId) return;
     if (activeSession.provider === "claude" && claudeClient) {
       const fork = await forkClaudeSession(claudeClient, currentSessionId);
-      openForkTab(fork.sessionId, fork.title);
+      openForkTab(fork.sessionId, fork.title, isCurrent());
     } else if (activeSession.provider === "opencode" && openCodeClient) {
       const fork = await forkOpenCodeSession(openCodeClient, currentSessionId);
-      openForkTab(fork.id, fork.title);
+      openForkTab(fork.id, fork.title, isCurrent());
     } else if (activeSession.provider === "codex" && codexClient) {
       const fork = await forkCodexSession(codexClient, currentSessionId);
       if (!fork) throw new Error("Codex cannot fork an active or empty session");
-      openForkTab(fork.sessionId, fork.title);
+      openForkTab(fork.sessionId, fork.title, isCurrent());
     }
   });
 
@@ -715,10 +768,10 @@ export function AgentInfoButton({
    */
   useEffect(() => {
     setOpen(false);
-    setOpenCodeShared(false);
-    setSteerText("");
-    setBusyAction(null);
-  }, [activeTab?.id, activeSession?.environmentId]);
+    shareVersionRef.current += 1;
+    setShareState({ sessionIdentity, value: false });
+    setSteerState({ sessionIdentity, value: "" });
+  }, [sessionIdentity]);
 
   /*
    * `openCodeShared` is an optimistic flag; the server's session record is the
@@ -737,9 +790,20 @@ export function AgentInfoButton({
       return;
     }
     let cancelled = false;
+    const shareVersion = shareVersionRef.current;
+    const requestedIdentity = sessionIdentity;
     void readOpenCodeShareUrl(openCodeClient, currentSessionId)
       .then((url) => {
-        if (!cancelled && url) setOpenCodeShared(true);
+        if (
+          !cancelled
+          && requestedIdentity !== null
+          && currentSessionIdentityRef.current === requestedIdentity
+          && shareVersionRef.current === shareVersion
+        ) {
+          // The provider snapshot is authoritative in both directions. A null
+          // URL means a formerly shared session was revoked elsewhere.
+          setShareState({ sessionIdentity: requestedIdentity, value: Boolean(url) });
+        }
       })
       .catch((error: unknown) => {
         // A failed lookup must not clear the flag: that would hide "Stop
@@ -749,7 +813,13 @@ export function AgentInfoButton({
     return () => {
       cancelled = true;
     };
-  }, [activeSession?.provider, currentSessionId, open, openCodeClient]);
+  }, [
+    activeSession?.provider,
+    currentSessionId,
+    open,
+    openCodeClient,
+    sessionIdentity,
+  ]);
 
   useEffect(() => {
     if (!open && restoreFocusRef.current) {
@@ -1032,38 +1102,51 @@ export function AgentInfoButton({
                         size="sm"
                         disabled={busyAction !== null}
                         className="justify-start gap-2"
-                        onClick={() => void runAction("share", async () => {
-                          if (!window.confirm(
-                            "Create an OpenCode share link? The conversation will leave this machine and be accessible to anyone with the link.",
-                          )) return;
-                          const url = await shareOpenCodeSession(
-                            openCodeClient,
-                            currentSessionId,
-                          );
-                          /*
-                           * The conversation is published the moment `share()`
-                           * resolves. Latch that first: every failure after this
-                           * point (a missing URL, a clipboard rejection on focus
-                           * or permission grounds) used to skip the flag, so the
-                           * user saw an error while the link was live and
-                           * "Stop sharing" never rendered.
-                           */
-                          setOpenCodeShared(true);
-                          if (!url) {
-                            toast.warning(
-                              "Session shared, but OpenCode did not return the link. Use Stop sharing to revoke it.",
+                        onClick={() => void runAction(
+                          "share",
+                          async ({ isCurrent, sessionIdentity: actionIdentity }) => {
+                            if (!window.confirm(
+                              "Create an OpenCode share link? The conversation will leave this machine and be accessible to anyone with the link.",
+                            )) return;
+                            shareVersionRef.current += 1;
+                            const url = await shareOpenCodeSession(
+                              openCodeClient,
+                              currentSessionId,
                             );
-                            return;
-                          }
-                          try {
-                            await navigator.clipboard.writeText(url);
-                            toast.success("Share link copied");
-                          } catch {
-                            toast.warning(
-                              `Session shared, but the link could not be copied: ${url}`,
-                            );
-                          }
-                        })}
+                            /*
+                             * The conversation is published the moment `share()`
+                             * resolves. Latch that first: every failure after this
+                             * point (a missing URL, a clipboard rejection on focus
+                             * or permission grounds) used to skip the flag, so the
+                             * user saw an error while the link was live and
+                             * "Stop sharing" never rendered.
+                             */
+                            if (isCurrent()) {
+                              setShareState({
+                                sessionIdentity: actionIdentity,
+                                value: true,
+                              });
+                            }
+                            // The originating session is now shared, but a
+                            // different active session must not receive its URL,
+                            // clipboard side effect, or notification.
+                            if (!isCurrent()) return;
+                            if (!url) {
+                              toast.warning(
+                                "Session shared, but OpenCode did not return the link. Use Stop sharing to revoke it.",
+                              );
+                              return;
+                            }
+                            try {
+                              await navigator.clipboard.writeText(url);
+                              if (isCurrent()) toast.success("Share link copied");
+                            } catch {
+                              if (isCurrent()) toast.warning(
+                                `Session shared, but the link could not be copied: ${url}`,
+                              );
+                            }
+                          },
+                        )}
                       >
                         <Share2 className="h-3.5 w-3.5" />
                         Share…
@@ -1090,14 +1173,23 @@ export function AgentInfoButton({
                           size="sm"
                           disabled={busyAction !== null}
                           className="justify-start gap-2"
-                          onClick={() => void runAction("unshare", async () => {
-                            await unshareOpenCodeSession(
-                              openCodeClient,
-                              currentSessionId,
-                            );
-                            setOpenCodeShared(false);
-                            toast.success("OpenCode share link disabled");
-                          })}
+                          onClick={() => void runAction(
+                            "unshare",
+                            async ({ isCurrent, sessionIdentity: actionIdentity }) => {
+                              shareVersionRef.current += 1;
+                              await unshareOpenCodeSession(
+                                openCodeClient,
+                                currentSessionId,
+                              );
+                              if (isCurrent()) {
+                                setShareState({
+                                  sessionIdentity: actionIdentity,
+                                  value: false,
+                                });
+                                toast.success("OpenCode share link disabled");
+                              }
+                            },
+                          )}
                         >
                           <X className="h-3.5 w-3.5" />
                           Stop sharing
@@ -1140,7 +1232,10 @@ export function AgentInfoButton({
                     <div className="flex gap-2">
                       <Input
                         value={steerText}
-                        onChange={(event) => setSteerText(event.target.value)}
+                        onChange={(event) => setSteerState({
+                          sessionIdentity,
+                          value: event.target.value,
+                        })}
                         placeholder="Correct or redirect Codex"
                         className="h-8 text-xs"
                       />
@@ -1148,20 +1243,28 @@ export function AgentInfoButton({
                         size="sm"
                         className="h-8"
                         disabled={!steerText.trim() || busyAction !== null}
-                        onClick={() => void runAction("steer", async () => {
-                          const text = steerText.trim();
-                          const sent = await steerCodexSession(
-                            codexClient,
-                            currentSessionId,
-                            text,
-                            createUuid(),
-                          );
-                          if (!sent) {
-                            throw new Error("The active turn changed; your text was not sent");
-                          }
-                          setSteerText("");
-                          toast.success("Sent to the active turn");
-                        })}
+                        onClick={() => void runAction(
+                          "steer",
+                          async ({ isCurrent, sessionIdentity: actionIdentity }) => {
+                            const text = steerText.trim();
+                            const sent = await steerCodexSession(
+                              codexClient,
+                              currentSessionId,
+                              text,
+                              createUuid(),
+                            );
+                            if (!sent) {
+                              throw new Error("The active turn changed; your text was not sent");
+                            }
+                            if (isCurrent()) {
+                              setSteerState({
+                                sessionIdentity: actionIdentity,
+                                value: "",
+                              });
+                              toast.success("Sent to the active turn");
+                            }
+                          },
+                        )}
                       >
                         Send now
                       </Button>

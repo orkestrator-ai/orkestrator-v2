@@ -38,7 +38,7 @@ import type {
   InteractionResolution,
 } from "../app-server/interactions.js";
 import { reduceHistoricalTurns, reduceNotification } from "../app-server/event-reducer.js";
-import { redactSecrets, redactSecretsDeep } from "../app-server/redaction.js";
+import { redactSecrets } from "../app-server/redaction.js";
 import {
   AppServerRpcError,
   classifyDispatchFailure,
@@ -88,6 +88,166 @@ export const ROOT_THREAD_SOURCE_KINDS = [
   "appServer",
   "unknown",
 ] as const;
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function optionalPublicString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? redactSecrets(value).slice(0, 1_000)
+    : undefined;
+}
+
+function allowlistToolInventory(value: unknown): Record<string, unknown> {
+  const source = objectRecord(value);
+  const tools: Record<string, unknown> = {};
+  for (const [name, candidate] of Object.entries(source)) {
+    const tool = objectRecord(candidate);
+    tools[name] = {
+      ...(optionalPublicString(tool.description)
+        ? { description: optionalPublicString(tool.description) }
+        : {}),
+      ...(optionalPublicString(tool.title) ? { title: optionalPublicString(tool.title) } : {}),
+    };
+  }
+  return tools;
+}
+
+function allowlistRuntimeInventory(
+  value: unknown,
+  kind: "mcp" | "skills" | "hooks",
+): { data: Record<string, unknown>[] } | { error: string } {
+  const root = objectRecord(value);
+  if (typeof root.error === "string") return { error: "Unavailable" };
+  const data = Array.isArray(root.data) ? root.data : [];
+  const allowed: Record<string, unknown>[] = [];
+  for (const candidate of data) {
+    const entry = objectRecord(candidate);
+    if (kind === "mcp") {
+      const name = optionalPublicString(entry.name);
+      if (!name) continue;
+      const serverInfo = objectRecord(entry.serverInfo);
+      allowed.push({
+        name,
+        ...(optionalPublicString(entry.status)
+          ? { status: optionalPublicString(entry.status) }
+          : {}),
+        ...(Object.keys(serverInfo).length > 0
+          ? {
+              serverInfo: {
+                ...(optionalPublicString(serverInfo.name)
+                  ? { name: optionalPublicString(serverInfo.name) }
+                  : {}),
+                ...(optionalPublicString(serverInfo.version)
+                  ? { version: optionalPublicString(serverInfo.version) }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(entry.tools && typeof entry.tools === "object"
+          ? { tools: allowlistToolInventory(entry.tools) }
+          : {}),
+      });
+      continue;
+    }
+
+    if (kind === "skills") {
+      const skills = Array.isArray(entry.skills) ? entry.skills : [];
+      allowed.push({
+        skills: skills.flatMap((candidateSkill) => {
+          const skill = objectRecord(candidateSkill);
+          const name = optionalPublicString(skill.name);
+          if (!name) return [];
+          const skillInterface = objectRecord(skill.interface);
+          return [{
+            name,
+            ...(optionalPublicString(skill.description)
+              ? { description: optionalPublicString(skill.description) }
+              : {}),
+            ...(optionalPublicString(skill.shortDescription)
+              ? { shortDescription: optionalPublicString(skill.shortDescription) }
+              : {}),
+            ...(Object.keys(skillInterface).length > 0
+              ? {
+                  interface: {
+                    ...(optionalPublicString(skillInterface.displayName)
+                      ? { displayName: optionalPublicString(skillInterface.displayName) }
+                      : {}),
+                    ...(optionalPublicString(skillInterface.shortDescription)
+                      ? { shortDescription: optionalPublicString(skillInterface.shortDescription) }
+                      : {}),
+                    ...(optionalPublicString(skillInterface.brandColor)
+                      ? { brandColor: optionalPublicString(skillInterface.brandColor) }
+                      : {}),
+                  },
+                }
+              : {}),
+            ...(optionalPublicString(skill.scope)
+              ? { scope: optionalPublicString(skill.scope) }
+              : {}),
+            ...(typeof skill.enabled === "boolean" ? { enabled: skill.enabled } : {}),
+          }];
+        }),
+      });
+      continue;
+    }
+
+    const hooks = Array.isArray(entry.hooks) ? entry.hooks : [];
+    allowed.push({
+      hooks: hooks.flatMap((candidateHook) => {
+        const hook = objectRecord(candidateHook);
+        const key = optionalPublicString(hook.key);
+        const eventName = optionalPublicString(hook.eventName);
+        if (!key || !eventName) return [];
+        return [{
+          key,
+          eventName,
+          ...(optionalPublicString(hook.handlerType)
+            ? { handlerType: optionalPublicString(hook.handlerType) }
+            : {}),
+          ...(optionalPublicString(hook.source)
+            ? { source: optionalPublicString(hook.source) }
+            : {}),
+          ...(optionalPublicString(hook.pluginId)
+            ? { pluginId: optionalPublicString(hook.pluginId) }
+            : {}),
+          ...(typeof hook.enabled === "boolean" ? { enabled: hook.enabled } : {}),
+          ...(typeof hook.isManaged === "boolean" ? { isManaged: hook.isManaged } : {}),
+          ...(optionalPublicString(hook.trustStatus)
+            ? { trustStatus: optionalPublicString(hook.trustStatus) }
+            : {}),
+        }];
+      }),
+    });
+  }
+  return {
+    data: allowed,
+  };
+}
+
+function allowlistRateLimits(value: unknown): Record<string, unknown> | { error: string } {
+  const response = objectRecord(value);
+  if (typeof response.error === "string") return { error: "Unavailable" };
+  const raw = objectRecord(response.rateLimits);
+  const rateLimits: Record<string, unknown> = {};
+  const limitName = optionalPublicString(raw.limitName);
+  if (limitName) rateLimits.limitName = limitName;
+  for (const key of ["primary", "secondary"] as const) {
+    const window = objectRecord(raw[key]);
+    const allowed: Record<string, number> = {};
+    if (typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent)) {
+      allowed.usedPercent = Math.max(0, Math.min(100, window.usedPercent));
+    }
+    if (typeof window.resetsAt === "number" && Number.isFinite(window.resetsAt)) {
+      allowed.resetsAt = window.resetsAt;
+    }
+    if (Object.keys(allowed).length > 0) rateLimits[key] = allowed;
+  }
+  return { rateLimits };
+}
 
 export interface AppServerEngineOptions {
   codexPath: string;
@@ -584,18 +744,15 @@ export class AppServerEngine implements CodexEngine {
     return { reviewThreadId: response.reviewThreadId, turnId: response.turn.id };
   }
 
-  /**
-   * One snapshot of everything the running child has loaded.
-   *
-   * Served by `GET /session/:id/runtime-health`, which — like every bridge route
-   * — is reachable cross-origin and unauthenticated. Each sub-request is settled
-   * independently so one failing list degrades a single panel instead of the
-   * whole view, and the whole payload is redacted before it leaves the process:
-   * MCP inventories carry auth state, hook definitions carry commands and
-   * environments, and notices carry startup errors.
-   */
+  /** One authenticated, allowlisted snapshot of the running child. */
   async getRuntimeHealth(threadId?: string): Promise<{
-    engine: ReturnType<AppServerEngine["getHealth"]>;
+    engine: {
+      state: string;
+      generation: number;
+      codexVersion?: string;
+      restartCount: number;
+      circuitOpen: boolean;
+    };
     mcp: unknown;
     skills: unknown;
     hooks: unknown;
@@ -619,17 +776,28 @@ export class AppServerEngine implements CodexEngine {
     const value = (result: PromiseSettledResult<unknown>) =>
       result.status === "fulfilled"
         ? result.value
-        : { error: result.reason instanceof Error ? result.reason.message : String(result.reason) };
+        : { error: "Unavailable" };
+    const engine = this.getHealth();
     return {
-      engine: this.getHealth(),
-      // `dropAuthStatus` removes the per-server auth mode from the inventory: it
-      // is not a credential, but it is not something an arbitrary origin should
-      // be able to enumerate for the user's MCP servers either.
-      mcp: redactSecretsDeep(value(mcp), { dropAuthStatus: true }),
-      skills: redactSecretsDeep(value(skills)),
-      hooks: redactSecretsDeep(value(hooks)),
-      notices: redactSecretsDeep([...this.runtimeNotices]),
-      rateLimits: value(rateLimits),
+      engine: {
+        state: engine.state,
+        generation: engine.generation,
+        ...(engine.codexVersion ? { codexVersion: engine.codexVersion } : {}),
+        restartCount: engine.restartCount,
+        circuitOpen: engine.circuitOpen,
+      },
+      mcp: allowlistRuntimeInventory(value(mcp), "mcp"),
+      skills: allowlistRuntimeInventory(value(skills), "skills"),
+      hooks: allowlistRuntimeInventory(value(hooks), "hooks"),
+      notices: this.runtimeNotices.map((notice) => ({
+        method: notice.method,
+        // Provider notice text is an error/log channel and routinely contains
+        // absolute paths, account identity, commands, and filenames. The panel
+        // needs to know that a notice occurred, not receive that raw payload.
+        message: `Codex reported ${notice.method.replaceAll("/", " ")}`,
+        receivedAt: notice.receivedAt,
+      })),
+      rateLimits: allowlistRateLimits(value(rateLimits)),
     };
   }
 
@@ -870,8 +1038,8 @@ export class AppServerEngine implements CodexEngine {
     if (second) return second;
 
     // Consult persisted state rather than guessing.
-    const persisted = await this.reconcileTurn(binding.threadId, turnId);
-    if (persisted !== "unknown") return persisted;
+    const persisted = await this.reconcileTurnById(binding.threadId, turnId);
+    if (persisted.result === "terminal") return persisted.status;
 
     if (options.allowRestart) {
       // Last resort: replacing the child guarantees the turn is not still
@@ -912,18 +1080,23 @@ export class AppServerEngine implements CodexEngine {
   }
 
   /** Reads persisted turn status when live events cannot answer. */
-  private async reconcileTurn(
+  async reconcileTurnById(
     threadId: string,
     turnId: string,
-  ): Promise<"completed" | "interrupted" | "failed" | "unknown"> {
+  ): Promise<
+    | { result: "terminal"; status: "completed" | "interrupted" | "failed" }
+    | { result: "running" }
+    | { result: "absent" }
+    | { result: "unknown" }
+  > {
     try {
       const thread = await this.readThread(threadId, { includeTurns: true });
       const turn = thread?.turns?.find((entry) => entry.id === turnId);
-      if (!turn) return "unknown";
-      if (turn.status === "inProgress") return "unknown";
-      return turn.status;
+      if (!turn) return { result: "absent" };
+      if (turn.status === "inProgress") return { result: "running" };
+      return { result: "terminal", status: turn.status };
     } catch {
-      return "unknown";
+      return { result: "unknown" };
     }
   }
 

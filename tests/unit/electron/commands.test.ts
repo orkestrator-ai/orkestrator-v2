@@ -4997,18 +4997,41 @@ exit 0
       port: number;
       pid: number;
       wasRunning: boolean;
+      authToken: string;
     };
 
     expect(result.wasRunning).toBe(false);
     expect(result.port).toBeGreaterThan(0);
     expect(result.pid).toBeGreaterThan(0);
+    expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(updates).toContainEqual({ localCodexPort: result.port, codexBridgePid: result.pid });
+    await expect(
+      commands.get("get_local_codex_server_status")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ).resolves.toMatchObject({
+      running: true,
+      port: result.port,
+      pid: result.pid,
+      authToken: result.authToken,
+    });
     await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
     expect(await fs.readFile(markerPath, "utf8")).toBe(managedCodexPath);
     expect(await fs.readFile(versionMarkerPath, "utf8")).toBe(APP_VERSION);
     expect(await fs.readFile(maxConcurrentThreadsMarkerPath, "utf8")).toBe("8");
 
     await commands.get("stop_local_codex_server_cmd")?.({ environmentId: environment.id }, context);
+    await expect(
+      commands.get("get_local_codex_server_status")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ).resolves.toEqual({
+      running: false,
+      port: null,
+      pid: null,
+    });
 
     const fallbackEnvironment = createEnvironment({
       id: "env-local-codex-fallback",
@@ -5839,8 +5862,11 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
 
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
     const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
+    const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
+    const tokenFile = path.join(path.dirname(pidFile), "token");
     process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
     process.env.FAKE_BRIDGE_PID_FILE = pidFile;
+    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
 
     // Fake docker: report the container running, map the bridge port to our host
     // port, and on `exec -d` spin up a real health endpoint so waitForHealth
@@ -5853,6 +5879,13 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/codex-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+    esac
+    token=$(printf '%s' "$*" | sed -n "s/.*CODEX_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
     exit 0 ;;
@@ -5862,10 +5895,27 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
-        const result = await commands.get("start_codex_server")?.({ containerId: "container-1" }, context);
-        expect(result).toEqual({ hostPort, wasRunning: false });
+        const [first, second] = await Promise.all([
+          commands.get("start_codex_server")?.(
+            { containerId: "container-1" },
+            context,
+          ),
+          commands.get("start_codex_server")?.(
+            { containerId: "container-1" },
+            context,
+          ),
+        ]) as Array<{ hostPort: number; wasRunning: boolean; authToken: string }>;
+        expect(first).toMatchObject({ hostPort, wasRunning: false });
+        expect(second).toMatchObject({ hostPort, wasRunning: true });
+        expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(second.authToken).toBe(first.authToken);
 
         const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(
+          execLog.split("\n").filter((line) => line.startsWith("exec -d ")),
+        ).toHaveLength(1);
+        expect(execLog).toContain("/tmp/codex-bridge-token");
+        expect(execLog).toContain("export CODEX_BRIDGE_TOKEN=");
         expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=9");
         expect(execLog).toContain("setsid bun /opt/codex-bridge/dist/index.js");
         expect(execLog).not.toContain("setsid node");
@@ -5883,6 +5933,8 @@ exit 0
       else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
       if (previousPidFile === undefined) delete process.env.FAKE_BRIDGE_PID_FILE;
       else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
+      if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
+      else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
     }
   });
 

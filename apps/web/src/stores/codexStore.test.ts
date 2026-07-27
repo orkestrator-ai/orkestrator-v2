@@ -550,6 +550,33 @@ describe("codexStore pending approvals", () => {
     ).toBe("rm -rf build");
   });
 
+  test("adopts permission, change, and actionability updates for the same approval id", () => {
+    const store = useCodexStore.getState();
+    const initial = {
+      ...approval("apr-1"),
+      kind: "permissions" as const,
+      permissions: { network: false, fileSystem: false },
+      changes: [{ path: "/workspace/a.ts", kind: "update" as const }],
+    };
+    store.setPendingApprovals(SESSION_KEY, [initial]);
+
+    const before = useCodexStore.getState().pendingApprovals;
+    store.setPendingApprovals(SESSION_KEY, [{
+      ...initial,
+      permissions: { network: true, fileSystem: false },
+      changes: [{ path: "/workspace/a.ts", kind: "delete" }],
+      actionable: false,
+    }]);
+
+    const state = useCodexStore.getState();
+    expect(state.pendingApprovals).not.toBe(before);
+    expect(state.pendingApprovals.get(SESSION_KEY)?.[0]).toMatchObject({
+      permissions: { network: true, fileSystem: false },
+      changes: [{ path: "/workspace/a.ts", kind: "delete" }],
+      actionable: false,
+    });
+  });
+
   test("clearEnvironment drops approvals for that environment only", () => {
     const store = useCodexStore.getState();
     const otherEnvKey = createCodexSessionKey("env-2", "tab-1");
@@ -560,6 +587,21 @@ describe("codexStore pending approvals", () => {
 
     expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false);
     expect(useCodexStore.getState().pendingApprovals.has(otherEnvKey)).toBe(true);
+  });
+});
+
+describe("codexStore fast mode", () => {
+  beforeEach(resetCodexStore);
+
+  test("defaults off and reflects both enabled and disabled writes", () => {
+    const store = useCodexStore.getState();
+    expect(store.isFastMode(SESSION_KEY)).toBe(false);
+
+    store.setFastMode(SESSION_KEY, true);
+    expect(useCodexStore.getState().isFastMode(SESSION_KEY)).toBe(true);
+
+    store.setFastMode(SESSION_KEY, false);
+    expect(useCodexStore.getState().isFastMode(SESSION_KEY)).toBe(false);
   });
 });
 

@@ -13,7 +13,9 @@ import { mockToastError } from "../../../../../tests/mocks/sonner";
 // Everything else in `@/lib/codex-client` stays real so no sibling suite loses
 // the genuine module.
 import * as realCodexClient from "@/lib/codex-client";
+import * as realBackend from "@/lib/backend";
 const realCodexClientSnapshot = { ...realCodexClient };
+const realBackendSnapshot = { ...realBackend };
 
 const mockRespondToInteraction = mock<
   (
@@ -23,16 +25,22 @@ const mockRespondToInteraction = mock<
     _answer: CodexInteractionAnswer,
   ) => Promise<CodexApprovalResponseResult>
 >(async () => "applied");
+const mockOpenInBrowser = mock(async (_url: string) => undefined);
 
 mock.module("@/lib/codex-client", () => ({
   ...realCodexClientSnapshot,
   respondToInteraction: mockRespondToInteraction,
+}));
+mock.module("@/lib/backend", () => ({
+  ...realBackendSnapshot,
+  openInBrowser: mockOpenInBrowser,
 }));
 
 const { CodexInteractionCard } = await import("./CodexInteractionCard");
 
 afterAll(() => {
   mock.module("@/lib/codex-client", () => realCodexClientSnapshot);
+  mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
 const CLIENT = { baseUrl: "http://127.0.0.1:9999" } as never;
@@ -83,23 +91,15 @@ function seedPending(interaction: CodexInteraction) {
   });
 }
 
-let originalOpen: typeof window.open;
-let openCalls: Array<[string | URL | undefined, string | undefined]> = [];
-
 beforeEach(() => {
   mockRespondToInteraction.mockClear();
   mockRespondToInteraction.mockImplementation(async () => "applied");
-  openCalls = [];
-  originalOpen = window.open;
-  window.open = ((url?: string | URL, target?: string) => {
-    openCalls.push([url, target]);
-    return null;
-  }) as typeof window.open;
+  mockOpenInBrowser.mockClear();
+  mockOpenInBrowser.mockImplementation(async () => undefined);
 });
 
 afterEach(() => {
   cleanup();
-  window.open = originalOpen;
   useCodexStore.setState({ pendingInteractions: new Map() });
 });
 
@@ -482,15 +482,32 @@ describe("CodexInteractionCard mcp-url branch", () => {
     });
   }
 
-  test("opens an https URL in a new tab with noopener", () => {
+  test("opens an https URL through the desktop-aware browser helper", async () => {
     const interaction = urlInteraction("https://example.com/form?id=1");
     seedPending(interaction);
     renderCard(interaction);
 
     fireEvent.click(screen.getByRole("button", { name: /Open secure form/ }));
-    expect(openCalls).toHaveLength(1);
-    expect(openCalls[0]?.[0]).toBe("https://example.com/form?id=1");
-    expect(openCalls[0]?.[1]).toBe("_blank");
+    await waitFor(() =>
+      expect(mockOpenInBrowser).toHaveBeenCalledWith("https://example.com/form?id=1"),
+    );
+  });
+
+  test("keeps the card usable and surfaces a native browser failure", async () => {
+    mockOpenInBrowser.mockImplementation(async () => {
+      throw new Error("desktop command failed");
+    });
+    const interaction = urlInteraction("https://example.com/form");
+    seedPending(interaction);
+    renderCard(interaction);
+
+    fireEvent.click(screen.getByRole("button", { name: /Open secure form/ }));
+
+    const message =
+      "Could not open the MCP form in your browser. Check the desktop connection and try again.";
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(message));
+    expect(mockToastError).toHaveBeenCalledWith(message);
+    expect(screen.getByRole("button", { name: /Open secure form/ })).toBeTruthy();
   });
 
   test.each([
@@ -499,7 +516,8 @@ describe("CodexInteractionCard mcp-url branch", () => {
     ["file:///etc/passwd"],
     ["vbscript:msgbox(1)"],
   ])("refuses to render a link for %s", (url) => {
-    // The allowlist is what stands between MCP-supplied text and `window.open`.
+    // The allowlist is what stands between MCP-supplied text and the native
+    // system-browser command.
     const interaction = urlInteraction(url);
     seedPending(interaction);
     renderCard(interaction);
@@ -509,7 +527,7 @@ describe("CodexInteractionCard mcp-url branch", () => {
     expect(
       screen.getByRole("button", { name: /I.?ve completed it/ }).hasAttribute("disabled"),
     ).toBe(true);
-    expect(openCalls).toHaveLength(0);
+    expect(mockOpenInBrowser).not.toHaveBeenCalled();
   });
 
   test("a malformed URL degrades to no link instead of throwing", () => {

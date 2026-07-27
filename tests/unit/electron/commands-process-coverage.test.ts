@@ -20,6 +20,7 @@ const originalDockerPort = process.env.FAKE_DOCKER_PORT;
 const originalDockerFailInfo = process.env.FAKE_DOCKER_FAIL_INFO;
 const originalDockerFailImage = process.env.FAKE_DOCKER_FAIL_IMAGE;
 const originalDockerNoPort = process.env.FAKE_DOCKER_NO_PORT;
+const originalCodexBridgeToken = process.env.FAKE_CODEX_BRIDGE_TOKEN;
 let root = "";
 let binDir = "";
 let commandLog = "";
@@ -82,6 +83,7 @@ if [ "$1" = "system" ] && [ "$2" = "prune" ]; then
 fi
 if [ "$1" = "exec" ]; then
   case "$*" in
+    *codex-bridge-token*) printf '%s' "\${FAKE_CODEX_BRIDGE_TOKEN:-}" ;;
     *opencode-serve.log*) printf 'opencode log\n' ;;
     *claude-bridge.log*) printf 'claude log\n' ;;
     *codex-bridge.log*) printf 'codex log\n' ;;
@@ -225,6 +227,7 @@ beforeEach(async () => {
   delete process.env.FAKE_DOCKER_FAIL_INFO;
   delete process.env.FAKE_DOCKER_FAIL_IMAGE;
   delete process.env.FAKE_DOCKER_NO_PORT;
+  delete process.env.FAKE_CODEX_BRIDGE_TOKEN;
 });
 
 afterEach(() => {
@@ -249,6 +252,8 @@ afterAll(async () => {
   else process.env.FAKE_DOCKER_FAIL_IMAGE = originalDockerFailImage;
   if (originalDockerNoPort === undefined) delete process.env.FAKE_DOCKER_NO_PORT;
   else process.env.FAKE_DOCKER_NO_PORT = originalDockerNoPort;
+  if (originalCodexBridgeToken === undefined) delete process.env.FAKE_CODEX_BRIDGE_TOKEN;
+  else process.env.FAKE_CODEX_BRIDGE_TOKEN = originalCodexBridgeToken;
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -360,10 +365,12 @@ describe("process and platform command behavior", () => {
 
     const healthy = await startHealthyServer();
     process.env.FAKE_DOCKER_PORT = String(healthy.port);
+    process.env.FAKE_CODEX_BRIDGE_TOKEN = "a".repeat(43);
     try {
       expect(await invoke("start_codex_server", { containerId: "container-a" })).toEqual({
         hostPort: healthy.port,
         wasRunning: true,
+        authToken: "a".repeat(43),
       });
     } finally {
       await healthy.close();

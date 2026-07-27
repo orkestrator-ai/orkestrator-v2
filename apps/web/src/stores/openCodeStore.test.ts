@@ -820,6 +820,34 @@ describe("openCodeStore questions and event subscriptions", () => {
     expect(store.getPendingQuestion("question-1")).toBeUndefined();
   });
 
+  test("removes a pending permission without disturbing other requests", () => {
+    const store = useOpenCodeStore.getState();
+    store.addPendingPermission({
+      id: "permission-1",
+      sessionID: "session-1",
+      permission: "edit",
+    } as PermissionRequest);
+    store.addPendingPermission({
+      id: "permission-2",
+      sessionID: "session-2",
+      permission: "read",
+    } as PermissionRequest);
+
+    store.removePendingPermission("permission-1");
+
+    expect(store.getPendingPermission("permission-1")).toBeUndefined();
+    expect(store.getPendingPermission("permission-2")?.id).toBe("permission-2");
+  });
+
+  test("reuses an active event subscription instead of creating a second stream owner", () => {
+    const store = useOpenCodeStore.getState();
+    const first = store.getOrCreateEventSubscription("env-1");
+    const second = store.getOrCreateEventSubscription("env-1");
+
+    expect(second).toBe(first);
+    expect(useOpenCodeStore.getState().eventSubscriptions.size).toBe(1);
+  });
+
   test("creates, updates, and closes event subscriptions", async () => {
     const store = useOpenCodeStore.getState();
     let closed = false;
@@ -1008,13 +1036,26 @@ describe("openCodeStore runtime health and agents", () => {
   test("clearEnvironment drops the snapshot for that environment only", () => {
     const store = useOpenCodeStore.getState();
     store.setRuntimeHealth("env-1", HEALTH);
+    store.setRuntimeHealth("env-env-1:tab-1", {
+      ...HEALTH,
+      diffs: [{
+        file: "private.patch",
+        patch: "sensitive retained patch",
+        additions: 1,
+        deletions: 0,
+        status: "modified",
+      }],
+    });
     store.setRuntimeHealth("env-2", HEALTH);
+    store.setRuntimeHealth("env-env-2:tab-1", HEALTH);
 
     store.clearEnvironment("env-1");
 
     const state = useOpenCodeStore.getState();
     expect(state.getRuntimeHealth("env-1")).toBeUndefined();
+    expect(state.getRuntimeHealth("env-env-1:tab-1")).toBeUndefined();
     expect(state.getRuntimeHealth("env-2")).toEqual(HEALTH);
+    expect(state.getRuntimeHealth("env-env-2:tab-1")).toEqual(HEALTH);
     expect(state.getAgents("env-1")).toEqual([]);
   });
 });

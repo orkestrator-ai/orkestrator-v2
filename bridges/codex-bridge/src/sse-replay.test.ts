@@ -21,6 +21,7 @@ globalThis.TransformStream = TransformStream as typeof globalThis.TransformStrea
 // Importing index.ts spawns the engine and binds a port; neither is wanted here.
 process.env.CODEX_BRIDGE_NO_ENGINE = "1";
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
+process.env.CODEX_BRIDGE_AUTH_DISABLED_FOR_TESTING = "1";
 
 const { app, __testing } = await import("./index.js");
 
@@ -102,6 +103,25 @@ async function collect(
 }
 
 describe("/event/subscribe", () => {
+  test("requires the bridge token and accepts it only on the EventSource query path", async () => {
+    const token = "sse-test-token";
+    __testing.setBridgeAuthForTesting(token);
+    try {
+      expect((await app.request("/event/subscribe")).status).toBe(401);
+      expect((await app.request("/session/list?token=sse-test-token")).status).toBe(401);
+
+      const controller = new AbortController();
+      const response = await app.request(
+        `/event/subscribe?token=${encodeURIComponent(token)}`,
+        { signal: controller.signal },
+      );
+      expect(response.status).toBe(200);
+      controller.abort();
+    } finally {
+      __testing.setBridgeAuthForTesting();
+    }
+  });
+
   let baseline = 0;
 
   beforeAll(() => {
@@ -397,6 +417,34 @@ describe("/event/subscribe", () => {
         [...drained.map((frame) => Number(frame.id))].sort((a, b) => a - b),
       );
     } finally {
+      __testing.setSseRouteTestHooksForTesting(null);
+    }
+  });
+
+  test("closes a subscriber whose handshake replay buffer exceeds its cap", async () => {
+    const cursor = __testing.eventRingForTesting().latestRevision;
+    const originalError = console.error;
+    const errors: string[] = [];
+    console.error = ((message: unknown) => errors.push(String(message))) as typeof console.error;
+    __testing.setSseRouteTestHooksForTesting({
+      maxBufferedReplayEvents: 2,
+      afterSubscriberRegistered: () => {
+        for (let index = 0; index < 3; index += 1) {
+          __testing.emitForTesting({
+            type: "session.updated",
+            sessionId: `overflow-${index}`,
+          });
+        }
+      },
+    });
+
+    try {
+      const frames = await collect(`?since=${cursor}`, () => undefined, { expected: 0 });
+      expect(frames.filter((frame) => String(frame.data.sessionId).startsWith("overflow-")))
+        .toHaveLength(0);
+      expect(errors.some((message) => message.includes("replay buffer overflowed"))).toBe(true);
+    } finally {
+      console.error = originalError;
       __testing.setSseRouteTestHooksForTesting(null);
     }
   });

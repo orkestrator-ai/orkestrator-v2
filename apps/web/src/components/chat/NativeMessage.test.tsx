@@ -441,6 +441,47 @@ describe("NativeMessage task list rendering", () => {
     expect(container.firstElementChild?.className).not.toContain("pt-0");
   });
 
+  test("survives a platform time formatter failure", () => {
+    const original = Date.prototype.toLocaleTimeString;
+    Date.prototype.toLocaleTimeString = function failingFormatter() {
+      throw new RangeError("formatter unavailable");
+    };
+    try {
+      render(
+        <NativeMessage
+          message={makeMessage([{ type: "text", content: "Still rendered" }])}
+        />,
+      );
+      expect(screen.getByText("Still rendered")).toBeTruthy();
+    } finally {
+      Date.prototype.toLocaleTimeString = original;
+    }
+  });
+
+  test("treats date comparison failures as separate assistant messages", () => {
+    const original = Date.prototype.getTime;
+    Date.prototype.getTime = function failingGetTime() {
+      throw new RangeError("date unavailable");
+    };
+    try {
+      render(
+        <NativeMessage
+          message={makeMessage(
+            [{ type: "text", content: "Second answer" }],
+            { id: "assistant-after-date-error" },
+          )}
+          previousMessage={makeMessage(
+            [{ type: "text", content: "First answer" }],
+            { id: "assistant-before-date-error" },
+          )}
+        />,
+      );
+      expect(screen.getByText(/Assistant/)).toBeTruthy();
+    } finally {
+      Date.prototype.getTime = original;
+    }
+  });
+
   test("uses uniform part spacing for tool and text blocks", () => {
     const message = makeMessage([
       {
@@ -567,6 +608,24 @@ describe("NativeMessage task list rendering", () => {
     expect(
       screen.getByRole("button", { name: /task wrapper/i }).parentElement?.className,
     ).toContain("my-0");
+  });
+
+  test("does not render an empty tool group shell", () => {
+    const message = makeMessage([
+      { type: "text", content: "Before tools" },
+      {
+        type: "tool-group",
+        content: "",
+        parts: [],
+      },
+      { type: "text", content: "After tools" },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).toContain("Before tools");
+    expect(container.textContent).toContain("After tools");
+    expect(container.querySelector(".border-zinc-700\\/70")).toBeNull();
   });
 
   test("renders Claude Agent task groups as compact agent activity rows", () => {

@@ -28,6 +28,8 @@ import {
   SessionNotFoundError,
   applyClaudeMessagePatch,
   contentFromParts,
+  parseClaudeBackgroundTasks,
+  parseClaudeContextUsage,
   type ClaudeClient,
   type ClaudeMessage,
   type ClaudeMessagePart,
@@ -209,6 +211,77 @@ describe("claude-client", () => {
       if (unavailableMalformed.kind === "unavailable") {
         expect(unavailableMalformed.error.message).toContain("malformed");
       }
+    });
+
+    test("sanitizes malformed optional metadata without rejecting the core session", async () => {
+      const base = {
+        id: "s-1",
+        status: "idle",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+      };
+
+      for (const malformed of [
+        { contextUsage: { usedTokens: 1, totalTokens: 10, percentUsed: Number.NaN } },
+        { promptSuggestion: { text: "not a string" } },
+        { backgroundTasks: { task: { id: "task", status: "unknown" } } },
+      ]) {
+        mockFetchJson({ ...base, ...malformed });
+        const result = await lookupSession(client, "s-1");
+        expect(result.kind).toBe("found");
+        if (result.kind === "found") {
+          expect(result.session).toMatchObject(base);
+          expect(result.session.contextUsage).toBeUndefined();
+          expect(result.session.promptSuggestion).toBeUndefined();
+          expect(result.session.backgroundTasks).toBeUndefined();
+          expect(result.session.invalidMetadataFields).toHaveLength(1);
+        }
+      }
+    });
+  });
+
+  describe("Claude metadata validators", () => {
+    test("accepts complete finite usage and rejects unsafe nested values", () => {
+      const usage = {
+        usedTokens: 25,
+        totalTokens: 100,
+        percentUsed: 25,
+        inputTokens: 20,
+        outputTokens: 5,
+        source: "claude" as const,
+        rateLimits: [{ label: "five hour", usedPercent: 50 }],
+        credits: { hasCredits: true, balance: "10.00" },
+        contextCategories: [{ name: "system", tokens: 10 }],
+      };
+      expect(parseClaudeContextUsage(usage)).toEqual(usage);
+      expect(parseClaudeContextUsage({ ...usage, percentUsed: Number.POSITIVE_INFINITY }))
+        .toBeUndefined();
+      expect(parseClaudeContextUsage({
+        ...usage,
+        rateLimits: [{ label: "five hour", usedPercent: 101 }],
+      })).toBeUndefined();
+      expect(parseClaudeContextUsage({
+        ...usage,
+        contextCategories: [{ name: "system", tokens: -1 }],
+      })).toBeUndefined();
+    });
+
+    test("validates every background task and its record identity", () => {
+      const tasks = {
+        build: {
+          id: "build",
+          description: "Run build",
+          status: "running" as const,
+          startedAt: 100,
+        },
+      };
+      expect(parseClaudeBackgroundTasks(tasks)).toEqual(tasks);
+      expect(parseClaudeBackgroundTasks({
+        build: { id: "other", status: "running" },
+      })).toBeUndefined();
+      expect(parseClaudeBackgroundTasks({
+        build: { id: "build", status: "running", startedAt: Number.NaN },
+      })).toBeUndefined();
     });
   });
 
@@ -654,6 +727,13 @@ describe("claude-client", () => {
       await expect(
         getPendingQuestions(client, "s-1", { throwOnError: true }),
       ).rejects.toThrow("HTTP 500");
+
+      globalThis.fetch = mock(async () => {
+        throw "non-error question rejection";
+      }) as unknown as typeof fetch;
+      await expect(
+        getPendingQuestions(client, "s-1", { throwOnError: true }),
+      ).rejects.toThrow("Failed to get pending Claude questions");
     });
   });
 
@@ -677,6 +757,13 @@ describe("claude-client", () => {
       await expect(
         getPendingPlanApprovals(client, "s-1", { throwOnError: true }),
       ).rejects.toThrow("network error");
+
+      globalThis.fetch = mock(async () => {
+        throw { reason: "non-error approval rejection" };
+      }) as unknown as typeof fetch;
+      await expect(
+        getPendingPlanApprovals(client, "s-1", { throwOnError: true }),
+      ).rejects.toThrow("Failed to get pending Claude plan approvals");
     });
   });
 

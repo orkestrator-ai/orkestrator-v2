@@ -131,6 +131,8 @@ export interface AppServerRuntimeOptions {
   environmentDrainTimeoutMs?: number;
   /** Longest a thread may sit in `recovering` after an ambiguous dispatch. */
   ambiguousRecoveryTimeoutMs?: number;
+  /** Test/embedding override for the background compaction completion deadline. */
+  compactionTimeoutMs?: number;
 }
 
 interface ThreadRuntimeState {
@@ -1509,9 +1511,32 @@ export class AppServerRuntime {
         turn.engineGeneration = generation;
 
         if (!turn.requestId) {
-          // Nothing to reconcile against, so the honest outcome is interrupted.
-          turn.complete("interrupted");
-          await this.finalizeTurn(context, turn);
+          // Native review turns do not carry a client user-message id. Reconcile
+          // them by the app-server turn id returned by review/start instead of
+          // inventing an id that can never appear in the persisted rollout.
+          const reviewOutcome = await this.options.engine.reconcileTurnById(
+            context.threadId,
+            turn.turnId,
+          );
+          if (reviewOutcome.result === "terminal") {
+            turn.complete(reviewOutcome.status);
+            await this.finalizeTurn(context, turn);
+            continue;
+          }
+          if (reviewOutcome.result === "running") {
+            this.registry.setPhase(context, "running");
+            this.emitStatus(context);
+            continue;
+          }
+          context.activeTurn = null;
+          this.registry.setPhase(
+            context,
+            "failed",
+            reviewOutcome.result === "absent"
+              ? "Codex restarted before the native review was persisted."
+              : "Codex could not reconcile the native review after restarting.",
+          );
+          this.emitStatus(context);
           continue;
         }
 
@@ -1968,7 +1993,7 @@ export class AppServerRuntime {
         context,
         "Codex never reported that compaction finished. The session was released.",
       );
-    }, DEFAULT_COMPACTION_TIMEOUT_MS);
+    }, this.options.compactionTimeoutMs ?? DEFAULT_COMPACTION_TIMEOUT_MS);
     timer.unref?.();
     this.compactionBackstops.set(threadId, timer);
   }
@@ -2106,7 +2131,6 @@ export class AppServerRuntime {
       const accumulator = new TurnAccumulator({
         threadId: context.threadId,
         turnId: review.turnId,
-        requestId: `review-${review.turnId}`,
         engineGeneration: this.options.engine.info().generation,
         assistantMessageId: assistantMessage.id,
         expectsStructuredOutput: false,
@@ -2146,7 +2170,12 @@ export class AppServerRuntime {
        * whole session as `error` because a review could not be started, which is
        * a different and much louder claim. Restore what it was.
        */
-      this.registry.setPhase(context, phaseBeforeReview, errorBeforeReview);
+      // A child failure can move the thread to `recovering` while review/start
+      // rejects. Only undo the phase while this dispatch still owns `starting`;
+      // never overwrite the replacement-generation recovery guard with `idle`.
+      if (context.phase === "starting") {
+        this.registry.setPhase(context, phaseBeforeReview, errorBeforeReview);
+      }
       this.emitStatus(context);
       const message = error instanceof Error ? error.message : "Native review failed";
       for (const id of context.bridgeSessionIds) {
@@ -2156,9 +2185,10 @@ export class AppServerRuntime {
     }
   }
 
-  async getRuntimeHealth(sessionId?: string): Promise<unknown> {
-    const session = sessionId ? this.registry.getSession(sessionId) : undefined;
-    return this.options.engine.getRuntimeHealth(session?.threadId ?? undefined);
+  async getRuntimeHealth(sessionId: string): Promise<unknown | null> {
+    const session = this.registry.getSession(sessionId);
+    if (!session) return null;
+    return this.options.engine.getRuntimeHealth(session.threadId ?? undefined);
   }
 
   /**

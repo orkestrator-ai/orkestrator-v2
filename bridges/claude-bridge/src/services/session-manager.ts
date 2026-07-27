@@ -1245,6 +1245,23 @@ async function readPersistedSessionMessages(
   return normalizePersistedSessionMessages(persisted);
 }
 
+function readPersistedSessionMessagesOnce(
+  session: SessionState,
+): Promise<{ messages: NormalizedMessage[]; taskRegistry: TaskRegistry } | undefined> {
+  if (session.persistedHydration) return session.persistedHydration;
+  const hydration = readPersistedSessionMessages(session);
+  session.persistedHydration = hydration;
+  void hydration.finally(() => {
+    if (session.persistedHydration === hydration) {
+      session.persistedHydration = undefined;
+    }
+  }).catch(() => {
+    // The caller observes the original rejection. This branch only handles the
+    // promise returned by `finally`, avoiding an unhandled rejection.
+  });
+  return hydration;
+}
+
 export async function hydratePersistedSessionMessages(
   sessionId: string,
 ): Promise<NormalizedMessage[]> {
@@ -1257,27 +1274,61 @@ export async function hydratePersistedSessionMessages(
   if (session.status === "running") return session.messages;
   if (session.persistedMessagesLoaded !== false) return session.messages;
 
-  const hydrated = await readPersistedSessionMessages(session);
-  if (hydrated) {
-    session.messages = hydrated.messages;
-    session.taskRegistry = hydrated.taskRegistry;
+  const hydrated = await readPersistedSessionMessagesOnce(session);
+  // A prompt or deletion may have claimed the session while the SDK read was
+  // pending. In that case its in-memory state is authoritative; the prompt
+  // shares this same read and applies it before appending its live message.
+  if (
+    sessions.get(sessionId) === session
+    && (session.status as SessionState["status"]) !== "running"
+    && !session.deleting
+    && session.persistedMessagesLoaded === false
+  ) {
+    if (hydrated) {
+      session.messages = hydrated.messages;
+      session.taskRegistry = hydrated.taskRegistry;
+    }
+    session.persistedMessagesLoaded = true;
   }
-  session.persistedMessagesLoaded = true;
   return session.messages;
 }
 
 export async function deleteSessionDurably(sessionId: string): Promise<boolean> {
-  const session = await ensurePersistedSession(sessionId);
+  // Do not introduce an `await` for an already registered session: deletion
+  // must claim it synchronously so a prompt cannot slip in on the next
+  // microtask before `deleting` is visible.
+  const session = sessions.get(sessionId) ?? await ensurePersistedSession(sessionId);
   if (!session) return false;
-  if (session.sdkSessionId) {
-    const sdk = await claudeSdk();
-    if (typeof sdk.deleteSession === "function") {
-      await sdk.deleteSession(session.sdkSessionId, {
-        dir: currentWorkingDirectory(),
-      });
-    }
+  if (session.deleting) {
+    throw sessionOperationError("conflict", "Session deletion is already in progress");
   }
-  return deleteSession(sessionId);
+
+  // Claim deletion before the first await. Stop every live writer before
+  // removing its rollout so it cannot recreate or append to the file.
+  session.deleting = true;
+  session.status = "running";
+  session.abortController?.abort();
+  session.abortController = undefined;
+  cleanupPendingInteractions(sessionId);
+  await releaseQueryControls(session);
+  try {
+    if (session.sdkSessionId) {
+      const sdk = await claudeSdk();
+      if (typeof sdk.deleteSession === "function") {
+        await sdk.deleteSession(session.sdkSessionId, {
+          dir: currentWorkingDirectory(),
+        });
+      }
+    }
+    sessions.delete(sessionId);
+    return true;
+  } catch (error) {
+    // The rollout still exists when deletion fails. Restore an addressable idle
+    // session, but leave its stopped query stopped.
+    session.deleting = false;
+    session.status = "idle";
+    throw error;
+  }
 }
 
 export async function renameSessionDurably(
@@ -1365,6 +1416,7 @@ export async function forkPersistedSession(
 async function resolvePersistedMessageId(
   session: SessionState,
   normalizedMessageId: string,
+  allowedTypes: ReadonlySet<"user" | "assistant"> = new Set(["user", "assistant"]),
 ): Promise<string | undefined> {
   if (!session.sdkSessionId) return undefined;
 
@@ -1378,7 +1430,7 @@ async function resolvePersistedMessageId(
       ? normalizedMessageId
       : undefined;
   if (!candidate) return undefined;
-  if (local && local.role === "system") return undefined;
+  if (local && !allowedTypes.has(local.role as "user" | "assistant")) return undefined;
 
   const sdk = await claudeSdk();
   if (typeof sdk.getSessionMessages !== "function") return candidate;
@@ -1389,7 +1441,7 @@ async function resolvePersistedMessageId(
   const match = persisted.find(
     (message) =>
       message.uuid === candidate
-      && (message.type === "user" || message.type === "assistant"),
+      && allowedTypes.has(message.type as "user" | "assistant"),
   );
   return match?.uuid;
 }
@@ -1473,7 +1525,11 @@ export async function rewindSessionFiles(
   // prompt accepted a millisecond later from executing against files mid-restore.
   session.rewindInProgress = true;
   try {
-    const persistedMessageId = await resolvePersistedMessageId(session, userMessageId);
+    const persistedMessageId = await resolvePersistedMessageId(
+      session,
+      userMessageId,
+      new Set(["user"]),
+    );
     if (!persistedMessageId) {
       throw sessionOperationError(
         "invalid",
@@ -1484,10 +1540,28 @@ export async function rewindSessionFiles(
     // against the same rollout only to ask it to rewind is both slower and a
     // write to the transcript this operation is indexed against.
     const liveRewind = session.queryControl?.rewindFiles;
+    let result: unknown;
     if (typeof liveRewind === "function") {
-      return await liveRewind.call(session.queryControl, persistedMessageId, { dryRun });
+      result = await liveRewind.call(session.queryControl, persistedMessageId, { dryRun });
+    } else {
+      result = await rewindViaTransientQuery(
+        session.sdkSessionId,
+        persistedMessageId,
+        dryRun,
+      );
     }
-    return await rewindViaTransientQuery(session.sdkSessionId, persistedMessageId, dryRun);
+    if (
+      !result
+      || typeof result !== "object"
+      || (result as { canRewind?: unknown }).canRewind !== true
+    ) {
+      const providerError =
+        typeof (result as { error?: unknown } | null)?.error === "string"
+          ? (result as { error: string }).error
+          : "Claude cannot rewind files to the selected checkpoint";
+      throw sessionOperationError("conflict", providerError);
+    }
+    return result;
   } finally {
     session.rewindInProgress = false;
   }
@@ -1499,12 +1573,6 @@ const LIVE_BACKGROUND_TASK_STATUSES = new Set<BackgroundTaskSnapshot["status"]>(
   "running",
   "paused",
 ]);
-
-function hasLiveBackgroundTasks(session: SessionState): boolean {
-  return Object.values(session.backgroundTasks ?? {}).some((task) =>
-    LIVE_BACKGROUND_TASK_STATUSES.has(task.status),
-  );
-}
 
 export async function stopBackgroundTask(
   sessionId: string,
@@ -1518,7 +1586,8 @@ export async function stopBackgroundTask(
   if (!task) {
     return { ok: false, reason: "task_not_found", message: "Task not found" };
   }
-  const stopTask = session.queryControl?.stopTask;
+  const control = session.backgroundTaskControls?.get(taskId) ?? session.queryControl;
+  const stopTask = control?.stopTask;
   if (typeof stopTask !== "function") {
     return {
       ok: false,
@@ -1526,7 +1595,7 @@ export async function stopBackgroundTask(
       message: "No live Claude control channel can reach this task",
     };
   }
-  await stopTask.call(session.queryControl, taskId);
+  await stopTask.call(control, taskId);
   return { ok: true };
 }
 
@@ -1536,13 +1605,36 @@ export async function stopBackgroundTask(
  * the two points at which the user has said the background work should stop.
  */
 function releaseQueryControl(session: SessionState): void {
-  const control = session.queryControl;
-  session.queryControl = undefined;
-  if (typeof control?.close === "function") {
-    void Promise.resolve(control.close()).catch((error) => {
-      console.debug("[session-manager] Failed to close query control:", error);
-    });
+  void releaseQueryControls(session);
+}
+
+async function closeQueryControl(control: NonNullable<SessionState["queryControl"]>): Promise<void> {
+  if (typeof control.close !== "function") return;
+  try {
+    await control.close();
+  } catch (error) {
+    console.debug("[session-manager] Failed to close query control:", error);
   }
+}
+
+async function releaseQueryControls(session: SessionState): Promise<void> {
+  const controls = new Set<NonNullable<SessionState["queryControl"]>>();
+  if (session.queryControl) controls.add(session.queryControl);
+  for (const control of session.backgroundTaskControls?.values() ?? []) {
+    controls.add(control);
+  }
+  session.queryControl = undefined;
+  session.backgroundTaskControls = undefined;
+  await Promise.all(Array.from(controls, closeQueryControl));
+}
+
+function closeQueryControlIfUnused(
+  session: SessionState,
+  control: NonNullable<SessionState["queryControl"]> | undefined,
+): void {
+  if (!control || session.queryControl === control) return;
+  if (Array.from(session.backgroundTaskControls?.values() ?? []).includes(control)) return;
+  void closeQueryControl(control);
 }
 
 /**
@@ -1986,6 +2078,10 @@ export async function sendPrompt(
     return;
   }
 
+  if (session.deleting) {
+    throw sessionOperationError("conflict", "Session is being deleted");
+  }
+
   if (session.status === "running") {
     throw new Error("Session is already processing a prompt");
   }
@@ -2030,7 +2126,7 @@ export async function sendPrompt(
 
   if (needsTranscriptHydration) {
     try {
-      const hydrated = await readPersistedSessionMessages(session);
+      const hydrated = await readPersistedSessionMessagesOnce(session);
       if (hydrated) {
         session.messages = hydrated.messages;
         session.taskRegistry = hydrated.taskRegistry;
@@ -2993,6 +3089,13 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             ...(session.backgroundTasks ?? {}),
             [task.id]: task,
           };
+          if (LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) {
+            (session.backgroundTaskControls ??= new Map()).set(task.id, queryIterator);
+          } else {
+            const owner = session.backgroundTaskControls?.get(task.id);
+            session.backgroundTaskControls?.delete(task.id);
+            closeQueryControlIfUnused(session, owner);
+          }
           emitBackgroundTasks();
         } else if (taskMessage.subtype === "task_notification" && taskMessage.task_id) {
           // The terminal edge. Without it nothing ever leaves `running`, so
@@ -3023,6 +3126,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             ...(session.backgroundTasks ?? {}),
             [task.id]: task,
           };
+          const owner = session.backgroundTaskControls?.get(task.id);
+          session.backgroundTaskControls?.delete(task.id);
+          closeQueryControlIfUnused(session, owner);
           emitBackgroundTasks();
         } else if (
           taskMessage.subtype === "background_tasks_changed"
@@ -3032,6 +3138,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           // consumers REPLACE their set from it, so a bookend lost to a
           // reconnect cannot wedge a stale running indicator.
           const replacement: Record<string, BackgroundTaskSnapshot> = {};
+          const previousControls = session.backgroundTaskControls;
+          const previousOwners = new Set(previousControls?.values() ?? []);
+          const replacementControls = new Map<
+            string,
+            NonNullable<SessionState["queryControl"]>
+          >();
           for (const entry of taskMessage.tasks) {
             const id = entry?.task_id;
             if (typeof id !== "string" || id.length === 0) continue;
@@ -3045,8 +3157,15 @@ Plan mode is read-only: do not write or edit files until the user approves your 
               isBackgrounded: previous?.isBackgrounded ?? true,
               startedAt: previous?.startedAt ?? Date.now(),
             };
+            const owner = previousControls?.get(id) ?? queryIterator;
+            replacementControls.set(id, owner);
           }
           session.backgroundTasks = replacement;
+          session.backgroundTaskControls =
+            replacementControls.size > 0 ? replacementControls : undefined;
+          for (const owner of previousOwners) {
+            closeQueryControlIfUnused(session, owner);
+          }
           emitBackgroundTasks();
         }
 
@@ -3479,7 +3598,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // still see. `deleteSession`/`abortSession` release it when the user says so.
     if (
       session.queryControl === queryIteratorControl
-      && !hasLiveBackgroundTasks(session)
+      && !Array.from(session.backgroundTaskControls?.values() ?? [])
+        .some((control) => control === queryIteratorControl)
     ) {
       session.queryControl = undefined;
     }

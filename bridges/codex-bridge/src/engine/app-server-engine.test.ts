@@ -819,6 +819,68 @@ describe("server requests", () => {
       ),
     ).toBe(true);
   });
+
+  test("exposes parked approval and interaction snapshots through the engine", async () => {
+    const h = harness();
+    h.engine.setApprovalHandlers({
+      present: () => true,
+      resolved: () => undefined,
+    });
+    h.engine.setInteractionHandlers({
+      present: () => true,
+      resolved: () => undefined,
+    });
+    await h.engine.start();
+
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: "approval-1",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "t1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "echo ok",
+        cwd: "/tmp/ws",
+      },
+    });
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: "question-1",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "t1",
+        turnId: "turn-1",
+        itemId: "item-2",
+        questions: [{
+          id: "q",
+          header: "Choice",
+          question: "Continue?",
+          options: [{ label: "Yes" }],
+        }],
+      },
+    });
+    await settle();
+
+    expect(h.engine.getParkedApprovals()).toHaveLength(1);
+    expect(h.engine.getParkedInteractions()).toHaveLength(1);
+  });
+
+  test("unknown server requests are answered with a JSON-RPC method error", async () => {
+    const h = harness();
+    await h.engine.start();
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: "future-1",
+      method: "future/request",
+      params: {},
+    });
+    await settle();
+
+    const response = h.child().stdin.lines.join("");
+    expect(response).toContain('"id":"future-1"');
+    expect(response).toContain('"code":-32601');
+  });
 });
 
 describe("thread operations behind the new session routes", () => {
@@ -957,8 +1019,37 @@ describe("runtime health", () => {
       data: [{ name: "deploy", serverInfo: { name: "deploy", version: "1" }, tools: {} }],
       nextCursor: null,
     }),
-    "skills/list": () => ({ data: [{ name: "review" }] }),
-    "hooks/list": () => ({ data: [{ event: "preTurn", command: "./hook.sh" }] }),
+    "skills/list": () => ({
+      data: [{
+        cwd: "/private/workspace",
+        skills: [{
+          name: "review",
+          description: "Review changes",
+          path: "/private/workspace/.codex/skills/review/SKILL.md",
+          scope: "repo",
+          enabled: true,
+        }],
+        errors: [],
+      }],
+    }),
+    "hooks/list": () => ({
+      data: [{
+        cwd: "/private/workspace",
+        hooks: [{
+          key: "pre-turn",
+          eventName: "preTurn",
+          handlerType: "command",
+          command: "./hook.sh",
+          sourcePath: "/private/workspace/hooks.json",
+          source: "project",
+          enabled: true,
+          isManaged: false,
+          trustStatus: "trusted",
+        }],
+        warnings: [],
+        errors: [],
+      }],
+    }),
     "account/rateLimits/read": () => ({ rateLimits: { primary: { usedPercent: 4 } } }),
   };
 
@@ -969,8 +1060,8 @@ describe("runtime health", () => {
     const health = await h.engine.getRuntimeHealth("t1") as Record<string, unknown>;
     expect(health.engine).toMatchObject({ state: expect.any(String) });
     expect(health.mcp).toMatchObject({ data: [{ name: "deploy" }] });
-    expect(health.skills).toMatchObject({ data: [{ name: "review" }] });
-    expect(health.hooks).toMatchObject({ data: [{ event: "preTurn" }] });
+    expect(health.skills).toMatchObject({ data: [{ skills: [{ name: "review" }] }] });
+    expect(health.hooks).toMatchObject({ data: [{ hooks: [{ eventName: "preTurn" }] }] });
     expect(health.rateLimits).toMatchObject({ rateLimits: { primary: { usedPercent: 4 } } });
     expect(h.child().requests.find((entry) => entry.method === "mcpServerStatus/list")?.params)
       .toMatchObject({ threadId: "t1", detail: "full" });
@@ -999,9 +1090,9 @@ describe("runtime health", () => {
     await h.engine.start();
 
     const health = await h.engine.getRuntimeHealth() as Record<string, unknown>;
-    expect(health.hooks).toMatchObject({ error: expect.stringContaining("hooks/list") });
+    expect(health.hooks).toEqual({ error: "Unavailable" });
     expect(health.mcp).toMatchObject({ data: [{ name: "deploy" }] });
-    expect(health.skills).toMatchObject({ data: [{ name: "review" }] });
+    expect(health.skills).toMatchObject({ data: [{ skills: [{ name: "review" }] }] });
   });
 
   test("every sub-request failing still returns a renderable snapshot", async () => {
@@ -1035,34 +1126,83 @@ describe("runtime health", () => {
 
     const health = await h.engine.getRuntimeHealth() as { mcp: { data: unknown[] } };
     const server = health.mcp.data[0] as Record<string, unknown>;
-    // Reachable cross-origin with no auth, so nothing credential-shaped leaves.
+    // Only explicitly useful inventory fields leave the bridge.
     expect(server.authStatus).toBeUndefined();
-    expect(server.headers).toBe("[redacted]");
+    expect(server.headers).toBeUndefined();
     expect(JSON.stringify(health)).not.toContain("abcdef123456");
     // The useful inventory survives.
     expect(server.name).toBe("deploy");
     expect(server.tools).toMatchObject({ ship: { description: "Ships it" } });
   });
 
-  test("hook commands and skill paths are redacted without being emptied", async () => {
+  test("hook commands, environments, and paths are omitted without emptying the panel", async () => {
     const h = harness({
       ...HEALTH_HANDLERS,
       "hooks/list": () => ({
         data: [{
-          event: "preTurn",
-          command: "curl -H 'Authorization: Bearer ghp_0123456789abcdefghij' https://x.test",
-          env: { OPENAI_API_KEY: "sk-live-0123456789abcdef" },
+          cwd: "/Users/private/project",
+          hooks: [{
+            key: "pre-turn",
+            eventName: "preTurn",
+            handlerType: "command",
+            command: "curl -H 'Authorization: Bearer ghp_0123456789abcdefghij' https://x.test",
+            env: { OPENAI_API_KEY: "sk-live-0123456789abcdef" },
+            sourcePath: "/Users/private/project/hooks.json",
+            source: "project",
+            enabled: true,
+            isManaged: false,
+            trustStatus: "trusted",
+          }],
+          warnings: ["private warning"],
+          errors: [],
         }],
       }),
     });
     await h.engine.start();
 
     const health = await h.engine.getRuntimeHealth() as { hooks: { data: unknown[] } };
-    const hook = health.hooks.data[0] as Record<string, unknown>;
-    expect(hook.event).toBe("preTurn");
-    expect(hook.env).toBe("[redacted]");
-    expect(String(hook.command)).not.toContain("ghp_0123456789abcdefghij");
-    expect(String(hook.command)).toContain("https://x.test");
+    const hook = (health.hooks.data[0] as { hooks: Record<string, unknown>[] }).hooks[0]!;
+    expect(hook.eventName).toBe("preTurn");
+    expect(hook.env).toBeUndefined();
+    expect(hook.command).toBeUndefined();
+    expect(JSON.stringify(health.hooks)).not.toContain("/Users/private");
+  });
+
+  test("engine and rate-limit panels expose only the allowlisted public fields", async () => {
+    const h = harness({
+      ...HEALTH_HANDLERS,
+      "account/rateLimits/read": () => ({
+        rateLimits: {
+          limitName: "Pro",
+          primary: { usedPercent: 12, resetsAt: 42, rawTokenCount: 99 },
+          credits: { balance: "123.45", hasCredits: true },
+          spendControl: { monthlyLimit: 500 },
+        },
+        account: { email: "private@example.test" },
+      }),
+    });
+    await h.engine.start();
+
+    const health = await h.engine.getRuntimeHealth() as Record<string, unknown>;
+    const serialized = JSON.stringify(health);
+    expect(health.engine).toEqual({
+      state: "ready",
+      generation: 1,
+      codexVersion: "0.145.0",
+      restartCount: 0,
+      circuitOpen: false,
+    });
+    expect(health.rateLimits).toEqual({
+      rateLimits: {
+        limitName: "Pro",
+        primary: { usedPercent: 12, resetsAt: 42 },
+      },
+    });
+    expect(serialized).not.toContain("codexHome");
+    expect(serialized).not.toContain('"pid"');
+    expect(serialized).not.toContain("private@example.test");
+    expect(serialized).not.toContain("123.45");
+    expect(serialized).not.toContain("monthlyLimit");
   });
 });
 
@@ -1104,14 +1244,19 @@ describe("runtime notices", () => {
     ]);
   });
 
-  test("prefers message, then reason, then error, then status", async () => {
+  test("does not expose raw provider notice text", async () => {
     const captured = await noticesFor([
       ["warning", { message: "m", reason: "r", error: "e", status: "s" }],
       ["warning", { reason: "r", error: "e", status: "s" }],
       ["warning", { error: "e", status: "s" }],
       ["warning", { status: "s" }],
     ]);
-    expect(captured.map((notice) => notice.message)).toEqual(["m", "r", "e", "s"]);
+    expect(captured.map((notice) => notice.message)).toEqual([
+      "Codex reported warning",
+      "Codex reported warning",
+      "Codex reported warning",
+      "Codex reported warning",
+    ]);
   });
 
   test("falls back to a readable form of the method when nothing is quotable", async () => {
@@ -1121,15 +1266,15 @@ describe("runtime notices", () => {
       ["warning", undefined],
     ]);
     expect(captured.map((notice) => notice.message)).toEqual([
-      "mcpServer startupStatus updated",
-      "configWarning",
-      "warning",
+      "Codex reported mcpServer startupStatus updated",
+      "Codex reported configWarning",
+      "Codex reported warning",
     ]);
   });
 
-  test("a very long notice is truncated to 1000 characters", async () => {
+  test("a very long notice is replaced by a bounded generic label", async () => {
     const captured = await noticesFor([["warning", { message: "x".repeat(5_000) }]]);
-    expect(captured[0]?.message).toHaveLength(1_000);
+    expect(captured[0]?.message).toBe("Codex reported warning");
   });
 
   test("the notice ring keeps only the most recent 100", async () => {
@@ -1137,8 +1282,7 @@ describe("runtime notices", () => {
       Array.from({ length: 130 }, (_, index) => ["warning", { message: `w${index}` }] as [string, unknown]),
     );
     expect(captured).toHaveLength(100);
-    expect(captured[0]?.message).toBe("w30");
-    expect(captured.at(-1)?.message).toBe("w129");
+    expect(captured.every((notice) => notice.message === "Codex reported warning")).toBe(true);
   });
 
   test("credentials in a startup error are redacted at capture, not on the way out", async () => {
@@ -1154,8 +1298,18 @@ describe("runtime notices", () => {
     expect(message).not.toContain("hunter2");
     expect(message).not.toContain("abcdef123456");
     expect(message).not.toContain("ghp_0123456789abcdefghij");
-    // Still diagnosable: the host and the shape of the failure survive.
-    expect(message).toContain("api.test");
-    expect(message).toContain("deploy failed");
+    expect(message).toBe("Codex reported mcpServer startupStatus updated");
+  });
+
+  test("absolute paths, identity, and private filenames never leave runtime health", async () => {
+    const captured = await noticesFor([
+      ["warning", {
+        message: "Failed reading /Users/alice/private-client-name/config.json for alice@example.test",
+      }],
+    ]);
+    const serialized = JSON.stringify(captured);
+    expect(serialized).not.toContain("/Users/alice");
+    expect(serialized).not.toContain("alice@example.test");
+    expect(serialized).not.toContain("private-client-name");
   });
 });

@@ -1,7 +1,7 @@
 import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
 import {
@@ -133,7 +133,10 @@ const terminalOutputBuffers = new Map<string, string>();
 const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalActivityArmed = new Set<string>();
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
+/** Per-process bearer tokens for renderer → local Codex bridge requests. */
+const localCodexBridgeTokens = new Map<string, string>();
 const localServerEnvironmentOperations = new Map<string, Promise<void>>();
+const containerCodexOperations = new Map<string, Promise<void>>();
 const deletingLocalServerEnvironments = new Set<string>();
 type LocalServerKind = "opencode" | "claude" | "codex";
 const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = ["opencode", "claude", "codex"];
@@ -2688,6 +2691,14 @@ async function waitForHealth(port: number, pathName = "/global/health", attempts
   throw new Error(`Server on port ${port} did not become healthy`);
 }
 
+async function waitForUnhealthy(port: number, attempts = 50): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (!await checkHttpHealth(port)) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Server on port ${port} did not stop`);
+}
+
 async function waitForLocalServerStartup(
   child: ChildProcessWithoutNullStreams,
   port: number,
@@ -2742,6 +2753,22 @@ function enqueueLocalServerEnvironmentOperation<T>(
   return result;
 }
 
+function enqueueContainerCodexOperation<T>(
+  containerId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = containerCodexOperations.get(containerId) ?? Promise.resolve();
+  const result = previous.then(operation, operation);
+  const tail = result.then(() => undefined, () => undefined);
+  containerCodexOperations.set(containerId, tail);
+  void tail.finally(() => {
+    if (containerCodexOperations.get(containerId) === tail) {
+      containerCodexOperations.delete(containerId);
+    }
+  });
+  return result;
+}
+
 function assertLocalServerStartAllowed(environmentId: string): void {
   if (localServerShutdownRequested) {
     throw new Error("Backend is shutting down; local servers cannot be started");
@@ -2755,21 +2782,34 @@ function releaseLocalServerOwnership(
   key: string,
   child: ChildProcessWithoutNullStreams,
 ): void {
-  if (localServerProcesses.get(key) === child) localServerProcesses.delete(key);
+  if (localServerProcesses.get(key) !== child) return;
+  localServerProcesses.delete(key);
+  if (key.startsWith("codex:")) {
+    localCodexBridgeTokens.delete(key.slice("codex:".length));
+  }
 }
 
 async function startLocalServerUnlocked(
   environmentId: string,
   context: CommandContext,
   kind: LocalServerKind,
-): Promise<{ port: number; pid: number; wasRunning: boolean }> {
+): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
   const key = `${kind}:${environmentId}`;
   const existing = localServerProcesses.get(key);
   if (existing && !existing.killed && existing.pid) {
     const env = await context.storage.getEnvironment(environmentId);
     const port = kind === "opencode" ? env?.localOpencodePort : kind === "claude" ? env?.localClaudePort : env?.localCodexPort;
     if (port && await checkHttpHealth(port)) {
-      return { port, pid: existing.pid, wasRunning: true };
+      const authToken =
+        kind === "codex" ? localCodexBridgeTokens.get(environmentId) : undefined;
+      if (kind !== "codex" || authToken) {
+        return {
+          port,
+          pid: existing.pid,
+          wasRunning: true,
+          ...(authToken ? { authToken } : {}),
+        };
+      }
     }
     await terminateLocalServerChild(key, existing);
   }
@@ -2816,17 +2856,28 @@ async function startLocalServerUnlocked(
     if (!existsSync(cwd)) throw new Error(`${kind} bridge directory not found: ${cwd}`);
     if (!existsSync(bridgeEntrypoint)) throw new Error(`${kind} bridge entrypoint not found: ${bridgeEntrypoint}`);
   }
+  if (kind === "codex") {
+    const authToken = randomBytes(32).toString("base64url");
+    env.CODEX_BRIDGE_TOKEN = authToken;
+    localCodexBridgeTokens.set(environmentId, authToken);
+  }
 
   const args = kind === "opencode"
     ? ["serve", "--port", String(port), "--hostname", "127.0.0.1"]
     : [bridgeEntrypoint];
-  const child = spawnCommand(command, args, {
-    cwd,
-    env,
-    // A dedicated group lets shutdown reach ordinary descendants immediately.
-    // Explicit descendant signalling also covers children that create new groups.
-    detached: process.platform !== "win32",
-  });
+  let child: ChildProcessWithoutNullStreams;
+  try {
+    child = spawnCommand(command, args, {
+      cwd,
+      env,
+      // A dedicated group lets shutdown reach ordinary descendants immediately.
+      // Explicit descendant signalling also covers children that create new groups.
+      detached: process.platform !== "win32",
+    });
+  } catch (error) {
+    if (kind === "codex") localCodexBridgeTokens.delete(environmentId);
+    throw error;
+  }
   localServerProcesses.set(key, child);
   child.stdout.on("data", (data) => console.debug(`[${kind}:${environmentId}] ${data.toString()}`));
   child.stderr.on("data", (data) => console.error(`[${kind}:${environmentId}] ${data.toString()}`));
@@ -2857,14 +2908,21 @@ async function startLocalServerUnlocked(
     }
     throw error;
   }
-  return { port, pid: child.pid ?? 0, wasRunning: false };
+  const authToken =
+    kind === "codex" ? localCodexBridgeTokens.get(environmentId) : undefined;
+  return {
+    port,
+    pid: child.pid ?? 0,
+    wasRunning: false,
+    ...(authToken ? { authToken } : {}),
+  };
 }
 
 function startLocalServer(
   environmentId: string,
   context: CommandContext,
   kind: LocalServerKind,
-): Promise<{ port: number; pid: number; wasRunning: boolean }> {
+): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
   assertLocalServerStartAllowed(environmentId);
   return enqueueLocalServerEnvironmentOperation(environmentId, async () => {
     // Shutdown may have begun while this start was queued behind an earlier
@@ -3030,13 +3088,25 @@ export async function shutdownLocalServers(): Promise<void> {
   }
 }
 
-async function getLocalServerStatus(environmentId: string, context: CommandContext, kind: LocalServerKind): Promise<{ running: boolean; port: number | null; pid: number | null }> {
+async function getLocalServerStatus(environmentId: string, context: CommandContext, kind: LocalServerKind): Promise<{
+  running: boolean;
+  port: number | null;
+  pid: number | null;
+  authToken?: string;
+}> {
   const key = `${kind}:${environmentId}`;
   const child = localServerProcesses.get(key);
   const env = await context.storage.getEnvironment(environmentId);
   const port = kind === "opencode" ? env?.localOpencodePort : kind === "claude" ? env?.localClaudePort : env?.localCodexPort;
   const pid = kind === "opencode" ? env?.opencodePid : kind === "claude" ? env?.claudeBridgePid : env?.codexBridgePid;
-  return { running: !!child && !child.killed, port: port ?? null, pid: child?.pid ?? pid ?? null };
+  const authToken =
+    kind === "codex" ? localCodexBridgeTokens.get(environmentId) : undefined;
+  return {
+    running: !!child && !child.killed,
+    port: port ?? null,
+    pid: child?.pid ?? pid ?? null,
+    ...(authToken ? { authToken } : {}),
+  };
 }
 
 async function allocateLocalPort(): Promise<number> {
@@ -4616,31 +4686,69 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     claudeModelCatalogRefreshes.set(id, refresh);
     return refresh;
   });
-  register("start_codex_server", async ({ containerId }, context) => {
-    const config = await context.storage.loadConfig();
-    const maxConcurrentThreads = resolveCodexMaxConcurrentThreads(
-      config.global.codexMaxConcurrentThreads,
-    );
-    return startContainerServer(asString(containerId, "containerId"), CODEX_BRIDGE_PORT, "codex", `
-      cd /workspace
-      rm -f /tmp/codex-bridge.log
-      mkdir -p /tmp/${APP_SLUG}
-      source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
-      orkestrator_source_runtime_env 2>/dev/null || true
-      export PORT=${CODEX_BRIDGE_PORT}
-      export HOSTNAME=0.0.0.0
-      export CWD=/workspace
-      export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
-      export ${CODEX_MAX_CONCURRENT_THREADS_ENV}=${maxConcurrentThreads}
-      export ORKESTRATOR_VERSION="${APP_VERSION}"
-      setsid bun /opt/codex-bridge/dist/index.js > /tmp/codex-bridge.log 2>&1 &
-    `);
+  register("start_codex_server", ({ containerId }, context) => {
+    const id = asString(containerId, "containerId");
+    return enqueueContainerCodexOperation(id, async () => {
+      const config = await context.storage.loadConfig();
+      const maxConcurrentThreads = resolveCodexMaxConcurrentThreads(
+        config.global.codexMaxConcurrentThreads,
+      );
+      const hostPort = await getHostPort(id, CODEX_BRIDGE_PORT);
+      if (hostPort && await checkHttpHealth(hostPort)) {
+        const persistedToken = (
+          await dockerExec(id, "cat /tmp/codex-bridge-token 2>/dev/null || true")
+        ).trim();
+        if (/^[A-Za-z0-9_-]{43}$/.test(persistedToken)) {
+          return { hostPort, wasRunning: true, authToken: persistedToken };
+        }
+        // A bridge from before per-process authentication cannot safely serve the
+        // renderer. Replace it once, then persist the new token for later starts.
+        await dockerExec(id, "pkill -f '[c]odex-bridge/dist/index.js' || true");
+        await waitForUnhealthy(hostPort);
+      }
+
+      const authToken = randomBytes(32).toString("base64url");
+      const started = await startContainerServer(id, CODEX_BRIDGE_PORT, "codex", `
+        cd /workspace
+        rm -f /tmp/codex-bridge.log
+        mkdir -p /tmp/${APP_SLUG}
+        umask 077
+        printf '%s' ${quoteShell(authToken)} > /tmp/codex-bridge-token
+        source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
+        orkestrator_source_runtime_env 2>/dev/null || true
+        export PORT=${CODEX_BRIDGE_PORT}
+        export HOSTNAME=0.0.0.0
+        export CWD=/workspace
+        export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
+        export CODEX_BRIDGE_TOKEN=${quoteShell(authToken)}
+        export ${CODEX_MAX_CONCURRENT_THREADS_ENV}=${maxConcurrentThreads}
+        export ORKESTRATOR_VERSION="${APP_VERSION}"
+        setsid bun /opt/codex-bridge/dist/index.js > /tmp/codex-bridge.log 2>&1 &
+      `);
+      return { ...started, authToken };
+    });
   });
-  register("stop_codex_server", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "pkill -f 'codex-bridge' || true").then(() => undefined));
+  register("stop_codex_server", ({ containerId }) => {
+    const id = asString(containerId, "containerId");
+    return enqueueContainerCodexOperation(id, () =>
+      dockerExec(
+        id,
+        "pkill -f 'codex-bridge' || true; rm -f /tmp/codex-bridge-token",
+      ).then(() => undefined)
+    );
+  });
   register("get_codex_server_status", async ({ containerId }) => {
     const id = asString(containerId, "containerId");
     const hostPort = await getHostPort(id, CODEX_BRIDGE_PORT);
-    return { running: hostPort ? await checkHttpHealth(hostPort) : false, hostPort };
+    const running = hostPort ? await checkHttpHealth(hostPort) : false;
+    const authToken = running
+      ? (await dockerExec(id, "cat /tmp/codex-bridge-token 2>/dev/null || true")).trim()
+      : "";
+    return {
+      running,
+      hostPort,
+      ...(/^[A-Za-z0-9_-]{43}$/.test(authToken) ? { authToken } : {}),
+    };
   });
   register("get_codex_server_log", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "cat /tmp/codex-bridge.log 2>/dev/null || true"));
 
@@ -5258,6 +5366,7 @@ export const __testing = {
       throw new Error("Cannot reset local server lifecycle while operations are active");
     }
     localServerProcesses.clear();
+    localCodexBridgeTokens.clear();
     deletingLocalServerEnvironments.clear();
     localServerShutdownRequested = false;
     localServerShutdownPromise = null;

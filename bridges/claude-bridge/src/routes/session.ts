@@ -172,12 +172,16 @@ session.get("/:id/structured-output", (c) => {
 // The bridge owns this state, so a tab that was unmounted while tasks changed
 // rehydrates from here rather than replaying the transcript and hoping the last
 // task tool part is still present.
-session.get("/:id/tasks", (c) => {
+session.get("/:id/tasks", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id);
+  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
 
   if (!sessionData) {
     return c.json({ error: "Session not found" }, 404);
+  }
+
+  if (sessionData.persistedMessagesLoaded === false) {
+    await hydratePersistedSessionMessages(id);
   }
 
   // A session that has never run a task tool has an empty, and complete, list.
@@ -383,13 +387,18 @@ session.post("/:id/abort", (c) => {
 // Delete a session
 session.delete("/:id", async (c) => {
   const id = c.req.param("id");
-
-  const deleted = await deleteSessionDurably(id);
-
-  if (deleted) {
-    return c.json({ status: "deleted" });
-  } else {
+  try {
+    const deleted = await deleteSessionDurably(id);
+    if (deleted) {
+      return c.json({ status: "deleted" });
+    }
     return c.json({ error: "Session not found" }, 404);
+  } catch (error) {
+    console.error("[session] Failed to delete session:", error);
+    return c.json(
+      { error: errorMessage(error, "Failed to delete session") },
+      sessionErrorStatus(error),
+    );
   }
 });
 

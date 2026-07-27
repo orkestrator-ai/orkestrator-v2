@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
@@ -6,8 +7,6 @@ import { promisify } from "node:util";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { isJsonSchema } from "@orkestrator/protocol/structured-output";
-import { cors } from "hono/cors";
-import { logger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
 import { readCachedTranscript } from "./transcript-cache.js";
 import {
@@ -137,6 +136,11 @@ interface PromptAttachmentInput {
 
 
 export const app = new Hono();
+const BRIDGE_TOKEN_ENV = "CODEX_BRIDGE_TOKEN";
+const BRIDGE_ALLOWED_ORIGINS_ENV = "CODEX_BRIDGE_ALLOWED_ORIGINS";
+let bridgeAuthToken =
+  process.env[BRIDGE_TOKEN_ENV]?.trim() || randomBytes(32).toString("base64url");
+let bridgeAuthEnabledOverrideForTesting: boolean | null = null;
 /** Overridden in tests so title generation does not spawn a real `codex exec`. */
 type SessionTitleGenerator = (prompt: string) => Promise<string>;
 let sessionTitleGeneratorForTesting: SessionTitleGenerator | null = null;
@@ -144,6 +148,7 @@ interface SseRouteTestHooks {
   afterSubscriberRegistered?: () => Promise<void> | void;
   beforeBufferedDrain?: () => Promise<void> | void;
   beforeBufferedWrite?: (revision: number) => Promise<void> | void;
+  maxBufferedReplayEvents?: number;
 }
 let sseRouteTestHooks: SseRouteTestHooks | null = null;
 function setSessionTitleGeneratorForTesting(generator: SessionTitleGenerator | null): void {
@@ -184,6 +189,59 @@ const RUNTIME_ENV_VARIABLES = new Set([
 function normalizeOptionalEnvPath(name: string): string | null {
   const value = process.env[name]?.trim();
   return value ? value : null;
+}
+
+function isBridgeAuthEnabled(): boolean {
+  if (bridgeAuthEnabledOverrideForTesting !== null) {
+    return bridgeAuthEnabledOverrideForTesting;
+  }
+  // Route tests explicitly opt out because they exercise route mapping rather
+  // than process authentication. This escape hatch is inert for a real server.
+  return !(
+    process.env.CODEX_BRIDGE_NO_SERVER === "1"
+    && process.env.CODEX_BRIDGE_AUTH_DISABLED_FOR_TESTING === "1"
+  );
+}
+
+function tokenMatches(candidate: string | undefined): boolean {
+  if (!candidate) return false;
+  const expected = Buffer.from(bridgeAuthToken);
+  const actual = Buffer.from(candidate);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function bearerToken(header: string | undefined): string | undefined {
+  if (!header) return undefined;
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  return match?.[1]?.trim() || undefined;
+}
+
+function isTrustedBridgeOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+  // Electron's packaged file renderer can be represented as a null origin.
+  // Authentication is still mandatory, so allowing it does not grant access.
+  if (origin === "null" || origin === "file://") return true;
+  const configured = (process.env[BRIDGE_ALLOWED_ORIGINS_ENV] ?? "")
+    .split(",")
+    .map((entry) => entry.trim().replace(/\/$/, ""))
+    .filter(Boolean);
+  if (configured.includes(origin.replace(/\/$/, ""))) return true;
+  try {
+    const parsed = new URL(origin);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:")
+      && (parsed.hostname === "127.0.0.1"
+        || parsed.hostname === "localhost"
+        || parsed.hostname === "::1"
+        || parsed.hostname === "[::1]")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isPublicHealthRequest(method: string, path: string): boolean {
+  return method === "GET" && path === "/global/health";
 }
 
 function getRuntimeEnvironmentScriptPath(): string {
@@ -611,6 +669,15 @@ export const __testing = {
   refreshRuntimeEnvironment,
   runInlinePromptCommand,
   runtimeForTesting: () => appServerRuntime,
+  setBridgeAuthForTesting: (token?: string) => {
+    if (token === undefined) {
+      bridgeAuthEnabledOverrideForTesting = null;
+      return;
+    }
+    bridgeAuthToken = token;
+    bridgeAuthEnabledOverrideForTesting = true;
+  },
+  isTrustedBridgeOriginForTesting: isTrustedBridgeOrigin,
   sanitizeLogFileComponentForTesting: sanitizeLogFileComponent,
   setSessionTitleGeneratorForTesting,
   setSseRouteTestHooksForTesting: (hooks: SseRouteTestHooks | null) => {
@@ -720,20 +787,45 @@ function createSerializedSseWriter<T extends { data?: string }>(
   };
 }
 
-app.use(
-  "*",
-  cors({
-    origin: "*",
-    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
-  }),
-);
-app.use("*", logger());
 app.use("*", async (c, next) => {
+  const origin = c.req.raw.headers.get("origin") ?? undefined;
+  if (!isTrustedBridgeOrigin(origin)) {
+    return c.json({ error: "Origin is not allowed" }, 403);
+  }
+  if (origin) {
+    c.header("Access-Control-Allow-Origin", origin);
+    c.header("Vary", "Origin");
+  }
+  if (c.req.method === "OPTIONS") {
+    c.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    c.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Orkestrator-Codex-Token",
+    );
+    c.header("Access-Control-Allow-Private-Network", "true");
+    return c.body(null, 204);
+  }
+  if (
+    isBridgeAuthEnabled()
+    && !isPublicHealthRequest(c.req.method, c.req.path)
+  ) {
+    const dedicatedHeaderToken =
+      c.req.raw.headers.get("x-orkestrator-codex-token")?.trim();
+    const headerToken = bearerToken(
+      c.req.raw.headers.get("authorization") ?? undefined,
+    );
+    const eventToken =
+      c.req.path === "/event/subscribe" ? c.req.query("token")?.trim() : undefined;
+    if (
+      !tokenMatches(dedicatedHeaderToken)
+      && !tokenMatches(headerToken)
+      && !tokenMatches(eventToken)
+    ) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+  }
   await next();
-  c.header("Access-Control-Allow-Private-Network", "true");
 });
-app.options("*", (c) => c.body(null, 204));
 
 app.get("/global/health", (c) => {
   const health = appServerRuntime.getHealth();
@@ -750,12 +842,9 @@ app.get("/global/health", (c) => {
       appServer: {
         state: health.state,
         generation: health.generation,
-        pid: health.pid,
         codexVersion: health.codexVersion,
         restartCount: health.restartCount,
         circuitOpen: health.circuitOpen,
-        environmentFingerprint: health.environmentFingerprint,
-        lastError: health.lastError,
       },
       activeThreads: health.activeThreads,
       activeTurns: health.activeTurns,
@@ -769,16 +858,13 @@ app.get("/global/health", (c) => {
       // A rising `dropped` with clients still reconnecting means the ring is too
       // small for this workload and reconnects are falling back to full resyncs.
       events: { ...eventRing.getStats(), subscribers: subscribers.size },
-      protocol: {
-        unknownNotifications: health.unknownNotifications,
-        unsupportedItems: health.unsupportedItems,
-        serverRequests: health.serverRequests,
-      },
-      rpc: health.rpc,
     },
     terminal ? 503 : 200,
   );
 });
+
+/** Lightweight authenticated probe used to reject a cached client after token rotation. */
+app.get("/global/auth-check", (c) => c.json({ status: "ok" }));
 
 app.get("/global/models", async (c) => {
   const { models, source } = await appServerRuntime.listModels();
@@ -1120,17 +1206,12 @@ app.post("/session/:id/review", async (c) => {
   return c.json({ status: "processing", turnId: result.turnId }, 202);
 });
 
-/**
- * Everything the running Codex child has loaded: MCP servers, skills, hooks and
- * recent runtime notices.
- *
- * Like every route here this is served under `cors({ origin: "*" })` with no
- * authentication, so treat the response as public to any page the user has open.
- * The engine redacts credential-shaped content and per-server auth state before
- * returning it; do not add unredacted fields to this payload.
- */
+/** Authenticated, allowlisted runtime inventory for one known bridge session. */
 app.get("/session/:id/runtime-health", async (c) => {
-  return c.json(await appServerRuntime.getRuntimeHealth(c.req.param("id")));
+  const health = await appServerRuntime.getRuntimeHealth(c.req.param("id"));
+  return health
+    ? c.json(health)
+    : c.json({ error: "Session not found" }, 404);
 });
 
 app.post("/session/:id/abort", async (c) => {
@@ -1152,7 +1233,7 @@ app.get("/event/subscribe", (c) => {
   // `?since=` is what our own client sends; `Last-Event-ID` is what a native
   // EventSource sends when the browser reconnects on its own. Accept both.
   const cursor =
-    parseEventCursor(c.req.query("since")) ?? parseEventCursor(c.req.header("Last-Event-ID"));
+    parseEventCursor(c.req.query("since")) ?? parseEventCursor(c.req.header("last-event-id"));
   const sessionFilter = c.req.query("sessionId")?.trim() || null;
 
   return streamSSE(c, async (stream) => {
@@ -1219,7 +1300,10 @@ app.get("/event/subscribe", (c) => {
 
     const listener = async (event: SseEvent, revision: number) => {
       if (buffered) {
-        if (buffered.length >= MAX_BUFFERED_REPLAY_EVENTS) {
+        if (
+          buffered.length
+          >= (sseRouteTestHooks?.maxBufferedReplayEvents ?? MAX_BUFFERED_REPLAY_EVENTS)
+        ) {
           failSlowSubscriber("replay buffer overflowed");
           return;
         }

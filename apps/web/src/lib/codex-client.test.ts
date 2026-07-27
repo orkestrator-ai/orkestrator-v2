@@ -76,6 +76,13 @@ describe("codex-client createClient", () => {
       baseUrl: `${window.location.origin}/__orkestrator/proxy/loopback/9999`,
     });
   });
+
+  test("retains the per-bridge authentication token", () => {
+    expect(createClient("http://127.0.0.1:9999", "bridge-secret")).toEqual({
+      baseUrl: "http://127.0.0.1:9999",
+      authToken: "bridge-secret",
+    });
+  });
 });
 
 describe("codex-client checkHealth", () => {
@@ -85,6 +92,18 @@ describe("codex-client checkHealth", () => {
     mockFetch(async () => new Response(null, { status: 200 }));
 
     expect(await checkHealth(client)).toBe(true);
+  });
+
+  test("uses the authenticated probe and bearer header", async () => {
+    const fetchMock = mock(() => new Response(null, { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    expect(await checkHealth(createClient("http://127.0.0.1:4000", "bridge-secret")))
+      .toBe(true);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4000/global/auth-check");
+    expect(new Headers(init.headers).get("X-Orkestrator-Codex-Token")).toBe("bridge-secret");
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
   });
 
   test("returns false on non-ok health response or network error", async () => {
@@ -1239,6 +1258,13 @@ describe("codex-client event cursor", () => {
     expect(url.searchParams.get("sessionId")).toBe("session/a b");
   });
 
+  test("puts the token only on the EventSource URL", () => {
+    const authenticated = createClient("http://127.0.0.1:4000", "bridge-secret");
+    subscribeToEvents(authenticated)[Symbol.asyncIterator]().next();
+    const url = new URL(instances[0]!.url);
+    expect(url.searchParams.get("token")).toBe("bridge-secret");
+  });
+
   test("ignores a nonsensical cursor rather than sending it", () => {
     subscribeToEvents(client, undefined, -1)[Symbol.asyncIterator]().next();
     expect(instances[0]!.url).not.toContain("since");
@@ -1380,6 +1406,30 @@ describe("codex-client approvals", () => {
       changes: [{ path: "/valid", kind: "update" }],
     });
     expect(approvals[0]?.permissions).toBeUndefined();
+  });
+
+  test("accepts a well-formed permissions descriptor", async () => {
+    mockFetch(() =>
+      Response.json({
+        approvals: [{
+          approvalId: "apr-permissions",
+          kind: "permissions",
+          method: "item/permissions/requestApproval",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          requestedAt: 1,
+          expiresAt: 2,
+          permissions: { network: true, fileSystem: false },
+          actionable: true,
+          supportsApproveForSession: false,
+        }],
+      }),
+    );
+
+    await expect(fetchPendingApprovals(client, "session-1")).resolves.toMatchObject([
+      { permissions: { network: true, fileSystem: false } },
+    ]);
   });
 
   test("fetchPendingApprovals rejects bad responses so callers preserve existing state", async () => {

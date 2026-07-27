@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  buildTranscriptCatalog,
   clearTranscriptPathCache,
   getTranscriptPathCacheStats,
   setTranscriptPathCacheLimitsForTesting,
@@ -12,9 +13,15 @@ import {
   getPersistedSessionMeta,
   getSessionMetaFromTranscriptPath,
   hydrateMessagesFromPersistedSession,
+  listPersistedSessionsForCwd,
   mergePersistedSessionMeta,
   readTranscriptLines,
 } from "./rollout.js";
+import { persistSessionTitle } from "../session-titles.js";
+import {
+  clearTranscriptCache,
+  getTranscriptCacheStats,
+} from "../transcript-cache.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -29,6 +36,7 @@ async function temporaryRollout(threadId: string, lines: unknown[]): Promise<str
 
 afterEach(async () => {
   clearTranscriptPathCache();
+  clearTranscriptCache();
   setTranscriptPathCacheLimitsForTesting();
   await Promise.all(
     temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
@@ -165,6 +173,135 @@ describe("rollout public helpers (continued)", () => {
     });
   });
 
+  test("skips metadata beyond the bounded head without filling the transcript cache", async () => {
+    const path = await temporaryRollout("oversized-head", [
+      { type: "event_msg", payload: { message: "x".repeat(70 * 1024) } },
+      {
+        type: "session_meta",
+        payload: {
+          id: "oversized-head",
+          cwd: "/workspace",
+          timestamp: "2026-07-25T12:00:00.000Z",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Recovered title" }],
+        },
+      },
+    ]);
+
+    expect(await getSessionMetaFromTranscriptPath(path)).toBeNull();
+    expect(getTranscriptCacheStats()).toEqual({ entries: 0, bytes: 0 });
+  });
+
+  test("catalog aliases, malformed index lines, and generated title overrides are defensive", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-catalog-"));
+    temporaryDirectories.push(root);
+    const transcriptPath = join(root, "sessions", "filename-alias.jsonl");
+    await mkdir(dirname(transcriptPath), { recursive: true });
+    await writeFile(transcriptPath, `${[
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "canonical-thread",
+          cwd: "/workspace",
+          timestamp: "2026-07-25T12:00:00.000Z",
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Prompt title" }],
+        },
+      }),
+    ].join("\n")}\n`, "utf8");
+    await writeFile(
+      join(root, "session_index.jsonl"),
+      `{malformed\n${JSON.stringify({
+        id: "canonical-thread",
+        updated_at: "2026-07-25T12:00:00.000Z",
+      })}\n`,
+      "utf8",
+    );
+    await persistSessionTitle(root, "canonical-thread", "Generated title", {
+      source: "generated",
+    });
+
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+    try {
+      const catalog = await buildTranscriptCatalog();
+      expect(catalog.transcriptPathByThreadId.get("filename-alias")).toBe(transcriptPath);
+      expect(catalog.transcriptPathByThreadId.get("canonical-thread")).toBe(transcriptPath);
+
+      const sessions = await listPersistedSessionsForCwd("/workspace");
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]).toMatchObject({
+        id: "canonical-thread",
+        title: "Generated title",
+        titleSource: "generated",
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test("cached and malformed metadata preserve caller fallbacks", async () => {
+    const path = "/sessions/thread-cached.jsonl";
+    const cached = {
+      id: "different-id",
+      title: "Prompt title",
+      titleSource: "prompt" as const,
+      updatedAt: "",
+      cwd: "/workspace",
+      transcriptPath: path,
+    };
+    const catalog = {
+      metas: [cached],
+      metaByPath: new Map([[path, cached]]),
+      transcriptPathByThreadId: new Map([["thread-cached", path]]),
+    };
+
+    expect(
+      await getPersistedSessionMeta(
+        "thread-cached",
+        "Indexed title",
+        "2026-07-25T12:00:00.000Z",
+        catalog,
+      ),
+    ).toMatchObject({
+      id: "thread-cached",
+      title: "Indexed title",
+      titleSource: "codex",
+      updatedAt: "2026-07-25T12:00:00.000Z",
+    });
+
+    const malformed = await temporaryRollout("malformed-meta-fallback", [{
+      type: "session_meta",
+      payload: { id: "" },
+    }]);
+    expect(
+      await getPersistedSessionMeta(
+        "malformed-meta-fallback",
+        "Fallback",
+        "2026-07-25T12:00:00.000Z",
+        undefined,
+        [malformed],
+      ),
+    ).toMatchObject({
+      id: "malformed-meta-fallback",
+      title: "Fallback",
+      transcriptPath: malformed,
+    });
+  });
+
   test("invalid transcript metadata falls back without fabricating a session", async () => {
     const noMeta = await temporaryRollout("no-meta", [{ type: "response_item" }]);
     expect(await getSessionMetaFromTranscriptPath(noMeta)).toBeNull();
@@ -248,6 +385,8 @@ describe("rollout public helpers (continued)", () => {
       extractPersistedMessageText([
         { type: "output_text", text: "one" },
         null,
+        { type: "output_text", text: 42 },
+        { type: "future_content", text: "hidden" },
         { type: "output_text", text: "two" },
       ], "assistant"),
     ).toBe("one\ntwo");

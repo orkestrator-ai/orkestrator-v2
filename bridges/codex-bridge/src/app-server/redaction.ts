@@ -1,11 +1,10 @@
 /**
  * Redaction for payloads the bridge serves over HTTP.
  *
- * The bridge listens on localhost with `cors({ origin: "*" })`, an
- * `Access-Control-Allow-Private-Network` opt-in and no authentication, so any
- * page the user happens to have open can read a snapshot endpoint. Changing that
- * model is a separate decision; what this file guarantees is that the *content*
- * of those snapshots does not carry credentials.
+ * The bridge requires a per-process bearer token and restricts browser origins.
+ * Redaction remains a second layer of defence: authenticated snapshot consumers
+ * still should not receive credentials embedded in provider diagnostics or
+ * inventory metadata.
  *
  * Two independent passes, because secrets appear in two different shapes:
  *

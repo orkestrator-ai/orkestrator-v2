@@ -929,11 +929,43 @@ export function CodexChatTab({
         return;
       }
 
-      setSession(sessionKey, {
-        sessionId: resumed.session.sessionId,
-        messages: resumed.messages,
-        isLoading: false,
-        title: resumed.session.title,
+      // Invalidate every request tied to the previous bridge session before
+      // publishing the new identity. This includes manual reconciles, whose
+      // completion deliberately ignores ordinary live-event invalidation.
+      reconcileSequenceRef.current += 1;
+      manualReconcileSequenceRef.current += 1;
+      approvalSnapshotSequenceRef.current += 1;
+      approvalActivitySequenceRef.current += 1;
+      interactionSnapshotSequenceRef.current += 1;
+      interactionActivitySequenceRef.current += 1;
+      refreshControllerRef.current = createCodexSessionRefreshController();
+
+      // The tab key is stable across resume, while approvals/interactions are
+      // bridge-session scoped. Replace the session and clear both collections
+      // atomically so no render can post an old request to the resumed session.
+      useCodexStore.setState((state) => {
+        const sessions = new Map(state.sessions);
+        sessions.set(sessionKey, {
+          sessionId: resumed.session.sessionId,
+          messages: resumed.messages,
+          isLoading: false,
+          title: resumed.session.title,
+        });
+        const pendingApprovals = new Map(state.pendingApprovals);
+        pendingApprovals.delete(sessionKey);
+        const pendingInteractions = new Map(state.pendingInteractions);
+        pendingInteractions.delete(sessionKey);
+        const sessionPhase = new Map(state.sessionPhase);
+        sessionPhase.delete(sessionKey);
+        const contextUsage = new Map(state.contextUsage);
+        contextUsage.delete(sessionKey);
+        return {
+          sessions,
+          pendingApprovals,
+          pendingInteractions,
+          sessionPhase,
+          contextUsage,
+        };
       });
       updateTabNativeSessionId(tabId, resumed.session.sessionId, environmentId);
       setResumeDialogOpen(false);
@@ -945,7 +977,6 @@ export function CodexChatTab({
       selectedMode,
       selectedReasoningEffort,
       sessionKey,
-      setSession,
       tabId,
       updateTabNativeSessionId,
       environmentId,
@@ -1115,33 +1146,48 @@ export function CodexChatTab({
         setErrorMessage(null);
 
         let port: number | null = null;
+        let authToken: string | undefined;
         if (isLocal) {
           let status = await getLocalCodexServerStatus(environmentId);
-          if (!status.running) {
+          if (!status.running || !status.authToken) {
             const result = await startLocalCodexServer(environmentId);
-            status = { running: true, port: result.port, pid: result.pid };
+            status = {
+              running: true,
+              port: result.port,
+              pid: result.pid,
+              authToken: result.authToken,
+            };
           }
           if (!mounted) return;
           port = status.port;
+          authToken = status.authToken;
         } else {
           if (!containerId) {
             throw new Error("Container ID is required for containerized Codex");
           }
           let status = await getCodexServerStatus(containerId);
-          if (!status.running) {
+          if (!status.running || !status.authToken) {
             const result = await startCodexServer(containerId);
-            status = { running: true, hostPort: result.hostPort };
+            status = {
+              running: true,
+              hostPort: result.hostPort,
+              authToken: result.authToken,
+            };
           }
           if (!mounted) return;
           port = status.hostPort;
+          authToken = status.authToken;
         }
 
         if (!port) {
           throw new Error("Failed to resolve Codex bridge port");
         }
+        if (!authToken) {
+          throw new Error("Failed to resolve Codex bridge authentication");
+        }
 
         setServerStatus(environmentId, { running: true, hostPort: port });
-        const nextClient = createClient(`http://127.0.0.1:${port}`);
+        const nextClient = createClient(`http://127.0.0.1:${port}`, authToken);
         setClient(environmentId, nextClient);
 
         if (!(await checkHealth(nextClient))) {

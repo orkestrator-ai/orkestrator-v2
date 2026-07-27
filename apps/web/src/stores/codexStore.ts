@@ -149,6 +149,7 @@ function isSameApproval(a: CodexApproval, b: CodexApproval | undefined): boolean
     && a.reason === b.reason
     && a.grantRoot === b.grantRoot
     && a.networkHost === b.networkHost
+    && a.actionable === b.actionable
     && a.supportsApproveForSession === b.supportsApproveForSession
     && a.permissions?.network === b.permissions?.network
     && a.permissions?.fileSystem === b.permissions?.fileSystem

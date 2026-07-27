@@ -106,21 +106,25 @@ function requireSessionPhase(
 async function resolveProviderPort(
   agent: LoopedReviewWorkflow["agent"],
   environment: Environment,
-): Promise<number> {
+): Promise<{ port: number; authToken?: string }> {
   if (environment.environmentType === "local") {
     if (agent === "claude") {
       const status = await backend.getLocalClaudeServerStatus(environment.id);
-      if (status.running && status.port) return status.port;
-      return (await backend.startLocalClaudeServer(environment.id)).port;
+      if (status.running && status.port) return { port: status.port };
+      return { port: (await backend.startLocalClaudeServer(environment.id)).port };
     }
     if (agent === "codex") {
       const status = await backend.getLocalCodexServerStatus(environment.id);
-      if (status.running && status.port) return status.port;
-      return (await backend.startLocalCodexServer(environment.id)).port;
+      if (status.running && status.port && status.authToken) {
+        return { port: status.port, authToken: status.authToken };
+      }
+      const started = await backend.startLocalCodexServer(environment.id);
+      if (!started.authToken) throw new Error("Codex bridge did not return an authentication token");
+      return { port: started.port, authToken: started.authToken };
     }
     const status = await backend.getLocalOpencodeServerStatus(environment.id);
-    if (status.running && status.port) return status.port;
-    return (await backend.startLocalOpencodeServer(environment.id)).port;
+    if (status.running && status.port) return { port: status.port };
+    return { port: (await backend.startLocalOpencodeServer(environment.id)).port };
   }
 
   if (!environment.containerId) {
@@ -128,17 +132,20 @@ async function resolveProviderPort(
   }
   if (agent === "claude") {
     const status = await backend.getClaudeServerStatus(environment.containerId);
-    if (status.running && status.hostPort) return status.hostPort;
-    return (await backend.startClaudeServer(environment.containerId)).hostPort;
+    if (status.running && status.hostPort) return { port: status.hostPort };
+    return { port: (await backend.startClaudeServer(environment.containerId)).hostPort };
   }
   if (agent === "codex") {
     const status = await backend.getCodexServerStatus(environment.containerId);
-    if (status.running && status.hostPort) return status.hostPort;
-    return (await backend.startCodexServer(environment.containerId)).hostPort;
+    if (status.running && status.hostPort && status.authToken) {
+      return { port: status.hostPort, authToken: status.authToken };
+    }
+    const started = await backend.startCodexServer(environment.containerId);
+    return { port: started.hostPort, authToken: started.authToken };
   }
   const status = await backend.getOpenCodeServerStatus(environment.containerId);
-  if (status.running && status.hostPort) return status.hostPort;
-  return (await backend.startOpenCodeServer(environment.containerId)).hostPort;
+  if (status.running && status.hostPort) return { port: status.hostPort };
+  return { port: (await backend.startOpenCodeServer(environment.containerId)).hostPort };
 }
 
 export function claudeAdapter(
@@ -312,7 +319,7 @@ export async function connectStructuredReviewAgent(
   workflow: LoopedReviewWorkflow,
   environment: Environment,
 ): Promise<NativeStructuredAgent> {
-  const port = await resolveProviderPort(workflow.agent, environment);
+  const { port, authToken } = await resolveProviderPort(workflow.agent, environment);
   const baseUrl = `http://127.0.0.1:${port}`;
   if (workflow.agent === "claude") {
     const client = createClaudeClient(baseUrl);
@@ -322,7 +329,8 @@ export async function connectStructuredReviewAgent(
     return claudeAdapter(client, workflow);
   }
   if (workflow.agent === "codex") {
-    const client = createCodexClient(baseUrl);
+    if (!authToken) throw new Error("Codex bridge authentication is unavailable");
+    const client = createCodexClient(baseUrl, authToken);
     if (!await checkCodexHealth(client)) {
       throw new Error("Codex native bridge health check failed");
     }

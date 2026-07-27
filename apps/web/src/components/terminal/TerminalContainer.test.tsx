@@ -70,6 +70,12 @@ const getEnvironmentSetupSessionMock = mock(async (_environmentId: string): Prom
 const setEnvironmentPendingAgentLaunchMock = mock(async (environmentId: string, pending: boolean) => ({
   ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
   pendingAgentLaunch: pending,
+  ...(pending
+    ? {}
+    : {
+        initialAgentModel: undefined,
+        initialReasoningEffort: undefined,
+      }),
 }));
 const setEnvironmentInitialPromptMock = mock(async (environmentId: string, initialPrompt: string) => ({
   ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
@@ -288,6 +294,12 @@ describe("TerminalContainer", () => {
     setEnvironmentPendingAgentLaunchMock.mockImplementation(async (environmentId: string, pending: boolean) => ({
       ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
       pendingAgentLaunch: pending,
+      ...(pending
+        ? {}
+        : {
+            initialAgentModel: undefined,
+            initialReasoningEffort: undefined,
+          }),
     }));
     setEnvironmentInitialPromptMock.mockReset();
     setEnvironmentInitialPromptMock.mockImplementation(async (environmentId: string, initialPrompt: string) => ({
@@ -1828,6 +1840,21 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
 
+  const acknowledgeDurableAgentOptions = async () => {
+    let tabId: string | undefined;
+    await waitFor(() => {
+      const agentTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .find((tab) => tab.type === "codex-native");
+      expect(agentTab?.initialAgentModel).toBe("gpt-5.6-sol");
+      expect(agentTab?.initialReasoningEffort).toBe("high");
+      tabId = agentTab?.id;
+    });
+    await act(async () => {
+      usePaneLayoutStore.getState().clearTabInitialAgentOptions(tabId!, "env-hidden");
+      await Promise.resolve();
+    });
+  };
+
   test("reconstructs and clears a durable agent launch after a full renderer reload", async () => {
     usePaneLayoutStore.setState({
       environments: new Map([[
@@ -1888,6 +1915,11 @@ describe("TerminalContainer", () => {
       expect(codexTab?.initialPrompt).toBe("Recover after mobile reload");
       expect(codexTab?.initialAgentModel).toBe("gpt-5.6-sol");
       expect(codexTab?.initialReasoningEffort).toBe("high");
+      expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
+    });
+    await acknowledgeDurableAgentOptions();
+
+    await waitFor(() => {
       expect(setEnvironmentPendingAgentLaunchMock).toHaveBeenCalledWith(
         "env-hidden",
         false,
@@ -1898,25 +1930,75 @@ describe("TerminalContainer", () => {
       ).toBe(false);
     });
 
-    // The layout must be durable *before* the intent is cleared, or an eviction
-    // in between loses the agent tab with nothing left to retry from.
-    expect(savePaneLayoutMock).toHaveBeenCalled();
+    // The consumed layout must be durable before the backend intent is cleared.
+    // Persistence of the pre-consumption fields is covered by the layout
+    // persistence tests; this component test does not mount App's persistence
+    // loop.
     const savedLayout = savePaneLayoutMock.mock.calls.at(-1)?.[1];
     expect(JSON.stringify(savedLayout)).toContain("codex-native");
-    expect(savePaneLayoutMock.mock.invocationCallOrder[0]!).toBeLessThan(
+    expect(JSON.stringify(savedLayout)).not.toContain("initialAgentModel");
+    expect(savePaneLayoutMock.mock.invocationCallOrder.at(-1)!).toBeLessThan(
       setEnvironmentPendingAgentLaunchMock.mock.invocationCallOrder[0]!,
     );
   });
 
+  test.each([
+    {
+      label: "Claude native",
+      overrides: { defaultAgent: "claude", claudeMode: "native" },
+      expectedType: "claude-native",
+      model: "claude-fable-5[1m]",
+    },
+    {
+      label: "OpenCode native",
+      overrides: { defaultAgent: "opencode", opencodeMode: "native" },
+      expectedType: "opencode-native",
+      model: "provider/review-model",
+    },
+    {
+      label: "Claude terminal",
+      overrides: { defaultAgent: "claude", claudeMode: "terminal" },
+      expectedType: "claude",
+      model: "sonnet",
+    },
+  ])("retains durable model and effort for $label until its consumer acknowledges them", async ({
+    overrides,
+    expectedType,
+    model,
+  }) => {
+    setupDurableLaunchEnvironment({
+      ...overrides,
+      initialAgentModel: model,
+      initialReasoningEffort: "high",
+    });
+    renderHiddenTerminal();
+
+    await waitFor(() => {
+      const agentTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .find((tab) => tab.type === expectedType);
+      expect(agentTab?.initialAgentModel).toBe(model);
+      expect(agentTab?.initialReasoningEffort).toBe("high");
+      expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
+    });
+  });
+
   test("keeps the durable launch pending when persisting the layout fails", async () => {
     setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
-    savePaneLayoutMock.mockRejectedValueOnce(new Error("offline"));
     const originalWarn = console.warn;
     const warned = mock(() => undefined);
     console.warn = warned;
 
     try {
       renderHiddenTerminal();
+      await waitFor(() => {
+        expect(
+          usePaneLayoutStore.getState().getAllTabs("env-hidden")
+            .some((tab) => tab.type === "codex-native"),
+        ).toBe(true);
+      });
+      savePaneLayoutMock.mockClear();
+      savePaneLayoutMock.mockRejectedValueOnce(new Error("offline"));
+      await acknowledgeDurableAgentOptions();
 
       await waitFor(() => {
         expect(savePaneLayoutMock).toHaveBeenCalled();
@@ -1941,6 +2023,7 @@ describe("TerminalContainer", () => {
 
     try {
       renderHiddenTerminal();
+      await acknowledgeDurableAgentOptions();
 
       await waitFor(() => {
         expect(setEnvironmentPendingAgentLaunchMock).toHaveBeenCalledTimes(1);
@@ -1976,6 +2059,7 @@ describe("TerminalContainer", () => {
     }));
 
     renderHiddenTerminal();
+    await acknowledgeDurableAgentOptions();
 
     await waitFor(() => {
       const environment = useEnvironmentStore.getState().getEnvironmentById("env-hidden");
@@ -2866,6 +2950,8 @@ describe("TerminalContainer", () => {
           launchAgent: true,
           agentType: "codex",
           initialPrompt: "Review this build",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
         },
       },
       pendingNativeLaunches: {},
@@ -2893,6 +2979,8 @@ describe("TerminalContainer", () => {
       expect(envHidden.root.tabs[0]?.type).toBe("codex-native");
       expect(envHidden.root.tabs[0]?.isSetupTab).toBeUndefined();
       expect(envHidden.root.tabs[0]?.initialPrompt).toBe("Review this build");
+      expect(envHidden.root.tabs[0]?.initialAgentModel).toBe("gpt-5.6-sol");
+      expect(envHidden.root.tabs[0]?.initialReasoningEffort).toBe("high");
       expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(false);
       expect(useEnvironmentStore.getState().isWorkspaceReady("env-hidden")).toBe(true);
     });
@@ -3030,6 +3118,8 @@ describe("TerminalContainer", () => {
           launchAgent: true,
           agentType: "claude",
           initialPrompt: "",
+          model: "sonnet",
+          reasoningEffort: "high",
         },
       },
       pendingNativeLaunches: {},
@@ -3051,6 +3141,8 @@ describe("TerminalContainer", () => {
         throw new Error("env-hidden root should be a leaf");
       }
       expect(envHidden.root.tabs[0]?.type).toBe("claude");
+      expect(envHidden.root.tabs[0]?.initialAgentModel).toBe("sonnet");
+      expect(envHidden.root.tabs[0]?.initialReasoningEffort).toBe("high");
       expect(
         useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
       ).toBeUndefined();

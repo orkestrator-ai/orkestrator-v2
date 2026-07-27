@@ -87,6 +87,59 @@ describe("buildReviewModelCatalog", () => {
       "removed-provider/model",
     );
   });
+
+  test("aggregates and deduplicates cached OpenCode catalogs before an environment exists", () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    useOpenCodeStore.getState().setModels("env-a", [
+      {
+        id: "provider/shared",
+        name: "Shared",
+        provider: "Provider A",
+        variants: ["fast"],
+      } as any,
+      {
+        id: "provider/only-a",
+        name: "Only A",
+        provider: "Provider A",
+        variants: [],
+      } as any,
+    ]);
+    useOpenCodeStore.getState().setModels("env-b", [
+      {
+        id: "provider/shared",
+        name: "Duplicate Shared",
+        provider: "Provider B",
+        variants: ["deep"],
+      } as any,
+      {
+        id: "provider/only-b",
+        name: "Only B",
+        provider: "Provider B",
+        variants: ["deep"],
+      } as any,
+    ]);
+
+    expect(buildReviewModelCatalog(undefined).opencode).toEqual([
+      {
+        id: "provider/shared",
+        name: "Shared",
+        description: "Provider A",
+        reasoningEfforts: ["fast"],
+      },
+      {
+        id: "provider/only-a",
+        name: "Only A",
+        description: "Provider A",
+        reasoningEfforts: [],
+      },
+      {
+        id: "provider/only-b",
+        name: "Only B",
+        description: "Provider B",
+        reasoningEfforts: ["deep"],
+      },
+    ]);
+  });
 });
 
 describe("resolveDefaultReviewTabType", () => {

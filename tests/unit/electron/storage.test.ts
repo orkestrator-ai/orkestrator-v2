@@ -323,6 +323,24 @@ describe("Electron StorageService", () => {
     });
     expect(updated.entryPort).toBeUndefined();
     await storage.updateEnvironment(firstEnvironment.id, {
+      initialAgentModel: 42,
+      initialReasoningEffort: { invalid: true },
+    });
+    expect(await storage.getEnvironment(firstEnvironment.id)).toMatchObject({
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "high",
+    });
+    await storage.updateEnvironment(firstEnvironment.id, {
+      initialAgentModel: null,
+      initialReasoningEffort: null,
+    });
+    expect((await storage.getEnvironment(firstEnvironment.id))?.initialAgentModel).toBeUndefined();
+    expect((await storage.getEnvironment(firstEnvironment.id))?.initialReasoningEffort).toBeUndefined();
+    await storage.updateEnvironment(firstEnvironment.id, {
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "high",
+    });
+    await storage.updateEnvironment(firstEnvironment.id, {
       pendingRenamePrompt: undefined,
       initialAgentModel: undefined,
       initialReasoningEffort: undefined,

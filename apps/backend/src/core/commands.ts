@@ -2394,6 +2394,14 @@ async function completeEnvironmentSetup(
   return updated;
 }
 
+function clearPendingAgentLaunchUpdates(): Partial<Environment> {
+  return {
+    pendingAgentLaunch: false,
+    initialAgentModel: undefined,
+    initialReasoningEffort: undefined,
+  };
+}
+
 async function failEnvironmentSetup(environmentId: string, error: unknown, context: CommandContext): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   const session = environmentSetupSessions.get(environmentId);
@@ -2419,7 +2427,10 @@ async function failEnvironmentSetup(environmentId: string, error: unknown, conte
   // the original prompt whenever the environment is next started.
   let updated: Environment | undefined;
   try {
-    updated = await context.storage.updateEnvironment(environmentId, { pendingAgentLaunch: false });
+    updated = await context.storage.updateEnvironment(
+      environmentId,
+      clearPendingAgentLaunchUpdates(),
+    );
   } catch (clearError) {
     console.warn(
       `[setup] Failed to clear pending agent launch for ${environmentId}:`,
@@ -4407,7 +4418,10 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     // the container stops.
     if (environment.containerId) {
       await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
-      await storage.updateEnvironment(environment.id, { status: "stopped", pendingAgentLaunch: false });
+      await storage.updateEnvironment(environment.id, {
+        status: "stopped",
+        ...clearPendingAgentLaunchUpdates(),
+      });
       return;
     }
 
@@ -4429,7 +4443,10 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
         stopError = error;
       }
     }
-    await storage.updateEnvironment(environment.id, { status: "stopped", pendingAgentLaunch: false });
+    await storage.updateEnvironment(environment.id, {
+      status: "stopped",
+      ...clearPendingAgentLaunchUpdates(),
+    });
     if (stopError) throw stopError;
   });
   register("recreate_environment", async ({ environmentId }, context) => {
@@ -4543,13 +4560,9 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) => {
     const nextPending = asRequiredBoolean(pending, "pending");
     return storage.updateEnvironment(asString(environmentId, "environmentId"), {
-      pendingAgentLaunch: nextPending,
       ...(nextPending
-        ? {}
-        : {
-            initialAgentModel: undefined,
-            initialReasoningEffort: undefined,
-          }),
+        ? { pendingAgentLaunch: true }
+        : clearPendingAgentLaunchUpdates()),
     });
   });
   // The renderer rewrites the initial prompt once it has uploaded the create

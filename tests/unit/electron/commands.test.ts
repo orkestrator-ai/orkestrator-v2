@@ -1366,6 +1366,9 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
       worktreePath: undefined,
       containerId: "container-1",
       status: "running",
+      pendingAgentLaunch: true,
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "high",
       branch: "old-branch",
       prUrl: "https://github.com/acme/repo/pull/1",
       prState: "open",
@@ -1809,9 +1812,17 @@ exit 0
       });
       // A launch that can never be honoured must not survive the failure.
       expect(environment.pendingAgentLaunch).toBe(false);
+      expect(environment.initialAgentModel).toBeUndefined();
+      expect(environment.initialReasoningEffort).toBeUndefined();
       expect(
         (failure?.payload as { environment?: Environment }).environment?.pendingAgentLaunch,
       ).toBe(false);
+      expect(
+        (failure?.payload as { environment?: Environment }).environment?.initialAgentModel,
+      ).toBeUndefined();
+      expect(
+        (failure?.payload as { environment?: Environment }).environment?.initialReasoningEffort,
+      ).toBeUndefined();
     });
   }, ASYNC_TEST_BUDGET_MS);
 
@@ -7618,11 +7629,21 @@ exit 1
   });
 
   test("stops local and container environments and treats recreation without a container as a no-op", async () => {
-    const local = createEnvironment({ id: "env-local", environmentType: "local", containerId: null });
+    const local = createEnvironment({
+      id: "env-local",
+      environmentType: "local",
+      containerId: null,
+      pendingAgentLaunch: true,
+      initialAgentModel: "claude-fable-5[1m]",
+      initialReasoningEffort: "max",
+    });
     const container = createEnvironment({
       id: "env-container",
       environmentType: "containerized",
       containerId: "container-1",
+      pendingAgentLaunch: true,
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "high",
     });
     const { context, updates } = createContext([local, container]);
     const commands = createCommandRegistry();
@@ -7630,7 +7651,12 @@ exit 1
     await commands.get("stop_environment")?.({ environmentId: local.id }, context);
     // A stopped environment cannot honour a post-setup agent launch, and the
     // renderer no longer mounts it, so the intent is dropped here.
-    expect(updates).toContainEqual({ status: "stopped", pendingAgentLaunch: false });
+    expect(updates).toContainEqual({
+      status: "stopped",
+      pendingAgentLaunch: false,
+      initialAgentModel: undefined,
+      initialReasoningEffort: undefined,
+    });
     await withFakeDocker(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 exit 0
@@ -7642,7 +7668,12 @@ exit 0
     expect(
       updates.filter((update) => (update as { status?: string }).status === "stopped"),
     ).toHaveLength(2);
-    expect(updates).toContainEqual({ status: "stopped", pendingAgentLaunch: false });
+    expect(updates).toContainEqual({
+      status: "stopped",
+      pendingAgentLaunch: false,
+      initialAgentModel: undefined,
+      initialReasoningEffort: undefined,
+    });
     await expect(commands.get("recreate_environment")?.({ environmentId: local.id }, context)).resolves.toBeUndefined();
   });
 
@@ -7748,6 +7779,64 @@ exit 0
       pendingAgentLaunch: true,
       initialAgentModel: "gpt-5.6-sol",
       initialReasoningEffort: "high",
+    });
+    await commands.get("update_environment_agent_settings")?.({
+      environmentId: environment.id,
+      defaultAgent: "codex",
+      claudeMode: null,
+      claudeNativeBackend: null,
+      opencodeMode: null,
+      codexMode: "native",
+      pendingAgentLaunch: false,
+      initialAgentModel: "must-not-survive",
+      initialReasoningEffort: "ultra",
+    }, context);
+    expect(updates.at(-1)).toEqual({
+      defaultAgent: "codex",
+      claudeMode: null,
+      claudeNativeBackend: null,
+      opencodeMode: null,
+      codexMode: "native",
+      pendingAgentLaunch: false,
+      initialAgentModel: undefined,
+      initialReasoningEffort: undefined,
+    });
+    await commands.get("update_environment_agent_settings")?.({
+      environmentId: environment.id,
+      defaultAgent: "codex",
+      claudeMode: null,
+      claudeNativeBackend: null,
+      opencodeMode: null,
+      codexMode: "native",
+      initialAgentModel: "gpt-5.4-mini",
+      initialReasoningEffort: "medium",
+    }, context);
+    expect(updates.at(-1)).toEqual({
+      defaultAgent: "codex",
+      claudeMode: null,
+      claudeNativeBackend: null,
+      opencodeMode: null,
+      codexMode: "native",
+      initialAgentModel: "gpt-5.4-mini",
+      initialReasoningEffort: "medium",
+    });
+    expect(updates.at(-1)).not.toHaveProperty("pendingAgentLaunch");
+    await commands.get("update_environment_agent_settings")?.({
+      environmentId: environment.id,
+      defaultAgent: "codex",
+      claudeMode: null,
+      claudeNativeBackend: null,
+      opencodeMode: null,
+      codexMode: "native",
+      initialAgentModel: 42,
+      initialReasoningEffort: {},
+    }, context);
+    expect(updates.at(-1)).toEqual({
+      defaultAgent: "codex",
+      claudeMode: null,
+      claudeNativeBackend: null,
+      opencodeMode: null,
+      codexMode: "native",
     });
     // Omitting the flag must leave an in-flight launch intent alone: the settings
     // dialog, FeaturesView and the non-Claude pipeline lanes all call this

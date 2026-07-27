@@ -277,10 +277,10 @@ export function OpenCodeChatTab({
     [environmentId, tabId],
   );
 
-  useEffect(() => {
-    if (initialLaunchOptionsPendingRef.current) {
-      clearTabInitialAgentOptions(tabId, environmentId);
-    }
+  const acknowledgeInitialLaunchOptions = useCallback(() => {
+    if (!initialLaunchOptionsPendingRef.current) return;
+    initialLaunchOptionsPendingRef.current = false;
+    clearTabInitialAgentOptions(tabId, environmentId);
   }, [clearTabInitialAgentOptions, environmentId, tabId]);
 
   // Get client from Map (shared per environment) - subscribing to the Map ensures re-render on changes
@@ -732,10 +732,12 @@ export function OpenCodeChatTab({
               });
             if (resolvedModel) setSelectedModel(sessionKey, resolvedModel);
             setSelectedVariant(sessionKey, resolvedVariant);
+            if (pendingLaunchOptions) {
+              acknowledgeInitialLaunchOptions();
+            }
           }
           // A warm client cannot safely send an unvalidated modal value. If its
           // model snapshot is empty, retain the store's existing selection.
-          initialLaunchOptionsPendingRef.current = false;
         }
         if (existingClient && existingSession?.sessionId) {
           console.debug("[OpenCodeChatTab] Fast reconnect - reusing existing client and session", {
@@ -949,14 +951,15 @@ export function OpenCodeChatTab({
             currentModel,
             currentVariant,
           });
-        initialLaunchOptionsPendingRef.current = false;
-
         if (resolvedModel && resolvedModel !== getSelectedModel(sessionKey)) {
           setSelectedModel(sessionKey, resolvedModel);
         }
 
         if (resolvedVariant !== getSelectedVariant(sessionKey)) {
           setSelectedVariant(sessionKey, resolvedVariant);
+        }
+        if (pendingInitialOptions && availableModels.length > 0) {
+          acknowledgeInitialLaunchOptions();
         }
 
         // Check for existing session - first from component ref, then from Zustand store
@@ -1095,6 +1098,7 @@ export function OpenCodeChatTab({
     syncPendingRequests,
     getSelectedModel,
     getSelectedVariant,
+    acknowledgeInitialLaunchOptions,
     setSelectedModel,
     setSelectedVariant,
     setupPending,

@@ -162,6 +162,16 @@ function hasStartupAgentTab(state: { root: PaneNode }): boolean {
     .some((leaf) => leaf.tabs.some((tab) => STARTUP_AGENT_TAB_TYPES[tab.type] === true));
 }
 
+function hasUnconsumedStartupAgentOptions(state: { root: PaneNode }): boolean {
+  return getAllLeaves(state.root).some((leaf) =>
+    leaf.tabs.some(
+      (tab) =>
+        STARTUP_AGENT_TAB_TYPES[tab.type] === true
+        && Boolean(tab.initialAgentModel || tab.initialReasoningEffort),
+    )
+  );
+}
+
 type TerminalTabDragEndAction =
   | { type: "none" }
   | {
@@ -699,6 +709,11 @@ export function TerminalContainer({
     if (!environment?.pendingAgentLaunch || !currentEnvState) return;
 
     if (hasStartupAgentTab(currentEnvState)) {
+      // The tab exists, but its agent surface may still be resolving a live
+      // model catalog or waiting for a terminal connection. Keep the backend
+      // intent and the persisted tab options authoritative until that consumer
+      // acknowledges them by clearing the tab fields.
+      if (hasUnconsumedStartupAgentOptions(currentEnvState)) return;
       if (durableLaunchClearInFlightRef.current) return;
       durableLaunchClearInFlightRef.current = true;
       // Persist the tab before clearing the launch intent. If the page is

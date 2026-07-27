@@ -69,11 +69,17 @@ describe("pane layout persistence", () => {
     expect(save).toHaveBeenCalledTimes(1);
     const persisted = save.mock.calls[0]?.[1];
     expect(JSON.stringify(persisted)).not.toContain("initialPrompt");
-    expect(JSON.stringify(persisted)).not.toContain("initialAgentModel");
-    expect(JSON.stringify(persisted)).not.toContain("initialReasoningEffort");
+    expect(JSON.stringify(persisted)).toContain('"initialAgentModel":"gpt-5.6-sol"');
+    expect(JSON.stringify(persisted)).toContain('"initialReasoningEffort":"xhigh"');
     expect(JSON.stringify(persisted)).not.toContain("initialCommands");
     expect(JSON.stringify(persisted)).not.toContain("hostPort");
     expect(JSON.stringify(persisted)).toContain("session-1");
+
+    store.clearTabInitialAgentOptions("native", "env-1");
+    await waitForTimers();
+    const consumed = save.mock.calls.at(-1)?.[1];
+    expect(JSON.stringify(consumed)).not.toContain("initialAgentModel");
+    expect(JSON.stringify(consumed)).not.toContain("initialReasoningEffort");
     stop();
   });
 

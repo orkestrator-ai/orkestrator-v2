@@ -368,6 +368,9 @@ export function ClaudeTmuxChatTab({
   const initialLaunchModel = initialLaunchOptionsRef.current.model;
   const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
   const initialLaunchModelPendingRef = useRef(Boolean(initialLaunchModel));
+  const initialLaunchOptionsPendingRef = useRef(
+    Boolean(initialLaunchModel || initialLaunchReasoningEffort),
+  );
   const [selectedModel, setSelectedModel] = useState<string>(() =>
     resolveTmuxModelPreference(
       initialLaunchModel ?? useConfigStore.getState().config.global.claudeModel,
@@ -501,20 +504,17 @@ export function ClaudeTmuxChatTab({
     }
   }, [initialLaunchReasoningEffort, setEffortLevel, storeKey]);
 
-  useEffect(() => {
-    if (initialLaunchModel || initialLaunchReasoningEffort) {
-      clearTabInitialAgentOptions(tabId, environmentId);
-    }
-  }, [
-    clearTabInitialAgentOptions,
-    environmentId,
-    initialLaunchModel,
-    initialLaunchReasoningEffort,
-    tabId,
-  ]);
+  const acknowledgeInitialLaunchOptions = useCallback(() => {
+    if (!initialLaunchOptionsPendingRef.current) return;
+    initialLaunchOptionsPendingRef.current = false;
+    clearTabInitialAgentOptions(tabId, environmentId);
+  }, [clearTabInitialAgentOptions, environmentId, tabId]);
 
   useEffect(() => {
-    if (hasStarted) return;
+    if (hasStarted) {
+      acknowledgeInitialLaunchOptions();
+      return;
+    }
     const preferredModel = initialLaunchModelPendingRef.current
       ? initialLaunchModel
       : persistedClaudeModel;
@@ -522,7 +522,16 @@ export function ClaudeTmuxChatTab({
       resolveTmuxModelPreference(preferredModel, availableModels),
     );
     initialLaunchModelPendingRef.current = false;
-  }, [hasStarted, initialLaunchModel, persistedClaudeModel, availableModels]);
+    if (!initialLaunchModel || availableModels.length > 0) {
+      acknowledgeInitialLaunchOptions();
+    }
+  }, [
+    acknowledgeInitialLaunchOptions,
+    availableModels,
+    hasStarted,
+    initialLaunchModel,
+    persistedClaudeModel,
+  ]);
 
   const persistSelectedModel = useCallback(
     async (modelId: string) => {

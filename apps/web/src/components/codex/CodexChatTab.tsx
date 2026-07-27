@@ -241,6 +241,9 @@ export function CodexChatTab({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
   });
+  const initialLaunchOptionsPendingRef = useRef(
+    Boolean(initialAgentModel || initialReasoningEffort),
+  );
   const initialLaunchModel = initialLaunchOptionsRef.current.model;
   const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
   const clearTabInitialAgentOptions = usePaneLayoutStore(
@@ -270,17 +273,16 @@ export function CodexChatTab({
         initialLaunchReasoningEffort as CodexReasoningEffort,
       );
     }
-    if (initialLaunchModel || initialLaunchReasoningEffort) {
-      clearTabInitialAgentOptions(tabId, environmentId);
-    }
   }, [
-    clearTabInitialAgentOptions,
-    environmentId,
     initialLaunchModel,
     initialLaunchReasoningEffort,
     sessionKey,
-    tabId,
   ]);
+  const acknowledgeInitialLaunchOptions = useCallback(() => {
+    if (!initialLaunchOptionsPendingRef.current) return;
+    initialLaunchOptionsPendingRef.current = false;
+    clearTabInitialAgentOptions(tabId, environmentId);
+  }, [clearTabInitialAgentOptions, environmentId, tabId]);
   const config = useConfigStore((state) => state.config);
   const setConfig = useConfigStore((state) => state.setConfig);
   const persistedPreferencesRef = useRef(getPersistedCodexPreferences(config));
@@ -1076,6 +1078,7 @@ export function CodexChatTab({
         const cachedClient = useCodexStore.getState().clients.get(environmentId);
         const cachedSession = useCodexStore.getState().sessions.get(sessionKey);
         if (cachedClient && cachedSession?.sessionId) {
+          acknowledgeInitialLaunchOptions();
           console.debug("[CodexChatTab] Fast reconnect - reusing existing client and session", {
             tabId,
             environmentId,
@@ -1151,6 +1154,7 @@ export function CodexChatTab({
               setSelectedReasoningEffort(sessionKey, resolvedSelection.reasoningEffort);
               isInitializedRef.current = true;
               setConnectionState("connected");
+              acknowledgeInitialLaunchOptions();
               return;
             }
             updateTabNativeSessionId(tabId, undefined, environmentId);
@@ -1176,6 +1180,7 @@ export function CodexChatTab({
           setSelectedMode(sessionKey, resolvedMode);
           setSelectedReasoningEffort(sessionKey, resolvedSelection.reasoningEffort);
           setConnectionState("connected");
+          acknowledgeInitialLaunchOptions();
           return;
         }
 
@@ -1312,6 +1317,7 @@ export function CodexChatTab({
           setSelectedReasoningEffort(sessionKey, resolvedReasoningEffort);
         }
         setConnectionState("connected");
+        acknowledgeInitialLaunchOptions();
       } catch (error) {
         if (!mounted) return;
         isInitializedRef.current = false;
@@ -1342,6 +1348,7 @@ export function CodexChatTab({
       mounted = false;
     };
   }, [
+    acknowledgeInitialLaunchOptions,
     containerId,
     environmentId,
     initialPrompt,

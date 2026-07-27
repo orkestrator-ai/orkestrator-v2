@@ -168,13 +168,71 @@ export function CreateEnvironmentDialog({
   // Resolve effective defaults: project-level overrides > app-level
   const resolved = resolveAgentDefaults(config.global, repoConfig);
   const configDefaultAgent = resolved.defaultAgent as AgentType;
+  const configClaudeMode = resolved.claudeMode as ClaudeMode;
+  const configOpencodeMode = resolved.opencodeMode as OpenCodeMode;
+  const configCodexMode = resolved.codexMode as CodexMode;
   const configEnvironmentType: EnvironmentType = repoConfig?.lastEnvironmentType ?? "containerized";
   const claudeModels = useClaudeStore((state) => state.models);
   const codexModels = useCodexStore((state) => state.models);
   const openCodeModels = useOpenCodeStore((state) => state.models);
+  const configuredOpenCodeModel =
+    (configDefaultAgent === "opencode" ? repoConfig?.defaultModel : undefined)
+    ?? config.global.opencodeModel;
+  const configuredOpenCodeEffort =
+    configDefaultAgent === "opencode" ? repoConfig?.defaultEffort : undefined;
   const modelCatalog = useMemo(
-    () => buildReviewModelCatalog(undefined),
-    [claudeModels, codexModels, openCodeModels],
+    () => {
+      const catalog = buildReviewModelCatalog(undefined);
+      if (!configuredOpenCodeModel) return catalog;
+
+      const configuredModel = catalog.opencode.find(
+        (candidate) => candidate.id === configuredOpenCodeModel,
+      );
+      if (configuredModel) {
+        if (
+          !configuredOpenCodeEffort
+          || configuredModel.reasoningEfforts?.includes(configuredOpenCodeEffort)
+        ) {
+          return catalog;
+        }
+        return {
+          ...catalog,
+          opencode: catalog.opencode.map((candidate) =>
+            candidate.id === configuredOpenCodeModel
+              ? {
+                  ...candidate,
+                  reasoningEfforts: [
+                    ...(candidate.reasoningEfforts ?? []),
+                    configuredOpenCodeEffort,
+                  ],
+                }
+              : candidate
+          ),
+        };
+      }
+
+      return {
+        ...catalog,
+        opencode: [
+          {
+            id: configuredOpenCodeModel,
+            name: configuredOpenCodeModel,
+            description: "Configured default",
+            reasoningEfforts: configuredOpenCodeEffort
+              ? [configuredOpenCodeEffort]
+              : [],
+          },
+          ...catalog.opencode,
+        ],
+      };
+    },
+    [
+      claudeModels,
+      codexModels,
+      configuredOpenCodeEffort,
+      configuredOpenCodeModel,
+      openCodeModels,
+    ],
   );
 
   const getInitialAgentSelection = useCallback(
@@ -195,12 +253,13 @@ export function CreateEnvironmentDialog({
         "default";
       const supportedEfforts =
         models.find((candidate) => candidate.id === selectedModel)?.reasoningEfforts ?? [];
+      const projectPreferredEffort =
+        nextAgent === configDefaultAgent ? repoConfig?.defaultEffort : undefined;
       const preferredEffort =
-        nextAgent === configDefaultAgent
-          ? repoConfig?.defaultEffort
-          : nextAgent === "codex"
-            ? config.global.codexReasoningEffort
-            : undefined;
+        projectPreferredEffort
+        ?? (nextAgent === "codex"
+          ? config.global.codexReasoningEffort
+          : undefined);
 
       return {
         model: selectedModel,
@@ -227,9 +286,9 @@ export function CreateEnvironmentDialog({
   const [environmentName, setEnvironmentName] = useState("");
   const [launchAgent, setLaunchAgent] = useState(true);
   const [agentType, setAgentType] = useState<AgentType>(configDefaultAgent);
-  const [claudeMode, setClaudeMode] = useState<ClaudeMode>("native");
-  const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>("native");
-  const [codexMode, setCodexMode] = useState<CodexMode>("native");
+  const [claudeMode, setClaudeMode] = useState<ClaudeMode>(configClaudeMode);
+  const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>(configOpencodeMode);
+  const [codexMode, setCodexMode] = useState<CodexMode>(configCodexMode);
   const [model, setModel] = useState(initialAgentSelection.model);
   const [reasoningEffort, setReasoningEffort] = useState(
     initialAgentSelection.reasoningEffort,
@@ -271,9 +330,9 @@ export function CreateEnvironmentDialog({
     setEnvironmentName("");
     setLaunchAgent(true);
     setAgentType(configDefaultAgent);
-    setClaudeMode("native");
-    setOpencodeMode("native");
-    setCodexMode("native");
+    setClaudeMode(configClaudeMode);
+    setOpencodeMode(configOpencodeMode);
+    setCodexMode(configCodexMode);
     const nextSelection = getInitialAgentSelection(configDefaultAgent);
     setModel(nextSelection.model);
     setReasoningEffort(nextSelection.reasoningEffort);
@@ -286,8 +345,11 @@ export function CreateEnvironmentDialog({
     setMobileTabTransitionDirection(null);
   }, [
     defaultPortMappings,
+    configClaudeMode,
+    configCodexMode,
     configDefaultAgent,
     configEnvironmentType,
+    configOpencodeMode,
     getInitialAgentSelection,
   ]);
 
@@ -384,9 +446,9 @@ export function CreateEnvironmentDialog({
       setShowPortConfig(defaultPortMappings.length > 0);
       setEnvironmentType(configEnvironmentType);
       setAgentType(configDefaultAgent);
-      setClaudeMode("native");
-      setOpencodeMode("native");
-      setCodexMode("native");
+      setClaudeMode(configClaudeMode);
+      setOpencodeMode(configOpencodeMode);
+      setCodexMode(configCodexMode);
       const nextSelection = getInitialAgentSelection(configDefaultAgent);
       setModel(nextSelection.model);
       setReasoningEffort(nextSelection.reasoningEffort);
@@ -403,6 +465,32 @@ export function CreateEnvironmentDialog({
   const availableModels = modelCatalog[agentType];
   const availableReasoningEfforts =
     availableModels.find((candidate) => candidate.id === model)?.reasoningEfforts ?? [];
+
+  useEffect(() => {
+    if (!open) return;
+
+    const selectedModel = availableModels.find((candidate) => candidate.id === model);
+    if (!selectedModel) {
+      const nextSelection = getInitialAgentSelection(agentType);
+      setModel(nextSelection.model);
+      setReasoningEffort(nextSelection.reasoningEffort);
+      return;
+    }
+
+    if (
+      reasoningEffort !== "default"
+      && !selectedModel.reasoningEfforts?.includes(reasoningEffort)
+    ) {
+      setReasoningEffort("default");
+    }
+  }, [
+    agentType,
+    availableModels,
+    getInitialAgentSelection,
+    model,
+    open,
+    reasoningEffort,
+  ]);
 
   const selectAgent = useCallback(
     (nextAgent: AgentType) => {

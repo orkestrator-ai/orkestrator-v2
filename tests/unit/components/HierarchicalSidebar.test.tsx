@@ -1056,7 +1056,7 @@ describe("HierarchicalSidebar", () => {
       expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalledWith(
         "env-created",
         "claude",
-        "native",
+        "terminal",
         null,
         null,
         null,

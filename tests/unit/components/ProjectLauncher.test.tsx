@@ -14,6 +14,7 @@ let flowProps: (CreateEnvironmentFlowOperations & {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string | null;
+  projectName?: string;
 }) | null = null;
 
 mock.module("@/hooks/useProjects", () => ({
@@ -26,6 +27,7 @@ mock.module("@/components/environments/CreateEnvironmentFlowDialog", () => ({
       open: boolean;
       onOpenChange: (open: boolean) => void;
       projectId: string | null;
+      projectName?: string;
     },
   ) => {
     flowProps = props;
@@ -187,6 +189,7 @@ describe("ProjectLauncher", () => {
     expect(flowProps).toMatchObject({
       open: true,
       projectId: "project-1",
+      projectName: "Project 1",
       ...operations,
     });
 

@@ -886,16 +886,23 @@ describe("looped review workflow transitions", () => {
       });
       return { workflows };
     });
-    useLoopedReviewStore.getState().completeFix(id, "fix-session");
+    useLoopedReviewStore.getState().completeFix(id, "fix-session", {
+      summary: "Fixed the pool",
+      notes: ["Issue 2 was already fixed on the branch."],
+    });
 
     const workflow = useLoopedReviewStore.getState().workflows.get(id)!;
     expect(workflow.phase).toBe("preparing");
     expect(workflow.currentRound).toBe(2);
     expect(workflow.currentAllowance).toBe(3);
     expect(workflow.activePool).toEqual({ issues: [], coverageGaps: [] });
+    // The pool is cleared here, so the archive is the only surviving record of
+    // what the fix session did and what it reported as already-resolved.
     expect(workflow.archivedPools[0]).toMatchObject({
       round: 1,
       fixSessionId: "fix-session",
+      fixSummary: "Fixed the pool",
+      fixNotes: ["Issue 2 was already fixed on the branch."],
     });
   });
 
@@ -922,7 +929,10 @@ describe("looped review workflow transitions", () => {
       });
       return { workflows };
     });
-    useLoopedReviewStore.getState().completeFix(id, "fix-final");
+    useLoopedReviewStore.getState().completeFix(id, "fix-final", {
+      summary: "Fixed",
+      notes: [],
+    });
     const workflow = useLoopedReviewStore.getState().workflows.get(id)!;
     expect(workflow.phase).toBe("creating-pr");
     expect(workflow.rounds).toHaveLength(1);
@@ -931,12 +941,13 @@ describe("looped review workflow transitions", () => {
   test("ignores fix completion outside fixing or without active findings", () => {
     const id = createWorkflow();
     const preparing = workflow(id);
-    useLoopedReviewStore.getState().completeFix(id, "fix-session");
+    const outcome = { summary: "Fixed", notes: [] };
+    useLoopedReviewStore.getState().completeFix(id, "fix-session", outcome);
     expect(workflow(id)).toBe(preparing);
 
     useLoopedReviewStore.getState().setPhase(id, "fixing");
     const emptyFix = workflow(id);
-    useLoopedReviewStore.getState().completeFix(id, "fix-session");
+    useLoopedReviewStore.getState().completeFix(id, "fix-session", outcome);
     expect(workflow(id)).toBe(emptyFix);
   });
 
@@ -1278,6 +1289,43 @@ describe("looped review recovery validation", () => {
       reviewInstruction: "Focus on recovery.",
       context: { comments: ["One"], imageNames: [] },
     })).toBe(true);
+  });
+
+  test("restores archived pools with and without a recorded fix outcome", () => {
+    const id = createWorkflow();
+    const valid = workflow(id);
+    const archive = {
+      round: 1,
+      fixedAt: valid.createdAt,
+      fixSessionId: "fix-session",
+      pool: { issues: [], coverageGaps: [] },
+    };
+
+    // Workflows archived before the fix outcome was recorded must still restore.
+    expect(isLoopedReviewWorkflow({
+      ...valid,
+      archivedPools: [archive],
+    })).toBe(true);
+    expect(isLoopedReviewWorkflow({
+      ...valid,
+      archivedPools: [{
+        ...archive,
+        fixSummary: "Fixed the pool",
+        fixNotes: ["Issue 2 was disproved."],
+      }],
+    })).toBe(true);
+    expect(isLoopedReviewWorkflow({
+      ...valid,
+      archivedPools: [{ ...archive, fixSummary: 42 }],
+    })).toBe(false);
+    expect(isLoopedReviewWorkflow({
+      ...valid,
+      archivedPools: [{ ...archive, fixNotes: "not a list" }],
+    })).toBe(false);
+    expect(isLoopedReviewWorkflow({
+      ...valid,
+      archivedPools: [{ ...archive, fixNotes: [42] }],
+    })).toBe(false);
   });
 
   test("rejects dangling references and invalid paused-state combinations", () => {

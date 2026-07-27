@@ -35,6 +35,7 @@ const baseOptions: ClaudeOptions = {
   claudeMode: "terminal",
   opencodeMode: "terminal",
   codexMode: "native",
+  model: "default",
   initialPrompt: "",
   initialPromptAttachments: [],
   networkAccessMode: "restricted",
@@ -80,6 +81,8 @@ describe("CreateEnvironmentFlowDialog", () => {
     const call = await submitCreateFlow();
     expect(call[0]).toBe("env-created");
     expect(call[6]).toBe(true);
+    expect(call[7]).toBe("default");
+    expect(call[8]).toBeUndefined();
   });
 
   test("persists a cleared launch intent when the user turns the agent off", async () => {
@@ -87,6 +90,8 @@ describe("CreateEnvironmentFlowDialog", () => {
     // Recording `false` explicitly is what stops an environment created with the
     // agent off from ever being treated as awaiting a launch.
     expect(call[6]).toBe(false);
+    expect(call[7]).toBeUndefined();
+    expect(call[8]).toBeUndefined();
   });
 
   test("does not submit without a selected project", () => {

@@ -4507,7 +4507,17 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("update_port_mappings", ({ environmentId, portMappings }, { storage }) =>
     storage.updateEnvironment(asString(environmentId, "environmentId"), { portMappings: asPortMappings(portMappings) ?? [] }),
   );
-  register("update_environment_agent_settings", ({ environmentId, defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode, pendingAgentLaunch }, { storage }) => {
+  register("update_environment_agent_settings", ({
+    environmentId,
+    defaultAgent,
+    claudeMode,
+    claudeNativeBackend,
+    opencodeMode,
+    codexMode,
+    pendingAgentLaunch,
+    initialAgentModel,
+    initialReasoningEffort,
+  }, { storage }) => {
     const updates = {
       defaultAgent,
       claudeMode,
@@ -4517,14 +4527,31 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     } as Partial<Environment>;
     if (typeof pendingAgentLaunch === "boolean") {
       updates.pendingAgentLaunch = pendingAgentLaunch;
+      if (!pendingAgentLaunch) {
+        updates.initialAgentModel = undefined;
+        updates.initialReasoningEffort = undefined;
+      }
+    }
+    if (pendingAgentLaunch !== false && typeof initialAgentModel === "string") {
+      updates.initialAgentModel = initialAgentModel;
+    }
+    if (pendingAgentLaunch !== false && typeof initialReasoningEffort === "string") {
+      updates.initialReasoningEffort = initialReasoningEffort;
     }
     return storage.updateEnvironment(asString(environmentId, "environmentId"), updates);
   });
-  register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) =>
-    storage.updateEnvironment(asString(environmentId, "environmentId"), {
-      pendingAgentLaunch: asRequiredBoolean(pending, "pending"),
-    }),
-  );
+  register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) => {
+    const nextPending = asRequiredBoolean(pending, "pending");
+    return storage.updateEnvironment(asString(environmentId, "environmentId"), {
+      pendingAgentLaunch: nextPending,
+      ...(nextPending
+        ? {}
+        : {
+            initialAgentModel: undefined,
+            initialReasoningEffort: undefined,
+          }),
+    });
+  });
   // The renderer rewrites the initial prompt once it has uploaded the create
   // dialog's attachments and knows their in-workspace paths. Persisting that
   // rewritten text is what lets a post-eviction launch recover a prompt whose

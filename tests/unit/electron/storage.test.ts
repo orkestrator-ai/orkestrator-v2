@@ -308,6 +308,8 @@ describe("Electron StorageService", () => {
       setupScriptsComplete: true,
       networkAccessMode: "full",
       pendingRenamePrompt: "Name this after startup",
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "high",
       entryPort: Number.NaN,
     });
     expect(updated).toMatchObject({
@@ -316,10 +318,18 @@ describe("Electron StorageService", () => {
       setupScriptsComplete: true,
       networkAccessMode: "full",
       pendingRenamePrompt: "Name this after startup",
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "high",
     });
     expect(updated.entryPort).toBeUndefined();
-    await storage.updateEnvironment(firstEnvironment.id, { pendingRenamePrompt: undefined });
+    await storage.updateEnvironment(firstEnvironment.id, {
+      pendingRenamePrompt: undefined,
+      initialAgentModel: undefined,
+      initialReasoningEffort: undefined,
+    });
     expect((await storage.getEnvironment(firstEnvironment.id))?.pendingRenamePrompt).toBeUndefined();
+    expect((await storage.getEnvironment(firstEnvironment.id))?.initialAgentModel).toBeUndefined();
+    expect((await storage.getEnvironment(firstEnvironment.id))?.initialReasoningEffort).toBeUndefined();
     await expect(storage.updateEnvironment("missing", {})).rejects.toThrow("Environment not found");
     expect((await storage.reorderEnvironments(firstProject.id, [secondEnvironment.id])).map((environment) => environment.id)).toEqual([
       secondEnvironment.id,

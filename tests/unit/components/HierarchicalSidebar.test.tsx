@@ -418,7 +418,11 @@ describe("HierarchicalSidebar", () => {
     ]);
 
     fireEvent.click(projectItems[1]!);
-    expect(await screen.findByRole("heading", { name: "Create Ork (Environment)" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", {
+        name: "Create Ork (Environment) Project Two",
+      }),
+    ).toBeTruthy();
   });
 
   test("shows completed activity from the environment record and selects the row", () => {
@@ -1044,7 +1048,7 @@ describe("HierarchicalSidebar", () => {
     render(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
-    await screen.findByText("Create Ork (Environment)");
+    await screen.findByText(/^Create Ork \(Environment\)/);
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
@@ -1052,15 +1056,17 @@ describe("HierarchicalSidebar", () => {
       expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalledWith(
         "env-created",
         "claude",
-        "terminal",
+        "native",
         null,
         null,
         null,
         true,
+        "default",
+        undefined,
       );
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "");
-      expect(screen.queryByText("Create Ork (Environment)")).toBeNull();
+      expect(screen.queryByText(/^Create Ork \(Environment\)/)).toBeNull();
     });
 
     resolveStart?.();
@@ -1086,7 +1092,9 @@ describe("HierarchicalSidebar", () => {
       resolveCreate?.(createdEnvironment);
       await Promise.resolve();
     });
-    await waitFor(() => expect(screen.queryByText("Create Ork (Environment)")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByText(/^Create Ork \(Environment\)/)).toBeNull(),
+    );
   });
 
   test("persists prompt naming intent before auto-starting", async () => {
@@ -1109,7 +1117,7 @@ describe("HierarchicalSidebar", () => {
       );
       expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "Implement billing exports");
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
-      expect(screen.queryByText("Create Ork (Environment)")).toBeNull();
+      expect(screen.queryByText(/^Create Ork \(Environment\)/)).toBeNull();
     });
   });
 
@@ -1129,7 +1137,7 @@ describe("HierarchicalSidebar", () => {
       await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
         "Failed to create environment:", expect.any(Error),
       ));
-      expect(screen.getByText("Create Ork (Environment)")).toBeTruthy();
+      expect(screen.getByText(/^Create Ork \(Environment\)/)).toBeTruthy();
       expect(updateEnvironmentAgentSettingsMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).not.toHaveBeenCalled();
     } finally {
@@ -1141,12 +1149,14 @@ describe("HierarchicalSidebar", () => {
     render(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
-    await screen.findByText("Create Ork (Environment)");
+    await screen.findByText(/^Create Ork \(Environment\)/);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByText("Create Ork (Environment)")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByText(/^Create Ork \(Environment\)/)).toBeNull(),
+    );
 
     fireEvent.click(screen.getByTitle("Create environment"));
-    await screen.findByText("Create Ork (Environment)");
+    await screen.findByText(/^Create Ork \(Environment\)/);
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => expect(createEnvironmentMock).toHaveBeenCalledWith(
@@ -1174,7 +1184,7 @@ describe("HierarchicalSidebar", () => {
       expect(updateEnvironmentMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).not.toHaveBeenCalled();
       expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
-      expect(screen.getByText("Create Ork (Environment)")).toBeTruthy();
+      expect(screen.getByText(/^Create Ork \(Environment\)/)).toBeTruthy();
     } finally {
       console.error = originalConsoleError;
     }
@@ -1198,7 +1208,7 @@ describe("HierarchicalSidebar", () => {
       await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
         "Failed to auto-start environment:", expect.any(Error),
       ));
-      expect(screen.queryByText("Create Ork (Environment)")).toBeNull();
+      expect(screen.queryByText(/^Create Ork \(Environment\)/)).toBeNull();
       expect(createEnvironmentMock).toHaveBeenCalledWith(
         "project-1",
         undefined,

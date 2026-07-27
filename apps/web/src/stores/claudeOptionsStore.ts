@@ -9,6 +9,8 @@ export interface ClaudeOptions {
   agentType: AgentType;
   initialPrompt: string;
   initialPromptAttachments?: InitialPromptImageAttachment[];
+  model?: string;
+  reasoningEffort?: string;
 }
 
 export interface PendingNativeAgentLaunch {
@@ -19,6 +21,8 @@ export interface PendingNativeAgentLaunch {
   agentType: AgentType;
   launchMode?: "native" | "terminal";
   claudeNativeBackend?: ClaudeNativeBackend;
+  model?: string;
+  reasoningEffort?: string;
 }
 
 interface ClaudeOptionsState {

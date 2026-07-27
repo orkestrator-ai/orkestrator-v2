@@ -1627,6 +1627,8 @@ describe("TerminalContainer", () => {
           launchAgent: true,
           agentType: "codex",
           initialPrompt: "Continue after setup",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
         },
       },
       pendingNativeLaunches: {},
@@ -1689,6 +1691,8 @@ describe("TerminalContainer", () => {
 
       const nativeTab = envHidden.root.tabs.find((tab) => tab.type === "codex-native");
       expect(nativeTab?.initialPrompt).toBe("Continue after setup");
+      expect(nativeTab?.initialAgentModel).toBe("gpt-5.6-sol");
+      expect(nativeTab?.initialReasoningEffort).toBe("high");
       expect(
         useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
       ).toBeUndefined();
@@ -1799,6 +1803,8 @@ describe("TerminalContainer", () => {
               setupScriptsComplete: true,
               pendingAgentLaunch: true,
               initialPrompt: "Recover after mobile reload",
+              initialAgentModel: "gpt-5.6-sol",
+              initialReasoningEffort: "high",
               ...overrides,
             }
           : environment
@@ -1851,6 +1857,8 @@ describe("TerminalContainer", () => {
               setupScriptsComplete: true,
               pendingAgentLaunch: true,
               initialPrompt: "Recover after mobile reload",
+              initialAgentModel: "gpt-5.6-sol",
+              initialReasoningEffort: "high",
             }
           : environment
       ),
@@ -1878,6 +1886,8 @@ describe("TerminalContainer", () => {
       const codexTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
         .find((tab) => tab.type === "codex-native");
       expect(codexTab?.initialPrompt).toBe("Recover after mobile reload");
+      expect(codexTab?.initialAgentModel).toBe("gpt-5.6-sol");
+      expect(codexTab?.initialReasoningEffort).toBe("high");
       expect(setEnvironmentPendingAgentLaunchMock).toHaveBeenCalledWith(
         "env-hidden",
         false,

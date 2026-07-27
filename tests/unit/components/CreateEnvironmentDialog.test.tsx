@@ -148,6 +148,34 @@ describe("resolveAgentDefaults", () => {
     expect(result.codexMode).toBe("terminal");
   });
 
+  test("shows the project name in the title and presents the compact agent controls in order", () => {
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        projectName="Orkestrator"
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Create Ork (Environment) Orkestrator",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getAllByRole("radio").map((control) => control.getAttribute("aria-label")),
+    ).toEqual(["Claude", "Codex", "OpenCode"]);
+    expect(screen.getByRole("combobox", { name: "Model" })).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", { name: "Reasoning effort" }),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("checkbox", { name: "Use TUI" }) as HTMLButtonElement)
+        .getAttribute("data-state"),
+    ).toBe("unchecked");
+  });
+
   test("starts on the prompt tab and preserves values while moving between mobile sections", () => {
     render(
       <CreateEnvironmentDialog
@@ -557,8 +585,8 @@ describe("resolveAgentDefaults", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
-    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use TUI" }));
     fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
       target: { value: "Review the migration plan" },
     });
@@ -571,6 +599,38 @@ describe("resolveAgentDefaults", () => {
           codexMode: "terminal",
           initialPrompt: "Review the migration plan",
         })
+      );
+    });
+  });
+
+  test("submits the selected model and reasoning effort", async () => {
+    const onCreate = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
+    fireEvent.click(
+      await screen.findByRole("option", { name: "GPT-5.4-Mini" }),
+    );
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Reasoning effort" }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "High" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "codex",
+          model: "gpt-5.4-mini",
+          reasoningEffort: "high",
+        }),
       );
     });
   });
@@ -623,10 +683,9 @@ describe("resolveAgentDefaults", () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole("button", { name: agentLabel }));
-      fireEvent.click(screen.getByRole("button", { name: "Native" }));
+      fireEvent.click(screen.getByRole("radio", { name: agentLabel }));
       if (selectedMode === "Terminal") {
-        fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+        fireEvent.click(screen.getByRole("checkbox", { name: "Use TUI" }));
       }
       fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
@@ -1407,7 +1466,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(screen.getByRole("combobox", { name: "Protocol" }));
     const udpOption = await screen.findByRole("option", { name: "UDP" });
     fireEvent.click(udpOption);
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));

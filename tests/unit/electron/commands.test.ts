@@ -7736,6 +7736,8 @@ exit 0
       opencodeMode: "native",
       codexMode: "native",
       pendingAgentLaunch: true,
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "high",
     }, context);
     expect(updates).toContainEqual({
       defaultAgent: "codex",
@@ -7744,6 +7746,8 @@ exit 0
       opencodeMode: "native",
       codexMode: "native",
       pendingAgentLaunch: true,
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "high",
     });
     // Omitting the flag must leave an in-flight launch intent alone: the settings
     // dialog, FeaturesView and the non-Claude pipeline lanes all call this
@@ -7780,7 +7784,11 @@ exit 0
       environmentId: environment.id,
       pending: false,
     }, context);
-    expect(updates).toContainEqual({ pendingAgentLaunch: false });
+    expect(updates).toContainEqual({
+      pendingAgentLaunch: false,
+      initialAgentModel: undefined,
+      initialReasoningEffort: undefined,
+    });
     await commands.get("set_environment_pending_agent_launch")?.({
       environmentId: environment.id,
       pending: true,

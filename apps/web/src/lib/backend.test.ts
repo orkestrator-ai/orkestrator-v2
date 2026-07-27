@@ -101,6 +101,8 @@ describe("backend setup wrappers", () => {
       null,
       "native",
       true,
+      "gpt-5.6-sol",
+      "high",
     );
 
     expect(invokeMock.mock.calls).toEqual([
@@ -112,6 +114,8 @@ describe("backend setup wrappers", () => {
         opencodeMode: null,
         codexMode: "native",
         pendingAgentLaunch: true,
+        initialAgentModel: "gpt-5.6-sol",
+        initialReasoningEffort: "high",
       }],
     ]);
   });

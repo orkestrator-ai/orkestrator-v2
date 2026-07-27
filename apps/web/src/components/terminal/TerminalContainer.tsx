@@ -752,6 +752,8 @@ export function TerminalContainer({
         agentType === "claude" && launchMode === "native"
           ? claudeNativeBackend
           : undefined,
+      model: environment.initialAgentModel,
+      reasoningEffort: environment.initialReasoningEffort,
     });
   }, [
     claudeMode,
@@ -1030,9 +1032,13 @@ export function TerminalContainer({
       // Determine initial tab type based on agent options
       let initialTabType: TerminalTabType = "plain";
       let pendingInitialPrompt: string | undefined;
+      let initialAgentModel: string | undefined;
+      let initialReasoningEffort: string | undefined;
       const launchAgent = claudeOptions?.launchAgent ?? false;
       if (launchAgent) {
         initialTabType = claudeOptions!.agentType;
+        initialAgentModel = claudeOptions!.model;
+        initialReasoningEffort = claudeOptions!.reasoningEffort;
         setHasAppliedClaudeOptions(true);
         if (claudeOptions!.initialPrompt?.trim()) {
           pendingInitialPrompt = claudeOptions!.initialPrompt.trim();
@@ -1061,6 +1067,8 @@ export function TerminalContainer({
             agentType: initialTabType,
             launchMode: useNativeOpenCode || useNativeClaude || useNativeCodex ? "native" : "terminal",
             claudeNativeBackend: useNativeClaude ? claudeNativeBackend : undefined,
+            model: initialAgentModel,
+            reasoningEffort: initialReasoningEffort,
           });
         }
 
@@ -1115,6 +1123,8 @@ export function TerminalContainer({
               environmentId,
               isLocal: true,
               initialPrompt: pendingInitialPrompt,
+              initialAgentModel,
+              initialReasoningEffort,
             });
             addTab("default", agentTab, environmentId);
           } else if (useNativeCodex) {
@@ -1123,6 +1133,8 @@ export function TerminalContainer({
               type: "codex-native",
               codexNativeData: { containerId: undefined, environmentId, isLocal: true },
               initialPrompt: pendingInitialPrompt,
+              initialAgentModel,
+              initialReasoningEffort,
             };
             addTab("default", agentTab, environmentId);
           } else if (useNativeOpenCode) {
@@ -1131,6 +1143,8 @@ export function TerminalContainer({
               type: "opencode-native",
               openCodeNativeData: { containerId: undefined, environmentId, isLocal: true },
               initialPrompt: pendingInitialPrompt,
+              initialAgentModel,
+              initialReasoningEffort,
             };
             addTab("default", agentTab, environmentId);
           } else {
@@ -1139,6 +1153,8 @@ export function TerminalContainer({
               id: "default",
               type: initialTabType,
               initialPrompt: pendingInitialPrompt,
+              initialAgentModel,
+              initialReasoningEffort,
             };
             addTab("default", agentTab, environmentId);
           }
@@ -1171,6 +1187,8 @@ export function TerminalContainer({
               environmentId,
               isLocal: true,
               initialPrompt: pendingInitialPrompt,
+              initialAgentModel,
+              initialReasoningEffort,
             });
             addTab("default", initialTab, environmentId);
           } else if (useNativeCodex) {
@@ -1179,6 +1197,8 @@ export function TerminalContainer({
               type: "codex-native",
               codexNativeData: { containerId: undefined, environmentId, isLocal: true },
               initialPrompt: pendingInitialPrompt,
+              initialAgentModel,
+              initialReasoningEffort,
             };
             addTab("default", initialTab, environmentId);
           } else {
@@ -1187,6 +1207,8 @@ export function TerminalContainer({
               type: "opencode-native",
               openCodeNativeData: { containerId: undefined, environmentId, isLocal: true },
               initialPrompt: pendingInitialPrompt,
+              initialAgentModel,
+              initialReasoningEffort,
             };
             addTab("default", initialTab, environmentId);
           }
@@ -1201,6 +1223,8 @@ export function TerminalContainer({
             id: "default",
             type: initialTabType,
             initialPrompt: pendingInitialPrompt,
+            initialAgentModel,
+            initialReasoningEffort,
           };
           addTab("default", initialTab, environmentId);
         }
@@ -1214,6 +1238,8 @@ export function TerminalContainer({
             environmentId,
             isLocal: false,
             initialPrompt: pendingInitialPrompt,
+            initialAgentModel,
+            initialReasoningEffort,
           });
           addTab("default", initialTab, environmentId);
         } else if (useNativeCodex) {
@@ -1222,6 +1248,8 @@ export function TerminalContainer({
             type: "codex-native",
             codexNativeData: { containerId: containerId ?? undefined, environmentId, isLocal: false },
             initialPrompt: pendingInitialPrompt,
+            initialAgentModel,
+            initialReasoningEffort,
           };
           addTab("default", initialTab, environmentId);
         } else if (useNativeOpenCode) {
@@ -1230,6 +1258,8 @@ export function TerminalContainer({
             type: "opencode-native",
             openCodeNativeData: { containerId: containerId ?? undefined, environmentId, isLocal: false },
             initialPrompt: pendingInitialPrompt,
+            initialAgentModel,
+            initialReasoningEffort,
           };
           addTab("default", initialTab, environmentId);
         } else {
@@ -1237,6 +1267,8 @@ export function TerminalContainer({
             id: "default",
             type: initialTabType,
             initialPrompt: pendingInitialPrompt,
+            initialAgentModel,
+            initialReasoningEffort,
           };
           addTab("default", initialTab, environmentId);
         }
@@ -1260,6 +1292,8 @@ export function TerminalContainer({
           agentType: useNativeClaude ? "claude" : useNativeCodex ? "codex" : "opencode",
           launchMode: "native",
           claudeNativeBackend: useNativeClaude ? claudeNativeBackend : undefined,
+          model: initialAgentModel,
+          reasoningEffort: initialReasoningEffort,
         });
         console.log(
           "[TerminalContainer] Pending native",
@@ -1287,6 +1321,8 @@ export function TerminalContainer({
             targetPaneId: "default",
             agentType: initialTabType,
             launchMode: "terminal",
+            model: initialAgentModel,
+            reasoningEffort: initialReasoningEffort,
           });
         }
         const initialTab: TabInfo = {
@@ -1363,6 +1399,8 @@ export function TerminalContainer({
             id: newTabId,
             type: pending.agentType,
             initialPrompt: pending.initialPrompt,
+            initialAgentModel: pending.model,
+            initialReasoningEffort: pending.reasoningEffort,
           };
           addTab(pending.targetPaneId, newTab, environmentId);
         } else if (isClaudeNative) {
@@ -1375,6 +1413,8 @@ export function TerminalContainer({
             environmentId: pending.environmentId,
             isLocal: isLocalEnvironment,
             initialPrompt: pending.initialPrompt,
+            initialAgentModel: pending.model,
+            initialReasoningEffort: pending.reasoningEffort,
           });
           addTab(pending.targetPaneId, newTab, environmentId);
         } else if (isCodexNative) {
@@ -1388,6 +1428,8 @@ export function TerminalContainer({
               isLocal: isLocalEnvironment,
             },
             initialPrompt: pending.initialPrompt,
+            initialAgentModel: pending.model,
+            initialReasoningEffort: pending.reasoningEffort,
           };
           addTab(pending.targetPaneId, newTab, environmentId);
         } else {
@@ -1402,6 +1444,8 @@ export function TerminalContainer({
               isLocal: isLocalEnvironment,
             },
             initialPrompt: pending.initialPrompt,
+            initialAgentModel: pending.model,
+            initialReasoningEffort: pending.reasoningEffort,
           };
           addTab(pending.targetPaneId, newTab, environmentId);
         }

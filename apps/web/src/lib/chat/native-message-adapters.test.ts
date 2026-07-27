@@ -4,6 +4,7 @@ import type { NativeMessage } from "./native-message-types";
 import {
   dedupeStreamedNativeParts,
   dropEmptyThinkingParts,
+  getClaudeSourceMessageId,
   groupNativeAgentActivity,
   groupNativeToolActivity,
   normalizeClaudeMessage,
@@ -1033,5 +1034,55 @@ describe("native message adapters", () => {
     ];
 
     expect(normalizeClaudeMessagesForDisplay(messages)).toHaveLength(1);
+  });
+});
+
+describe("getClaudeSourceMessageId", () => {
+  test("passes an unsplit id through unchanged", () => {
+    expect(getClaudeSourceMessageId("msg-1")).toBe("msg-1");
+    expect(getClaudeSourceMessageId("")).toBe("");
+  });
+
+  test("resolves a split display row back to its persisted message", () => {
+    expect(getClaudeSourceMessageId("msg-1:text-block:7")).toBe("msg-1");
+  });
+
+  test("resolves every row a real split produces", () => {
+    // The bridge only ever sees the persisted id, so each display row this
+    // splitter emits has to map back onto exactly one message on disk.
+    const rows = splitClaudeAssistantTextBlocks({
+      id: "assistant-1",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-06-18T12:00:00.000Z",
+      parts: [
+        {
+          type: "text",
+          content: "First",
+          createdAt: "2026-06-18T12:00:00.000Z",
+        },
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          createdAt: "2026-06-18T12:01:00.000Z",
+        },
+        {
+          type: "text",
+          content: "Second",
+          createdAt: "2026-06-18T12:10:00.000Z",
+        },
+      ],
+    });
+
+    expect(rows.length).toBeGreaterThan(1);
+    expect(rows.map((row) => getClaudeSourceMessageId(row.id))).toEqual(
+      rows.map(() => "assistant-1"),
+    );
+  });
+
+  test("truncates at the first marker so a nested split cannot leak through", () => {
+    expect(getClaudeSourceMessageId("msg-1:text-block:2:text-block:5")).toBe(
+      "msg-1",
+    );
   });
 });

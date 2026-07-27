@@ -13,7 +13,7 @@ import type {
   ClaudeQuestionRequest,
 } from "@/lib/claude-client";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-import { mockToastError } from "../../../../../tests/mocks/sonner";
+import { mockToastError, mockToastWarning } from "../../../../../tests/mocks/sonner";
 
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -37,7 +37,13 @@ const realResumeSessionDialogSnapshot = { ...realResumeSessionDialog };
 const mockScrollToBottom = mock(() => {});
 let mockIsAtBottom = true;
 let lastVirtualizedMessages: any[] = [];
-const mockCreateSession = mock(async () => ({ sessionId: "session-1" }));
+// Typed from `createSession`'s real signature rather than inferred from the
+// default factory, so a test that stubs a title is not an excess-property error.
+type MockCreatedSession = { sessionId: string; title?: string } | null;
+const createDefaultSession = async (): Promise<MockCreatedSession> => ({
+  sessionId: "session-1",
+});
+const mockCreateSession = mock(createDefaultSession);
 const mockGetModels = mock(async (): Promise<ClaudeModel[]> => []);
 const mockGetClaudeModelCatalog = mock(async () => ({
   environmentId: "env-1",
@@ -407,7 +413,11 @@ describe("ClaudeChatTab", () => {
     resetStores();
     mockIsAtBottom = true;
     mockScrollToBottom.mockClear();
+    // `mockClear` only drops call history. Without restoring the factory too, a
+    // single test's `mockResolvedValue` silently becomes the default for every
+    // test after it in this file.
     mockCreateSession.mockClear();
+    mockCreateSession.mockImplementation(createDefaultSession);
     mockGetModels.mockReset();
     mockGetModels.mockImplementation(async () => []);
     mockGetClaudeModelCatalog.mockReset();
@@ -474,6 +484,7 @@ describe("ClaudeChatTab", () => {
     mockReadFileBase64.mockReset();
     mockReadFileBase64.mockImplementation(async () => "chat-local-base64");
     mockToastError.mockClear();
+    mockToastWarning.mockClear();
     lastVirtualizedMessages = [];
   });
 
@@ -3403,36 +3414,45 @@ describe("ClaudeChatTab", () => {
 
   describe("forking from a message", () => {
     function forkButtons() {
-      return screen.getAllByRole("button", { name: "Fork Claude session from this message" });
+      return screen.getAllByRole("button", { name: "Fork Claude session from this prompt" });
     }
 
     async function renderWithUserTurn() {
-      const message: ClaudeMessageType = {
-        id: "user-1",
-        role: "user",
-        content: "Add pagination",
-        parts: [{ type: "text", content: "Add pagination" }],
-        timestamp: "2026-07-26T00:00:00.000Z",
-      };
-      mockGetSessionMessages.mockImplementation(async () => [message]);
+      const messages: ClaudeMessageType[] = [
+        {
+          id: "assistant-0",
+          role: "assistant",
+          content: "Existing answer",
+          parts: [{ type: "text", content: "Existing answer" }],
+          timestamp: "2026-07-26T00:00:00.000Z",
+        },
+        {
+          id: "user-1",
+          role: "user",
+          content: "Add pagination",
+          parts: [{ type: "text", content: "Add pagination" }],
+          timestamp: "2026-07-26T00:01:00.000Z",
+        },
+      ];
+      mockGetSessionMessages.mockImplementation(async () => messages);
       act(() => {
         useClaudeStore.getState().setSession(SESSION_KEY, {
           sessionId: "session-1",
           isLoading: false,
-          messages: [message],
+          messages,
         });
       });
       render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
       await waitFor(() => expect(forkButtons().length).toBeGreaterThan(0));
     }
 
-    test("opens a fork tab bounded by the chosen message", async () => {
+    test("forks before a prompt and restores that prompt as the new draft", async () => {
       await renderWithUserTurn();
       fireEvent.click(forkButtons()[0]!);
 
       await waitFor(() =>
         expect(mockForkClaudeSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1", {
-          upToMessageId: "user-1",
+          upToMessageId: "assistant-0",
         }),
       );
       await waitFor(() =>
@@ -3446,6 +3466,298 @@ describe("ClaudeChatTab", () => {
       expect(forked.displayTitle).toBe("Claude fork");
       expect(forked.claudeNativeData?.sessionId).toBe("claude-fork");
       expect(forked.initialPrompt).toBeUndefined();
+      expect(
+        useClaudeStore.getState().getDraftText(
+          createSessionKey(ENVIRONMENT_ID, forked.id),
+        ),
+      ).toBe("Add pagination");
+    });
+
+    test("creates an empty fork when the selected prompt is the first message", async () => {
+      const message: ClaudeMessageType = {
+        id: "user-1",
+        role: "user",
+        content: "First prompt",
+        parts: [{ type: "text", content: "First prompt" }],
+        timestamp: "2026-07-26T00:00:00.000Z",
+      };
+      mockCreateSession.mockResolvedValue({
+        sessionId: "empty-fork",
+        title: "Empty fork",
+      });
+      mockGetSessionMessages.mockResolvedValue([message]);
+      act(() => {
+        useClaudeStore.getState().setSession(SESSION_KEY, {
+          sessionId: "session-1",
+          isLoading: false,
+          messages: [message],
+        });
+      });
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      fireEvent.click(await screen.findByRole("button", {
+        name: "Fork Claude session from this prompt",
+      }));
+
+      await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+      expect(mockForkClaudeSession).not.toHaveBeenCalled();
+      const forked = usePaneLayoutStore
+        .getState()
+        .getAllTabs(ENVIRONMENT_ID)
+        .find((tab) => tab.id !== TAB_ID)!;
+      expect(forked.claudeNativeData?.sessionId).toBe("empty-fork");
+      expect(
+        useClaudeStore.getState().getDraftText(
+          createSessionKey(ENVIRONMENT_ID, forked.id),
+        ),
+      ).toBe("First prompt");
+    });
+
+    test("forks a response inclusively and leaves the new composer empty", async () => {
+      const messages: ClaudeMessageType[] = [
+        {
+          id: "user-1",
+          role: "user",
+          content: "Add pagination",
+          parts: [{ type: "text", content: "Add pagination" }],
+          timestamp: "2026-07-26T00:00:00.000Z",
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "Done",
+          parts: [{ type: "text", content: "Done" }],
+          timestamp: "2026-07-26T00:01:00.000Z",
+        },
+      ];
+      act(() => {
+        useClaudeStore.getState().setSession(SESSION_KEY, {
+          sessionId: "session-1",
+          isLoading: false,
+          messages,
+        });
+      });
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      fireEvent.click(await screen.findByRole("button", {
+        name: "Fork Claude session from this response",
+      }));
+
+      await waitFor(() =>
+        expect(mockForkClaudeSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1", {
+          upToMessageId: "assistant-1",
+        }),
+      );
+      const forked = usePaneLayoutStore
+        .getState()
+        .getAllTabs(ENVIRONMENT_ID)
+        .find((tab) => tab.id !== TAB_ID)!;
+      // `getDraftText` returns "" for any unseen key, so asserting on it would
+      // pass whether or not a draft was written. Assert on the backing map.
+      expect(
+        useClaudeStore.getState().draftText.has(
+          createSessionKey(ENVIRONMENT_ID, forked.id),
+        ),
+      ).toBe(false);
+    });
+
+    test("forks a response at the persisted id of a timestamp-split row", async () => {
+      /*
+       * A long turn is displayed as several rows whose ids carry a
+       * `:text-block:` suffix. Only the bottom row gets the action, and the
+       * bridge resolves ids by identity — handing it a display id would fail
+       * with "not a persisted fork boundary".
+       */
+      const messages: ClaudeMessageType[] = [
+        {
+          id: "user-1",
+          role: "user",
+          content: "Add pagination",
+          parts: [{ type: "text", content: "Add pagination" }],
+          timestamp: "2026-07-26T00:00:00.000Z",
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "",
+          timestamp: "2026-07-26T00:01:00.000Z",
+          parts: [
+            {
+              type: "text",
+              content: "Starting",
+              timestamp: "2026-07-26T00:01:00.000Z",
+            },
+            {
+              type: "tool-invocation",
+              content: "Bash",
+              toolName: "Bash",
+              timestamp: "2026-07-26T00:02:00.000Z",
+            },
+            {
+              type: "text",
+              content: "Finished",
+              timestamp: "2026-07-26T00:20:00.000Z",
+            },
+          ],
+        } as ClaudeMessageType,
+      ];
+      mockGetSessionMessages.mockImplementation(async () => messages);
+      act(() => {
+        useClaudeStore.getState().setSession(SESSION_KEY, {
+          sessionId: "session-1",
+          isLoading: false,
+          messages,
+        });
+      });
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      // The fixture has to actually split, or this test would pass against a
+      // `getClaudeSourceMessageId` that did nothing at all.
+      await waitFor(() =>
+        expect(
+          lastVirtualizedMessages.filter((m) => m.role === "assistant").map((m) => m.id),
+        ).toEqual(["assistant-1", "assistant-1:text-block:2"]),
+      );
+
+      // One action for the whole split turn, not one per row.
+      const responseForks = await screen.findAllByRole("button", {
+        name: "Fork Claude session from this response",
+      });
+      expect(responseForks).toHaveLength(1);
+      fireEvent.click(responseForks[0]!);
+
+      await waitFor(() =>
+        expect(mockForkClaudeSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1", {
+          upToMessageId: "assistant-1",
+        }),
+      );
+    });
+
+    test("forks before a prompt whose predecessor is a split row", async () => {
+      // The boundary here is the *previous* message, and the row before this
+      // prompt is the tail half of a split turn — its display id is not an id
+      // the bridge can resolve.
+      const messages: ClaudeMessageType[] = [
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "",
+          timestamp: "2026-07-26T00:01:00.000Z",
+          parts: [
+            {
+              type: "text",
+              content: "Starting",
+              timestamp: "2026-07-26T00:01:00.000Z",
+            },
+            {
+              type: "tool-invocation",
+              content: "Bash",
+              toolName: "Bash",
+              timestamp: "2026-07-26T00:02:00.000Z",
+            },
+            {
+              type: "text",
+              content: "Finished",
+              timestamp: "2026-07-26T00:20:00.000Z",
+            },
+          ],
+        } as ClaudeMessageType,
+        {
+          id: "user-2",
+          role: "user",
+          content: "Now paginate",
+          parts: [{ type: "text", content: "Now paginate" }],
+          timestamp: "2026-07-26T00:30:00.000Z",
+        },
+      ];
+      mockGetSessionMessages.mockImplementation(async () => messages);
+      act(() => {
+        useClaudeStore.getState().setSession(SESSION_KEY, {
+          sessionId: "session-1",
+          isLoading: false,
+          messages,
+        });
+      });
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() =>
+        expect(
+          lastVirtualizedMessages.filter((m) => m.role === "assistant").map((m) => m.id),
+        ).toEqual(["assistant-1", "assistant-1:text-block:2"]),
+      );
+
+      fireEvent.click((await screen.findAllByRole("button", {
+        name: "Fork Claude session from this prompt",
+      }))[0]!);
+
+      await waitFor(() =>
+        expect(mockForkClaudeSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1", {
+          upToMessageId: "assistant-1",
+        }),
+      );
+    });
+
+    test("warns that a forked prompt's attachments did not come across", async () => {
+      /*
+       * A prompt fork branches *before* its prompt, so the attachments are in
+       * neither the fork's history nor the restored draft. Saying so beats
+       * losing them silently.
+       */
+      const messages: ClaudeMessageType[] = [
+        {
+          id: "assistant-0",
+          role: "assistant",
+          content: "Existing answer",
+          parts: [{ type: "text", content: "Existing answer" }],
+          timestamp: "2026-07-26T00:00:00.000Z",
+        },
+        {
+          id: "user-1",
+          role: "user",
+          content:
+            "Match this mock\n<attached-files>\n"
+            + '<attachment type="image" path="/tmp/mock.png" filename="mock.png" />\n'
+            + "</attached-files>",
+          parts: [],
+          timestamp: "2026-07-26T00:01:00.000Z",
+        },
+      ];
+      mockGetSessionMessages.mockImplementation(async () => messages);
+      act(() => {
+        useClaudeStore.getState().setSession(SESSION_KEY, {
+          sessionId: "session-1",
+          isLoading: false,
+          messages,
+        });
+      });
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(forkButtons().length).toBeGreaterThan(0));
+
+      fireEvent.click(forkButtons()[0]!);
+
+      await waitFor(() =>
+        expect(mockToastWarning).toHaveBeenCalledWith(
+          "1 attachment was not carried into the fork. Re-attach it before sending.",
+        ),
+      );
+      const forked = usePaneLayoutStore
+        .getState()
+        .getAllTabs(ENVIRONMENT_ID)
+        .find((tab) => tab.id !== TAB_ID)!;
+      // The text still comes across; only the file did not.
+      expect(
+        useClaudeStore.getState().getDraftText(
+          createSessionKey(ENVIRONMENT_ID, forked.id),
+        ),
+      ).toBe("Match this mock");
+    });
+
+    test("does not warn when the forked prompt had no attachments", async () => {
+      await renderWithUserTurn();
+      fireEvent.click(forkButtons()[0]!);
+
+      await waitFor(() => expect(mockForkClaudeSession).toHaveBeenCalled());
+      expect(mockToastWarning).not.toHaveBeenCalled();
     });
 
     test("reports a fork the bridge refuses", async () => {

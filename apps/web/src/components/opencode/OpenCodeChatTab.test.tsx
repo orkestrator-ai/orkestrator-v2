@@ -2303,7 +2303,7 @@ describe("OpenCodeChatTab", () => {
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
 
       fireEvent.click(screen.getByRole("button", {
-        name: "Fork OpenCode session from this message",
+        name: "Fork OpenCode session from this prompt",
       }));
 
       await waitFor(() => {
@@ -2325,6 +2325,55 @@ describe("OpenCodeChatTab", () => {
             sessionId: "fork-session",
           },
         });
+        expect(
+          useOpenCodeStore.getState().getDraftText(
+            createOpenCodeSessionKey(ENVIRONMENT_ID, tabs[1]!.id),
+          ),
+        ).toBe("Start here");
+      });
+    });
+
+    test("forks through a response and opens an empty composer", async () => {
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [
+        {
+          id: "user-message-1",
+          role: "user",
+          content: "Start here",
+          parts: [{ type: "text", content: "Start here" }],
+          createdAt: "2026-07-16T12:00:00.000Z",
+        },
+        {
+          id: "assistant-message-1",
+          role: "assistant",
+          content: "Done",
+          parts: [{ type: "text", content: "Done" }],
+          createdAt: "2026-07-16T12:01:00.000Z",
+        },
+      ]);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      fireEvent.click(screen.getByRole("button", {
+        name: "Fork OpenCode session from this response",
+      }));
+
+      await waitFor(() => {
+        expect(mockForkOpenCodeSession).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          "session-1",
+          undefined,
+        );
+        const tabs = usePaneLayoutStore.getState().getPane(
+          "default",
+          ENVIRONMENT_ID,
+        )?.tabs ?? [];
+        expect(tabs).toHaveLength(2);
+        // `getDraftText` returns "" for any unseen key, so asserting on it would
+        // pass whether or not a draft was written. Assert on the backing map.
+        expect(
+          useOpenCodeStore.getState().draftText.has(
+            createOpenCodeSessionKey(ENVIRONMENT_ID, tabs[1]!.id),
+          ),
+        ).toBe(false);
       });
     });
 
@@ -2334,7 +2383,7 @@ describe("OpenCodeChatTab", () => {
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
 
       fireEvent.click(screen.getByRole("button", {
-        name: "Fork OpenCode session from this message",
+        name: "Fork OpenCode session from this prompt",
       }));
 
       await waitFor(() => {
@@ -2351,7 +2400,7 @@ describe("OpenCodeChatTab", () => {
       mockForkOpenCodeSession.mockImplementation(() => pendingFork.promise);
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
       const button = screen.getByRole("button", {
-        name: "Fork OpenCode session from this message",
+        name: "Fork OpenCode session from this prompt",
       });
 
       fireEvent.click(button);

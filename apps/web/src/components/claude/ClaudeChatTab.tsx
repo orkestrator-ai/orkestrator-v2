@@ -58,6 +58,12 @@ import {
   renameEnvironmentFromPrompt,
 } from "@/lib/backend";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
+import {
+  buildMessageForkPlan,
+  findPreviousForkMessage,
+  forkAttachmentNotice,
+  type MessageForkKind,
+} from "@/components/chat/message-fork";
 import { ClaudeComposeBar } from "./ClaudeComposeBar";
 import { ClaudeQuestionCard } from "./ClaudeQuestionCard";
 import { ClaudePlanApprovalCard } from "./ClaudePlanApprovalCard";
@@ -68,7 +74,10 @@ import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import type { ClaudeAttachment, QueuedMessage } from "@/stores/claudeStore";
-import { normalizeClaudeMessagesForDisplay } from "@/lib/chat/native-message-adapters";
+import {
+  getClaudeSourceMessageId,
+  normalizeClaudeMessagesForDisplay,
+} from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 
 /**
@@ -561,6 +570,35 @@ export function ClaudeChatTab({
     ),
     [sessionMessages],
   );
+  const forkPlan = useMemo(
+    () => buildMessageForkPlan(displayMessages, {
+      responseInProgress: session?.isLoading ?? false,
+      // Claude's boundary is inclusive, so branching *before* a prompt means
+      // forking at the message before it; the first prompt has nothing to fork
+      // at and starts an empty sibling session instead.
+      resolvePromptBoundary: (message, messages) => {
+        const previous = findPreviousForkMessage(messages, message.id);
+        return previous
+          ? {
+              type: "message",
+              messageId: getClaudeSourceMessageId(previous.id),
+            }
+          : { type: "session-start" };
+      },
+      // A response is inclusive of itself. Display rows split by timestamp
+      // resolve back to the one message the bridge can find on disk.
+      resolveResponseBoundary: (message) => ({
+        type: "message",
+        messageId: getClaudeSourceMessageId(message.id),
+      }),
+    }),
+    [displayMessages, session?.isLoading],
+  );
+  // Read by the fork handler so it does not have to depend on the transcript:
+  // `displayMessages` is a fresh array on every streaming tick, and a handler
+  // that changed with it would rebuild every fork button on every tick.
+  const forkPlanRef = useRef(forkPlan);
+  forkPlanRef.current = forkPlan;
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
 
@@ -1811,7 +1849,10 @@ export function ClaudeChatTab({
     [client, environmentId, sessionKey, tabId, updateTabNativeSessionId]
   );
 
-  const handleForkFromMessage = useCallback(async (messageId: string) => {
+  const handleForkFromMessage = useCallback(async (
+    messageId: string,
+    kind: MessageForkKind,
+  ) => {
     if (!client || !session?.sessionId) return;
     // Each call POSTs a fork and then adds a tab with a freshly generated id,
     // so the pane store cannot dedupe a double click into one tab. The ref
@@ -1820,32 +1861,68 @@ export function ClaudeChatTab({
     forkInFlightRef.current = true;
     setForkInFlight(true);
     try {
-      const fork = await forkClaudeSession(client, session.sessionId, {
-        upToMessageId: messageId,
-      });
+      const planned = forkPlanRef.current.get(messageId);
+      if (!planned || planned.kind !== kind) {
+        throw new Error("The selected message is no longer in this session");
+      }
+
+      let fork: Awaited<ReturnType<typeof forkClaudeSession>>;
+      if (planned.boundary.type === "message") {
+        fork = await forkClaudeSession(client, session.sessionId, {
+          upToMessageId: planned.boundary.messageId,
+        });
+      } else {
+        const created = await createSession(
+          client,
+          session.title ? `${session.title} (fork)` : "Forked session",
+        );
+        if (!created) {
+          throw new Error("Claude did not return a new session");
+        }
+        fork = created;
+      }
+
       const paneStore = usePaneLayoutStore.getState();
+      const forkTabId = createUuid();
+      if (planned.kind === "prompt") {
+        useClaudeStore.getState().setDraftText(
+          createSessionKey(environmentId, forkTabId),
+          planned.draftText,
+        );
+      }
       paneStore.addTab(
         paneStore.getActivePaneId(environmentId),
         {
-          id: createUuid(),
+          id: forkTabId,
           type: "claude-native",
           displayTitle: fork.title ?? "Claude fork",
           claudeNativeData: { ...data, sessionId: fork.sessionId },
         },
         environmentId,
       );
+
+      const attachmentNotice = forkAttachmentNotice(planned.droppedAttachmentCount);
+      if (attachmentNotice) toast.warning(attachmentNotice);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to fork Claude session");
     } finally {
       forkInFlightRef.current = false;
       setForkInFlight(false);
     }
-  }, [client, data, environmentId, session?.sessionId]);
+  }, [
+    client,
+    data,
+    environmentId,
+    session?.sessionId,
+    session?.title,
+  ]);
 
-  // Referentially stable per message id, so `memo(NativeMessage)` still holds
-  // for every visible message while an answer streams in.
+  // None of these change while an answer streams in — the transcript is read
+  // through `forkPlanRef` precisely so it cannot drag the handler's identity
+  // with it. That keeps the cached fork elements below referentially stable per
+  // message id, which is what lets `memo(NativeMessage)` hold on every tick.
   const forkAction = useMessageForkAction({
-    label: "Fork Claude session from this message",
+    agentLabel: "Claude",
     disabled: forkInFlight,
     onFork: handleForkFromMessage,
   });
@@ -1877,9 +1954,12 @@ export function ClaudeChatTab({
       scrollProps={scrollProps}
       virtuosoRef={virtuosoRef}
       onResumeClick={client ? () => setResumeDialogOpen(true) : undefined}
-      messageActions={(message) =>
-        message.role === "user" ? forkAction(message.id) : undefined
-      }
+      messageActions={(message) => {
+        // Keyed by display row id: the plan already resolved a split row back
+        // to the persisted message the bridge can find.
+        const planned = forkPlan.get(message.id);
+        return planned ? forkAction(message.id, planned.kind) : undefined;
+      }}
       topAccessory={
         promptSuggestion ? (
           <button

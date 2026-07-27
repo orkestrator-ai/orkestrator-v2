@@ -1,13 +1,15 @@
 import { memo, useCallback, useMemo, type ReactNode } from "react";
 import { GitFork } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { MessageForkKind } from "./message-fork";
 
 interface MessageForkActionProps {
   messageId: string;
-  /** Provider-specific accessible name, e.g. "Fork Codex session from this message". */
+  kind: MessageForkKind;
+  /** Provider- and role-specific accessible name. */
   label: string;
   disabled: boolean;
-  onFork: (messageId: string) => void;
+  onFork: (messageId: string, kind: MessageForkKind) => void;
 }
 
 /**
@@ -18,20 +20,21 @@ interface MessageForkActionProps {
  */
 export const MessageForkAction = memo(function MessageForkAction({
   messageId,
+  kind,
   label,
   disabled,
   onFork,
 }: MessageForkActionProps) {
   const handleClick = useCallback(() => {
-    onFork(messageId);
-  }, [messageId, onFork]);
+    onFork(messageId, kind);
+  }, [kind, messageId, onFork]);
 
   return (
     <Button
       variant="ghost"
       size="icon"
       className="h-6 w-6"
-      title="Fork from here"
+      title={kind === "prompt" ? "Fork and edit prompt" : "Fork after response"}
       aria-label={label}
       disabled={disabled}
       onClick={handleClick}
@@ -56,26 +59,28 @@ export const MessageForkAction = memo(function MessageForkAction({
  * It is bounded by the number of messages in one transcript.
  */
 export function useMessageForkAction(options: {
-  label: string;
+  agentLabel: string;
   disabled: boolean;
-  onFork: (messageId: string) => void;
-}): (messageId: string) => ReactNode {
-  const { label, disabled, onFork } = options;
+  onFork: (messageId: string, kind: MessageForkKind) => void;
+}): (messageId: string, kind: MessageForkKind) => ReactNode {
+  const { agentLabel, disabled, onFork } = options;
   return useMemo(() => {
     const cache = new Map<string, ReactNode>();
-    return (messageId: string): ReactNode => {
-      const cached = cache.get(messageId);
+    return (messageId: string, kind: MessageForkKind): ReactNode => {
+      const cacheKey = `${kind}:${messageId}`;
+      const cached = cache.get(cacheKey);
       if (cached !== undefined) return cached;
       const element = (
         <MessageForkAction
           messageId={messageId}
-          label={label}
+          kind={kind}
+          label={`Fork ${agentLabel} session from this ${kind}`}
           disabled={disabled}
           onFork={onFork}
         />
       );
-      cache.set(messageId, element);
+      cache.set(cacheKey, element);
       return element;
     };
-  }, [disabled, label, onFork]);
+  }, [agentLabel, disabled, onFork]);
 }

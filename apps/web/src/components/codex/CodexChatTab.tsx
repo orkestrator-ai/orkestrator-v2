@@ -65,6 +65,12 @@ import {
   SYSTEM_MESSAGE_PREFIX,
 } from "@/lib/opencode-client";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
+import {
+  buildMessageForkActionKinds,
+  findPreviousForkMessage,
+  getForkPromptText,
+  type MessageForkKind,
+} from "@/components/chat/message-fork";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { CodexComposeBar } from "./CodexComposeBar";
 import { CodexApprovalCard } from "./CodexApprovalCard";
@@ -418,6 +424,13 @@ export function CodexChatTab({
   const displayMessages = useMemo(
     () => sessionMessages.map(normalizeCodexNativeMessage),
     [sessionMessages],
+  );
+  const forkActionKinds = useMemo(
+    () => buildMessageForkActionKinds(
+      displayMessages,
+      session?.isLoading ?? false,
+    ),
+    [displayMessages, session?.isLoading],
   );
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
@@ -999,7 +1012,10 @@ export function CodexChatTab({
     ],
   );
 
-  const handleForkFromMessage = useCallback(async (messageId: string) => {
+  const handleForkFromMessage = useCallback(async (
+    messageId: string,
+    kind: MessageForkKind,
+  ) => {
     if (!client || !session?.sessionId) return;
     // A fork POSTs then opens a tab with a freshly generated id, so the pane
     // store's existing-id dedupe cannot collapse a double click: it would
@@ -1010,12 +1026,65 @@ export function CodexChatTab({
     forkInFlightRef.current = true;
     setForkInFlight(true);
     try {
-      const fork = await forkCodexSession(client, session.sessionId, messageId);
+      const selectedMessage = displayMessages.find(
+        (message) => message.id === messageId,
+      );
+      if (!selectedMessage) {
+        throw new Error("The selected message is no longer in this session");
+      }
+
+      let draftPrompt: string | undefined;
+      let fork: Awaited<ReturnType<typeof forkCodexSession>>;
+      if (kind === "prompt") {
+        draftPrompt = getForkPromptText(selectedMessage);
+        const previousMessage = findPreviousForkMessage(
+          displayMessages,
+          messageId,
+          (candidate) => (
+            Boolean(candidate.turnId)
+            && candidate.turnId !== selectedMessage.turnId
+          ),
+        );
+        const hasEarlierHistory = Boolean(
+          findPreviousForkMessage(displayMessages, messageId),
+        );
+
+        if (previousMessage) {
+          fork = await forkCodexSession(
+            client,
+            session.sessionId,
+            previousMessage.id,
+          );
+        } else if (!hasEarlierHistory) {
+          fork = await createSession(client, {
+            title: session.title ? `${session.title} (fork)` : "Forked session",
+            model: selectedModel,
+            modelReasoningEffort: selectedReasoningEffort,
+            mode: selectedMode,
+            fastMode: fastModeEnabled,
+          });
+        } else {
+          throw new CodexForkError(
+            422,
+            "The history before this prompt has no usable Codex turn boundary",
+          );
+        }
+      } else {
+        fork = await forkCodexSession(client, session.sessionId, messageId);
+      }
+
       const paneStore = usePaneLayoutStore.getState();
+      const forkTabId = createUuid();
+      if (draftPrompt !== undefined) {
+        useCodexStore.getState().setDraftText(
+          createSessionKey(environmentId, forkTabId),
+          draftPrompt,
+        );
+      }
       paneStore.addTab(
         paneStore.getActivePaneId(environmentId),
         {
-          id: createUuid(),
+          id: forkTabId,
           type: "codex-native",
           displayTitle: fork.title ?? "Codex fork",
           codexNativeData: { ...data, sessionId: fork.sessionId },
@@ -1040,12 +1109,23 @@ export function CodexChatTab({
       forkInFlightRef.current = false;
       setForkInFlight(false);
     }
-  }, [client, data, environmentId, session?.sessionId]);
+  }, [
+    client,
+    data,
+    displayMessages,
+    environmentId,
+    fastModeEnabled,
+    selectedMode,
+    selectedModel,
+    selectedReasoningEffort,
+    session?.sessionId,
+    session?.title,
+  ]);
 
   // Referentially stable per message id, so `memo(NativeMessage)` still holds
   // for every visible message while an answer streams in.
   const forkAction = useMessageForkAction({
-    label: "Fork Codex session from this message",
+    agentLabel: "Codex",
     disabled: forkInFlight,
     onFork: handleForkFromMessage,
   });
@@ -2144,12 +2224,15 @@ export function CodexChatTab({
       onResumeClick={client ? () => setResumeDialogOpen(true) : undefined}
       // h-32 ≈ compose bar; h-80 adds room for the plan card (~230px) above it
       bottomSpacerClassName={showPlanModeCard ? "h-80" : "h-32"}
-      messageActions={(message) =>
-        // Only a message whose turn boundary is known can be forked from.
-        message.role === "user" && message.turnId
-          ? forkAction(message.id)
-          : undefined
-      }
+      messageActions={(message) => {
+        const kind = forkActionKinds.get(message.id);
+        if (!kind) return undefined;
+        // A response is inclusive, so Codex must be able to attribute it to a
+        // turn. A first prompt needs no boundary because it creates an empty
+        // sibling session and restores that prompt as a draft.
+        if (kind === "response" && !message.turnId) return undefined;
+        return forkAction(message.id, kind);
+      }}
       blockingCards={
         showApprovals || showInteractions ? (
           <>

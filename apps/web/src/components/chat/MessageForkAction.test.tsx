@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
 import { NativeMessage } from "./NativeMessage";
 import { MessageForkAction, useMessageForkAction } from "./MessageForkAction";
+import type { MessageForkKind } from "./message-fork";
 
 afterEach(cleanup);
 
@@ -18,16 +19,16 @@ function Harness({
 }: {
   messageIds: string[];
   disabled: boolean;
-  onFork: (messageId: string) => void;
+  onFork: (messageId: string, kind: MessageForkKind) => void;
   collect: (elements: ReactNode[]) => void;
 }) {
   const [tick, setTick] = useState(0);
   const forkAction = useMessageForkAction({
-    label: "Fork Codex session from this message",
+    agentLabel: "Codex",
     disabled,
     onFork,
   });
-  collect(messageIds.map((id) => forkAction(id)));
+  collect(messageIds.map((id) => forkAction(id, "prompt")));
   return (
     <div>
       <button type="button" onClick={() => setTick((value) => value + 1)}>
@@ -35,7 +36,7 @@ function Harness({
       </button>
       <span data-testid="tick">{tick}</span>
       {messageIds.map((id) => (
-        <span key={id}>{forkAction(id)}</span>
+        <span key={id}>{forkAction(id, "prompt")}</span>
       ))}
     </div>
   );
@@ -86,7 +87,7 @@ describe("useMessageForkAction", () => {
       />,
     );
     expect(
-      screen.getByRole("button", { name: "Fork Codex session from this message" })
+      screen.getByRole("button", { name: "Fork Codex session from this prompt" })
         .hasAttribute("disabled"),
     ).toBe(false);
 
@@ -101,13 +102,13 @@ describe("useMessageForkAction", () => {
 
     expect(renders.at(-1)![0]).not.toBe(renders[0]![0]);
     expect(
-      screen.getByRole("button", { name: "Fork Codex session from this message" })
+      screen.getByRole("button", { name: "Fork Codex session from this prompt" })
         .hasAttribute("disabled"),
     ).toBe(true);
   });
 
   test("forks the message the button belongs to", () => {
-    const onFork = mock((_messageId: string) => {});
+    const onFork = mock((_messageId: string, _kind: MessageForkKind) => {});
     render(
       <Harness
         messageIds={["user-1", "user-2"]}
@@ -118,16 +119,16 @@ describe("useMessageForkAction", () => {
     );
 
     fireEvent.click(
-      screen.getAllByRole("button", { name: "Fork Codex session from this message" })[1]!,
+      screen.getAllByRole("button", { name: "Fork Codex session from this prompt" })[1]!,
     );
 
-    expect(onFork.mock.calls).toEqual([["user-2"]]);
+    expect(onFork.mock.calls).toEqual([["user-2", "prompt"]]);
   });
 });
 
 describe("MessageForkAction inside NativeMessage", () => {
   test("renders in the message action slot and forks on click", () => {
-    const onFork = mock((_messageId: string) => {});
+    const onFork = mock((_messageId: string, _kind: MessageForkKind) => {});
     render(
       <NativeMessage
         message={{
@@ -141,7 +142,8 @@ describe("MessageForkAction inside NativeMessage", () => {
         actions={
           <MessageForkAction
             messageId="user-1"
-            label="Fork Codex session from this message"
+            kind="prompt"
+            label="Fork Codex session from this prompt"
             disabled={false}
             onFork={onFork}
           />
@@ -150,8 +152,8 @@ describe("MessageForkAction inside NativeMessage", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Fork Codex session from this message" }),
+      screen.getByRole("button", { name: "Fork Codex session from this prompt" }),
     );
-    expect(onFork.mock.calls).toEqual([["user-1"]]);
+    expect(onFork.mock.calls).toEqual([["user-1", "prompt"]]);
   });
 });

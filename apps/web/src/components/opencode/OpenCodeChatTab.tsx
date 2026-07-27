@@ -69,6 +69,12 @@ import {
   type OpenCodeModelPreferences,
 } from "@/lib/backend";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
+import {
+  buildMessageForkActionKinds,
+  findNextForkMessage,
+  getForkPromptText,
+  type MessageForkKind,
+} from "@/components/chat/message-fork";
 import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { OpenCodeComposeBar } from "./OpenCodeComposeBar";
@@ -303,6 +309,13 @@ export function OpenCodeChatTab({
       sessionMessages.map(normalizeOpenCodeNativeMessage),
     ),
     [sessionMessages],
+  );
+  const forkActionKinds = useMemo(
+    () => buildMessageForkActionKinds(
+      displayMessages,
+      session?.isLoading ?? false,
+    ),
+    [displayMessages, session?.isLoading],
   );
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
@@ -2018,7 +2031,10 @@ export function OpenCodeChatTab({
     [client, environmentId, models, sessionKey, syncPendingRequests, tabId, updateTabNativeSessionId],
   );
 
-  const handleForkFromMessage = useCallback(async (messageId: string) => {
+  const handleForkFromMessage = useCallback(async (
+    messageId: string,
+    kind: MessageForkKind,
+  ) => {
     if (!client || !session?.sessionId) return;
     // Each call forks server-side and then adds a tab with a freshly generated
     // id, so the pane store cannot dedupe a double click. The ref latches
@@ -2027,12 +2043,38 @@ export function OpenCodeChatTab({
     forkInFlightRef.current = true;
     setForkInFlight(true);
     try {
-      const fork = await forkOpenCodeSession(client, session.sessionId, messageId);
+      const selectedMessage = displayMessages.find(
+        (message) => message.id === messageId,
+      );
+      if (!selectedMessage) {
+        throw new Error("The selected message is no longer in this session");
+      }
+
+      /*
+       * OpenCode's boundary is exclusive: it clones messages before messageID.
+       * A prompt therefore uses its own id, while a response uses the next
+       * message (or no boundary when it is the end of the transcript).
+       */
+      const boundaryMessageId = kind === "prompt"
+        ? messageId
+        : findNextForkMessage(displayMessages, messageId)?.id;
+      const fork = await forkOpenCodeSession(
+        client,
+        session.sessionId,
+        boundaryMessageId,
+      );
       const paneStore = usePaneLayoutStore.getState();
+      const forkTabId = createUuid();
+      if (kind === "prompt") {
+        useOpenCodeStore.getState().setDraftText(
+          createSessionKey(environmentId, forkTabId),
+          getForkPromptText(selectedMessage),
+        );
+      }
       paneStore.addTab(
         paneStore.getActivePaneId(environmentId),
         {
-          id: createUuid(),
+          id: forkTabId,
           type: "opencode-native",
           displayTitle: fork.title ?? "OpenCode fork",
           openCodeNativeData: { ...data, sessionId: fork.id },
@@ -2045,12 +2087,12 @@ export function OpenCodeChatTab({
       forkInFlightRef.current = false;
       setForkInFlight(false);
     }
-  }, [client, data, environmentId, session?.sessionId]);
+  }, [client, data, displayMessages, environmentId, session?.sessionId]);
 
   // Referentially stable per message id, so `memo(NativeMessage)` still holds
   // for every visible message while an answer streams in.
   const forkAction = useMessageForkAction({
-    label: "Fork OpenCode session from this message",
+    agentLabel: "OpenCode",
     disabled: forkInFlight,
     onFork: handleForkFromMessage,
   });
@@ -2130,9 +2172,10 @@ export function OpenCodeChatTab({
       virtuosoRef={virtuosoRef}
       onResumeClick={client ? () => setResumeDialogOpen(true) : undefined}
       emptyStateMessage="No messages yet. Start a conversation!"
-      messageActions={(message) =>
-        message.role === "user" ? forkAction(message.id) : undefined
-      }
+      messageActions={(message) => {
+        const kind = forkActionKinds.get(message.id);
+        return kind ? forkAction(message.id, kind) : undefined;
+      }}
       blockingCards={
         session && client && (pendingPermissions.length > 0 || pendingQuestions.length > 0) ? (
           <>

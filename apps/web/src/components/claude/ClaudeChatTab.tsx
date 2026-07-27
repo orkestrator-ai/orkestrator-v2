@@ -58,6 +58,12 @@ import {
   renameEnvironmentFromPrompt,
 } from "@/lib/backend";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
+import {
+  buildMessageForkActionKinds,
+  findPreviousForkMessage,
+  getForkPromptText,
+  type MessageForkKind,
+} from "@/components/chat/message-fork";
 import { ClaudeComposeBar } from "./ClaudeComposeBar";
 import { ClaudeQuestionCard } from "./ClaudeQuestionCard";
 import { ClaudePlanApprovalCard } from "./ClaudePlanApprovalCard";
@@ -68,7 +74,10 @@ import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import type { ClaudeAttachment, QueuedMessage } from "@/stores/claudeStore";
-import { normalizeClaudeMessagesForDisplay } from "@/lib/chat/native-message-adapters";
+import {
+  getClaudeSourceMessageId,
+  normalizeClaudeMessagesForDisplay,
+} from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 
 /**
@@ -560,6 +569,13 @@ export function ClaudeChatTab({
       normalizeClaudeMessagesForDisplay(sessionMessages),
     ),
     [sessionMessages],
+  );
+  const forkActionKinds = useMemo(
+    () => buildMessageForkActionKinds(
+      displayMessages,
+      session?.isLoading ?? false,
+    ),
+    [displayMessages, session?.isLoading],
   );
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
@@ -1811,7 +1827,10 @@ export function ClaudeChatTab({
     [client, environmentId, sessionKey, tabId, updateTabNativeSessionId]
   );
 
-  const handleForkFromMessage = useCallback(async (messageId: string) => {
+  const handleForkFromMessage = useCallback(async (
+    messageId: string,
+    kind: MessageForkKind,
+  ) => {
     if (!client || !session?.sessionId) return;
     // Each call POSTs a fork and then adds a tab with a freshly generated id,
     // so the pane store cannot dedupe a double click into one tab. The ref
@@ -1820,14 +1839,53 @@ export function ClaudeChatTab({
     forkInFlightRef.current = true;
     setForkInFlight(true);
     try {
-      const fork = await forkClaudeSession(client, session.sessionId, {
-        upToMessageId: messageId,
-      });
+      const selectedMessage = displayMessages.find(
+        (message) => getClaudeSourceMessageId(message.id) === messageId,
+      );
+      if (!selectedMessage) {
+        throw new Error("The selected message is no longer in this session");
+      }
+
+      let draftPrompt: string | undefined;
+      let fork: Awaited<ReturnType<typeof forkClaudeSession>>;
+      if (kind === "prompt") {
+        draftPrompt = getForkPromptText(selectedMessage);
+        const previousMessage = findPreviousForkMessage(
+          displayMessages,
+          selectedMessage.id,
+        );
+        if (previousMessage) {
+          fork = await forkClaudeSession(client, session.sessionId, {
+            upToMessageId: getClaudeSourceMessageId(previousMessage.id),
+          });
+        } else {
+          const created = await createSession(
+            client,
+            session.title ? `${session.title} (fork)` : "Forked session",
+          );
+          if (!created) {
+            throw new Error("Claude did not return a new session");
+          }
+          fork = created;
+        }
+      } else {
+        fork = await forkClaudeSession(client, session.sessionId, {
+          upToMessageId: messageId,
+        });
+      }
+
       const paneStore = usePaneLayoutStore.getState();
+      const forkTabId = createUuid();
+      if (draftPrompt !== undefined) {
+        useClaudeStore.getState().setDraftText(
+          createSessionKey(environmentId, forkTabId),
+          draftPrompt,
+        );
+      }
       paneStore.addTab(
         paneStore.getActivePaneId(environmentId),
         {
-          id: createUuid(),
+          id: forkTabId,
           type: "claude-native",
           displayTitle: fork.title ?? "Claude fork",
           claudeNativeData: { ...data, sessionId: fork.sessionId },
@@ -1840,12 +1898,19 @@ export function ClaudeChatTab({
       forkInFlightRef.current = false;
       setForkInFlight(false);
     }
-  }, [client, data, environmentId, session?.sessionId]);
+  }, [
+    client,
+    data,
+    displayMessages,
+    environmentId,
+    session?.sessionId,
+    session?.title,
+  ]);
 
   // Referentially stable per message id, so `memo(NativeMessage)` still holds
   // for every visible message while an answer streams in.
   const forkAction = useMessageForkAction({
-    label: "Fork Claude session from this message",
+    agentLabel: "Claude",
     disabled: forkInFlight,
     onFork: handleForkFromMessage,
   });
@@ -1877,9 +1942,12 @@ export function ClaudeChatTab({
       scrollProps={scrollProps}
       virtuosoRef={virtuosoRef}
       onResumeClick={client ? () => setResumeDialogOpen(true) : undefined}
-      messageActions={(message) =>
-        message.role === "user" ? forkAction(message.id) : undefined
-      }
+      messageActions={(message) => {
+        const kind = forkActionKinds.get(message.id);
+        return kind
+          ? forkAction(getClaudeSourceMessageId(message.id), kind)
+          : undefined;
+      }}
       topAccessory={
         promptSuggestion ? (
           <button

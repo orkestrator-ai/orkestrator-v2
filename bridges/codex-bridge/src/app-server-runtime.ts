@@ -371,13 +371,19 @@ function buildRecoveredContextPrompt(
 ): string {
   const transcript = messages
     .map((message) => {
+      // Text parts first, not `content`. One assistant message covers a whole
+      // turn and its `content` is only the *last* agent text (mirroring the live
+      // renderer), so preferring `content` would silently drop every earlier
+      // segment of a multi-step turn from the context replayed to the model.
+      // The parts are a superset; `content` is the fallback for messages that
+      // carry text nowhere else.
       const content =
-        message.content.trim()
-        || message.parts
+        message.parts
           .filter((part) => part.type === "text")
           .map((part) => part.content)
           .join("\n")
-          .trim();
+          .trim()
+        || message.content.trim();
       return content ? `${message.role.toUpperCase()}:\n${content}` : "";
     })
     .filter(Boolean)

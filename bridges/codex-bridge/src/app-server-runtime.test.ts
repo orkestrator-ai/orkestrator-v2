@@ -649,6 +649,70 @@ describe("session lifecycle", () => {
     expect(JSON.stringify(starts.at(-1)?.params.input)).not.toContain("recovered_conversation");
   });
 
+  test("recovered context keeps every assistant segment of a multi-step turn", async () => {
+    // Hydration folds a whole turn into one assistant message whose `content` is
+    // only the *last* agent text; the earlier segments live in `parts`. The
+    // recovered transcript must read the parts, or a turn that reasoned across
+    // several messages is replayed to the model as its closing line alone.
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, "thread-multi.jsonl"),
+      `${[
+        {
+          type: "session_meta",
+          payload: { id: "thread-multi", cwd: "/tmp/ws", timestamp: "2026-07-25T12:00:00.000Z" },
+        },
+        { type: "turn_context", payload: { turn_id: "turn-1", cwd: "/tmp/ws" } },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Investigate the failure" }],
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "First I checked the logs." }],
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "The cache key was stale." }],
+          },
+        },
+      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const h = await harness({
+      "thread/resume": () => {
+        const error = new Error("thread/resume: no rollout found for thread id thread-multi");
+        (error as { rpcCode?: number }).rpcCode = -32600;
+        throw error;
+      },
+    });
+    const resumed = await h.runtime.resumeSession({ threadId: "thread-multi", mode: "build" });
+    await h.runtime.prompt(resumed!.sessionId, {
+      prompt: "continue",
+      requestId: "req-multi",
+      attachments: [],
+    });
+
+    const start = h.child().requests.find((request) => request.method === "turn/start");
+    const input = JSON.stringify(start?.params.input);
+    expect(input).toContain("Investigate the failure");
+    expect(input).toContain("First I checked the logs.");
+    expect(input).toContain("The cache key was stale.");
+  });
+
   test("recovered context is bounded before it is sent", async () => {
     const sessionsDir = join(codexHome, "sessions");
     mkdirSync(sessionsDir, { recursive: true });
@@ -998,6 +1062,23 @@ describe("session lifecycle", () => {
         {
           type: "response_item",
           payload: {
+            type: "function_call",
+            name: "exec_command",
+            call_id: "persisted-tool",
+            arguments: JSON.stringify({ cmd: "git status --short" }),
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "persisted-tool",
+            output: "clean",
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
             type: "message",
             role: "assistant",
             content: [{ type: "output_text", text: "Persisted answer" }],
@@ -1020,8 +1101,18 @@ describe("session lifecycle", () => {
       "thread/resume": () => ({ thread: threadPayload("thread-named", { name: "Codex Name" }) }),
     });
 
-    expect((await h.runtime.getMessages("session-named"))?.map((message) => message.content))
-      .toEqual(["Persisted answer"]);
+    const messages = await h.runtime.getMessages("session-named");
+    expect(messages?.map((message) => message.content)).toEqual(["Persisted answer"]);
+    expect(messages?.[0]?.parts).toEqual([
+      expect.objectContaining({
+        type: "tool-invocation",
+        toolName: "exec_command",
+        // A persisted function_call records no outcome, so none is claimed.
+        toolState: undefined,
+        toolOutput: "clean",
+      }),
+      { type: "text", content: "Persisted answer" },
+    ]);
     expect(h.runtime.getStatus("session-named")?.messageRevision).toBe(1);
     // app-server's own name outranks anything reconstructed from the rollout.
     expect(h.runtime.getStatus("session-named")).toMatchObject({ title: "Codex Name" });
@@ -1814,7 +1905,12 @@ describe("at-most-once dispatch", () => {
         additionalProperties: false,
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    // The dispatch must genuinely be in flight before the child dies. A fixed
+    // delay loses that race on a loaded machine — the child exits before
+    // turn/start is written, so the turn never becomes ambiguous and `pending`
+    // never settles. Wait for the second turn/start (the first materialized the
+    // thread), matching the other lost-response tests in this file.
+    await h.child().waitForRequest("turn/start", 2);
     h.child().exit(1);
 
     expect(await pending).toMatchObject({

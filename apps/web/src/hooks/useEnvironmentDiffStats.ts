@@ -106,8 +106,8 @@ export function useEnvironmentDiffStats() {
       loadingRef.current.add(env.id);
       try {
         const changes: backend.GitFileChange[] = target.kind === "local"
-          ? await backend.getLocalGitStatus(target.worktreePath, comparisonRef, false)
-          : await backend.getGitStatus(target.containerId, comparisonRef, false);
+          ? await backend.getLocalGitStatus(target.worktreePath, comparisonRef, true)
+          : await backend.getGitStatus(target.containerId, comparisonRef, true);
 
         // The snapshot this result describes may have been replaced while the
         // request was open - most commonly by createdFromCommit being recorded,

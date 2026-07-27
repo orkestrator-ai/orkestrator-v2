@@ -13,6 +13,10 @@ import {
   type BuildPipeline,
 } from "@/stores/buildPipelineStore";
 import type { PersistedBuildPipeline } from "@/types";
+import {
+  TEST_LEGACY_STRUCTURED_REVIEW_REPORT,
+  TEST_STRUCTURED_REVIEW_REPORT,
+} from "@/components/build-pipeline/structured-review-test-fixture";
 
 const PROJECT_ID = "project-1";
 
@@ -97,6 +101,66 @@ describe("hydrateBuildPipeline", () => {
     expect(restored).toMatchObject({ phase: "reviewing", backendRevision: 7 });
     expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1"))
       .toMatchObject({ phase: "reviewing", backendRevision: 7 });
+  });
+
+  test("normalizes legacy structured reviews before installing the snapshot", async () => {
+    const restored = await hydrateBuildPipeline(
+      "pipeline-1",
+      async () => persisted(pipeline({
+        phase: "failed",
+        structuredReview: TEST_LEGACY_STRUCTURED_REVIEW_REPORT as never,
+      }), 8),
+    );
+
+    expect(restored?.structuredReview?.testResults.notRun).toBe(13);
+    expect(
+      useBuildPipelineStore.getState().pipelines
+        .get("pipeline-1")
+        ?.structuredReview
+        ?.testResults.notRun,
+    ).toBe(13);
+  });
+
+  test("leaves an already-normalized review untouched", async () => {
+    // Rewriting an unchanged report would change the snapshot fingerprint and
+    // schedule a pointless backend write on every hydration.
+    const restored = await hydrateBuildPipeline(
+      "pipeline-1",
+      async () => persisted(pipeline({
+        phase: "failed",
+        structuredReview: TEST_STRUCTURED_REVIEW_REPORT,
+      }), 8),
+    );
+
+    expect(restored?.structuredReview).toBe(TEST_STRUCTURED_REVIEW_REPORT);
+  });
+
+  test("drops a snapshot whose structured review cannot be repaired", async () => {
+    const restored = await hydrateBuildPipeline(
+      "pipeline-1",
+      async () => persisted(pipeline({
+        phase: "failed",
+        structuredReview: {
+          ...TEST_STRUCTURED_REVIEW_REPORT,
+          testResults: { total: 5, passed: 6, failed: 0, failures: [] },
+        } as never,
+      }), 8),
+    );
+
+    expect(restored).toBeNull();
+    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+  });
+
+  test("normalizes legacy structured reviews for every pipeline in a project", async () => {
+    const restored = await hydrateBuildPipelinesForProject(
+      PROJECT_ID,
+      async () => [persisted(pipeline({
+        phase: "failed",
+        structuredReview: TEST_LEGACY_STRUCTURED_REVIEW_REPORT as never,
+      }), 4)],
+    );
+
+    expect(restored[0]?.structuredReview?.testResults.notRun).toBe(13);
   });
 
   test("keeps a local snapshot that has already seen a newer revision", async () => {
@@ -591,6 +655,31 @@ describe("migrateLegacyBuildPipelines", () => {
     // The backend has never seen it, so the first save must find no prior record.
     expect(restored?.backendRevision).toBe(0);
     expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-1")).toBe(true);
+  });
+
+  test("normalizes a legacy structured review while adopting the pipeline", () => {
+    // A pre-backend snapshot is the oldest data in the app, so it is the most
+    // likely to hold a report written before `testResults.notRun` existed.
+    // Rejecting it here would silently drop an in-flight build on upgrade.
+    const storage = legacyStorage({
+      state: {
+        pipelines: [["pipeline-1", legacyEntry({
+          phase: "failed",
+          structuredReview: TEST_LEGACY_STRUCTURED_REVIEW_REPORT,
+        })]],
+      },
+      version: 1,
+    });
+
+    const adopted = migrateLegacyBuildPipelines(storage);
+
+    expect(adopted[0]?.structuredReview?.testResults.notRun).toBe(13);
+    expect(
+      useBuildPipelineStore.getState().pipelines
+        .get("pipeline-1")
+        ?.structuredReview
+        ?.testResults.notRun,
+    ).toBe(13);
   });
 
   test("removes the legacy key so the migration runs exactly once", () => {

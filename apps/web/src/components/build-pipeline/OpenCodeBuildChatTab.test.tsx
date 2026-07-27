@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
+  TEST_CLEAN_STRUCTURED_REVIEW_OUTPUT,
+  TEST_LEGACY_STRUCTURED_REVIEW_REPORT,
   TEST_STRUCTURED_REVIEW_OUTPUT,
   TEST_STRUCTURED_REVIEW_REPORT,
 } from "./structured-review-test-fixture";
@@ -319,6 +321,31 @@ function seedPipelineSessionPhase(
   seedOpenCodeStore(isLoading);
 }
 
+/**
+ * A review round that completed on the provider but failed the transition into
+ * the next phase, with the durable request id recorded and no report consumed
+ * yet — the state "Retry Review" is allowed to recover from.
+ */
+function seedFailedReviewTransition(requestId: string) {
+  seedPipelineSessionPhase("reviewing", "idle", false);
+  useBuildPipelineStore.setState((state) => {
+    const pipeline = state.pipelines.get(PIPELINE_ID)!;
+    return {
+      pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+        ...pipeline,
+        phase: "failed",
+        error:
+          "Invalid structured-review-report: 1 validation issue. $.testResults.notRun: Required field \"notRun\" is missing.",
+        structuredReviewRequestId: requestId,
+        failureContext: {
+          phase: "reviewing",
+          kind: "stage-transition",
+        },
+      }),
+    };
+  });
+}
+
 function seedPendingPipeline() {
   useBuildPipelineStore.setState({
     pipelines: new Map([
@@ -503,6 +530,7 @@ describe("OpenCodeBuildChatTab", () => {
     mockCreateClient.mockClear();
     mockCreateSession.mockClear();
     mockGetSessionMessages.mockClear();
+    mockGetStructuredOutput.mockClear();
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
     mockSubscribeToEvents.mockClear();
@@ -1334,6 +1362,99 @@ describe("OpenCodeBuildChatTab", () => {
       useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)
         ?.structuredReviewRequestId,
     ).toBeTruthy();
+  });
+
+  test("retrying a review reuses a legacy completed result with skipped tests", async () => {
+    seedFailedReviewTransition("review-request-with-skips");
+    mockGetStructuredOutput.mockResolvedValueOnce({
+      ...TEST_STRUCTURED_REVIEW_OUTPUT,
+      provider: "opencode",
+      value: TEST_LEGACY_STRUCTURED_REVIEW_REPORT,
+    } as any);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry Review" }));
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("addressing");
+      expect(pipeline?.structuredReview?.testResults.notRun).toBe(13);
+    });
+
+    expect(mockGetStructuredOutput).toHaveBeenCalledWith(
+      expect.anything(),
+      SESSION_ID,
+      "review-request-with-skips",
+    );
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    expect(mockSendPrompt.mock.calls[0]?.[1]).toBe(SESSION_ID);
+    expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(
+      "Stage only files that clearly belong to the review fixes",
+    );
+  });
+
+  test("retrying a review reuses a findings-free result and verifies instead", async () => {
+    seedFailedReviewTransition("clean-review-request");
+    mockGetStructuredOutput.mockResolvedValueOnce({
+      ...TEST_CLEAN_STRUCTURED_REVIEW_OUTPUT,
+      provider: "opencode",
+    } as any);
+    mockCreateSession.mockResolvedValueOnce({
+      id: "recovered-verify-session",
+      createdAt: "2026-04-15T00:00:04.000Z",
+    });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry Review" }));
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("verifying");
+      expect(pipeline?.structuredReview?.issues).toEqual([]);
+      expect(pipeline?.sessions.at(-1)?.sdkSessionId).toBe("recovered-verify-session");
+    });
+
+    expect(mockSendPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      "recovered-verify-session",
+      expect.stringContaining("Verification is read-only"),
+      expect.objectContaining({ mode: "build" }),
+    );
+  });
+
+  test("retrying a review starts a fresh one when the durable read rejects", async () => {
+    seedFailedReviewTransition("unreadable-review-request");
+    mockGetStructuredOutput.mockImplementationOnce(() =>
+      Promise.reject(new Error("structured output store unavailable"))
+    );
+    mockCreateSession.mockResolvedValueOnce({
+      id: "fallback-review-session",
+      createdAt: "2026-04-15T00:00:05.000Z",
+    });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry Review" }));
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("reviewing");
+      expect(pipeline?.sessions.at(-1)?.sdkSessionId).toBe("fallback-review-session");
+    });
+
+    expect(mockGetStructuredOutput).toHaveBeenCalledTimes(1);
+    expect(mockSendPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      "fallback-review-session",
+      expect.any(String),
+      expect.objectContaining({
+        outputSchema: expect.objectContaining({ type: "object" }),
+        requestId: expect.any(String),
+      }),
+    );
+    expect(
+      useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.structuredReview,
+    ).toBeUndefined();
   });
 
   test("restores the paused jump-in state when sending a message fails", async () => {

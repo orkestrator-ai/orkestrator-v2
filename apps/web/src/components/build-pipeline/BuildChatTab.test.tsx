@@ -2,6 +2,8 @@ import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, test, mock } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
+  TEST_CLEAN_STRUCTURED_REVIEW_OUTPUT,
+  TEST_LEGACY_STRUCTURED_REVIEW_REPORT,
   TEST_STRUCTURED_REVIEW_OUTPUT,
   TEST_STRUCTURED_REVIEW_REPORT,
 } from "./structured-review-test-fixture";
@@ -245,6 +247,35 @@ function seedClaudeReviewPipeline(phase: "reviewing" | "addressing" = "reviewing
     return { pipelines };
   });
   seedClaudeSession(false);
+}
+
+/**
+ * A review round that completed on the provider but failed the transition into
+ * the next phase, with the durable request id recorded and no report consumed
+ * yet — the state "Retry Review" is allowed to recover from.
+ */
+function seedFailedClaudeReviewTransition(requestId: string) {
+  seedClaudeReviewPipeline();
+  useBuildPipelineStore.setState((state) => {
+    const pipelines = new Map(state.pipelines);
+    const pipeline = pipelines.get(PIPELINE_ID)!;
+    pipelines.set(PIPELINE_ID, {
+      ...pipeline,
+      phase: "failed",
+      error:
+        "Invalid structured-review-report: 1 validation issue. $.testResults.notRun: Required field \"notRun\" is missing.",
+      structuredReviewRequestId: requestId,
+      failureContext: {
+        phase: "reviewing",
+        kind: "stage-transition",
+      },
+      sessions: pipeline.sessions.map((session) => ({
+        ...session,
+        status: "idle" as const,
+      })),
+    });
+    return { pipelines };
+  });
 }
 
 function seedClaudePrPipeline(phase: "creating-pr" | "resolving-conflicts" = "creating-pr") {
@@ -1597,6 +1628,96 @@ describe("BuildChatTab", () => {
         useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)
           ?.structuredReviewRequestId,
       ).toBeTruthy();
+    });
+
+    test("retrying a review reuses a legacy completed result with skipped tests", async () => {
+      seedFailedClaudeReviewTransition("review-request-with-skips");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      mockGetStructuredOutput.mockResolvedValueOnce({
+        ...TEST_STRUCTURED_REVIEW_OUTPUT,
+        value: TEST_LEGACY_STRUCTURED_REVIEW_REPORT,
+      } as any);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+      fireEvent.click(await screen.findByRole("button", { name: "Retry Review" }));
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("addressing");
+        expect(pipeline?.structuredReview?.testResults.notRun).toBe(13);
+      });
+
+      expect(mockGetStructuredOutput).toHaveBeenCalledWith(
+        { baseUrl: "http://127.0.0.1:9999" },
+        SESSION_ID,
+        "review-request-with-skips",
+      );
+      expect(mockCreateSession).not.toHaveBeenCalled();
+      const recovered = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)
+        ?.structuredReview;
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        { baseUrl: "http://127.0.0.1:9999" },
+        SESSION_ID,
+        createAddressIssuesPrompt(recovered!),
+        { permissionMode: "bypassPermissions" },
+      );
+    });
+
+    test("retrying a review reuses a findings-free result and verifies instead", async () => {
+      seedFailedClaudeReviewTransition("clean-review-request");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      mockGetStructuredOutput.mockResolvedValueOnce(
+        TEST_CLEAN_STRUCTURED_REVIEW_OUTPUT,
+      );
+      mockCreateSession.mockResolvedValueOnce({ sessionId: "recovered-verify-session" });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+      fireEvent.click(await screen.findByRole("button", { name: "Retry Review" }));
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("verifying");
+        expect(pipeline?.structuredReview?.issues).toEqual([]);
+        expect(pipeline?.sessions.at(-1)?.sdkSessionId).toBe("recovered-verify-session");
+      });
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        { baseUrl: "http://127.0.0.1:9999" },
+        "recovered-verify-session",
+        expect.stringContaining("Verify the changes"),
+        expect.objectContaining({ permissionMode: "bypassPermissions" }),
+      );
+    });
+
+    test("retrying a review starts a fresh one when the durable read rejects", async () => {
+      seedFailedClaudeReviewTransition("unreadable-review-request");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      mockGetStructuredOutput.mockImplementationOnce(() =>
+        Promise.reject(new Error("structured output store unavailable"))
+      );
+      mockCreateSession.mockResolvedValueOnce({ sessionId: "fallback-review-session" });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+      fireEvent.click(await screen.findByRole("button", { name: "Retry Review" }));
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("reviewing");
+        expect(pipeline?.sessions.at(-1)?.sdkSessionId).toBe("fallback-review-session");
+      });
+      expect(mockGetStructuredOutput).toHaveBeenCalledTimes(1);
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        expect.anything(),
+        "fallback-review-session",
+        expect.any(String),
+        expect.objectContaining({
+          outputSchema: expect.objectContaining({ type: "object" }),
+          requestId: expect.any(String),
+        }),
+      );
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)
+          ?.structuredReview,
+      ).toBeUndefined();
     });
 
     test("keeps the successful address-issues follow-up in the review session until it idles", async () => {

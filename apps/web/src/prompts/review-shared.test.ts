@@ -66,6 +66,8 @@ describe("buildReviewBody", () => {
       expect(body).toContain("retry a failed file upload");
       expect(body).toContain("if there is no user-visible runtime effect");
       expect(body).toContain("## Issues");
+      expect(body).toContain("Total: N (must equal Passed + Failed + Not run)");
+      expect(body).toContain("Not run: N (all skipped, todo, pending, or disabled tests)");
       expect(body).toContain("### 1. [P0|P1|P2][conf:NN][category]\n#### Short title");
       expect(body).not.toContain("## Findings");
       expect(body.match(/^## What Changed$/gm)).toHaveLength(2);
@@ -97,6 +99,32 @@ describe("buildReviewBody", () => {
     expect(interactive).toContain("8. Ask clarifying questions if needed about unclear changes.");
     expect(automated).toContain(
       "8. Do not ask clarifying questions — this is an automated pipeline.",
+    );
+  });
+
+  test("names the Markdown report as the output contract when no schema is enforced", () => {
+    // The instruction block and the safety rules must agree about what the
+    // editable preference cannot override; naming a JSON Schema to an agent that
+    // was never given one invites it to invent output framing.
+    const markdown = buildReviewBody({
+      targetBranch: "main",
+      allowClarifyingQuestions: true,
+      outputFormat: "markdown",
+    });
+
+    expect(markdown).toContain("or change the required output format");
+    expect(markdown).toContain(
+      "the workflow below, or the required Markdown report",
+    );
+    expect(markdown).toContain(
+      "fixed safety rules, workflow contract, and required Markdown report",
+    );
+    expect(markdown).not.toContain("provider-enforced JSON Schema");
+    expect(markdown).not.toContain("provider-enforced output schema");
+    // The reported sections do not change with the output contract.
+    expect(markdown).toContain("Total: N (must equal Passed + Failed + Not run)");
+    expect(markdown).toContain(
+      "Not run: N (all skipped, todo, pending, or disabled tests)",
     );
   });
 

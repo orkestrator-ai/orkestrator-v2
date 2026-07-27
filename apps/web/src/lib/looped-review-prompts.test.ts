@@ -61,7 +61,7 @@ const emptyReport: StructuredReviewReport = {
     overallRisk: "low",
     reasoning: "Low risk",
   },
-  testResults: { total: 0, passed: 0, failed: 0, failures: [] },
+  testResults: { total: 0, passed: 0, failed: 0, notRun: 0, failures: [] },
   strengths: [],
   issues: [],
   testCoverageGaps: [],

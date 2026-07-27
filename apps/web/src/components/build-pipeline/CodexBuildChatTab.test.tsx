@@ -6,6 +6,7 @@ import {
   type CodexPromptSendOutcome,
 } from "@/lib/codex-client";
 import {
+  TEST_CLEAN_STRUCTURED_REVIEW_OUTPUT,
   TEST_STRUCTURED_REVIEW_OUTPUT,
   TEST_STRUCTURED_REVIEW_REPORT,
 } from "./structured-review-test-fixture";
@@ -613,6 +614,32 @@ function seedFailedPromptRecovery(options: {
   }));
 }
 
+/**
+ * A review round that completed on the provider but failed the transition into
+ * the next phase, with the durable request id recorded and no report consumed
+ * yet — the state `recoverExistingBuildReview` is allowed to reuse.
+ */
+function seedFailedReviewTransition(requestId: string) {
+  seedReviewPipeline();
+  seedCodexStore(false);
+  useBuildPipelineStore.setState((state) => {
+    const pipeline = state.pipelines.get(PIPELINE_ID)!;
+    return {
+      pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+        ...pipeline,
+        phase: "failed",
+        error:
+          "Invalid structured-review-report: 1 validation issue. $.testResults.notRun: Required field \"notRun\" is missing.",
+        structuredReviewRequestId: requestId,
+        failureContext: {
+          phase: "reviewing",
+          kind: "stage-transition",
+        },
+      }),
+    };
+  });
+}
+
 function resetStores() {
   useBuildPipelineStore.setState({
     pipelines: new Map(),
@@ -679,6 +706,7 @@ describe("CodexBuildChatTab", () => {
     mockCreateSession.mockClear();
     mockGetSessionMessages.mockClear();
     mockGetSessionStatus.mockClear();
+    mockGetStructuredOutput.mockClear();
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
     mockDetectPr.mockClear();
@@ -2589,6 +2617,212 @@ describe("CodexBuildChatTab", () => {
     >;
     expect(sendCalls[0]?.[1]).toBe("retry-review-session");
     expect(sendCalls[0]?.[2]).not.toBe(completedBuildPrompt);
+  });
+
+  test("reconnect reuses a legacy completed review with skipped tests", async () => {
+    seedReviewPipeline();
+    seedCodexStore(false);
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          phase: "failed",
+          error:
+            "Invalid structured-review-report: 1 validation issue. $.testResults.notRun: Required field \"notRun\" is missing.",
+          structuredReviewRequestId: "review-request-with-skips",
+          failureContext: {
+            phase: "reviewing",
+            kind: "stage-transition",
+          },
+        }),
+      };
+    });
+    mockGetStructuredOutput.mockResolvedValueOnce({
+      ...TEST_STRUCTURED_REVIEW_OUTPUT,
+      value: {
+        ...TEST_STRUCTURED_REVIEW_REPORT,
+        testResults: {
+          total: 8_107,
+          passed: 8_094,
+          failed: 0,
+          failures: [],
+        },
+      },
+    } as any);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => {
+      const pipeline =
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("addressing");
+      expect(pipeline?.structuredReview?.testResults.notRun).toBe(13);
+    });
+
+    expect(mockGetStructuredOutput).toHaveBeenCalledWith(
+      { baseUrl: "http://127.0.0.1:9999" },
+      SESSION_ID,
+      "review-request-with-skips",
+    );
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    expect(mockSendPrompt.mock.calls[0]?.[1]).toBe(SESSION_ID);
+  });
+
+  test("reconnect reuses a findings-free completed review and verifies instead", async () => {
+    seedFailedReviewTransition("clean-review-request");
+    mockGetStructuredOutput.mockResolvedValueOnce(
+      TEST_CLEAN_STRUCTURED_REVIEW_OUTPUT as any,
+    );
+    mockCreateSession.mockResolvedValueOnce({
+      sessionId: "recovered-verify-session",
+      title: "Verification",
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => {
+      const pipeline =
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("verifying");
+      expect(pipeline?.sessions.at(-1)).toMatchObject({
+        phase: "verify",
+        sdkSessionId: "recovered-verify-session",
+      });
+    });
+
+    expect(mockGetStructuredOutput).toHaveBeenCalledWith(
+      { baseUrl: "http://127.0.0.1:9999" },
+      SESSION_ID,
+      "clean-review-request",
+    );
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    expect(mockSendPrompt.mock.calls[0]?.[1]).toBe("recovered-verify-session");
+  });
+
+  test("reconnect starts a fresh review when the durable read rejects", async () => {
+    seedFailedReviewTransition("unreadable-review-request");
+    mockGetStructuredOutput.mockImplementationOnce(() =>
+      Promise.reject(new Error("structured output store unavailable"))
+    );
+    mockCreateSession.mockResolvedValueOnce({
+      sessionId: "fallback-review-session",
+      title: "Review Session",
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => {
+      const pipeline =
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("reviewing");
+      expect(pipeline?.sessions.at(-1)).toMatchObject({
+        phase: "review",
+        sdkSessionId: "fallback-review-session",
+      });
+    });
+
+    expect(mockGetStructuredOutput).toHaveBeenCalledTimes(1);
+    expect(mockSendPrompt).toHaveBeenCalledWith(
+      { baseUrl: "http://127.0.0.1:9999" },
+      "fallback-review-session",
+      expect.any(String),
+      expect.objectContaining({
+        outputSchema: expect.objectContaining({ type: "object" }),
+        requestId: expect.any(String),
+      }),
+    );
+  });
+
+  test("reconnect starts a fresh review when no durable result was stored", async () => {
+    seedFailedReviewTransition("missing-review-request");
+    mockGetStructuredOutput.mockResolvedValueOnce(null as any);
+    mockCreateSession.mockResolvedValueOnce({
+      sessionId: "fallback-review-session",
+      title: "Review Session",
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => {
+      const pipeline =
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("reviewing");
+      expect(pipeline?.sessions.at(-1)).toMatchObject({
+        phase: "review",
+        sdkSessionId: "fallback-review-session",
+      });
+    });
+
+    expect(mockGetStructuredOutput).toHaveBeenCalledTimes(1);
+    expect(
+      useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)
+        ?.structuredReviewRequestId,
+    ).not.toBe("missing-review-request");
+  });
+
+  test("reconnect does not reuse a review the pipeline has already consumed", async () => {
+    seedReviewPipeline();
+    seedCodexStore(false);
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          phase: "failed",
+          error: "Failed to create review session",
+          // The request id and the last review session still point at the
+          // previous round, whose report was already consumed.
+          structuredReviewRequestId: "previous-round-request",
+          structuredReview: TEST_STRUCTURED_REVIEW_REPORT,
+          sessions: [
+            { ...pipeline.sessions[0]!, status: "idle" as const },
+            {
+              phase: "fix" as const,
+              iteration: 1,
+              sessionKey: SESSION_KEY,
+              sdkSessionId: "fix-session",
+              status: "idle" as const,
+              startedAt: "2026-04-15T00:01:00.000Z",
+              label: "Fix Session (Iteration 2)",
+            },
+          ],
+          currentSessionIndex: 1,
+          failureContext: {
+            phase: "reviewing",
+            kind: "stage-transition",
+          },
+        }),
+      };
+    });
+    mockCreateSession.mockResolvedValueOnce({
+      sessionId: "next-round-review-session",
+      title: "Review Session",
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => {
+      const pipeline =
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("reviewing");
+      expect(pipeline?.sessions.at(-1)).toMatchObject({
+        phase: "review",
+        sdkSessionId: "next-round-review-session",
+      });
+    });
+
+    expect(mockGetStructuredOutput).not.toHaveBeenCalled();
+    expect(
+      useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)
+        ?.structuredReviewRequestId,
+    ).not.toBe("previous-round-request");
   });
 
   test("reconnect adopts an authoritative running turn without resending its prompt", async () => {

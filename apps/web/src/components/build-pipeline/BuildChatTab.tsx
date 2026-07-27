@@ -62,6 +62,7 @@ import { StructuredReviewReportView } from "@/components/review/StructuredReview
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import {
   readValidatedBuildReview,
+  recoverExistingBuildReview,
   structuredReviewHasFindings,
 } from "@/lib/build-pipeline-structured-review";
 import { hideRawStructuredReviewMessages } from "@/lib/structured-review-messages";
@@ -1384,11 +1385,42 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
     setIsRetryingReview(true);
     try {
+      // Only the read is guarded. Everything after a successful recovery has
+      // already moved the phase and may have dispatched a prompt, so treating a
+      // failure there as "recovery failed" would start a second review on top.
+      const recovered = client
+        ? await recoverExistingBuildReview(
+            currentPipeline,
+            (sessionId, requestId) =>
+              getStructuredOutput(client, sessionId, requestId),
+            "[BuildChatTab]",
+          )
+        : null;
+      if (recovered) {
+        setStructuredReview(pipelineId, recovered.report);
+        const recoveredPipeline = {
+          ...currentPipeline,
+          structuredReview: recovered.report,
+        };
+        if (structuredReviewHasFindings(recovered.report)) {
+          await sendAddressIssuesMessage(recoveredPipeline, recovered.session);
+        } else {
+          await startVerifySession(recoveredPipeline);
+        }
+        return;
+      }
       await startReviewSession(currentPipeline);
     } finally {
       setIsRetryingReview(false);
     }
-  }, [pipelineId, startReviewSession]);
+  }, [
+    client,
+    pipelineId,
+    sendAddressIssuesMessage,
+    setStructuredReview,
+    startReviewSession,
+    startVerifySession,
+  ]);
 
   // When the bridge server is connected and environment is starting, transition to
   // waiting-for-setup. Both local and container environments must complete their setup

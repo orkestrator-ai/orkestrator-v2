@@ -197,9 +197,10 @@ Use the unrelated example below only as a model for specificity and structure. R
 - Reasoning: 1-3 sentences
 
 ## Test Results
-- Total: N
+- Total: N (must equal Passed + Failed + Not run)
 - Passed: N
 - Failed: N
+- Not run: N (all skipped, todo, pending, or disabled tests)
 - For each failure: test name, file, error message.
 
 ## Strengths

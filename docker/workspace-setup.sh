@@ -4,6 +4,14 @@
 
 set -e
 
+PREPARE_ONLY=false
+if [ "${1:-}" = "--prepare-only" ]; then
+    PREPARE_ONLY=true
+elif [ "$#" -gt 0 ]; then
+    echo "Unknown workspace setup argument: $1" >&2
+    exit 2
+fi
+
 # Color output helpers - use $'...' syntax for proper escape sequence handling
 GREEN=$'\033[0;32m'
 BLUE=$'\033[0;34m'
@@ -175,6 +183,11 @@ append_git_exclude_pattern() {
     local pattern="$2"
     ensure_git_exclude_trailing_newline "$exclude_file"
     printf '%s\n' "$pattern" >> "$exclude_file"
+}
+
+validate_prepared_workspace() {
+    local workspace="${1:-/workspace}"
+    git -C "$workspace" rev-parse --verify 'HEAD^{commit}' >/dev/null 2>&1
 }
 
 # Function to add Orkestrator workspace artifacts to .git/info/exclude
@@ -457,15 +470,19 @@ else
     fi
 fi
 
-# Capture the immutable commit this environment branch started from before
-# copied project files or setup scripts can modify (or commit to) the worktree.
-# Keep the first value across setup retries and container restarts.
-if [ -d "/workspace/.git" ] && [ ! -s /tmp/.orkestrator-created-from-commit ]; then
-    git -C /workspace rev-parse HEAD > /tmp/.orkestrator-created-from-commit 2>/dev/null || true
-fi
-
 restore_orkestrator_workspace_state
 add_workspace_artifacts_to_git_exclude
+
+# The backend invokes this phase separately and durably stores HEAD before it
+# allows copied files or repository-controlled setup commands to run.
+if [ "$PREPARE_ONLY" = true ]; then
+    if ! validate_prepared_workspace /workspace; then
+        echo -e "${RED}Workspace preparation failed - no valid Git HEAD${NC}" >&2
+        exit 1
+    fi
+    echo -e "${GREEN}Workspace preparation complete${NC}"
+    exit 0
+fi
 
 # Copy .env files to workspace
 echo ""

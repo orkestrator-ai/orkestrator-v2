@@ -49,6 +49,17 @@ add_workspace_artifacts_to_git_exclude
   return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
+function runPreparedWorkspaceValidation(workspace: string): number | null {
+  const harness = `
+set -e
+eval "$(sed -n '/^validate_prepared_workspace() {/,/^}$/p' "$1")"
+validate_prepared_workspace "$2"
+`;
+  return spawnSync("bash", ["-c", harness, "--", setupScript, workspace], {
+    encoding: "utf8",
+  }).status;
+}
+
 describe("workspace setup attachment preservation (structure)", () => {
   test("preserve/restore wrap workspace cleanup, in correct order", () => {
     const setup = read("docker/workspace-setup.sh");
@@ -84,6 +95,38 @@ describe("workspace setup attachment preservation (structure)", () => {
     expect(setup).toContain('grep -qxF "$pattern" "$exclude_file"');
     expect(setup).toContain('append_git_exclude_pattern "$exclude_file" "$pattern"');
     expect(setup.match(/add_workspace_artifacts_to_git_exclude/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+
+  test("prepare-only stops after checkout restoration and before untrusted setup", () => {
+    const setup = read("docker/workspace-setup.sh");
+    const workspaceCleanup = setup.indexOf("rm -rf /workspace/*");
+    const restoreCall = setup.indexOf("restore_orkestrator_workspace_state", workspaceCleanup);
+    const prepareCheckpoint = setup.indexOf('if [ "$PREPARE_ONLY" = true ]');
+    const envCopy = setup.indexOf(">>> Setting up environment files <<<");
+    const projectSetup = setup.indexOf("=== Running Container Setup ===");
+
+    expect(setup).toContain('if [ "${1:-}" = "--prepare-only" ]; then');
+    expect(prepareCheckpoint).toBeGreaterThan(restoreCall);
+    expect(prepareCheckpoint).toBeLessThan(envCopy);
+    expect(prepareCheckpoint).toBeLessThan(projectSetup);
+    expect(setup).not.toContain(".orkestrator-created-from-commit");
+  });
+
+  test("prepared workspace validation requires a real commit", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ork-ws-prepare-"));
+    try {
+      expect(runPreparedWorkspaceValidation(workspace)).not.toBe(0);
+      if (!gitAvailable()) return;
+      runGit(workspace, ["init"]);
+      runGit(workspace, ["config", "user.email", "test@example.com"]);
+      runGit(workspace, ["config", "user.name", "Test"]);
+      writeFileSync(join(workspace, "tracked.txt"), "base\n");
+      runGit(workspace, ["add", "tracked.txt"]);
+      runGit(workspace, ["commit", "-m", "base"]);
+      expect(runPreparedWorkspaceValidation(workspace)).toBe(0);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });
 

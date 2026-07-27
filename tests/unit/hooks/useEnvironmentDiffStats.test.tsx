@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useEnvironmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
@@ -367,5 +367,98 @@ describe("useEnvironmentDiffStats", () => {
       globalThis.setInterval = originalSetInterval;
       globalThis.clearInterval = originalClearInterval;
     }
+  });
+
+  test("does not overlap polls for the same environment snapshot", async () => {
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+    let intervalCallback: (() => void) | null = null;
+
+    globalThis.setInterval = ((callback: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      if (timeout === 15000) {
+        intervalCallback = callback as () => void;
+        return 8 as unknown as ReturnType<typeof setInterval>;
+      }
+      return originalSetInterval(callback, timeout, ...args);
+    }) as typeof setInterval;
+    globalThis.clearInterval = ((intervalId: Parameters<typeof clearInterval>[0]) => {
+      if (intervalId !== (8 as unknown as Parameters<typeof clearInterval>[0])) {
+        originalClearInterval(intervalId);
+      }
+    }) as typeof clearInterval;
+
+    try {
+      const environment = createMockEnvironment({
+        id: "env-local",
+        projectId: "project-1",
+        environmentType: "local",
+        worktreePath: "/tmp/worktree",
+        status: "stopped",
+      });
+      resetStores([environment]);
+      let resolveRequest: (changes: GitFileChange[]) => void = () => {};
+      mockGetLocalGitStatus.mockImplementation(() => new Promise((resolve) => {
+        resolveRequest = resolve;
+      }));
+
+      renderHook(() => useEnvironmentDiffStats());
+      await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
+
+      act(() => {
+        intervalCallback?.();
+        intervalCallback?.();
+      });
+      expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolveRequest([]);
+        await Promise.resolve();
+      });
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
+  });
+
+  test("does not restore stats when an environment is removed while its poll is in flight", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores([environment]);
+    useEnvironmentDiffStore.setState({
+      stats: new Map([["env-local", { additions: 1, deletions: 1, filesChanged: 1 }]]),
+    });
+    let resolveRequest: (changes: GitFileChange[]) => void = () => {};
+    mockGetLocalGitStatus.mockImplementation(() => new Promise((resolve) => {
+      resolveRequest = resolve;
+    }));
+
+    renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(mockGetLocalGitStatus).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      useEnvironmentStore.setState({ environments: [] });
+    });
+    await waitFor(() => {
+      expect(useEnvironmentDiffStore.getState().stats.has("env-local")).toBe(false);
+    });
+
+    await act(async () => {
+      resolveRequest([{
+        path: "late.ts",
+        filename: "late.ts",
+        directory: "",
+        status: "M",
+        additions: 99,
+        deletions: 0,
+      }]);
+      await Promise.resolve();
+    });
+
+    expect(useEnvironmentDiffStore.getState().stats.has("env-local")).toBe(false);
   });
 });

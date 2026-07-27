@@ -18,6 +18,18 @@ interface DiffPollEnv {
   createdFromCommit?: string;
 }
 
+function getDiffPollEnvKey(env: DiffPollEnv): string {
+  return JSON.stringify([
+    env.id,
+    env.projectId,
+    env.environmentType,
+    env.worktreePath ?? "",
+    env.status,
+    env.containerId ?? "",
+    env.createdFromCommit ?? "",
+  ]);
+}
+
 /**
  * Hook that polls git diff stats for all environments and updates the diff store.
  * Should be mounted once at the sidebar/app level.
@@ -49,10 +61,7 @@ export function useEnvironmentDiffStats() {
   // Stable identity string that only changes when the set of environments
   // or their availability-relevant fields change.
   const envKey = useMemo(
-    () =>
-      envSnapshot
-        .map((e) => `${e.id}:${e.status}:${e.worktreePath ?? ""}:${e.containerId ?? ""}:${e.createdFromCommit ?? ""}`)
-        .join("|"),
+    () => JSON.stringify(envSnapshot.map(getDiffPollEnvKey)),
     [envSnapshot]
   );
 
@@ -66,7 +75,8 @@ export function useEnvironmentDiffStats() {
 
   useEffect(() => {
     const fetchStatsForEnvironment = async (env: DiffPollEnv) => {
-      if (loadingRef.current.has(env.id)) return;
+      const requestKey = getDiffPollEnvKey(env);
+      if (loadingRef.current.has(requestKey)) return;
 
       const isLocal = env.environmentType === "local";
       const isAvailable = isLocal
@@ -78,7 +88,7 @@ export function useEnvironmentDiffStats() {
       const repoConfig = getRepositoryConfigRef.current(env.projectId);
       const comparisonRef = env.createdFromCommit || repoConfig?.prBaseBranch || "main";
 
-      loadingRef.current.add(env.id);
+      loadingRef.current.add(requestKey);
       try {
         let changes: backend.GitFileChange[];
         if (isLocal && env.worktreePath) {
@@ -89,9 +99,13 @@ export function useEnvironmentDiffStats() {
           return;
         }
 
+        const isCurrentEnvironment = envRef.current.some(
+          (currentEnv) => getDiffPollEnvKey(currentEnv) === requestKey,
+        );
+        if (!isCurrentEnvironment) return;
+
         const totalAdditions = changes.reduce((sum, c) => sum + c.additions, 0);
         const totalDeletions = changes.reduce((sum, c) => sum + c.deletions, 0);
-
         setStats(env.id, {
           additions: totalAdditions,
           deletions: totalDeletions,
@@ -100,7 +114,7 @@ export function useEnvironmentDiffStats() {
       } catch {
         // Silently ignore - stats are non-critical
       } finally {
-        loadingRef.current.delete(env.id);
+        loadingRef.current.delete(requestKey);
       }
     };
 

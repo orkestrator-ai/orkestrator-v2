@@ -580,6 +580,118 @@ describe("useFilesPanel", () => {
     expect(useFilesPanelStore.getState().fileTree).toEqual(secondTree);
   });
 
+  test("waits for pre-mutation refreshes before publishing fresh post-mutation snapshots", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const staleChange = { ...change, additions: 1 };
+    const freshChange = { ...change, additions: 9 };
+    const staleTree: FileNode[] = [{ name: "stale.ts", path: "stale.ts", isDirectory: false }];
+    const freshTree: FileNode[] = [{ name: "fresh.ts", path: "fresh.ts", isDirectory: false }];
+    let resolveStaleChanges: (changes: GitFileChange[]) => void = () => {};
+    let resolveStaleTree: (nodes: FileNode[]) => void = () => {};
+    let changesCallCount = 0;
+    let treeCallCount = 0;
+    resetStores(environment);
+    mockGetGitStatus.mockImplementation(() => {
+      changesCallCount += 1;
+      return changesCallCount === 1
+        ? new Promise((resolve) => { resolveStaleChanges = resolve; })
+        : Promise.resolve([freshChange]);
+    });
+    mockGetFileTree.mockImplementation(() => {
+      treeCallCount += 1;
+      return treeCallCount === 1
+        ? new Promise((resolve) => { resolveStaleTree = resolve; })
+        : Promise.resolve(freshTree);
+    });
+
+    const { result } = renderHook(() => useFilesPanel());
+    let preMutationRefresh: Promise<unknown>;
+    act(() => {
+      preMutationRefresh = Promise.all([
+        result.current.loadChanges(true),
+        result.current.loadFileTree(true),
+      ]);
+    });
+    expect(mockGetGitStatus).toHaveBeenCalledTimes(1);
+    expect(mockGetFileTree).toHaveBeenCalledTimes(1);
+
+    let mutation: Promise<void>;
+    act(() => {
+      mutation = result.current.deleteFile("src/App.tsx");
+    });
+    await waitFor(() => expect(mockDeleteContainerFile).toHaveBeenCalledTimes(1));
+    expect(mockGetGitStatus).toHaveBeenCalledTimes(1);
+    expect(mockGetFileTree).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveStaleChanges([staleChange]);
+      resolveStaleTree(staleTree);
+      await Promise.all([preMutationRefresh, mutation]);
+    });
+
+    expect(mockGetGitStatus).toHaveBeenCalledTimes(2);
+    expect(mockGetFileTree).toHaveBeenCalledTimes(2);
+    expect(useFilesPanelStore.getState().changes).toEqual([freshChange]);
+    expect(useFilesPanelStore.getState().fileTree).toEqual(freshTree);
+  });
+
+  test("does not refresh or overwrite the new environment after switching during a mutation", async () => {
+    const firstEnvironment = createMockEnvironment({
+      id: "env-a",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-a",
+      status: "running",
+    });
+    const secondEnvironment = createMockEnvironment({
+      id: "env-b",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-b",
+      status: "running",
+    });
+    const secondChange = { ...change, path: "src/Second.tsx", filename: "Second.tsx" };
+    const secondTree: FileNode[] = [{ name: "Second.tsx", path: "src/Second.tsx", isDirectory: false }];
+    let resolveDelete: (path: string) => void = () => {};
+    resetStores(firstEnvironment);
+    useEnvironmentStore.setState({ environments: [firstEnvironment, secondEnvironment] });
+    mockDeleteContainerFile.mockImplementation(() => new Promise((resolve) => {
+      resolveDelete = resolve;
+    }));
+
+    const { result } = renderHook(() => useFilesPanel());
+    let mutation: Promise<void>;
+    act(() => {
+      mutation = result.current.deleteFile("src/App.tsx");
+    });
+    await waitFor(() => expect(result.current.fileActionPending).toBe("src/App.tsx"));
+
+    act(() => {
+      useUIStore.setState({ selectedEnvironmentId: "env-b" });
+    });
+    await waitFor(() => expect(result.current.environmentId).toBe("env-b"));
+    act(() => {
+      useFilesPanelStore.setState({ changes: [secondChange], fileTree: secondTree });
+    });
+
+    await act(async () => {
+      resolveDelete("src/App.tsx");
+      await mutation;
+    });
+
+    expect(mockGetGitStatus).not.toHaveBeenCalled();
+    expect(mockGetFileTree).not.toHaveBeenCalled();
+    expect(useFilesPanelStore.getState().changes).toEqual([secondChange]);
+    expect(useFilesPanelStore.getState().fileTree).toEqual(secondTree);
+    expect(result.current.fileActionPending).toBeNull();
+  });
+
   test("reverts local files against the comparison ref and refreshes both snapshots", async () => {
     const environment = createMockEnvironment({
       id: "env-local",
@@ -777,6 +889,73 @@ describe("useFilesPanel", () => {
 
       unmount();
       expect(clearIntervalMock).toHaveBeenCalledWith(1);
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
+  });
+
+  test("silent auto-refresh reloads changes and tree on the all-files tab", async () => {
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+    let intervalCallback: (() => void) | null = null;
+
+    globalThis.setInterval = ((callback: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      if (timeout === 5000) {
+        intervalCallback = callback as () => void;
+        return 2 as unknown as ReturnType<typeof setInterval>;
+      }
+      return originalSetInterval(callback, timeout, ...args);
+    }) as typeof setInterval;
+    globalThis.clearInterval = ((intervalId: Parameters<typeof clearInterval>[0]) => {
+      if (intervalId !== (2 as unknown as Parameters<typeof clearInterval>[0])) {
+        originalClearInterval(intervalId);
+      }
+    }) as typeof clearInterval;
+
+    try {
+      const environment = createMockEnvironment({
+        id: "env-container",
+        projectId: "project-1",
+        environmentType: "containerized",
+        containerId: "container-1",
+        status: "running",
+      });
+      const refreshedChange = { ...change, additions: 12 };
+      const refreshedTree: FileNode[] = [{
+        name: "updated.ts",
+        path: "src/updated.ts",
+        isDirectory: false,
+      }];
+      resetStores(environment);
+      useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
+      mockGetGitStatus
+        .mockImplementationOnce(() => Promise.resolve([]))
+        .mockImplementationOnce(() => Promise.resolve([refreshedChange]));
+      mockGetFileTree
+        .mockImplementationOnce(() => Promise.resolve([]))
+        .mockImplementationOnce(() => Promise.resolve(refreshedTree));
+
+      renderHook(() => useFilesPanel());
+      await waitFor(() => {
+        expect(mockGetGitStatus).toHaveBeenCalledTimes(1);
+        expect(mockGetFileTree).toHaveBeenCalledTimes(1);
+        expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+        expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
+      });
+
+      await act(async () => {
+        intervalCallback?.();
+      });
+
+      await waitFor(() => {
+        expect(mockGetGitStatus).toHaveBeenCalledTimes(2);
+        expect(mockGetFileTree).toHaveBeenCalledTimes(2);
+        expect(useFilesPanelStore.getState().changes).toEqual([refreshedChange]);
+        expect(useFilesPanelStore.getState().fileTree).toEqual(refreshedTree);
+      });
+      expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+      expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
     } finally {
       globalThis.setInterval = originalSetInterval;
       globalThis.clearInterval = originalClearInterval;

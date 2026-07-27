@@ -155,13 +155,13 @@ let spawnLocalServerCommandImpl = spawnCommand;
 const CLAUDE_MODEL_CATALOG_TTL_MS = 5 * 60_000;
 const CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS = 30_000;
 const CONTAINER_WORKSPACE_SETUP_COMMAND = "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh'; else /usr/local/bin/workspace-setup.sh; fi";
+const CONTAINER_WORKSPACE_PREPARE_COMMAND = "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh --prepare-only'; else /usr/local/bin/workspace-setup.sh --prepare-only; fi";
 const SETUP_DONE_OSC_SEQUENCE = "\u001b]9999;setup_done\u0007";
 const SETUP_FAILED_OSC_SEQUENCE = "\u001b]9999;setup_failed\u0007";
 const SETUP_DONE_PRINTF_CMD = "printf '\\033]9999;setup_done\\007'";
 const SETUP_FAILED_PRINTF_CMD = "printf '\\033]9999;setup_failed\\007'";
 const MAX_TERMINAL_OUTPUT_BUFFER_CHARS = 500 * 1024;
 const TERMINAL_ACTIVITY_SETTLE_MS = 750;
-const CONTAINER_CREATED_FROM_COMMIT_FILE = "/tmp/.orkestrator-created-from-commit";
 export function buildContainerSafeBase64Reader(
   testMutation?: "append" | "replace",
 ): string {
@@ -246,6 +246,67 @@ try {
 }
 export const CONTAINER_SAFE_BASE64_READER = buildContainerSafeBase64Reader();
 
+export const CONTAINER_UNTRACKED_STATS_SCANNER = String.raw`
+const fs = require("node:fs");
+const limit = Number(process.argv[1]);
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  const input = Buffer.concat(chunks);
+  let offset = 0;
+  while (offset < input.length) {
+    const end = input.indexOf(0, offset);
+    if (end === -1) process.exit(2);
+    const record = input.subarray(offset, end);
+    offset = end + 1;
+    if (record.length < 4 || record[0] !== 63 || record[1] !== 63 || record[2] !== 32) continue;
+    const filePath = record.subarray(3);
+    let count = 0;
+    let fd;
+    try {
+      fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      const initial = fs.fstatSync(fd);
+      if (!initial.isFile() || initial.size === 0 || initial.size > limit) throw new Error("skip");
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      let total = 0;
+      let separators = 0;
+      let previousWasCarriageReturn = false;
+      let lastByte = -1;
+      while (true) {
+        const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+        if (bytesRead === 0) break;
+        total += bytesRead;
+        if (total > limit) throw new Error("skip");
+        for (let index = 0; index < bytesRead; index += 1) {
+          const byte = buffer[index];
+          if (byte === 0) throw new Error("skip");
+          if (byte === 13) {
+            separators += 1;
+            previousWasCarriageReturn = true;
+          } else if (byte === 10) {
+            if (!previousWasCarriageReturn) separators += 1;
+            previousWasCarriageReturn = false;
+          } else {
+            previousWasCarriageReturn = false;
+          }
+          lastByte = byte;
+        }
+      }
+      count = separators + (lastByte !== 13 && lastByte !== 10 ? 1 : 0);
+    } catch {
+      count = 0;
+    } finally {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd); } catch {}
+      }
+    }
+    process.stdout.write(Buffer.from(String(count) + "\t"));
+    process.stdout.write(filePath);
+    process.stdout.write(Buffer.from([0]));
+  }
+});
+`;
+
 type EnvironmentSetupSession = {
   environmentId: string;
   sessionId: string;
@@ -266,6 +327,8 @@ type EnvironmentSetupStartResult = {
 
 const environmentSetupSessions = new Map<string, EnvironmentSetupSession>();
 const environmentSetupTasks = new Map<string, Promise<Environment>>();
+const environmentSetupStartTasks = new Map<string, Promise<EnvironmentSetupStartResult>>();
+const environmentBaselineTasks = new Map<string, Promise<Environment>>();
 const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [".orkestrator", ".claude/settings.local.json"] as const;
 
 function asString(value: unknown, name: string): string {
@@ -2216,6 +2279,8 @@ function cleanupEnvironmentSetupState(environmentId: string): void {
   terminalOutputBuffers.delete(setupTerminalSessionId(environmentId));
   environmentSetupSessions.delete(environmentId);
   environmentSetupTasks.delete(environmentId);
+  environmentSetupStartTasks.delete(environmentId);
+  environmentBaselineTasks.delete(environmentId);
 }
 
 function buildSetupTerminalCommand(commands: string[], finalShellCommand: string): string {
@@ -2371,8 +2436,10 @@ async function completeEnvironmentSetup(
   environment: Environment,
   context: CommandContext,
 ): Promise<Environment> {
-  const completed = await context.storage.updateEnvironment(environment.id, { setupScriptsComplete: true });
-  const updated = await captureCreatedFromCommit(completed, context.storage);
+  if (!environment.createdFromCommit) {
+    throw new Error(`Environment creation commit was not captured before setup completed: ${environment.id}`);
+  }
+  const updated = await context.storage.updateEnvironment(environment.id, { setupScriptsComplete: true });
   const session = environmentSetupSessions.get(environment.id);
   logSetupTerminal("setup completed", {
     environmentId: environment.id,
@@ -2435,11 +2502,11 @@ async function failEnvironmentSetup(environmentId: string, error: unknown, conte
   });
 }
 
-async function startEnvironmentSetup(
+async function startEnvironmentSetupOnce(
   environment: Environment,
   context: CommandContext,
 ): Promise<EnvironmentSetupStartResult> {
-  const current = await context.storage.getEnvironment(environment.id) ?? environment;
+  let current = await context.storage.getEnvironment(environment.id) ?? environment;
   if (current.setupScriptsComplete) {
     logSetupTerminal("setup already complete", {
       environmentId: current.id,
@@ -2454,6 +2521,7 @@ async function startEnvironmentSetup(
     };
   }
 
+  current = await ensureCreatedFromCommitBeforeSetup(current, context);
   const commands = await readEnvironmentSetupCommands(current);
   if (commands.length === 0) {
     logSetupTerminal("no setup commands found", {
@@ -2516,6 +2584,23 @@ async function startEnvironmentSetup(
     setupSessionId: sessionId,
     environment: current,
   };
+}
+
+function startEnvironmentSetup(
+  environment: Environment,
+  context: CommandContext,
+): Promise<EnvironmentSetupStartResult> {
+  const existing = environmentSetupStartTasks.get(environment.id);
+  if (existing) return existing;
+
+  const task = startEnvironmentSetupOnce(environment, context)
+    .finally(() => {
+      if (environmentSetupStartTasks.get(environment.id) === task) {
+        environmentSetupStartTasks.delete(environment.id);
+      }
+    });
+  environmentSetupStartTasks.set(environment.id, task);
+  return task;
 }
 
 async function runEnvironmentSetupNow(environmentId: string, context: CommandContext): Promise<Environment> {
@@ -2664,26 +2749,77 @@ async function dockerExec(
 }
 
 async function readLocalHeadCommit(worktreePath: string): Promise<string> {
-  const { stdout } = await runCommand("git", ["-C", worktreePath, "rev-parse", "HEAD"], { timeoutMs: 30_000 });
-  return stdout.trim();
+  const { stdout } = await runCommand(
+    "git",
+    ["-C", worktreePath, "rev-parse", "--verify", "HEAD^{commit}"],
+    { timeoutMs: 30_000 },
+  );
+  const commit = stdout.trim();
+  if (!/^[0-9a-f]{40}$/i.test(commit)) {
+    throw new Error(`Git returned an invalid HEAD commit for ${worktreePath}`);
+  }
+  return commit;
 }
 
 async function readContainerHeadCommit(containerId: string): Promise<string | undefined> {
   const commit = await dockerExec(
     containerId,
-    `cat ${CONTAINER_CREATED_FROM_COMMIT_FILE} 2>/dev/null || git -C /workspace rev-parse HEAD 2>/dev/null || true`,
+    "git -C /workspace rev-parse --verify 'HEAD^{commit}'",
     30_000,
   );
   const trimmed = commit.trim();
   return /^[0-9a-f]{40}$/i.test(trimmed) ? trimmed : undefined;
 }
 
-async function captureCreatedFromCommit(environment: Environment, storage: StorageService): Promise<Environment> {
+async function establishCreatedFromCommit(
+  environment: Environment,
+  context: CommandContext,
+): Promise<Environment> {
   if (environment.createdFromCommit) return environment;
-  const commit = environment.environmentType === "local"
-    ? environment.worktreePath ? await readLocalHeadCommit(environment.worktreePath).catch(() => undefined) : undefined
-    : environment.containerId ? await readContainerHeadCommit(environment.containerId).catch(() => undefined) : undefined;
-  return commit ? storage.updateEnvironment(environment.id, { createdFromCommit: commit }) : environment;
+
+  const existing = environmentBaselineTasks.get(environment.id);
+  if (existing) return existing;
+
+  const task = (async () => {
+    const current = await context.storage.getEnvironment(environment.id) ?? environment;
+    if (current.createdFromCommit) return current;
+
+    let commit: string | undefined;
+    if (current.environmentType === "local") {
+      if (!current.worktreePath) {
+        throw new Error(`Local environment worktree is not available: ${current.id}`);
+      }
+      commit = await readLocalHeadCommit(current.worktreePath);
+    } else {
+      if (!current.containerId) {
+        throw new Error(`Environment has no container: ${current.id}`);
+      }
+      if (!await isContainerRunning(current.containerId)) {
+        throw new Error(`Container is not running: ${current.containerId}`);
+      }
+      await dockerExec(current.containerId, CONTAINER_WORKSPACE_PREPARE_COMMAND, 10 * 60_000);
+      commit = await readContainerHeadCommit(current.containerId);
+    }
+
+    if (!commit) {
+      throw new Error(`Could not resolve environment creation commit: ${current.id}`);
+    }
+    return context.storage.updateEnvironment(current.id, { createdFromCommit: commit });
+  })().finally(() => {
+    if (environmentBaselineTasks.get(environment.id) === task) {
+      environmentBaselineTasks.delete(environment.id);
+    }
+  });
+  environmentBaselineTasks.set(environment.id, task);
+  return task;
+}
+
+async function ensureCreatedFromCommitBeforeSetup(
+  environment: Environment,
+  context: CommandContext,
+): Promise<Environment> {
+  if (environment.setupScriptsComplete || environment.createdFromCommit) return environment;
+  return establishCreatedFromCommit(environment, context);
 }
 
 async function dockerExecDetached(
@@ -3201,38 +3337,114 @@ type GitFileChange = {
   status: string;
 };
 
-function parseGitFileChanges(nameStatusOutput: string, numstatOutput: string): GitFileChange[] {
+function splitNulTerminatedGitFields(output: string, label: string): string[] {
+  if (output.length === 0) return [];
+  if (!output.endsWith("\0")) {
+    throw new Error(`Malformed ${label}: missing NUL terminator`);
+  }
+  return output.slice(0, -1).split("\0");
+}
+
+function parseGitNumstat(numstatOutput: string): Map<string, { additions: number; deletions: number }> {
   const stats = new Map<string, { additions: number; deletions: number }>();
-  for (const line of numstatOutput.split("\n").filter(Boolean)) {
-    const [additions = "0", deletions = "0", ...paths] = line.split("\t");
-    const normalizedPath = parseNumstatPath(paths.join("\t"));
-    stats.set(normalizedPath, {
+  const fields = splitNulTerminatedGitFields(numstatOutput, "git numstat output");
+  for (let index = 0; index < fields.length;) {
+    const header = fields[index++] ?? "";
+    const firstTab = header.indexOf("\t");
+    const secondTab = firstTab === -1 ? -1 : header.indexOf("\t", firstTab + 1);
+    if (firstTab <= 0 || secondTab === -1) {
+      throw new Error("Malformed git numstat output: invalid record header");
+    }
+    const additions = header.slice(0, firstTab);
+    const deletions = header.slice(firstTab + 1, secondTab);
+    if (
+      (additions !== "-" && !/^\d+$/.test(additions))
+      || (deletions !== "-" && !/^\d+$/.test(deletions))
+    ) {
+      throw new Error("Malformed git numstat output: invalid statistics");
+    }
+    const inlinePath = header.slice(secondTab + 1);
+    let filePath = inlinePath;
+    if (inlinePath.length === 0) {
+      if (index + 1 >= fields.length) {
+        throw new Error("Malformed git numstat output: truncated rename/copy record");
+      }
+      index += 1; // The preimage path is not the result path used by name-status.
+      filePath = fields[index++] ?? "";
+    }
+    if (!filePath) {
+      throw new Error("Malformed git numstat output: empty path");
+    }
+    stats.set(filePath, {
       additions: additions === "-" ? 0 : Number.parseInt(additions, 10) || 0,
       deletions: deletions === "-" ? 0 : Number.parseInt(deletions, 10) || 0,
     });
   }
+  return stats;
+}
 
-  return nameStatusOutput
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const parts = line.split("\t");
-      const status = parts[0] ?? "";
-      const filePath = parts.at(-1) ?? "";
-      const originalPath = (status.startsWith("R") || status.startsWith("C"))
-        ? parts[1]
-        : undefined;
-      const fileStats = stats.get(filePath) ?? { additions: 0, deletions: 0 };
-      return {
-        path: filePath,
-        originalPath,
-        filename: path.basename(filePath),
-        directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
-        additions: fileStats.additions,
-        deletions: fileStats.deletions,
-        status,
-      };
+function parseGitFileChanges(nameStatusOutput: string, numstatOutput: string): GitFileChange[] {
+  const stats = parseGitNumstat(numstatOutput);
+  const fields = splitNulTerminatedGitFields(nameStatusOutput, "git name-status output");
+  const changes: GitFileChange[] = [];
+
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++] ?? "";
+    if (!status) throw new Error("Malformed git name-status output: empty status");
+    const isRenameOrCopy = status.startsWith("R") || status.startsWith("C");
+    const pathCount = isRenameOrCopy ? 2 : 1;
+    if (index + pathCount > fields.length) {
+      throw new Error("Malformed git name-status output: truncated record");
+    }
+    const originalPath = isRenameOrCopy ? fields[index++] : undefined;
+    const filePath = fields[index++] ?? "";
+    if (!filePath || (isRenameOrCopy && !originalPath)) {
+      throw new Error("Malformed git name-status output: empty path");
+    }
+    const fileStats = stats.get(filePath) ?? { additions: 0, deletions: 0 };
+    changes.push({
+      path: filePath,
+      originalPath,
+      filename: path.basename(filePath),
+      directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
+      additions: fileStats.additions,
+      deletions: fileStats.deletions,
+      status,
     });
+  }
+  return changes;
+}
+
+function decodeGitStatusSection(payload: string, label: string): string {
+  if (payload.length === 0) return "";
+  if (payload.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(payload)) {
+    throw new Error(`Malformed ${label}: invalid base64`);
+  }
+  return Buffer.from(payload, "base64").toString("utf8");
+}
+
+function parseContainerUntrackedStats(output: string): GitFileChange[] {
+  const fields = splitNulTerminatedGitFields(output, "container untracked stats");
+  return fields.map((field) => {
+    const separator = field.indexOf("\t");
+    if (separator <= 0) {
+      throw new Error("Malformed container untracked stats record");
+    }
+    const additionsText = field.slice(0, separator);
+    const filePath = field.slice(separator + 1);
+    if (!/^\d+$/.test(additionsText) || !filePath) {
+      throw new Error("Malformed container untracked stats record");
+    }
+    return {
+      path: filePath,
+      originalPath: undefined,
+      filename: path.basename(filePath),
+      directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
+      additions: Number.parseInt(additionsText, 10),
+      deletions: 0,
+      status: "?",
+    };
+  });
 }
 
 async function getLocalGitStatus(
@@ -3246,8 +3458,8 @@ async function getLocalGitStatus(
   const base = await resolveLocalGitBase(worktreePath, targetBranch);
   const endRef = includeUncommitted ? [] : ["HEAD"];
   const [nameStatus, numstat] = await Promise.all([
-    runCommand("git", ["-C", worktreePath, "diff", "--name-status", "-M", base, ...endRef], { timeoutMs: 60_000 }),
-    runCommand("git", ["-C", worktreePath, "diff", "--numstat", "-M", base, ...endRef], { timeoutMs: 60_000 }),
+    runCommand("git", ["-C", worktreePath, "diff", "--name-status", "-z", "-M", base, ...endRef], { timeoutMs: 60_000 }),
+    runCommand("git", ["-C", worktreePath, "diff", "--numstat", "-z", "-M", base, ...endRef], { timeoutMs: 60_000 }),
   ]);
 
   const changes = parseGitFileChanges(nameStatus.stdout, numstat.stdout);
@@ -3276,19 +3488,6 @@ async function getLocalGitStatus(
   }
 
   return changes;
-}
-
-function parseNumstatPath(token: string): string {
-  // Rename/copy numstat entries render the path as "prefix{old => new}suffix" or "old => new".
-  // Resolve to the new path so the stats line up with the --name-status path key.
-  const arrowIndex = token.indexOf(" => ");
-  if (arrowIndex === -1) return token;
-  const braceStart = token.indexOf("{");
-  const braceEnd = token.indexOf("}");
-  if (braceStart !== -1 && braceEnd > arrowIndex && braceStart < arrowIndex) {
-    return `${token.slice(0, braceStart)}${token.slice(arrowIndex + 4, braceEnd)}${token.slice(braceEnd + 1)}`;
-  }
-  return token.slice(arrowIndex + 4);
 }
 
 async function countLocalFileLines(rootPath: string, relativePath: string): Promise<number> {
@@ -4486,9 +4685,16 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const activityAt = asString(occurredAt, "occurredAt");
     return storage.recordEnvironmentCompletion(id, activityAt);
   });
-  register("set_environment_setup_complete", async ({ environmentId, complete }, { storage }) => {
-    const updated = await storage.updateEnvironment(asString(environmentId, "environmentId"), { setupScriptsComplete: asBoolean(complete) });
-    return asBoolean(complete) ? captureCreatedFromCommit(updated, storage) : updated;
+  register("set_environment_setup_complete", async ({ environmentId, complete }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const shouldComplete = asBoolean(complete);
+    if (!shouldComplete) {
+      return context.storage.updateEnvironment(id, { setupScriptsComplete: false });
+    }
+    const environment = await context.storage.getEnvironment(id);
+    if (!environment) throw new Error(`Environment not found: ${id}`);
+    const withBaseline = await ensureCreatedFromCommitBeforeSetup(environment, context);
+    return context.storage.updateEnvironment(withBaseline.id, { setupScriptsComplete: true });
   });
   register("run_environment_setup", async ({ environmentId }, context) => {
     return runEnvironmentSetupNow(asString(environmentId, "environmentId"), context);
@@ -5251,8 +5457,11 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const includeWorkingTree = includeUncommitted !== false;
     const nameStatusMarker = "\u001eORKESTRATOR_NAME_STATUS\u001f";
     const numstatMarker = "\u001eORKESTRATOR_NUMSTAT\u001f";
-    const porcelainMarker = "\u001eORKESTRATOR_PORCELAIN\u001f";
+    const untrackedMarker = "\u001eORKESTRATOR_UNTRACKED\u001f";
+    const endMarker = "\u001eORKESTRATOR_END\u001f";
+    const untrackedScanner = `node -e ${quoteShell(CONTAINER_UNTRACKED_STATS_SCANNER)} -- ${MAX_BINARY_FILE_BYTES}`;
     const output = await dockerExec(asString(containerId, "containerId"), `
+      set -e -o pipefail
       if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         exit 0
       fi
@@ -5279,49 +5488,52 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       else
         base="$ref"
       fi
+      if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+        printf 'Target ref not found: %s\\n' "$ref" >&2
+        exit 2
+      fi
       end_ref=${includeWorkingTree ? "" : "HEAD"}
       printf '\\036ORKESTRATOR_NAME_STATUS\\037'
-      git diff --name-status -M "$base" $end_ref 2>/dev/null || true
+      git diff --name-status -z -M "$base" $end_ref | base64 -w0
       printf '\\036ORKESTRATOR_NUMSTAT\\037'
-      git diff --numstat -M "$base" $end_ref 2>/dev/null || true
-      printf '\\036ORKESTRATOR_PORCELAIN\\037'
-      ${includeWorkingTree ? "git status --porcelain=v1 -z --untracked-files=all 2>/dev/null || true" : ""}
+      git diff --numstat -z -M "$base" $end_ref | base64 -w0
+      printf '\\036ORKESTRATOR_UNTRACKED\\037'
+      ${includeWorkingTree ? `git status --porcelain=v1 -z --untracked-files=all | ${untrackedScanner} | base64 -w0` : ""}
+      printf '\\036ORKESTRATOR_END\\037'
     `);
+    if (output.length === 0) return [];
     const nameStatusStart = output.indexOf(nameStatusMarker);
     const numstatStart = output.indexOf(numstatMarker);
-    const porcelainStart = output.indexOf(porcelainMarker);
+    const untrackedStart = output.indexOf(untrackedMarker);
+    const endStart = output.indexOf(endMarker);
     if (
-      nameStatusStart === -1
+      nameStatusStart !== 0
       || numstatStart < nameStatusStart
-      || porcelainStart < numstatStart
-    ) return [];
+      || untrackedStart < numstatStart
+      || endStart < untrackedStart
+      || endStart + endMarker.length !== output.length
+    ) {
+      throw new Error("Malformed container git status response");
+    }
 
-    const nameStatusOutput = output.slice(
-      nameStatusStart + nameStatusMarker.length,
-      numstatStart,
+    const nameStatusOutput = decodeGitStatusSection(
+      output.slice(nameStatusStart + nameStatusMarker.length, numstatStart),
+      "container git name-status section",
     );
-    const numstatOutput = output.slice(
-      numstatStart + numstatMarker.length,
-      porcelainStart,
+    const numstatOutput = decodeGitStatusSection(
+      output.slice(numstatStart + numstatMarker.length, untrackedStart),
+      "container git numstat section",
     );
     const changes = parseGitFileChanges(nameStatusOutput, numstatOutput);
     if (!includeWorkingTree) return changes;
 
     const existingPaths = new Set(changes.map((change) => change.path));
-    const porcelainOutput = output.slice(porcelainStart + porcelainMarker.length);
-    for (const line of porcelainOutput.split("\0").filter(Boolean)) {
-      if (!line.startsWith("?? ")) continue;
-      const filePath = line.slice(3);
-      if (existingPaths.has(filePath)) continue;
-      changes.push({
-        path: filePath,
-        originalPath: undefined,
-        filename: path.basename(filePath),
-        directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
-        additions: 0,
-        deletions: 0,
-        status: "?",
-      });
+    const untrackedOutput = decodeGitStatusSection(
+      output.slice(untrackedStart + untrackedMarker.length, endStart),
+      "container untracked section",
+    );
+    for (const change of parseContainerUntrackedStats(untrackedOutput)) {
+      if (!existingPaths.has(change.path)) changes.push(change);
     }
     return changes;
   });
@@ -5529,6 +5741,8 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
 
 export const __testing = {
   createExtensionCommandRunner,
+  parseGitFileChanges,
+  parseContainerUntrackedStats,
   setLocalServerProcess(
     key: string,
     child: ChildProcessWithoutNullStreams,

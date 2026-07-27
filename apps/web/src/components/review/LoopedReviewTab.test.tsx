@@ -963,8 +963,11 @@ describe("LoopedReviewTab result validation", () => {
         result: "failed",
         summary: "one failure",
       }],
-      limitations: [],
-    })).toThrow("cannot be complete");
+      notes: [],
+      limitations: ["A second validation could not run"],
+    })).toThrow(
+      "Failed validation: bun test — one failure\n- Blocking limitation: A second validation could not run",
+    );
 
     expect(parseFixResult({
       complete: true,
@@ -975,8 +978,31 @@ describe("LoopedReviewTab result validation", () => {
         result: "passed",
         summary: "passed",
       }],
+      notes: ["Preserved the existing feature branch and its commits."],
       limitations: [],
-    }).complete).toBe(true);
+    })).toEqual({
+      complete: true,
+      summary: "Finished",
+      filesChanged: ["src/a.ts"],
+      commandsRun: [{
+        command: "bun test",
+        result: "passed",
+        summary: "passed",
+      }],
+      notes: ["Preserved the existing feature branch and its commits."],
+      limitations: [],
+    });
+
+    expect(() => parseFixResult({
+      complete: false,
+      summary: "Not finished",
+      filesChanged: [],
+      commandsRun: [],
+      notes: ["No blocking issue was found."],
+      limitations: [],
+    })).toThrow(
+      "cannot be incomplete without a failed validation or blocking limitation",
+    );
   });
 
   test("accepts only canonical-host HTTPS pull-request URLs", () => {

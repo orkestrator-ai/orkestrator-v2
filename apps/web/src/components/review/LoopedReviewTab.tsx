@@ -100,11 +100,33 @@ class MissingProviderSessionError extends Error {
   }
 }
 
+function fixBlockerDetails(result: ReviewFixResult): string[] {
+  return [
+    ...result.commandsRun
+      .filter((command) => command.result === "failed")
+      .map((command) =>
+        `- Failed validation: ${command.command}${
+          command.summary.trim() ? ` — ${command.summary.trim()}` : ""
+        }`
+      ),
+    ...result.limitations.map((limitation) =>
+      `- Blocking limitation: ${limitation}`
+    ),
+  ];
+}
+
 export function parseFixResult(value: unknown): ReviewFixResult {
   if (
     !isRecord(value)
     || Object.keys(value).some((key) =>
-      !["complete", "summary", "filesChanged", "commandsRun", "limitations"].includes(key)
+      ![
+        "complete",
+        "summary",
+        "filesChanged",
+        "commandsRun",
+        "notes",
+        "limitations",
+      ].includes(key)
     )
     || typeof value.complete !== "boolean"
     || typeof value.summary !== "string"
@@ -125,25 +147,33 @@ export function parseFixResult(value: unknown): ReviewFixResult {
       && (command.result === "passed" || command.result === "failed")
       && typeof command.summary === "string"
     )
+    || !Array.isArray(value.notes)
+    || !value.notes.every((note) =>
+      typeof note === "string" && note.trim().length > 0
+    )
     || !Array.isArray(value.limitations)
-    || !value.limitations.every((limitation) => typeof limitation === "string")
+    || !value.limitations.every((limitation) =>
+      typeof limitation === "string" && limitation.trim().length > 0
+    )
   ) {
     throw new Error("Fix result failed runtime validation");
   }
-  if (
-    value.complete
-    && (
-      value.limitations.length > 0
-      || value.commandsRun.some((command) =>
-        isRecord(command) && command.result === "failed"
-      )
-    )
-  ) {
+  const result = value as unknown as ReviewFixResult;
+  const blockerDetails = fixBlockerDetails(result);
+  if (result.complete && blockerDetails.length > 0) {
     throw new Error(
-      "Fix result cannot be complete while validation failed or limitations remain",
+      [
+        "Fix result cannot be complete because validation failed or blocking limitations remain:",
+        ...blockerDetails,
+      ].join("\n"),
     );
   }
-  return value as unknown as ReviewFixResult;
+  if (!result.complete && blockerDetails.length === 0) {
+    throw new Error(
+      "Fix result cannot be incomplete without a failed validation or blocking limitation",
+    );
+  }
+  return result;
 }
 
 export function parseReviewPreparationResult(
@@ -713,8 +743,10 @@ export function LoopedReviewTab({
       const fixResult = parseFixResult(result.value);
       if (!fixResult.complete) {
         throw new Error(
-          fixResult.limitations[0]
-          ?? "The fix session did not resolve the complete active pool",
+          [
+            "The fix session did not resolve the complete active pool:",
+            ...fixBlockerDetails(fixResult),
+          ].join("\n"),
         );
       }
       store.completeFix(current.id, session.id);

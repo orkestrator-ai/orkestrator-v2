@@ -171,8 +171,16 @@ describe("looped-review prompts", () => {
   });
 
   test("fix and PR prompts preserve the complete pool and existing PR workflow", () => {
-    expect(createFixPoolPrompt({ pool: emptyPool, targetBranch: "main" }))
-      .toContain("Complete active pool");
+    const fix = createFixPoolPrompt({ pool: emptyPool, targetBranch: "main" });
+    expect(fix).toContain("Complete active pool");
+    expect(fix).toContain(
+      "preserved branch state, disproved findings, and other informational observations in notes",
+    );
+    expect(fix).toContain("Limitations are blockers only");
+    expect(fix).toContain(
+      "Set complete=false if any command failed or limitations is non-empty",
+    );
+    expect(REVIEW_FIX_RESULT_JSON_SCHEMA.required).toContain("notes");
     const pr = createLoopedReviewPrPrompt("release");
     expect(pr).toContain("origin/release");
     expect(pr).toContain("final fresh session");

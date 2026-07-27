@@ -161,6 +161,7 @@ const SETUP_DONE_PRINTF_CMD = "printf '\\033]9999;setup_done\\007'";
 const SETUP_FAILED_PRINTF_CMD = "printf '\\033]9999;setup_failed\\007'";
 const MAX_TERMINAL_OUTPUT_BUFFER_CHARS = 500 * 1024;
 const TERMINAL_ACTIVITY_SETTLE_MS = 750;
+const CONTAINER_CREATED_FROM_COMMIT_FILE = "/tmp/.orkestrator-created-from-commit";
 export function buildContainerSafeBase64Reader(
   testMutation?: "append" | "replace",
 ): string {
@@ -2668,7 +2669,11 @@ async function readLocalHeadCommit(worktreePath: string): Promise<string> {
 }
 
 async function readContainerHeadCommit(containerId: string): Promise<string | undefined> {
-  const commit = await dockerExec(containerId, "git -C /workspace rev-parse HEAD 2>/dev/null || true", 30_000);
+  const commit = await dockerExec(
+    containerId,
+    `cat ${CONTAINER_CREATED_FROM_COMMIT_FILE} 2>/dev/null || git -C /workspace rev-parse HEAD 2>/dev/null || true`,
+    30_000,
+  );
   const trimmed = commit.trim();
   return /^[0-9a-f]{40}$/i.test(trimmed) ? trimmed : undefined;
 }
@@ -3186,19 +3191,19 @@ async function buildFileTree(rootPath: string, relativePath = ""): Promise<Array
   return nodes.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name));
 }
 
-async function getLocalGitStatus(worktreePath: string, targetBranch: string): Promise<unknown[]> {
-  validateGitRefName(targetBranch, "target branch");
-  await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
+type GitFileChange = {
+  path: string;
+  originalPath?: string;
+  filename: string;
+  directory: string;
+  additions: number;
+  deletions: number;
+  status: string;
+};
 
-  const base = await resolveLocalGitBase(worktreePath, targetBranch);
-  const [nameStatus, numstat, porcelain] = await Promise.all([
-    runCommand("git", ["-C", worktreePath, "diff", "--name-status", base], { timeoutMs: 60_000 }),
-    runCommand("git", ["-C", worktreePath, "diff", "--numstat", base], { timeoutMs: 60_000 }),
-    runCommand("git", ["-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"], { timeoutMs: 60_000 }),
-  ]);
-
+function parseGitFileChanges(nameStatusOutput: string, numstatOutput: string): GitFileChange[] {
   const stats = new Map<string, { additions: number; deletions: number }>();
-  for (const line of numstat.stdout.split("\n").filter(Boolean)) {
+  for (const line of numstatOutput.split("\n").filter(Boolean)) {
     const [additions = "0", deletions = "0", ...paths] = line.split("\t");
     const normalizedPath = parseNumstatPath(paths.join("\t"));
     stats.set(normalizedPath, {
@@ -3207,7 +3212,7 @@ async function getLocalGitStatus(worktreePath: string, targetBranch: string): Pr
     });
   }
 
-  const changes = nameStatus.stdout
+  return nameStatusOutput
     .split("\n")
     .filter(Boolean)
     .map((line) => {
@@ -3228,7 +3233,31 @@ async function getLocalGitStatus(worktreePath: string, targetBranch: string): Pr
         status,
       };
     });
+}
 
+async function getLocalGitStatus(
+  worktreePath: string,
+  targetBranch: string,
+  includeUncommitted: boolean,
+): Promise<GitFileChange[]> {
+  validateGitRefName(targetBranch, "target branch");
+  await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
+
+  const base = await resolveLocalGitBase(worktreePath, targetBranch);
+  const endRef = includeUncommitted ? [] : ["HEAD"];
+  const [nameStatus, numstat] = await Promise.all([
+    runCommand("git", ["-C", worktreePath, "diff", "--name-status", "-M", base, ...endRef], { timeoutMs: 60_000 }),
+    runCommand("git", ["-C", worktreePath, "diff", "--numstat", "-M", base, ...endRef], { timeoutMs: 60_000 }),
+  ]);
+
+  const changes = parseGitFileChanges(nameStatus.stdout, numstat.stdout);
+  if (!includeUncommitted) return changes;
+
+  const porcelain = await runCommand(
+    "git",
+    ["-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    { timeoutMs: 60_000 },
+  );
   const existingPaths = new Set(changes.map((change) => change.path));
   for (const line of porcelain.stdout.split("\0").filter(Boolean)) {
     if (!line.startsWith("?? ")) continue;
@@ -5193,7 +5222,13 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     cleanupTerminalSession(asString(sessionId, "sessionId"));
   });
 
-  register("get_local_git_status", ({ worktreePath, targetBranch }) => getLocalGitStatus(asString(worktreePath, "worktreePath"), asString(targetBranch, "targetBranch")));
+  register("get_local_git_status", ({ worktreePath, targetBranch, includeUncommitted }) =>
+    getLocalGitStatus(
+      asString(worktreePath, "worktreePath"),
+      asString(targetBranch, "targetBranch"),
+      includeUncommitted !== false,
+    )
+  );
   register("get_local_file_tree", ({ worktreePath }) => buildFileTree(asString(worktreePath, "worktreePath")));
   register("read_local_file", ({ worktreePath, filePath }) => readTextFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath")));
   register("read_local_file_at_branch", ({ worktreePath, filePath, branch }) =>
@@ -5210,8 +5245,13 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     return deleteLocalFile(environment.worktreePath!, asString(filePath, "filePath"));
   });
 
-  register("get_git_status", async ({ containerId, targetBranch }) => {
-    const branch = quoteShell(asString(targetBranch, "targetBranch"));
+  register("get_git_status", async ({ containerId, targetBranch, includeUncommitted }) => {
+    const ref = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
+    const branch = quoteShell(ref);
+    const includeWorkingTree = includeUncommitted !== false;
+    const nameStatusMarker = "\u001eORKESTRATOR_NAME_STATUS\u001f";
+    const numstatMarker = "\u001eORKESTRATOR_NUMSTAT\u001f";
+    const porcelainMarker = "\u001eORKESTRATOR_PORCELAIN\u001f";
     const output = await dockerExec(asString(containerId, "containerId"), `
       if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         exit 0
@@ -5232,16 +5272,58 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
           fi
         done
       fi
-      git fetch origin ${branch} >/dev/null 2>&1 || true
-      git diff --name-status origin/${branch} 2>/dev/null || git diff --name-status ${branch} 2>/dev/null || true
+      ref=${branch}
+      git fetch origin "$ref" >/dev/null 2>&1 || true
+      if git rev-parse --verify --quiet "origin/$ref^{commit}" >/dev/null; then
+        base="origin/$ref"
+      else
+        base="$ref"
+      fi
+      end_ref=${includeWorkingTree ? "" : "HEAD"}
+      printf '\\036ORKESTRATOR_NAME_STATUS\\037'
+      git diff --name-status -M "$base" $end_ref 2>/dev/null || true
+      printf '\\036ORKESTRATOR_NUMSTAT\\037'
+      git diff --numstat -M "$base" $end_ref 2>/dev/null || true
+      printf '\\036ORKESTRATOR_PORCELAIN\\037'
+      ${includeWorkingTree ? "git status --porcelain=v1 -z --untracked-files=all 2>/dev/null || true" : ""}
     `);
-    return output.split("\n").filter(Boolean).map((line) => {
-      const parts = line.split("\t");
-      const status = parts[0] ?? "";
-      const filePath = parts.at(-1) ?? "";
-      const originalPath = (status.startsWith("R") || status.startsWith("C")) ? parts[1] : undefined;
-      return { path: filePath, originalPath, filename: path.basename(filePath), directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath), additions: 0, deletions: 0, status };
-    });
+    const nameStatusStart = output.indexOf(nameStatusMarker);
+    const numstatStart = output.indexOf(numstatMarker);
+    const porcelainStart = output.indexOf(porcelainMarker);
+    if (
+      nameStatusStart === -1
+      || numstatStart < nameStatusStart
+      || porcelainStart < numstatStart
+    ) return [];
+
+    const nameStatusOutput = output.slice(
+      nameStatusStart + nameStatusMarker.length,
+      numstatStart,
+    );
+    const numstatOutput = output.slice(
+      numstatStart + numstatMarker.length,
+      porcelainStart,
+    );
+    const changes = parseGitFileChanges(nameStatusOutput, numstatOutput);
+    if (!includeWorkingTree) return changes;
+
+    const existingPaths = new Set(changes.map((change) => change.path));
+    const porcelainOutput = output.slice(porcelainStart + porcelainMarker.length);
+    for (const line of porcelainOutput.split("\0").filter(Boolean)) {
+      if (!line.startsWith("?? ")) continue;
+      const filePath = line.slice(3);
+      if (existingPaths.has(filePath)) continue;
+      changes.push({
+        path: filePath,
+        originalPath: undefined,
+        filename: path.basename(filePath),
+        directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
+        additions: 0,
+        deletions: 0,
+        status: "?",
+      });
+    }
+    return changes;
   });
   register("get_file_tree", async ({ containerId }) => {
     const output = await dockerExec(asString(containerId, "containerId"), "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type l -prune -o -type f -printf '%P\\n' | head -5000");

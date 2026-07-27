@@ -12,10 +12,10 @@ import { createMockEnvironment } from "../utils/testFactories";
 const realBackendSnapshot = { ...realBackend };
 const realConsoleError = console.error;
 
-const mockGetGitStatus = mock<(containerId: string, targetBranch?: string) => Promise<GitFileChange[]>>(
+const mockGetGitStatus = mock<(containerId: string, targetBranch?: string, includeUncommitted?: boolean) => Promise<GitFileChange[]>>(
   () => Promise.resolve([]),
 );
-const mockGetLocalGitStatus = mock<(worktreePath: string, targetBranch?: string) => Promise<GitFileChange[]>>(
+const mockGetLocalGitStatus = mock<(worktreePath: string, targetBranch?: string, includeUncommitted?: boolean) => Promise<GitFileChange[]>>(
   () => Promise.resolve([]),
 );
 const mockGetFileTree = mock<(containerId: string) => Promise<FileNode[]>>(() => Promise.resolve([]));
@@ -178,7 +178,7 @@ describe("useFilesPanel", () => {
     renderHook(() => useFilesPanel());
 
     await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop");
+      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
       expect(useFilesPanelStore.getState().changes).toEqual([change]);
     });
 
@@ -203,7 +203,7 @@ describe("useFilesPanel", () => {
     renderHook(() => useFilesPanel());
 
     await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "abc123def456");
+      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "abc123def456", true);
       expect(useFilesPanelStore.getState().targetBranch).toBe("abc123def456");
     });
   });
@@ -226,7 +226,7 @@ describe("useFilesPanel", () => {
     await waitFor(() => {
       expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
       expect(useFilesPanelStore.getState().fileTree).toEqual(tree);
-      expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop");
+      expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop", true);
       expect(useFilesPanelStore.getState().changes).toEqual([change]);
     });
 
@@ -250,7 +250,7 @@ describe("useFilesPanel", () => {
     renderHook(() => useFilesPanel());
 
     await waitFor(() => {
-      expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop");
+      expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop", true);
       expect(useFilesPanelStore.getState().changes).toEqual([change]);
     });
 
@@ -274,7 +274,7 @@ describe("useFilesPanel", () => {
     renderHook(() => useFilesPanel());
 
     await waitFor(() => {
-      expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "abc123def456");
+      expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "abc123def456", true);
       expect(useFilesPanelStore.getState().changes).toEqual([change]);
     });
   });
@@ -318,7 +318,7 @@ describe("useFilesPanel", () => {
     renderHook(() => useFilesPanel());
 
     await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "main");
+      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "main", true);
       expect(useFilesPanelStore.getState().targetBranch).toBe("main");
     });
   });
@@ -554,7 +554,7 @@ describe("useFilesPanel", () => {
     const { result } = renderHook(() => useFilesPanel());
 
     await waitFor(() => {
-      expect(mockGetGitStatus).toHaveBeenCalledWith("container-a", "develop");
+      expect(mockGetGitStatus).toHaveBeenCalledWith("container-a", "develop", true);
       expect(mockGetFileTree).toHaveBeenCalledWith("container-a");
     });
 
@@ -563,7 +563,7 @@ describe("useFilesPanel", () => {
     });
 
     await waitFor(() => {
-      expect(mockGetGitStatus).toHaveBeenCalledWith("container-b", "develop");
+      expect(mockGetGitStatus).toHaveBeenCalledWith("container-b", "develop", true);
       expect(mockGetFileTree).toHaveBeenCalledWith("container-b");
       expect(useFilesPanelStore.getState().changes).toEqual([secondChange]);
       expect(useFilesPanelStore.getState().fileTree).toEqual(secondTree);
@@ -601,7 +601,7 @@ describe("useFilesPanel", () => {
       "src/App.tsx",
       "abc123def456",
     );
-    expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "abc123def456");
+    expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "abc123def456", true);
     expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
     expect(result.current.fileActionPending).toBeNull();
   });
@@ -622,7 +622,7 @@ describe("useFilesPanel", () => {
     });
 
     expect(mockDeleteContainerFile).toHaveBeenCalledWith("env-container", "src/App.tsx");
-    expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop");
+    expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop", true);
     expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
     expect(result.current.fileActionPending).toBeNull();
   });

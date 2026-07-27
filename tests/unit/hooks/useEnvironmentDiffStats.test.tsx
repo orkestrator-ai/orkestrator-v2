@@ -10,10 +10,10 @@ import { createMockEnvironment } from "../utils/testFactories";
 
 const realBackendSnapshot = { ...realBackend };
 
-const mockGetGitStatus = mock<(containerId: string, targetBranch?: string) => Promise<GitFileChange[]>>(
+const mockGetGitStatus = mock<(containerId: string, targetBranch?: string, includeUncommitted?: boolean) => Promise<GitFileChange[]>>(
   () => Promise.resolve([]),
 );
-const mockGetLocalGitStatus = mock<(worktreePath: string, targetBranch?: string) => Promise<GitFileChange[]>>(
+const mockGetLocalGitStatus = mock<(worktreePath: string, targetBranch?: string, includeUncommitted?: boolean) => Promise<GitFileChange[]>>(
   () => Promise.resolve([]),
 );
 
@@ -166,9 +166,9 @@ describe("useEnvironmentDiffStats", () => {
       });
     });
 
-    expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "release");
-    expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "release");
-    expect(mockGetGitStatus).not.toHaveBeenCalledWith("container-2", "release");
+    expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "release", false);
+    expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "release", false);
+    expect(mockGetGitStatus).not.toHaveBeenCalledWith("container-2", "release", false);
     expect(useEnvironmentDiffStore.getState().stats.has("env-stopped")).toBe(false);
   });
 
@@ -186,7 +186,7 @@ describe("useEnvironmentDiffStats", () => {
     renderHook(() => useEnvironmentDiffStats());
 
     await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "abc123def456");
+      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "abc123def456", false);
     });
   });
 
@@ -232,7 +232,7 @@ describe("useEnvironmentDiffStats", () => {
     renderHook(() => useEnvironmentDiffStats());
 
     await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "release");
+      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "release", false);
     });
 
     expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toEqual({
@@ -263,7 +263,7 @@ describe("useEnvironmentDiffStats", () => {
     renderHook(() => useEnvironmentDiffStats());
 
     await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "main");
+      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "main", false);
       expect(useEnvironmentDiffStore.getState().stats.get("env-local")).toEqual({
         additions: 1,
         deletions: 0,

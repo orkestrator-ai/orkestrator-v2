@@ -1664,6 +1664,7 @@ exit 0
       expect(environment.setupScriptsComplete).toBe(true);
       expect(environment.createdFromCommit).toBe("1111111111111111111111111111111111111111");
       const execLog = await fs.readFile(logs.exec, "utf8");
+      expect(execLog).toContain("cat /tmp/.orkestrator-created-from-commit");
       expect(execLog).toContain("git -C /workspace rev-parse HEAD");
       expect(ptySpawn).toHaveBeenCalledWith(
         "docker",
@@ -3025,6 +3026,33 @@ exit 0
     }));
   });
 
+  test("can limit local git stats to committed changes since environment creation", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const creationCommit = await currentGitCommit(worktree);
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "base\ncommitted\n");
+    await runGit(worktree, ["add", "tracked.txt"]);
+    await runGit(worktree, ["commit", "-m", "branch change"]);
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "base\ncommitted\nuncommitted\n");
+    await fs.writeFile(path.join(worktree, "untracked.txt"), "not committed\n");
+    const commands = createCommandRegistry();
+
+    const changes = await commands.get("get_local_git_status")?.(
+      {
+        worktreePath: worktree,
+        targetBranch: creationCommit,
+        includeUncommitted: false,
+      },
+      createContext(createEnvironment()).context,
+    ) as Array<{ path: string; additions: number; deletions: number; status: string }>;
+
+    expect(changes).toEqual([expect.objectContaining({
+      path: "tracked.txt",
+      additions: 1,
+      deletions: 0,
+      status: "M",
+    })]);
+  });
+
   test("reads local branch files from origin and returns null for files missing in the base", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
     await fs.writeFile(path.join(worktree, "tracked.txt"), "local branch content\n");
@@ -3368,7 +3396,9 @@ exit 1
     await withFakeDocker(`#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 if [ "$1" = "exec" ]; then
-  printf 'M\ttracked.txt\n'
+  printf '\\036ORKESTRATOR_NAME_STATUS\\037M\ttracked.txt\n'
+  printf '\\036ORKESTRATOR_NUMSTAT\\0371\t2\ttracked.txt\n'
+  printf '\\036ORKESTRATOR_PORCELAIN\\037'
   exit 0
 fi
 exit 1
@@ -3384,7 +3414,7 @@ exit 1
       expect(dockerExec).toContain('for pattern in ".orkestrator" ".claude/settings.local.json"; do');
       expect(dockerExec).toContain('grep -qxF "$pattern" "$exclude_file"');
       expect(dockerExec).toContain("tail -c 1");
-      expect(dockerExec).toContain("git diff --name-status origin/'main'");
+      expect(dockerExec).toContain('git diff --name-status -M "$base" $end_ref');
     });
   });
 
@@ -3399,7 +3429,9 @@ exit 1
 
     await withFakeDocker(`#!/bin/sh
 if [ "$1" = "exec" ]; then
-  printf 'R100\told name.ts\tnew name.ts\n'
+  printf '\\036ORKESTRATOR_NAME_STATUS\\037R100\told name.ts\tnew name.ts\n'
+  printf '\\036ORKESTRATOR_NUMSTAT\\0372\t1\told name.ts => new name.ts\n'
+  printf '\\036ORKESTRATOR_PORCELAIN\\037'
   exit 0
 fi
 exit 1
@@ -3411,8 +3443,51 @@ exit 1
         path: "new name.ts",
         originalPath: "old name.ts",
         filename: "new name.ts",
+        additions: 2,
+        deletions: 1,
         status: "R100",
       })]);
+    });
+  });
+
+  test("includes untracked container files only when working-tree changes are requested", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '\\036ORKESTRATOR_NAME_STATUS\\037'
+  printf '\\036ORKESTRATOR_NUMSTAT\\037'
+  printf '\\036ORKESTRATOR_PORCELAIN\\037?? untracked.txt\\0'
+  exit 0
+fi
+exit 1
+`, async () => {
+      await expect(commands.get("get_git_status")?.(
+        {
+          containerId: "container-1",
+          targetBranch: "0123456789012345678901234567890123456789",
+          includeUncommitted: true,
+        },
+        createContext(environment).context,
+      )).resolves.toEqual([expect.objectContaining({
+        path: "untracked.txt",
+        status: "?",
+      })]);
+
+      await expect(commands.get("get_git_status")?.(
+        {
+          containerId: "container-1",
+          targetBranch: "0123456789012345678901234567890123456789",
+          includeUncommitted: false,
+        },
+        createContext(environment).context,
+      )).resolves.toEqual([]);
     });
   });
 

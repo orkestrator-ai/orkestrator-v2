@@ -82,9 +82,9 @@ export function useEnvironmentDiffStats() {
       try {
         let changes: backend.GitFileChange[];
         if (isLocal && env.worktreePath) {
-          changes = await backend.getLocalGitStatus(env.worktreePath, comparisonRef);
+          changes = await backend.getLocalGitStatus(env.worktreePath, comparisonRef, false);
         } else if (env.containerId) {
-          changes = await backend.getGitStatus(env.containerId, comparisonRef);
+          changes = await backend.getGitStatus(env.containerId, comparisonRef, false);
         } else {
           return;
         }

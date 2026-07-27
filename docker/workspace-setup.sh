@@ -457,6 +457,13 @@ else
     fi
 fi
 
+# Capture the immutable commit this environment branch started from before
+# copied project files or setup scripts can modify (or commit to) the worktree.
+# Keep the first value across setup retries and container restarts.
+if [ -d "/workspace/.git" ] && [ ! -s /tmp/.orkestrator-created-from-commit ]; then
+    git -C /workspace rev-parse HEAD > /tmp/.orkestrator-created-from-commit 2>/dev/null || true
+fi
+
 restore_orkestrator_workspace_state
 add_workspace_artifacts_to_git_exclude
 

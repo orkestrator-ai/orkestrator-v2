@@ -4575,6 +4575,56 @@ describe("forking", () => {
 
     expect(await h.runtime.forkSession(sessionId)).toEqual({ outcome: "unavailable" });
   });
+
+  /** A forkable session whose turn has already finished. */
+  async function forkableSession(
+    handlers: Record<string, (params: Record<string, unknown>) => unknown> = FORK_HANDLERS,
+  ) {
+    const h = await harness(handlers);
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+    return { h, sessionId };
+  }
+
+  /**
+   * A restarting app-server rejects `thread/fork` outright. Without a catch the
+   * rejection escaped the route's own 404/409/422/503 mapping and Hono answered
+   * a raw 500, which tells the UI nothing about whether it can retry.
+   */
+  test("an engine rejection reports unavailable rather than escaping the route", async () => {
+    const { h, sessionId } = await forkableSession({
+      "thread/fork": () => {
+        throw new Error("app-server is restarting");
+      },
+    });
+
+    expect(await h.runtime.forkSession(sessionId)).toEqual({ outcome: "unavailable" });
+  });
+
+  test("a fork that cannot be persisted is cleaned up instead of left orphaned", async () => {
+    const { h, sessionId } = await forkableSession();
+    const before = h.runtime.getRegistry().listSessions().length;
+    // Fails *after* `registry.attach`, which is the window where a rejection used
+    // to leave a child session bound to a fork no client was ever told about.
+    (h.runtime as unknown as { persistSession: () => Promise<void> }).persistSession =
+      async () => {
+        throw new Error("session store is unwritable");
+      };
+
+    expect(await h.runtime.forkSession(sessionId)).toEqual({ outcome: "unavailable" });
+    expect(h.runtime.getRegistry().listSessions()).toHaveLength(before);
+    expect(h.runtime.getRegistry().getThread("fork-of-thread-1")).toBeUndefined();
+    // Released by unsubscribing. Deleting would destroy the user's rollout.
+    expect(h.child().requests.some((request) => request.method === "thread/delete")).toBe(false);
+    expect(h.child().requests.some((request) => request.method === "thread/unsubscribe")).toBe(
+      true,
+    );
+  });
 });
 
 describe("compaction", () => {
@@ -4702,6 +4752,65 @@ describe("compaction", () => {
     })).toMatchObject({ ok: true });
   });
 
+  /**
+   * The retraction has to reach *every* tab on the thread, not just the one that
+   * called abort. Clearing the flag without emitting left any other mounted tab —
+   * which had seen `{compacted: true, compacting: true}` — showing busy until it
+   * happened to refetch.
+   */
+  test("abort emits the same retraction frames a finished compaction does", async () => {
+    const { h, sessionId } = await compactableSession();
+    const second = await h.runtime.resumeSession({ threadId: "thread-1", mode: "build" });
+    await h.runtime.compactSession(sessionId);
+    h.events.length = 0;
+
+    await h.runtime.abort(sessionId);
+
+    for (const id of [sessionId, second!.sessionId]) {
+      const forSession = h.events.filter((event) => event.sessionId === id);
+      expect(forSession.some(
+        (event) => event.type === "session.updated" && event.data?.status === "idle",
+      )).toBe(true);
+      expect(forSession.some(
+        (event) => event.data?.compacted === true && event.data?.compacting === false,
+      )).toBe(true);
+      expect(forSession.some((event) => event.type === "session.idle")).toBe(true);
+    }
+  });
+
+  /**
+   * The hold can be released while `thread/compact/start` is still in flight — by
+   * an abort, a generation change, or a `thread/compacted` arriving in the same
+   * stdout chunk as the response, since the JSONL client dispatches every line of
+   * a chunk synchronously. Announcing the hold afterwards would make
+   * `compacting: true` the last word, with nothing left to retract it.
+   */
+  test("a hold released during the RPC is never re-announced afterwards", async () => {
+    let release!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { h, sessionId } = await compactableSession({
+      "thread/compact/start": async () => {
+        await inFlight;
+        return {};
+      },
+    });
+
+    const compaction = h.runtime.compactSession(sessionId);
+    await Bun.sleep(1);
+    await h.runtime.abort(sessionId);
+    release();
+
+    expect(await compaction).toBe("accepted");
+    await h.drain();
+    expect(h.events.some((event) => event.data?.compacting === true)).toBe(false);
+    expect(
+      h.events.some((event) => event.data?.compacted === true && event.data?.compacting === false),
+    ).toBe(true);
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle" });
+  });
+
   test("a generation change releases a compaction the dead child can never finish", async () => {
     const { h, sessionId } = await compactableSession();
     await h.runtime.compactSession(sessionId);
@@ -4792,6 +4901,51 @@ describe("steering", () => {
       // The turn is untouched: a failed steer is not a cancellation.
       expect(h.runtime.getStatus(sessionId)?.status).toBe("running");
     }
+  });
+
+  /**
+   * `cancelling` reports `running`, so a steer arriving in the interrupt window
+   * is offered to app-server rather than refused as idle: only the child knows
+   * whether the turn is still accepting input. It must never be reported as
+   * accepted on a guess — a turn that has already been interrupted rejects, and
+   * that is a mismatch.
+   */
+  test("a steer during cancelling is decided by the engine, never assumed", async () => {
+    const accepting = await harness({ "turn/steer": () => ({ turnId: "turn-1" }) });
+    const { sessionId } = accepting.runtime.createSession({ mode: "build" });
+    await accepting.runtime.prompt(sessionId, {
+      prompt: "go",
+      requestId: "req-cancelling-1",
+      attachments: [],
+    });
+    await accepting.runtime.abort(sessionId);
+    expect(accepting.runtime.getStatus(sessionId)).toMatchObject({ phase: "cancelling" });
+
+    expect(await accepting.runtime.steerSession(sessionId, "more")).toBe("accepted");
+    // The steer is pinned to the turn the user was looking at, interrupt or not.
+    expect(
+      accepting.child().requests.find((request) => request.method === "turn/steer")?.params,
+    ).toMatchObject({ threadId: "thread-1", expectedTurnId: "turn-1" });
+
+    const rejecting = await harness({
+      "turn/steer": () => {
+        throw new Error("turn is no longer accepting input");
+      },
+    });
+    const { sessionId: rejectedId } = rejecting.runtime.createSession({ mode: "build" });
+    await rejecting.runtime.prompt(rejectedId, {
+      prompt: "go",
+      requestId: "req-cancelling-2",
+      attachments: [],
+    });
+    await rejecting.runtime.abort(rejectedId);
+
+    expect(await rejecting.runtime.steerSession(rejectedId, "more")).toBe("mismatch");
+    // Still cancelling: a refused steer neither completes nor resurrects the turn.
+    expect(rejecting.runtime.getStatus(rejectedId)).toMatchObject({
+      status: "running",
+      phase: "cancelling",
+    });
   });
 });
 
@@ -5021,6 +5175,35 @@ describe("runtime health", () => {
     expect(
       h.child().requests.some((request) => request.method === "mcpServerStatus/list"),
     ).toBe(false);
+  });
+
+  /**
+   * Protocol drift is what operators watch after a Codex bump, and this is the
+   * authenticated surface it is served on — the public `/global/health` payload
+   * stays stripped.
+   */
+  test("carries the engine-global protocol drift counters", async () => {
+    const h = await harness({
+      "mcpServerStatus/list": () => ({ data: [] }),
+      "skills/list": () => ({ data: [] }),
+      "hooks/list": () => ({ data: [] }),
+      "account/rateLimits/read": () => ({ rateLimits: {} }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    h.child().notify("codex/invented/method", { threadId: "thread-1" });
+    await h.drain();
+
+    const health = await h.runtime.getRuntimeHealth(sessionId) as {
+      protocol: {
+        unknownNotifications: number;
+        unsupportedItems: number;
+        serverRequests: Record<string, unknown>;
+      };
+    };
+    expect(health.protocol.unknownNotifications).toBe(1);
+    expect(health.protocol.unsupportedItems).toBe(0);
+    expect(health.protocol.serverRequests).toMatchObject({ pending: expect.any(Number) });
   });
 });
 

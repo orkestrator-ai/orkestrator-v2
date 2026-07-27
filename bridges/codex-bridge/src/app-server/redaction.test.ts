@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { redactSecrets, redactSecretsDeep } from "./redaction.js";
+import { redactSecrets } from "./redaction.js";
 
 describe("redactSecrets", () => {
   test("removes an Authorization bearer token but keeps the header name", () => {
@@ -77,62 +77,5 @@ describe("redactSecrets", () => {
     const input = "Bearer ghp_0123456789abcdefghij";
     expect(redactSecrets(input)).toBe(redactSecrets(input));
     expect(redactSecrets(input)).not.toContain("ghp_0123456789abcdefghij");
-  });
-});
-
-describe("redactSecretsDeep", () => {
-  test("redacts strings at every depth and through arrays", () => {
-    const redacted = redactSecretsDeep({
-      servers: [{ startup: { error: "Bearer ghp_0123456789abcdefghij" } }],
-    });
-    expect(JSON.stringify(redacted)).not.toContain("ghp_0123456789abcdefghij");
-  });
-
-  test("blanks credential-named fields whatever their value looks like", () => {
-    const redacted = redactSecretsDeep({
-      authorization: "anything",
-      token: "short",
-      apiKey: "k",
-      env: { OPENAI_API_KEY: "x" },
-      headers: { Authorization: "y" },
-      cookie: "session=1",
-    }) as Record<string, unknown>;
-
-    for (const key of ["authorization", "token", "apiKey", "env", "headers", "cookie"]) {
-      expect(redacted[key]).toBe("[redacted]");
-    }
-  });
-
-  test("keeps a null or absent credential field null rather than inventing a value", () => {
-    expect(redactSecretsDeep({ token: null })).toEqual({ token: null });
-  });
-
-  test("drops auth-status fields only when asked", () => {
-    expect(redactSecretsDeep({ authStatus: "oAuth" })).toEqual({ authStatus: "oAuth" });
-    expect(redactSecretsDeep({ authStatus: "oAuth" }, { dropAuthStatus: true })).toEqual({});
-  });
-
-  test("returns a copy so serving a snapshot cannot mutate retained state", () => {
-    const original = { notices: [{ message: "Bearer ghp_0123456789abcdefghij" }] };
-    const redacted = redactSecretsDeep(original);
-    expect(original.notices[0]!.message).toContain("ghp_0123456789abcdefghij");
-    expect(redacted).not.toBe(original);
-  });
-
-  test("preserves non-string scalars", () => {
-    expect(redactSecretsDeep({ count: 3, ok: true, missing: null })).toEqual({
-      count: 3,
-      ok: true,
-      missing: null,
-    });
-  });
-
-  test("truncates rather than recursing without bound", () => {
-    let deep: Record<string, unknown> = { value: "leaf" };
-    for (let index = 0; index < 40; index += 1) deep = { nested: deep };
-    // A pathological payload must not be able to pin the event loop on a route
-    // any origin can call.
-    expect(() => redactSecretsDeep(deep)).not.toThrow();
-    expect(JSON.stringify(redactSecretsDeep(deep))).toContain("truncated");
   });
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowDown, GitFork, History, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, ArrowDown, History, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
@@ -23,6 +23,7 @@ import {
   type CodexPromptSendOutcome,
   type CodexReasoningEffort,
   type CodexSessionConfigUpdateOutcome,
+  CodexForkError,
   DEFAULT_CODEX_MODEL,
   abortSession,
   checkHealth,
@@ -56,6 +57,7 @@ import {
 } from "@/lib/backend";
 import { SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { useMessageForkAction } from "@/components/chat/MessageForkAction";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { CodexComposeBar } from "./CodexComposeBar";
 import { CodexApprovalCard } from "./CodexApprovalCard";
@@ -995,7 +997,6 @@ export function CodexChatTab({
     setForkInFlight(true);
     try {
       const fork = await forkCodexSession(client, session.sessionId, messageId);
-      if (!fork) throw new Error("This Codex turn cannot be used as a fork boundary");
       const paneStore = usePaneLayoutStore.getState();
       paneStore.addTab(
         paneStore.getActivePaneId(environmentId),
@@ -1008,12 +1009,32 @@ export function CodexChatTab({
         environmentId,
       );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to fork Codex session");
+      /*
+       * The bridge answers a fork refusal with a differentiated status and its
+       * own message (404 missing, 409 the turn is still running, 422 not a
+       * usable fork point, 503 engine unavailable). Surfacing that verbatim is
+       * the only way the user learns which one happened; the single "cannot be
+       * used as a fork boundary" line used to blame the message even when the
+       * real answer was "wait for the turn to finish".
+       */
+      toast.error(
+        error instanceof CodexForkError
+          ? error.message
+          : "Failed to fork Codex session",
+      );
     } finally {
       forkInFlightRef.current = false;
       setForkInFlight(false);
     }
   }, [client, data, environmentId, session?.sessionId]);
+
+  // Referentially stable per message id, so `memo(NativeMessage)` still holds
+  // for every visible message while an answer streams in.
+  const forkAction = useMessageForkAction({
+    label: "Fork Codex session from this message",
+    disabled: forkInFlight,
+    onFork: handleForkFromMessage,
+  });
 
   useEffect(() => {
     persistedPreferencesRef.current = getPersistedCodexPreferences(config);
@@ -2190,19 +2211,9 @@ export function CodexChatTab({
               message={message}
               previousMessage={prev}
               assistantLabel="Codex"
-              actions={message.role === "user" && message.turnId ? (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  title="Fork from here"
-                  aria-label="Fork Codex session from this message"
-                  disabled={forkInFlight}
-                  onClick={() => void handleForkFromMessage(message.id)}
-                >
-                  <GitFork className="h-3.5 w-3.5" />
-                </Button>
-              ) : undefined}
+              actions={message.role === "user" && message.turnId
+                ? forkAction(message.id)
+                : undefined}
             />
           )}
           footer={

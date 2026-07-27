@@ -31,6 +31,7 @@ function resetClaudeStore() {
     includeLocalSettings: new Map(),
     promptSuggestionOptIn: new Map(),
     promptSuggestions: new Map(),
+    dismissedPromptSuggestions: new Map(),
     backgroundTasks: new Map(),
   });
 }
@@ -582,6 +583,44 @@ describe("claudeStore per-session turn options", () => {
     });
   });
 
+  describe("dismissedPromptSuggestions", () => {
+    test("remembers the exact consumed string and clears on a falsy value", () => {
+      /*
+       * The bridge only clears `session.promptSuggestion` when the *next*
+       * prompt runs, so every snapshot replays it. This latch is what stops a
+       * consumed chip from coming back, and it has to be the string rather than
+       * a boolean so a genuinely new suggestion still gets through.
+       */
+      const store = useClaudeStore.getState();
+
+      store.setDismissedPromptSuggestion(SESSION_KEY, "Add a regression test");
+      expect(useClaudeStore.getState().getDismissedPromptSuggestion(SESSION_KEY))
+        .toBe("Add a regression test");
+
+      store.setDismissedPromptSuggestion(SESSION_KEY, undefined);
+      expect(useClaudeStore.getState().dismissedPromptSuggestions.has(SESSION_KEY)).toBe(false);
+
+      store.setDismissedPromptSuggestion(SESSION_KEY, "Add a regression test");
+      store.setDismissedPromptSuggestion(SESSION_KEY, "");
+      expect(useClaudeStore.getState().dismissedPromptSuggestions.has(SESSION_KEY)).toBe(false);
+    });
+
+    test("is scoped per session and independent of the live suggestion", () => {
+      const store = useClaudeStore.getState();
+      const otherKey = createClaudeSessionKey("env-1", "tab-2");
+
+      store.setPromptSuggestion(SESSION_KEY, "Run the tests");
+      store.setDismissedPromptSuggestion(SESSION_KEY, "Run the tests");
+
+      const state = useClaudeStore.getState();
+      // Latching what was consumed does not itself hide the chip; the tab
+      // clears the live suggestion separately.
+      expect(state.promptSuggestions.get(SESSION_KEY)).toBe("Run the tests");
+      expect(state.dismissedPromptSuggestions.has(otherKey)).toBe(false);
+      expect(state.getDismissedPromptSuggestion(otherKey)).toBeUndefined();
+    });
+  });
+
   describe("backgroundTasks", () => {
     const task = { id: "task-1", status: "running" } as never;
 
@@ -684,9 +723,17 @@ describe("claudeStore per-session turn options", () => {
       store.setIncludeLocalSettings(key, true);
       store.setPromptSuggestionOptIn(key, true);
       store.setPromptSuggestion(key, "Run the tests");
+      store.setDismissedPromptSuggestion(key, "Already used this one");
       store.setBackgroundTasks(key, { "task-1": { id: "task-1" } as never });
       store.setFastMode(key, true);
       store.setContextUsage(key, { usedTokens: 1, totalTokens: 2, percentUsed: 50 });
+      store.setEffort(key, "low");
+      store.setPlanMode(key, true);
+      store.setComposing(key, true);
+      store.setSelectedModel(key, "claude-sonnet-4");
+      store.setDraftText(key, "half-written prompt");
+      store.setDraftMentions(key, ["src/index.ts"] as never);
+      store.addToQueue(key, { id: "queued-1", text: "later" } as never);
     }
 
     store.clearEnvironment("env-1");
@@ -696,18 +743,36 @@ describe("claudeStore per-session turn options", () => {
     expect(state.includeLocalSettings.has(SESSION_KEY)).toBe(false);
     expect(state.promptSuggestionOptIn.has(SESSION_KEY)).toBe(false);
     expect(state.promptSuggestions.has(SESSION_KEY)).toBe(false);
+    expect(state.dismissedPromptSuggestions.has(SESSION_KEY)).toBe(false);
     expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
     expect(state.fastMode.has(SESSION_KEY)).toBe(false);
     expect(state.contextUsage.has(SESSION_KEY)).toBe(false);
+    expect(state.effort.has(SESSION_KEY)).toBe(false);
+    expect(state.planMode.has(SESSION_KEY)).toBe(false);
+    expect(state.isComposing.has(SESSION_KEY)).toBe(false);
+    expect(state.selectedModel.has(SESSION_KEY)).toBe(false);
+    expect(state.draftText.has(SESSION_KEY)).toBe(false);
+    expect(state.draftMentions.has(SESSION_KEY)).toBe(false);
+    expect(state.messageQueue.has(SESSION_KEY)).toBe(false);
 
     // A second environment's tabs are untouched: clearing one environment must
-    // not disturb work still running in another.
+    // not disturb work still running in another. Asserted map by map — a shared
+    // "nothing leaked" assertion would pass while one prune quietly took the
+    // wrong prefix.
     expect(state.selectedAgent.get(otherEnvKey)).toBe("reviewer");
     expect(state.includeLocalSettings.get(otherEnvKey)).toBe(true);
     expect(state.promptSuggestionOptIn.get(otherEnvKey)).toBe(true);
     expect(state.promptSuggestions.get(otherEnvKey)).toBe("Run the tests");
+    expect(state.dismissedPromptSuggestions.get(otherEnvKey)).toBe("Already used this one");
     expect(state.backgroundTasks.has(otherEnvKey)).toBe(true);
     expect(state.fastMode.get(otherEnvKey)).toBe(true);
     expect(state.contextUsage.has(otherEnvKey)).toBe(true);
+    expect(state.effort.get(otherEnvKey)).toBe("low");
+    expect(state.planMode.get(otherEnvKey)).toBe(true);
+    expect(state.isComposing.get(otherEnvKey)).toBe(true);
+    expect(state.selectedModel.get(otherEnvKey)).toBe("claude-sonnet-4");
+    expect(state.draftText.get(otherEnvKey)).toBe("half-written prompt");
+    expect(state.draftMentions.get(otherEnvKey)).toEqual(["src/index.ts"] as never);
+    expect(state.messageQueue.get(otherEnvKey)).toHaveLength(1);
   });
 });

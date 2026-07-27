@@ -23,6 +23,20 @@ async function withRuntimeMethod(
   }
 }
 
+/**
+ * Builds a request carrying an `Origin`.
+ *
+ * happy-dom — registered globally by the root test preload — treats `Origin` as
+ * a forbidden request header and silently drops it from a `Request` init, which
+ * would make an origin-policy assertion pass for the wrong reason. Setting it on
+ * the built request is not filtered.
+ */
+function requestWithOrigin(path: string, origin: string, init: RequestInit = {}): Request {
+  const request = new Request(`http://localhost${path}`, init);
+  request.headers.set("Origin", origin);
+  return request;
+}
+
 async function jsonRequest(
   path: string,
   method: "POST" | "DELETE",
@@ -99,6 +113,108 @@ describe("bridge authentication and origin policy", () => {
       .toBe(true);
     expect(__testing.isTrustedBridgeOriginForTesting("file://")).toBe(true);
     expect(__testing.isTrustedBridgeOriginForTesting("null")).toBe(true);
+  });
+
+  test("reads the configured allowlist, tolerating blanks and trailing slashes", () => {
+    const previous = process.env.CODEX_BRIDGE_ALLOWED_ORIGINS;
+    process.env.CODEX_BRIDGE_ALLOWED_ORIGINS =
+      " https://app.example.test/ , , https://other.example.test ";
+    try {
+      // A trailing slash on either side is the same origin, and an empty entry
+      // from a stray comma must not become an allowlisted empty string.
+      expect(__testing.isTrustedBridgeOriginForTesting("https://app.example.test")).toBe(true);
+      expect(__testing.isTrustedBridgeOriginForTesting("https://app.example.test/")).toBe(true);
+      expect(__testing.isTrustedBridgeOriginForTesting("https://other.example.test")).toBe(true);
+      expect(__testing.isTrustedBridgeOriginForTesting("https://attacker.example")).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_BRIDGE_ALLOWED_ORIGINS;
+      else process.env.CODEX_BRIDGE_ALLOWED_ORIGINS = previous;
+    }
+  });
+
+  test("rejects a disallowed Origin before the route runs, even on public health", async () => {
+    const response = await app.request(
+      requestWithOrigin("/global/health", "https://attacker.example"),
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: "Origin is not allowed" });
+    // Not a CORS-header omission: the body must not have been produced at all.
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+
+  test("answers a preflight from a trusted origin with the headers the client needs", async () => {
+    const response = await app.request(
+      requestWithOrigin("/session/session-1/prompt", "http://127.0.0.1:5173", {
+        method: "OPTIONS",
+      }),
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("http://127.0.0.1:5173");
+    expect(response.headers.get("Vary")).toBe("Origin");
+    expect(response.headers.get("Access-Control-Allow-Methods")).toBe(
+      "GET, POST, DELETE, OPTIONS",
+    );
+    expect(response.headers.get("Access-Control-Allow-Headers")).toBe(
+      "Content-Type, Authorization, X-Orkestrator-Codex-Token",
+    );
+    // Chrome's private-network access check, which the renderer needs to reach a
+    // loopback bridge from a page it did not itself serve.
+    expect(response.headers.get("Access-Control-Allow-Private-Network")).toBe("true");
+    expect(await response.text()).toBe("");
+  });
+
+  /**
+   * The renderer's health gate calls this route, so an unconditional 200 would
+   * let a terminally failed engine pass every check the UI makes.
+   */
+  test("auth-check mirrors the engine-state semantics of public health", async () => {
+    const healthy = await app.request("/global/auth-check");
+    expect(healthy.status).toBe(200);
+    expect(await healthy.json()).toEqual({ status: "ok" });
+
+    for (const terminal of [
+      { state: "failed", circuitOpen: false },
+      { state: "restarting", circuitOpen: true },
+    ]) {
+      await withRuntimeMethod("getHealth", () => terminal, async () => {
+        const response = await app.request("/global/auth-check");
+        expect(response.status).toBe(503);
+        expect(await response.json()).toEqual({ status: "error" });
+      });
+    }
+
+    // A restartable blip stays 200 so a transient state does not flap the UI.
+    await withRuntimeMethod(
+      "getHealth",
+      () => ({ state: "restarting", circuitOpen: false }),
+      async () => {
+        expect((await app.request("/global/auth-check")).status).toBe(200);
+      },
+    );
+  });
+
+  test("public health omits the protocol drift counters that runtime-health carries", async () => {
+    await withRuntimeMethod(
+      "getHealth",
+      () => ({
+        state: "ready",
+        generation: 1,
+        circuitOpen: false,
+        restartCount: 0,
+        // Present on the engine snapshot, deliberately not fanned out publicly.
+        unknownNotifications: 7,
+        unsupportedItems: 3,
+        serverRequests: { pending: 1 },
+        storage: {},
+      }),
+      async () => {
+        const serialized = JSON.stringify(await (await app.request("/global/health")).json());
+        expect(serialized).not.toContain("unknownNotifications");
+        expect(serialized).not.toContain("unsupportedItems");
+        expect(serialized).not.toContain("serverRequests");
+      },
+    );
   });
 });
 
@@ -549,6 +665,39 @@ describe("fork route outcomes", () => {
     });
   });
 
+  /**
+   * Driven through the real `forkSession`, not a stub: the point is that an
+   * engine rejection is mapped by the route's own outcome switch instead of
+   * escaping as a raw Hono 500, and that nothing is left registered behind it.
+   */
+  test("an engine rejection is mapped to 503 and leaves no orphan session", async () => {
+    const engine = (runtime as unknown as {
+      options: { engine: { forkThread: unknown } };
+    }).options.engine;
+    const originalForkThread = engine.forkThread;
+    const registry = runtime.getRegistry();
+    registry.createSession({
+      id: "session-fork-parent",
+      threadId: "thread-fork-parent",
+      config: { mode: "build", cwd: "/workspace" },
+      titleGenerationAttempted: true,
+    });
+    const before = registry.listSessions().length;
+    engine.forkThread = async () => {
+      throw new Error("app-server is restarting");
+    };
+
+    try {
+      const response = await jsonRequest("/session/session-fork-parent/fork", "POST", {});
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: "Codex did not return a forked thread" });
+      expect(registry.listSessions()).toHaveLength(before);
+    } finally {
+      engine.forkThread = originalForkThread;
+      registry.releaseSession("session-fork-parent");
+    }
+  });
+
   test("returns the created session without leaking the internal outcome tag", async () => {
     await withRuntimeMethod(
       "forkSession",
@@ -805,6 +954,12 @@ describe("runtime-health route", () => {
   test("serves the engine snapshot as-is", async () => {
     const payload = {
       engine: { state: "ready" },
+      // Protocol drift is served here, behind auth, rather than on public health.
+      protocol: {
+        unknownNotifications: 2,
+        unsupportedItems: 0,
+        serverRequests: { pending: 0, awaitingUser: 0 },
+      },
       mcp: { data: [] },
       skills: { data: [] },
       hooks: { data: [] },

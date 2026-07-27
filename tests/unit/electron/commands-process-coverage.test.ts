@@ -377,6 +377,33 @@ describe("process and platform command behavior", () => {
     }
   });
 
+  test("stops the in-container Codex bridge without the pattern matching its own shell", async () => {
+    await expect(invoke("stop_codex_server", { containerId: "container-a" })).resolves.toBeUndefined();
+
+    const log = await readCommandLog();
+    expect(log).toContain("pkill -f '[c]odex-bridge' || true; rm -f /tmp/codex-bridge-token");
+    expect(log).not.toContain("pkill -f 'codex-bridge'");
+  });
+
+  test("omits the Codex auth token when the container token file is missing or malformed", async () => {
+    const healthy = await startHealthyServer();
+    process.env.FAKE_DOCKER_PORT = String(healthy.port);
+    try {
+      expect(await invoke("get_codex_server_status", { containerId: "container-a" })).toEqual({
+        running: true,
+        hostPort: healthy.port,
+      });
+
+      process.env.FAKE_CODEX_BRIDGE_TOKEN = "not-a-valid-token";
+      expect(await invoke("get_codex_server_status", { containerId: "container-a" })).toEqual({
+        running: true,
+        hostPort: healthy.port,
+      });
+    } finally {
+      await healthy.close();
+    }
+  });
+
   test("reports credentials and GitHub CLI availability from isolated filesystem state", async () => {
     expect(await invoke("has_claude_credentials")).toBe(false);
     expect(await invoke("get_credential_status")).toEqual({ available: false, expiresAt: null });

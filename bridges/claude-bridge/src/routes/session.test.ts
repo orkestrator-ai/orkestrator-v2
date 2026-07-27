@@ -252,6 +252,28 @@ describe("session routes", () => {
       const res = await app.request("/session/s-unknown");
       expect(res.status).toBe(404);
     });
+
+    test("maps a materialization refusal instead of returning a bodiless 500", async () => {
+      mockGetSession.mockImplementationOnce(() => undefined);
+      mockEnsurePersistedSession.mockImplementation(async () => {
+        throw refusal("conflict", "Session store is locked");
+      });
+
+      const res = await app.request("/session/s-1");
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toEqual({ error: "Session store is locked" });
+    });
+
+    test("still reports an unclassified materialization fault as a 500 with a body", async () => {
+      mockGetSession.mockImplementationOnce(() => undefined);
+      mockEnsurePersistedSession.mockImplementation(async () => {
+        throw new Error("claude home unreadable");
+      });
+
+      const res = await app.request("/session/s-1");
+      expect(res.status).toBe(500);
+      expect(await jsonBody(res)).toEqual({ error: "claude home unreadable" });
+    });
   });
 
   describe("GET /session/:id/structured-output", () => {
@@ -307,6 +329,18 @@ describe("session routes", () => {
     test("returns 404 for unknown session", async () => {
       const res = await app.request("/session/s-unknown/messages");
       expect(res.status).toBe(404);
+    });
+
+    test("maps a materialization refusal instead of returning a bodiless 500", async () => {
+      mockGetSession.mockImplementationOnce(() => undefined);
+      mockEnsurePersistedSession.mockImplementation(async () => {
+        throw refusal("not_found", "Session has not been materialized");
+      });
+
+      const res = await app.request("/session/s-1/messages");
+      expect(res.status).toBe(404);
+      expect(await jsonBody(res)).toEqual({ error: "Session has not been materialized" });
+      expect(mockHydratePersistedSessionMessages).not.toHaveBeenCalled();
     });
   });
 
@@ -367,6 +401,18 @@ describe("session routes", () => {
 
   // --- POST /session/:id/prompt ---
   describe("POST /session/:id/prompt", () => {
+    test("maps a materialization refusal instead of returning a bodiless 500", async () => {
+      mockGetSession.mockImplementationOnce(() => undefined);
+      mockEnsurePersistedSession.mockImplementation(async () => {
+        throw refusal("conflict", "Session is being deleted");
+      });
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", { prompt: "Hello" });
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toEqual({ error: "Session is being deleted" });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
     test("returns 202 with valid prompt", async () => {
       const res = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Hello Claude",

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, mock } from "bun:test";
 import {
   CODEX_MODELS,
+  CodexForkError,
   DEFAULT_CODEX_MODEL,
   abortSession,
   checkHealth,
@@ -2130,17 +2131,60 @@ describe("codex-client session operations", () => {
       });
     });
 
-    test("returns null rather than a session bound to no id", async () => {
+    test("throws rather than binding a tab to an absent session id", async () => {
       mockFetch(() => Response.json({}));
-      expect(await forkCodexSession(client, "session-1")).toBeNull();
+      await expect(forkCodexSession(client, "session-1")).rejects.toThrow(
+        "did not include a session id",
+      );
 
       mockFetch(() => Response.json({ sessionId: 7 }));
-      expect(await forkCodexSession(client, "session-1")).toBeNull();
+      await expect(forkCodexSession(client, "session-1")).rejects.toThrow(
+        CodexForkError,
+      );
     });
 
-    test("returns null on a non-2xx response", async () => {
+    /**
+     * The bridge answers each fork failure with its own status and reason
+     * (bridges/codex-bridge/src/index.ts). Collapsing them all to null made the
+     * UI blame "an active or empty session" for a 404, so the client must carry
+     * both the status and the bridge's own message.
+     */
+    test.each([
+      [404, "Session not found"],
+      [409, "Session cannot be forked while it is running"],
+      [422, "That message is not a usable fork point: it belongs to no Codex turn"],
+      [503, "Codex did not return a forked thread"],
+    ])("surfaces the bridge's %p reason", async (status, error) => {
+      mockFetch(() => Response.json({ error }, { status }));
+
+      const attempt = forkCodexSession(client, "session-1");
+      await expect(attempt).rejects.toBeInstanceOf(CodexForkError);
+      await expect(attempt).rejects.toMatchObject({ status, message: error });
+    });
+
+    test("falls back to a per-status reason when the error body is absent", async () => {
+      mockFetch(() => new Response(null, { status: 409 }));
+      await expect(forkCodexSession(client, "session-1")).rejects.toMatchObject({
+        status: 409,
+        message: "Codex session cannot be forked while it is running",
+      });
+
       mockFetch(() => new Response(null, { status: 500 }));
-      expect(await forkCodexSession(client, "session-1")).toBeNull();
+      await expect(forkCodexSession(client, "session-1")).rejects.toMatchObject({
+        status: 500,
+        message: "Codex fork failed: HTTP 500",
+      });
+    });
+
+    test("wraps a transport failure as status 0", async () => {
+      mockFetchError(new Error("bridge offline"));
+
+      const attempt = forkCodexSession(client, "session-1");
+      await expect(attempt).rejects.toBeInstanceOf(CodexForkError);
+      await expect(attempt).rejects.toMatchObject({
+        status: 0,
+        message: "bridge offline",
+      });
     });
   });
 
@@ -2156,6 +2200,9 @@ describe("codex-client session operations", () => {
 
     test("reports failure without throwing", async () => {
       mockFetch(() => new Response(null, { status: 409 }));
+      expect(await compactCodexSession(client, "session-1")).toBe(false);
+
+      mockFetchError(new Error("bridge offline"));
       expect(await compactCodexSession(client, "session-1")).toBe(false);
     });
   });
@@ -2177,6 +2224,11 @@ describe("codex-client session operations", () => {
 
     test("reports failure without throwing", async () => {
       mockFetch(() => new Response(null, { status: 409 }));
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toBe(
+        false,
+      );
+
+      mockFetchError(new Error("bridge offline"));
       expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toBe(
         false,
       );
@@ -2206,6 +2258,9 @@ describe("codex-client session operations", () => {
 
     test("reports failure without throwing", async () => {
       mockFetch(() => new Response(null, { status: 500 }));
+      expect(await startCodexNativeReview(client, "session-1")).toBe(false);
+
+      mockFetchError(new Error("bridge offline"));
       expect(await startCodexNativeReview(client, "session-1")).toBe(false);
     });
   });

@@ -441,7 +441,8 @@ export class ServerRequestRouter {
          * it. We *do* advertise `mcpServerOpenaiFormElicitation: true`, so this is
          * an ordinary outcome, not a protocol violation — counting it as one
          * inflated the `protocol.serverRequests` figure operators watch for real
-         * drift.
+         * drift (served on the authenticated `/session/:id/runtime-health`; the
+         * public `/global/health` payload stays stripped).
          */
         this.explain(record, "An MCP server asked for input, but no Orkestrator tab was attached to display it. The request was cancelled.");
         return this.finish(key, record, "cancelled", () =>

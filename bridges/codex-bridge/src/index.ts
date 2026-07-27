@@ -863,8 +863,17 @@ app.get("/global/health", (c) => {
   );
 });
 
-/** Lightweight authenticated probe used to reject a cached client after token rotation. */
-app.get("/global/auth-check", (c) => c.json({ status: "ok" }));
+/**
+ * Lightweight authenticated probe used to reject a cached client after token
+ * rotation. Mirrors `/global/health`'s engine-state semantics: the web client's
+ * health gate calls this route, so an unconditional 200 would let a terminally
+ * failed engine pass every renderer health check.
+ */
+app.get("/global/auth-check", (c) => {
+  const health = appServerRuntime.getHealth();
+  const terminal = health.state === "failed" || health.circuitOpen;
+  return c.json({ status: terminal ? "error" : "ok" }, terminal ? 503 : 200);
+});
 
 app.get("/global/models", async (c) => {
   const { models, source } = await appServerRuntime.listModels();

@@ -1175,6 +1175,54 @@ describe("OpenCodeChatTab", () => {
     });
   });
 
+  test("atomically replaces stale metadata when resuming another session", async () => {
+    /*
+     * The tab key survives a resume, and the usage effect only ever writes a
+     * *truthy* summary — so a resumed session whose transcript reports no usage
+     * yet kept displaying the previous session's context meter, and the
+     * session-keyed runtime health kept the previous session's todos and diffs
+     * if the health refetch failed. Claude and Codex both replace this metadata
+     * in the same update that publishes the new session.
+     */
+    useOpenCodeStore.getState().setContextUsage(SESSION_KEY, {
+      usedTokens: 9_000,
+      totalTokens: 10_000,
+      percentUsed: 90,
+      estimated: false,
+      source: "opencode",
+      updatedAt: "2026-04-15T09:00:00.000Z",
+    });
+    useOpenCodeStore.getState().setRuntimeHealth(
+      SESSION_KEY,
+      emptyRuntimeHealth({
+        todos: [{ content: "From the old session", status: "pending", priority: "high" }],
+      }) as never,
+    );
+    mockGetOpenCodeRuntimeHealth.mockRejectedValue(new Error("health unavailable"));
+    mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
+      sessionId === "resumed-opencode" ? [] : []
+    );
+
+    const originalWarn = console.warn;
+    console.warn = mock(() => {}) as unknown as typeof console.warn;
+    try {
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+      fireEvent.click(await screen.findByTestId("opencode-resume-choice"));
+
+      await waitFor(() =>
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId)
+          .toBe("resumed-opencode"),
+      );
+      const state = useOpenCodeStore.getState();
+      expect(state.contextUsage.has(SESSION_KEY)).toBe(false);
+      expect(state.runtimeHealth.has(SESSION_KEY)).toBe(false);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   test("keeps the current session and resume dialog open when manual resume fails", async () => {
     const originalError = console.error;
     const consoleError = mock(() => {});
@@ -2246,6 +2294,35 @@ describe("OpenCodeChatTab", () => {
               name: "/review",
               arguments: "main --verbose",
             },
+          }),
+        );
+      });
+    });
+
+    test("keeps multi-line slash-command arguments intact", async () => {
+      /*
+       * The arguments used to be rebuilt from `split(/\s+/).join(" ")`, which
+       * flattened every newline and indent — so a command invoked with a pasted
+       * diff or a multi-line spec reached the server as one unreadable line.
+       */
+      resetStores("named-environment");
+      const argument = "first line\n  indented second\n\nfinal line";
+      composeText = `/review ${argument}`;
+      useOpenCodeStore.getState().setSlashCommands(ENVIRONMENT_ID, [{
+        name: "/review",
+        description: "Review the branch",
+      }]);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      fireEvent.click(screen.getByTestId("opencode-send"));
+
+      await waitFor(() => {
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          "session-1",
+          composeText,
+          expect.objectContaining({
+            command: { name: "/review", arguments: argument },
           }),
         );
       });

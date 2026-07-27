@@ -118,10 +118,39 @@ session.get("/list", async (c) => {
   return c.json(response);
 });
 
+/**
+ * Materialize a session, turning a session-manager refusal into the same
+ * structured body every other route returns.
+ *
+ * Without this the route fell through to Hono's default 500 — an empty body the
+ * client cannot distinguish from a crash, for what is usually a conflict or a
+ * missing rollout.
+ */
+async function resolveSession(
+  id: string,
+  failureMessage: string,
+): Promise<
+  | { ok: true; session: Awaited<ReturnType<typeof ensurePersistedSession>> }
+  | { ok: false; body: { error: string }; status: 400 | 404 | 409 | 500 }
+> {
+  try {
+    return { ok: true, session: getSession(id) ?? await ensurePersistedSession(id) };
+  } catch (error) {
+    console.error(`[session] ${failureMessage}:`, error);
+    return {
+      ok: false,
+      body: { error: errorMessage(error, failureMessage) },
+      status: sessionErrorStatus(error),
+    };
+  }
+}
+
 // Get session details
 session.get("/:id", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
+  const resolved = await resolveSession(id, "Failed to load session");
+  if (!resolved.ok) return c.json(resolved.body, resolved.status);
+  const sessionData = resolved.session;
 
   if (!sessionData) {
     return c.json({ error: "Session not found" }, 404);
@@ -191,7 +220,9 @@ session.get("/:id/tasks", async (c) => {
 // Get session messages
 session.get("/:id/messages", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
+  const resolved = await resolveSession(id, "Failed to load session messages");
+  if (!resolved.ok) return c.json(resolved.body, resolved.status);
+  const sessionData = resolved.session;
 
   if (!sessionData) {
     return c.json({ error: "Session not found" }, 404);
@@ -209,7 +240,9 @@ session.get("/:id/messages", async (c) => {
 // Send a prompt to a session
 session.post("/:id/prompt", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
+  const resolved = await resolveSession(id, "Failed to send prompt");
+  if (!resolved.ok) return c.json(resolved.body, resolved.status);
+  const sessionData = resolved.session;
 
   if (!sessionData) {
     return c.json({ error: "Session not found" }, 404);
@@ -452,16 +485,9 @@ session.post("/:id/fork", async (c) => {
 
 session.post("/:id/compact", async (c) => {
   const id = c.req.param("id");
-  let sessionData;
-  try {
-    sessionData = getSession(id) ?? await ensurePersistedSession(id);
-  } catch (error) {
-    console.error("[session] Failed to materialize session for compaction:", error);
-    return c.json(
-      { error: errorMessage(error, "Failed to compact session") },
-      sessionErrorStatus(error),
-    );
-  }
+  const resolved = await resolveSession(id, "Failed to compact session");
+  if (!resolved.ok) return c.json(resolved.body, resolved.status);
+  const sessionData = resolved.session;
   if (!sessionData) return c.json({ error: "Session not found" }, 404);
   if (sessionData.status === "running") {
     return c.json({ error: "Session is already processing a prompt" }, 409);

@@ -1858,11 +1858,18 @@ export class AppServerRuntime {
       if (!lastTurnId) return { outcome: "no-fork-point" };
     }
 
-    const fork = await this.options.engine.forkThread(
-      parent.threadId,
-      parent.config,
-      lastTurnId,
-    );
+    let fork: Awaited<ReturnType<AppServerEngine["forkThread"]>>;
+    try {
+      fork = await this.options.engine.forkThread(parent.threadId, parent.config, lastTurnId);
+    } catch (error) {
+      // A restarting or failed app-server rejects here. That is an availability
+      // problem, not a route bug — surface it as the mapped 503, never a raw 500.
+      console.warn(
+        `[codex-bridge] thread/fork failed for ${parent.threadId}:`,
+        error instanceof Error ? error.message : error,
+      );
+      return { outcome: "unavailable" };
+    }
     if (!fork.id) return { outcome: "unavailable" };
     const child = this.registry.createSession({
       id: createSessionId(),
@@ -1872,24 +1879,36 @@ export class AppServerRuntime {
       titleSource: "explicit",
       titleGenerationAttempted: true,
     });
-    const context = this.registry.attach(child.id, fork.id, {
-      engineHandle: fork.handle,
-      engineGeneration: this.options.engine.info().generation,
-      cwd: fork.cwd,
-      name: fork.name,
-    });
-    context.materialized = true;
-    const hydrated = await hydrateMessagesFromPersistedSession(fork.id);
-    context.messages = hydrated.messages;
-    if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
-    await this.persistSession(child);
-    return {
-      outcome: "created",
-      sessionId: child.id,
-      title: child.title,
-      threadId: fork.id,
-      messages: context.messages,
-    };
+    try {
+      const context = this.registry.attach(child.id, fork.id, {
+        engineHandle: fork.handle,
+        engineGeneration: this.options.engine.info().generation,
+        cwd: fork.cwd,
+        name: fork.name,
+      });
+      context.materialized = true;
+      const hydrated = await hydrateMessagesFromPersistedSession(fork.id);
+      context.messages = hydrated.messages;
+      if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
+      await this.persistSession(child);
+      return {
+        outcome: "created",
+        sessionId: child.id,
+        title: child.title,
+        threadId: fork.id,
+        messages: context.messages,
+      };
+    } catch (error) {
+      // The child session was registered above; failing here would leave an
+      // orphan bridge session bound to a fork no client ever learned about.
+      // Close it — which unsubscribes, never `thread/delete` — before reporting.
+      await this.deleteSession(child.id).catch(() => undefined);
+      console.warn(
+        `[codex-bridge] Fork of ${parent.threadId} could not be hydrated:`,
+        error instanceof Error ? error.message : error,
+      );
+      return { outcome: "unavailable" };
+    }
   }
 
   /**
@@ -1973,12 +1992,19 @@ export class AppServerRuntime {
       return "unavailable";
     }
 
-    for (const id of context.bridgeSessionIds) {
-      this.options.emit({
-        type: "session.updated",
-        sessionId: id,
-        data: { compacted: true, compacting: true },
-      });
+    // Recheck after the round-trip: the hold may already have been released — by
+    // an abort, a generation change, or a `thread/compacted` delivered in the
+    // same stdout chunk as the RPC response (the JSONL client dispatches every
+    // line of a chunk synchronously). Announcing `compacting: true` then would be
+    // the last frame clients ever see, with nothing left to retract it.
+    if (context.compacting) {
+      for (const id of context.bridgeSessionIds) {
+        this.options.emit({
+          type: "session.updated",
+          sessionId: id,
+          data: { compacted: true, compacting: true },
+        });
+      }
     }
     return "accepted";
   }
@@ -3312,14 +3338,11 @@ export class AppServerRuntime {
     const context = this.registry.getThreadForSession(sessionId);
     // Cancelling releases a compaction hold too. Compaction has no interrupt, but
     // an explicit stop must not leave the thread pinned busy on a notification
-    // that may never arrive.
-    if (context?.compacting) {
-      context.compacting = false;
-      this.clearCompactionBackstop(context.threadId);
-      if (!context.activeTurn && context.phase === "running") {
-        this.registry.setPhase(context, "idle");
-      }
-    }
+    // that may never arrive. Released through `finishCompaction` so every mounted
+    // tab gets the same status/`compacting: false`/idle retraction frames a
+    // finished compaction emits — silently clearing the flag left other tabs
+    // showing busy until their next refetch.
+    if (context?.compacting) this.finishCompaction(context);
     const turn = context?.activeTurn;
     if (!context || !turn) {
       // Nothing running; report the real phase rather than forcing idle.

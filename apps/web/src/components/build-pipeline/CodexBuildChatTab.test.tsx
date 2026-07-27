@@ -1042,6 +1042,66 @@ describe("CodexBuildChatTab", () => {
     expect(mockCreateClient).not.toHaveBeenCalled();
   });
 
+  test("refuses to build a client when a started local bridge returns no auth token", async () => {
+    /*
+     * The port check passes here, so only the token check stands between a
+     * tokenless bridge and `createClient(url, undefined)` — which would build a
+     * client whose every request is answered with 401 and surface as a generic
+     * health failure instead of the real cause.
+     */
+    seedStartingPipeline();
+    useEnvironmentStore.setState((state) => ({
+      environments: state.environments.map((environment) => ({
+        ...environment,
+        containerId: null,
+        environmentType: "local" as const,
+      })),
+      setupCommandsResolved: new Set([ENV_ID]),
+    }));
+    mockGetLocalCodexServerStatus.mockResolvedValue({
+      running: false,
+      port: 0,
+      pid: 0,
+      authToken: "",
+    });
+    mockStartLocalCodexServer.mockResolvedValue({
+      port: 7777,
+      pid: 4321,
+      authToken: "",
+    });
+
+    render(<CodexBuildChatTab data={createData({ isLocal: true })} isActive />);
+
+    expect(await screen.findByText("Codex bridge authentication is unavailable"))
+      .toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reconnect now" })).toBeTruthy();
+    expect(mockCreateClient).not.toHaveBeenCalled();
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+  });
+
+  test("refuses to build a client when a started container bridge returns no auth token", async () => {
+    seedStartingPipeline();
+    mockGetCodexServerStatus.mockResolvedValue({
+      running: false,
+      hostPort: 0,
+      authToken: "",
+    });
+    mockStartCodexServer.mockResolvedValue({
+      hostPort: 8888,
+      authToken: "",
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    expect(await screen.findByText("Codex bridge authentication is unavailable"))
+      .toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reconnect now" })).toBeTruthy();
+    expect(mockCreateClient).not.toHaveBeenCalled();
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+  });
+
   test("sends task images and falls back to an empty note when project notes fail", async () => {
     seedStartingPipeline();
     useBuildPipelineStore.setState((state) => {

@@ -49,6 +49,7 @@ import {
   unshareOpenCodeSession,
 } from "@/lib/opencode-client";
 import {
+  CodexForkError,
   compactCodexSession,
   forkCodexSession,
   getCodexRuntimeHealth,
@@ -735,8 +736,20 @@ export function AgentInfoButton({
       const fork = await forkOpenCodeSession(openCodeClient, currentSessionId);
       openForkTab(fork.id, fork.title, isCurrent());
     } else if (activeSession.provider === "codex" && codexClient) {
-      const fork = await forkCodexSession(codexClient, currentSessionId);
-      if (!fork) throw new Error("Codex cannot fork an active or empty session");
+      /*
+       * The bridge differentiates its refusals (404 missing, 409 running, 422
+       * not a fork point, 503 unavailable) and `CodexForkError` carries that
+       * body verbatim. The old single message blamed "an active or empty
+       * session" for all four, including a bridge that was simply down.
+       */
+      let fork: Awaited<ReturnType<typeof forkCodexSession>>;
+      try {
+        fork = await forkCodexSession(codexClient, currentSessionId);
+      } catch (error) {
+        throw error instanceof CodexForkError
+          ? error
+          : new Error("Failed to fork Codex session");
+      }
       openForkTab(fork.sessionId, fork.title, isCurrent());
     }
   });
@@ -828,13 +841,24 @@ export function AgentInfoButton({
     }
   }, [open]);
 
+  /*
+   * Escape must be *claimed*, not merely observed. All three chat tabs bind a
+   * window-level Escape handler that aborts the running turn, guarded only by
+   * `event.defaultPrevented`; dismissing this popover mid-turn used to kill the
+   * turn as well. Capture phase makes the outcome independent of mount order —
+   * the tab's bubble-phase listener sees the key already consumed however the
+   * two components happened to mount.
+   */
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented) close();
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      close();
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [open]);
 
   return (

@@ -282,6 +282,7 @@ function resetStores(environmentName = "review-table") {
     modelCatalogs: new Map(),
     fastMode: new Map(),
     promptSuggestions: new Map(),
+    dismissedPromptSuggestions: new Map(),
     promptSuggestionOptIn: new Map(),
     includeLocalSettings: new Map(),
     selectedAgent: new Map(),
@@ -2718,6 +2719,39 @@ describe("ClaudeChatTab", () => {
       expect(state.promptSuggestions.get(SESSION_KEY)).toBe("keep suggestion");
       expect(Object.keys(state.backgroundTasks.get(SESSION_KEY) ?? {})).toEqual(["keep"]);
     });
+
+    test("adopts a snapshot whose invalid fields are only dotted sub-paths", async () => {
+      /*
+       * `lookupSession` reports a whole rejected field by name
+       * (`"contextUsage"`) and a dropped decoration or task inside an otherwise
+       * valid field as a dotted path (`"contextUsage.rateLimits"`,
+       * `"backgroundTasks.<taskId>"`). Only the former means "keep what you
+       * had": treating a dotted path as a whole-field rejection would freeze
+       * the meter on a stale snapshot for as long as one optional decoration
+       * kept arriving malformed.
+       */
+      useClaudeStore.getState().setContextUsage(SESSION_KEY, {
+        usedTokens: 1,
+        totalTokens: 10,
+        percentUsed: 10,
+      });
+      useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
+        stale: { id: "stale", status: "running" },
+      });
+      mockGetSession.mockResolvedValue(
+        serverSession({
+          invalidMetadataFields: ["contextUsage.rateLimits", "backgroundTasks.task-2"],
+        }) as any,
+      );
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() =>
+        expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)?.usedTokens).toBe(1_000),
+      );
+      const state = useClaudeStore.getState();
+      expect(state.promptSuggestions.get(SESSION_KEY)).toBe("Add tests for the new branch");
+      expect(Object.keys(state.backgroundTasks.get(SESSION_KEY) ?? {})).toEqual(["task-1"]);
+    });
   });
 
   describe("session.updated frames", () => {
@@ -2942,6 +2976,77 @@ describe("ClaudeChatTab", () => {
       } finally {
         channel.close();
       }
+    });
+
+    test("a consumed suggestion stays gone after this tab unmounts and remounts", async () => {
+      /*
+       * Switching environments unmounts the tab, and `GET /session/:id` replays
+       * `promptSuggestion` on the next mount because the bridge only clears it
+       * when the following prompt runs. With the latch in a component ref the
+       * chip the user had already used came straight back on return; it has to
+       * live in the store, keyed by session.
+       */
+      const suggestion = "Add a regression test";
+      seedTranscript();
+      useClaudeStore.getState().setPromptSuggestion(SESSION_KEY, suggestion);
+
+      const view = render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      fireEvent.click(await screen.findByRole("button", { name: /^Suggested: / }));
+      expect(chip()).toBeNull();
+      expect(useClaudeStore.getState().dismissedPromptSuggestions.get(SESSION_KEY))
+        .toBe(suggestion);
+
+      // The environment the user switched to keeps its own latch.
+      view.unmount();
+      mockGetSession.mockImplementation(async (_client, sessionId) => ({
+        id: sessionId,
+        status: "idle",
+        createdAt: "2026-07-26T00:00:00.000Z",
+        lastActivity: "2026-07-26T00:00:00.000Z",
+        promptSuggestion: suggestion,
+      }));
+      useClaudeStore.getState().setDraftText(SESSION_KEY, "");
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(useClaudeStore.getState().promptSuggestions.get(SESSION_KEY)).toBeUndefined(),
+      );
+      expect(chip()).toBeNull();
+
+      // A genuinely new suggestion still reaches the remounted tab.
+      act(() => {
+        useClaudeStore.getState().setPromptSuggestion(SESSION_KEY, "Something else entirely");
+      });
+      expect(
+        screen.getByRole("button", { name: /^Suggested: Something else entirely/ }),
+      ).toBeTruthy();
+    });
+
+    test("resuming another session forgets the previous session's consumed suggestion", async () => {
+      // The latch belongs to the session that was replaced: keeping it would
+      // suppress the resumed session's own suggestion if the strings matched.
+      useClaudeStore.getState().setDismissedPromptSuggestion(SESSION_KEY, "stale consumption");
+      mockGetSession.mockImplementation(async (_client, sessionId) =>
+        sessionId === "resumed-claude"
+          ? {
+              id: sessionId,
+              status: "idle",
+              createdAt: "2026-04-15T10:00:00.000Z",
+              lastActivity: "2026-04-15T10:00:00.000Z",
+            }
+          : null,
+      );
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      fireEvent.click(screen.getAllByRole("button", { name: "Resume Session" })[0]!);
+      fireEvent.click(await screen.findByTestId("claude-resume-choice"));
+
+      await waitFor(() =>
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId)
+          .toBe("resumed-claude"),
+      );
+      expect(useClaudeStore.getState().dismissedPromptSuggestions.has(SESSION_KEY)).toBe(false);
     });
 
     test("no chip is rendered when there is no suggestion", async () => {

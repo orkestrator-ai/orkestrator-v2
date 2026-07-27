@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -466,6 +466,33 @@ function seedPipeline(
   return id;
 }
 
+/**
+ * Unmount the view and let its reconcile monitors finish reacting.
+ *
+ * `FeaturesView` keeps one abortable monitor per active conversation, and its
+ * effect cleanup aborts them on unmount — but abort only takes effect at the
+ * monitor's next checkpoint, which sits behind an already-issued status or
+ * transcript promise. Without draining those checkpoints here, a monitor left
+ * over from one test resumed *inside the next one*, calling the freshly cleared
+ * `getSessionStatus`/`getSessionMessages` mocks and making call-count
+ * assertions depend on how loaded the machine was. Draining runs each straggler
+ * to its abort check while its own test's mocks are still installed.
+ */
+async function drainReconcileMonitors(): Promise<void> {
+  cleanup();
+  // Three turns: one for the in-flight request's continuation, one for the poll
+  // timer that resolves early on abort, one for the loop's own re-check.
+  for (let turn = 0; turn < 3; turn += 1) {
+    await act(async () => {
+      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    });
+  }
+}
+
+afterEach(async () => {
+  await drainReconcileMonitors();
+});
+
 beforeEach(() => {
   cleanup();
   mockToastError.mockClear();
@@ -668,7 +695,7 @@ describe("FeaturesView message drafts", () => {
     expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("");
     expect(useFeaturePlanStore.getState().getChatDraft("feature:other")).toBe("leave feature");
 
-    cleanup();
+    await drainReconcileMonitors();
     seedStores(featureWithStories({
       codexEnvironmentId: "env-feature",
       codexSessionId: "session-existing",
@@ -1097,7 +1124,7 @@ describe("FeaturesView lifecycle and navigation", () => {
       startedAt: "2026-01-03T00:00:00.000Z",
     }));
 
-    cleanup();
+    await drainReconcileMonitors();
     useFeaturePlanStore.setState({ activeConversations: new Map() });
     seedStores(chatFeature({
       messages: [pendingUser("2026-01-04T00:00:00.000Z", "feature-latest")],
@@ -1536,7 +1563,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     );
     expect(getCodexServerStatusMock).not.toHaveBeenCalled();
 
-    cleanup();
+    await drainReconcileMonitors();
     getSessionStatusMock.mockClear();
     createClientMock.mockClear();
     getLocalCodexServerStatusMock.mockClear();
@@ -1585,7 +1612,7 @@ describe("FeaturesView lifecycle and navigation", () => {
 
     try {
       for (const scenario of cases) {
-        cleanup();
+        await drainReconcileMonitors();
         useEnvironmentStore.setState({ environments: scenario.environment ? [scenario.environment] : [] });
         seedStores(chatFeature({ messages: [pendingUser()] }));
         getEnvironmentMock.mockClear();
@@ -1688,18 +1715,31 @@ describe("FeaturesView lifecycle and navigation", () => {
     );
 
     const secondStatus = deferred<{ status: "idle" }>();
-    cleanup();
+    await drainReconcileMonitors();
     getSessionStatusMock.mockClear();
     getSessionStatusMock.mockImplementation(async () => secondStatus.promise);
     getSessionMessagesMock.mockClear();
-    const unmountedSessionId = "session-unmounted-during-status";
+    /*
+     * A session id unique to this phase. Reconciliation deliberately outlives
+     * unmount (see the "settles ... even after the view unmounts" test), so
+     * monitors from earlier tests are still running against the shared mocks
+     * and every one of them uses `chatFeature`'s default `session-existing`.
+     * Asserting on that id — or on the mock as a whole — measures those
+     * stragglers rather than this view, which is why it only failed under the
+     * load of a full-suite run.
+     */
+    const unmountedSessionId = "session-unmount-guard";
     seedStores(chatFeature({
       codexSessionId: unmountedSessionId,
       messages: [pendingUser()],
     }));
     seedExistingCodexEnvironment();
     const unmounted = render(<FeaturesView projectId="project-1" />);
-    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalled());
+    // Wait for *this* view's monitor, not a straggler's, or the assertion below
+    // passes vacuously because the read it guards never started.
+    await waitFor(() => expect(
+      getSessionStatusMock.mock.calls.some((call) => call[1] === unmountedSessionId),
+    ).toBe(true));
     unmounted.unmount();
     await act(async () => secondStatus.resolve({ status: "idle" }));
     expect(messageReadsFor(unmountedSessionId)).toHaveLength(0);
@@ -1837,7 +1877,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     expect(appendMessageMock).not.toHaveBeenCalled();
     await waitForConversationToSettle();
 
-    cleanup();
+    await drainReconcileMonitors();
     updateFeatureMock.mockClear();
     const storyResponse = `Local story reply.
 <story_refinement>{"storyId":"story-1","title":"Local story recovery"}</story_refinement>`;
@@ -2044,7 +2084,7 @@ describe("FeaturesView lifecycle and navigation", () => {
       stateApplication: "superseded",
     });
 
-    cleanup();
+    await drainReconcileMonitors();
     updateFeatureMock.mockClear();
     seedStores(feature);
     render(<FeaturesView projectId="project-1" />);
@@ -2099,7 +2139,7 @@ describe("FeaturesView lifecycle and navigation", () => {
       stateApplication: "applied",
     });
 
-    cleanup();
+    await drainReconcileMonitors();
     updateFeatureMock.mockClear();
     seedStores(feature);
     render(<FeaturesView projectId="project-1" />);
@@ -2145,7 +2185,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     await waitForConversationToSettle();
     expect(messageReadsFor(removedFeatureSessionId)).toHaveLength(0);
 
-    cleanup();
+    await drainReconcileMonitors();
     getSessionStatusMock.mockClear();
     const removedTargetSessionId = "session-removed-target";
     const removedTargetStatus = deferred<{ status: "idle" }>();
@@ -3419,7 +3459,7 @@ describe("FeaturesView feature planning chat", () => {
     fireEvent.click(screen.getByTitle("Refresh Codex status"));
     expect(getSessionMessagesMock.mock.calls.length).toBe(readsBeforeRefresh);
 
-    cleanup();
+    await drainReconcileMonitors();
     getSessionMessagesMock.mockImplementationOnce(async () => {
       throw new Error("bridge unavailable");
     });
@@ -3809,7 +3849,7 @@ describe("FeaturesView Codex session bootstrap", () => {
     await waitForConversationToSettle();
     expect(sendPromptMock).not.toHaveBeenCalled();
 
-    cleanup();
+    await drainReconcileMonitors();
     mockToastError.mockClear();
     seedStores(chatFeature());
     seedExistingCodexEnvironment();

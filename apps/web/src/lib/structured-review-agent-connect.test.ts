@@ -6,23 +6,23 @@ import type { LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
 
 const getLocalStatus = mock(async () => ({
   running: true,
-  port: 4100,
-  pid: 10,
-  authToken: "local-token",
+  port: 4100 as number | null,
+  pid: 10 as number | null,
+  authToken: "local-token" as string | undefined,
 }));
 const startLocal = mock(async () => ({
   port: 4100,
   pid: 10,
-  authToken: "local-start-token",
+  authToken: "local-start-token" as string | undefined,
 }));
 const getContainerStatus = mock(async () => ({
   running: false,
-  hostPort: null,
+  hostPort: null as number | null,
   authToken: undefined as string | undefined,
 }));
 const startContainer = mock(async () => ({
   hostPort: 4200,
-  authToken: "container-start-token",
+  authToken: "container-start-token" as string | undefined,
 }));
 const createClient = mock((baseUrl: string, authToken?: string) => ({
   baseUrl,
@@ -100,4 +100,51 @@ test("starts a container Codex bridge and propagates its token", async () => {
     "http://127.0.0.1:4200",
     "container-start-token",
   );
+});
+
+test("reuses a running container bridge that already has a token", async () => {
+  getContainerStatus.mockResolvedValueOnce({
+    running: true,
+    hostPort: 4300,
+    authToken: "container-token",
+  });
+
+  await connectStructuredReviewAgent(workflow(), environment());
+
+  expect(startContainer).not.toHaveBeenCalled();
+  expect(createClient).toHaveBeenCalledWith(
+    "http://127.0.0.1:4300",
+    "container-token",
+  );
+});
+
+test("throws when the local bridge starts without an authentication token", async () => {
+  getLocalStatus.mockResolvedValueOnce({
+    running: false,
+    port: null,
+    pid: null,
+    authToken: undefined,
+  });
+  startLocal.mockResolvedValueOnce({ port: 4100, pid: 10, authToken: undefined });
+
+  await expect(
+    connectStructuredReviewAgent(workflow(), environment({
+      environmentType: "local",
+      containerId: null,
+      worktreePath: "/workspace",
+    })),
+  ).rejects.toThrow("did not return an authentication token");
+  expect(createClient).not.toHaveBeenCalled();
+});
+
+test("refuses to connect a Codex agent without authentication", async () => {
+  // A container bridge that answered without a token: the client would only be
+  // able to make unauthenticated requests, so connecting must fail up front.
+  startContainer.mockResolvedValueOnce({ hostPort: 4200, authToken: undefined });
+
+  await expect(
+    connectStructuredReviewAgent(workflow(), environment()),
+  ).rejects.toThrow("Codex bridge authentication is unavailable");
+  expect(createClient).not.toHaveBeenCalled();
+  expect(checkHealth).not.toHaveBeenCalled();
 });

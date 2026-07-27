@@ -366,6 +366,58 @@ describe("CodexInteractionCard failure handling", () => {
     );
   });
 
+  test("an interaction whose deadline passes while it is open stays answerable", async () => {
+    /*
+     * Expiry is the bridge's call, not the card's. A client-side timer that
+     * disabled the controls would strand the user in front of a question they
+     * can no longer answer while the turn is still parked on it — and the
+     * clocks are not necessarily the same. The card keeps working; the bridge
+     * answers `stale` if it really has moved on, which clears the card.
+     */
+    const expired = createInteraction({
+      requestedAt: Date.now() - 600_000,
+      expiresAt: Date.now() - 300_000,
+    });
+    seedPending(expired);
+    renderCard(expired);
+
+    fireEvent.click(screen.getByRole("button", { name: /staging/ }));
+    const submit = screen.getByRole("button", { name: "Submit" });
+    expect(submit.hasAttribute("disabled")).toBe(false);
+
+    mockRespondToInteraction.mockImplementation(async () => "stale");
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(mockRespondToInteraction).toHaveBeenCalledTimes(1));
+    expect(mockRespondToInteraction.mock.calls[0]?.[3]).toEqual({
+      action: "accept",
+      answers: { q1: ["staging"] },
+    });
+    await waitFor(() =>
+      expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY) ?? []).toEqual([]),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  test("a reconcile that withdraws an expired interaction empties the authoritative store entry", () => {
+    /*
+     * The bridge withdraws an expired interaction on its next snapshot, and
+     * `/session/:id/interactions` — not the SSE frame the tab may have missed —
+     * is what the tab rehydrates from. Pin that a withdrawal reaches the store
+     * even while a card for it is mounted, so the tab stops rendering it.
+     */
+    const interaction = createInteraction({ expiresAt: Date.now() - 1_000 });
+    seedPending(interaction);
+    renderCard(interaction);
+    expect(screen.getByText("Codex has a question")).toBeTruthy();
+
+    useCodexStore.getState().setPendingInteractions(SESSION_KEY, []);
+
+    expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
+    // The mounted card never posted anything on its own behalf.
+    expect(mockRespondToInteraction).not.toHaveBeenCalled();
+  });
+
   test("cancel posts a bare cancel action with no answers", async () => {
     const interaction = createInteraction();
     seedPending(interaction);
@@ -455,6 +507,54 @@ describe("CodexInteractionCard mcp-form branch", () => {
       content: Record<string, unknown>;
     };
     expect(second.content.count).toBe("");
+  });
+
+  test("never sends NaN for a numeric field that cannot be parsed", async () => {
+    /*
+     * `JSON.stringify(NaN)` is `null`, so an unparseable numeric field would
+     * reach the MCP server as a silently wrong value rather than as a refusal.
+     * It degrades to the emptied-field state instead, which the required check
+     * already blocks.
+     */
+    seedPending(formInteraction);
+    const { container } = renderCard(formInteraction);
+
+    const textInputs = container.querySelectorAll('input[type="text"]');
+    fireEvent.change(textInputs[0]!, { target: { value: "v2.4.0" } });
+    const numberInput = container.querySelector('input[type="number"]')!;
+    fireEvent.change(numberInput, { target: { value: "3" } });
+    fireEvent.change(numberInput, { target: { value: "not a number" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(mockRespondToInteraction).toHaveBeenCalledTimes(1));
+    const answer = mockRespondToInteraction.mock.calls[0]?.[3] as {
+      content: Record<string, unknown>;
+    };
+    expect(Number.isNaN(answer.content.count)).toBe(false);
+    expect(answer.content.count).toBe("");
+    expect(answer.content.release).toBe("v2.4.0");
+  });
+
+  test("blocks submission when a required numeric field holds unparseable text", () => {
+    const requiredNumber = createInteraction({
+      interactionId: "interaction-required-number",
+      kind: "mcp-form",
+      questions: undefined,
+      schema: {
+        required: ["count"],
+        properties: { count: { type: "integer", title: "Replica count" } },
+      },
+    });
+    seedPending(requiredNumber);
+    const { container } = renderCard(requiredNumber);
+
+    const numberInput = container.querySelector('input[type="number"]')!;
+    fireEvent.change(numberInput, { target: { value: "2" } });
+    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(false);
+
+    fireEvent.change(numberInput, { target: { value: "12e" } });
+    // The required check treats "" as unanswered, so garbage cannot be sent.
+    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
   });
 
   test("submits no answers key for a form interaction", async () => {

@@ -1302,40 +1302,100 @@ export async function respondToInteraction(
   }
 }
 
+/**
+ * A fork request the bridge refused, carrying the HTTP status it answered with.
+ *
+ * The fork route reports four differentiated failures (404 not found, 409
+ * running, 422 not a usable fork point, 503 engine unavailable), each with its
+ * own `error` body. Collapsing them to null made the UI blame a running turn
+ * that was not there, so every non-OK answer now surfaces as this error.
+ * `status` is 0 when the request itself failed in transport, i.e. no HTTP
+ * answer was received at all.
+ */
+export class CodexForkError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "CodexForkError";
+    this.status = status;
+  }
+}
+
+/** Fallbacks mirroring the bridge's own reasons, for bodies without `error`. */
+const CODEX_FORK_ERROR_FALLBACKS: Record<number, string> = {
+  404: "Codex session or fork point was not found",
+  409: "Codex session cannot be forked while it is running",
+  422: "That message is not a usable fork point",
+  503: "Codex did not return a forked thread",
+};
+
 export async function forkCodexSession(
   client: CodexClient,
   sessionId: string,
   lastMessageId?: string,
-): Promise<CodexSession | null> {
-  const response = await fetchCodex(
-    client,
-    `/session/${sessionId}/fork`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lastMessageId }),
-    },
-  );
-  if (!response.ok) return null;
-  const body = (await response.json()) as { sessionId?: unknown; title?: unknown };
-  return typeof body.sessionId === "string"
-    ? {
-        sessionId: body.sessionId,
-        ...(typeof body.title === "string" ? { title: body.title } : {}),
-      }
-    : null;
+): Promise<CodexSession> {
+  let response: Response;
+  try {
+    response = await fetchCodex(
+      client,
+      `/session/${sessionId}/fork`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lastMessageId }),
+      },
+    );
+  } catch (error) {
+    throw new CodexForkError(
+      0,
+      error instanceof Error ? error.message : "Codex fork request failed",
+    );
+  }
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as
+      | { error?: unknown }
+      | null;
+    const message =
+      body && typeof body.error === "string" && body.error.length > 0
+        ? body.error
+        : CODEX_FORK_ERROR_FALLBACKS[response.status]
+          ?? `Codex fork failed: HTTP ${response.status}`;
+    throw new CodexForkError(response.status, message);
+  }
+  const body = (await response.json().catch(() => ({}))) as {
+    sessionId?: unknown;
+    title?: unknown;
+  };
+  // A `200 {}` would otherwise bind the new tab to `sessionId: undefined`,
+  // which every subsequent request then addresses as the literal "undefined".
+  if (typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+    throw new CodexForkError(
+      response.status,
+      "Codex fork response did not include a session id",
+    );
+  }
+  return {
+    sessionId: body.sessionId,
+    ...(typeof body.title === "string" ? { title: body.title } : {}),
+  };
 }
 
 export async function compactCodexSession(
   client: CodexClient,
   sessionId: string,
 ): Promise<boolean> {
-  const response = await fetchCodex(
-    client,
-    `/session/${sessionId}/compact`,
-    { method: "POST" },
-  );
-  return response.ok;
+  try {
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/compact`,
+      { method: "POST" },
+    );
+    return response.ok;
+  } catch (error) {
+    console.error("[codex-client] Failed to compact session:", error);
+    return false;
+  }
 }
 
 export async function steerCodexSession(
@@ -1344,16 +1404,21 @@ export async function steerCodexSession(
   input: string,
   requestId: string,
 ): Promise<boolean> {
-  const response = await fetchCodex(
-    client,
-    `/session/${sessionId}/steer`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ input, requestId }),
-    },
-  );
-  return response.ok;
+  try {
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/steer`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input, requestId }),
+      },
+    );
+    return response.ok;
+  } catch (error) {
+    console.error("[codex-client] Failed to steer session:", error);
+    return false;
+  }
 }
 
 export async function startCodexNativeReview(
@@ -1365,16 +1430,21 @@ export async function startCodexNativeReview(
     | { type: "commit"; sha: string; title?: string }
     | { type: "custom"; instructions: string } = { type: "uncommittedChanges" },
 ): Promise<boolean> {
-  const response = await fetchCodex(
-    client,
-    `/session/${sessionId}/review`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(target),
-    },
-  );
-  return response.ok;
+  try {
+    const response = await fetchCodex(
+      client,
+      `/session/${sessionId}/review`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(target),
+      },
+    );
+    return response.ok;
+  } catch (error) {
+    console.error("[codex-client] Failed to start native review:", error);
+    return false;
+  }
 }
 
 export async function getCodexRuntimeHealth(

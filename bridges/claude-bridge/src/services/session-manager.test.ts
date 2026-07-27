@@ -3884,6 +3884,120 @@ describe("reconcilePersistedSessions", () => {
     );
   });
 
+  test("keeps a generated title and writes it through to the rollout", async () => {
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("/claude"));
+    const { child, complete } = createMockChildProcess({
+      stdout: "Focused title\n",
+      defer: true,
+    });
+    mockSpawn.mockImplementationOnce(() => child as never);
+
+    // No summary on disk yet, so the bridge starts from the id-derived
+    // placeholder — the state a first turn generates a title from.
+    const state = await materializePersistedSession({ summary: "", cwd: "/repo/env-a" });
+    expect(state.title).toBe(`Session ${PERSISTED_SDK_ID.slice(-6)}`);
+
+    const promptPromise = sendPrompt(state.id, "make the thing");
+    const call = await nextQueryCall();
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+    complete();
+    await waitFor(() => state.title === "Focused title");
+
+    // Persisted, not just held in memory: without a durable custom title the
+    // reconcile below has nothing to tell this apart from a placeholder.
+    expect(mockSdkRenameSession).toHaveBeenCalledWith(PERSISTED_SDK_ID, "Focused title", {
+      dir: process.env.CWD || process.cwd(),
+    });
+
+    // `summary` is effectively always set, so taking it unconditionally
+    // reverted the generated title on the very next `GET /session/list`.
+    mockSdkListSessions.mockImplementation(async () => [
+      sdkSessionInfo({ summary: "Do the thing well", cwd: "/repo/env-a" }),
+    ]);
+    await withWorkspaceCwd("/repo/env-a", async () => {
+      await reconcilePersistedSessions();
+    });
+    expect(getSession(state.id)?.title).toBe("Focused title");
+  });
+
+  test("lets a summary fill a still-default title but never an explicit one", async () => {
+    const placeholder = createSession();
+    track(placeholder.id);
+    const named = createSession("Chosen by the user");
+    track(named.id);
+
+    mockSdkListSessions.mockImplementation(async () => [
+      sdkSessionInfo({
+        sessionId: placeholder.id.slice("session-".length),
+        summary: "Summarized on disk",
+        cwd: "/repo/env-a",
+      }),
+      sdkSessionInfo({
+        sessionId: named.id.slice("session-".length),
+        summary: "Summarized on disk",
+        cwd: "/repo/env-a",
+      }),
+    ]);
+    await withWorkspaceCwd("/repo/env-a", async () => {
+      await reconcilePersistedSessions();
+    });
+
+    expect(placeholder.title).toBe("Summarized on disk");
+    expect(named.title).toBe("Chosen by the user");
+  });
+
+  test("an on-disk rename still outranks the in-memory title", async () => {
+    const existing = createSession("Local title");
+    track(existing.id);
+    mockSdkListSessions.mockImplementation(async () => [
+      sdkSessionInfo({
+        sessionId: existing.id.slice("session-".length),
+        customTitle: "Renamed on disk",
+        summary: "Summarized on disk",
+        cwd: "/repo/env-a",
+      }),
+    ]);
+    await withWorkspaceCwd("/repo/env-a", async () => {
+      await reconcilePersistedSessions();
+    });
+    expect(existing.title).toBe("Renamed on disk");
+  });
+
+  test("does not resurrect a session deleted while the listing was in flight", async () => {
+    const state = await materializePersistedSession({ cwd: "/repo/env-a" });
+    let releaseList: ((infos: SdkSessionInfo[]) => void) | undefined;
+    mockSdkListSessions.mockImplementation(
+      async () => new Promise<SdkSessionInfo[]>((resolve) => {
+        releaseList = resolve;
+      }),
+    );
+
+    const reconcile = withWorkspaceCwd("/repo/env-a", async () => {
+      await reconcilePersistedSessions();
+    });
+    await waitFor(() => releaseList !== undefined);
+
+    expect(await deleteSessionDurably(state.id)).toBe(true);
+    expect(getSession(state.id)).toBeUndefined();
+
+    // This snapshot predates the deletion. Adopting it re-inserts a session
+    // whose rollout is gone — and reconcile never prunes, so it would be
+    // listed, openable and undeletable for the lifetime of the bridge.
+    releaseList!([sdkSessionInfo({ cwd: "/repo/env-a" })]);
+    await reconcile;
+    expect(getSession(state.id)).toBeUndefined();
+
+    // The tombstone orders one read against one deletion; it is not a
+    // permanent ban on the id.
+    mockSdkListSessions.mockImplementation(async () => [sdkSessionInfo({ cwd: "/repo/env-a" })]);
+    await withWorkspaceCwd("/repo/env-a", async () => {
+      await reconcilePersistedSessions();
+    });
+    expect(getSession(state.id)).toBeDefined();
+  });
+
   test("propagates a listSessions failure to its caller", async () => {
     mockSdkListSessions.mockImplementation(async () => {
       throw new Error("claude home unreadable");
@@ -3924,6 +4038,63 @@ describe("ensurePersistedSession", () => {
     expect(mockSdkGetSessionInfo).toHaveBeenCalledWith(PERSISTED_SDK_ID, {
       dir: process.env.CWD || process.cwd(),
     });
+  });
+
+  test("shares one materialization between concurrent callers", async () => {
+    const bridgeId = track(`session-${PERSISTED_SDK_ID}`);
+    let releaseInfo: ((info: SdkSessionInfo) => void) | undefined;
+    mockSdkGetSessionInfo.mockImplementation(
+      async () => new Promise<SdkSessionInfo>((resolve) => {
+        releaseInfo = resolve;
+      }),
+    );
+
+    // A mounting tab fires GET /:id, /messages and /tasks together; each one
+    // lands here. Without a shared in-flight promise every one of them reads
+    // the SDK and then writes its own fresh state over the others'.
+    const first = ensurePersistedSession(bridgeId);
+    const second = ensurePersistedSession(bridgeId);
+    await waitFor(() => releaseInfo !== undefined);
+    releaseInfo!(sdkSessionInfo());
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toBe(b);
+    expect(a).toBe(getSession(bridgeId)!);
+    expect(mockSdkGetSessionInfo).toHaveBeenCalledTimes(1);
+  });
+
+  test("yields to a session that was claimed while the SDK read was pending", async () => {
+    const bridgeId = track(`session-${PERSISTED_SDK_ID}`);
+    let releaseInfo: ((info: SdkSessionInfo) => void) | undefined;
+    mockSdkGetSessionInfo.mockImplementation(
+      async () => new Promise<SdkSessionInfo>((resolve) => {
+        releaseInfo = resolve;
+      }),
+    );
+
+    const pending = ensurePersistedSession(bridgeId);
+    await waitFor(() => releaseInfo !== undefined);
+
+    // `GET /session/list` registers the same id from the listing while the
+    // point read is still in flight, and a prompt then claims it.
+    mockSdkListSessions.mockImplementation(async () => [sdkSessionInfo()]);
+    await reconcilePersistedSessions();
+    const claimed = getSession(bridgeId)!;
+    const promptPromise = sendPrompt(bridgeId, "live prompt");
+    const call = await nextQueryCall();
+    expect(claimed.status).toBe("running");
+
+    releaseInfo!(sdkSessionInfo({ customTitle: "Stale metadata" }));
+
+    // Registering a fresh idle record here would discard the running status,
+    // the in-flight user message and the turn's task registry.
+    expect(await pending).toBe(claimed);
+    expect(getSession(bridgeId)).toBe(claimed);
+    expect(claimed.status).toBe("running");
+    expect(claimed.messages.at(-1)?.content).toBe("live prompt");
+
+    call.finish();
+    await promptPromise;
   });
 });
 
@@ -4035,7 +4206,7 @@ describe("hydratePersistedSessionMessages", () => {
     expect(getSessionMessages(state.id).at(-1)?.content).toBe("live prompt");
   });
 
-  test("survives an SDK that cannot read the transcript before a prompt", async () => {
+  test("survives an SDK that cannot read the transcript before a prompt, and retries after", async () => {
     mockSdkGetSessionMessages.mockImplementation(async () => {
       throw new Error("transcript unreadable");
     });
@@ -4049,6 +4220,16 @@ describe("hydratePersistedSessionMessages", () => {
     expect(getSessionMessages(state.id).map((message) => message.content)).toEqual([
       "still works",
     ]);
+
+    // The turn claimed the transcript for a hydration that never happened.
+    // Leaving the claim set hid the whole on-disk history behind a transient
+    // read failure until the bridge was restarted.
+    expect(getSession(state.id)?.persistedMessagesLoaded).toBe(false);
+
+    mockSdkGetSessionMessages.mockImplementation(async () => transcriptWithToolResult());
+    const recovered = await hydratePersistedSessionMessages(state.id);
+    expect(recovered.length).toBeGreaterThan(0);
+    expect(getSession(state.id)?.persistedMessagesLoaded).toBe(true);
   });
 });
 
@@ -4484,16 +4665,51 @@ describe("rewindSessionFiles", () => {
 // Background tasks
 // ---------------------------------------------------------------------------
 
+/**
+ * Drive a turn, assert while its stream is still live, then close it.
+ *
+ * `running` is an intra-turn fact. The turn's `for await` is the only consumer
+ * of the SDK iterator, and by the time it is done with it the provider process
+ * is gone — so the bridge settles whatever was still live rather than leaving a
+ * snapshot that can never change again. These tests are about the reducer, so
+ * they observe it before that happens, and then assert the settling too.
+ */
+async function inspectDuringTurn(
+  messages: unknown[],
+  ready: (session: NonNullable<ReturnType<typeof getSession>>) => boolean,
+): Promise<{
+  session: NonNullable<ReturnType<typeof getSession>>;
+  finish: () => Promise<void>;
+}> {
+  const created = createSession("Fixed title");
+  track(created.id);
+  const promptPromise = sendPrompt(created.id, "test prompt");
+  const call = await nextQueryCall();
+  for (const message of messages) call.push(message);
+  const session = getSession(created.id)!;
+  await waitFor(() => ready(session));
+  return {
+    session,
+    finish: async () => {
+      call.finish();
+      await promptPromise;
+    },
+  };
+}
+
 describe("background task reducer", () => {
-  test("records a started task as running", async () => {
-    const { session } = await runPromptWithMessages([
-      {
-        type: "system",
-        subtype: "task_started",
-        task_id: "task-1",
-        description: "Run the suite",
-      },
-    ]);
+  test("records a started task as running, then settles it when the stream ends", async () => {
+    const { session, finish } = await inspectDuringTurn(
+      [
+        {
+          type: "system",
+          subtype: "task_started",
+          task_id: "task-1",
+          description: "Run the suite",
+        },
+      ],
+      (s) => s.backgroundTasks?.["task-1"] !== undefined,
+    );
 
     expect(session.backgroundTasks?.["task-1"]).toMatchObject({
       id: "task-1",
@@ -4501,25 +4717,35 @@ describe("background task reducer", () => {
       status: "running",
     });
     expect(session.backgroundTasks?.["task-1"]?.startedAt).toBeNumber();
+
+    await finish();
+    // Nothing is left that could ever report a result for this task, so leaving
+    // it at "running" would wedge `GET /session/:id` for the bridge's lifetime.
+    expect(session.backgroundTasks?.["task-1"]).toMatchObject({ status: "killed" });
+    expect(session.backgroundTasks?.["task-1"]?.endedAt).toBeNumber();
   });
 
   test("merges task_progress and task_updated patches", async () => {
-    const { session } = await runPromptWithMessages([
-      { type: "system", subtype: "task_started", task_id: "task-1", description: "Build" },
-      { type: "system", subtype: "task_progress", task_id: "task-1" },
-      {
-        type: "system",
-        subtype: "task_updated",
-        task_id: "task-1",
-        patch: { is_backgrounded: true, description: "Build (backgrounded)" },
-      },
-    ]);
+    const { session, finish } = await inspectDuringTurn(
+      [
+        { type: "system", subtype: "task_started", task_id: "task-1", description: "Build" },
+        { type: "system", subtype: "task_progress", task_id: "task-1" },
+        {
+          type: "system",
+          subtype: "task_updated",
+          task_id: "task-1",
+          patch: { is_backgrounded: true, description: "Build (backgrounded)" },
+        },
+      ],
+      (s) => s.backgroundTasks?.["task-1"]?.isBackgrounded === true,
+    );
 
     expect(session.backgroundTasks?.["task-1"]).toMatchObject({
       description: "Build (backgrounded)",
       status: "running",
       isBackgrounded: true,
     });
+    await finish();
   });
 
   const terminalCases: Array<{
@@ -4588,18 +4814,21 @@ describe("background task reducer", () => {
   });
 
   test("background_tasks_changed replaces the whole set", async () => {
-    const { session } = await runPromptWithMessages([
-      { type: "system", subtype: "task_started", task_id: "task-1", description: "Build" },
-      { type: "system", subtype: "task_started", task_id: "task-2", description: "Lint" },
-      {
-        type: "system",
-        subtype: "background_tasks_changed",
-        tasks: [
-          { task_id: "task-2", task_type: "bash", description: "Lint" },
-          { task_id: "task-3", task_type: "agent", description: "Research" },
-        ],
-      },
-    ]);
+    const { session, finish } = await inspectDuringTurn(
+      [
+        { type: "system", subtype: "task_started", task_id: "task-1", description: "Build" },
+        { type: "system", subtype: "task_started", task_id: "task-2", description: "Lint" },
+        {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [
+            { task_id: "task-2", task_type: "bash", description: "Lint" },
+            { task_id: "task-3", task_type: "agent", description: "Research" },
+          ],
+        },
+      ],
+      (s) => s.backgroundTasks?.["task-3"] !== undefined,
+    );
 
     // REPLACE semantics, per the SDK's own contract: a missed bookend must not
     // be able to wedge a stale running indicator.
@@ -4613,6 +4842,7 @@ describe("background task reducer", () => {
       status: "running",
       isBackgrounded: true,
     });
+    await finish();
   });
 
   test("an empty background_tasks_changed clears every task", async () => {
@@ -4649,7 +4879,38 @@ describe("stopBackgroundTask", () => {
     });
   });
 
-  test("stops a backgrounded task after the turn that started it has ended", async () => {
+  test("stops a live task and settles the snapshot without waiting for a notification", async () => {
+    const stopTask = mock(async (_taskId: string) => {});
+    queryControlOverrides.stopTask = stopTask;
+
+    const { session, finish } = await inspectDuringTurn(
+      [
+        {
+          type: "system",
+          subtype: "task_started",
+          task_id: "task-1",
+          description: "Long build",
+        },
+        {
+          type: "system",
+          subtype: "task_updated",
+          task_id: "task-1",
+          patch: { is_backgrounded: true },
+        },
+      ],
+      (s) => s.backgroundTasks?.["task-1"]?.isBackgrounded === true,
+    );
+
+    expect(await stopBackgroundTask(session.id, "task-1")).toEqual({ ok: true });
+    expect(stopTask).toHaveBeenCalledWith("task-1");
+    // The SDK answers a stop with a `task_notification`, but a stop issued
+    // after the turn has no reader for it, so the snapshot is patched here
+    // rather than left to a message that may never be consumed.
+    expect(session.backgroundTasks?.["task-1"]).toMatchObject({ status: "killed" });
+    await finish();
+  });
+
+  test("reports no control channel once the turn that owned the task has ended", async () => {
     const stopTask = mock(async (_taskId: string) => {});
     queryControlOverrides.stopTask = stopTask;
 
@@ -4668,14 +4929,20 @@ describe("stopBackgroundTask", () => {
       },
     ]);
 
-    // The turn is over; a backgrounded task outlives it by definition, and the
-    // control handle is the only route to `stopTask`.
+    // The turn's iterator is the only consumer of the stream, so once it is
+    // finished with the provider process behind the handle is gone. Reporting
+    // `ok` here would claim a stop that never reached anything.
     expect(session.status).toBe("idle");
-    expect(await stopBackgroundTask(session.id, "task-1")).toEqual({ ok: true });
-    expect(stopTask).toHaveBeenCalledWith("task-1");
+    expect(session.backgroundTasks?.["task-1"]).toMatchObject({ status: "killed" });
+    expect(await stopBackgroundTask(session.id, "task-1")).toEqual({
+      ok: false,
+      reason: "no_control_channel",
+      message: "No live Claude control channel can reach this task",
+    });
+    expect(stopTask).not.toHaveBeenCalled();
   });
 
-  test("keeps the first turn's task control after a follow-up installs a new control", async () => {
+  test("routes a stop through the control that owns the task, not the newest one", async () => {
     const firstStop = mock(async () => {});
     const secondStop = mock(async () => {});
     queryControlOverrides.stopTask = firstStop;
@@ -4690,6 +4957,7 @@ describe("stopBackgroundTask", () => {
       task_id: "task-old",
       description: "Old build",
     });
+    await waitFor(() => getSession(session.id)?.backgroundTasks?.["task-old"] !== undefined);
     firstCall.finish();
     await firstPrompt;
 
@@ -4702,14 +4970,50 @@ describe("stopBackgroundTask", () => {
       task_id: "task-new",
       description: "New build",
     });
-    secondCall.finish();
-    await secondPrompt;
+    await waitFor(() => getSession(session.id)?.backgroundTasks?.["task-new"] !== undefined);
 
-    expect(await stopBackgroundTask(session.id, "task-old")).toEqual({ ok: true });
-    expect(firstStop).toHaveBeenCalledWith("task-old");
-    expect(secondStop).not.toHaveBeenCalledWith("task-old");
+    // The second turn's control must not be handed a task it never owned.
+    expect(await stopBackgroundTask(session.id, "task-old")).toEqual({
+      ok: false,
+      reason: "no_control_channel",
+      message: "No live Claude control channel can reach this task",
+    });
+    expect(firstStop).not.toHaveBeenCalled();
+    expect(secondStop).not.toHaveBeenCalled();
+
     expect(await stopBackgroundTask(session.id, "task-new")).toEqual({ ok: true });
     expect(secondStop).toHaveBeenCalledWith("task-new");
+
+    secondCall.finish();
+    await secondPrompt;
+  });
+
+  test("does not 500 when the stop lands on a closed transport", async () => {
+    queryControlOverrides.stopTask = mock(async () => {
+      throw new Error("Query closed before response received");
+    });
+
+    const { session, finish } = await inspectDuringTurn(
+      [
+        {
+          type: "system",
+          subtype: "task_started",
+          task_id: "task-1",
+          description: "Long build",
+        },
+      ],
+      (s) => s.backgroundTasks?.["task-1"] !== undefined,
+    );
+
+    // A handle whose transport has gone is a conflict the user can act on, not
+    // a bridge fault: the route maps `no_control_channel` to 409.
+    expect(await stopBackgroundTask(session.id, "task-1")).toEqual({
+      ok: false,
+      reason: "no_control_channel",
+      message: "No live Claude control channel can reach this task",
+    });
+    expect(session.backgroundTasks?.["task-1"]).toMatchObject({ status: "killed" });
+    await finish();
   });
 
   test("tolerates a rejected query-control close during deletion", async () => {
@@ -4790,7 +5094,8 @@ describe("rate_limit_event", () => {
           rate_limit_info: {
             rateLimitType: "five_hour",
             utilization: 42,
-            resetsAt: Date.parse("2026-07-26T18:00:00.000Z"),
+            // Epoch SECONDS, as the CLI reports them.
+            resetsAt: Date.parse("2026-07-26T18:00:00.000Z") / 1000,
           },
         },
       ]));
@@ -4806,11 +5111,47 @@ describe("rate_limit_event", () => {
         resetsAt: "2026-07-26T18:00:00.000Z",
       },
     ]);
+    // Reading seconds as milliseconds put every window in 1970, which the UI
+    // renders as a limit that reset decades ago.
+    expect(
+      new Date(session.rateLimits![0]!.resetsAt!).getUTCFullYear(),
+    ).toBeGreaterThan(2020);
     expect(events).toContainEqual({
       type: "session.updated",
       sessionId: session.id,
       data: { rateLimits: session.rateLimits },
     });
+  });
+
+  test("accepts a reset instant already expressed in milliseconds", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "rate_limit_event",
+        rate_limit_info: {
+          rateLimitType: "seven_day",
+          utilization: 12,
+          resetsAt: Date.parse("2026-07-26T18:00:00.000Z"),
+        },
+      },
+    ]);
+
+    // Above the 1e12 threshold no real reset instant is ambiguous, so a future
+    // SDK that switches units does not silently produce year-33658 timestamps.
+    expect(session.rateLimits).toEqual([
+      { label: "Seven Day", usedPercent: 12, resetsAt: "2026-07-26T18:00:00.000Z" },
+    ]);
+  });
+
+  test("drops a reset instant no Date can represent", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "rate_limit_event",
+        rate_limit_info: { rateLimitType: "five_hour", resetsAt: Number.MAX_SAFE_INTEGER },
+      },
+    ]);
+    expect(session.rateLimits).toEqual([
+      { label: "Five Hour", usedPercent: undefined, resetsAt: undefined },
+    ]);
   });
 
   test("deduplicates by label and keeps distinct windows", async () => {

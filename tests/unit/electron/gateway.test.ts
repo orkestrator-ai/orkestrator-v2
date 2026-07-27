@@ -605,6 +605,11 @@ describe("remote gateway", () => {
     expect(preflight.status).toBe(204);
     expect(preflight.headers["access-control-allow-origin"]).toBe("https://orkestrator.dev");
     expect(preflight.headers["access-control-allow-private-network"]).toBe("true");
+    // Remote renderers authenticate Codex bridge calls with this header, so a
+    // preflight that omits it blocks every Codex request from the browser.
+    expect(preflight.headers["access-control-allow-headers"]).toBe(
+      "Authorization, Content-Type, X-Orkestrator-Codex-Token",
+    );
 
     const connected = await requestUrl(endpoint, {
       headers: {

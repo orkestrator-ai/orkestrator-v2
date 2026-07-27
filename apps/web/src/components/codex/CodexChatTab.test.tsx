@@ -105,12 +105,14 @@ const mockFetchPendingInteractions = mock<
   (_client: unknown, _sessionId: string) => Promise<CodexInteraction[]>
 >(async () => []);
 const mockRespondToInteraction = mock(async () => "applied" as const);
+// `forkCodexSession` no longer collapses refusals to null: it throws a
+// `CodexForkError` carrying the bridge's own status and message.
 const mockForkCodexSession = mock<
   (
     _client: unknown,
     _sessionId: string,
     _messageId?: string,
-  ) => Promise<{ sessionId: string; title?: string } | null>
+  ) => Promise<{ sessionId: string; title?: string }>
 >(async () => ({ sessionId: "fork-session", title: "Codex fork" }));
 const mockCreateSession = mock(async () => ({ sessionId: "session-1", title: "Test session" }));
 const mockGetSessionStatus = mock<
@@ -208,6 +210,9 @@ mock.module("@/lib/backend", () => ({
 mock.module("@/lib/codex-client", () => ({
   CODEX_MODELS: MOCK_MODELS,
   DEFAULT_CODEX_MODEL: MOCK_MODELS[0]!.id,
+  // The real class: the fork handler branches on `instanceof`, so a stub would
+  // send every refusal down the unexpected-error path.
+  CodexForkError: realCodexClientSnapshot.CodexForkError,
   abortSession: mockAbortSession,
   checkHealth: mockCheckHealth,
   createClient: mockCreateClient,
@@ -4466,15 +4471,43 @@ describe("CodexChatTab", () => {
       expect(forked.initialPrompt).toBeUndefined();
     });
 
-    test("reports a boundary Codex refuses and opens no tab", async () => {
-      mockForkCodexSession.mockImplementation(async () => null);
+    test.each([
+      [409, "Codex session cannot be forked while it is running"],
+      [422, "That message is not a usable fork point"],
+      [404, "Codex session or fork point was not found"],
+      [503, "Codex did not return a forked thread"],
+      [0, "fetch failed"],
+    ])(
+      "surfaces the bridge's own %s refusal instead of one generic line",
+      async (status, message) => {
+        /*
+         * The four refusals mean different things to the user — wait for the
+         * turn, pick another message, the session is gone, the engine is down —
+         * and only the bridge knows which happened.
+         */
+        mockForkCodexSession.mockImplementation(async () => {
+          throw new realCodexClientSnapshot.CodexForkError(status, message);
+        });
+        await renderWithUserTurn();
+        fireEvent.click(forkButtons()[0]!);
+
+        await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(message));
+        expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+        // The latch releases so the user can retry once the cause is cleared.
+        await waitFor(() => expect(forkButtons()[0]!.hasAttribute("disabled")).toBe(false));
+      },
+    );
+
+    test("falls back to generic copy for an error that is not a fork refusal", async () => {
+      // A programming error must not be presented as if Codex had answered.
+      mockForkCodexSession.mockImplementation(async () => {
+        throw new TypeError("client.fetch is not a function");
+      });
       await renderWithUserTurn();
       fireEvent.click(forkButtons()[0]!);
 
       await waitFor(() =>
-        expect(mockToastError).toHaveBeenCalledWith(
-          "This Codex turn cannot be used as a fork boundary",
-        ),
+        expect(mockToastError).toHaveBeenCalledWith("Failed to fork Codex session"),
       );
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
     });

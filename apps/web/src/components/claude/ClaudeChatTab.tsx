@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from "react";
-import { Loader2, AlertCircle, RefreshCw, ArrowDown, GitFork, History } from "lucide-react";
+import { Loader2, AlertCircle, RefreshCw, ArrowDown, History } from "lucide-react";
 import { toast } from "sonner";
 import { useVirtuosoScrollState, clearPersistedVirtuosoState, useElapsedTimer } from "@/hooks";
 import { formatElapsed } from "@/lib/format-elapsed";
@@ -55,6 +55,7 @@ import {
   renameEnvironmentFromPrompt,
 } from "@/lib/backend";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { useMessageForkAction } from "@/components/chat/MessageForkAction";
 import { ClaudeComposeBar } from "./ClaudeComposeBar";
 import { ClaudeQuestionCard } from "./ClaudeQuestionCard";
 import { ClaudePlanApprovalCard } from "./ClaudePlanApprovalCard";
@@ -272,28 +273,28 @@ export function ClaudeChatTab({
     ),
   );
   /**
-   * The suggestion this tab has already used or dismissed.
+   * Apply a server-delivered suggestion unless this session already consumed it.
    *
    * The bridge does not clear `session.promptSuggestion` once a turn has
    * produced one, so every authoritative snapshot — mount, restore, reconnect
-   * and each `session.idle` — re-delivers it. Without this the chip a user
-   * just consumed reappears, sometimes several turns later. Remembering the
+   * and each `session.idle` — re-delivers it. The "already consumed" latch
+   * therefore lives in the store, not in a component ref: consuming the chip
+   * and then switching environments unmounts this tab, and a ref would let the
+   * next mount resurrect the chip from the replayed snapshot. Remembering the
    * exact string (not just "dismissed") means a genuinely new suggestion still
    * gets through.
    */
-  const dismissedPromptSuggestionRef = useRef<string | null>(null);
   const applyPromptSuggestion = useCallback(
     (key: string, suggestion: string | undefined) => {
       if (
-        key === sessionKey
-        && suggestion !== undefined
-        && suggestion === dismissedPromptSuggestionRef.current
+        suggestion !== undefined
+        && suggestion === useClaudeStore.getState().dismissedPromptSuggestions.get(key)
       ) {
         return;
       }
       setPromptSuggestion(key, suggestion);
     },
-    [sessionKey, setPromptSuggestion],
+    [setPromptSuggestion],
   );
   const applyServerSessionMetadata = useCallback(
     (
@@ -1207,8 +1208,23 @@ export function ClaudeChatTab({
                 );
               }
               if (sessionUpdate && "backgroundTasks" in sessionUpdate) {
-                const tasks = parseClaudeBackgroundTasks(sessionUpdate.backgroundTasks);
-                if (tasks) {
+                /*
+                 * `parseClaudeBackgroundTasks` drops individual malformed tasks
+                 * rather than rejecting the whole map, so a frame in which
+                 * *every* task was rejected arrives here as `{}`. That is a
+                 * malformed frame, not an authoritative "no tasks left":
+                 * writing it would remove the Stop controls for tasks that are
+                 * still running.
+                 */
+                const droppedTaskIds: string[] = [];
+                const tasks = parseClaudeBackgroundTasks(
+                  sessionUpdate.backgroundTasks,
+                  droppedTaskIds,
+                );
+                if (
+                  tasks
+                  && !(Object.keys(tasks).length === 0 && droppedTaskIds.length > 0)
+                ) {
                   setBackgroundTasks(sessionTabId, tasks);
                 }
               }
@@ -1716,7 +1732,6 @@ export function ClaudeChatTab({
         const contextUsage = parseClaudeContextUsage(serverSession.contextUsage);
         const backgroundTasks =
           parseClaudeBackgroundTasks(serverSession.backgroundTasks) ?? {};
-        dismissedPromptSuggestionRef.current = null;
 
         // Publish the new identity, transcript, and all session-scoped metadata
         // in one store update. No render can pair the resumed session with the
@@ -1745,6 +1760,12 @@ export function ClaudeChatTab({
             promptSuggestions.delete(sessionKey);
           }
 
+          // The consumed-suggestion latch belongs to the session that was
+          // replaced; keeping it would suppress the resumed session's own
+          // suggestion if the two happened to match.
+          const dismissedPromptSuggestions = new Map(state.dismissedPromptSuggestions);
+          dismissedPromptSuggestions.delete(sessionKey);
+
           const tasksBySession = new Map(state.backgroundTasks);
           if (Object.keys(backgroundTasks).length > 0) {
             tasksBySession.set(sessionKey, backgroundTasks);
@@ -1756,6 +1777,7 @@ export function ClaudeChatTab({
             sessions,
             contextUsage: contextUsageBySession,
             promptSuggestions,
+            dismissedPromptSuggestions,
             backgroundTasks: tasksBySession,
           };
         });
@@ -1806,6 +1828,14 @@ export function ClaudeChatTab({
       setForkInFlight(false);
     }
   }, [client, data, environmentId, session?.sessionId]);
+
+  // Referentially stable per message id, so `memo(NativeMessage)` still holds
+  // for every visible message while an answer streams in.
+  const forkAction = useMessageForkAction({
+    label: "Fork Claude session from this message",
+    disabled: forkInFlight,
+    onFork: handleForkFromMessage,
+  });
 
   if (setupPending) {
     return (
@@ -1873,19 +1903,7 @@ export function ClaudeChatTab({
               previousMessage={prev}
               assistantLabel="Claude"
               containerId={containerId}
-              actions={message.role === "user" ? (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  title="Fork from here"
-                  aria-label="Fork Claude session from this message"
-                  disabled={forkInFlight}
-                  onClick={() => void handleForkFromMessage(message.id)}
-                >
-                  <GitFork className="h-3.5 w-3.5" />
-                </Button>
-              ) : undefined}
+              actions={message.role === "user" ? forkAction(message.id) : undefined}
             />
           )}
           emptyState={
@@ -1987,7 +2005,7 @@ export function ClaudeChatTab({
                         ? `${draft.replace(/\s+$/, "")}\n\n${promptSuggestion}`
                         : promptSuggestion,
                     );
-                    dismissedPromptSuggestionRef.current = promptSuggestion;
+                    store.setDismissedPromptSuggestion(sessionKey, promptSuggestion);
                     setPromptSuggestion(sessionKey, undefined);
                   }}
                   className="max-w-[min(70vw,34rem)] truncate rounded-full border border-border/60 bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground"

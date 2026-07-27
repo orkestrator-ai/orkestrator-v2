@@ -1067,6 +1067,29 @@ describe("runtime health", () => {
       .toMatchObject({ threadId: "t1", detail: "full" });
   });
 
+  /**
+   * `/global/health` is public and stripped, so the drift counters an operator
+   * watches after a Codex bump live on this authenticated snapshot instead.
+   */
+  test("reports the protocol drift counters", async () => {
+    const h = harness(HEALTH_HANDLERS);
+    await h.engine.start();
+    h.child().notify("codex/invented/method", { threadId: "t1" });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+
+    const health = await h.engine.getRuntimeHealth() as {
+      protocol: {
+        unknownNotifications: number;
+        unsupportedItems: number;
+        serverRequests: { pending: number; awaitingUser: number };
+      };
+    };
+    expect(health.protocol.unknownNotifications).toBe(1);
+    expect(health.protocol.unsupportedItems).toBe(0);
+    expect(health.protocol.serverRequests).toMatchObject({ pending: 0, awaitingUser: 0 });
+  });
+
   test("scopes the MCP list to the whole environment when no thread is given", async () => {
     const h = harness(HEALTH_HANDLERS);
     await h.engine.start();
@@ -1299,6 +1322,30 @@ describe("runtime notices", () => {
     expect(message).not.toContain("abcdef123456");
     expect(message).not.toContain("ghp_0123456789abcdefghij");
     expect(message).toBe("Codex reported mcpServer startupStatus updated");
+  });
+
+  /**
+   * The generation check guards notice capture too, not just event reduction. A
+   * warning from a replaced child describes a process that no longer exists, so
+   * showing it in the live runtime panel would report a condition the running
+   * app-server may not have at all.
+   */
+  test("a notice from a replaced generation is dropped", async () => {
+    const h = harness();
+    await h.engine.start();
+    const dead = h.child();
+    dead.exit(1);
+    await h.engine.getSupervisor().ensureReady();
+
+    dead.notify("warning", { message: "from the dead child" });
+    h.child().notify("configWarning", { message: "from the live child" });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+
+    const health = await h.engine.getRuntimeHealth() as {
+      notices: Array<{ method: string }>;
+    };
+    expect(health.notices.map((notice) => notice.method)).toEqual(["configWarning"]);
   });
 
   test("absolute paths, identity, and private filenames never leave runtime health", async () => {

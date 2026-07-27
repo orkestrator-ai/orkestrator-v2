@@ -135,6 +135,8 @@ const terminalActivityArmed = new Set<string>();
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 /** Per-process bearer tokens for renderer → local Codex bridge requests. */
 const localCodexBridgeTokens = new Map<string, string>();
+/** Shape of a base64url-encoded 32-byte Codex bridge token persisted in the container. */
+const CODEX_BRIDGE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const localServerEnvironmentOperations = new Map<string, Promise<void>>();
 const containerCodexOperations = new Map<string, Promise<void>>();
 const deletingLocalServerEnvironments = new Set<string>();
@@ -148,6 +150,7 @@ const LOCAL_SERVER_KILL_WAIT_MS = 1_000;
 let localServerShutdownRequested = false;
 let localServerShutdownPromise: Promise<void> | null = null;
 let terminateProcessTreeImpl = terminateProcessTree;
+let spawnLocalServerCommandImpl = spawnCommand;
 const CLAUDE_MODEL_CATALOG_TTL_MS = 5 * 60_000;
 const CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS = 30_000;
 const CONTAINER_WORKSPACE_SETUP_COMMAND = "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh'; else /usr/local/bin/workspace-setup.sh; fi";
@@ -2634,8 +2637,13 @@ async function addLocalWorkspaceArtifactsToGitExclude(worktreePath: string): Pro
   }
 }
 
-async function dockerExec(containerId: string, command: string, timeoutMs = 120_000): Promise<string> {
-  const { stdout } = await runCommand("docker", ["exec", containerId, "bash", "-lc", command], { timeoutMs });
+async function dockerExec(
+  containerId: string,
+  command: string,
+  timeoutMs = 120_000,
+  redactValues?: ReadonlyArray<string | null | undefined>,
+): Promise<string> {
+  const { stdout } = await runCommand("docker", ["exec", containerId, "bash", "-lc", command], { timeoutMs, redactValues });
   return stdout;
 }
 
@@ -2658,8 +2666,12 @@ async function captureCreatedFromCommit(environment: Environment, storage: Stora
   return commit ? storage.updateEnvironment(environment.id, { createdFromCommit: commit }) : environment;
 }
 
-async function dockerExecDetached(containerId: string, command: string): Promise<void> {
-  await runCommand("docker", ["exec", "-d", containerId, "bash", "-lc", command], { timeoutMs: 30_000 });
+async function dockerExecDetached(
+  containerId: string,
+  command: string,
+  redactValues?: ReadonlyArray<string | null | undefined>,
+): Promise<void> {
+  await runCommand("docker", ["exec", "-d", containerId, "bash", "-lc", command], { timeoutMs: 30_000, redactValues });
 }
 
 async function checkHttpHealth(port: number, pathName = "/global/health"): Promise<boolean> {
@@ -2867,7 +2879,7 @@ async function startLocalServerUnlocked(
     : [bridgeEntrypoint];
   let child: ChildProcessWithoutNullStreams;
   try {
-    child = spawnCommand(command, args, {
+    child = spawnLocalServerCommandImpl(command, args, {
       cwd,
       env,
       // A dedicated group lets shutdown reach ordinary descendants immediately.
@@ -3677,15 +3689,21 @@ async function createDockerContainer(environment: Environment, context: CommandC
   return containerId;
 }
 
-async function startContainerServer(containerId: string, port: number, processName: "opencode" | "claude" | "codex", command: string): Promise<{ hostPort: number; wasRunning: boolean }> {
+async function startContainerServer(
+  containerId: string,
+  port: number,
+  processName: "opencode" | "claude" | "codex",
+  command: string,
+  redactValues?: ReadonlyArray<string | null | undefined>,
+): Promise<{ hostPort: number; wasRunning: boolean }> {
   if (!await isContainerRunning(containerId)) throw new Error("Container is not running");
   const hostPort = await getHostPort(containerId, port);
   if (!hostPort) throw new Error(`Container port ${port} is not mapped`);
   if (await checkHttpHealth(hostPort)) return { hostPort, wasRunning: true };
-  await dockerExecDetached(containerId, command);
+  await dockerExecDetached(containerId, command, redactValues);
   await waitForHealth(hostPort).catch(async (error) => {
     const logFile = processName === "opencode" ? "/tmp/opencode-serve.log" : processName === "claude" ? "/tmp/claude-bridge.log" : "/tmp/codex-bridge.log";
-    const log = await dockerExec(containerId, `cat ${logFile} 2>/dev/null || true`).catch(() => "");
+    const log = await dockerExec(containerId, `cat ${logFile} 2>/dev/null || true`, undefined, redactValues).catch(() => "");
     throw new Error(`${error instanceof Error ? error.message : String(error)}${log.trim() ? `\n${log.trim()}` : ""}`);
   });
   return { hostPort, wasRunning: false };
@@ -4693,47 +4711,69 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       const maxConcurrentThreads = resolveCodexMaxConcurrentThreads(
         config.global.codexMaxConcurrentThreads,
       );
-      const hostPort = await getHostPort(id, CODEX_BRIDGE_PORT);
-      if (hostPort && await checkHttpHealth(hostPort)) {
+      const readPersistedToken = async (): Promise<string | null> => {
         const persistedToken = (
           await dockerExec(id, "cat /tmp/codex-bridge-token 2>/dev/null || true")
         ).trim();
-        if (/^[A-Za-z0-9_-]{43}$/.test(persistedToken)) {
+        return CODEX_BRIDGE_TOKEN_PATTERN.test(persistedToken) ? persistedToken : null;
+      };
+      const replaceRunningBridge = async (port: number): Promise<void> => {
+        await dockerExec(id, "pkill -f '[c]odex-bridge/dist/index.js' || true");
+        await waitForUnhealthy(port);
+      };
+      const startWithFreshToken = async (): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> => {
+        const authToken = randomBytes(32).toString("base64url");
+        const started = await startContainerServer(id, CODEX_BRIDGE_PORT, "codex", `
+          cd /workspace
+          rm -f /tmp/codex-bridge.log
+          mkdir -p /tmp/${APP_SLUG}
+          umask 077
+          printf '%s' ${quoteShell(authToken)} > /tmp/codex-bridge-token
+          source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
+          orkestrator_source_runtime_env 2>/dev/null || true
+          export PORT=${CODEX_BRIDGE_PORT}
+          export HOSTNAME=0.0.0.0
+          export CWD=/workspace
+          export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
+          export CODEX_BRIDGE_TOKEN=${quoteShell(authToken)}
+          export ${CODEX_MAX_CONCURRENT_THREADS_ENV}=${maxConcurrentThreads}
+          export ORKESTRATOR_VERSION="${APP_VERSION}"
+          setsid bun /opt/codex-bridge/dist/index.js > /tmp/codex-bridge.log 2>&1 &
+        `, [authToken]);
+        return { ...started, authToken };
+      };
+
+      const hostPort = await getHostPort(id, CODEX_BRIDGE_PORT);
+      if (hostPort && await checkHttpHealth(hostPort)) {
+        const persistedToken = await readPersistedToken();
+        if (persistedToken) {
           return { hostPort, wasRunning: true, authToken: persistedToken };
         }
         // A bridge from before per-process authentication cannot safely serve the
         // renderer. Replace it once, then persist the new token for later starts.
-        await dockerExec(id, "pkill -f '[c]odex-bridge/dist/index.js' || true");
-        await waitForUnhealthy(hostPort);
+        await replaceRunningBridge(hostPort);
       }
 
-      const authToken = randomBytes(32).toString("base64url");
-      const started = await startContainerServer(id, CODEX_BRIDGE_PORT, "codex", `
-        cd /workspace
-        rm -f /tmp/codex-bridge.log
-        mkdir -p /tmp/${APP_SLUG}
-        umask 077
-        printf '%s' ${quoteShell(authToken)} > /tmp/codex-bridge-token
-        source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
-        orkestrator_source_runtime_env 2>/dev/null || true
-        export PORT=${CODEX_BRIDGE_PORT}
-        export HOSTNAME=0.0.0.0
-        export CWD=/workspace
-        export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
-        export CODEX_BRIDGE_TOKEN=${quoteShell(authToken)}
-        export ${CODEX_MAX_CONCURRENT_THREADS_ENV}=${maxConcurrentThreads}
-        export ORKESTRATOR_VERSION="${APP_VERSION}"
-        setsid bun /opt/codex-bridge/dist/index.js > /tmp/codex-bridge.log 2>&1 &
-      `);
-      return { ...started, authToken };
+      const started = await startWithFreshToken();
+      if (!started.wasRunning) return started;
+      // A bridge came up between the health check above and startContainerServer's
+      // internal recheck (e.g. a prior start whose health wait timed out but whose
+      // bridge arrived late). The fresh token was never written, so return the
+      // token that bridge actually holds — or replace the bridge if it has none.
+      const persistedToken = await readPersistedToken();
+      if (persistedToken) return { ...started, authToken: persistedToken };
+      await replaceRunningBridge(started.hostPort);
+      return startWithFreshToken();
     });
   });
   register("stop_codex_server", ({ containerId }) => {
     const id = asString(containerId, "containerId");
     return enqueueContainerCodexOperation(id, () =>
+      // The bracketed pattern keeps pkill from matching the `bash -lc` shell that
+      // carries it, which would kill the shell before `rm -f` runs.
       dockerExec(
         id,
-        "pkill -f 'codex-bridge' || true; rm -f /tmp/codex-bridge-token",
+        "pkill -f '[c]odex-bridge' || true; rm -f /tmp/codex-bridge-token",
       ).then(() => undefined)
     );
   });
@@ -4747,7 +4787,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     return {
       running,
       hostPort,
-      ...(/^[A-Za-z0-9_-]{43}$/.test(authToken) ? { authToken } : {}),
+      ...(CODEX_BRIDGE_TOKEN_PATTERN.test(authToken) ? { authToken } : {}),
     };
   });
   register("get_codex_server_log", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "cat /tmp/codex-bridge.log 2>/dev/null || true"));
@@ -5356,10 +5396,22 @@ export const __testing = {
     return localServerProcesses.get(key);
   },
   releaseLocalServerOwnership,
+  waitForUnhealthy,
   setTerminateProcessTree(
     implementation: typeof terminateProcessTree,
   ): void {
     terminateProcessTreeImpl = implementation;
+  },
+  setSpawnLocalServerCommand(
+    implementation: typeof spawnCommand,
+  ): void {
+    spawnLocalServerCommandImpl = implementation;
+  },
+  getLocalCodexBridgeToken(environmentId: string): string | undefined {
+    return localCodexBridgeTokens.get(environmentId);
+  },
+  deleteLocalCodexBridgeToken(environmentId: string): void {
+    localCodexBridgeTokens.delete(environmentId);
   },
   resetLocalServerLifecycle(): void {
     if (localServerEnvironmentOperations.size > 0) {
@@ -5371,5 +5423,6 @@ export const __testing = {
     localServerShutdownRequested = false;
     localServerShutdownPromise = null;
     terminateProcessTreeImpl = terminateProcessTree;
+    spawnLocalServerCommandImpl = spawnCommand;
   },
 };

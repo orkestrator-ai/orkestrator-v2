@@ -191,6 +191,31 @@ function parseTokenValue(value: unknown): number | undefined {
   return undefined;
 }
 
+/**
+ * Largest value `new Date(ms)` can represent; anything beyond it is a RangeError
+ * rather than a timestamp.
+ */
+const MAX_DATE_MS = 8.64e15;
+
+/**
+ * Values above this are already milliseconds — 1e12 ms is 2001, while 1e12
+ * seconds is the year 33658, so no real reset instant is ambiguous.
+ */
+const EPOCH_MILLISECONDS_THRESHOLD = 1e12;
+
+/**
+ * `rate_limit_info.resetsAt` is epoch **seconds**, matching the CLI and the
+ * Codex bridge's `epochSecondsToIso`. Reading it as milliseconds put every
+ * reset instant in 1970, which the UI then rendered as a permanently expired
+ * window. The threshold keeps a future SDK that switches units working.
+ */
+function rateLimitResetToIso(value: unknown): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const ms = Math.abs(value) >= EPOCH_MILLISECONDS_THRESHOLD ? value : value * 1_000;
+  if (!Number.isFinite(ms) || Math.abs(ms) > MAX_DATE_MS) return undefined;
+  return new Date(ms).toISOString();
+}
+
 function extractContextUsageFromUnknown(payload: unknown, fallbackModel?: string): ContextUsagePayload | null {
   if (!payload || typeof payload !== "object") return null;
 
@@ -560,6 +585,15 @@ async function generateAndSetSessionTitle(
 
     session.title = title;
     console.debug("[session-manager] Generated session title:", { sessionId, title });
+
+    // Written through to the rollout, not just held in memory: without a
+    // durable custom title the next `reconcilePersistedSessions` has nothing to
+    // distinguish this from a placeholder and the SDK summary takes it back.
+    try {
+      await persistSessionTitle(session, title);
+    } catch (error) {
+      console.debug("[session-manager] Failed to persist generated title:", error);
+    }
 
     eventEmitter.emit({
       type: "session.title-updated",
@@ -1152,6 +1186,77 @@ function currentWorkingDirectory(): string {
 }
 
 /**
+ * Rename the session on disk when the installed SDK can.
+ *
+ * Feature-detected rather than assumed: an older SDK simply has no rename, and
+ * a title that only ever lived in memory is not worth failing an operation over.
+ */
+async function persistSessionTitle(session: SessionState, title: string): Promise<void> {
+  if (!session.sdkSessionId) return;
+  const sdk = await claudeSdk();
+  if (typeof sdk.renameSession !== "function") return;
+  await sdk.renameSession(session.sdkSessionId, title, {
+    dir: currentWorkingDirectory(),
+  });
+}
+
+/**
+ * Monotonic tick, bumped by every durable deletion.
+ *
+ * Deliberately not `Date.now()`: a delete and the read that has to be ordered
+ * against it routinely land in the same millisecond, and a wall-clock
+ * comparison then has to guess. A counter makes "did this deletion happen after
+ * that read started" exact.
+ */
+let sessionDeletionTick = 0;
+
+/** How many recent deletions are remembered; each only has to outlast one read. */
+const DELETE_TOMBSTONE_LIMIT = 128;
+
+/** SDK session id → the tick at which durable deletion removed its rollout. */
+const deletedSdkSessionTicks = new Map<string, number>();
+
+function recordDeletedSdkSession(sdkSessionId: string): void {
+  sessionDeletionTick += 1;
+  // Insertion-ordered, so the first key is always the oldest tombstone.
+  deletedSdkSessionTicks.delete(sdkSessionId);
+  deletedSdkSessionTicks.set(sdkSessionId, sessionDeletionTick);
+  while (deletedSdkSessionTicks.size > DELETE_TOMBSTONE_LIMIT) {
+    const oldest = deletedSdkSessionTicks.keys().next();
+    if (oldest.done) break;
+    deletedSdkSessionTicks.delete(oldest.value);
+  }
+}
+
+/**
+ * Whether a read that started at `readTick` could be holding a pre-deletion
+ * snapshot of this session. A deletion that landed after the read started means
+ * the rows it returns are stale, so adopting them would resurrect a session the
+ * user deleted — with no code path that ever prunes it again.
+ */
+function deletedSinceTick(sdkSessionId: string, readTick: number): boolean {
+  const deletedAt = deletedSdkSessionTicks.get(sdkSessionId);
+  return deletedAt !== undefined && deletedAt > readTick;
+}
+
+/**
+ * Whether a title is still the id-derived placeholder the bridge assigns, and
+ * so carries no user or generated intent worth preserving.
+ *
+ * Matched exactly against the two forms that can be minted rather than by
+ * prefix: a user-chosen "Session planning notes" is not a default.
+ */
+function isDefaultSessionTitle(
+  title: string | undefined,
+  bridgeId: string,
+  sdkId?: string,
+): boolean {
+  if (title === undefined || title.length === 0) return true;
+  if (title === `Session ${bridgeId.slice(-6)}`) return true;
+  return sdkId !== undefined && title === `Session ${sdkId.slice(-6)}`;
+}
+
+/**
  * Reconcile lightweight SDK session metadata into the bridge registry.
  *
  * Transcript bodies are deliberately loaded only when one session is opened.
@@ -1161,6 +1266,9 @@ export async function reconcilePersistedSessions(): Promise<void> {
   const sdk = await claudeSdk();
   if (typeof sdk.listSessions !== "function") return;
   const cwd = currentWorkingDirectory();
+  // Recorded before the read, so a deletion that lands while it is in flight is
+  // detectable against the snapshot it returns.
+  const listStartedAtTick = sessionDeletionTick;
   const infos = await sdk.listSessions({
     dir: cwd,
     includeProgrammatic: true,
@@ -1176,10 +1284,24 @@ export async function reconcilePersistedSessions(): Promise<void> {
     if (typeof info.cwd === "string" && info.cwd.length > 0 && !isPathWithin(cwd, info.cwd)) {
       continue;
     }
+    // The rollout was deleted while this listing was in flight. Nothing prunes
+    // a re-inserted entry, so adopting it would leave a permanent zombie.
+    if (deletedSinceTick(info.sessionId, listStartedAtTick)) continue;
     const id = bridgeSessionIdFromSdkId(info.sessionId);
     const existing = sessions.get(id);
     if (existing) {
-      existing.title = info.customTitle || info.summary || existing.title;
+      // `summary` is effectively always set, so taking it unconditionally
+      // reverted every title generated by `generateAndSetSessionTitle` on the
+      // next `GET /session/list`. Only an explicit on-disk rename outranks the
+      // in-memory title; a summary may only fill a still-default placeholder.
+      if (info.customTitle) {
+        existing.title = info.customTitle;
+      } else if (
+        info.summary
+        && isDefaultSessionTitle(existing.title, id, info.sessionId)
+      ) {
+        existing.title = info.summary;
+      }
       existing.lastActivity = new Date(info.lastModified);
       existing.sdkSessionId = info.sessionId;
       continue;
@@ -1197,20 +1319,38 @@ export async function reconcilePersistedSessions(): Promise<void> {
   }
 }
 
-export async function ensurePersistedSession(
-  sessionId: string,
-): Promise<SessionState | undefined> {
-  const existing = sessions.get(sessionId);
-  if (existing) return existing;
+/**
+ * Single in-flight materialization per bridge session id.
+ *
+ * `GET /:id`, `/messages`, `/tasks` and `POST /:id/prompt` all call
+ * {@link ensurePersistedSession}, and a tab mounting fires them together. One
+ * shared promise means one SDK read and, more importantly, one writer.
+ */
+const persistedMaterializations = new Map<string, Promise<SessionState | undefined>>();
 
-  const sdkId = sdkSessionIdFromBridgeId(sessionId);
-  if (!sdkId) return undefined;
+async function materializePersistedSessionState(
+  sessionId: string,
+  sdkId: string,
+): Promise<SessionState | undefined> {
+  const startedAtTick = sessionDeletionTick;
   const sdk = await claudeSdk();
+  // Re-checked after every await. A prompt that claimed this id while the read
+  // was pending owns a running status, a live transcript and a task registry;
+  // overwriting it with a fresh idle record silently discards the turn.
+  const racedDuringImport = sessions.get(sessionId);
+  if (racedDuringImport) return racedDuringImport;
+
   if (typeof sdk.getSessionInfo !== "function") return undefined;
   const info = await sdk.getSessionInfo(sdkId, {
     dir: currentWorkingDirectory(),
   });
+  const racedDuringRead = sessions.get(sessionId);
+  if (racedDuringRead) return racedDuringRead;
+
   if (!info) return undefined;
+  // Deleted while this read was in flight: the metadata is a pre-deletion
+  // snapshot and registering it would resurrect the session.
+  if (deletedSinceTick(sdkId, startedAtTick)) return undefined;
   const state: SessionState = {
     id: sessionId,
     title: info.customTitle || info.summary || `Session ${sdkId.slice(-6)}`,
@@ -1223,6 +1363,33 @@ export async function ensurePersistedSession(
   };
   sessions.set(sessionId, state);
   return state;
+}
+
+export async function ensurePersistedSession(
+  sessionId: string,
+): Promise<SessionState | undefined> {
+  const existing = sessions.get(sessionId);
+  if (existing) return existing;
+
+  const inFlight = persistedMaterializations.get(sessionId);
+  if (inFlight) return inFlight;
+
+  const sdkId = sdkSessionIdFromBridgeId(sessionId);
+  if (!sdkId) return undefined;
+
+  const materialization = materializePersistedSessionState(sessionId, sdkId);
+  persistedMaterializations.set(sessionId, materialization);
+  void materialization
+    .finally(() => {
+      if (persistedMaterializations.get(sessionId) === materialization) {
+        persistedMaterializations.delete(sessionId);
+      }
+    })
+    .catch(() => {
+      // The caller observes the original rejection. This branch only handles
+      // the promise returned by `finally`, avoiding an unhandled rejection.
+    });
+  return materialization;
 }
 
 /**
@@ -1319,6 +1486,9 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
           dir: currentWorkingDirectory(),
         });
       }
+      // Recorded before the map entry is dropped: a reconcile already holding a
+      // pre-deletion `listSessions` snapshot would otherwise re-insert it.
+      recordDeletedSdkSession(session.sdkSessionId);
     }
     sessions.delete(sessionId);
     return true;
@@ -1337,14 +1507,7 @@ export async function renameSessionDurably(
 ): Promise<boolean> {
   const session = await ensurePersistedSession(sessionId);
   if (!session) return false;
-  if (session.sdkSessionId) {
-    const sdk = await claudeSdk();
-    if (typeof sdk.renameSession === "function") {
-      await sdk.renameSession(session.sdkSessionId, title, {
-        dir: currentWorkingDirectory(),
-      });
-    }
-  }
+  await persistSessionTitle(session, title);
   session.title = title;
   session.lastActivity = new Date();
   eventEmitter.emit({
@@ -1574,6 +1737,74 @@ const LIVE_BACKGROUND_TASK_STATUSES = new Set<BackgroundTaskSnapshot["status"]>(
   "paused",
 ]);
 
+const NO_CONTROL_CHANNEL: StopBackgroundTaskResult = {
+  ok: false,
+  reason: "no_control_channel",
+  message: "No live Claude control channel can reach this task",
+};
+
+/**
+ * Move one task to a terminal state and release the handle that owned it.
+ *
+ * Used wherever the bridge learns a task can no longer be running *without*
+ * being told by a `task_notification` — a stop it issued itself, or a provider
+ * process that went away. The snapshot is the only thing `GET /session/:id`
+ * serves, so leaving it at `running` is indistinguishable from live work.
+ */
+function settleBackgroundTask(
+  session: SessionState,
+  taskId: string,
+  status: BackgroundTaskSnapshot["status"],
+  error?: string,
+): boolean {
+  const previous = session.backgroundTasks?.[taskId];
+  if (!previous) return false;
+  session.backgroundTasks = {
+    ...(session.backgroundTasks ?? {}),
+    [taskId]: {
+      ...previous,
+      status,
+      endedAt: previous.endedAt ?? Date.now(),
+      ...(error !== undefined ? { error: previous.error ?? error } : {}),
+    },
+  };
+  const owner = session.backgroundTaskControls?.get(taskId);
+  session.backgroundTaskControls?.delete(taskId);
+  if (session.backgroundTaskControls?.size === 0) {
+    session.backgroundTaskControls = undefined;
+  }
+  closeQueryControlIfUnused(session, owner);
+  return true;
+}
+
+/**
+ * Settle every live task that `control` owned, plus any live task no handle
+ * owns at all.
+ *
+ * Called when a turn's iterator is finished with. The `for await` loop is the
+ * only consumer of the stream and it ends either exhausted or through an
+ * abrupt exit — and an abrupt exit invokes the iterator's `return()`, which the
+ * SDK implements as `cleanup()` → `transport.close()`. So by the time this
+ * runs the provider process behind `control` is gone: no further
+ * `task_notification` can arrive and `stopTask` has nothing to talk to. A task
+ * left at `running` here wedges there for the lifetime of the bridge.
+ */
+function settleTasksOwnedByClosedControl(
+  session: SessionState,
+  control: NonNullable<SessionState["queryControl"]>,
+  reason: string,
+): boolean {
+  let changed = false;
+  for (const task of Object.values(session.backgroundTasks ?? {})) {
+    if (!LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) continue;
+    const owner = session.backgroundTaskControls?.get(task.id);
+    // An owner that is some *other* live control keeps the task addressable.
+    if (owner !== undefined && owner !== control) continue;
+    changed = settleBackgroundTask(session, task.id, "killed", reason) || changed;
+  }
+  return changed;
+}
+
 export async function stopBackgroundTask(
   sessionId: string,
   taskId: string,
@@ -1586,17 +1817,53 @@ export async function stopBackgroundTask(
   if (!task) {
     return { ok: false, reason: "task_not_found", message: "Task not found" };
   }
-  const control = session.backgroundTaskControls?.get(taskId) ?? session.queryControl;
+  // Strictly the handle that owns this task. Falling back to whatever control
+  // is current asked a *later* turn's provider process to stop a task it never
+  // started — it answers `ok` for a task id it has never heard of, so the user
+  // was told the work had stopped when nothing had been reached at all.
+  const control = session.backgroundTaskControls?.get(taskId);
   const stopTask = control?.stopTask;
   if (typeof stopTask !== "function") {
-    return {
-      ok: false,
-      reason: "no_control_channel",
-      message: "No live Claude control channel can reach this task",
-    };
+    return NO_CONTROL_CHANNEL;
   }
-  await stopTask.call(control, taskId);
+  try {
+    await stopTask.call(control, taskId);
+  } catch (error) {
+    // The handle outlived its transport (the CLI exited, the query was closed).
+    // That is a conflict the user can understand, not a bridge fault, and it
+    // must not surface as a 500 on `POST /:id/tasks/:taskId/stop`.
+    console.error(
+      "[session-manager] Background task stop failed on a closed control channel:",
+      error instanceof Error ? error.message : String(error),
+    );
+    if (
+      settleBackgroundTask(
+        session,
+        taskId,
+        "killed",
+        "The Claude control channel for this task is no longer available",
+      )
+    ) {
+      emitBackgroundTaskSnapshot(session);
+    }
+    return NO_CONTROL_CHANNEL;
+  }
+  // The SDK answers a stop with a `task_notification` of status `stopped`, but
+  // only the turn's `for await` loop reads that — a stop issued after the turn
+  // has no reader, so the snapshot is patched here rather than waited for. The
+  // notification, if one does arrive, lands on the same terminal state.
+  if (settleBackgroundTask(session, taskId, "killed")) {
+    emitBackgroundTaskSnapshot(session);
+  }
   return { ok: true };
+}
+
+function emitBackgroundTaskSnapshot(session: SessionState): void {
+  eventEmitter.emit({
+    type: "session.updated",
+    sessionId: session.id,
+    data: { backgroundTasks: session.backgroundTasks },
+  });
 }
 
 /**
@@ -2104,6 +2371,10 @@ export async function sendPrompt(
   // `session.messages` (and `taskRegistry`) out from under this turn.
   const needsTranscriptHydration = session.persistedMessagesLoaded === false;
   session.persistedMessagesLoaded = true;
+  // Set when the pre-turn read fails. The claim above is still correct for the
+  // duration of the turn, but leaving it set afterwards would hide the on-disk
+  // history until the bridge restarted, so the turn's `finally` clears it.
+  let transcriptHydrationFailed = false;
 
   // Create abort controller for this query
   const abortController = new AbortController();
@@ -2132,7 +2403,13 @@ export async function sendPrompt(
         session.taskRegistry = hydrated.taskRegistry;
       }
     } catch (error) {
-      console.debug("[session-manager] Failed to hydrate transcript before prompt:", error);
+      // A turn that cannot read its own history is not a debug-level event: the
+      // transcript the user is looking at is incomplete until the retry lands.
+      transcriptHydrationFailed = true;
+      console.error(
+        "[session-manager] Failed to hydrate transcript before prompt:",
+        error instanceof Error ? error.message : String(error),
+      );
     }
   }
 
@@ -2994,10 +3271,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           const nextWindow: SessionRateLimitWindow = {
             label,
             usedPercent: info.utilization,
-            resetsAt:
-              typeof info.resetsAt === "number"
-                ? new Date(info.resetsAt).toISOString()
-                : undefined,
+            resetsAt: rateLimitResetToIso(info.resetsAt),
           };
           // Held on the session, not inside `usage`. Rate-limit events arrive
           // mid-turn and `usage` only exists after the first `result`, so
@@ -3592,16 +3866,34 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     }
     throw error;
   } finally {
-    // A backgrounded task outlives the turn that started it by definition, and
-    // `stopTask` is only reachable through this handle. Dropping it here made
-    // `POST /:id/tasks/:taskId/stop` fail for exactly the tasks the user can
-    // still see. `deleteSession`/`abortSession` release it when the user says so.
+    // The loop above is the only consumer of this iterator, and it ends either
+    // exhausted or through an abrupt exit — which invokes `return()`, i.e. the
+    // SDK's `cleanup()` → `transport.close()`. So the handle is dead either
+    // way: nothing more can arrive on it and `stopTask` would answer a stop
+    // request with a transport error. Settle what it owned instead of retaining
+    // a handle that can only fail, and never leave a task at `running`.
+    if (queryIteratorControl) {
+      const settled = settleTasksOwnedByClosedControl(
+        session,
+        queryIteratorControl,
+        "The Claude session that owned this task ended before it reported a result",
+      );
+      if (session.queryControl === queryIteratorControl) {
+        session.queryControl = undefined;
+      }
+      closeQueryControlIfUnused(session, queryIteratorControl);
+      if (settled) emitBackgroundTaskSnapshot(session);
+    }
+    // The pre-turn transcript read failed, so `persistedMessagesLoaded` claims
+    // a hydration that never happened. Clearing it once the turn is over lets
+    // the next transcript request retry; leaving it set hid the on-disk history
+    // until the bridge restarted.
     if (
-      session.queryControl === queryIteratorControl
-      && !Array.from(session.backgroundTaskControls?.values() ?? [])
-        .some((control) => control === queryIteratorControl)
+      transcriptHydrationFailed
+      && sessions.get(sessionId) === session
+      && !session.deleting
     ) {
-      session.queryControl = undefined;
+      session.persistedMessagesLoaded = false;
     }
     if (heartbeat) {
       clearInterval(heartbeat);

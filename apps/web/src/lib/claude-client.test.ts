@@ -13,7 +13,6 @@ import {
   sendStructuredPrompt,
   abortSession,
   deleteSession,
-  renameClaudeSession,
   forkClaudeSession,
   compactClaudeSession,
   rewindClaudeFiles,
@@ -221,11 +220,16 @@ describe("claude-client", () => {
         lastActivity: "2026-01-01",
       };
 
-      for (const malformed of [
-        { contextUsage: { usedTokens: 1, totalTokens: 10, percentUsed: Number.NaN } },
-        { promptSuggestion: { text: "not a string" } },
-        { backgroundTasks: { task: { id: "task", status: "unknown" } } },
-      ]) {
+      // Whole-field rejections: the required usage triple is broken, the
+      // suggestion is not a string, the task record is not a record.
+      for (const [malformed, expectedField] of [
+        [
+          { contextUsage: { usedTokens: 1, totalTokens: 10, percentUsed: Number.NaN } },
+          "contextUsage",
+        ],
+        [{ promptSuggestion: { text: "not a string" } }, "promptSuggestion"],
+        [{ backgroundTasks: "none" }, "backgroundTasks"],
+      ] as const) {
         mockFetchJson({ ...base, ...malformed });
         const result = await lookupSession(client, "s-1");
         expect(result.kind).toBe("found");
@@ -234,39 +238,134 @@ describe("claude-client", () => {
           expect(result.session.contextUsage).toBeUndefined();
           expect(result.session.promptSuggestion).toBeUndefined();
           expect(result.session.backgroundTasks).toBeUndefined();
-          expect(result.session.invalidMetadataFields).toHaveLength(1);
+          expect(result.session.invalidMetadataFields).toEqual([expectedField]);
         }
+      }
+    });
+
+    test("keeps the core usage reading and names a dropped optional decoration", async () => {
+      mockFetchJson({
+        id: "s-1",
+        status: "idle",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+        contextUsage: {
+          usedTokens: 1,
+          totalTokens: 10,
+          percentUsed: 10,
+          // The bridge forwards utilization unclamped, so this can exceed 100.
+          rateLimits: [{ label: "five hour", usedPercent: 120 }],
+        },
+        backgroundTasks: {
+          build: { id: "build", status: "running" },
+          broken: { id: "mismatch", status: "running" },
+        },
+      });
+
+      const result = await lookupSession(client, "s-1");
+      expect(result.kind).toBe("found");
+      if (result.kind === "found") {
+        expect(result.session.contextUsage).toEqual({
+          usedTokens: 1,
+          totalTokens: 10,
+          percentUsed: 10,
+        });
+        expect(result.session.backgroundTasks).toEqual({
+          build: { id: "build", status: "running" },
+        });
+        expect(result.session.invalidMetadataFields).toEqual([
+          "contextUsage.rateLimits",
+          "backgroundTasks.broken",
+        ]);
       }
     });
   });
 
   describe("Claude metadata validators", () => {
-    test("accepts complete finite usage and rejects unsafe nested values", () => {
-      const usage = {
+    const usage = {
+      usedTokens: 25,
+      totalTokens: 100,
+      percentUsed: 25,
+      inputTokens: 20,
+      outputTokens: 5,
+      source: "claude" as const,
+      rateLimits: [{ label: "five hour", usedPercent: 50 }],
+      credits: { hasCredits: true, balance: "10.00" },
+      contextCategories: [{ name: "system", tokens: 10 }],
+    };
+
+    test("accepts complete finite usage", () => {
+      expect(parseClaudeContextUsage(usage)).toEqual(usage);
+    });
+
+    test("rejects only the required numeric triple", () => {
+      expect(parseClaudeContextUsage({ ...usage, percentUsed: Number.POSITIVE_INFINITY }))
+        .toBeUndefined();
+      expect(parseClaudeContextUsage({ ...usage, percentUsed: 101 })).toBeUndefined();
+      expect(parseClaudeContextUsage({ ...usage, usedTokens: -1 })).toBeUndefined();
+      // An overdrawn core reading is a broken triple, not a droppable extra:
+      // the meter itself would be lying.
+      expect(parseClaudeContextUsage({ ...usage, usedTokens: 101 })).toBeUndefined();
+      expect(parseClaudeContextUsage({ ...usage, totalTokens: 0 })).toBeUndefined();
+    });
+
+    test("accepts the boundary values the bridge legitimately reports", () => {
+      expect(parseClaudeContextUsage({ ...usage, percentUsed: 100 })).toMatchObject({
+        percentUsed: 100,
+      });
+      expect(parseClaudeContextUsage({
+        ...usage,
+        rateLimits: [{ label: "five hour", usedPercent: 100 }],
+      })).toMatchObject({
+        rateLimits: [{ label: "five hour", usedPercent: 100 }],
+      });
+      // usedTokens === totalTokens is a full-but-valid window.
+      expect(parseClaudeContextUsage({ ...usage, usedTokens: 100 })).toMatchObject({
+        usedTokens: 100,
+        totalTokens: 100,
+      });
+    });
+
+    test("drops an out-of-range rate-limit window but keeps the reading", () => {
+      const dropped: string[] = [];
+      // The bridge forwards utilization unclamped, so >100 does happen.
+      expect(parseClaudeContextUsage({
+        ...usage,
+        rateLimits: [
+          { label: "five hour", usedPercent: 101 },
+          { label: "weekly", usedPercent: 20 },
+        ],
+      }, dropped)).toEqual({
+        ...usage,
+        rateLimits: [{ label: "weekly", usedPercent: 20 }],
+      });
+      expect(dropped).toEqual(["rateLimits"]);
+    });
+
+    test("drops other malformed optional decorations individually", () => {
+      const dropped: string[] = [];
+      expect(parseClaudeContextUsage({
+        ...usage,
+        inputTokens: "20",
+        contextCategories: [{ name: "system", tokens: -1 }],
+        credits: { hasCredits: "yes" },
+        source: "telepathy",
+      }, dropped)).toEqual({
         usedTokens: 25,
         totalTokens: 100,
         percentUsed: 25,
-        inputTokens: 20,
         outputTokens: 5,
-        source: "claude" as const,
-        rateLimits: [{ label: "five hour", usedPercent: 50 }],
-        credits: { hasCredits: true, balance: "10.00" },
-        contextCategories: [{ name: "system", tokens: 10 }],
-      };
-      expect(parseClaudeContextUsage(usage)).toEqual(usage);
-      expect(parseClaudeContextUsage({ ...usage, percentUsed: Number.POSITIVE_INFINITY }))
-        .toBeUndefined();
-      expect(parseClaudeContextUsage({
-        ...usage,
-        rateLimits: [{ label: "five hour", usedPercent: 101 }],
-      })).toBeUndefined();
-      expect(parseClaudeContextUsage({
-        ...usage,
-        contextCategories: [{ name: "system", tokens: -1 }],
-      })).toBeUndefined();
+        rateLimits: usage.rateLimits,
+      });
+      expect(dropped.sort()).toEqual([
+        "contextCategories",
+        "credits",
+        "inputTokens",
+        "source",
+      ]);
     });
 
-    test("validates every background task and its record identity", () => {
+    test("keeps valid background tasks while dropping malformed ones", () => {
       const tasks = {
         build: {
           id: "build",
@@ -276,12 +375,18 @@ describe("claude-client", () => {
         },
       };
       expect(parseClaudeBackgroundTasks(tasks)).toEqual(tasks);
+
+      const dropped: string[] = [];
       expect(parseClaudeBackgroundTasks({
-        build: { id: "other", status: "running" },
-      })).toBeUndefined();
-      expect(parseClaudeBackgroundTasks({
-        build: { id: "build", status: "running", startedAt: Number.NaN },
-      })).toBeUndefined();
+        ...tasks,
+        mismatch: { id: "other", status: "running" },
+        clock: { id: "clock", status: "running", startedAt: Number.NaN },
+      }, dropped)).toEqual(tasks);
+      expect(dropped.sort()).toEqual(["clock", "mismatch"]);
+
+      // Only a value that is not a record at all rejects the snapshot.
+      expect(parseClaudeBackgroundTasks("none")).toBeUndefined();
+      expect(parseClaudeBackgroundTasks(null)).toBeUndefined();
     });
   });
 
@@ -555,24 +660,6 @@ describe("claude-client", () => {
       return calls;
     }
 
-    describe("renameClaudeSession", () => {
-      test("posts the title and reports success", async () => {
-        const calls = captureFetch(() => new Response(null, { status: 200 }));
-
-        expect(await renameClaudeSession(client, "s-1", "New title")).toBe(true);
-        expect(calls[0]?.[0]).toBe("http://127.0.0.1:4001/session/s-1/rename");
-        expect(calls[0]?.[1]?.method).toBe("POST");
-        expect(JSON.parse(calls[0]?.[1]?.body as string)).toEqual({
-          title: "New title",
-        });
-      });
-
-      test("reports failure without throwing", async () => {
-        mockFetchStatus(500);
-        expect(await renameClaudeSession(client, "s-1", "New title")).toBe(false);
-      });
-    });
-
     describe("forkClaudeSession", () => {
       test("returns the forked session id and title", async () => {
         const calls = captureFetch(() =>
@@ -645,6 +732,9 @@ describe("claude-client", () => {
       test("reports failure without throwing", async () => {
         mockFetchStatus(409);
         expect(await compactClaudeSession(client, "s-1")).toBe(false);
+
+        mockFetchError();
+        expect(await compactClaudeSession(client, "s-1")).toBe(false);
       });
     });
 
@@ -699,6 +789,9 @@ describe("claude-client", () => {
 
       test("reports failure without throwing", async () => {
         mockFetchStatus(404);
+        expect(await stopClaudeBackgroundTask(client, "s-1", "task-1")).toBe(false);
+
+        mockFetchError();
         expect(await stopClaudeBackgroundTask(client, "s-1", "task-1")).toBe(false);
       });
     });

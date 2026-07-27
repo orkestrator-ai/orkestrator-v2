@@ -51,12 +51,14 @@ const mockShareOpenCodeSession = mock<
 const mockUnshareOpenCodeSession = mock(async () => undefined);
 
 const mockCompactCodexSession = mock(async () => true);
+// `forkCodexSession` throws a `CodexForkError` carrying the bridge's status and
+// message rather than collapsing every refusal to null.
 const mockForkCodexSession = mock<
   (
     _client: unknown,
     _sessionId: string,
     _messageId?: string,
-  ) => Promise<{ sessionId: string; title?: string } | null>
+  ) => Promise<{ sessionId: string; title?: string }>
 >(async () => ({ sessionId: "codex-fork", title: "Codex fork title" }));
 const mockGetCodexRuntimeHealth = mock<
   (_client: unknown, _sessionId: string) => Promise<unknown>
@@ -417,6 +419,58 @@ describe("AgentInfoButton popover lifecycle", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
     });
     expect(isPopoverOpen()).toBe(false);
+  });
+
+  test("dismissing with Escape consumes the key so the chat tab does not abort the turn", () => {
+    /*
+     * All three chat tabs bind a window-level Escape handler that aborts the
+     * running turn, guarded only by `event.defaultPrevented`. This popover used
+     * to close without claiming the key, so dismissing it mid-turn killed the
+     * turn. The listener below mimics that guard exactly, and is registered
+     * *before* the popover's own so the fix cannot depend on mount order.
+     */
+    const abortsTurn = mock(() => {});
+    const chatTabHandler = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      abortsTurn();
+    };
+    window.addEventListener("keydown", chatTabHandler);
+
+    try {
+      render(<AgentInfoButton activeTab={claudeTab()} />);
+      open();
+
+      const escape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+      act(() => {
+        window.dispatchEvent(escape);
+      });
+
+      expect(isPopoverOpen()).toBe(false);
+      expect(escape.defaultPrevented).toBe(true);
+      expect(abortsTurn).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", chatTabHandler);
+    }
+  });
+
+  test("a closed panel leaves Escape to the chat tab", () => {
+    // The turn-abort shortcut must keep working when nothing is open to dismiss.
+    const abortsTurn = mock(() => {});
+    const chatTabHandler = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      abortsTurn();
+    };
+    window.addEventListener("keydown", chatTabHandler);
+
+    try {
+      render(<AgentInfoButton activeTab={claudeTab()} />);
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+      });
+      expect(abortsTurn).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("keydown", chatTabHandler);
+    }
   });
 
   test("the Escape listener is torn down when the panel closes", () => {
@@ -1124,21 +1178,49 @@ describe("AgentInfoButton session actions", () => {
     });
   });
 
-  test("surfaces a Codex fork refusal as an error toast and opens no tab", async () => {
+  test.each([
+    [409, "Codex session cannot be forked while it is running"],
+    [422, "That message is not a usable fork point"],
+    [404, "Codex session or fork point was not found"],
+    [0, "network request failed"],
+  ])(
+    "surfaces the bridge's own %s fork refusal and opens no tab",
+    async (status, message) => {
+      /*
+       * These four mean different things — wait for the turn, pick another
+       * message, the session is gone, the bridge is unreachable — and the old
+       * single line blamed "an active or empty session" for all of them.
+       */
+      seedCodexSession();
+      mockForkCodexSession.mockImplementation(async () => {
+        throw new realCodexClientSnapshot.CodexForkError(status, message);
+      });
+      render(<AgentInfoButton activeTab={codexTab()} />);
+      open();
+      fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(message));
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+      // A failed action leaves the panel open so the user can retry.
+      expect(isPopoverOpen()).toBe(true);
+    },
+  );
+
+  test("reports an unexpected Codex fork error with generic copy", async () => {
+    // Not a bridge answer: presenting a programming error as Codex's own reason
+    // would send the user looking for a session problem that does not exist.
     seedCodexSession();
-    mockForkCodexSession.mockImplementation(async () => null);
+    mockForkCodexSession.mockImplementation(async () => {
+      throw new TypeError("client.fetch is not a function");
+    });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Fork session/ }));
 
     await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith(
-        "Codex cannot fork an active or empty session",
-      ),
+      expect(mockToastError).toHaveBeenCalledWith("Failed to fork Codex session"),
     );
     expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
-    // A failed action leaves the panel open so the user can retry.
-    expect(isPopoverOpen()).toBe(true);
   });
 
   test("disables every action while one is running and re-enables afterwards", async () => {

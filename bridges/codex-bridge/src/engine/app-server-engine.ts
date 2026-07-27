@@ -753,6 +753,17 @@ export class AppServerEngine implements CodexEngine {
       restartCount: number;
       circuitOpen: boolean;
     };
+    /**
+     * Protocol-drift counters, engine-global. This is the surface operators
+     * watch after a Codex bump: a rising `serverRequests.unknown-method` or
+     * `unknownNotifications` means the pinned protocol has moved. Deliberately
+     * not on the public `/global/health` payload — these stay behind auth.
+     */
+    protocol: {
+      unknownNotifications: number;
+      unsupportedItems: number;
+      serverRequests: ReturnType<ServerRequestRouter["getMetrics"]>;
+    };
     mcp: unknown;
     skills: unknown;
     hooks: unknown;
@@ -785,6 +796,11 @@ export class AppServerEngine implements CodexEngine {
         ...(engine.codexVersion ? { codexVersion: engine.codexVersion } : {}),
         restartCount: engine.restartCount,
         circuitOpen: engine.circuitOpen,
+      },
+      protocol: {
+        unknownNotifications: engine.unknownNotifications,
+        unsupportedItems: engine.unsupportedItems,
+        serverRequests: engine.serverRequests,
       },
       mcp: allowlistRuntimeInventory(value(mcp), "mcp"),
       skills: allowlistRuntimeInventory(value(skills), "skills"),

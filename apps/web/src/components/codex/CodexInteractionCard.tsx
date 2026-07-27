@@ -25,6 +25,25 @@ function object(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/**
+ * Coerce one mcp-form field to the type its JSON schema declares.
+ *
+ * A numeric field is sent as a number, never as the typed string. Anything that
+ * does not parse to a finite number degrades to `""` — the same state as an
+ * emptied field, which the required-field check already blocks. `NaN` must
+ * never reach the wire: `JSON.stringify` turns it into `null`, so the MCP
+ * server would receive a silently wrong value instead of a refusal.
+ */
+export function coerceFormFieldValue(
+  rawValue: string,
+  schemaType: unknown,
+): string | number {
+  if (schemaType !== "number" && schemaType !== "integer") return rawValue;
+  if (rawValue === "") return "";
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) ? parsed : "";
+}
+
 function safeExternalUrl(value: string | undefined): string | null {
   if (!value) return null;
   try {
@@ -273,12 +292,10 @@ export function CodexInteractionCard({
                       value={String(form[key] ?? "")}
                       onChange={(event) => setForm((current) => ({
                         ...current,
-                        [key]:
-                          definition.type === "number" || definition.type === "integer"
-                            ? event.target.value === ""
-                              ? ""
-                              : Number(event.target.value)
-                            : event.target.value,
+                        [key]: coerceFormFieldValue(
+                          event.target.value,
+                          definition.type,
+                        ),
                       }))}
                     />
                   )}

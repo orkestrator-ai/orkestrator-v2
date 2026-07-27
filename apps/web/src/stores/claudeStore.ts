@@ -123,6 +123,17 @@ interface ClaudeState extends ClaudeChatSlice {
   includeLocalSettings: Map<ClaudeSessionKey, boolean>;
   promptSuggestionOptIn: Map<ClaudeSessionKey, boolean>;
   promptSuggestions: Map<ClaudeSessionKey, string>;
+  /**
+   * The suggestion each session has already used or dismissed.
+   *
+   * The bridge clears `session.promptSuggestion` only when the *next* prompt
+   * runs, and `GET /session/:id` replays it on every mount, restore, reconnect
+   * and `session.idle`. This latch has to outlive the component or the chip a
+   * user just consumed comes back the moment they switch environments and
+   * return. The exact string is remembered rather than a boolean so a
+   * genuinely new suggestion still gets through.
+   */
+  dismissedPromptSuggestions: Map<ClaudeSessionKey, string>;
   backgroundTasks: Map<ClaudeSessionKey, Record<string, ClaudeBackgroundTask>>;
   pendingQuestions: Map<string, ClaudeQuestionRequest>;
   pendingPlanApprovals: Map<string, ClaudePlanApprovalRequest>;
@@ -162,6 +173,10 @@ interface ClaudeState extends ClaudeChatSlice {
     sessionKey: ClaudeSessionKey,
     suggestion: string | undefined,
   ) => void;
+  setDismissedPromptSuggestion: (
+    sessionKey: ClaudeSessionKey,
+    suggestion: string | undefined,
+  ) => void;
   setBackgroundTasks: (
     sessionKey: ClaudeSessionKey,
     tasks: Record<string, ClaudeBackgroundTask>,
@@ -197,6 +212,9 @@ interface ClaudeState extends ClaudeChatSlice {
   getContextUsage: (
     sessionKey: ClaudeSessionKey,
   ) => ContextUsageSnapshot | undefined;
+  getDismissedPromptSuggestion: (
+    sessionKey: ClaudeSessionKey,
+  ) => string | undefined;
   getSelectedAgent: (sessionKey: ClaudeSessionKey) => string | undefined;
   includesLocalSettings: (sessionKey: ClaudeSessionKey) => boolean;
   getPendingQuestionsForSession: (
@@ -243,6 +261,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   includeLocalSettings: new Map(),
   promptSuggestionOptIn: new Map(),
   promptSuggestions: new Map(),
+  dismissedPromptSuggestions: new Map(),
   backgroundTasks: new Map(),
   pendingQuestions: new Map(),
   pendingPlanApprovals: new Map(),
@@ -389,6 +408,14 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       return { promptSuggestions: next };
     }),
 
+  setDismissedPromptSuggestion: (sessionKey, suggestion) =>
+    set((state) => {
+      const next = new Map(state.dismissedPromptSuggestions);
+      if (suggestion) next.set(sessionKey, suggestion);
+      else next.delete(sessionKey);
+      return { dismissedPromptSuggestions: next };
+    }),
+
   setBackgroundTasks: (sessionKey, tasks) =>
     set((state) => {
       const next = new Map(state.backgroundTasks);
@@ -478,6 +505,10 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
         ),
         promptSuggestions: pruneSessionKeyedMap(
           state.promptSuggestions,
+          prefix,
+        ),
+        dismissedPromptSuggestions: pruneSessionKeyedMap(
+          state.dismissedPromptSuggestions,
           prefix,
         ),
         backgroundTasks: pruneSessionKeyedMap(state.backgroundTasks, prefix),
@@ -601,6 +632,8 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   getSessionInitData: (environmentId) =>
     get().sessionInitData.get(environmentId),
   getContextUsage: (sessionKey) => get().contextUsage.get(sessionKey),
+  getDismissedPromptSuggestion: (sessionKey) =>
+    get().dismissedPromptSuggestions.get(sessionKey),
   getSelectedAgent: (sessionKey) => get().selectedAgent.get(sessionKey),
   includesLocalSettings: (sessionKey) =>
     get().includeLocalSettings.get(sessionKey) ?? false,

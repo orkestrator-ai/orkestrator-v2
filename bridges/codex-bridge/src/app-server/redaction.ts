@@ -1,22 +1,19 @@
 /**
- * Redaction for payloads the bridge serves over HTTP.
+ * Redaction for text the bridge captures from the engine and serves over HTTP.
  *
  * The bridge requires a per-process bearer token and restricts browser origins.
  * Redaction remains a second layer of defence: authenticated snapshot consumers
- * still should not receive credentials embedded in provider diagnostics or
- * inventory metadata.
+ * still should not receive credentials embedded in provider diagnostics.
  *
- * Two independent passes, because secrets appear in two different shapes:
+ * One pass, by *shape*: a bearer token, an `sk-`/`ghp_` style key, URL userinfo
+ * or a query-string credential embedded in free text — typically an MCP server's
+ * startup error, which is the single most likely place for a real token to
+ * surface. Structured engine payloads never leave the process raw: they go
+ * through the allowlists in `app-server-engine.ts`, which drop unknown fields
+ * instead of trying to redact them.
  *
- *   - by *name*: a field literally called `authorization`, `apiKey`, `headers`
- *     or `env`, whose value is a credential whatever it looks like;
- *   - by *shape*: a bearer token, an `sk-`/`ghp_` style key, URL userinfo or a
- *     query-string credential embedded in free text — typically an MCP server's
- *     startup error, which is the single most likely place for a real token to
- *     surface.
- *
- * Both are best-effort. They exist to stop the common cases leaving the process,
- * not to make an untrusted reader safe.
+ * Best-effort. It exists to stop the common cases leaving the process, not to
+ * make an untrusted reader safe.
  */
 
 /** Applied in order; earlier rules consume the text later ones would match. */
@@ -71,54 +68,4 @@ export function redactSecrets(value: string): string {
     result = result.replace(new RegExp(rule.pattern.source, rule.pattern.flags), rule.replacement);
   }
   return result;
-}
-
-/**
- * Field names whose *value* is a credential regardless of its shape.
- *
- * `env` and `headers` are here because an MCP server or hook definition carries
- * its whole environment and header map, which is where a real API key lives.
- */
-const SECRET_KEY_PATTERN =
-  /^(?:authorization|auth|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|api[_-]?key|apikey|secret|client[_-]?secret|password|passwd|passphrase|credential|credentials|cookie|cookies|bearer|env|environment|headers|private[_-]?key)$/i;
-
-/** Fields that describe *how* a server authenticates. Not credentials, but not ours to publish. */
-const AUTH_STATUS_KEY_PATTERN = /^(?:authStatus|auth_status|authMethod|auth_mode)$/i;
-
-/** Bounds the walk so a hostile or pathological payload cannot pin the event loop. */
-const MAX_DEPTH = 12;
-const MAX_NODES = 20_000;
-
-/**
- * Deep-redacts a JSON-ish value.
- *
- * Returns a *copy*: the caller's retained state (the notice ring, an engine
- * response) must not be mutated by serving it.
- */
-export function redactSecretsDeep<T>(
-  value: T,
-  options: { dropAuthStatus?: boolean } = {},
-): T {
-  let nodes = 0;
-
-  const walk = (input: unknown, depth: number): unknown => {
-    nodes += 1;
-    if (nodes > MAX_NODES || depth > MAX_DEPTH) return "[redacted: truncated]";
-    if (typeof input === "string") return redactSecrets(input);
-    if (input === null || typeof input !== "object") return input;
-    if (Array.isArray(input)) return input.map((entry) => walk(entry, depth + 1));
-
-    const output: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(input as Record<string, unknown>)) {
-      if (options.dropAuthStatus && AUTH_STATUS_KEY_PATTERN.test(key)) continue;
-      if (SECRET_KEY_PATTERN.test(key)) {
-        output[key] = entry === null || entry === undefined ? entry : "[redacted]";
-        continue;
-      }
-      output[key] = walk(entry, depth + 1);
-    }
-    return output;
-  };
-
-  return walk(value, 0) as T;
 }

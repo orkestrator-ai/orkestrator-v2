@@ -18,6 +18,10 @@ class FakeWebContents extends EventEmitter {
   readonly reload = mock(() => undefined);
   readonly openDevTools = mock(() => undefined);
   readonly inspectElement = mock(() => undefined);
+  readonly replaceMisspelling = mock((_suggestion: string) => undefined);
+  readonly session = {
+    addWordToSpellCheckerDictionary: mock((_word: string) => true),
+  };
   readonly setWindowOpenHandler = mock((_handler: unknown) => undefined);
   readonly close = mock(() => {
     this.destroyed = true;
@@ -268,6 +272,33 @@ describe("BrowserPreviewManager", () => {
 
     expect(contents.inspectElement).toHaveBeenCalledWith(123, 456);
     expect(harness.views).toHaveLength(1);
+  });
+
+  test("offers spelling suggestions for editable fields in a preview", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+
+    contents.emit("context-menu", {}, createContextMenuParams({
+      isEditable: true,
+      misspelledWord: "mispelled",
+      dictionarySuggestions: ["misspelled"],
+    }));
+
+    const template = harness.menuTemplates[0]!;
+    template.find((item) => item.label === "misspelled")?.click?.(
+      undefined as never,
+      undefined as never,
+      undefined as never,
+    );
+    template.find((item) => item.label === "Add to Dictionary")?.click?.(
+      undefined as never,
+      undefined as never,
+      undefined as never,
+    );
+
+    expect(contents.replaceMisspelling).toHaveBeenCalledWith("misspelled");
+    expect(contents.session.addWordToSpellCheckerDictionary).toHaveBeenCalledWith("mispelled");
   });
 
   test("routes Cmd+L and Ctrl+L from the native preview to the app address bar", async () => {

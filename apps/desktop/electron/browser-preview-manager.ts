@@ -353,7 +353,14 @@ export class BrowserPreviewManager {
         );
       }
 
-      const defaultTemplate = createContextMenuTemplate(params);
+      const defaultTemplate = createContextMenuTemplate(params, {
+        replaceMisspelling: (suggestion) => {
+          contents.replaceMisspelling(suggestion);
+        },
+        addToDictionary: (word) => {
+          contents.session.addWordToSpellCheckerDictionary(word);
+        },
+      });
       if (defaultTemplate.length > 0) {
         if (template.length > 0) template.push({ type: "separator" });
         template.push(...defaultTemplate);

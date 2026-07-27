@@ -28,7 +28,7 @@ import {
 import { Bell, Trash2, Play, Square, Container, Laptop, Shield, Globe, Settings2, RotateCw, Loader2, Network, Copy, MoreVertical } from "lucide-react";
 import { toast } from "sonner";
 import type { Environment } from "@/types";
-import { useAgentActivityStore, useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore, useUIStore } from "@/stores";
+import { useAgentActivityStore, useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
 import { EnvironmentSettingsDialog } from "./EnvironmentSettingsDialog";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
@@ -148,9 +148,8 @@ export function EnvironmentItem({
 
   // Check if this is a build pipeline environment (O(1) Set lookup, stable reference)
   const isBuildEnvironment = useBuildPipelineStore((s) => s.buildEnvironmentIds.has(environment.id));
-  const hasUnreadActivity = useUIStore((s) =>
-    s.unreadEnvironmentIds.includes(environment.id)
-  );
+  // Backend-owned, so the badge agrees across every connected client.
+  const hasUnreadActivity = environment.hasUnreadWork === true;
 
   const isLocalEnvironment = environment.environmentType === "local";
   // Local environments are always considered "running" - they exist or they don't
@@ -162,10 +161,10 @@ export function EnvironmentItem({
 
   // Clear local transitioning state when environment status changes to non-transitioning
   useEffect(() => {
-    if (!isCreating && !isStopping && isLocalTransitioning) {
+    if (!isCreating && !isStopping) {
       setIsLocalTransitioning(false);
     }
-  }, [environment.status, isCreating, isStopping, isLocalTransitioning]);
+  }, [environment.status, isCreating, isStopping]);
 
   const confirmDelete = () => {
     onDelete(environment.id);

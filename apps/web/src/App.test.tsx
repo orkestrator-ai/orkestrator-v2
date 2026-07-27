@@ -41,6 +41,8 @@ import * as realBackend from "@/lib/backend";
 import * as realLucideReact from "lucide-react";
 import * as realProcess from "@/lib/native/process";
 import * as realLoopedReviewSupervisor from "@/components/review/LoopedReviewSupervisor";
+import * as realBuildPipelinePersistence from "@/lib/build-pipeline-persistence";
+import * as realPromptQueuePersistence from "@/lib/prompt-queue-persistence";
 
 const realLayoutSnapshot = { ...realLayout };
 const realTooltipSnapshot = { ...realTooltip };
@@ -61,6 +63,8 @@ const realBackendSnapshot = { ...realBackend };
 const realLucideReactSnapshot = { ...realLucideReact };
 const realProcessSnapshot = { ...realProcess };
 const realLoopedReviewSupervisorSnapshot = { ...realLoopedReviewSupervisor };
+const realBuildPipelinePersistenceSnapshot = { ...realBuildPipelinePersistence };
+const realPromptQueuePersistenceSnapshot = { ...realPromptQueuePersistence };
 
 const mockStartEnvironment = mock(async () => {});
 const mockCreateEnvironment = mock(async () => makeEnvironment("created", "project-1"));
@@ -267,6 +271,38 @@ const mockSaveLoopedReviewWorkflow = mock(async (
   revision: expectedRevision + 1,
 }));
 const mockLoopedReviewSupervisorRender = mock(() => undefined);
+const mockListPromptQueues = mock(async (_environmentId: string) => []);
+const mockListBuildPipelines = mock(async (_projectId: string) => []);
+const appPersistenceLifecycle: string[] = [];
+const mockStopBuildPipelinePersistence = mock(() => undefined);
+const mockStopPromptQueuePersistence = mock(() => undefined);
+const mockMigrateLegacyBuildPipelines = mock(() => {
+  appPersistenceLifecycle.push("migrate-build");
+  return [];
+});
+const mockStartBuildPipelinePersistence = mock(() => {
+  appPersistenceLifecycle.push("start-build");
+  return mockStopBuildPipelinePersistence;
+});
+const mockStartPromptQueuePersistence = mock(() => {
+  appPersistenceLifecycle.push("start-prompt");
+  return mockStopPromptQueuePersistence;
+});
+
+mock.module("@/lib/build-pipeline-persistence", () => ({
+  ...realBuildPipelinePersistenceSnapshot,
+  hydrateBuildPipelinesForProject: (projectId: string) =>
+    mockListBuildPipelines(projectId),
+  migrateLegacyBuildPipelines: mockMigrateLegacyBuildPipelines,
+  startBuildPipelinePersistence: mockStartBuildPipelinePersistence,
+}));
+
+mock.module("@/lib/prompt-queue-persistence", () => ({
+  ...realPromptQueuePersistenceSnapshot,
+  hydratePromptQueuesForEnvironment: (environmentId: string) =>
+    mockListPromptQueues(environmentId),
+  startPromptQueuePersistence: mockStartPromptQueuePersistence,
+}));
 
 mock.module("@/components/review/LoopedReviewSupervisor", () => ({
   LoopedReviewSupervisor: () => {
@@ -284,7 +320,9 @@ mock.module("@/lib/backend", () => ({
   checkGithubCli: mockCheckGithubCli,
   getAvailableAiCli: mockGetAvailableAiCli,
   getConfig: mockGetConfig,
+  listBuildPipelines: mockListBuildPipelines,
   listLoopedReviewWorkflows: mockListLoopedReviewWorkflows,
+  listPromptQueues: mockListPromptQueues,
   savePaneLayout: mockSavePaneLayout,
   saveLoopedReviewWorkflow: mockSaveLoopedReviewWorkflow,
   syncAllEnvironmentsWithDocker: mockSyncAllEnvironmentsWithDocker,
@@ -435,6 +473,16 @@ function resetAppMocks() {
   mockSavePaneLayout.mockClear();
   mockListLoopedReviewWorkflows.mockReset();
   mockListLoopedReviewWorkflows.mockResolvedValue([]);
+  mockListPromptQueues.mockReset();
+  mockListPromptQueues.mockResolvedValue([]);
+  mockListBuildPipelines.mockReset();
+  mockListBuildPipelines.mockResolvedValue([]);
+  appPersistenceLifecycle.length = 0;
+  mockStopBuildPipelinePersistence.mockClear();
+  mockStopPromptQueuePersistence.mockClear();
+  mockMigrateLegacyBuildPipelines.mockClear();
+  mockStartBuildPipelinePersistence.mockClear();
+  mockStartPromptQueuePersistence.mockClear();
   mockSaveLoopedReviewWorkflow.mockClear();
   mockLoopedReviewSupervisorRender.mockClear();
   mockToastError.mockClear();
@@ -475,6 +523,14 @@ afterAll(() => {
   mock.module(
     "@/components/review/LoopedReviewSupervisor",
     () => realLoopedReviewSupervisorSnapshot,
+  );
+  mock.module(
+    "@/lib/build-pipeline-persistence",
+    () => realBuildPipelinePersistenceSnapshot,
+  );
+  mock.module(
+    "@/lib/prompt-queue-persistence",
+    () => realPromptQueuePersistenceSnapshot,
   );
 });
 
@@ -551,6 +607,85 @@ describe("App background processing mounts", () => {
 
     expect(await screen.findByTestId("looped-review-supervisor")).toBeTruthy();
     expect(mockLoopedReviewSupervisorRender).toHaveBeenCalled();
+  });
+
+  test("starts and cleans up the authoritative resource synchronization listeners", async () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(appEventCallbacks.has("resource-changed")).toBe(true);
+      expect(appEventCallbacks.has("native-event-stream-connected")).toBe(true);
+      expect(mockStartBuildPipelinePersistence).toHaveBeenCalledTimes(1);
+      expect(mockStartPromptQueuePersistence).toHaveBeenCalledTimes(1);
+    });
+    expect(appPersistenceLifecycle.indexOf("migrate-build"))
+      .toBeLessThan(appPersistenceLifecycle.indexOf("start-build"));
+
+    cleanup();
+    expect(mockAppUnlisten.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(mockStopBuildPipelinePersistence).toHaveBeenCalledTimes(1);
+    expect(mockStopPromptQueuePersistence).toHaveBeenCalledTimes(1);
+  });
+
+  test("hydrates every environment queue and project pipeline independently", async () => {
+    resetStores({
+      environments: [
+        makeEnvironment("env-one", "project-one"),
+        makeEnvironment("env-two", "project-two"),
+      ],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+    useProjectStore.setState({
+      projects: [
+        {
+          id: "project-one",
+          name: "One",
+          gitUrl: "https://example.invalid/one.git",
+          localPath: null,
+          addedAt: "2026-01-01T00:00:00.000Z",
+          order: 0,
+        },
+        {
+          id: "project-two",
+          name: "Two",
+          gitUrl: "https://example.invalid/two.git",
+          localPath: null,
+          addedAt: "2026-01-01T00:00:00.000Z",
+          order: 1,
+        },
+      ],
+    });
+    mockListPromptQueues.mockImplementation(async (environmentId) => {
+      if (environmentId === "env-one") throw new Error("queue unavailable");
+      return [];
+    });
+    mockListBuildPipelines.mockImplementation(async (projectId) => {
+      if (projectId === "project-one") throw new Error("pipeline unavailable");
+      return [];
+    });
+    const originalWarn = console.warn;
+    console.warn = mock(() => undefined);
+    try {
+      render(<App />);
+
+      await waitFor(() => {
+        expect(mockListPromptQueues.mock.calls.map(([id]) => id).sort()).toEqual(
+          ["env-one", "env-two"],
+        );
+        expect(mockListBuildPipelines.mock.calls.map(([id]) => id).sort()).toEqual(
+          ["project-one", "project-two"],
+        );
+      });
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   test("hydrates looped reviews for environments and retains their background host", async () => {

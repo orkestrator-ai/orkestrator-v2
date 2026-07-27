@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   createBrowserGatewayApi,
   installBrowserGatewayApi,
-  WEB_GATEWAY_CONNECTED_EVENT,
 } from "./web-gateway";
 import {
   clearDirectGatewayTransport,
   configureDirectGatewayTransport,
 } from "./gateway-auth-transport";
+import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "./events";
 
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
@@ -30,8 +30,8 @@ type TestGatewayWindow = {
 
 class MockEventSource {
   static instances: MockEventSource[] = [];
+  onopen: ((event?: Event) => void) | null = null;
   onmessage: ((message: MessageEvent) => void) | null = null;
-  onopen: ((event: Event) => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
 
@@ -257,6 +257,11 @@ describe("web gateway browser API", () => {
       token: "direct-token-123456",
       eventReconnectDelayMs: 0,
     });
+    const connected = mock(() => undefined);
+    const stopConnected = api.listen(
+      "native-event-stream-connected",
+      connected,
+    );
 
     try {
       const payload = await new Promise<string>((resolve) => {
@@ -268,9 +273,29 @@ describe("web gateway browser API", () => {
       expect(payload).toBe("reconnected");
       expect(attempt).toBe(2);
       expect(warning).toHaveBeenCalledTimes(1);
+      expect(connected).toHaveBeenCalledTimes(1);
     } finally {
+      stopConnected();
       console.warn = originalWarn;
     }
+  });
+
+  test("announces every browser EventSource connection", () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+    const connected = mock(() => undefined);
+    const unsubscribe = api.listen(
+      "native-event-stream-connected",
+      connected,
+    );
+    const source = MockEventSource.instances[0];
+    if (!source) throw new Error("EventSource was not created");
+
+    source.onopen?.();
+    source.onopen?.();
+
+    expect(connected).toHaveBeenCalledTimes(2);
+    unsubscribe();
   });
 
   test("notifies listeners when a direct gateway stream connects", async () => {
@@ -283,7 +308,7 @@ describe("web gateway browser API", () => {
     });
 
     await new Promise<void>((resolve) => {
-      const unsubscribe = api.listen(WEB_GATEWAY_CONNECTED_EVENT, () => {
+      const unsubscribe = api.listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
         unsubscribe();
         resolve();
       });
@@ -311,7 +336,7 @@ describe("web gateway browser API", () => {
 
     try {
       await new Promise<void>((resolve) => {
-        const unsubscribe = api.listen(WEB_GATEWAY_CONNECTED_EVENT, () => {
+        const unsubscribe = api.listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
           attemptsAtConnect.push(attempt);
           if (attemptsAtConnect.length === 2) {
             unsubscribe();
@@ -335,7 +360,7 @@ describe("web gateway browser API", () => {
       new Response(new ReadableStream({
         start(controller) {
           controller.enqueue(encoder.encode(
-            `data: {"event":"${WEB_GATEWAY_CONNECTED_EVENT}","payload":"spoofed"}\n\n`,
+            `data: {"event":"${NATIVE_EVENT_STREAM_CONNECTED_EVENT}","payload":"spoofed"}\n\n`,
           ));
           controller.enqueue(encoder.encode('data: {"event":"changed","payload":"real"}\n\n'));
         },
@@ -347,7 +372,7 @@ describe("web gateway browser API", () => {
     });
 
     const connectedPayloads: unknown[] = [];
-    const stopConnected = api.listen(WEB_GATEWAY_CONNECTED_EVENT, (payload) => {
+    const stopConnected = api.listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, (payload) => {
       connectedPayloads.push(payload);
     });
 
@@ -492,7 +517,7 @@ describe("web gateway browser API", () => {
 
     const connectedCallback = mock(() => undefined);
     const unsubscribeConnected = api.listen(
-      WEB_GATEWAY_CONNECTED_EVENT,
+      NATIVE_EVENT_STREAM_CONNECTED_EVENT,
       connectedCallback,
     );
     source.onopen?.({} as Event);

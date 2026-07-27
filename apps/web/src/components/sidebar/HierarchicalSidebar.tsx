@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useProjects } from "@/hooks/useProjects";
 import { useEnvironments } from "@/hooks/useEnvironments";
-import { useEnvironmentListPolling } from "@/hooks/useEnvironmentListPolling";
+import { useEnvironmentListSync } from "@/hooks/useEnvironmentListSync";
 import { useUIStore } from "@/stores";
 import { RepositorySettings } from "@/components/settings/RepositorySettings";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
@@ -335,7 +335,7 @@ export function HierarchicalSidebar() {
     updateEnvironment,
   } = useEnvironments(null);
 
-  useEnvironmentListPolling(
+  useEnvironmentListSync(
     projects.map((project) => project.id),
     (projectId) => loadEnvironments(projectId, { silent: true, reconcileStatus: false }),
   );
@@ -354,7 +354,6 @@ export function HierarchicalSidebar() {
     collapseEmptyProjects,
     environmentSortMode,
     setEnvironmentSortMode,
-    unreadEnvironmentIds,
   } = useUIStore();
 
   const activityEnvironments = useMemo(
@@ -366,10 +365,10 @@ export function HierarchicalSidebar() {
     [projects],
   );
   const totalEnvironmentCount = activityEnvironments.length;
-  const waitingEnvironmentCount = useMemo(() => {
-    const environmentIds = new Set(allEnvironments.map((environment) => environment.id));
-    return unreadEnvironmentIds.filter((id) => environmentIds.has(id)).length;
-  }, [allEnvironments, unreadEnvironmentIds]);
+  const waitingEnvironmentCount = useMemo(
+    () => allEnvironments.filter((environment) => environment.hasUnreadWork).length,
+    [allEnvironments],
+  );
 
   const isMultiSelectMode = selectedEnvironmentIds.length >= 1;
 

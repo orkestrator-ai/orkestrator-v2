@@ -9,6 +9,7 @@ import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { createUuid } from "@/lib/uuid";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { persistBuildPipelineNow } from "@/lib/build-pipeline-persistence";
 import { useConfigStore, useCodexStore, useEnvironmentStore } from "@/stores";
 import type {
   BuildPhase,
@@ -749,6 +750,37 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         startedAt: new Date().toISOString(),
       });
       if (!ownsAttempt) return false;
+
+      // Flush the lease before the prompt leaves this process. The debounced
+      // mirror would land ~250ms later, which is exactly the window in which a
+      // crash leaves a dispatched turn with no record that it was attempted.
+      try {
+        const persisted = await persistBuildPipelineNow(pipelineId);
+        const durableAttempt = persisted.pendingPromptAttempt;
+        if (
+          durableAttempt?.id !== attemptId
+          || durableAttempt.sessionId !== sdkSessionId
+          || durableAttempt.requestId !== requestId
+          || durableAttempt.phase !== options.phase
+          || durableAttempt.prompt !== prompt
+          || durableAttempt.useTaskImages !== options.useTaskImages
+          || durableAttempt.structuredReview !== (
+            options.structuredReview ? true : undefined
+          )
+        ) {
+          // A compare-and-swap conflict means another client owns the durable
+          // pipeline snapshot. Never dispatch from this client's stale state.
+          completePromptAttempt(pipelineId, attemptId);
+          return false;
+        }
+      } catch (error) {
+        console.error(
+          `[CodexBuildChatTab] Refusing to dispatch without a durable lease for ${pipelineId}:`,
+          error,
+        );
+        completePromptAttempt(pipelineId, attemptId);
+        return false;
+      }
 
       try {
         const sent = await sendPrompt(activeClient, sdkSessionId, prompt, {

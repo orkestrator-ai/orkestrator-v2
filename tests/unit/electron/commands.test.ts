@@ -336,12 +336,33 @@ function createContext(
         Object.assign(environment, update);
         return environment;
       }),
+      recordEnvironmentCompletion: mock(async (environmentId: string, occurredAt: string) => {
+        const activityTime = Date.parse(occurredAt);
+        if (!Number.isFinite(activityTime)) {
+          throw new Error("occurredAt must be a valid ISO timestamp");
+        }
+        const environment = environments.find((candidate) => candidate.id === environmentId);
+        if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+        const previousTime = environment.lastActivityAt
+          ? Date.parse(environment.lastActivityAt)
+          : Number.NEGATIVE_INFINITY;
+        if (Number.isFinite(previousTime) && previousTime >= activityTime) return environment;
+        const update = {
+          lastActivityAt: new Date(activityTime).toISOString(),
+          hasUnreadWork: true,
+        };
+        updates.push(update);
+        Object.assign(environment, update);
+        return environment;
+      }),
       removeEnvironment: mock(async (environmentId: string) => {
         const index = environments.findIndex((candidate) => candidate.id === environmentId);
         if (index >= 0) environments.splice(index, 1);
       }),
       removeSessionsByEnvironment: mock(async () => undefined),
       deleteLoopedReviewWorkflowsByEnvironment: mock(async () => undefined),
+      deleteBuildPipelinesByEnvironment: mock(async () => [] as string[]),
+      deletePromptQueuesByEnvironment: mock(async () => [] as string[]),
       deletePaneLayout: mock(async () => undefined),
       getProject: mock(async (projectId: string) => {
         if (options.project) return options.project.id === projectId ? options.project : null;
@@ -6173,6 +6194,7 @@ exit 0
     const { context, emitted } = createContext(environment);
     const commands = createCommandRegistry();
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+    const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
 
     const sessionId = await commands.get("create_local_terminal_session")?.(
       {
@@ -6197,10 +6219,11 @@ exit 0
       ptyProcesses[0]?.emitData("work complete\r\n");
       await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
     });
-    expect(recordActivity).toHaveBeenLastCalledWith(
+    expect(recordCompletion).toHaveBeenLastCalledWith(
       environment.id,
       "2026-07-23T10:05:00.000Z",
     );
+    expect(environment.hasUnreadWork).toBe(true);
     expect(environment.lastActivityAt).toBe("2026-07-23T10:05:00.000Z");
     await waitForCondition(
       () => emitted.some(({ event, payload }) =>
@@ -6231,6 +6254,7 @@ exit 0
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+    const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
 
     const sessionId = await commands.get("create_local_terminal_session")?.(
       {
@@ -6259,19 +6283,19 @@ exit 0
     // recorded 500ms later. This sleep is load-bearing: it is the reset itself
     // being asserted, and it leaves 250ms of slack against a stalled machine.
     await Bun.sleep(500);
-    expect(recordActivity).not.toHaveBeenCalled();
+    expect(recordCompletion).not.toHaveBeenCalled();
 
     // Wait for the restarted window to elapse rather than sleeping exactly past
     // it, so a scheduling stall delays the test instead of failing it.
     await waitForCondition(
-      () => recordActivity.mock.calls.length > 0,
-      "debounced terminal activity to settle",
+      () => recordCompletion.mock.calls.length > 0,
+      "debounced terminal completion to settle",
     );
-    expect(recordActivity).toHaveBeenCalledTimes(1);
-    recordActivity.mockClear();
+    expect(recordCompletion).toHaveBeenCalledTimes(1);
+    recordCompletion.mockClear();
     ptyProcesses[0]?.emitData("background output after completion");
     await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
-    expect(recordActivity).not.toHaveBeenCalled();
+    expect(recordCompletion).not.toHaveBeenCalled();
     await commands.get("close_local_terminal_session")?.({ sessionId }, context);
   }, ASYNC_TEST_BUDGET_MS);
 
@@ -6328,6 +6352,7 @@ exit 0
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+    const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
 
     const sessionId = await commands.get("create_local_terminal_session")?.(
       {
@@ -6347,6 +6372,7 @@ exit 0
     await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
 
     expect(recordActivity).not.toHaveBeenCalled();
+    expect(recordCompletion).not.toHaveBeenCalled();
     expect(ptyProcesses[0]?.kill).toHaveBeenCalled();
   });
 
@@ -6361,6 +6387,7 @@ exit 0
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+    const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
 
     const sessionId = await commands.get("create_terminal_session")?.(
       {
@@ -6381,10 +6408,15 @@ exit 0
       ptyProcesses[0]?.emitExit({ exitCode: 0 });
     });
 
-    expect(recordActivity.mock.calls).toEqual([
-      [environment.id, "2026-07-23T11:00:00.000Z"],
-      [environment.id, "2026-07-23T11:02:00.000Z"],
-    ]);
+    expect(recordActivity).toHaveBeenCalledWith(
+      environment.id,
+      "2026-07-23T11:00:00.000Z",
+    );
+    expect(recordCompletion).toHaveBeenCalledWith(
+      environment.id,
+      "2026-07-23T11:02:00.000Z",
+    );
+    expect(environment.hasUnreadWork).toBe(true);
     expect(environment.lastActivityAt).toBe("2026-07-23T11:02:00.000Z");
   });
 
@@ -6415,6 +6447,7 @@ exit 0
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+    const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
 
     const sessionId = await commands.get("create_local_terminal_session")?.(
       { environmentId: environment.id, cols: 80, rows: 24 },
@@ -6426,6 +6459,7 @@ exit 0
     ptyProcesses[0]?.emitExit({ exitCode: 0 });
 
     expect(recordActivity).not.toHaveBeenCalled();
+    expect(recordCompletion).not.toHaveBeenCalled();
   });
 
   test("rejects local terminal start when the worktree path is missing", async () => {

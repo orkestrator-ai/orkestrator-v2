@@ -135,6 +135,12 @@ export interface Environment {
    */
   setupScriptsComplete?: boolean;
   /**
+   * Agent work finished here and no client has opened it since. Backend-owned
+   * so the badge is consistent across every connected client rather than being
+   * a per-window guess.
+   */
+  hasUnreadWork?: boolean;
+  /**
    * Durable intent to open the configured agent once setup is ready. The
    * backend owns this flag so mobile page eviction cannot lose the launch.
    */
@@ -175,6 +181,34 @@ export interface PersistedLoopedReviewWorkflow<T = unknown> {
   id: string;
   environmentId: string;
   snapshot: T;
+  updatedAt: string;
+  revision: number;
+}
+
+/**
+ * A build pipeline as the backend stores it. The backend owns durability and
+ * the compare-and-swap `revision`; this application owns the snapshot schema
+ * and validates it on the way back in.
+ */
+export interface PersistedBuildPipeline<T = unknown> {
+  version: number;
+  id: string;
+  projectId: string;
+  /** Blank between pipeline creation and its environment existing. */
+  environmentId: string;
+  snapshot: T;
+  updatedAt: string;
+  revision: number;
+}
+
+/**
+ * A tab's undispatched prompt queue as the backend stores it. Message bodies
+ * stay opaque to the backend; each agent defines its own shape.
+ */
+export interface PersistedPromptQueue<T = unknown> {
+  queueKey: string;
+  environmentId: string;
+  messages: T[];
   updatedAt: string;
   revision: number;
 }

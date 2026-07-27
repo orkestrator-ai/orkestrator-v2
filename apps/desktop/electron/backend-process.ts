@@ -122,6 +122,10 @@ export class BackendHttpClient {
           signal,
         });
         if (!response.ok || !response.body) throw new Error(`Backend event stream returned HTTP ${response.status}`);
+        // Keep this in sync with NATIVE_EVENT_STREAM_CONNECTED_EVENT in the
+        // renderer's native/events module. The transport has no replay buffer,
+        // so consumers must authoritatively refetch after every connection.
+        onEvent("native-event-stream-connected", undefined);
         const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
         let pending = "";
         while (!signal.aborted) {

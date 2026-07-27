@@ -28,6 +28,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
+import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import {
   createClient,
   getModelsWithDefaults,
@@ -82,7 +83,10 @@ import {
 } from "./slash-command-directory";
 import { getNativeSlashCommands } from "./slash-command-registry";
 import type { OpenCodeNativeData } from "@/types/paneLayout";
-import type { OpenCodeAttachment } from "@/stores/openCodeStore";
+import type {
+  OpenCodeAttachment,
+  OpenCodeQueuedMessage,
+} from "@/stores/openCodeStore";
 
 interface OpenCodeChatTabProps {
   tabId: string;
@@ -241,7 +245,6 @@ export function OpenCodeChatTab({
     getSelectedMode,
     setContextUsage,
     addToQueue,
-    removeFromQueue,
     addPendingPermission,
     addPendingQuestion,
     removePendingPermission,
@@ -1663,27 +1666,22 @@ export function OpenCodeChatTab({
     const latestSession = getSession(sessionKey);
     if (!latestSession || latestSession.isLoading) return;
 
-    const nextMessage = removeFromQueue(sessionKey);
-    if (!nextMessage) return;
-
     isProcessingQueueRef.current = true;
-
-    const sendPromise = handleSendRef.current?.(
-      nextMessage.text,
-      nextMessage.attachments,
-      {
-        model: nextMessage.model,
-        variant: nextMessage.variant,
-        mode: nextMessage.mode,
-      },
-    );
-
-    if (!sendPromise) {
-      isProcessingQueueRef.current = false;
-      return;
-    }
-
-    sendPromise
+    let claimedQueueEntry = false;
+    void claimAgentPromptQueueHead<OpenCodeQueuedMessage>("opencode", sessionKey)
+      .then((nextMessage) => {
+        if (!nextMessage) return;
+        claimedQueueEntry = true;
+        return handleSendRef.current?.(
+          nextMessage.text,
+          nextMessage.attachments,
+          {
+            model: nextMessage.model,
+            variant: nextMessage.variant,
+            mode: nextMessage.mode,
+          },
+        );
+      })
       .catch((error) => {
         console.error("[OpenCodeChatTab] Failed to send queued prompt:", error);
         const errorText = `Failed to send queued prompt: ${
@@ -1700,9 +1698,11 @@ export function OpenCodeChatTab({
       })
       .finally(() => {
         isProcessingQueueRef.current = false;
-        queueMicrotask(() => {
-          processQueue();
-        });
+        if (claimedQueueEntry) {
+          queueMicrotask(() => {
+            processQueue();
+          });
+        }
       });
   }, [
     connectionState,
@@ -1710,7 +1710,6 @@ export function OpenCodeChatTab({
     getSession,
     sessionKey,
     setupPending,
-    removeFromQueue,
     addMessage,
     setSessionLoading,
   ]);

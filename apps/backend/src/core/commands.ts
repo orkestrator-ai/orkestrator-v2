@@ -1884,7 +1884,10 @@ function persistTerminalActivity(
   }
 
   const occurredAt = new Date().toISOString();
-  void context.storage.recordEnvironmentActivity(environmentId, occurredAt)
+  const persistActivity = activityKind === "completed"
+    ? context.storage.recordEnvironmentCompletion.bind(context.storage)
+    : context.storage.recordEnvironmentActivity.bind(context.storage);
+  void persistActivity(environmentId, occurredAt)
     .then((environment) => {
       context.emit("environment-activity-recorded", {
         environment_id: environment.id,
@@ -2959,6 +2962,13 @@ async function deleteEnvironment(
     await enqueueLocalServerEnvironmentOperation(environmentId, async () => {
       const { storage } = context;
       const environment = await storage.getEnvironment(environmentId);
+      // Persist the deletion intent before any durable child-state cleanup.
+      // Queue/pipeline saves consult this marker while holding their own locks:
+      // a write that began earlier is swept by cleanup, and a later write is
+      // rejected even if cleanup pauses or fails.
+      await storage.updateEnvironment(environmentId, {
+        deletionRequestedAt: new Date().toISOString(),
+      });
       if (environment) await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
       if (environment?.containerId) {
         await runCommand(
@@ -2973,6 +2983,14 @@ async function deleteEnvironment(
       }
       await storage.removeSessionsByEnvironment(environmentId).catch(() => undefined);
       await storage.deleteLoopedReviewWorkflowsByEnvironment(environmentId);
+      // A pipeline whose environment is gone can never advance again; leaving it
+      // behind would resurrect a dead build on the next client that hydrates.
+      await storage.deleteBuildPipelinesByEnvironment(
+        environmentId,
+        environment?.buildPipelineId,
+      );
+      // Queued prompts for a deleted environment can never be dispatched.
+      await storage.deletePromptQueuesByEnvironment(environmentId);
       await storage.removeEnvironment(environmentId);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);
       cleanupEnvironmentSetupState(environmentId);
@@ -4321,6 +4339,11 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const activityAt = asString(occurredAt, "occurredAt");
     return storage.recordEnvironmentActivity(id, activityAt);
   });
+  register("record_environment_completion", async ({ environmentId, occurredAt }, { storage }) => {
+    const id = asString(environmentId, "environmentId");
+    const activityAt = asString(occurredAt, "occurredAt");
+    return storage.recordEnvironmentCompletion(id, activityAt);
+  });
   register("set_environment_setup_complete", async ({ environmentId, complete }, { storage }) => {
     const updated = await storage.updateEnvironment(asString(environmentId, "environmentId"), { setupScriptsComplete: asBoolean(complete) });
     return asBoolean(complete) ? captureCreatedFromCommit(updated, storage) : updated;
@@ -4737,6 +4760,76 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   );
   register("delete_looped_review_workflow", ({ workflowId }, { storage }) =>
     storage.deleteLoopedReviewWorkflow(asString(workflowId, "workflowId")),
+  );
+
+  register("get_build_pipeline", ({ pipelineId }, { storage }) =>
+    storage.getBuildPipeline(asString(pipelineId, "pipelineId")),
+  );
+  register("list_build_pipelines", ({ projectId }, { storage }) =>
+    storage.listBuildPipelines(asString(projectId, "projectId")),
+  );
+  register(
+    "save_build_pipeline",
+    ({ pipelineId, projectId, environmentId, version, snapshot, expectedRevision }, { storage }) =>
+      storage.saveBuildPipeline(
+        asString(pipelineId, "pipelineId"),
+        asString(projectId, "projectId"),
+        // A pipeline is stored before its environment exists, so this is the one
+        // identifier here that is legitimately blank.
+        typeof environmentId === "string" ? environmentId : "",
+        asNumber(version, "version"),
+        snapshot,
+        expectedRevision === undefined
+          ? undefined
+          : asNumber(expectedRevision, "expectedRevision"),
+      ),
+  );
+  register("delete_build_pipeline", ({ pipelineId }, { storage }) =>
+    storage.deleteBuildPipeline(asString(pipelineId, "pipelineId")),
+  );
+
+  register(
+    "set_environment_unread",
+    async ({ environmentId, unread, expectedLastActivityAt }, { storage }) =>
+      storage.setEnvironmentUnread(
+        asString(environmentId, "environmentId"),
+        asBoolean(unread),
+        expectedLastActivityAt === undefined || expectedLastActivityAt === null
+          ? expectedLastActivityAt
+          : asString(expectedLastActivityAt, "expectedLastActivityAt"),
+      ),
+  );
+
+  register("get_prompt_queue", ({ queueKey }, { storage }) =>
+    storage.getPromptQueue(asString(queueKey, "queueKey")),
+  );
+  register("list_prompt_queues", ({ environmentId }, { storage }) =>
+    storage.listPromptQueues(asString(environmentId, "environmentId")),
+  );
+  register(
+    "save_prompt_queue",
+    ({ queueKey, environmentId, messages, expectedRevision }, { storage }) =>
+      storage.savePromptQueue(
+        asString(queueKey, "queueKey"),
+        asString(environmentId, "environmentId"),
+        // Passed through unvalidated so storage rejects a malformed payload.
+        // Coercing to [] here would turn a bad request into a queue deletion
+        // that also bumps the revision every other client compares against.
+        messages as unknown[],
+        expectedRevision === undefined
+          ? undefined
+          : asNumber(expectedRevision, "expectedRevision"),
+      ),
+  );
+  register(
+    "claim_prompt_queue_head",
+    ({ queueKey, environmentId, expectedMessageId, candidateMessages }, { storage }) =>
+      storage.claimPromptQueueHead(
+        asString(queueKey, "queueKey"),
+        asString(environmentId, "environmentId"),
+        asString(expectedMessageId, "expectedMessageId"),
+        candidateMessages as unknown[],
+      ),
   );
 
   register("create_terminal_session", async ({ containerId, cols, rows, user, trackEnvironmentActivity }, { storage }) => {

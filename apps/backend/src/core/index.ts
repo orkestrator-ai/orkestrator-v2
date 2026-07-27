@@ -6,6 +6,7 @@ import {
 } from "./commands.js";
 import { reapOrphanedLocalServers } from "./local-server-reaper.js";
 import { StorageService } from "./storage.js";
+import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 
 export class OrkestratorBackend {
   private readonly commands = createCommandRegistry();
@@ -20,8 +21,15 @@ export class OrkestratorBackend {
     resourceRoot: string;
     emit: BackendEmit;
   }) {
+    const storage = new StorageService(options.dataDir);
+    // Every committed mutation fans out to all connected clients, so a second
+    // window or browser converges without polling. `emit` is read lazily by the
+    // caller's closure, which is how this survives the gateway not existing yet.
+    storage.setResourceChangeListener((change) => {
+      options.emit(RESOURCE_CHANGED_EVENT, change);
+    });
     this.context = {
-      storage: new StorageService(options.dataDir),
+      storage,
       toolchainBinDir: options.toolchainBinDir,
       appRoot: options.appRoot,
       resourceRoot: options.resourceRoot,

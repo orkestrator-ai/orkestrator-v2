@@ -67,10 +67,11 @@ import {
 } from "./codex-preferences";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
+import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { cn } from "@/lib/utils";
 import type { CodexNativeData } from "@/types/paneLayout";
-import type { CodexAttachment } from "@/stores/codexStore";
+import type { CodexAttachment, CodexQueuedMessage } from "@/stores/codexStore";
 
 interface CodexChatTabProps {
   tabId: string;
@@ -286,7 +287,6 @@ export function CodexChatTab({
   const setSelectedReasoningEffort = useCodexStore((state) => state.setSelectedReasoningEffort);
   const setFastMode = useCodexStore((state) => state.setFastMode);
   const addToQueue = useCodexStore((state) => state.addToQueue);
-  const removeFromQueue = useCodexStore((state) => state.removeFromQueue);
   const client = useCodexStore(
     useCallback((state) => state.clients.get(environmentId), [environmentId]),
   );
@@ -739,23 +739,18 @@ export function CodexChatTab({
     const latestSession = codexState.sessions.get(sessionKey);
     if (!latestSession || latestSession.isLoading) return;
 
-    const nextMessage = removeFromQueue(sessionKey);
-    if (!nextMessage) return;
-
     isProcessingQueueRef.current = true;
-
-    const sendPromise = handleSendRef.current?.(
-      nextMessage.text,
-      nextMessage.attachments,
-      nextMessage.requestId ?? nextMessage.id,
-    );
-
-    if (!sendPromise) {
-      isProcessingQueueRef.current = false;
-      return;
-    }
-
-    sendPromise
+    let claimedQueueEntry = false;
+    void claimAgentPromptQueueHead<CodexQueuedMessage>("codex", sessionKey)
+      .then((nextMessage) => {
+        if (!nextMessage) return;
+        claimedQueueEntry = true;
+        return handleSendRef.current?.(
+          nextMessage.text,
+          nextMessage.attachments,
+          nextMessage.requestId ?? nextMessage.id,
+        );
+      })
       .catch((error) => {
         console.error("[CodexChatTab] Failed to send queued prompt:", error);
         setSessionLoading(sessionKey, false);
@@ -779,6 +774,7 @@ export function CodexChatTab({
          */
         const settled = useCodexStore.getState();
         if (
+          claimedQueueEntry &&
           (settled.messageQueue.get(sessionKey)?.length ?? 0) > 0
           && settled.sessions.get(sessionKey)?.isLoading !== true
         ) {
@@ -788,7 +784,6 @@ export function CodexChatTab({
   }, [
     client,
     connectionState,
-    removeFromQueue,
     sessionKey,
     setupPending,
     setSessionError,

@@ -5,10 +5,10 @@ import {
   updateDirectGatewayToken,
 } from "@/lib/native/gateway-auth-transport";
 import { readClipboardImageDimensions } from "@/lib/clipboard-image";
+import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 
 const GATEWAY_PREFIX = "/__orkestrator";
 const EVENT_RECONNECT_DELAY_MS = 2_000;
-export const WEB_GATEWAY_CONNECTED_EVENT = "web-gateway-connected";
 
 type EventCallback<T> = (payload: T) => void;
 type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
@@ -82,16 +82,16 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     if (typeof parsed.event !== "string") return;
     // Transport-level events are synthesized locally and share this listener
     // map, so a server frame must never be able to impersonate one.
-    if (parsed.event === WEB_GATEWAY_CONNECTED_EVENT) return;
+    if (parsed.event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) return;
     const callbacks = listeners.get(parsed.event);
     if (!callbacks) return;
     for (const callback of callbacks) callback(parsed.payload);
   };
 
-  const dispatchEvent = (event: string, payload: unknown) => {
-    const callbacks = listeners.get(event);
+  const announceEventStreamConnected = () => {
+    const callbacks = listeners.get(NATIVE_EVENT_STREAM_CONNECTED_EVENT);
     if (!callbacks) return;
-    for (const callback of callbacks) callback(payload);
+    for (const callback of callbacks) callback(undefined);
   };
 
   const scheduleReconnect = () => {
@@ -117,7 +117,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         if (!response.ok || !response.body) {
           throw new Error(`Gateway event stream failed with HTTP ${response.status}`);
         }
-        dispatchEvent(WEB_GATEWAY_CONNECTED_EVENT, undefined);
+        announceEventStreamConnected();
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -155,9 +155,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     eventSource = new EventSource(apiUrl(`${GATEWAY_PREFIX}/events`), {
       withCredentials: true,
     });
-    eventSource.onopen = () => {
-      dispatchEvent(WEB_GATEWAY_CONNECTED_EVENT, undefined);
-    };
+    eventSource.onopen = announceEventStreamConnected;
     eventSource.onmessage = (message) => dispatchMessage(message.data);
     eventSource.onerror = () => {
       console.warn("[RemoteGateway] Event stream disconnected");

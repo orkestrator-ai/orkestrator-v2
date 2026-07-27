@@ -29,6 +29,8 @@ import type {
   PersistedPaneLayout,
   ClaudeModelCatalogSnapshot,
   PersistedLoopedReviewWorkflow,
+  PersistedBuildPipeline,
+  PersistedPromptQueue,
 } from "@/types";
 import type {
   LinearCompletionCommentResult,
@@ -110,6 +112,14 @@ export async function recordEnvironmentActivity(
   occurredAt: string,
 ): Promise<Environment> {
   return invoke<Environment>("record_environment_activity", { environmentId, occurredAt });
+}
+
+/** Atomically records a completed turn and marks its environment unread. */
+export async function recordEnvironmentCompletion(
+  environmentId: string,
+  occurredAt: string,
+): Promise<Environment> {
+  return invoke<Environment>("record_environment_completion", { environmentId, occurredAt });
 }
 
 export async function createEnvironment(
@@ -1430,6 +1440,105 @@ export async function deleteLoopedReviewWorkflow(
   workflowId: string,
 ): Promise<void> {
   return invoke("delete_looped_review_workflow", { workflowId });
+}
+
+// --- Build Pipeline Persistence ---
+
+export async function getBuildPipeline<T = unknown>(
+  pipelineId: string,
+): Promise<PersistedBuildPipeline<T> | null> {
+  return invoke<PersistedBuildPipeline<T> | null>("get_build_pipeline", { pipelineId });
+}
+
+export async function listBuildPipelines<T = unknown>(
+  projectId: string,
+): Promise<Array<PersistedBuildPipeline<T>>> {
+  return invoke<Array<PersistedBuildPipeline<T>>>("list_build_pipelines", { projectId });
+}
+
+export async function saveBuildPipeline<T>(
+  pipelineId: string,
+  projectId: string,
+  environmentId: string,
+  version: number,
+  snapshot: T,
+  expectedRevision?: number,
+): Promise<PersistedBuildPipeline<T>> {
+  return invoke<PersistedBuildPipeline<T>>("save_build_pipeline", {
+    pipelineId,
+    projectId,
+    environmentId,
+    version,
+    snapshot,
+    ...(expectedRevision === undefined ? {} : { expectedRevision }),
+  });
+}
+
+export async function deleteBuildPipeline(pipelineId: string): Promise<void> {
+  return invoke("delete_build_pipeline", { pipelineId });
+}
+
+/**
+ * Marks or clears the environment's unread badge.
+ *
+ * A dedicated command rather than a general update so two clients racing on the
+ * badge cannot clobber each other's unrelated environment fields.
+ */
+export async function setEnvironmentUnread(
+  environmentId: string,
+  unread: boolean,
+  expectedLastActivityAt?: string | null,
+): Promise<Environment> {
+  return invoke<Environment>("set_environment_unread", {
+    environmentId,
+    unread,
+    ...(expectedLastActivityAt === undefined ? {} : { expectedLastActivityAt }),
+  });
+}
+
+// --- Prompt Queues ---
+
+export async function getPromptQueue<T = unknown>(
+  queueKey: string,
+): Promise<PersistedPromptQueue<T> | null> {
+  return invoke<PersistedPromptQueue<T> | null>("get_prompt_queue", { queueKey });
+}
+
+export async function listPromptQueues<T = unknown>(
+  environmentId: string,
+): Promise<Array<PersistedPromptQueue<T>>> {
+  return invoke<Array<PersistedPromptQueue<T>>>("list_prompt_queues", { environmentId });
+}
+
+export async function savePromptQueue<T>(
+  queueKey: string,
+  environmentId: string,
+  messages: T[],
+  expectedRevision?: number,
+): Promise<PersistedPromptQueue<T>> {
+  return invoke<PersistedPromptQueue<T>>("save_prompt_queue", {
+    queueKey,
+    environmentId,
+    messages,
+    ...(expectedRevision === undefined ? {} : { expectedRevision }),
+  });
+}
+
+export async function claimPromptQueueHead<T>(
+  queueKey: string,
+  environmentId: string,
+  expectedMessageId: string,
+  candidateMessages: T[],
+): Promise<{
+  claimed: T | null;
+  queue: PersistedPromptQueue<T> | null;
+}> {
+  return invoke("claim_prompt_queue_head", {
+    queueKey,
+    environmentId,
+    expectedMessageId,
+    candidateMessages,
+  });
 }
 
 // --- Local Server Commands (for local/worktree environments) ---

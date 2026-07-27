@@ -6,6 +6,8 @@ import { mockReadImage } from "../../mocks/clipboard";
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import { useClaudeOptionsStore, useConfigStore, useUIStore } from "@/stores";
 import type { Environment, Project } from "@/types";
+import { ENVIRONMENT_LIST_RESYNC_INTERVAL_MS } from "@/hooks/useEnvironmentListSync";
+import { dispatchResourceChange, resetResourceSync } from "@/lib/resource-sync";
 
 import * as realDndCore from "@dnd-kit/core";
 import * as realUseProjects from "@/hooks/useProjects";
@@ -243,7 +245,6 @@ describe("HierarchicalSidebar", () => {
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
       environmentSortMode: "project",
-      unreadEnvironmentIds: [],
       zoomLevel: 100,
     });
     useConfigStore.setState((state) => ({
@@ -383,6 +384,7 @@ describe("HierarchicalSidebar", () => {
       {
         ...createdEnvironment,
         id: "env-running",
+        hasUnreadWork: true,
         lastActivityAt: "2026-07-22T10:00:00.000Z",
       },
       {
@@ -401,10 +403,7 @@ describe("HierarchicalSidebar", () => {
         lastActivityAt: "2026-07-20T10:00:00.000Z",
       },
     ];
-    useUIStore.setState({
-      environmentSortMode: "activity",
-      unreadEnvironmentIds: ["env-running", "missing-environment"],
-    });
+    useUIStore.setState({ environmentSortMode: "activity" });
 
     render(<HierarchicalSidebar />);
 
@@ -422,29 +421,28 @@ describe("HierarchicalSidebar", () => {
     expect(await screen.findByRole("heading", { name: "Create Ork (Environment)" })).toBeTruthy();
   });
 
-  test("shows completed activity on its row and clears it when the environment is opened", () => {
+  test("shows completed activity from the environment record and selects the row", () => {
     environmentsValue = [{
       ...createdEnvironment,
       id: "env-waiting",
       name: "Waiting environment",
+      hasUnreadWork: true,
       lastActivityAt: "2026-07-22T10:00:00.000Z",
     }];
-    useUIStore.setState({
-      environmentSortMode: "activity",
-      unreadEnvironmentIds: ["env-waiting"],
-    });
+    useUIStore.setState({ environmentSortMode: "activity" });
 
     render(<HierarchicalSidebar />);
 
     expect(screen.getByLabelText("New completed activity")).toBeTruthy();
+    expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
     const row = screen.getByTestId("activity-environment-list")
       .querySelector('[data-environment-id="env-waiting"] [role="button"]');
     expect(row).toBeTruthy();
     fireEvent.click(row!);
 
-    expect(useUIStore.getState().unreadEnvironmentIds).toEqual([]);
-    expect(screen.queryByLabelText("New completed activity")).toBeNull();
-    expect(screen.getByLabelText("0 waiting environments")).toBeTruthy();
+    // Clearing the badge is useUnreadEnvironmentSync's job now, because the
+    // badge is backend state rather than something this sidebar owns.
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-waiting");
   });
 
   test("persists environment updates initiated from an activity row", async () => {
@@ -1237,12 +1235,12 @@ describe("HierarchicalSidebar", () => {
     expect(header.className).toContain("border-transparent");
   });
 
-  test("polls each project through the read-only silent snapshot path", async () => {
+  test("resyncs each project through the read-only silent snapshot path", async () => {
     let intervalCallback: (() => void) | undefined;
     const originalSetInterval = globalThis.setInterval;
     const originalClearInterval = globalThis.clearInterval;
     globalThis.setInterval = ((callback: TimerHandler, timeout?: number) => {
-      if (timeout === 5_000) intervalCallback = callback as () => void;
+      if (timeout === ENVIRONMENT_LIST_RESYNC_INTERVAL_MS) intervalCallback = callback as () => void;
       return 42 as unknown as ReturnType<typeof setInterval>;
     }) as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
@@ -1264,6 +1262,27 @@ describe("HierarchicalSidebar", () => {
     } finally {
       globalThis.setInterval = originalSetInterval;
       globalThis.clearInterval = originalClearInterval;
+    }
+  });
+
+  test("refreshes environments when another client announces a change", async () => {
+    try {
+      render(<HierarchicalSidebar />);
+      await waitFor(() => expect(loadEnvironmentsMock).toHaveBeenCalled());
+      loadEnvironmentsMock.mockClear();
+
+      await act(async () => {
+        dispatchResourceChange({ resource: "environment", id: "env-created-elsewhere", revision: 1 });
+        // Past the dispatcher's coalescing window.
+        await new Promise((resolve) => setTimeout(resolve, 80));
+      });
+
+      expect(loadEnvironmentsMock).toHaveBeenCalledWith("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    } finally {
+      resetResourceSync();
     }
   });
 

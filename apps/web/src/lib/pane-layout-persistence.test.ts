@@ -3,6 +3,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PersistedPaneLayout } from "@/types/paneLayout";
 import {
   createPersistedPaneLayoutInput,
+  flushPaneLayoutNow,
   startPaneLayoutPersistence,
 } from "./pane-layout-persistence";
 
@@ -195,5 +196,114 @@ describe("pane layout persistence", () => {
     expect(firstTabs.map(({ id }) => id)).toEqual(["tab-1"]);
     expect(secondTabs.map(({ id }) => id)).toEqual(["tab-1", "tab-2"]);
     stop();
+  });
+
+  test("flushPaneLayoutNow orders its write behind an in-flight debounced write", async () => {
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const save = mock(async (environmentId: string, input: LayoutInput) => {
+      if (save.mock.calls.length === 1) await firstBlocked;
+      return createSaved(environmentId, input);
+    });
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "tab-1", type: "plain" }, "env-1");
+    await waitForTimers();
+    expect(save).toHaveBeenCalledTimes(1);
+
+    // A direct write issued while the older write is still in flight must not
+    // overtake it — otherwise the older payload lands last and discards the tab
+    // this write exists to record.
+    usePaneLayoutStore.getState().addTab("default", { id: "agent", type: "codex-native" }, "env-1");
+    const flushed = flushPaneLayoutNow(
+      "env-1",
+      createPersistedPaneLayoutInput(usePaneLayoutStore.getState().environments.get("env-1")!),
+    );
+    await waitForTimers();
+    expect(save).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    await flushed;
+    await waitForTimers();
+
+    const order = save.mock.calls.map(
+      ([, input]) => (input.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id),
+    );
+    expect(order[0]).toEqual(["tab-1"]);
+    expect(order[1]).toEqual(["tab-1", "agent"]);
+    // The debounced writer must not then echo the identical layout back.
+    expect(save).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  test("flushPaneLayoutNow resolves after the layout is durably saved", async () => {
+    const saved: string[] = [];
+    const save = mock(async (environmentId: string, input: LayoutInput) => {
+      saved.push(environmentId);
+      return createSaved(environmentId, input);
+    });
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 60_000 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "agent", type: "claude-native" }, "env-1");
+
+    await flushPaneLayoutNow(
+      "env-1",
+      createPersistedPaneLayoutInput(usePaneLayoutStore.getState().environments.get("env-1")!),
+    );
+    expect(saved).toEqual(["env-1"]);
+    stop();
+  });
+
+  test("flushPaneLayoutNow falls back to a direct save when no persistence loop is running", async () => {
+    const directSave = mock(async (environmentId: string, layout: LayoutInput) =>
+      createSaved(environmentId, layout)
+    );
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+
+    // No startPaneLayoutPersistence() in this test, so there is no write chain to
+    // join; the layout must still be written rather than silently dropped.
+    await flushPaneLayoutNow(
+      "env-1",
+      createPersistedPaneLayoutInput(usePaneLayoutStore.getState().environments.get("env-1")!),
+      directSave,
+    );
+    expect(directSave).toHaveBeenCalledTimes(1);
+    expect(directSave.mock.calls[0]?.[0]).toBe("env-1");
+  });
+
+  test("flushPaneLayoutNow prefers the active write chain over the direct save", async () => {
+    const chainSave = mock(async (environmentId: string, input: LayoutInput) => createSaved(environmentId, input));
+    const directSave = mock(async (environmentId: string, input: LayoutInput) => createSaved(environmentId, input));
+    const stop = startPaneLayoutPersistence({ save: chainSave, debounceMs: 60_000 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+
+    await flushPaneLayoutNow(
+      "env-1",
+      createPersistedPaneLayoutInput(usePaneLayoutStore.getState().environments.get("env-1")!),
+      directSave,
+    );
+    expect(chainSave).toHaveBeenCalledTimes(1);
+    expect(directSave).not.toHaveBeenCalled();
+    stop();
+
+    // After teardown the chain is deregistered and the fallback applies again.
+    await flushPaneLayoutNow(
+      "env-1",
+      createPersistedPaneLayoutInput(usePaneLayoutStore.getState().environments.get("env-1")!),
+      directSave,
+    );
+    expect(directSave).toHaveBeenCalledTimes(1);
   });
 });

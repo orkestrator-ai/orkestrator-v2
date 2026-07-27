@@ -24,6 +24,7 @@ export function getBackgroundProcessingEnvironments(
   queuedAgentPromptEnvironmentIds: Iterable<string> = [],
   pendingSetupEnvironmentIds: Iterable<string> = [],
   loopedReviews: Iterable<LoopedReviewWorkflow> = [],
+  durablePendingAgentLaunchEnvironmentIds: Iterable<string> = [],
 ): Environment[] {
   const backgroundEnvIds = new Set<string>(setupRunningEnvironmentIds);
   for (const environmentId of pendingNativeLaunchEnvironmentIds) {
@@ -47,6 +48,11 @@ export function getBackgroundProcessingEnvironments(
     }
   }
   for (const environmentId of pendingSetupEnvironmentIds) {
+    if (environmentId) {
+      backgroundEnvIds.add(environmentId);
+    }
+  }
+  for (const environmentId of durablePendingAgentLaunchEnvironmentIds) {
     if (environmentId) {
       backgroundEnvIds.add(environmentId);
     }

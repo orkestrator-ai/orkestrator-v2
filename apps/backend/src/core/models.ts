@@ -55,6 +55,15 @@ export interface Environment {
   projectId: string;
   /** Persisted association used to recover a build pipeline after renderer remount. */
   buildPipelineId?: string;
+  /**
+   * Set before durable child state is removed.
+   *
+   * Queue and pipeline writes reject an environment carrying this marker, so a
+   * delayed renderer write cannot recreate state after deletion cleanup has
+   * passed. The marker intentionally remains when cleanup fails: a retry may
+   * continue deletion, but background work must not resume in the meantime.
+   */
+  deletionRequestedAt?: string;
   name: string;
   branch: string;
   containerId: string | null;
@@ -88,6 +97,15 @@ export interface Environment {
   opencodeMode?: OpenCodeMode;
   codexMode?: CodexMode;
   setupScriptsComplete?: boolean;
+  /**
+   * Agent work finished here and no client has opened it since.
+   *
+   * A fact about the environment, not about one window: whichever client opens
+   * it clears the badge everywhere, because the work has now been seen.
+   */
+  hasUnreadWork?: boolean;
+  /** Durable intent to open the configured agent once setup is ready. */
+  pendingAgentLaunch?: boolean;
   initialPrompt?: string;
   /** Prompt awaiting a backend-owned rename after the environment starts. */
   pendingRenamePrompt?: string;
@@ -140,6 +158,45 @@ export interface PersistedLoopedReviewWorkflow {
   id: string;
   environmentId: string;
   snapshot: unknown;
+  updatedAt: string;
+  revision: number;
+}
+
+/**
+ * A build pipeline as the backend stores it.
+ *
+ * Same division of labour as {@link PersistedLoopedReviewWorkflow}: the backend
+ * owns durability and compare-and-swap revisions, the web application owns and
+ * runtime-validates the snapshot schema.
+ *
+ * `environmentId` is blank between a pipeline being created and its environment
+ * existing. That window is exactly when a crash used to orphan the pipeline, so
+ * the record must be storable before it can be linked.
+ */
+export interface PersistedBuildPipeline {
+  version: number;
+  id: string;
+  projectId: string;
+  environmentId: string;
+  snapshot: unknown;
+  updatedAt: string;
+  revision: number;
+}
+
+/**
+ * Prompts a user has committed to sending but which have not been dispatched
+ * yet, for one agent tab.
+ *
+ * The queue lives here rather than in a renderer because a queued prompt is a
+ * user decision, not a view: it must survive a reload, be visible to every
+ * client, and still drain when the tab that queued it is closed. The message
+ * body is opaque — each agent carries different attachment and mode fields, and
+ * the backend has no reason to understand any of them.
+ */
+export interface PersistedPromptQueue {
+  queueKey: string;
+  environmentId: string;
+  messages: unknown[];
   updatedAt: string;
   revision: number;
 }

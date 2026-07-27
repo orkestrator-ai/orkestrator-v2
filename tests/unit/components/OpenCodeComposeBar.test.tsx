@@ -10,6 +10,11 @@ import {
 } from "@testing-library/react";
 import { forwardRef, useImperativeHandle, useState } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
+import {
+  emitViewportChange,
+  restoreMatchMedia,
+  setMobileViewport,
+} from "../../mocks/match-media";
 import { mockToastError } from "../../mocks/sonner";
 
 const mockWriteContainerFile = mock(async () => {});
@@ -90,6 +95,7 @@ afterAll(() => {
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/hooks/useFileMentions", () => realUseFileMentionsSnapshot);
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
+  restoreMatchMedia();
 });
 
 // --- Module mocks (must be before component import) ---
@@ -272,6 +278,7 @@ function renderComposeBar(
 
 describe("OpenCodeComposeBar", () => {
   beforeEach(() => {
+    setMobileViewport(false);
     mockReadImage.mockReset();
     mockWriteContainerFile.mockReset();
     mockWriteLocalFile.mockReset();
@@ -356,6 +363,23 @@ describe("OpenCodeComposeBar", () => {
   test("focuses the mentionable input on mount", () => {
     renderComposeBar();
     expect(mockInputFocus).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not focus the mentionable input on mobile mount", () => {
+    setMobileViewport(true);
+    renderComposeBar();
+
+    expect(mockInputFocus).not.toHaveBeenCalled();
+  });
+
+  test("does not focus when the viewport widens past the mobile breakpoint", () => {
+    setMobileViewport(true);
+    renderComposeBar();
+    expect(mockInputFocus).not.toHaveBeenCalled();
+
+    act(() => emitViewportChange(false));
+
+    expect(mockInputFocus).not.toHaveBeenCalled();
   });
 
   test("reports file search errors for mention loading", () => {

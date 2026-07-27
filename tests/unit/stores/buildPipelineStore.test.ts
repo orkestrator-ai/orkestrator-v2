@@ -1,11 +1,13 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import {
-  BUILD_PIPELINE_STORAGE_KEY,
+  BUILD_PIPELINE_VERSION,
   isActiveBuildPhase,
+  isBuildPipeline,
   useBuildPipelineStore,
 } from "../../../apps/web/src/stores/buildPipelineStore";
 import type {
   BuildPhase,
+  BuildPipeline,
   PipelinePromptAttempt,
   PipelineReconnectAttempt,
   PipelineSession,
@@ -75,7 +77,6 @@ function createPromptAttempt(
 
 describe("buildPipelineStore", () => {
   beforeEach(() => {
-    localStorage.removeItem(BUILD_PIPELINE_STORAGE_KEY);
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -273,8 +274,13 @@ describe("buildPipelineStore", () => {
     });
   });
 
-  describe("persistence", () => {
-    test("rehydrates pipeline source, phase, snapshot, and derived environment IDs", async () => {
+  describe("backend mirror", () => {
+    test("starts a new pipeline at revision 0 so the first save finds no prior record", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      expect(useBuildPipelineStore.getState().pipelines.get(id)?.backendRevision).toBe(0);
+    });
+
+    test("replacePipeline installs the backend snapshot and rebuilds derived environment IDs", () => {
       const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams({
         taskId: "github:acme/widget#42",
         source: {
@@ -286,17 +292,15 @@ describe("buildPipelineStore", () => {
           status: "Review",
         },
       }));
-      useBuildPipelineStore.getState().setPipelineEnvironment(id, "env-github");
-      useBuildPipelineStore.getState().setPhase(id, "reviewing");
-      const stored = localStorage.getItem(BUILD_PIPELINE_STORAGE_KEY);
-      expect(stored).not.toBeNull();
+      useBuildPipelineStore.getState().setPipelineEnvironment(id, "env-stale");
+      const local = useBuildPipelineStore.getState().pipelines.get(id)!;
 
-      useBuildPipelineStore.setState({
-        pipelines: new Map(),
-        buildEnvironmentIds: new Set(),
+      useBuildPipelineStore.getState().replacePipeline({
+        ...local,
+        environmentId: "env-github",
+        phase: "reviewing",
+        backendRevision: 7,
       });
-      if (stored) localStorage.setItem(BUILD_PIPELINE_STORAGE_KEY, stored);
-      await useBuildPipelineStore.persist.rehydrate();
 
       const pipeline = useBuildPipelineStore.getState().pipelines.get(id);
       expect(pipeline?.source).toMatchObject({
@@ -307,51 +311,244 @@ describe("buildPipelineStore", () => {
       });
       expect(pipeline?.phase).toBe("reviewing");
       expect(pipeline?.taskSnapshot).toEqual(defaultTaskSnapshot);
+      expect(pipeline?.backendRevision).toBe(7);
+      // The replaced snapshot moved environments, so the stale id must not linger.
       expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-github")).toBe(true);
+      expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-stale")).toBe(false);
     });
 
-    test("clears an interrupted posting lease during rehydration so completion can retry", async () => {
+    test("setBackendRevision records the revision a write landed at", () => {
       const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
-      useBuildPipelineStore.getState().setPhase(id, "complete");
-      useBuildPipelineStore.getState().setCompletionCommentStatus(id, "posting");
-      const stored = localStorage.getItem(BUILD_PIPELINE_STORAGE_KEY);
-
-      useBuildPipelineStore.setState({
-        pipelines: new Map(),
-        buildEnvironmentIds: new Set(),
-      });
-      if (stored) localStorage.setItem(BUILD_PIPELINE_STORAGE_KEY, stored);
-      await useBuildPipelineStore.persist.rehydrate();
-
-      expect(
-        useBuildPipelineStore.getState().pipelines.get(id)?.completionCommentStatus,
-      ).toBeUndefined();
+      useBuildPipelineStore.getState().setBackendRevision(id, 3);
+      expect(useBuildPipelineStore.getState().pipelines.get(id)?.backendRevision).toBe(3);
     });
 
-    test("skips malformed persisted entries while retaining valid pipelines", async () => {
+    test("setBackendRevision never moves the revision backwards", () => {
       const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
-      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
-      const stored = JSON.stringify({
-          state: {
-            pipelines: [
-              null,
-              ["missing-pipeline"],
-              [42, pipeline],
-              ["empty", null],
-              [id, pipeline],
-            ],
-          },
-          version: 1,
-        });
-      useBuildPipelineStore.setState({
-        pipelines: new Map(),
-        buildEnvironmentIds: new Set(),
-      });
-      localStorage.setItem(BUILD_PIPELINE_STORAGE_KEY, stored);
+      useBuildPipelineStore.getState().setBackendRevision(id, 5);
+      // A slower write landing after a faster one must not re-arm the
+      // compare-and-swap against a stale value.
+      useBuildPipelineStore.getState().setBackendRevision(id, 2);
+      expect(useBuildPipelineStore.getState().pipelines.get(id)?.backendRevision).toBe(5);
+    });
 
-      await useBuildPipelineStore.persist.rehydrate();
+    test("setBackendRevision ignores a pipeline that is no longer in the store", () => {
+      const before = useBuildPipelineStore.getState();
+      useBuildPipelineStore.getState().setBackendRevision("missing-pipeline", 4);
+      expect(useBuildPipelineStore.getState().pipelines).toBe(before.pipelines);
+    });
 
-      expect(Array.from(useBuildPipelineStore.getState().pipelines.keys())).toEqual([id]);
+    test("exposes a positive integer snapshot schema version", () => {
+      expect(Number.isInteger(BUILD_PIPELINE_VERSION)).toBe(true);
+      expect(BUILD_PIPELINE_VERSION).toBeGreaterThan(0);
+    });
+  });
+
+  describe("isBuildPipeline", () => {
+    function validSnapshot(): BuildPipeline {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      return useBuildPipelineStore.getState().pipelines.get(id)!;
+    }
+
+    test("accepts a snapshot produced by the store", () => {
+      expect(isBuildPipeline(validSnapshot())).toBe(true);
+    });
+
+    test("rejects non-objects", () => {
+      for (const value of [null, undefined, 42, "pipeline", true, []]) {
+        expect(isBuildPipeline(value)).toBe(false);
+      }
+    });
+
+    test("rejects a snapshot carrying an unknown phase", () => {
+      expect(isBuildPipeline({ ...validSnapshot(), phase: "teleporting" })).toBe(false);
+    });
+
+    test("rejects a snapshot missing a required field", () => {
+      const required = [
+        "id",
+        "taskId",
+        "projectId",
+        "environmentId",
+        "environmentType",
+        "agentType",
+        "phase",
+        "sessions",
+        "currentSessionIndex",
+        "iteration",
+        "maxIterations",
+        "createdAt",
+        "taskTitle",
+        "taskSnapshot",
+        "backendRevision",
+      ] as const;
+      for (const field of required) {
+        const candidate: Record<string, unknown> = { ...validSnapshot() };
+        delete candidate[field];
+        expect(isBuildPipeline(candidate)).toBe(false);
+      }
+    });
+
+    test("rejects a snapshot with a blank id or project id", () => {
+      expect(isBuildPipeline({ ...validSnapshot(), id: "" })).toBe(false);
+      expect(isBuildPipeline({ ...validSnapshot(), projectId: "" })).toBe(false);
+    });
+
+    test("accepts a blank environment id, which is legitimate before the environment exists", () => {
+      expect(isBuildPipeline({ ...validSnapshot(), environmentId: "" })).toBe(true);
+    });
+
+    test("rejects a snapshot whose sessions are not an array", () => {
+      expect(isBuildPipeline({ ...validSnapshot(), sessions: {} })).toBe(false);
+    });
+
+    test("rejects a snapshot whose taskSnapshot is null", () => {
+      expect(isBuildPipeline({ ...validSnapshot(), taskSnapshot: null })).toBe(false);
+    });
+
+    test("accepts a snapshot with a valid current session and optional recovery metadata", () => {
+      const snapshot = {
+        ...validSnapshot(),
+        sessions: [createMockSession({ startedAt: "2026-07-23T08:00:00.000Z" })],
+        currentSessionIndex: 0,
+        iteration: 1,
+        maxIterations: 3,
+        verificationResult: "fail" as const,
+        verificationFeedback: "Retry",
+        pendingPromptAttempt: createPromptAttempt(),
+        source: {
+          type: "github" as const,
+          repositoryOwner: "acme",
+          repositoryName: "widget",
+          issueNumber: 42,
+          issueUrl: "https://github.com/acme/widget/issues/42",
+          status: "Open",
+          updatedAt: "2026-07-23T08:00:00.000Z",
+        },
+      };
+
+      expect(isBuildPipeline(snapshot)).toBe(true);
+    });
+
+    test("rejects invalid finite integer ranges and session indexes", () => {
+      const snapshot = validSnapshot();
+      for (const candidate of [
+        { ...snapshot, backendRevision: Number.NaN },
+        { ...snapshot, backendRevision: Number.POSITIVE_INFINITY },
+        { ...snapshot, backendRevision: -1 },
+        { ...snapshot, backendRevision: 1.5 },
+        { ...snapshot, iteration: -1 },
+        { ...snapshot, iteration: 1.5 },
+        { ...snapshot, maxIterations: 0 },
+        { ...snapshot, maxIterations: 1.5 },
+        { ...snapshot, iteration: 4, maxIterations: 3 },
+        { ...snapshot, currentSessionIndex: 0 },
+        {
+          ...snapshot,
+          sessions: [createMockSession()],
+          currentSessionIndex: -1,
+        },
+        {
+          ...snapshot,
+          sessions: [createMockSession()],
+          currentSessionIndex: 1,
+        },
+        {
+          ...snapshot,
+          sessions: [createMockSession({ iteration: 4 })],
+          currentSessionIndex: 0,
+          maxIterations: 3,
+        },
+      ]) {
+        expect(isBuildPipeline(candidate)).toBe(false);
+      }
+    });
+
+    test("rejects malformed nested sessions", () => {
+      const snapshot = validSnapshot();
+      const validSession = createMockSession({ startedAt: "2026-07-23T08:00:00.000Z" });
+      for (const session of [
+        null,
+        { ...validSession, phase: "unknown" },
+        { ...validSession, iteration: -1 },
+        { ...validSession, iteration: 0.5 },
+        { ...validSession, sessionKey: "" },
+        { ...validSession, sdkSessionId: "" },
+        { ...validSession, status: "pending" },
+        { ...validSession, startedAt: "not-a-date" },
+        { ...validSession, label: 42 },
+      ]) {
+        expect(isBuildPipeline({
+          ...snapshot,
+          sessions: [session],
+          currentSessionIndex: 0,
+        })).toBe(false);
+      }
+    });
+
+    test("rejects malformed task snapshots", () => {
+      const snapshot = validSnapshot();
+      const task = snapshot.taskSnapshot;
+      for (const taskSnapshot of [
+        { ...task, title: 42 },
+        { ...task, description: null },
+        { ...task, acceptanceCriteria: [] },
+        { ...task, comments: [{ body: "wrong field" }] },
+        { ...task, comments: [{ text: 42 }] },
+        { ...task, images: [{ filename: "", data: "abc" }] },
+        { ...task, images: [{ filename: "image.png", data: 42 }] },
+      ]) {
+        expect(isBuildPipeline({ ...snapshot, taskSnapshot })).toBe(false);
+      }
+    });
+
+    test("validates each source variant and its numeric and date boundaries", () => {
+      const snapshot = validSnapshot();
+      const invalidSources = [
+        { type: "kanban", taskId: "" },
+        { type: "linear", issueId: "", issueIdentifier: "ENG-1" },
+        { type: "linear", issueId: "1", issueIdentifier: "ENG-1", updatedAt: "yesterday" },
+        {
+          type: "github",
+          repositoryOwner: "acme",
+          repositoryName: "widget",
+          issueNumber: 0,
+          issueUrl: "https://github.com/acme/widget/issues/0",
+          status: "Open",
+        },
+        {
+          type: "github",
+          repositoryOwner: "acme",
+          repositoryName: "widget",
+          issueNumber: 1.5,
+          issueUrl: "https://github.com/acme/widget/issues/1",
+          status: "Open",
+        },
+        { type: "unknown" },
+      ];
+
+      for (const source of invalidSources) {
+        expect(isBuildPipeline({ ...snapshot, source })).toBe(false);
+      }
+    });
+
+    test("rejects invalid enums, dates, and prompt attempt metadata", () => {
+      const snapshot = validSnapshot();
+      for (const candidate of [
+        { ...snapshot, environmentType: "remote" },
+        { ...snapshot, agentType: "unknown" },
+        { ...snapshot, createdAt: "not-a-date" },
+        { ...snapshot, pausedFromPhase: "paused" },
+        { ...snapshot, verificationResult: "unknown" },
+        { ...snapshot, completionCommentStatus: "unknown" },
+        { ...snapshot, completionCommentPostedAt: "not-a-date" },
+        { ...snapshot, pendingPromptAttempt: { ...createPromptAttempt(), id: "" } },
+        { ...snapshot, pendingPromptAttempt: { ...createPromptAttempt(), startedAt: "invalid" } },
+        { ...snapshot, reconnectAttempt: { ...createReconnectAttempt(), startedAt: "invalid" } },
+        { ...snapshot, structuredReview: {} },
+      ]) {
+        expect(isBuildPipeline(candidate)).toBe(false);
+      }
     });
   });
 

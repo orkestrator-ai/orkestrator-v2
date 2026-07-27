@@ -401,6 +401,16 @@ function asBoolean(value: unknown, fallback = false): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+/**
+ * Boolean argument that must be supplied. Use this instead of `asBoolean` when
+ * the fallback would silently destroy state — a malformed call should fail, not
+ * be read as `false`.
+ */
+function asRequiredBoolean(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`Expected ${name} to be a boolean`);
+  return value;
+}
+
 function asNumber(value: unknown, name: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`Expected ${name} to be a number`);
   return value;
@@ -1889,7 +1899,10 @@ function persistTerminalActivity(
   }
 
   const occurredAt = new Date().toISOString();
-  void context.storage.recordEnvironmentActivity(environmentId, occurredAt)
+  const persistActivity = activityKind === "completed"
+    ? context.storage.recordEnvironmentCompletion.bind(context.storage)
+    : context.storage.recordEnvironmentActivity.bind(context.storage);
+  void persistActivity(environmentId, occurredAt)
     .then((environment) => {
       context.emit("environment-activity-recorded", {
         environment_id: environment.id,
@@ -2375,7 +2388,7 @@ async function completeEnvironmentSetup(
   return updated;
 }
 
-function failEnvironmentSetup(environmentId: string, error: unknown, context: CommandContext): void {
+async function failEnvironmentSetup(environmentId: string, error: unknown, context: CommandContext): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   const session = environmentSetupSessions.get(environmentId);
   logSetupTerminal("setup failed", {
@@ -2393,10 +2406,25 @@ function failEnvironmentSetup(environmentId: string, error: unknown, context: Co
       error: message,
     });
   }
+  // A post-setup agent launch can no longer be honoured: the workspace never
+  // became ready. Clearing the durable intent here is what stops it outliving
+  // this attempt — the renderer only clears it once an agent tab exists, so a
+  // failed setup would otherwise leave the flag set forever and auto-dispatch
+  // the original prompt whenever the environment is next started.
+  let updated: Environment | undefined;
+  try {
+    updated = await context.storage.updateEnvironment(environmentId, { pendingAgentLaunch: false });
+  } catch (clearError) {
+    console.warn(
+      `[setup] Failed to clear pending agent launch for ${environmentId}:`,
+      clearError,
+    );
+  }
   context.emit("environment-setup-complete", {
     environment_id: environmentId,
     success: false,
     error: message,
+    ...(updated ? { environment: updated } : {}),
   });
 }
 
@@ -2463,8 +2491,8 @@ async function startEnvironmentSetup(
       }
       return completeEnvironmentSetup(current, context);
     })
-    .catch((error) => {
-      failEnvironmentSetup(current.id, error, context);
+    .catch(async (error) => {
+      await failEnvironmentSetup(current.id, error, context);
       throw error;
     })
     .finally(() => {
@@ -2949,6 +2977,13 @@ async function deleteEnvironment(
     await enqueueLocalServerEnvironmentOperation(environmentId, async () => {
       const { storage } = context;
       const environment = await storage.getEnvironment(environmentId);
+      // Persist the deletion intent before any durable child-state cleanup.
+      // Queue/pipeline saves consult this marker while holding their own locks:
+      // a write that began earlier is swept by cleanup, and a later write is
+      // rejected even if cleanup pauses or fails.
+      await storage.updateEnvironment(environmentId, {
+        deletionRequestedAt: new Date().toISOString(),
+      });
       if (environment) await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
       if (environment?.containerId) {
         await runCommand(
@@ -2963,6 +2998,14 @@ async function deleteEnvironment(
       }
       await storage.removeSessionsByEnvironment(environmentId).catch(() => undefined);
       await storage.deleteLoopedReviewWorkflowsByEnvironment(environmentId);
+      // A pipeline whose environment is gone can never advance again; leaving it
+      // behind would resurrect a dead build on the next client that hydrates.
+      await storage.deleteBuildPipelinesByEnvironment(
+        environmentId,
+        environment?.buildPipelineId,
+      );
+      // Queued prompts for a deleted environment can never be dispatched.
+      await storage.deletePromptQueuesByEnvironment(environmentId);
       await storage.removeEnvironment(environmentId);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);
       cleanupEnvironmentSetupState(environmentId);
@@ -4267,9 +4310,14 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     // Discovery runs inside the environment, so its cached result stops being
     // meaningful the moment the environment does.
     extensionDiscoveryCache.invalidate(environment.id);
+    // A stopped environment cannot honour a post-setup agent launch, and the
+    // renderer cannot clear the intent for an environment it no longer mounts.
+    // Dropping it here keeps the durable flag from outliving the run it belongs
+    // to. This matches the renderer clearing its transient pending launch when
+    // the container stops.
     if (environment.containerId) {
       await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
-      await storage.updateEnvironment(environment.id, { status: "stopped" });
+      await storage.updateEnvironment(environment.id, { status: "stopped", pendingAgentLaunch: false });
       return;
     }
 
@@ -4291,7 +4339,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
         stopError = error;
       }
     }
-    await storage.updateEnvironment(environment.id, { status: "stopped" });
+    await storage.updateEnvironment(environment.id, { status: "stopped", pendingAgentLaunch: false });
     if (stopError) throw stopError;
   });
   register("recreate_environment", async ({ environmentId }, context) => {
@@ -4313,6 +4361,11 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const id = asString(environmentId, "environmentId");
     const activityAt = asString(occurredAt, "occurredAt");
     return storage.recordEnvironmentActivity(id, activityAt);
+  });
+  register("record_environment_completion", async ({ environmentId, occurredAt }, { storage }) => {
+    const id = asString(environmentId, "environmentId");
+    const activityAt = asString(occurredAt, "occurredAt");
+    return storage.recordEnvironmentCompletion(id, activityAt);
   });
   register("set_environment_setup_complete", async ({ environmentId, complete }, { storage }) => {
     const updated = await storage.updateEnvironment(asString(environmentId, "environmentId"), { setupScriptsComplete: asBoolean(complete) });
@@ -4364,8 +4417,32 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("update_port_mappings", ({ environmentId, portMappings }, { storage }) =>
     storage.updateEnvironment(asString(environmentId, "environmentId"), { portMappings: asPortMappings(portMappings) ?? [] }),
   );
-  register("update_environment_agent_settings", ({ environmentId, defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode }, { storage }) =>
-    storage.updateEnvironment(asString(environmentId, "environmentId"), { defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode }),
+  register("update_environment_agent_settings", ({ environmentId, defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode, pendingAgentLaunch }, { storage }) => {
+    const updates = {
+      defaultAgent,
+      claudeMode,
+      claudeNativeBackend,
+      opencodeMode,
+      codexMode,
+    } as Partial<Environment>;
+    if (typeof pendingAgentLaunch === "boolean") {
+      updates.pendingAgentLaunch = pendingAgentLaunch;
+    }
+    return storage.updateEnvironment(asString(environmentId, "environmentId"), updates);
+  });
+  register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) =>
+    storage.updateEnvironment(asString(environmentId, "environmentId"), {
+      pendingAgentLaunch: asRequiredBoolean(pending, "pending"),
+    }),
+  );
+  // The renderer rewrites the initial prompt once it has uploaded the create
+  // dialog's attachments and knows their in-workspace paths. Persisting that
+  // rewritten text is what lets a post-eviction launch recover a prompt whose
+  // attachment references still resolve.
+  register("set_environment_initial_prompt", ({ environmentId, initialPrompt }, { storage }) =>
+    storage.updateEnvironment(asString(environmentId, "environmentId"), {
+      initialPrompt: asString(initialPrompt, "initialPrompt"),
+    }),
   );
   register("get_environment_extensions", async ({ environmentId, refresh }, context) => {
     const id = asString(environmentId, "environmentId");
@@ -4737,6 +4814,76 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   );
   register("delete_looped_review_workflow", ({ workflowId }, { storage }) =>
     storage.deleteLoopedReviewWorkflow(asString(workflowId, "workflowId")),
+  );
+
+  register("get_build_pipeline", ({ pipelineId }, { storage }) =>
+    storage.getBuildPipeline(asString(pipelineId, "pipelineId")),
+  );
+  register("list_build_pipelines", ({ projectId }, { storage }) =>
+    storage.listBuildPipelines(asString(projectId, "projectId")),
+  );
+  register(
+    "save_build_pipeline",
+    ({ pipelineId, projectId, environmentId, version, snapshot, expectedRevision }, { storage }) =>
+      storage.saveBuildPipeline(
+        asString(pipelineId, "pipelineId"),
+        asString(projectId, "projectId"),
+        // A pipeline is stored before its environment exists, so this is the one
+        // identifier here that is legitimately blank.
+        typeof environmentId === "string" ? environmentId : "",
+        asNumber(version, "version"),
+        snapshot,
+        expectedRevision === undefined
+          ? undefined
+          : asNumber(expectedRevision, "expectedRevision"),
+      ),
+  );
+  register("delete_build_pipeline", ({ pipelineId }, { storage }) =>
+    storage.deleteBuildPipeline(asString(pipelineId, "pipelineId")),
+  );
+
+  register(
+    "set_environment_unread",
+    async ({ environmentId, unread, expectedLastActivityAt }, { storage }) =>
+      storage.setEnvironmentUnread(
+        asString(environmentId, "environmentId"),
+        asBoolean(unread),
+        expectedLastActivityAt === undefined || expectedLastActivityAt === null
+          ? expectedLastActivityAt
+          : asString(expectedLastActivityAt, "expectedLastActivityAt"),
+      ),
+  );
+
+  register("get_prompt_queue", ({ queueKey }, { storage }) =>
+    storage.getPromptQueue(asString(queueKey, "queueKey")),
+  );
+  register("list_prompt_queues", ({ environmentId }, { storage }) =>
+    storage.listPromptQueues(asString(environmentId, "environmentId")),
+  );
+  register(
+    "save_prompt_queue",
+    ({ queueKey, environmentId, messages, expectedRevision }, { storage }) =>
+      storage.savePromptQueue(
+        asString(queueKey, "queueKey"),
+        asString(environmentId, "environmentId"),
+        // Passed through unvalidated so storage rejects a malformed payload.
+        // Coercing to [] here would turn a bad request into a queue deletion
+        // that also bumps the revision every other client compares against.
+        messages as unknown[],
+        expectedRevision === undefined
+          ? undefined
+          : asNumber(expectedRevision, "expectedRevision"),
+      ),
+  );
+  register(
+    "claim_prompt_queue_head",
+    ({ queueKey, environmentId, expectedMessageId, candidateMessages }, { storage }) =>
+      storage.claimPromptQueueHead(
+        asString(queueKey, "queueKey"),
+        asString(environmentId, "environmentId"),
+        asString(expectedMessageId, "expectedMessageId"),
+        candidateMessages as unknown[],
+      ),
   );
 
   register("create_terminal_session", async ({ containerId, cols, rows, user, trackEnvironmentActivity }, { storage }) => {

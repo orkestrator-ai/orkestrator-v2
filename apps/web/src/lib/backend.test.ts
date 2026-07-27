@@ -46,6 +46,7 @@ const {
   postLinearCompletionComment,
   openInBrowser,
   recordEnvironmentActivity,
+  recordEnvironmentCompletion,
   runEnvironmentSetup,
   resetWebClientServe,
   savePaneLayout,
@@ -53,6 +54,10 @@ const {
   setGatewayToken,
   setGitHubToken,
   setEnvironmentSetupComplete,
+  setEnvironmentUnread,
+  setEnvironmentPendingAgentLaunch,
+  setEnvironmentInitialPrompt,
+  updateEnvironmentAgentSettings,
 } = backendWrappers;
 
 afterEach(() => {
@@ -72,6 +77,79 @@ describe("backend setup wrappers", () => {
 
     expect(invokeMock.mock.calls).toEqual([
       ["set_environment_setup_complete", { environmentId: "env-1", complete: true }],
+    ]);
+  });
+
+  test("persists the durable post-setup agent launch flag", async () => {
+    await setEnvironmentPendingAgentLaunch("env-1", false);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_environment_pending_agent_launch", {
+        environmentId: "env-1",
+        pending: false,
+      }],
+    ]);
+  });
+
+  test("configures an environment and its durable launch intent together", async () => {
+    await updateEnvironmentAgentSettings(
+      "env-1",
+      "codex",
+      null,
+      null,
+      null,
+      "native",
+      true,
+    );
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["update_environment_agent_settings", {
+        environmentId: "env-1",
+        defaultAgent: "codex",
+        claudeMode: null,
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: "native",
+        pendingAgentLaunch: true,
+      }],
+    ]);
+  });
+
+  test("omits the launch intent key entirely when no launch is being configured", async () => {
+    await updateEnvironmentAgentSettings("env-1", "codex", null, null, null, "native");
+
+    // Omission is load-bearing: the settings dialog and FeaturesView both call
+    // this while an environment may still be awaiting its launch, and sending
+    // `false` would clear it.
+    const [[command, args]] = invokeMock.mock.calls as [[string, Record<string, unknown>]];
+    expect(command).toBe("update_environment_agent_settings");
+    expect(args).not.toHaveProperty("pendingAgentLaunch");
+  });
+
+  test("records a cleared launch intent when one is explicitly configured off", async () => {
+    await updateEnvironmentAgentSettings("env-1", "claude", "terminal", null, null, null, false);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["update_environment_agent_settings", {
+        environmentId: "env-1",
+        defaultAgent: "claude",
+        claudeMode: "terminal",
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: null,
+        pendingAgentLaunch: false,
+      }],
+    ]);
+  });
+
+  test("persists a rewritten initial prompt so a recovered launch keeps its attachment references", async () => {
+    await setEnvironmentInitialPrompt("env-1", "Fix it [img](/work/a.png)");
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_environment_initial_prompt", {
+        environmentId: "env-1",
+        initialPrompt: "Fix it [img](/work/a.png)",
+      }],
     ]);
   });
 
@@ -184,6 +262,101 @@ describe("backend setup wrappers", () => {
 
     expect(invokeMock.mock.calls).toEqual([
       ["record_environment_activity", { environmentId: "env-1", occurredAt }],
+    ]);
+  });
+
+  test("records completed activity atomically with the supplied occurrence time", async () => {
+    const occurredAt = "2026-07-23T11:12:14.000Z";
+    await recordEnvironmentCompletion("env-1", occurredAt);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["record_environment_completion", { environmentId: "env-1", occurredAt }],
+    ]);
+  });
+
+  test("guards unread clears with the activity token observed by the client", async () => {
+    await setEnvironmentUnread("env-1", false, "2026-07-23T11:12:14.000Z");
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_environment_unread", {
+        environmentId: "env-1",
+        unread: false,
+        expectedLastActivityAt: "2026-07-23T11:12:14.000Z",
+      }],
+    ]);
+
+    invokeMock.mockClear();
+    await setEnvironmentUnread("env-legacy", false, null);
+    expect(invokeMock).toHaveBeenCalledWith("set_environment_unread", {
+      environmentId: "env-legacy",
+      unread: false,
+      expectedLastActivityAt: null,
+    });
+  });
+
+  test("forwards revisioned build-pipeline persistence payloads exactly", async () => {
+    const snapshot = { status: "running", taskIndex: 2 };
+
+    await backendWrappers.getBuildPipeline("pipeline-1");
+    await backendWrappers.listBuildPipelines("project-1");
+    await backendWrappers.saveBuildPipeline(
+      "pipeline-1",
+      "project-1",
+      "env-1",
+      3,
+      snapshot,
+      7,
+    );
+    await backendWrappers.deleteBuildPipeline("pipeline-1");
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_build_pipeline", { pipelineId: "pipeline-1" }],
+      ["list_build_pipelines", { projectId: "project-1" }],
+      ["save_build_pipeline", {
+        pipelineId: "pipeline-1",
+        projectId: "project-1",
+        environmentId: "env-1",
+        version: 3,
+        snapshot,
+        expectedRevision: 7,
+      }],
+      ["delete_build_pipeline", { pipelineId: "pipeline-1" }],
+    ]);
+  });
+
+  test("forwards prompt-queue persistence and atomic claim payloads exactly", async () => {
+    const messages = [{ id: "message-1", text: "Ship it" }];
+
+    await backendWrappers.getPromptQueue("codex\u0000env-1:tab-1");
+    await backendWrappers.listPromptQueues("env-1");
+    await backendWrappers.savePromptQueue(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      messages,
+      4,
+    );
+    await backendWrappers.claimPromptQueueHead(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      "message-1",
+      messages,
+    );
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_prompt_queue", { queueKey: "codex\u0000env-1:tab-1" }],
+      ["list_prompt_queues", { environmentId: "env-1" }],
+      ["save_prompt_queue", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        messages,
+        expectedRevision: 4,
+      }],
+      ["claim_prompt_queue_head", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        expectedMessageId: "message-1",
+        candidateMessages: messages,
+      }],
     ]);
   });
 

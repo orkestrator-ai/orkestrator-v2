@@ -383,7 +383,14 @@ describe("Electron connection manager", () => {
     const manager = new ConnectionManager({ localBackend: local.backend, secureStorage: secureStorage(), onEvent });
     await manager.initialize();
     await manager.connect({ address: "https://desk.example", token });
-    for (let attempt = 0; attempt < 20 && onEvent.mock.calls.length === 0; attempt += 1) await Promise.resolve();
+    for (
+      let attempt = 0;
+      attempt < 20 && !onEvent.mock.calls.some(([event]) => event === "remote-updated");
+      attempt += 1
+    ) {
+      await Promise.resolve();
+    }
+    expect(onEvent).toHaveBeenCalledWith("native-event-stream-connected", undefined);
     expect(onEvent).toHaveBeenCalledWith("remote-updated", { id: "env-remote" });
 
     await manager.use("local");

@@ -74,9 +74,10 @@ import {
 } from "./codex-preferences";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
+import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { CodexNativeData } from "@/types/paneLayout";
-import type { CodexAttachment } from "@/stores/codexStore";
+import type { CodexAttachment, CodexQueuedMessage } from "@/stores/codexStore";
 
 interface CodexChatTabProps {
   tabId: string;
@@ -728,6 +729,7 @@ export function CodexChatTab({
   useNativeMessageQueue({
     agentLabel: "Codex",
     sessionKey,
+    claimHead: () => claimAgentPromptQueueHead<CodexQueuedMessage>("codex", sessionKey),
     store: useCodexStore,
     canDrain: !setupPending && connectionState === "connected" && !!client,
     queueLength,

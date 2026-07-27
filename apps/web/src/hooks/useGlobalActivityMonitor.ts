@@ -180,6 +180,26 @@ function getEnvironmentTransitionIds<T>(
   return { activityEnvironmentIds, completedEnvironmentIds };
 }
 
+/**
+ * Route one batch of transitions to the persistence callbacks. An environment
+ * that both worked and completed in the same batch persists as a completion —
+ * the completion write records the activity timestamp too, and issuing both
+ * would race two backend mutations for one event.
+ */
+function persistEnvironmentTransitions(
+  transitions: ReturnType<typeof getEnvironmentTransitionIds>,
+  recordActivity: (environmentId: string) => void,
+  markCompleted: (environmentId: string) => void,
+): void {
+  for (const environmentId of transitions.activityEnvironmentIds) {
+    if (transitions.completedEnvironmentIds.has(environmentId)) {
+      markCompleted(environmentId);
+    } else {
+      recordActivity(environmentId);
+    }
+  }
+}
+
 /** Minimal session shape the shared derivation needs. */
 interface ActivitySession {
   sessionId: string;
@@ -276,8 +296,7 @@ function subscribeNativeActivity<TState extends NativeActivityState>(
         (session, key) => activityStateFor(state, key, session),
         (session, key) => activityStateFor(prevState, key, session),
       );
-      for (const envId of transitions.activityEnvironmentIds) recordActivity(envId);
-      for (const envId of transitions.completedEnvironmentIds) markCompleted(envId);
+      persistEnvironmentTransitions(transitions, recordActivity, markCompleted);
     }
 
     for (const envId of environmentIds) {
@@ -379,11 +398,12 @@ function syncClaudeTmuxActivityState(
           )
         ),
     );
-    for (const environmentId of transitions.activityEnvironmentIds) {
-      recordActivity(environmentId);
-    }
-    for (const environmentId of transitions.completedEnvironmentIds) {
-      markCompleted?.(environmentId);
+    if (markCompleted) {
+      persistEnvironmentTransitions(transitions, recordActivity, markCompleted);
+    } else {
+      for (const environmentId of transitions.activityEnvironmentIds) {
+        recordActivity(environmentId);
+      }
     }
   }
 
@@ -433,7 +453,10 @@ export function useGlobalActivityMonitor(): void {
   const activePollers = useRef(new Map<string, symbol>());
   const activeListeners = useRef(new Map<string, UnlistenFn>());
 
-  const recordActivity = useCallback((environmentId: string) => {
+  const persistActivity = useCallback((
+    environmentId: string,
+    completed: boolean,
+  ) => {
     const environmentStore = useEnvironmentStore.getState();
     const environment = environmentStore.environments.find(
       (candidate) => candidate.id === environmentId,
@@ -441,6 +464,7 @@ export function useGlobalActivityMonitor(): void {
     if (!environment) return;
 
     const previousActivityAt = environment.lastActivityAt;
+    const previousUnreadWork = environment.hasUnreadWork === true;
     const previousActivityTime = previousActivityAt
       ? Date.parse(previousActivityAt)
       : Number.NEGATIVE_INFINITY;
@@ -453,8 +477,17 @@ export function useGlobalActivityMonitor(): void {
     );
     lastIssuedActivityTime.current = occurredTime;
     const occurredAt = new Date(occurredTime).toISOString();
-    environmentStore.updateEnvironment(environment.id, { lastActivityAt: occurredAt });
-    backend.recordEnvironmentActivity(environment.id, occurredAt)
+    const shouldMarkUnread =
+      completed &&
+      useUIStore.getState().selectedEnvironmentId !== environmentId;
+    environmentStore.updateEnvironment(environment.id, {
+      lastActivityAt: occurredAt,
+      ...(shouldMarkUnread ? { hasUnreadWork: true } : {}),
+    });
+    const persist = shouldMarkUnread
+      ? backend.recordEnvironmentCompletion(environment.id, occurredAt)
+      : backend.recordEnvironmentActivity(environment.id, occurredAt);
+    persist
       .then((updatedEnvironment) => {
         const persistedAt = updatedEnvironment.lastActivityAt;
         if (!persistedAt) return;
@@ -468,7 +501,12 @@ export function useGlobalActivityMonitor(): void {
         if (Number.isFinite(persistedTime) && persistedTime >= currentTime) {
           useEnvironmentStore.getState().updateEnvironment(
             updatedEnvironment.id,
-            { lastActivityAt: persistedAt },
+            {
+              lastActivityAt: persistedAt,
+              ...(shouldMarkUnread
+                ? { hasUnreadWork: updatedEnvironment.hasUnreadWork === true }
+                : {}),
+            },
           );
         }
       })
@@ -488,7 +526,12 @@ export function useGlobalActivityMonitor(): void {
             if (latestEnvironment?.lastActivityAt === occurredAt) {
               useEnvironmentStore.getState().updateEnvironment(
                 environment.id,
-                { lastActivityAt: persistedEnvironment?.lastActivityAt },
+                {
+                  lastActivityAt: persistedEnvironment?.lastActivityAt,
+                  ...(shouldMarkUnread
+                    ? { hasUnreadWork: persistedEnvironment?.hasUnreadWork === true }
+                    : {}),
+                },
               );
             }
           } catch (snapshotError) {
@@ -498,7 +541,12 @@ export function useGlobalActivityMonitor(): void {
             if (latestEnvironment?.lastActivityAt === occurredAt) {
               useEnvironmentStore.getState().updateEnvironment(
                 environment.id,
-                { lastActivityAt: previousActivityAt },
+                {
+                  lastActivityAt: previousActivityAt,
+                  ...(shouldMarkUnread
+                    ? { hasUnreadWork: previousUnreadWork }
+                    : {}),
+                },
               );
             }
             console.warn(
@@ -508,18 +556,24 @@ export function useGlobalActivityMonitor(): void {
           }
         }
         console.warn(
-          "[GlobalActivityMonitor] Failed to persist environment activity:",
+          completed
+            ? "[GlobalActivityMonitor] Failed to persist environment completion:"
+            : "[GlobalActivityMonitor] Failed to persist environment activity:",
           error,
         );
       });
   }, []);
 
+  const recordActivity = useCallback((environmentId: string) => {
+    persistActivity(environmentId, false);
+  }, [persistActivity]);
+
   const markCompleted = useCallback((environmentId: string) => {
-    const uiStore = useUIStore.getState();
-    if (uiStore.selectedEnvironmentId !== environmentId) {
-      uiStore.markEnvironmentUnread(environmentId);
-    }
-  }, []);
+    // Completion persistence owns both the activity token and unread bit in one
+    // backend mutation. An open environment records the activity without
+    // setting a badge because that client has already seen the result.
+    persistActivity(environmentId, true);
+  }, [persistActivity]);
 
   // Persist activity independently of whichever sidebar/chat is mounted. The
   // backend timestamp is the source of truth; the optimistic store update
@@ -534,8 +588,8 @@ export function useGlobalActivityMonitor(): void {
         (candidate) => candidate.containerId === activityKey,
       );
       if (!environment) return;
-      if (isActivity) recordActivity(environment.id);
       if (isCompleted) markCompleted(environment.id);
+      else if (isActivity) recordActivity(environment.id);
     });
 
     return () => unregisterStateCallback(callbackId);
@@ -657,6 +711,7 @@ export function useGlobalActivityMonitor(): void {
       ),
     [markCompleted, recordActivity, setContainerState],
   );
+
   // ── Claude tmux mode: derive activity from hydrated tmux tab state ──
   // Tmux mode has its own backend lifecycle (`running`) and turn lifecycle
   // (`busy`). The sidebar icon should match native mode: blue while Claude is
@@ -772,10 +827,8 @@ export function useGlobalActivityMonitor(): void {
 
         useEnvironmentStore.getState().updateEnvironment(environmentId, {
           lastActivityAt: new Date(occurredTime).toISOString(),
+          ...(activityKind === "completed" ? { hasUnreadWork: true } : {}),
         });
-        if (activityKind === "completed") {
-          markCompleted(environmentId);
-        }
       },
     ).then((stop) => {
       if (disposed) stop();
@@ -791,5 +844,5 @@ export function useGlobalActivityMonitor(): void {
       disposed = true;
       unlisten?.();
     };
-  }, [markCompleted]);
+  }, []);
 }

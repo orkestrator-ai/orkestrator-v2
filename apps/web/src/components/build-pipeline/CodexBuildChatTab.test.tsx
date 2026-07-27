@@ -45,6 +45,23 @@ const mockGetCodexServerStatus = mock(async () => ({ running: true, hostPort: 99
 const mockGetLocalCodexServerStatus = mock(async () => ({ running: true, port: 9999, pid: 1234 }));
 const mockStartCodexServer = mock(async () => ({ hostPort: 9999 }));
 const mockStartLocalCodexServer = mock(async () => ({ port: 9999, pid: 1234 }));
+const mockSaveBuildPipeline = mock(async (
+  id: string,
+  projectId: string,
+  environmentId: string,
+  version: number,
+  snapshot: any,
+  expectedRevision = 0,
+) => ({
+  id,
+  projectId,
+  environmentId,
+  version,
+  snapshot,
+  revision: expectedRevision + 1,
+  updatedAt: "2026-04-15T00:00:00.000Z",
+}));
+const mockGetBuildPipeline = mock(async (_pipelineId: string): Promise<any> => null);
 
 mock.module("@/lib/codex-client", () => ({
   abortSession: mockAbortSession,
@@ -107,15 +124,20 @@ mock.module("@/lib/backend", () => ({
   detectPr: mockDetectPr,
   detectPrLocal: mockDetectPrLocal,
   getCodexServerStatus: mockGetCodexServerStatus,
+  getBuildPipeline: mockGetBuildPipeline,
   getLocalCodexServerStatus: mockGetLocalCodexServerStatus,
   getProjectNotes: mockGetProjectNotes,
   startCodexServer: mockStartCodexServer,
   startLocalCodexServer: mockStartLocalCodexServer,
+  saveBuildPipeline: mockSaveBuildPipeline,
   updateKanbanTask: mockUpdateKanbanTask,
 }));
 
-import {useCodexStore} from "@/stores/codexStore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useCodexStore } from "@/stores/codexStore";
+import {
+  BUILD_PIPELINE_VERSION,
+  useBuildPipelineStore,
+} from "@/stores/buildPipelineStore";
 import type {
   PipelineFailureContext,
   PipelineSessionPhase,
@@ -254,6 +276,7 @@ function seedPipeline(phase: "building" | "paused", sessionStatus: "running" | "
           currentSessionIndex: 0,
           iteration: 0,
           maxIterations: 3,
+          backendRevision: 0,
           createdAt: "2026-04-15T00:00:00.000Z",
           taskTitle: "Test task",
           taskSnapshot: {
@@ -287,6 +310,7 @@ function seedStartingPipeline() {
           currentSessionIndex: -1,
           iteration: 0,
           maxIterations: 3,
+          backendRevision: 0,
           createdAt: "2026-04-15T00:00:00.000Z",
           taskTitle: "Test task",
           taskSnapshot: {
@@ -330,6 +354,7 @@ function seedReviewPipeline() {
           currentSessionIndex: 0,
           iteration: 0,
           maxIterations: 3,
+          backendRevision: 0,
           createdAt: "2026-04-15T00:00:00.000Z",
           taskTitle: "Test task",
           taskSnapshot: {
@@ -386,6 +411,7 @@ function seedVerifyPipeline(
           currentSessionIndex: 0,
           iteration,
           maxIterations,
+          backendRevision: 0,
           createdAt: "2026-04-15T00:00:00.000Z",
           taskTitle: "Test task",
           taskSnapshot: {
@@ -458,6 +484,7 @@ function seedPrPipeline() {
           currentSessionIndex: 0,
           iteration: 0,
           maxIterations: 3,
+          backendRevision: 0,
           createdAt: "2026-04-15T00:00:00.000Z",
           taskTitle: "Test task",
           taskSnapshot: {
@@ -657,6 +684,25 @@ describe("CodexBuildChatTab", () => {
     mockStartCodexServer.mockResolvedValue({ hostPort: 9999 });
     mockStartLocalCodexServer.mockReset();
     mockStartLocalCodexServer.mockResolvedValue({ port: 9999, pid: 1234 });
+    mockSaveBuildPipeline.mockReset();
+    mockSaveBuildPipeline.mockImplementation(async (
+      id,
+      projectId,
+      environmentId,
+      version,
+      snapshot,
+      expectedRevision = 0,
+    ) => ({
+      id,
+      projectId,
+      environmentId,
+      version,
+      snapshot,
+      revision: expectedRevision + 1,
+      updatedAt: "2026-04-15T00:00:00.000Z",
+    }));
+    mockGetBuildPipeline.mockReset();
+    mockGetBuildPipeline.mockResolvedValue(null);
     lastVirtualizedRows = [];
 
     mockCreateSession.mockImplementation(async () => ({ sessionId: "review-session", title: "Review Session" }));
@@ -986,6 +1032,90 @@ describe("CodexBuildChatTab", () => {
     expect(useCodexStore.getState().sessions.get(createdKey!)?.messages.at(-1)?.content).toBe(
       "Failed to send build prompt",
     );
+  });
+
+  test("waits for the durable dispatch lease before sending the prompt", async () => {
+    seedStartingPipeline();
+    let resolveSave: ((value: any) => void) | undefined;
+    mockSaveBuildPipeline.mockImplementationOnce(
+      (...args) => new Promise((resolve) => {
+        const [id, projectId, environmentId, version, snapshot, expectedRevision = 0] = args;
+        resolveSave = () => resolve({
+          id,
+          projectId,
+          environmentId,
+          version,
+          snapshot,
+          revision: expectedRevision + 1,
+          updatedAt: "2026-04-15T00:00:00.000Z",
+        });
+      }),
+    );
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => expect(mockSaveBuildPipeline).toHaveBeenCalledTimes(1));
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+    const leasedSnapshot = mockSaveBuildPipeline.mock.calls[0]?.[4] as any;
+    expect(leasedSnapshot.pendingPromptAttempt).toMatchObject({
+      sessionId: "review-session",
+      phase: "building",
+    });
+
+    await act(async () => {
+      resolveSave?.(undefined);
+    });
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+  });
+
+  test("fails closed when the dispatch lease cannot be persisted", async () => {
+    seedStartingPipeline();
+    mockSaveBuildPipeline.mockRejectedValueOnce(new Error("disk is full"));
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(pipeline?.pendingPromptAttempt).toBeUndefined();
+    });
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+  });
+
+  test("does not dispatch after a revision conflict owned by another client", async () => {
+    seedStartingPipeline();
+    mockSaveBuildPipeline.mockRejectedValueOnce(
+      new Error("Build pipeline revision conflict"),
+    );
+    mockGetBuildPipeline.mockImplementationOnce(async () => {
+      const local = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)!;
+      return {
+        id: PIPELINE_ID,
+        projectId: local.projectId,
+        environmentId: local.environmentId,
+        version: BUILD_PIPELINE_VERSION,
+        revision: 7,
+        updatedAt: "2026-04-15T00:00:00.000Z",
+        snapshot: {
+          ...local,
+          pendingPromptAttempt: {
+            ...local.pendingPromptAttempt!,
+            id: "another-client-attempt",
+            requestId: "another-client-request",
+          },
+        },
+      };
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(mockGetBuildPipeline).toHaveBeenCalledWith(PIPELINE_ID);
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase,
+      ).toBe("failed");
+    });
+    expect(mockSendPrompt).not.toHaveBeenCalled();
   });
 
   test("fails the stage when an ambiguous send is proven not to have reached Codex", async () => {
@@ -2164,6 +2294,7 @@ describe("CodexBuildChatTab", () => {
             currentSessionIndex: 0,
             iteration: 0,
             maxIterations: 3,
+            backendRevision: 0,
             createdAt: "2026-04-15T00:00:00.000Z",
             taskTitle: "Test task",
             taskSnapshot: {
@@ -2983,6 +3114,7 @@ describe("CodexBuildChatTab", () => {
             currentSessionIndex: 0,
             iteration: 0,
             maxIterations: 3,
+            backendRevision: 0,
             createdAt: "2026-04-15T00:00:00.000Z",
             taskTitle: "Test task",
             taskSnapshot: {

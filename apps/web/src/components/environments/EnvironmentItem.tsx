@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useId, useRef, type ComponentType, type ReactNode } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
@@ -18,14 +18,85 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { Bell, Trash2, Play, Square, Container, Laptop, Shield, Globe, Settings2, RotateCw, Loader2, Network, Copy } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Bell, Trash2, Play, Square, Container, Laptop, Shield, Globe, Settings2, RotateCw, Loader2, Network, Copy, MoreVertical } from "lucide-react";
 import { toast } from "sonner";
 import type { Environment } from "@/types";
-import { useAgentActivityStore, useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore, useUIStore } from "@/stores";
+import { useAgentActivityStore, useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
 import { EnvironmentSettingsDialog } from "./EnvironmentSettingsDialog";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
+
+/** Below this width the row shows an explicit actions button; a right-click
+ *  context menu is not reachable on touch. Matches Tailwind's `md` breakpoint. */
+const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
+
+/**
+ * One entry in the environment action list. The same list drives both the
+ * desktop context menu and the mobile actions dropdown, so an action added
+ * here cannot be missing from one surface.
+ */
+type EnvironmentMenuItem =
+  | { key: string; separator: true }
+  | {
+      key: string;
+      separator?: undefined;
+      label: string;
+      icon: ReactNode;
+      onSelect: () => void;
+      disabled?: boolean;
+      variant?: "destructive";
+    };
+
+type MenuItemComponent = ComponentType<{
+  children?: ReactNode;
+  variant?: "default" | "destructive";
+  disabled?: boolean;
+  /** Radix only fires `onSelect` when the item is enabled; a plain `onClick`
+   *  would still run on a disabled item wherever CSS is not applied. */
+  onSelect?: () => void;
+}>;
+
+type MenuSeparatorComponent = ComponentType<Record<never, never>>;
+
+/** Renders `items` with whichever menu primitive the calling surface uses. */
+function EnvironmentMenuItems({
+  items,
+  Item,
+  Separator,
+}: {
+  items: EnvironmentMenuItem[];
+  Item: MenuItemComponent;
+  Separator: MenuSeparatorComponent;
+}) {
+  return (
+    <>
+      {items.map((item) =>
+        item.separator ? (
+          <Separator key={item.key} />
+        ) : (
+          <Item
+            key={item.key}
+            variant={item.variant}
+            disabled={item.disabled}
+            onSelect={item.onSelect}
+          >
+            {item.icon}
+            {item.label}
+          </Item>
+        )
+      )}
+    </>
+  );
+}
 
 interface EnvironmentItemProps {
   environment: Environment;
@@ -77,9 +148,8 @@ export function EnvironmentItem({
 
   // Check if this is a build pipeline environment (O(1) Set lookup, stable reference)
   const isBuildEnvironment = useBuildPipelineStore((s) => s.buildEnvironmentIds.has(environment.id));
-  const hasUnreadActivity = useUIStore((s) =>
-    s.unreadEnvironmentIds.includes(environment.id)
-  );
+  // Backend-owned, so the badge agrees across every connected client.
+  const hasUnreadActivity = environment.hasUnreadWork === true;
 
   const isLocalEnvironment = environment.environmentType === "local";
   // Local environments are always considered "running" - they exist or they don't
@@ -91,10 +161,10 @@ export function EnvironmentItem({
 
   // Clear local transitioning state when environment status changes to non-transitioning
   useEffect(() => {
-    if (!isCreating && !isStopping && isLocalTransitioning) {
+    if (!isCreating && !isStopping) {
       setIsLocalTransitioning(false);
     }
-  }, [environment.status, isCreating, isStopping, isLocalTransitioning]);
+  }, [environment.status, isCreating, isStopping]);
 
   const confirmDelete = () => {
     onDelete(environment.id);
@@ -168,94 +238,198 @@ export function EnvironmentItem({
   const createdDate = new Date(environment.createdAt).toLocaleDateString();
   const tooltipAnchorRef = useRef<HTMLDivElement>(null);
   const tooltip = useHoverTooltip();
+  // Touch devices have no right-click, so the actions live behind an explicit
+  // button there. Gating on the query (rather than a `md:hidden` class) keeps
+  // the trigger out of the accessibility tree and the DOM on desktop.
+  const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
+  const environmentNameId = useId();
+  const menuItems: EnvironmentMenuItem[] = [
+    {
+      key: "settings",
+      label: "Settings",
+      icon: <Settings2 className="h-4 w-4 mr-2" />,
+      onSelect: () => setShowSettingsDialog(true),
+    },
+    ...(localAddress
+      ? [{
+          key: "copy-address",
+          label: "Copy Address",
+          icon: <Copy className="h-4 w-4 mr-2" />,
+          onSelect: copyAddress,
+        }]
+      : []),
+    ...(initialPrompt
+      ? [{
+          key: "copy-initial-prompt",
+          label: "Copy Initial Prompt",
+          icon: <Copy className="h-4 w-4 mr-2" />,
+          onSelect: copyInitialPrompt,
+        }]
+      : []),
+    // Start/Stop/Restart only apply to containerized environments.
+    ...(!isLocalEnvironment
+      ? ([
+          { key: "container-actions", separator: true },
+          {
+            key: "power",
+            label: isRunning ? "Stop" : "Start",
+            icon: isRunning
+              ? <Square className="h-4 w-4 mr-2" />
+              : <Play className="h-4 w-4 mr-2" />,
+            onSelect: () => isRunning ? onStop(environment.id) : onStart(environment.id),
+            disabled: isTransitioning,
+          },
+          {
+            key: "restart",
+            label: "Restart",
+            icon: <RotateCw className="h-4 w-4 mr-2" />,
+            onSelect: () => onRestart(environment.id),
+            disabled: !isRunning || isTransitioning,
+          },
+        ] satisfies EnvironmentMenuItem[])
+      : []),
+    { key: "delete-separator", separator: true },
+    {
+      key: "delete",
+      label: "Delete",
+      icon: <Trash2 className="h-4 w-4 mr-2" />,
+      onSelect: () => setShowDeleteDialog(true),
+      variant: "destructive",
+    },
+  ];
 
   return (
     <>
       <ContextMenu>
         <ContextMenuTrigger className="contents">
+          {/* Row container. Deliberately NOT the button: the checkbox and the
+              actions trigger are siblings of the selectable region, because
+              ARIA treats the children of `role="button"` as presentational and
+              would hide any control nested inside it from assistive tech. */}
           <div
             ref={tooltipAnchorRef}
-            role="button"
-            tabIndex={0}
-            onClick={handleClick}
-            onKeyDown={handleKeyDown}
-            onMouseEnter={tooltip.show}
-            onMouseLeave={tooltip.hide}
-            onFocus={tooltip.show}
-            onBlur={tooltip.hide}
             className={cn(
-              "group flex w-full cursor-pointer items-center gap-2 py-1.5 pr-2 text-left text-[13px] transition-colors",
+              "group flex w-full items-center gap-2 py-1.5 pr-2 text-[13px] transition-colors",
+              // Stops a long-press from starting a text selection on touch.
+              isMobile && "select-none",
               subtitle && "py-2",
-              isSelected && !isMultiSelectMode
-                ? "text-foreground"
-                : "text-muted-foreground hover:text-foreground",
               isChecked && isMultiSelectMode && "bg-zinc-800/50",
               (isStopping || isEnvironmentDeleting) && "opacity-60"
             )}
           >
-            {isEnvironmentDeleting ? (
-              // Show red spinner when deleting (priority over multi-select checkbox)
-              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-destructive" />
-            ) : isMultiSelectMode ? (
+            {/* A deleting environment shows its spinner instead of a checkbox:
+                there is nothing useful left to select. */}
+            {isMultiSelectMode && !isEnvironmentDeleting && (
               <Checkbox
                 checked={isChecked}
                 onCheckedChange={handleCheckboxChange}
-                onClick={(e) => e.stopPropagation()}
                 className="h-4 w-4 shrink-0"
               />
-            ) : isTransitioning ? (
-              // Show spinner when creating/stopping
-              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
-            ) : (
-              // Show Laptop for local environments, Container for containerized
-              environment.environmentType === "local" ? (
-                <Laptop className={cn(
-                  "h-4 w-4 shrink-0 transition-colors",
-                  !isRunning && "text-muted-foreground",
-                  isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
-                  isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
-                  isRunning && agentActivityState === "idle" && "text-green-500"
-                )} />
-              ) : (
-                <Container className={cn(
-                  "h-4 w-4 shrink-0 transition-colors",
-                  !isRunning && "text-muted-foreground",
-                  isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
-                  isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
-                  isRunning && agentActivityState === "idle" && "text-green-500"
-                )} />
-              )
             )}
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="flex min-w-0 items-center gap-1.5">
-                <span className={cn("truncate font-medium leading-4", isBuildEnvironment && "text-yellow-400")}>
-                  {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : environment.name}
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={handleClick}
+              onKeyDown={handleKeyDown}
+              onMouseEnter={tooltip.show}
+              onMouseLeave={tooltip.hide}
+              onFocus={tooltip.show}
+              onBlur={tooltip.hide}
+              className={cn(
+                "flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left transition-colors",
+                isSelected && !isMultiSelectMode
+                  ? "text-foreground"
+                  : "text-muted-foreground group-hover:text-foreground"
+              )}
+            >
+              {isEnvironmentDeleting ? (
+                // Show red spinner when deleting (priority over multi-select checkbox)
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-destructive" />
+              ) : isMultiSelectMode ? null : isTransitioning ? (
+                // Show spinner when creating/stopping
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
+              ) : (
+                // Show Laptop for local environments, Container for containerized
+                environment.environmentType === "local" ? (
+                  <Laptop className={cn(
+                    "h-4 w-4 shrink-0 transition-colors",
+                    !isRunning && "text-muted-foreground",
+                    isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
+                    isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
+                    isRunning && agentActivityState === "idle" && "text-green-500"
+                  )} />
+                ) : (
+                  <Container className={cn(
+                    "h-4 w-4 shrink-0 transition-colors",
+                    !isRunning && "text-muted-foreground",
+                    isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
+                    isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
+                    isRunning && agentActivityState === "idle" && "text-green-500"
+                  )} />
+                )
+              )}
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span
+                    id={environmentNameId}
+                    className={cn("truncate font-medium leading-4", isBuildEnvironment && "text-yellow-400")}
+                  >
+                    {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : environment.name}
+                  </span>
+                  {hasUnreadActivity && (
+                    <Bell
+                      className="h-3 w-3 shrink-0 fill-amber-400/20 text-amber-400"
+                      aria-label="New completed activity"
+                    />
+                  )}
                 </span>
-                {hasUnreadActivity && (
-                  <Bell
-                    className="h-3 w-3 shrink-0 fill-amber-400/20 text-amber-400"
-                    aria-label="New completed activity"
-                  />
+                {subtitle && (
+                  <span className="truncate text-[11px] font-normal leading-4 text-zinc-500">
+                    {subtitle}
+                  </span>
                 )}
               </span>
-              {subtitle && (
-                <span className="truncate text-[11px] font-normal leading-4 text-zinc-500">
-                  {subtitle}
+              {diffStats && (diffStats.additions > 0 || diffStats.deletions > 0 || diffStats.filesChanged > 0) && (
+                <span className="ml-1 flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">
+                  {diffStats.additions > 0 && (
+                    <span className="text-green-500">+{diffStats.additions}</span>
+                  )}
+                  {diffStats.deletions > 0 && (
+                    <span className="text-red-400">-{diffStats.deletions}</span>
+                  )}
+                  {diffStats.additions === 0 && diffStats.deletions === 0 && diffStats.filesChanged > 0 && (
+                    <span className="text-muted-foreground">{diffStats.filesChanged}F</span>
+                  )}
                 </span>
               )}
-            </span>
-            {diffStats && (diffStats.additions > 0 || diffStats.deletions > 0 || diffStats.filesChanged > 0) && (
-              <span className="ml-1 flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">
-                {diffStats.additions > 0 && (
-                  <span className="text-green-500">+{diffStats.additions}</span>
-                )}
-                {diffStats.deletions > 0 && (
-                  <span className="text-red-400">-{diffStats.deletions}</span>
-                )}
-                {diffStats.additions === 0 && diffStats.deletions === 0 && diffStats.filesChanged > 0 && (
-                  <span className="text-muted-foreground">{diffStats.filesChanged}F</span>
-                )}
-              </span>
+            </div>
+            {isMobile && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="-my-1 -mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-zinc-700/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    // The label stays generic and the row name is attached as a
+                    // description: folding the name into the label would make
+                    // every "<name>" role+name query in the app ambiguous.
+                    aria-label="Environment actions"
+                    aria-describedby={environmentNameId}
+                    // Radix's ContextMenu opens on a touch long-press anywhere
+                    // inside its trigger, which includes this button. Without
+                    // this the long-press timer races the dropdown open.
+                    onPointerDown={(event) => event.stopPropagation()}
+                  >
+                    <MoreVertical className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <EnvironmentMenuItems
+                    items={menuItems}
+                    Item={DropdownMenuItem}
+                    Separator={DropdownMenuSeparator}
+                  />
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
           </div>
         </ContextMenuTrigger>
@@ -325,50 +499,11 @@ export function EnvironmentItem({
             </div>
         </HoverTooltipContent>
         <ContextMenuContent>
-          <ContextMenuItem onClick={() => setShowSettingsDialog(true)}>
-            <Settings2 className="h-4 w-4 mr-2" />
-            Settings
-          </ContextMenuItem>
-          {localAddress && (
-            <ContextMenuItem onClick={copyAddress}>
-              <Copy className="h-4 w-4 mr-2" />
-              Copy Address
-            </ContextMenuItem>
-          )}
-          {initialPrompt && (
-            <ContextMenuItem onClick={copyInitialPrompt}>
-              <Copy className="h-4 w-4 mr-2" />
-              Copy Initial Prompt
-            </ContextMenuItem>
-          )}
-          {/* Start/Stop/Restart only applicable for containerized environments */}
-          {!isLocalEnvironment && (
-            <>
-              <ContextMenuSeparator />
-              <ContextMenuItem onClick={() => isRunning ? onStop(environment.id) : onStart(environment.id)} disabled={isTransitioning}>
-                {isRunning ? (
-                  <>
-                    <Square className="h-4 w-4 mr-2" />
-                    Stop
-                  </>
-                ) : (
-                  <>
-                    <Play className="h-4 w-4 mr-2" />
-                    Start
-                  </>
-                )}
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => onRestart(environment.id)} disabled={!isRunning || isTransitioning}>
-                <RotateCw className="h-4 w-4 mr-2" />
-                Restart
-              </ContextMenuItem>
-            </>
-          )}
-          <ContextMenuSeparator />
-          <ContextMenuItem variant="destructive" onClick={() => setShowDeleteDialog(true)}>
-            <Trash2 className="h-4 w-4 mr-2" />
-            Delete
-          </ContextMenuItem>
+          <EnvironmentMenuItems
+            items={menuItems}
+            Item={ContextMenuItem}
+            Separator={ContextMenuSeparator}
+          />
         </ContextMenuContent>
       </ContextMenu>
 

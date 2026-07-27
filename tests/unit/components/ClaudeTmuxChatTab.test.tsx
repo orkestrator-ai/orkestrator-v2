@@ -31,6 +31,7 @@ import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
 import * as realReactVirtuoso from "react-virtuoso";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { mockReadImage } from "../../mocks/clipboard";
+import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import type { Environment, FileCandidate } from "@/types";
 
 const realTmuxClientSnapshot = { ...realTmuxClient };
@@ -175,6 +176,21 @@ mock.module("@/components/claude/ClaudeTmuxInteractiveTerminal", () => ({
 }));
 
 mock.module("@/lib/backend", () => ({
+  claimPromptQueueHead: mock(async (
+    queueKey: string,
+    environmentId: string,
+    _expectedMessageId: string,
+    candidateMessages: Array<{ id: string }>,
+  ) => ({
+    claimed: candidateMessages[0] ?? null,
+    queue: {
+      queueKey,
+      environmentId,
+      messages: candidateMessages.slice(1),
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    },
+  })),
   getFileTree: getFileTreeMock,
   getLocalFileTree: getLocalFileTreeMock,
   writeContainerFile: writeContainerFileMock,
@@ -358,6 +374,7 @@ describe("ClaudeTmuxChatTab", () => {
     mock.module("@/components/claude/ClaudeTmuxInteractiveTerminal", () => realInteractiveTerminalSnapshot);
     mock.module("@/components/chat/FileMentionMenu", () => realFileMentionMenuSnapshot);
     mock.module("react-virtuoso", () => realReactVirtuosoSnapshot);
+    restoreMatchMedia();
     HTMLCanvasElement.prototype.getContext = originalGetContext;
     HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
     delete (document as { activeElement?: Element }).activeElement;
@@ -371,6 +388,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   beforeEach(() => {
+    setMobileViewport(false);
     cleanup();
     getFileTreeMock.mockReset();
     getFileTreeMock.mockResolvedValue([]);
@@ -2339,6 +2357,42 @@ Running 1 Explore agent...
     expect(tab.pendingPlans).toEqual([]);
     expect(tab.pendingPermissions).toEqual([]);
     expect(tab.pendingElicitations).toEqual([]);
+  });
+
+  test("autofocuses the compose input on desktop but not on mobile", () => {
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    const desktop = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(document.activeElement).toBe(
+      screen.getByPlaceholderText(/Ask Claude anything/),
+    );
+
+    desktop.unmount();
+    setMobileViewport(true);
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(document.activeElement).not.toBe(
+      screen.getByPlaceholderText(/Ask Claude anything/),
+    );
   });
 
   test("typing / opens the built-in slash command menu and selecting one fills the input", async () => {

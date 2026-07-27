@@ -15,6 +15,7 @@ import { spawnSync } from "node:child_process";
 
 const repoRoot = path.resolve(import.meta.dir, "../..");
 const temporaryDirectories: string[] = [];
+const DOWNLOADER_TEST_TIMEOUT_MS = 15_000;
 
 interface ScriptFixture {
   binariesDirectory: string;
@@ -262,7 +263,7 @@ for (const downloader of downloaders) {
 
         const codesignCalls = log.match(/^codesign /gm) ?? [];
         expect(codesignCalls).toHaveLength(platform.os === "Darwin" ? 2 : 0);
-      });
+      }, DOWNLOADER_TEST_TIMEOUT_MS);
     }
 
     for (const [label, architecture, os, expectedMessage] of [
@@ -277,7 +278,7 @@ for (const downloader of downloaders) {
         expect(result.stdout).toContain(expectedMessage);
         expect(commandLog(fixture)).not.toContain("curl ");
         expect(existsSync(fixture.binariesDirectory)).toBe(false);
-      });
+      }, DOWNLOADER_TEST_TIMEOUT_MS);
     }
 
     for (const [stage, expectedStatus] of [
@@ -299,7 +300,7 @@ for (const downloader of downloaders) {
         expect(result.status).toBe(expectedStatus);
         expect(existsSync(fixture.temporaryDirectory)).toBe(false);
         expect(commandLog(fixture)).toContain(`rm -rf ${fixture.temporaryDirectory}`);
-      });
+      }, DOWNLOADER_TEST_TIMEOUT_MS);
     }
 
     test("propagates macOS signing failure and removes temporary files", () => {
@@ -313,7 +314,7 @@ for (const downloader of downloaders) {
       expect(result.status).toBe(32);
       expect(commandLog(fixture)).not.toContain(`probe ${downloader.binaryName}`);
       expect(existsSync(fixture.temporaryDirectory)).toBe(false);
-    });
+    }, DOWNLOADER_TEST_TIMEOUT_MS);
 
     test("continues when removing an existing macOS signature fails", () => {
       const fixture = createFixture(downloader.scriptName);
@@ -325,6 +326,6 @@ for (const downloader of downloaders) {
 
       expect(result.status).toBe(0);
       expect(commandLog(fixture)).toContain(`probe ${downloader.binaryName} --version`);
-    });
+    }, DOWNLOADER_TEST_TIMEOUT_MS);
   });
 }

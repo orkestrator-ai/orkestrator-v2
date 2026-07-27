@@ -33,6 +33,7 @@ import { useFileMentions } from "@/hooks/useFileMentions";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
 import { useSlashCommandMenu } from "@/hooks/useSlashCommandMenu";
 import { useNativeComposeSubmit } from "@/hooks/useNativeComposeSubmit";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { FileMention, FileCandidate } from "@/types";
 
 const EFFORT_LABELS: Record<ClaudeEffortLevel, string> = {
@@ -89,6 +90,10 @@ export function ClaudeComposeBar({
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
+  const isMobile = useMediaQuery("(max-width: 767px)");
+  // Sampled once so a later resize across the breakpoint cannot re-run the
+  // mount focus effect and steal focus from whatever the user is doing.
+  const autoFocusOnMountRef = useRef(!isMobile);
 
   // Create sessionKey for store lookups (format: "env-{environmentId}:{tabId}")
   const sessionKey = createSessionKey(environmentId, tabId);
@@ -311,9 +316,12 @@ export function ClaudeComposeBar({
     [addAttachment, containerId, disabled, isSending, sessionKey, worktreePath],
   );
 
-  // Focus input on mount
+  // Focus input on mount, except on mobile where it would raise the on-screen
+  // keyboard over the transcript before the user has asked to type.
   useEffect(() => {
-    inputRef.current?.focus();
+    if (autoFocusOnMountRef.current) {
+      inputRef.current?.focus();
+    }
   }, []);
 
   const focusInput = useCallback(() => inputRef.current?.focus(), []);

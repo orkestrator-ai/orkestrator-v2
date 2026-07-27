@@ -186,3 +186,19 @@ describe("Codex max concurrent thread config storage", () => {
     });
   });
 });
+
+describe("session buffer deletion", () => {
+  test("removes an existing buffer and is idempotent when it is already absent", async () => {
+    await withTemporaryStorage(async (storage) => {
+      await storage.saveSessionBuffer("session-delete", "sensitive terminal output");
+      expect(await storage.loadSessionBuffer("session-delete")).toBe(
+        "sensitive terminal output",
+      );
+
+      await storage.deleteSessionBuffer("session-delete");
+      await storage.deleteSessionBuffer("session-delete");
+
+      expect(await storage.loadSessionBuffer("session-delete")).toBeNull();
+    });
+  });
+});

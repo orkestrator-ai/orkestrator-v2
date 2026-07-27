@@ -20,7 +20,7 @@ import {
   COMPOSE_MIN_INPUT_HEIGHT,
 } from "@/components/chat/compose-metrics";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useFileMentions, useFileSearch, useNativeComposeBarPaste } from "@/hooks";
+import { useFileMentions, useFileSearch, useMediaQuery, useNativeComposeBarPaste } from "@/hooks";
 import { toast } from "sonner";
 import { useSlashCommandMenu } from "@/hooks/useSlashCommandMenu";
 import { useNativeComposeSubmit } from "@/hooks/useNativeComposeSubmit";
@@ -110,6 +110,10 @@ export function CodexComposeBar({
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const prevFileMentionMenuOpen = useRef(false);
+  const isMobile = useMediaQuery("(max-width: 767px)");
+  // Sampled once so a later resize across the breakpoint cannot re-run the
+  // mount focus effect and steal focus from whatever the user is doing.
+  const autoFocusOnMountRef = useRef(!isMobile);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const text = useCodexStore((state) => state.draftText.get(sessionKey) ?? "");
   const mentions = useCodexStore(
@@ -151,8 +155,12 @@ export function CodexComposeBar({
     createMention,
   } = useFileMentions({ searchFiles });
 
+  // Focus input on mount, except on mobile where it would raise the on-screen
+  // keyboard over the transcript before the user has asked to type.
   useEffect(() => {
-    inputRef.current?.focus();
+    if (autoFocusOnMountRef.current) {
+      inputRef.current?.focus();
+    }
   }, []);
 
   useEffect(() => {

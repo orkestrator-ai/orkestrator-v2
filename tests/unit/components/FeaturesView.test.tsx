@@ -210,6 +210,28 @@ async function waitForConversationToSettle(featureId = "feature-1"): Promise<voi
   ).toBe(false));
 }
 
+/**
+ * Transcript reads recorded for one session id.
+ *
+ * `getSessionMessagesMock` is module level and live feature sends deliberately
+ * survive unmounts (see AGENTS.md), so a bare `not.toHaveBeenCalled()` also sees
+ * work leaked from earlier tests and fails at random under `--parallel`. Seeding
+ * a unique `codexSessionId` and filtering on it keeps the "this conversation was
+ * never hydrated" assertion exact without that coupling.
+ */
+function messageReadsFor(sessionId: string): unknown[][] {
+  return getSessionMessagesMock.mock.calls.filter(
+    (call) => (call as unknown as unknown[])[1] === sessionId,
+  );
+}
+
+/** Status reads recorded for one session id. See {@link messageReadsFor}. */
+function statusReadsFor(sessionId: string): unknown[][] {
+  return getSessionStatusMock.mock.calls.filter(
+    (call) => (call as unknown as unknown[])[1] === sessionId,
+  );
+}
+
 async function waitForConversationPhase(
   phase: ActiveFeatureConversation["phase"],
   featureId = "feature-1",
@@ -1082,7 +1104,9 @@ describe("FeaturesView lifecycle and navigation", () => {
   });
 
   test("does not reconcile answered conversations or malformed timestamps", async () => {
+    const answeredSessionId = "session-answered-or-malformed";
     seedStores(chatFeature({
+      codexSessionId: answeredSessionId,
       messages: [{
         id: "answered",
         role: "assistant",
@@ -1096,7 +1120,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     render(<FeaturesView projectId="project-1" />);
     await flushReconcileStart();
 
-    expect(getSessionStatusMock).not.toHaveBeenCalled();
+    expect(statusReadsFor(answeredSessionId)).toHaveLength(0);
     expect(useFeaturePlanStore.getState().activeConversations.size).toBe(0);
   });
 
@@ -1271,37 +1295,69 @@ describe("FeaturesView lifecycle and navigation", () => {
 
   test("bounds status retries and requires an explicit stop before unlocking", async () => {
     const realSetTimeout = globalThis.setTimeout;
+    // The reconcile poll and its failure backoff are the only timers this view
+    // schedules at or above POLL_INTERVAL_MS (every other one is 0ms), so
+    // collapsing that whole band both keeps the test fast and records the backoff
+    // schedule. Recording rather than hardcoding the delays means a changed
+    // schedule fails on the assertion below instead of silently timing out.
+    const scheduledBackoffs: number[] = [];
     const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
       callback: TimerHandler,
       delay?: number,
       ...args: unknown[]
     ) => {
-      if (
-        typeof callback === "function"
-        && (delay === 1_500 || delay === 3_000 || delay === 6_000)
-      ) {
+      if (typeof callback === "function" && typeof delay === "number" && delay >= 1_500) {
+        scheduledBackoffs.push(delay);
         return realSetTimeout(callback, 0, ...args);
       }
       return realSetTimeout(callback, delay, ...args);
     }) as typeof setTimeout);
-    seedStores(chatFeature({ messages: [pendingUser()] }));
-    seedExistingCodexEnvironment();
+    // Every identifier this test asserts on is unique to it. The spies are module
+    // level and live feature sends deliberately survive unmounts, so a raw call
+    // count would also see work leaked from earlier tests; filtering by these
+    // identifiers keeps the assertions exact without reintroducing that coupling.
+    const boundedSessionId = "session-bounded-status-retries";
+    const boundedContainerId = "container-bounded-status-retries";
+    const boundedBaseUrl = "http://127.0.0.1:4321";
+    seedStores(chatFeature({
+      codexSessionId: boundedSessionId,
+      messages: [pendingUser()],
+    }));
+    seedExistingCodexEnvironment(makeEnvironment({ containerId: boundedContainerId }));
+    getCodexServerStatusMock.mockImplementation(async () => ({ running: true, hostPort: 4321 }));
     getSessionStatusMock.mockImplementation(async () => {
       throw new Error("bridge unavailable");
     });
 
+    let recoveryAlert: HTMLElement | null = null;
     try {
       render(<FeaturesView projectId="project-1" />);
-      await act(async () => {
-        await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
-      });
+      const deadline = Date.now() + 3_000;
+      while (!recoveryAlert && Date.now() < deadline) {
+        await act(async () => {
+          await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
+        });
+        recoveryAlert = screen.queryByRole("alert");
+      }
     } finally {
       timeoutSpy.mockRestore();
     }
-    expect((await screen.findByRole("alert")).textContent).toContain("Codex status is unavailable");
-    expect(getSessionStatusMock).toHaveBeenCalledTimes(4);
-    expect(createClientMock).toHaveBeenCalledTimes(4);
-    expect(getCodexServerStatusMock).toHaveBeenCalledTimes(4);
+    expect(recoveryAlert).not.toBeNull();
+    expect(recoveryAlert?.textContent).toContain("Codex status is unavailable");
+    expect(
+      getSessionStatusMock.mock.calls.filter(([, sessionId]) => sessionId === boundedSessionId),
+    ).toHaveLength(4);
+    // Each failure evicts the cached client, so a failed bridge is re-resolved
+    // rather than reused. Without these the eviction can be deleted silently.
+    expect(
+      getCodexServerStatusMock.mock.calls.filter(([containerId]) => containerId === boundedContainerId),
+    ).toHaveLength(4);
+    expect(
+      createClientMock.mock.calls.filter(([baseUrl]) => baseUrl === boundedBaseUrl),
+    ).toHaveLength(4);
+    // Doubling backoff, one gap per retry, all under the 12s clamp: the fourth
+    // failure gives up instead of sleeping again.
+    expect(scheduledBackoffs).toEqual([1_500, 3_000, 6_000]);
     expect(sendPromptMock).not.toHaveBeenCalled();
     expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
 
@@ -1506,6 +1562,9 @@ describe("FeaturesView lifecycle and navigation", () => {
           featureId: "feature-1",
           phase: "unavailable",
         });
+        // Safe as an absolute count: both spies are cleared inside this loop
+        // iteration, immediately before the render above, so nothing an earlier
+        // test leaked can reach these assertions.
         expect(getSessionStatusMock).not.toHaveBeenCalled();
         expect(createClientMock).not.toHaveBeenCalled();
       }
@@ -1584,18 +1643,26 @@ describe("FeaturesView lifecycle and navigation", () => {
     getSessionStatusMock.mockClear();
     getSessionStatusMock.mockImplementation(async () => secondStatus.promise);
     getSessionMessagesMock.mockClear();
-    seedStores(chatFeature({ messages: [pendingUser()] }));
+    const unmountedSessionId = "session-unmounted-during-status";
+    seedStores(chatFeature({
+      codexSessionId: unmountedSessionId,
+      messages: [pendingUser()],
+    }));
     seedExistingCodexEnvironment();
     const unmounted = render(<FeaturesView projectId="project-1" />);
     await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalled());
     unmounted.unmount();
     await act(async () => secondStatus.resolve({ status: "idle" }));
-    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+    expect(messageReadsFor(unmountedSessionId)).toHaveLength(0);
   });
 
   test("settles without hydrating when the pending turn is answered during a status read", async () => {
+    const answeredDuringReadSessionId = "session-answered-during-read";
     const status = deferred<{ status: "idle" }>();
-    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedStores(chatFeature({
+      codexSessionId: answeredDuringReadSessionId,
+      messages: [pendingUser()],
+    }));
     seedExistingCodexEnvironment();
     getSessionStatusMock.mockImplementation(async () => status.promise);
 
@@ -1620,7 +1687,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     await waitFor(() => expect(
       useFeaturePlanStore.getState().activeConversations.has("feature-1"),
     ).toBe(false));
-    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+    expect(messageReadsFor(answeredDuringReadSessionId)).toHaveLength(0);
     expect(appendMessageMock).not.toHaveBeenCalled();
   });
 
@@ -1653,7 +1720,11 @@ describe("FeaturesView lifecycle and navigation", () => {
   });
 
   test("settles a recovery retry when the pending turn was already answered", async () => {
-    seedStores(chatFeature({ messages: [pendingUser()] }));
+    const answeredTurnSessionId = "session-answered-turn";
+    seedStores(chatFeature({
+      codexSessionId: answeredTurnSessionId,
+      messages: [pendingUser()],
+    }));
     seedExistingCodexEnvironment();
     useFeaturePlanStore.getState().startConversation({
       operationId: "unavailable-turn",
@@ -1684,8 +1755,8 @@ describe("FeaturesView lifecycle and navigation", () => {
     await waitFor(() => expect(
       useFeaturePlanStore.getState().activeConversations.has("feature-1"),
     ).toBe(false));
-    expect(getSessionStatusMock).not.toHaveBeenCalled();
-    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+    expect(statusReadsFor(answeredTurnSessionId)).toHaveLength(0);
+    expect(messageReadsFor(answeredTurnSessionId)).toHaveLength(0);
   });
 
   test("reapplies valid feature and story state from already-persisted local replies", async () => {
@@ -1988,7 +2059,8 @@ describe("FeaturesView lifecycle and navigation", () => {
   });
 
   test("settles an explicit retry whose persisted target no longer exists", async () => {
-    seedStores(chatFeature({ messages: [] }));
+    const missingTargetSessionId = "session-missing-target";
+    seedStores(chatFeature({ codexSessionId: missingTargetSessionId, messages: [] }));
     seedExistingCodexEnvironment();
     useFeaturePlanStore.getState().startConversation({
       operationId: "missing-target",
@@ -2003,13 +2075,17 @@ describe("FeaturesView lifecycle and navigation", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
 
     await waitForConversationToSettle();
-    expect(getSessionStatusMock).not.toHaveBeenCalled();
-    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+    expect(statusReadsFor(missingTargetSessionId)).toHaveLength(0);
+    expect(messageReadsFor(missingTargetSessionId)).toHaveLength(0);
   });
 
   test("settles safely when the feature or target disappears during a status read", async () => {
+    const removedFeatureSessionId = "session-removed-feature";
     const removedFeatureStatus = deferred<{ status: "idle" }>();
-    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedStores(chatFeature({
+      codexSessionId: removedFeatureSessionId,
+      messages: [pendingUser()],
+    }));
     seedExistingCodexEnvironment();
     getSessionStatusMock.mockImplementation(async () => removedFeatureStatus.promise);
     render(<FeaturesView projectId="project-1" />);
@@ -2018,12 +2094,16 @@ describe("FeaturesView lifecycle and navigation", () => {
     act(() => useFeaturePlanStore.setState({ features: [] }));
     await act(async () => removedFeatureStatus.resolve({ status: "idle" }));
     await waitForConversationToSettle();
-    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+    expect(messageReadsFor(removedFeatureSessionId)).toHaveLength(0);
 
     cleanup();
     getSessionStatusMock.mockClear();
+    const removedTargetSessionId = "session-removed-target";
     const removedTargetStatus = deferred<{ status: "idle" }>();
-    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedStores(chatFeature({
+      codexSessionId: removedTargetSessionId,
+      messages: [pendingUser()],
+    }));
     seedExistingCodexEnvironment();
     getSessionStatusMock.mockImplementation(async () => removedTargetStatus.promise);
     render(<FeaturesView projectId="project-1" />);
@@ -2032,12 +2112,16 @@ describe("FeaturesView lifecycle and navigation", () => {
     act(() => updateFeatureInStore("feature-1", { messages: [] }));
     await act(async () => removedTargetStatus.resolve({ status: "idle" }));
     await waitForConversationToSettle();
-    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+    expect(messageReadsFor(removedTargetSessionId)).toHaveLength(0);
   });
 
   test("does not clear an unavailable recovery state when stale status returns running", async () => {
+    const staleSessionId = "session-stale-running-guard";
     const status = deferred<{ status: "running" }>();
-    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedStores(chatFeature({
+      codexSessionId: staleSessionId,
+      messages: [pendingUser()],
+    }));
     seedExistingCodexEnvironment();
     getSessionStatusMock.mockImplementation(async () => status.promise);
     render(<FeaturesView projectId="project-1" />);
@@ -2067,7 +2151,7 @@ describe("FeaturesView lifecycle and navigation", () => {
       phase: "unavailable",
       error: "Keep this recovery visible.",
     });
-    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+    expect(messageReadsFor(staleSessionId)).toHaveLength(0);
   });
 
   test("settles successful reconciliation persistence even after the view unmounts", async () => {
@@ -3279,8 +3363,12 @@ describe("FeaturesView feature planning chat", () => {
     seedStores(chatFeature({ codexEnvironmentId: undefined, codexSessionId: undefined }));
     render(<FeaturesView projectId="project-1" />);
 
+    // This feature has no session id, so there is nothing to filter the shared spy
+    // on. Compare against a snapshot taken immediately before the click instead of
+    // asserting an absolute zero, which leaked work from an earlier test can break.
+    const readsBeforeRefresh = getSessionMessagesMock.mock.calls.length;
     fireEvent.click(screen.getByTitle("Refresh Codex status"));
-    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+    expect(getSessionMessagesMock.mock.calls.length).toBe(readsBeforeRefresh);
 
     cleanup();
     getSessionMessagesMock.mockImplementationOnce(async () => {
@@ -3415,6 +3503,9 @@ describe("FeaturesView Codex session bootstrap", () => {
       null,
       "native",
     );
+    // This path drives the Codex bridge directly and opens no agent tab, so it
+    // must not touch a durable launch intent.
+    expect(updateEnvironmentAgentSettingsMock.mock.calls.at(-1)).toHaveLength(6);
     expect(startEnvironmentMock).toHaveBeenCalledWith("env-local", undefined, { silent: true });
     expect(startLocalCodexServerMock).toHaveBeenCalledWith("env-local");
     expect(createClientMock).toHaveBeenCalledWith("http://127.0.0.1:4100");

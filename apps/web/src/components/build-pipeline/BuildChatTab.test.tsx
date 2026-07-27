@@ -165,6 +165,7 @@ function seedPipeline(phase = "waiting-for-setup" as string) {
           currentSessionIndex: -1,
           iteration: 0,
           maxIterations: 3,
+          backendRevision: 0,
           createdAt: new Date().toISOString(),
           taskTitle: "Test task",
           taskSnapshot: {
@@ -208,6 +209,7 @@ function seedPipelineWithBuildSession(phase: "building" | "paused", sessionStatu
           currentSessionIndex: 0,
           iteration: 0,
           maxIterations: 3,
+          backendRevision: 0,
           createdAt: "2026-06-22T00:00:00.000Z",
           taskTitle: "Test task",
           taskSnapshot: {
@@ -314,6 +316,7 @@ function seedClaudeVerifyPipeline(
       phase: "verifying",
       iteration,
       maxIterations: options.maxIterations ?? 3,
+      backendRevision: 0,
       sessions: [{ ...pipeline.sessions[0]!, phase: "verify", iteration, label: "Verification Session" }],
     });
     return { pipelines };

@@ -21,6 +21,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
+import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import {
   createClient,
   getModelsWithDefaults,
@@ -74,7 +75,10 @@ import {
 } from "./slash-command-directory";
 import { getNativeSlashCommands } from "./slash-command-registry";
 import type { OpenCodeNativeData } from "@/types/paneLayout";
-import type { OpenCodeAttachment } from "@/stores/openCodeStore";
+import type {
+  OpenCodeAttachment,
+  OpenCodeQueuedMessage,
+} from "@/stores/openCodeStore";
 
 interface OpenCodeChatTabProps {
   tabId: string;
@@ -1688,6 +1692,8 @@ export function OpenCodeChatTab({
     queueLength,
     isLoading: session?.isLoading ?? false,
     blockedByDraft: isQueueBlockedByDraft,
+    claimHead: () =>
+      claimAgentPromptQueueHead<OpenCodeQueuedMessage>("opencode", sessionKey),
     send: (entry) =>
       handleSendRef.current?.(entry.text, entry.attachments, {
         model: entry.model,

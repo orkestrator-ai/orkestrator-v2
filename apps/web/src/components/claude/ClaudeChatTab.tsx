@@ -59,7 +59,8 @@ import type { ClaudeNativeData } from "@/types/paneLayout";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
-import type { ClaudeAttachment } from "@/stores/claudeStore";
+import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
+import type { ClaudeAttachment, QueuedMessage } from "@/stores/claudeStore";
 import { normalizeClaudeMessagesForDisplay } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 
@@ -1503,6 +1504,7 @@ export function ClaudeChatTab({
     queueLength,
     isLoading: session?.isLoading ?? false,
     blockedByDraft: isQueueBlockedByDraft,
+    claimHead: () => claimAgentPromptQueueHead<QueuedMessage>("claude", sessionKey),
     send: (entry) =>
       handleSendRef.current?.(
         entry.text,

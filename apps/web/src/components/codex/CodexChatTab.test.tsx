@@ -136,12 +136,34 @@ const mockUpdateGlobalConfig = mock(async (config: any) => ({
   ...useConfigStore.getState().config,
   global: config,
 }));
+const claimedPromptHeads = new Set<string>();
+const mockClaimPromptQueueHead = mock(async (
+  queueKey: string,
+  environmentId: string,
+  expectedMessageId: string,
+  candidateMessages: Array<{ id: string }>,
+) => {
+  const claimKey = `${queueKey}\u0000${expectedMessageId}`;
+  const alreadyClaimed = claimedPromptHeads.has(claimKey);
+  if (!alreadyClaimed) claimedPromptHeads.add(claimKey);
+  return {
+    claimed: alreadyClaimed ? null : (candidateMessages[0] ?? null),
+    queue: {
+      queueKey,
+      environmentId,
+      messages: candidateMessages.slice(1),
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    },
+  };
+});
 
 // NOTE: Do NOT mock @/hooks/useScrollLock here — it pollutes the global
 // module cache and breaks useScrollLock.test.ts. The real hook returns
 // safe defaults (isAtBottom: true) when no viewport is found in happy-dom.
 
 mock.module("@/lib/backend", () => ({
+  claimPromptQueueHead: mockClaimPromptQueueHead,
   getCodexServerLog: mockGetCodexServerLog,
   getCodexServerStatus: mockGetCodexServerStatus,
   getLocalCodexServerStatus: mockGetLocalCodexServerStatus,
@@ -576,6 +598,8 @@ afterAll(() => {
 describe("CodexChatTab", () => {
   beforeEach(() => {
     cleanup();
+    claimedPromptHeads.clear();
+    mockClaimPromptQueueHead.mockClear();
     composeText = "Rename the environment";
     composeAttachments = [];
 
@@ -3299,6 +3323,26 @@ describe("CodexChatTab", () => {
       expect(mockSendPrompt).toHaveBeenCalledTimes(1);
       expect(useCodexStore.getState().messageQueue.get(SESSION_KEY) ?? []).toEqual([]);
       releaseSend({ status: "processing" });
+    });
+
+    test("a failed backend claim does not spin or dispatch the unclaimed prompt", async () => {
+      mockClaimPromptQueueHead.mockRejectedValueOnce(new Error("claim unavailable"));
+      useCodexStore.getState().addToQueue(
+        SESSION_KEY,
+        queueEntry({ id: "row-1", requestId: "request-1", text: "Keep queued" }),
+      );
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      await waitFor(() => expect(mockClaimPromptQueueHead).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      expect(mockClaimPromptQueueHead).toHaveBeenCalledTimes(1);
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+      expect(useCodexStore.getState().messageQueue.get(SESSION_KEY))
+        .toEqual([expect.objectContaining({ id: "row-1" })]);
     });
   });
 

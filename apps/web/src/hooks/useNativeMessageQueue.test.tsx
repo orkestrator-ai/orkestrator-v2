@@ -43,12 +43,14 @@ function Harness({
   onError = () => {},
   canDrain = true,
   blockedByDraft = false,
+  claimHead,
 }: {
   store: ReturnType<typeof createStore>;
   send: (entry: Queued) => Promise<unknown> | undefined;
   onError?: (error: unknown, entry: Queued) => void;
   canDrain?: boolean;
   blockedByDraft?: boolean;
+  claimHead?: () => Promise<Queued | null>;
 }) {
   const queueLength = store((s) => s.messageQueue.get(SESSION_KEY)?.length ?? 0);
   const isLoading = store((s) => s.sessions.get(SESSION_KEY)?.isLoading ?? false);
@@ -61,6 +63,11 @@ function Harness({
     queueLength,
     isLoading,
     blockedByDraft,
+    // The production claim goes through the backend queue mirror; the test
+    // double claims from the local store the same way a granted claim resolves.
+    claimHead:
+      claimHead
+      ?? (async () => store.getState().removeFromQueue(SESSION_KEY) ?? null),
     send,
     onError,
   });
@@ -234,5 +241,103 @@ describe("useNativeMessageQueue", () => {
 
     expect(send).not.toHaveBeenCalled();
     expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([]);
+  });
+
+  test("treats a synchronous send throw like a rejection and keeps draining", async () => {
+    /**
+     * `send`'s contract allows a non-async implementation. A synchronous throw
+     * escaping `process()` would leave the re-entrancy flag stuck at true,
+     * silently killing the drain for the rest of the mount.
+     */
+    const store = createStore([
+      { id: "q-1", text: "first" },
+      { id: "q-2", text: "second" },
+    ]);
+    const onError = mock(() => {});
+    const sent: string[] = [];
+    const send = mock((entry: Queued): Promise<unknown> | undefined => {
+      if (entry.id === "q-1") throw new Error("sync boom");
+      sent.push(entry.text);
+      return Promise.resolve();
+    });
+
+    render(<Harness store={store} send={send} onError={onError} />);
+
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect((onError.mock.calls[0] as unknown[])[1]).toEqual({ id: "q-1", text: "first" });
+    // The throw must not wedge the queue — the second entry still goes out.
+    await waitFor(() => expect(sent).toEqual(["second"]));
+  });
+
+  test("retries after a failed claim without losing queued work", async () => {
+    const store = createStore([{ id: "q-1", text: "first" }]);
+    const send = mock(async () => {});
+    let claimAttempts = 0;
+    const claimHead = mock(async () => {
+      claimAttempts += 1;
+      if (claimAttempts === 1) throw new Error("backend unreachable");
+      return store.getState().removeFromQueue(SESSION_KEY) ?? null;
+    });
+
+    const view = render(<Harness store={store} send={send} claimHead={claimHead} />);
+
+    await waitFor(() => expect(claimHead).toHaveBeenCalledTimes(1));
+    // Nothing was dequeued by the failed claim.
+    expect(store.getState().messageQueue.get(SESSION_KEY)).toHaveLength(1);
+    expect(send).not.toHaveBeenCalled();
+
+    // The next drive (here: a dependency change) retries the claim.
+    view.rerender(<Harness store={store} send={send} claimHead={claimHead} blockedByDraft />);
+    view.rerender(
+      <Harness store={store} send={send} claimHead={claimHead} blockedByDraft={false} />,
+    );
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+  });
+
+  test("does not spin when the backend denies the claim", async () => {
+    /**
+     * The local mirror can show entries whose head another client has claimed.
+     * A null claim must not re-drive the drain — that would hot-loop against a
+     * queue this client does not own.
+     */
+    const store = createStore([{ id: "q-1", text: "first" }]);
+    const send = mock(async () => {});
+    const claimHead = mock(async () => null);
+
+    render(<Harness store={store} send={send} claimHead={claimHead} />);
+
+    await waitFor(() => expect(claimHead).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(claimHead).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  test("does not re-enter from the settle path while a new turn is running", async () => {
+    /**
+     * The finally-block re-drive exists for a queue stranded with an idle
+     * session. When the send left the session loading again, the effect watching
+     * `isLoading` owns the next drain — re-entering here would race it.
+     */
+    const store = createStore([
+      { id: "q-1", text: "first" },
+      { id: "q-2", text: "second" },
+    ]);
+    const sent: string[] = [];
+    const send = mock(async (entry: Queued) => {
+      sent.push(entry.text);
+      // The dispatched prompt starts a turn that has not settled yet.
+      store.setState({ sessions: new Map([[SESSION_KEY, { isLoading: true }]]) });
+    });
+
+    render(<Harness store={store} send={send} />);
+
+    await waitFor(() => expect(sent).toEqual(["first"]));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The second entry waits for the running turn to settle.
+    expect(sent).toEqual(["first"]);
+    expect(store.getState().messageQueue.get(SESSION_KEY)).toHaveLength(1);
+
+    store.setState({ sessions: new Map([[SESSION_KEY, { isLoading: false }]]) });
+    await waitFor(() => expect(sent).toEqual(["first", "second"]));
   });
 });

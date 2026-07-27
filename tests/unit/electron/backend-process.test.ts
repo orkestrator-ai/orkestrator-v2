@@ -238,8 +238,16 @@ sleep 5
       enabled: true,
       running: true,
     });
-    const received = new Promise((resolve) => client.listen((event, payload) => resolve({ event, payload })));
-    await expect(received).resolves.toEqual({ event: "changed", payload: { ok: true } });
+    const received: Array<{ event: string; payload: unknown }> = [];
+    const delivered = new Promise<void>((resolve) => client.listen((event, payload) => {
+      received.push({ event, payload });
+      if (received.length === 2) resolve();
+    }));
+    await delivered;
+    expect(received).toEqual([
+      { event: "native-event-stream-connected", payload: undefined },
+      { event: "changed", payload: { ok: true } },
+    ]);
     client.stopListening();
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => server.close((error) => {
@@ -258,6 +266,36 @@ sleep 5
 
     globalThis.fetch = mock(async () => new Response("not json", { status: 200 })) as typeof fetch;
     await expect(client.setWebClientEnabled(true)).rejects.toThrow();
+  });
+
+  test("announces each successful event-stream reconnection", async () => {
+    let attempts = 0;
+    globalThis.fetch = mock(async () => {
+      attempts += 1;
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      }), { status: 200 });
+    }) as typeof fetch;
+    const client = new BackendHttpClient(
+      "http://127.0.0.1:34121/",
+      "test-token-123456",
+    );
+    const connected = new Promise<void>((resolve) => {
+      let connectionCount = 0;
+      client.listen((event) => {
+        if (event !== "native-event-stream-connected") return;
+        connectionCount += 1;
+        if (connectionCount === 2) {
+          client.stopListening();
+          resolve();
+        }
+      });
+    });
+
+    await connected;
+    expect(attempts).toBe(2);
   });
 
   test("launches one service for both the Electron bridge and browser clients", async () => {

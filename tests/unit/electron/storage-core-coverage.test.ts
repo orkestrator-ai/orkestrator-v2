@@ -46,6 +46,9 @@ describe("StorageService core coverage", () => {
     const environment = await storage.addEnvironment(
       createEnvironment("project-1", { name: "fields" }),
     );
+    // A new environment starts with no durable launch intent, so an environment
+    // that was never created with "launch agent" cannot inherit one.
+    expect(environment.pendingAgentLaunch).toBe(false);
     const portMappings = [
       { containerPort: 3000, hostPort: 43000, protocol: "tcp" as const },
       { containerPort: 5353, hostPort: 45353, protocol: "udp" as const },
@@ -70,6 +73,7 @@ describe("StorageService core coverage", () => {
       entryPort: 3000,
       hostEntryPort: 43000,
       setupScriptsComplete: true,
+      pendingAgentLaunch: true,
       initialPrompt: "Start here",
       pendingRenamePrompt: "Rename me",
       createdFromCommit: "abc123",
@@ -100,6 +104,7 @@ describe("StorageService core coverage", () => {
       entryPort: 3000,
       hostEntryPort: 43000,
       setupScriptsComplete: true,
+      pendingAgentLaunch: true,
       initialPrompt: "Start here",
       pendingRenamePrompt: "Rename me",
       createdFromCommit: "abc123",
@@ -151,6 +156,7 @@ describe("StorageService core coverage", () => {
       entryPort: "3000",
       hostEntryPort: Number.NEGATIVE_INFINITY,
       setupScriptsComplete: "false",
+      pendingAgentLaunch: "false",
       initialPrompt: 1,
       pendingRenamePrompt: 42,
       createdFromCommit: {},
@@ -179,6 +185,7 @@ describe("StorageService core coverage", () => {
       entryPort: undefined,
       hostEntryPort: null,
       setupScriptsComplete: false,
+      pendingAgentLaunch: false,
       initialPrompt: null,
       pendingRenamePrompt: undefined,
       createdFromCommit: null,
@@ -204,6 +211,7 @@ describe("StorageService core coverage", () => {
     expect(reset.entryPort).toBeUndefined();
     expect(reset.hostEntryPort).toBeUndefined();
     expect(reset.setupScriptsComplete).toBe(false);
+    expect(reset.pendingAgentLaunch).toBe(false);
     expect(reset.initialPrompt).toBeUndefined();
     expect(reset.pendingRenamePrompt).toBeUndefined();
     expect(reset.createdFromCommit).toBeUndefined();

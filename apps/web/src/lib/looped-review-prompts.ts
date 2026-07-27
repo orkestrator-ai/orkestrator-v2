@@ -310,7 +310,8 @@ export function createFixPoolPrompt(input: {
 - Return the enforced structured fix result.
 - Put non-blocking context, preserved branch state, disproved findings, and other informational observations in notes.
 - Limitations are blockers only: use them exclusively for applicable findings that remain unresolved or validation required for confidence that could not be completed.
-- Set complete=false if any command failed or limitations is non-empty. Set complete=true only when every applicable finding is resolved, every required validation command passed, and limitations is empty.
+- commandsRun records the final state of each validation command, not every attempt. If you re-run a command after fixing what it caught, report that command once with its final result.
+- Set complete=false if any command's final result is failed or limitations is non-empty. Set complete=true only when every applicable finding is resolved, every required validation command finished passing, and limitations is empty.
 
 Target branch: ${input.targetBranch}
 

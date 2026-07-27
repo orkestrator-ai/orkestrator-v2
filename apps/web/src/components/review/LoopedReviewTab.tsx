@@ -100,9 +100,25 @@ class MissingProviderSessionError extends Error {
   }
 }
 
+/**
+ * A fix session legitimately re-runs a validation command after repairing what
+ * that command caught. Only the last report for a given command describes the
+ * tree the session is handing back, so earlier attempts must not be counted as
+ * blockers and stall the loop on an already-green worktree.
+ */
+function finalCommandResults(
+  commands: ReviewFixResult["commandsRun"],
+): ReviewFixResult["commandsRun"] {
+  const byCommand = new Map<string, ReviewFixResult["commandsRun"][number]>();
+  for (const command of commands) {
+    byCommand.set(command.command.trim(), command);
+  }
+  return [...byCommand.values()];
+}
+
 function fixBlockerDetails(result: ReviewFixResult): string[] {
   return [
-    ...result.commandsRun
+    ...finalCommandResults(result.commandsRun)
       .filter((command) => command.result === "failed")
       .map((command) =>
         `- Failed validation: ${command.command}${
@@ -115,10 +131,28 @@ function fixBlockerDetails(result: ReviewFixResult): string[] {
   ];
 }
 
+/**
+ * The provider-enforced schema is the OpenAI strict subset, which cannot express
+ * `minLength`, so a model can legitimately return blank entries. Dropping them
+ * is lossless — a blank string describes neither a note nor a blocker — and
+ * avoids failing a whole fix round over unrepresentable strictness.
+ */
+function normalizedTextList(value: unknown[]): string[] {
+  return value
+    .map((entry) => (entry as string).trim())
+    .filter((entry) => entry.length > 0);
+}
+
 export function parseFixResult(value: unknown): ReviewFixResult {
+  if (!isRecord(value)) {
+    throw new Error("Fix result failed runtime validation");
+  }
+  // `notes` postdates the first shipped fix contract. A dispatch sent by an
+  // earlier build is replayed by request ID after an upgrade, so its result
+  // must stay parseable rather than fail the restored workflow.
+  const notes = value.notes === undefined ? [] : value.notes;
   if (
-    !isRecord(value)
-    || Object.keys(value).some((key) =>
+    Object.keys(value).some((key) =>
       ![
         "complete",
         "summary",
@@ -147,18 +181,21 @@ export function parseFixResult(value: unknown): ReviewFixResult {
       && (command.result === "passed" || command.result === "failed")
       && typeof command.summary === "string"
     )
-    || !Array.isArray(value.notes)
-    || !value.notes.every((note) =>
-      typeof note === "string" && note.trim().length > 0
-    )
+    || !Array.isArray(notes)
+    || !notes.every((note) => typeof note === "string")
     || !Array.isArray(value.limitations)
-    || !value.limitations.every((limitation) =>
-      typeof limitation === "string" && limitation.trim().length > 0
-    )
+    || !value.limitations.every((limitation) => typeof limitation === "string")
   ) {
     throw new Error("Fix result failed runtime validation");
   }
-  const result = value as unknown as ReviewFixResult;
+  const result: ReviewFixResult = {
+    complete: value.complete,
+    summary: value.summary,
+    filesChanged: value.filesChanged,
+    commandsRun: value.commandsRun,
+    notes: normalizedTextList(notes),
+    limitations: normalizedTextList(value.limitations),
+  };
   const blockerDetails = fixBlockerDetails(result);
   if (result.complete && blockerDetails.length > 0) {
     throw new Error(
@@ -170,7 +207,8 @@ export function parseFixResult(value: unknown): ReviewFixResult {
   }
   if (!result.complete && blockerDetails.length === 0) {
     throw new Error(
-      "Fix result cannot be incomplete without a failed validation or blocking limitation",
+      "Fix result cannot be incomplete without a failed validation or blocking limitation."
+      + ` Session summary: ${result.summary}`,
     );
   }
   return result;
@@ -749,7 +787,10 @@ export function LoopedReviewTab({
           ].join("\n"),
         );
       }
-      store.completeFix(current.id, session.id);
+      store.completeFix(current.id, session.id, {
+        summary: fixResult.summary,
+        notes: fixResult.notes,
+      });
       return;
     }
     const prResult = parsePrResult(result.value);
@@ -1189,6 +1230,25 @@ export function LoopedReviewTab({
                 fixed in session {archive.fixSessionId}
               </span>
             </div>
+            {archive.fixSummary ? (
+              <p className="mb-3 whitespace-pre-wrap text-sm text-foreground/80">
+                {archive.fixSummary}
+              </p>
+            ) : null}
+            {archive.fixNotes && archive.fixNotes.length > 0 ? (
+              <div className="mb-3">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Fix session notes
+                </p>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-foreground/80">
+                  {archive.fixNotes.map((note, index) => (
+                    // Archived notes never reorder, and a model can legitimately
+                    // repeat itself, so the position is the only stable key.
+                    <li key={index} className="whitespace-pre-wrap">{note}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <PoolView pool={archive.pool} archived />
           </section>
         ))}

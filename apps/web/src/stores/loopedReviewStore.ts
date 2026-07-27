@@ -145,6 +145,17 @@ export interface ArchivedReviewPool {
   fixedAt: string;
   fixSessionId: string;
   pool: ReviewFindingPool;
+  /**
+   * What the fix session reported about this pool. Optional because workflows
+   * archived before the fix result carried an outcome are still restored.
+   */
+  fixSummary?: string;
+  fixNotes?: string[];
+}
+
+export interface ReviewFixOutcome {
+  summary: string;
+  notes: string[];
 }
 
 export interface LoopedReviewDispatch {
@@ -725,6 +736,17 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
       && typeof archive.fixSessionId === "string"
       && typeof archive.fixedAt === "string"
       && isReviewFindingPool(archive.pool)
+      && (
+        archive.fixSummary === undefined
+        || typeof archive.fixSummary === "string"
+      )
+      && (
+        archive.fixNotes === undefined
+        || (
+          Array.isArray(archive.fixNotes)
+          && archive.fixNotes.every((note) => typeof note === "string")
+        )
+      )
     )
     && (
       workflow.pausedFromPhase === undefined
@@ -1000,7 +1022,11 @@ interface LoopedReviewState {
     sessionId: string,
     reconciliation: LoopedReviewReconciliation,
   ) => ReconciliationApplyResult | undefined;
-  completeFix: (workflowId: string, fixSessionId: string) => void;
+  completeFix: (
+    workflowId: string,
+    fixSessionId: string,
+    outcome: ReviewFixOutcome,
+  ) => void;
   claimDispatch: (
     workflowId: string,
     dispatch: Omit<LoopedReviewDispatch, "state" | "createdAt">,
@@ -1321,7 +1347,7 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
       return applied;
     },
 
-    completeFix: (workflowId, fixSessionId) =>
+    completeFix: (workflowId, fixSessionId, outcome) =>
       set((state) => updateWorkflow(state, workflowId, (workflow) => {
         if (workflow.phase !== "fixing" || !hasReviewFindings(workflow.activePool)) {
           return workflow;
@@ -1332,6 +1358,10 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
           fixedAt: now,
           fixSessionId,
           pool: workflow.activePool,
+          // The pool is cleared from here on, so this is the only durable record
+          // of what the fix session did and of findings it reported as disproved.
+          fixSummary: outcome.summary,
+          fixNotes: outcome.notes,
         }];
         const completedRounds = workflow.rounds.map((round) =>
           round.round === workflow.currentRound

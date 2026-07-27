@@ -178,11 +178,67 @@ describe("looped-review prompts", () => {
     );
     expect(fix).toContain("Limitations are blockers only");
     expect(fix).toContain(
-      "Set complete=false if any command failed or limitations is non-empty",
+      "Set complete=false if any command's final result is failed or limitations is non-empty",
+    );
+    // A re-run after a repair must be reported once, or the superseded attempt
+    // stalls the loop on an already-green worktree.
+    expect(fix).toContain(
+      "commandsRun records the final state of each validation command, not every attempt",
     );
     expect(REVIEW_FIX_RESULT_JSON_SCHEMA.required).toContain("notes");
+    // notes belongs to the fix contract alone; it must not leak into the others.
+    for (
+      const schema of [
+        REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+        REVIEW_PR_RESULT_JSON_SCHEMA,
+        LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA,
+      ]
+    ) {
+      expect(schema.required as readonly string[]).not.toContain("notes");
+    }
     const pr = createLoopedReviewPrPrompt("release");
     expect(pr).toContain("origin/release");
     expect(pr).toContain("final fresh session");
+  });
+
+  test("serializes the complete pool into the fix prompt", () => {
+    const pool: ReviewFindingPool = {
+      issues: [{
+        poolId: "issue-1",
+        severity: "P1",
+        confidence: 90,
+        category: "correctness",
+        title: "Lost result",
+        file: "src/review.ts",
+        line: 42,
+        symbol: "applyResult",
+        description: "The result can be lost.",
+        evidence: "The lease is cleared first.",
+        suggestion: "Consume the lease atomically.",
+        verification: "Pause before result resolution.",
+        alternativeFixes: ["Record the result while paused."],
+      }],
+      coverageGaps: [{
+        poolId: "gap-1",
+        file: "src/review.ts",
+        untestedBehavior: "The paused result lease.",
+      }],
+    };
+    const prompt = createFixPoolPrompt({ pool, targetBranch: "develop" });
+
+    // The agent fixes from this text alone, so every finding must survive.
+    expect(prompt).toContain(JSON.stringify(pool, null, 2));
+    expect(prompt).toContain("Target branch: develop");
+  });
+
+  test("omits the context block when no ticket context exists", () => {
+    const prompt = createReviewPreparationPrompt({
+      round: 1,
+      packageId: "package-1",
+      targetBranch: "main",
+    });
+
+    expect(prompt).not.toContain("Available ticket and project context");
+    expect(prompt).toContain("## Preparation workflow");
   });
 });

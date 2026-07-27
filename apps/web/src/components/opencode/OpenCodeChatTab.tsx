@@ -69,7 +69,11 @@ import {
   renameEnvironmentFromPrompt,
   type OpenCodeModelPreferences,
 } from "@/lib/backend";
-import { openCodeModelRefToId } from "@/lib/opencode-model-preferences";
+import {
+  EMPTY_OPENCODE_MODEL_PREFERENCES,
+  normalizeOpenCodeModelPreferences,
+  openCodeModelRefToId,
+} from "@/lib/opencode-model-preferences";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
 import {
   buildMessageForkPlan,
@@ -108,68 +112,11 @@ interface OpenCodeChatTabProps {
 
 type ConnectionState = "connecting" | "connected" | "error";
 
-const EMPTY_MODEL_PREFERENCES: OpenCodeModelPreferences = {
-  recent: [],
-  favorite: [],
-  variant: {},
-};
+const EMPTY_MODEL_PREFERENCES = EMPTY_OPENCODE_MODEL_PREFERENCES;
 
 const EMPTY_SLASH_COMMANDS: OpenCodeSlashCommand[] = [];
 const EMPTY_MODELS: OpenCodeModel[] = [];
 
-function normalizeModelReferences(input: unknown): string[] {
-  if (!Array.isArray(input)) return [];
-
-  const references: string[] = [];
-  const seen = new Set<string>();
-  for (const candidate of input) {
-    let modelId: string | undefined;
-    if (typeof candidate === "string") {
-      modelId = openCodeModelRefToId(candidate);
-    } else if (
-      candidate &&
-      typeof candidate === "object" &&
-      typeof (candidate as { providerID?: unknown }).providerID === "string" &&
-      typeof (candidate as { modelID?: unknown }).modelID === "string"
-    ) {
-      modelId = openCodeModelRefToId(candidate as {
-        providerID: string;
-        modelID: string;
-      });
-    }
-
-    if (!modelId || seen.has(modelId)) continue;
-    seen.add(modelId);
-    references.push(modelId);
-  }
-  return references;
-}
-
-function normalizeModelPreferences(input: unknown): OpenCodeModelPreferences {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    return EMPTY_MODEL_PREFERENCES;
-  }
-
-  const raw = input as {
-    recent?: unknown;
-    favorite?: unknown;
-    variant?: unknown;
-  };
-  const variant: Record<string, string> = {};
-  if (raw.variant && typeof raw.variant === "object" && !Array.isArray(raw.variant)) {
-    for (const [rawModelId, rawVariant] of Object.entries(raw.variant)) {
-      const modelId = rawModelId.trim();
-      const value = typeof rawVariant === "string" ? rawVariant.trim() : "";
-      if (modelId && value) variant[modelId] = value;
-    }
-  }
-
-  return {
-    recent: normalizeModelReferences(raw.recent),
-    favorite: normalizeModelReferences(raw.favorite),
-    variant,
-  };
-}
 
 function resolveModelSelection(input: {
   availableModels: OpenCodeModel[];
@@ -259,6 +206,19 @@ export function OpenCodeChatTab({
   });
   const initialLaunchOptionsPendingRef = useRef(
     Boolean(initialAgentModel || initialReasoningEffort),
+  );
+  /**
+   * Whether initialization has finished deciding what to do with the one-shot
+   * launch options.
+   *
+   * Validating them can require a catalogue fetch, and the initial-prompt
+   * effect below runs on its own schedule — on a warm client it can fire before
+   * that fetch resolves. Without this gate the prompt would race ahead and
+   * dispatch with the server default while the user's explicit choice was
+   * still being validated.
+   */
+  const [launchOptionsSettled, setLaunchOptionsSettled] = useState(
+    () => !initialLaunchOptionsPendingRef.current,
   );
   // Track when we are currently draining queued prompts
   const manualRefreshSequenceRef = useRef(0);
@@ -532,7 +492,7 @@ export function OpenCodeChatTab({
         ) {
           return;
         }
-        setModels(environmentId, snapshot.models);
+        setModels(environmentId, snapshot.models, "cache");
       })
       .catch((error) => {
         console.warn("[OpenCodeChatTab] Failed to load cached models:", error);
@@ -819,25 +779,81 @@ export function OpenCodeChatTab({
          * whatever the server happens to default to.
          */
         const pendingLaunchOptions = initialLaunchOptionsPendingRef.current;
-        if (existingClient && !pendingLaunchOptions && !getSelectedModel(sessionKey)) {
-          const availableModels = useOpenCodeStore.getState().getModels(environmentId);
-          if (availableModels.length > 0) {
+        if (
+          existingClient &&
+          (pendingLaunchOptions || !getSelectedModel(sessionKey))
+        ) {
+          /**
+           * Only a *live* catalogue may be used here. One rehydrated from the
+           * durable project cache has the same shape but cannot prove the
+           * running server advertises those ids, so pinning one would send a
+           * model the server may reject.
+           */
+          let liveModels = useOpenCodeStore.getState().hasLiveModels(environmentId)
+            ? useOpenCodeStore.getState().getModels(environmentId)
+            : EMPTY_MODELS;
+
+          /**
+           * A one-shot launch option is the user's explicit choice and is
+           * consumed exactly once. Rather than drop it because this path
+           * normally skips the catalogue fetch, pay for a single fetch so it
+           * can be validated and acknowledged — nothing else on the warm path
+           * ever refreshes the catalogue, so deferring here means never.
+           */
+          if (pendingLaunchOptions && liveModels.length === 0) {
+            // Best-effort: failing to validate a launch option must not turn a
+            // reconnect that would otherwise have worked into a broken tab.
+            const { models: refreshedModels } = await getModelsWithDefaults(
+              existingClient,
+            ).catch((error) => {
+              console.warn(
+                "[OpenCodeChatTab] Failed to load models for launch options:",
+                error,
+              );
+              return { models: EMPTY_MODELS, defaults: {} };
+            });
+            if (!mounted) return;
+            if (refreshedModels.length > 0) {
+              setModels(environmentId, refreshedModels);
+              liveModels = refreshedModels;
+              if (projectId) {
+                void cacheOpenCodeModelCatalog(projectId, refreshedModels).catch(
+                  (error) => {
+                    console.warn("[OpenCodeChatTab] Failed to cache models:", error);
+                  },
+                );
+              }
+            }
+          }
+
+          if (liveModels.length > 0) {
             const { model: resolvedModel, variant: resolvedVariant } =
               resolveModelSelection({
-                availableModels,
+                availableModels: liveModels,
                 defaults: {},
-                preferences: modelPreferences,
-                // No launch option to honour, so fall back to the user's global
-                // OpenCode default — the same value the compose bar persists.
-                currentModel: useConfigStore.getState().config.global.opencodeModel,
-                currentVariant: getSelectedVariant(sessionKey),
+                preferences: pendingLaunchOptions
+                  ? EMPTY_MODEL_PREFERENCES
+                  : modelPreferences,
+                currentModel: pendingLaunchOptions
+                  ? initialLaunchOptionsRef.current.model
+                  : // No launch option to honour, so fall back to the user's
+                    // global OpenCode default — the same value the compose bar
+                    // persists whenever a model is picked.
+                    useConfigStore.getState().config.global.opencodeModel,
+                currentVariant: pendingLaunchOptions
+                  ? initialLaunchOptionsRef.current.reasoningEffort
+                  : getSelectedVariant(sessionKey),
               });
             if (resolvedModel) setSelectedModel(sessionKey, resolvedModel);
             setSelectedVariant(sessionKey, resolvedVariant);
+            if (pendingLaunchOptions) {
+              acknowledgeInitialLaunchOptions();
+            }
           }
-          // A warm client cannot prove where its model snapshot came from. Keep
-          // one-shot launch options for a live refresh and use the server
-          // default for an initial prompt until they have been validated.
+          // A server that reports no catalogue at all cannot validate anything.
+          // Keep the one-shot options pending — the tab holds the only durable
+          // copy — and let the initial prompt fall back to the server default.
+          setLaunchOptionsSettled(true);
         }
         if (existingClient && existingSession?.sessionId) {
           console.debug("[OpenCodeChatTab] Fast reconnect - reusing existing client and session", {
@@ -1034,51 +1050,53 @@ export function OpenCodeChatTab({
           ]);
         if (!mounted) return;
 
-        const effectiveModels =
-          availableModels.length > 0
-            ? availableModels
-            : useOpenCodeStore.getState().getModels(environmentId);
-        if (availableModels.length > 0) {
+        // Only a live catalogue is authoritative. When the server reports an
+        // empty one, whatever the durable cache seeded stays on screen for the
+        // picker, but nothing is pinned to this session and the one-shot launch
+        // options are not consumed against it.
+        const hasLiveCatalog = availableModels.length > 0;
+        if (hasLiveCatalog) {
           setModels(environmentId, availableModels);
+          if (projectId) {
+            void cacheOpenCodeModelCatalog(projectId, availableModels).catch((error) => {
+              console.warn("[OpenCodeChatTab] Failed to cache models:", error);
+            });
+          }
         }
-        if (availableModels.length > 0 && projectId) {
-          void cacheOpenCodeModelCatalog(projectId, availableModels).catch((error) => {
-            console.warn("[OpenCodeChatTab] Failed to cache models:", error);
-          });
-        }
-        const preferences = normalizeModelPreferences(rawPreferences);
+        const preferences = normalizeOpenCodeModelPreferences(rawPreferences);
         setModelPreferences(preferences);
 
         // Initialize selected model/variant while preserving valid user-selected values.
         const pendingInitialOptions = initialLaunchOptionsPendingRef.current
           ? initialLaunchOptionsRef.current
           : undefined;
-        const canValidateInitialOptions =
-          Boolean(pendingInitialOptions) && availableModels.length > 0;
-        const currentModel = canValidateInitialOptions
-          ? pendingInitialOptions?.model
-          : getSelectedModel(sessionKey);
-        const currentVariant = canValidateInitialOptions
-          ? pendingInitialOptions?.reasoningEffort
-          : getSelectedVariant(sessionKey);
-        const { model: resolvedModel, variant: resolvedVariant } =
-          resolveModelSelection({
-            availableModels: effectiveModels,
-            defaults,
-            preferences,
-            currentModel,
-            currentVariant,
-          });
-        if (resolvedModel && resolvedModel !== getSelectedModel(sessionKey)) {
-          setSelectedModel(sessionKey, resolvedModel);
-        }
+        if (hasLiveCatalog) {
+          const currentModel = pendingInitialOptions
+            ? pendingInitialOptions.model
+            : getSelectedModel(sessionKey);
+          const currentVariant = pendingInitialOptions
+            ? pendingInitialOptions.reasoningEffort
+            : getSelectedVariant(sessionKey);
+          const { model: resolvedModel, variant: resolvedVariant } =
+            resolveModelSelection({
+              availableModels,
+              defaults,
+              preferences,
+              currentModel,
+              currentVariant,
+            });
+          if (resolvedModel && resolvedModel !== getSelectedModel(sessionKey)) {
+            setSelectedModel(sessionKey, resolvedModel);
+          }
 
-        if (resolvedVariant !== getSelectedVariant(sessionKey)) {
-          setSelectedVariant(sessionKey, resolvedVariant);
+          if (resolvedVariant !== getSelectedVariant(sessionKey)) {
+            setSelectedVariant(sessionKey, resolvedVariant);
+          }
+          if (pendingInitialOptions) {
+            acknowledgeInitialLaunchOptions();
+          }
         }
-        if (pendingInitialOptions && availableModels.length > 0) {
-          acknowledgeInitialLaunchOptions();
-        }
+        setLaunchOptionsSettled(true);
 
         // Check for existing session - first from component ref, then from Zustand store
         // This handles reconnection after tab remount where refs are lost but store persists
@@ -1982,6 +2000,7 @@ export function OpenCodeChatTab({
       session &&
       initialPrompt &&
       !setupPending &&
+      launchOptionsSettled &&
       !initialPromptSentRef.current &&
       !sessionHasMessages
     ) {
@@ -2010,6 +2029,7 @@ export function OpenCodeChatTab({
     session,
     initialPrompt,
     setupPending,
+    launchOptionsSettled,
     tabId,
     clearTabInitialPrompt,
     environmentId,
@@ -2216,40 +2236,39 @@ export function OpenCodeChatTab({
     try {
       const { models: availableModels, defaults } =
         await getModelsWithDefaults(client);
-      const effectiveModels =
-        availableModels.length > 0
-          ? availableModels
-          : useOpenCodeStore.getState().getModels(environmentId);
-      if (availableModels.length > 0) {
+      const hasLiveCatalog = availableModels.length > 0;
+      if (hasLiveCatalog) {
         setModels(environmentId, availableModels);
-      }
-      if (availableModels.length > 0 && projectId) {
-        void cacheOpenCodeModelCatalog(projectId, availableModels).catch((error) => {
-          console.warn("[OpenCodeChatTab] Failed to cache refreshed models:", error);
-        });
+        if (projectId) {
+          void cacheOpenCodeModelCatalog(projectId, availableModels).catch((error) => {
+            console.warn("[OpenCodeChatTab] Failed to cache refreshed models:", error);
+          });
+        }
       }
 
       const rawPreferences = await getOpencodeModelPreferences().catch((error) => {
         console.warn("[OpenCodeChatTab] Failed to load model preferences:", error);
         return EMPTY_MODEL_PREFERENCES;
       });
-      const preferences = normalizeModelPreferences(rawPreferences);
+      const preferences = normalizeOpenCodeModelPreferences(rawPreferences);
       setModelPreferences(preferences);
+
+      // Same rule as initialization: a catalogue the server did not just
+      // report cannot validate a model id, so nothing is pinned from it.
+      if (!hasLiveCatalog) return;
 
       const pendingInitialOptions = initialLaunchOptionsPendingRef.current
         ? initialLaunchOptionsRef.current
         : undefined;
-      const canValidateInitialOptions =
-        Boolean(pendingInitialOptions) && availableModels.length > 0;
-      const currentModel = canValidateInitialOptions
-        ? pendingInitialOptions?.model
+      const currentModel = pendingInitialOptions
+        ? pendingInitialOptions.model
         : getSelectedModel(sessionKey);
-      const currentVariant = canValidateInitialOptions
-        ? pendingInitialOptions?.reasoningEffort
+      const currentVariant = pendingInitialOptions
+        ? pendingInitialOptions.reasoningEffort
         : getSelectedVariant(sessionKey);
       const { model: resolvedModel, variant: resolvedVariant } =
         resolveModelSelection({
-          availableModels: effectiveModels,
+          availableModels,
           defaults,
           preferences,
           currentModel,
@@ -2262,7 +2281,7 @@ export function OpenCodeChatTab({
       if (resolvedVariant !== getSelectedVariant(sessionKey)) {
         setSelectedVariant(sessionKey, resolvedVariant);
       }
-      if (pendingInitialOptions && availableModels.length > 0) {
+      if (pendingInitialOptions) {
         acknowledgeInitialLaunchOptions();
       }
     } catch (error) {

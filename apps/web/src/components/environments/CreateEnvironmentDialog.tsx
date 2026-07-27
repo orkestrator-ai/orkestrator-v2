@@ -77,16 +77,13 @@ import {
   type CachedOpenCodeModel,
   type OpenCodeModelPreferences,
 } from "@/lib/backend";
-import { openCodeModelRefToId } from "@/lib/opencode-model-preferences";
+import {
+  EMPTY_OPENCODE_MODEL_PREFERENCES,
+  openCodeModelRefToId,
+} from "@/lib/opencode-model-preferences";
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
-const EMPTY_OPENCODE_MODEL_PREFERENCES: OpenCodeModelPreferences = {
-  recent: [],
-  favorite: [],
-  variant: {},
-};
-
 function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | null {
   if (!Array.isArray(value)) return null;
   return value.filter((candidate): candidate is CachedOpenCodeModel => {

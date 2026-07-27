@@ -546,6 +546,59 @@ function asOpenCodeContextWindow(value: unknown, name: string): number {
   return contextWindow;
 }
 
+function asOpenCodeModelCatalogEntry(
+  candidate: unknown,
+  name: string,
+): OpenCodeModelCatalogEntry {
+  const model = asRecord(candidate, name);
+  assertOnlyKeys(
+    model,
+    [
+      "id",
+      "name",
+      "provider",
+      "variants",
+      "inputCost",
+      "outputCost",
+      "contextWindow",
+    ],
+    name,
+  );
+  return {
+    id: asNonBlankString(model.id, `${name}.id`),
+    name: asNonBlankString(model.name, `${name}.name`),
+    provider: asNonBlankString(model.provider, `${name}.provider`),
+    ...(model.variants === undefined
+      ? {}
+      : { variants: asOpenCodeModelVariants(model.variants, `${name}.variants`) }),
+    ...(model.inputCost === undefined
+      ? {}
+      : { inputCost: asOpenCodeModelCost(model.inputCost, `${name}.inputCost`) }),
+    ...(model.outputCost === undefined
+      ? {}
+      : { outputCost: asOpenCodeModelCost(model.outputCost, `${name}.outputCost`) }),
+    ...(model.contextWindow === undefined
+      ? {}
+      : {
+          contextWindow: asOpenCodeContextWindow(
+            model.contextWindow,
+            `${name}.contextWindow`,
+          ),
+        }),
+  };
+}
+
+/**
+ * Validate a discovered catalogue, dropping entries that fail rather than
+ * rejecting the batch.
+ *
+ * The catalogue is best-effort cached data assembled from whatever a provider
+ * reports, and the renderer only logs a rejection. Failing the whole call over
+ * one rogue model — a `NaN` cost, a field added to `OpenCodeModel` upstream —
+ * would silently disable caching for that project indefinitely. `StorageService`
+ * already normalizes per entry; this matches it. A batch with nothing valid in
+ * it is still an error, because that is a caller bug rather than one bad model.
+ */
 function asOpenCodeModelCatalog(value: unknown): OpenCodeModelCatalogEntry[] {
   if (!Array.isArray(value)) {
     throw new Error("Expected models to be an array");
@@ -554,59 +607,22 @@ function asOpenCodeModelCatalog(value: unknown): OpenCodeModelCatalogEntry[] {
     throw new Error("OpenCode model catalogue must contain at least one model.");
   }
 
-  return value.map((candidate, index) => {
-    const model = asRecord(candidate, `models[${index}]`);
-    assertOnlyKeys(
-      model,
-      [
-        "id",
-        "name",
-        "provider",
-        "variants",
-        "inputCost",
-        "outputCost",
-        "contextWindow",
-      ],
-      `models[${index}]`,
-    );
-    return {
-      id: asNonBlankString(model.id, `models[${index}].id`),
-      name: asNonBlankString(model.name, `models[${index}].name`),
-      provider: asNonBlankString(model.provider, `models[${index}].provider`),
-      ...(model.variants === undefined
-        ? {}
-        : {
-            variants: asOpenCodeModelVariants(
-              model.variants,
-              `models[${index}].variants`,
-            ),
-          }),
-      ...(model.inputCost === undefined
-        ? {}
-        : {
-            inputCost: asOpenCodeModelCost(
-              model.inputCost,
-              `models[${index}].inputCost`,
-            ),
-          }),
-      ...(model.outputCost === undefined
-        ? {}
-        : {
-            outputCost: asOpenCodeModelCost(
-              model.outputCost,
-              `models[${index}].outputCost`,
-            ),
-          }),
-      ...(model.contextWindow === undefined
-        ? {}
-        : {
-            contextWindow: asOpenCodeContextWindow(
-              model.contextWindow,
-              `models[${index}].contextWindow`,
-            ),
-          }),
-    };
+  const models: OpenCodeModelCatalogEntry[] = [];
+  let firstRejection: string | undefined;
+  value.forEach((candidate, index) => {
+    try {
+      models.push(asOpenCodeModelCatalogEntry(candidate, `models[${index}]`));
+    } catch (error) {
+      firstRejection ??= error instanceof Error ? error.message : String(error);
+    }
   });
+
+  if (models.length === 0) {
+    throw new Error(
+      `OpenCode model catalogue must contain at least one model. ${firstRejection ?? ""}`.trim(),
+    );
+  }
+  return models;
 }
 
 function asFeaturePlanRole(value: unknown): "user" | "assistant" | "system" {

@@ -846,6 +846,39 @@ export async function getCachedOpenCodeModelCatalog(
   );
 }
 
+const finiteNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+/**
+ * Project a model onto exactly the fields the cache command accepts.
+ *
+ * The catalogue is assembled from whatever a provider reports, so this drops
+ * `NaN`/`Infinity` costs that `typeof x === "number"` lets through upstream and
+ * makes the wire contract explicit: a field added to `OpenCodeModel` later
+ * cannot start failing the command's strict key check.
+ */
+function toCachedOpenCodeModel(
+  model: CachedOpenCodeModel,
+): CachedOpenCodeModel {
+  const variants = Array.isArray(model.variants)
+    ? model.variants.filter(
+        (variant) => typeof variant === "string" && variant.trim().length > 0,
+      )
+    : undefined;
+  const inputCost = finiteNumber(model.inputCost);
+  const outputCost = finiteNumber(model.outputCost);
+  const contextWindow = finiteNumber(model.contextWindow);
+  return {
+    id: model.id,
+    name: model.name,
+    provider: model.provider,
+    ...(variants?.length ? { variants } : {}),
+    ...(inputCost === undefined ? {} : { inputCost }),
+    ...(outputCost === undefined ? {} : { outputCost }),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+  };
+}
+
 /**
  * Store a newly-discovered catalogue. The backend hashes normalized model data
  * and only rewrites the cache when the catalogue version has actually changed.
@@ -856,7 +889,9 @@ export async function cacheOpenCodeModelCatalog(
 ): Promise<OpenCodeModelCatalogSnapshot> {
   return invoke<OpenCodeModelCatalogSnapshot>("cache_opencode_model_catalog", {
     projectId,
-    models,
+    // A non-array is a caller bug; forwarding it lets the command reject it
+    // with a named error instead of throwing a TypeError in the renderer.
+    models: (Array.isArray(models) ? models : []).map(toCachedOpenCodeModel),
   });
 }
 

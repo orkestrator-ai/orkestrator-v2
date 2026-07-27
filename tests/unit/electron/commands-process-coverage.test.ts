@@ -487,6 +487,59 @@ describe("process and platform command behavior", () => {
     ).rejects.toThrow("models[0].name");
   });
 
+  test("caches the valid models in a batch instead of rejecting it wholesale", async () => {
+    // The catalogue is best-effort data assembled from whatever a provider
+    // reports and the renderer only logs a rejection, so one rogue model must
+    // not silently disable caching for the whole project.
+    const cacheOpenCodeModelCatalog = mock(async (_projectId: string, models: unknown) => ({
+      schemaVersion: 2,
+      projectId: "project-a",
+      catalogVersion: "v1",
+      updatedAt: "2026-07-27T12:00:00.000Z",
+      models,
+    }));
+    const context = {
+      ...fixture.context,
+      storage: { ...fixture.context.storage, cacheOpenCodeModelCatalog },
+    } as CommandContext;
+
+    await invoke(
+      "cache_opencode_model_catalog",
+      {
+        projectId: "project-a",
+        models: [
+          { id: "openai/good", name: "Good", provider: "openai" },
+          // Every rejection reason, one per entry.
+          { id: "openai/nan-cost", name: "NaN", provider: "openai", inputCost: Number.NaN },
+          { id: "openai/unknown-key", name: "Unknown", provider: "openai", tier: "pro" },
+          { id: " ", name: "Blank id", provider: "openai" },
+          null,
+          { id: "openai/also-good", name: "Also Good", provider: "openai", variants: ["high"] },
+        ],
+      },
+      context,
+    );
+
+    expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith("project-a", [
+      { id: "openai/good", name: "Good", provider: "openai" },
+      { id: "openai/also-good", name: "Also Good", provider: "openai", variants: ["high"] },
+    ]);
+  });
+
+  test("reports why a batch was rejected when no model in it is usable", async () => {
+    await expect(
+      invoke("cache_opencode_model_catalog", {
+        projectId: "project-a",
+        models: [
+          { id: "openai/a", name: "A", provider: "openai", contextWindow: 1.5 },
+          { id: "openai/b", name: "B", provider: "openai", inputCost: -1 },
+        ],
+      }),
+    ).rejects.toThrow(
+      /at least one model.*contextWindow to be a positive safe integer/s,
+    );
+  });
+
   test.each([
     ["missing project id", "get_opencode_model_catalog_cache", {}, "projectId"],
     ["blank project id", "get_opencode_model_catalog_cache", { projectId: " " }, "non-blank"],

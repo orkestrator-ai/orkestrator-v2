@@ -480,6 +480,39 @@ describe("OpenCode model catalogue cache", () => {
     });
   });
 
+  test("a read concurrent with a write sees one coherent snapshot", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const first = await storage.cacheOpenCodeModelCatalog(projectId, models);
+
+      // Reads deliberately skip the mutation lock, so they rely on the write
+      // being atomic. A torn read would surface as a null or a partial model
+      // list rather than one of the two whole snapshots.
+      const [, ...reads] = await Promise.all([
+        storage.cacheOpenCodeModelCatalog(projectId, [
+          ...models,
+          { id: "provider/added", name: "Added", provider: "provider" },
+        ]),
+        ...Array.from({ length: 24 }, () =>
+          storage.getOpenCodeModelCatalog(projectId)
+        ),
+      ]);
+
+      const second = await storage.getOpenCodeModelCatalog(projectId);
+      expect(second?.models).toHaveLength(3);
+      for (const read of reads) {
+        expect(read).not.toBeNull();
+        expect([first.catalogVersion, second?.catalogVersion]).toContain(
+          read?.catalogVersion,
+        );
+        expect(read?.models).toEqual(
+          read?.catalogVersion === first.catalogVersion
+            ? first.models
+            : second!.models,
+        );
+      }
+    });
+  });
+
   test("serializes separate StorageService instances sharing a data directory", async () => {
     await withTemporaryStorage(async (first, dataDir) => {
       const second = new StorageService(dataDir);

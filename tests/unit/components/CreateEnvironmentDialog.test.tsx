@@ -1464,6 +1464,172 @@ describe("resolveAgentDefaults", () => {
     });
   });
 
+  test("keeps the durable catalog usable when loading favorites fails", async () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "opencode";
+    config.global.opencodeModel = undefined;
+    useConfigStore.setState({ config });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_opencode_model_catalog_cache") {
+        return Promise.resolve({
+          schemaVersion: 2,
+          projectId: "prefs-project",
+          catalogVersion: "catalog-v1",
+          updatedAt: "2026-07-27T12:00:00.000Z",
+          models: [{
+            id: "provider/model-a",
+            name: "Durable Model A",
+            provider: "Provider",
+          }],
+        });
+      }
+      if (command === "get_opencode_model_preferences") {
+        return Promise.reject(new Error("preferences unavailable"));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        projectId="prefs-project"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .toContain("Durable Model A")
+    );
+    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    // The catalogue still renders; there is simply no Favorites section.
+    expect(
+      await screen.findByRole("menuitemradio", { name: /Durable Model A/ }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Favorites")).toBeNull();
+  });
+
+  test.each([
+    { name: "malformed", preferences: { recent: "recent", favorite: [] } },
+    { name: "non-object", preferences: "preferences" },
+    { name: "null", preferences: null },
+  ])("ignores a $name preferences payload", async ({ preferences }) => {
+    useOpenCodeStore.setState({ models: new Map() });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "opencode";
+    config.global.opencodeModel = undefined;
+    useConfigStore.setState({ config });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_opencode_model_catalog_cache") {
+        return Promise.resolve({
+          schemaVersion: 2,
+          projectId: "prefs-project",
+          catalogVersion: "catalog-v1",
+          updatedAt: "2026-07-27T12:00:00.000Z",
+          models: [{
+            id: "provider/model-a",
+            name: "Durable Model A",
+            provider: "Provider",
+          }],
+        });
+      }
+      if (command === "get_opencode_model_preferences") {
+        return Promise.resolve(preferences);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        projectId="prefs-project"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .toContain("Durable Model A")
+    );
+    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(
+      await screen.findByRole("menuitemradio", { name: /Durable Model A/ }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Favorites")).toBeNull();
+  });
+
+  test("keeps a model chosen before the durable catalog arrives", async () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "opencode";
+    // A configured default is a real selectable entry before the cache lands,
+    // so the user can pick it while the read is still in flight.
+    config.global.opencodeModel = "provider/configured";
+    useConfigStore.setState({ config });
+    let resolveCache: (value: unknown) => void = () => {};
+    const cacheRead = new Promise((resolve) => {
+      resolveCache = resolve;
+    });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_opencode_model_catalog_cache") return cacheRead;
+      if (command === "get_opencode_model_preferences") {
+        return Promise.resolve({ recent: [], favorite: [], variant: {} });
+      }
+      return Promise.resolve(undefined);
+    });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        projectId="race-project"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .toContain("provider/configured")
+    );
+
+    await act(async () => {
+      resolveCache({
+        schemaVersion: 2,
+        projectId: "race-project",
+        catalogVersion: "catalog-v1",
+        updatedAt: "2026-07-27T12:00:00.000Z",
+        models: [
+          { id: "provider/configured", name: "Configured", provider: "Provider" },
+          { id: "provider/other", name: "Other", provider: "Provider" },
+        ],
+      });
+      await cacheRead;
+    });
+
+    // Still valid in the arriving catalogue, so the choice survives — now
+    // rendered with the catalogue's friendly name rather than the raw id.
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .toContain("Configured")
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "provider/configured" }),
+      )
+    );
+  });
+
   test("resets effort for an incompatible model and reconciles a refreshed catalog", async () => {
     useCodexStore.setState({
       models: [

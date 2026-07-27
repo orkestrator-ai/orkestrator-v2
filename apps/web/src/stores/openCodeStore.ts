@@ -33,6 +33,15 @@ export type EventSubscriptionState = NativeEventSubscriptionState<OpenCodeEvent>
 export type OpenCodeServerStatus = NativeServerStatus;
 export type OpenCodeSessionState = NativeSessionState<OpenCodeMessage>;
 
+/**
+ * Provenance of a per-environment model catalogue.
+ *
+ * `"server"` came from a live `getModelsWithDefaults` call against a running
+ * OpenCode server. `"cache"` was rehydrated from the durable project-scoped
+ * catalogue and may be stale or describe a different `opencode.json`.
+ */
+export type OpenCodeModelSource = "server" | "cache";
+
 export interface OpenCodeAttachment {
   id: string;
   type: "file" | "image";
@@ -62,6 +71,17 @@ interface OpenCodeState
     NativeEventSubscriptionSlice<OpenCodeEvent> {
   // Agent-specific state (per-environment)
   models: Map<string, OpenCodeModel[]>;
+  /**
+   * Where each environment's catalogue came from.
+   *
+   * A catalogue rehydrated from the durable per-project cache is
+   * indistinguishable from a live one by shape alone, but only a live one
+   * proves the running server actually advertises those models. Callers that
+   * commit a model id — validating a one-shot launch option, pinning a session
+   * selection — must check this rather than assume a non-empty catalogue is
+   * authoritative.
+   */
+  modelSource: Map<string, OpenCodeModelSource>;
   slashCommands: Map<string, OpenCodeSlashCommand[]>;
 
   /**
@@ -84,7 +104,11 @@ interface OpenCodeState
   pendingPermissions: Map<string, PermissionRequest>;
 
   // Agent-specific actions (per-environment)
-  setModels: (environmentId: string, models: OpenCodeModel[]) => void;
+  setModels: (
+    environmentId: string,
+    models: OpenCodeModel[],
+    source?: OpenCodeModelSource,
+  ) => void;
   setSlashCommands: (
     environmentId: string,
     commands: OpenCodeSlashCommand[],
@@ -124,6 +148,8 @@ interface OpenCodeState
   // Selectors
   getSelectedModel: (sessionKey: string) => string | undefined;
   getModels: (environmentId: string) => OpenCodeModel[];
+  /** True only when a running server reported this environment's catalogue. */
+  hasLiveModels: (environmentId: string) => boolean;
   getSlashCommands: (environmentId: string) => OpenCodeSlashCommand[];
   getSelectedVariant: (sessionKey: string) => string | undefined;
   getSelectedMode: (sessionKey: string) => OpenCodeConversationMode;
@@ -183,6 +209,7 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
 
   // Agent-specific state
   models: new Map(),
+  modelSource: new Map(),
   slashCommands: new Map(),
   selectedModel: new Map(),
   selectedVariant: new Map(),
@@ -195,11 +222,13 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   pendingPermissions: new Map(),
 
   // Agent-specific actions
-  setModels: (environmentId, models) =>
+  setModels: (environmentId, models, source = "server") =>
     set((state) => {
       const next = new Map(state.models);
       next.set(environmentId, models);
-      return { models: next };
+      const nextSource = new Map(state.modelSource);
+      nextSource.set(environmentId, source);
+      return { models: next, modelSource: nextSource };
     }),
 
   setSlashCommands: (environmentId, commands) =>
@@ -339,6 +368,7 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
             "serverStatus",
             "clients",
             "models",
+            "modelSource",
             "slashCommands",
             "eventSubscriptions",
           ],
@@ -383,6 +413,9 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   getSelectedModel: (sessionKey) => get().selectedModel.get(sessionKey),
   getModels: (environmentId) =>
     get().models.get(environmentId) ?? EMPTY_MODELS,
+  hasLiveModels: (environmentId) =>
+    get().modelSource.get(environmentId) === "server" &&
+    (get().models.get(environmentId)?.length ?? 0) > 0,
   getSlashCommands: (environmentId) =>
     get().slashCommands.get(environmentId) ?? EMPTY_COMMANDS,
   getSelectedVariant: (sessionKey) => get().selectedVariant.get(sessionKey),

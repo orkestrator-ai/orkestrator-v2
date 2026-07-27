@@ -260,6 +260,70 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
+  test("projects catalogue entries onto the fields the cache command accepts", async () => {
+    invokeMock.mockResolvedValue(null);
+
+    await cacheOpenCodeModelCatalog("project-1", [
+      {
+        id: "openai/gpt-5",
+        name: "GPT-5",
+        provider: "openai",
+        variants: ["high", "  ", ""],
+        inputCost: 0,
+        outputCost: 1.5,
+        contextWindow: 400_000,
+        // A field added to `OpenCodeModel` upstream must not start failing the
+        // command's strict key check.
+        extra: "unexpected",
+      } as never,
+      {
+        id: "openai/gpt-4",
+        name: "GPT-4",
+        provider: "openai",
+        // `typeof x === "number"` lets these through upstream; the command
+        // rejects them, so they are dropped rather than sent.
+        inputCost: Number.NaN,
+        outputCost: Number.POSITIVE_INFINITY,
+        contextWindow: Number.NEGATIVE_INFINITY,
+        variants: [],
+      },
+    ]);
+
+    expect(invokeMock).toHaveBeenCalledWith("cache_opencode_model_catalog", {
+      projectId: "project-1",
+      models: [
+        {
+          id: "openai/gpt-5",
+          name: "GPT-5",
+          provider: "openai",
+          variants: ["high"],
+          inputCost: 0,
+          outputCost: 1.5,
+          contextWindow: 400_000,
+        },
+        { id: "openai/gpt-4", name: "GPT-4", provider: "openai" },
+      ],
+    });
+  });
+
+  test("keeps a non-array variants field from reaching the command", async () => {
+    invokeMock.mockResolvedValue(null);
+
+    await cacheOpenCodeModelCatalog("project-1", [
+      {
+        id: "openai/gpt-5",
+        name: "GPT-5",
+        provider: "openai",
+        variants: "high" as never,
+      },
+    ]);
+
+    expect(invokeMock).toHaveBeenCalledWith("cache_opencode_model_catalog", {
+      projectId: "project-1",
+      models: [{ id: "openai/gpt-5", name: "GPT-5", provider: "openai" }],
+    });
+  });
+
   test("calls the create-environment Electron command with naming prompt", async () => {
     await createEnvironment(
       "project-1",

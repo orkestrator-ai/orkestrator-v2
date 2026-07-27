@@ -297,4 +297,114 @@ describe("OpenCodeModelSelect", () => {
     expect(screen.getByText("0 models")).toBeTruthy();
     expect(screen.getByText("No matching models")).toBeTruthy();
   });
+
+  test("ignores favorites that are not in the catalogue", () => {
+    // A favorite pinned against a provider that is no longer configured must
+    // not create a phantom row, nor hide a real model that shares its id.
+    const { trigger } = renderPicker({
+      favorites: ["deleted/provider-model", "anthropic/claude-sonnet"],
+    });
+    openPicker(trigger);
+
+    const rows = screen.getAllByRole("menuitemradio");
+    // The surviving favorite first, then the rest by provider and then name.
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Claude Sonnetanthropic/claude-sonnet",
+      "Geminiopenrouter/google/gemini",
+      "GPT-5openrouter/openai/gpt-5",
+    ]);
+    expect(screen.getByText("3 models")).toBeTruthy();
+    expect(screen.queryByText(/deleted\/provider-model/)).toBeNull();
+  });
+
+  test("gives every result a resolvable option id across both sections", () => {
+    // The favorites section and the all-models section index into one shared
+    // result list; a mismatch would break `aria-activedescendant` lookups.
+    const { trigger } = renderPicker({
+      favorites: ["openrouter/google/gemini", "anthropic/claude-sonnet"],
+    });
+    const search = openPicker(trigger);
+
+    const ids = screen
+      .getAllByRole("menuitemradio")
+      .map((row) => row.getAttribute("id"));
+    expect(ids).toEqual(ids.filter((id) => id && !id.endsWith("-option--1")));
+    expect(new Set(ids).size).toBe(ids.length);
+
+    // Walking the whole list must land on each row exactly once, in order.
+    const visited: (string | null)[] = [];
+    for (let index = 0; index < ids.length; index += 1) {
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+      visited.push(search.getAttribute("aria-activedescendant"));
+    }
+    expect(visited).toEqual(ids);
+
+    // And wrap back to the first.
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(search.getAttribute("aria-activedescendant")).toBe(ids[0]);
+  });
+
+  test("scrolls the active result into view as the keyboard moves through it", () => {
+    const scrolled: unknown[] = [];
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function scrollIntoView(this: Element, arg) {
+      scrolled.push({ id: this.getAttribute("id"), arg });
+    } as typeof Element.prototype.scrollIntoView;
+
+    try {
+      const { trigger } = renderPicker();
+      const search = openPicker(trigger);
+
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+      const firstActive = search.getAttribute("aria-activedescendant");
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+      const secondActive = search.getAttribute("aria-activedescendant");
+
+      expect(scrolled).toEqual([
+        { id: firstActive, arg: { block: "nearest" } },
+        { id: secondActive, arg: { block: "nearest" } },
+      ]);
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
+  test("survives an environment without scrollIntoView", () => {
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    // happy-dom and jsdom have both shipped without it at various points.
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+
+    try {
+      const { trigger } = renderPicker();
+      const search = openPicker(trigger);
+      expect(() =>
+        fireEvent.keyDown(search, { key: "ArrowDown" }),
+      ).not.toThrow();
+      expect(search.getAttribute("aria-activedescendant")).toBeTruthy();
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
+  test("Enter without an active result does not select anything", () => {
+    const onValueChange = mock(() => {});
+    const { trigger } = renderPicker({ onValueChange });
+    const search = openPicker(trigger);
+
+    fireEvent.keyDown(search, { key: "Enter" });
+
+    expect(onValueChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("searchbox")).toBeTruthy();
+  });
+
+  test("arrow keys are inert when the query matches nothing", () => {
+    const { trigger } = renderPicker();
+    const search = openPicker(trigger);
+    fireEvent.change(search, { target: { value: "no-such-model" } });
+
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(search, { key: "ArrowUp" });
+
+    expect(search.getAttribute("aria-activedescendant")).toBeNull();
+  });
 });

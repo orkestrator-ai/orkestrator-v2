@@ -722,6 +722,38 @@ describe("backend command wrapper coverage", () => {
     );
   });
 
+  test("forwards explicit committed-only Git status requests", async () => {
+    await backendWrappers.getGitStatus("container-1", "base-sha", false);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_git_status", {
+      containerId: "container-1",
+      targetBranch: "base-sha",
+      includeUncommitted: false,
+    });
+
+    await backendWrappers.getLocalGitStatus("/tmp/worktree", "base-sha", false);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_local_git_status", {
+      worktreePath: "/tmp/worktree",
+      targetBranch: "base-sha",
+      includeUncommitted: false,
+    });
+  });
+
+  test("includes uncommitted changes in Git status requests by default", async () => {
+    await backendWrappers.getGitStatus("container-1", "main");
+    expect(invokeMock).toHaveBeenLastCalledWith("get_git_status", {
+      containerId: "container-1",
+      targetBranch: "main",
+      includeUncommitted: true,
+    });
+
+    await backendWrappers.getLocalGitStatus("/tmp/worktree", "main");
+    expect(invokeMock).toHaveBeenLastCalledWith("get_local_git_status", {
+      worktreePath: "/tmp/worktree",
+      targetBranch: "main",
+      includeUncommitted: true,
+    });
+  });
+
   test("every exported command wrapper reaches the native invoke boundary", async () => {
     const specialWrappers = new Set([
       "getWebClientStatus",

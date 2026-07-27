@@ -99,10 +99,10 @@ export function useFilesPanel() {
         let changes: backend.GitFileChange[] = [];
         if (isLocalEnvironment && worktreePath) {
           // Local environment - use local git status command
-          changes = await backend.getLocalGitStatus(worktreePath, comparisonRef);
+          changes = await backend.getLocalGitStatus(worktreePath, comparisonRef, true);
         } else if (containerId) {
           // Container environment - use container git status command
-          changes = await backend.getGitStatus(containerId, comparisonRef);
+          changes = await backend.getGitStatus(containerId, comparisonRef, true);
         }
         if (activeSnapshotKeyRef.current === environmentSnapshotKey) {
           setChanges(changes);

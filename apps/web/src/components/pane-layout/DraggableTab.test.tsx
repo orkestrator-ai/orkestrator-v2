@@ -84,7 +84,7 @@ describe("DraggableTab title precedence", () => {
     const tab: TabInfo = {
       id: "tab-a",
       type: "claude-native",
-      displayTitle: "Review",
+      displayTitle: "Implementation",
       claudeNativeData: { environmentId: "env-1" },
     };
 
@@ -115,11 +115,12 @@ describe("DraggableTab title precedence", () => {
     expect(screen.getByText("Custom 3")).toBeDefined();
   });
 
-  test("claudeSessionTitle beats displayTitle once the agent has named the session", () => {
+  test("review tabs keep their numbered workflow title after the agent names the session", () => {
     const tab: TabInfo = {
       id: "tab-a",
       type: "claude-native",
       displayTitle: "Review",
+      isReviewTab: true,
       claudeNativeData: { environmentId: "env-1" },
     };
 
@@ -131,14 +132,15 @@ describe("DraggableTab title precedence", () => {
 
     renderTab(tab, 0);
 
-    expect(screen.getByText("Auto Title")).toBeDefined();
+    expect(screen.getByText("Review 1")).toBeDefined();
+    expect(screen.queryByText("Auto Title")).toBeNull();
   });
 
-  test("uses the Codex title from this tab's environment-scoped session", () => {
+  test("PR tabs keep their numbered workflow title after Codex names the session", () => {
     const tab: TabInfo = {
       id: "tab-codex",
       type: "codex-native",
-      displayTitle: "Review",
+      displayTitle: "PR",
       codexNativeData: { environmentId: "env-1" },
     };
     useCodexStore.setState({
@@ -151,8 +153,46 @@ describe("DraggableTab title precedence", () => {
 
     renderTab(tab);
 
-    expect(screen.getByText("Codex title")).toBeDefined();
-    expect(screen.queryByText("Review 1")).toBeNull();
+    expect(screen.getByText("PR 1")).toBeDefined();
+    expect(screen.queryByText("Codex title")).toBeNull();
+  });
+
+  test("resolve tabs keep their numbered workflow title after OpenCode names the session", () => {
+    const tab: TabInfo = {
+      id: "tab-opencode",
+      type: "opencode-native",
+      displayTitle: "Resolve",
+      openCodeNativeData: { environmentId: "env-1" },
+    };
+    useOpenCodeStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-opencode"), { title: "OpenCode title" } as never],
+      ]),
+    });
+
+    renderTab(tab, 2);
+
+    expect(screen.getByText("Resolve 3")).toBeDefined();
+    expect(screen.queryByText("OpenCode title")).toBeNull();
+  });
+
+  test("restored legacy Conflict tabs use the Resolve label", () => {
+    const tab: TabInfo = {
+      id: "tab-codex",
+      type: "codex-native",
+      displayTitle: "Conflict",
+      codexNativeData: { environmentId: "env-1" },
+    };
+    useCodexStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-codex"), { title: "Codex title" } as never],
+      ]),
+    });
+
+    renderTab(tab, 1);
+
+    expect(screen.getByText("Resolve 2")).toBeDefined();
+    expect(screen.queryByText("Codex title")).toBeNull();
   });
 
   test("uses the OpenCode title before the workflow display title", () => {

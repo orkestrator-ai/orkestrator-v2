@@ -1360,7 +1360,7 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("names PR, conflict, and push workflow tabs", () => {
+  test("names PR, resolve, and push workflow tabs", () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -1387,7 +1387,7 @@ describe("ActionBar workflow tabs", () => {
 
     expect(createTabMock).toHaveBeenLastCalledWith(
       "codex",
-      expect.objectContaining({ displayTitle: "Conflict" }),
+      expect.objectContaining({ displayTitle: "Resolve" }),
     );
 
     currentEnvironment = {
@@ -1443,7 +1443,7 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resolve with Codex" }));
     expect(createTabMock).toHaveBeenLastCalledWith(
       "codex",
-      expect.objectContaining({ displayTitle: "Conflict" }),
+      expect.objectContaining({ displayTitle: "Resolve" }),
     );
 
     currentEnvironment = {

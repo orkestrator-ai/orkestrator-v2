@@ -39,6 +39,15 @@ const isCodexTab = (type: TabType): boolean =>
 /** Check if a tab type is a build pipeline tab */
 const isBuildTab = (type: TabType): boolean => type === "claude-build";
 
+function getWorkflowTabTitle(tab: TabInfo): "Review" | "PR" | "Resolve" | undefined {
+  if (tab.isReviewTab) return "Review";
+  if (tab.displayTitle === "PR") return "PR";
+  if (tab.displayTitle === "Resolve" || tab.displayTitle === "Conflict") {
+    return "Resolve";
+  }
+  return undefined;
+}
+
 interface DraggableTabProps {
   tab: TabInfo;
   paneId: string;
@@ -152,13 +161,20 @@ export function DraggableTab({
     // For terminal tabs, include session name if set
     const tabNumber = index + 1;
 
+    // Workflow tabs keep a stable numbered label instead of adopting the
+    // agent-generated session title. "Conflict" supports restored tabs created
+    // before the conflict-resolution label changed to "Resolve".
+    const workflowTitle = getWorkflowTabTitle(tab);
+    if (workflowTitle) {
+      return `${workflowTitle} ${tabNumber}`;
+    }
+
     if (session?.name) {
       // Custom session name + number for keyboard shortcut reference
       return `${session.name} ${tabNumber}`;
     }
 
-    // Auto-generated title from the native session takes precedence over the
-    // workflow-supplied displayTitle once the agent has named the session.
+    // Ordinary native agent tabs adopt their auto-generated session title.
     if (nativeSessionTitle) {
       return nativeSessionTitle;
     }

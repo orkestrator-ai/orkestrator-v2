@@ -43,13 +43,16 @@ mock.module("@/components/ui/select", () => ({
   // context, so the mock has to do the same or a disabled select is untestable.
   SelectTrigger: ({
     id,
+    className,
     children,
   }: {
     id?: string;
+    className?: string;
     children: React.ReactNode;
   }) => (
     <button
       id={id}
+      className={className}
       type="button"
       role="combobox"
       disabled={useContext(SelectTestContext)?.disabled ?? false}
@@ -74,6 +77,7 @@ import {
   getReviewAgent,
   type ReviewLaunchSelection,
   type ReviewModelCatalog,
+  type ReviewTabType,
 } from "./ReviewLaunchDialog";
 
 afterEach(cleanup);
@@ -203,6 +207,56 @@ describe("ReviewLaunchDialog", () => {
       model: "codex-a",
       reasoningEffort: "high",
     });
+  });
+
+  test("lets a described model trigger grow beyond its minimum height", () => {
+    renderDialog({
+      catalog: {
+        ...catalog,
+        claude: [
+          {
+            ...catalog.claude[0]!,
+            description: "Balanced reviews for everyday code changes",
+          },
+        ],
+      },
+    });
+
+    const trigger = screen.getByRole("combobox", { name: "Model" });
+    const classes = trigger.className.split(/\s+/);
+    expect(classes).toContain("min-h-11");
+    expect(classes).toContain("py-2.5");
+    expect(classes).toContain("data-[size=default]:h-auto");
+    expect(classes).not.toContain("h-11");
+    expect(trigger.textContent).toContain("Claude A");
+    expect(trigger.textContent).toContain("Balanced reviews for everyday code changes");
+  });
+
+  test("manually changes reasoning effort and submits the selection", () => {
+    const { onConfirm } = renderDialog();
+
+    fireEvent.click(screen.getByRole("option", { name: "High" }));
+
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      .toContain("high");
+    expect(screen.getByText(/Claude Native · Claude A · high effort · one pass/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude-native",
+      model: "claude-a",
+      reasoningEffort: "high",
+    });
+  });
+
+  test("closes without launching when cancelled", () => {
+    const onOpenChange = mock((_open: boolean) => undefined);
+    const { onConfirm } = renderDialog({ onOpenChange });
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 });
 
@@ -388,7 +442,7 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
   });
 
   test("falls back to the first model when a refreshed catalog drops the selected one", () => {
-    const { props, rerender } = renderDialog({
+    const { onConfirm, props, rerender } = renderDialog({
       preferredModels: { claude: "claude-b" },
     });
     expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Claude B");
@@ -401,6 +455,46 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
     );
 
     expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Claude A");
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude-native",
+      model: "claude-a",
+      reasoningEffort: undefined,
+    });
+  });
+
+  test("drops an effort removed by a refreshed catalog before submitting", () => {
+    const { onConfirm, props, rerender } = renderDialog({
+      preferredModels: { claude: "claude-a" },
+      preferredReasoningEfforts: { claude: "high" },
+    });
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      .toContain("high");
+
+    rerender(
+      <ReviewLaunchDialog
+        {...props}
+        catalog={{
+          ...catalog,
+          claude: [
+            {
+              ...catalog.claude[0]!,
+              reasoningEfforts: ["low"],
+            },
+            catalog.claude[1]!,
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      .toContain("default");
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude-native",
+      model: "claude-a",
+      reasoningEffort: undefined,
+    });
   });
 });
 
@@ -516,4 +610,5 @@ test("review tab mapping is native-only", () => {
   expect(getReviewAgent("claude-native")).toBe("claude");
   expect(getReviewAgent("codex-native")).toBe("codex");
   expect(getReviewAgent("opencode-native")).toBe("opencode");
+  expect(getReviewAgent("unsupported" as ReviewTabType)).toBe("claude");
 });

@@ -33,6 +33,8 @@ import type {
   Environment,
   EnvironmentStatus,
   EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  OpenCodeModelCatalogSnapshot,
   PortMapping,
   PrState,
   Project,
@@ -650,6 +652,79 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
+function normalizeOpenCodeModelCatalogEntries(
+  models: OpenCodeModelCatalogEntry[],
+): OpenCodeModelCatalogEntry[] {
+  const byId = new Map<string, OpenCodeModelCatalogEntry>();
+
+  for (const candidate of models) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+    const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
+    const provider =
+      typeof candidate.provider === "string" ? candidate.provider.trim() : "";
+    if (!id || !name || !provider) continue;
+
+    const variants = Array.isArray(candidate.variants)
+      ? Array.from(new Set(candidate.variants.filter(
+          (variant): variant is string =>
+            typeof variant === "string" && variant.trim().length > 0,
+        ).map((variant) => variant.trim())))
+      : undefined;
+    const finiteNumber = (value: unknown): number | undefined =>
+      typeof value === "number" && Number.isFinite(value) ? value : undefined;
+    const contextWindow = finiteNumber(candidate.contextWindow);
+
+    byId.set(id, {
+      id,
+      name,
+      provider,
+      ...(variants?.length ? { variants } : {}),
+      ...(finiteNumber(candidate.inputCost) !== undefined
+        ? { inputCost: finiteNumber(candidate.inputCost) }
+        : {}),
+      ...(finiteNumber(candidate.outputCost) !== undefined
+        ? { outputCost: finiteNumber(candidate.outputCost) }
+        : {}),
+      ...(contextWindow !== undefined && contextWindow > 0
+        ? { contextWindow }
+        : {}),
+    });
+  }
+
+  return Array.from(byId.values()).sort((left, right) =>
+    left.id.localeCompare(right.id),
+  );
+}
+
+function parseOpenCodeModelCatalogSnapshot(
+  value: unknown,
+): OpenCodeModelCatalogSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (record.schemaVersion !== 1 || !Array.isArray(record.models)) return null;
+
+  const models = normalizeOpenCodeModelCatalogEntries(
+    record.models as OpenCodeModelCatalogEntry[],
+  );
+  if (models.length === 0) return null;
+
+  const updatedAt =
+    typeof record.updatedAt === "string" && !Number.isNaN(Date.parse(record.updatedAt))
+      ? record.updatedAt
+      : new Date(0).toISOString();
+  const catalogVersion = createHash("sha256")
+    .update(JSON.stringify(models))
+    .digest("hex");
+
+  return {
+    schemaVersion: 1,
+    catalogVersion,
+    updatedAt,
+    models,
+  };
+}
+
 export type ResourceChangeListener = (change: ResourceChange) => void;
 
 export class StorageService {
@@ -657,6 +732,7 @@ export class StorageService {
   private writeQueue = Promise.resolve();
   private environmentMutationQueue: Promise<unknown> = Promise.resolve();
   private configMutationQueue: Promise<unknown> = Promise.resolve();
+  private openCodeModelCatalogMutationQueue: Promise<unknown> = Promise.resolve();
   private githubCompletionCommentMutationQueue: Promise<unknown> = Promise.resolve();
   private featurePlanMutation: Promise<unknown> = Promise.resolve();
   private paneLayoutMutation: Promise<unknown> = Promise.resolve();
@@ -719,6 +795,10 @@ export class StorageService {
 
   private configFile(): string {
     return this.file("config.json");
+  }
+
+  private openCodeModelCatalogFile(): string {
+    return this.file("opencode-model-catalog.json");
   }
 
   private sessionsFile(): string {
@@ -1551,6 +1631,48 @@ export class StorageService {
     const validated = validateConfigReviewInstruction(config);
     await this.enqueueConfigMutation(() => this.saveJson(this.configFile(), validated));
     this.announce("config", "app");
+  }
+
+  async getOpenCodeModelCatalog(): Promise<OpenCodeModelCatalogSnapshot | null> {
+    const snapshot = await this.loadJson<unknown>(
+      this.openCodeModelCatalogFile(),
+      () => null,
+    );
+    return parseOpenCodeModelCatalogSnapshot(snapshot);
+  }
+
+  async cacheOpenCodeModelCatalog(
+    models: OpenCodeModelCatalogEntry[],
+  ): Promise<OpenCodeModelCatalogSnapshot> {
+    const normalizedModels = normalizeOpenCodeModelCatalogEntries(models);
+    if (normalizedModels.length === 0) {
+      throw new Error("OpenCode model catalogue must contain at least one model.");
+    }
+
+    const catalogVersion = createHash("sha256")
+      .update(JSON.stringify(normalizedModels))
+      .digest("hex");
+
+    const run = async () => {
+      const current = await this.getOpenCodeModelCatalog();
+      if (current?.catalogVersion === catalogVersion) return current;
+
+      const snapshot: OpenCodeModelCatalogSnapshot = {
+        schemaVersion: 1,
+        catalogVersion,
+        updatedAt: new Date().toISOString(),
+        models: normalizedModels,
+      };
+      await this.saveJson(this.openCodeModelCatalogFile(), snapshot);
+      return snapshot;
+    };
+
+    const next = this.openCodeModelCatalogMutationQueue.then(run, run);
+    this.openCodeModelCatalogMutationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   async getDesktopConnections(): Promise<StoredDesktopConnections> {

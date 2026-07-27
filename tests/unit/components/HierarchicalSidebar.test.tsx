@@ -420,7 +420,7 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(projectItems[1]!);
     expect(
       await screen.findByRole("heading", {
-        name: "Create Ork (Environment) Project Two",
+        name: "Create Ork (Environment) - Project Two",
       }),
     ).toBeTruthy();
   });

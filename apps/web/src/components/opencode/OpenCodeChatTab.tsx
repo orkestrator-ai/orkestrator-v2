@@ -62,12 +62,14 @@ import {
   getOpenCodeServerStatus,
   getOpenCodeServerLog,
   getOpencodeModelPreferences,
+  getCachedOpenCodeModelCatalog,
+  cacheOpenCodeModelCatalog,
   startLocalOpencodeServer,
   getLocalOpencodeServerStatus,
   renameEnvironmentFromPrompt,
-  type OpenCodeModelRef,
   type OpenCodeModelPreferences,
 } from "@/lib/backend";
+import { openCodeModelRefToId } from "@/lib/opencode-model-preferences";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
 import {
   buildMessageForkPlan,
@@ -115,14 +117,6 @@ const EMPTY_MODEL_PREFERENCES: OpenCodeModelPreferences = {
 const EMPTY_SLASH_COMMANDS: OpenCodeSlashCommand[] = [];
 const EMPTY_MODELS: OpenCodeModel[] = [];
 
-function toOpenCodeModelId(modelRef?: OpenCodeModelRef): string | undefined {
-  if (!modelRef?.providerID || !modelRef?.modelID) {
-    return undefined;
-  }
-
-  return `${modelRef.providerID}/${modelRef.modelID}`;
-}
-
 function resolveModelSelection(input: {
   availableModels: OpenCodeModel[];
   defaults: OpenCodeModelDefaults;
@@ -132,7 +126,7 @@ function resolveModelSelection(input: {
 }): { model: string | undefined; variant: string | undefined } {
   const { availableModels, defaults, preferences, currentModel, currentVariant } = input;
   const availableModelIds = new Set(availableModels.map((m) => m.id));
-  const recentModelId = toOpenCodeModelId(preferences.recent[0]);
+  const recentModelId = openCodeModelRefToId(preferences.recent[0]);
 
   let model =
     currentModel && availableModelIds.has(currentModel) ? currentModel : undefined;
@@ -383,7 +377,7 @@ export function OpenCodeChatTab({
     const seen = new Set<string>();
 
     for (const favorite of modelPreferences.favorite) {
-      const modelId = toOpenCodeModelId(favorite);
+      const modelId = openCodeModelRefToId(favorite);
       if (!modelId || seen.has(modelId)) continue;
       seen.add(modelId);
       ids.push(modelId);
@@ -462,6 +456,29 @@ export function OpenCodeChatTab({
       [environmentId],
     ),
   );
+
+  // Rehydrate a last-known-good catalogue before a server finishes starting.
+  // The authoritative live fetch below replaces it as soon as one is available.
+  useEffect(() => {
+    let cancelled = false;
+    void getCachedOpenCodeModelCatalog()
+      .then((snapshot) => {
+        if (
+          cancelled ||
+          !snapshot?.models.length ||
+          useOpenCodeStore.getState().getModels(environmentId).length > 0
+        ) {
+          return;
+        }
+        setModels(environmentId, snapshot.models);
+      })
+      .catch((error) => {
+        console.warn("[OpenCodeChatTab] Failed to load cached models:", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [environmentId, setModels]);
 
   useEffect(() => {
     const usage = summarizeOpenCodeUsage(sessionMessages, models);
@@ -967,7 +984,18 @@ export function OpenCodeChatTab({
           ]);
         if (!mounted) return;
 
-        setModels(environmentId, availableModels);
+        const effectiveModels =
+          availableModels.length > 0
+            ? availableModels
+            : useOpenCodeStore.getState().getModels(environmentId);
+        if (availableModels.length > 0) {
+          setModels(environmentId, availableModels);
+        }
+        if (availableModels.length > 0) {
+          void cacheOpenCodeModelCatalog(availableModels).catch((error) => {
+            console.warn("[OpenCodeChatTab] Failed to cache models:", error);
+          });
+        }
         setModelPreferences(preferences);
 
         // Initialize selected model/variant while preserving valid user-selected values.
@@ -978,7 +1006,7 @@ export function OpenCodeChatTab({
         const currentVariant = pendingInitialOptions?.reasoningEffort ?? getSelectedVariant(sessionKey);
         const { model: resolvedModel, variant: resolvedVariant } =
           resolveModelSelection({
-            availableModels,
+            availableModels: effectiveModels,
             defaults,
             preferences,
             currentModel,
@@ -991,7 +1019,7 @@ export function OpenCodeChatTab({
         if (resolvedVariant !== getSelectedVariant(sessionKey)) {
           setSelectedVariant(sessionKey, resolvedVariant);
         }
-        if (pendingInitialOptions && availableModels.length > 0) {
+        if (pendingInitialOptions && effectiveModels.length > 0) {
           acknowledgeInitialLaunchOptions();
         }
 
@@ -2125,7 +2153,18 @@ export function OpenCodeChatTab({
     try {
       const { models: availableModels, defaults } =
         await getModelsWithDefaults(client);
-      setModels(environmentId, availableModels);
+      const effectiveModels =
+        availableModels.length > 0
+          ? availableModels
+          : useOpenCodeStore.getState().getModels(environmentId);
+      if (availableModels.length > 0) {
+        setModels(environmentId, availableModels);
+      }
+      if (availableModels.length > 0) {
+        void cacheOpenCodeModelCatalog(availableModels).catch((error) => {
+          console.warn("[OpenCodeChatTab] Failed to cache refreshed models:", error);
+        });
+      }
 
       const preferences = await getOpencodeModelPreferences().catch((error) => {
         console.warn("[OpenCodeChatTab] Failed to load model preferences:", error);
@@ -2137,7 +2176,7 @@ export function OpenCodeChatTab({
       const currentVariant = getSelectedVariant(sessionKey);
       const { model: resolvedModel, variant: resolvedVariant } =
         resolveModelSelection({
-          availableModels,
+          availableModels: effectiveModels,
           defaults,
           preferences,
           currentModel,

@@ -780,15 +780,34 @@ export interface OpenCodeServerStatus {
   hostPort: number | null;
 }
 
-export interface OpenCodeModelRef {
-  providerID: string;
-  modelID: string;
-}
+export type OpenCodeModelRef =
+  | string
+  | {
+      providerID: string;
+      modelID: string;
+    };
 
 export interface OpenCodeModelPreferences {
   recent: OpenCodeModelRef[];
   favorite: OpenCodeModelRef[];
   variant: Record<string, string>;
+}
+
+export interface CachedOpenCodeModel {
+  id: string;
+  name: string;
+  provider: string;
+  variants?: string[];
+  inputCost?: number;
+  outputCost?: number;
+  contextWindow?: number;
+}
+
+export interface OpenCodeModelCatalogSnapshot {
+  schemaVersion: 1;
+  catalogVersion: string;
+  updatedAt: string;
+  models: CachedOpenCodeModel[];
 }
 
 /** Start the OpenCode server in a container */
@@ -814,6 +833,23 @@ export async function getOpenCodeServerLog(containerId: string): Promise<string>
 /** Get OpenCode model preferences from ~/.local/state/opencode/model.json */
 export async function getOpencodeModelPreferences(): Promise<OpenCodeModelPreferences> {
   return invoke<OpenCodeModelPreferences>("get_opencode_model_preferences");
+}
+
+/** Load the durable host-level catalogue before an OpenCode server is ready. */
+export async function getCachedOpenCodeModelCatalog(): Promise<OpenCodeModelCatalogSnapshot | null> {
+  return invoke<OpenCodeModelCatalogSnapshot | null>("get_opencode_model_catalog_cache");
+}
+
+/**
+ * Store a newly-discovered catalogue. The backend hashes normalized model data
+ * and only rewrites the cache when the catalogue version has actually changed.
+ */
+export async function cacheOpenCodeModelCatalog(
+  models: CachedOpenCodeModel[],
+): Promise<OpenCodeModelCatalogSnapshot> {
+  return invoke<OpenCodeModelCatalogSnapshot>("cache_opencode_model_catalog", {
+    models,
+  });
 }
 
 // --- Claude Bridge Server Commands ---

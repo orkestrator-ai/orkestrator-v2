@@ -403,6 +403,58 @@ describe("process and platform command behavior", () => {
     }
   });
 
+  test("loads and validates the durable OpenCode model catalogue", async () => {
+    const cached = {
+      schemaVersion: 1 as const,
+      catalogVersion: "cached",
+      updatedAt: "2026-07-27T12:00:00.000Z",
+      models: [],
+    };
+    const getOpenCodeModelCatalog = mock(async () => cached);
+    const cacheOpenCodeModelCatalog = mock(async (models: unknown[]) => ({
+      ...cached,
+      catalogVersion: "updated",
+      models,
+    }));
+    const context = {
+      ...fixture.context,
+      storage: {
+        ...fixture.context.storage,
+        getOpenCodeModelCatalog,
+        cacheOpenCodeModelCatalog,
+      },
+    } as CommandContext;
+
+    expect(
+      await invoke("get_opencode_model_catalog_cache", {}, context),
+    ).toEqual(cached);
+
+    const models = [
+      {
+        id: "openrouter/openai/gpt-5",
+        name: "GPT-5",
+        provider: "openrouter",
+        variants: ["low", "high"],
+      },
+    ];
+    expect(
+      await invoke("cache_opencode_model_catalog", { models }, context),
+    ).toEqual({
+      ...cached,
+      catalogVersion: "updated",
+      models,
+    });
+    expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith(models);
+
+    await expect(
+      invoke(
+        "cache_opencode_model_catalog",
+        { models: [{ id: "missing-fields" }] },
+        context,
+      ),
+    ).rejects.toThrow("models[0].name");
+  });
+
   test("stops the in-container Codex bridge without the pattern matching its own shell", async () => {
     await expect(invoke("stop_codex_server", { containerId: "container-a" })).resolves.toBeUndefined();
 

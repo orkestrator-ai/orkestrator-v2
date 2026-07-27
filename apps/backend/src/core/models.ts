@@ -64,6 +64,30 @@ export interface ClaudeModelCatalogSnapshot {
   error?: string;
 }
 
+export interface OpenCodeModelCatalogEntry {
+  id: string;
+  name: string;
+  provider: string;
+  variants?: string[];
+  inputCost?: number;
+  outputCost?: number;
+  contextWindow?: number;
+}
+
+/**
+ * Host-level OpenCode catalogue shared by every environment.
+ *
+ * `catalogVersion` is a digest of the normalized model data. Keeping it
+ * separate from `updatedAt` lets the backend avoid rewriting the cache when a
+ * newly-started OpenCode server reports the same catalogue.
+ */
+export interface OpenCodeModelCatalogSnapshot {
+  schemaVersion: 1;
+  catalogVersion: string;
+  updatedAt: string;
+  models: OpenCodeModelCatalogEntry[];
+}
+
 export interface Environment {
   id: string;
   projectId: string;

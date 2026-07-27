@@ -28,6 +28,7 @@ const {
   deletePaneLayout,
   getEnvironmentSnapshots,
   getClaudeModelCatalog,
+  getCachedOpenCodeModelCatalog,
   getPaneLayout,
   getLinearConnection,
   getLinearIssue,
@@ -60,6 +61,7 @@ const {
   setEnvironmentUnread,
   setEnvironmentPendingAgentLaunch,
   setEnvironmentInitialPrompt,
+  cacheOpenCodeModelCatalog,
   updateAgentModelDefault,
   updateEnvironmentAgentSettings,
 } = backendWrappers;
@@ -225,6 +227,31 @@ describe("backend setup wrappers", () => {
       environmentId: "env-1",
       forceRefresh: true,
     });
+  });
+
+  test("loads and updates the durable OpenCode model catalogue", async () => {
+    const snapshot = {
+      schemaVersion: 1 as const,
+      catalogVersion: "catalog-v1",
+      updatedAt: "2026-07-27T12:00:00.000Z",
+      models: [
+        {
+          id: "openrouter/anthropic/claude-sonnet",
+          name: "Claude Sonnet",
+          provider: "openrouter",
+        },
+      ],
+    };
+    invokeMock.mockResolvedValue(snapshot);
+
+    await expect(getCachedOpenCodeModelCatalog()).resolves.toEqual(snapshot);
+    await expect(cacheOpenCodeModelCatalog(snapshot.models)).resolves.toEqual(
+      snapshot,
+    );
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_opencode_model_catalog_cache", undefined],
+      ["cache_opencode_model_catalog", { models: snapshot.models }],
+    ]);
   });
 
   test("calls the create-environment Electron command with naming prompt", async () => {

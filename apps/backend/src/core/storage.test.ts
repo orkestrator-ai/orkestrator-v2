@@ -202,3 +202,70 @@ describe("session buffer deletion", () => {
     });
   });
 });
+
+describe("OpenCode model catalogue cache", () => {
+  const models = [
+    {
+      id: "openrouter/openai/gpt-5",
+      name: "GPT-5",
+      provider: "openrouter",
+      variants: ["low", "high"],
+      contextWindow: 400_000,
+    },
+    {
+      id: "anthropic/claude-sonnet",
+      name: "Claude Sonnet",
+      provider: "anthropic",
+    },
+  ];
+
+  test("persists a normalized catalogue in the application config folder", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const snapshot = await storage.cacheOpenCodeModelCatalog(models);
+
+      expect(snapshot.schemaVersion).toBe(1);
+      expect(snapshot.models.map((model) => model.id)).toEqual([
+        "anthropic/claude-sonnet",
+        "openrouter/openai/gpt-5",
+      ]);
+      expect(await storage.getOpenCodeModelCatalog()).toEqual(snapshot);
+      expect(
+        JSON.parse(
+          await fs.readFile(
+            path.join(dataDir, "opencode-model-catalog.json"),
+            "utf8",
+          ),
+        ),
+      ).toEqual(snapshot);
+    });
+  });
+
+  test("keeps the existing cache version until the discovered models change", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const initial = await storage.cacheOpenCodeModelCatalog(models);
+      const unchanged = await storage.cacheOpenCodeModelCatalog([...models].reverse());
+      expect(unchanged).toEqual(initial);
+
+      const updated = await storage.cacheOpenCodeModelCatalog([
+        ...models,
+        {
+          id: "openrouter/google/gemini",
+          name: "Gemini",
+          provider: "openrouter",
+        },
+      ]);
+      expect(updated.catalogVersion).not.toBe(initial.catalogVersion);
+      expect(updated.models).toHaveLength(3);
+    });
+  });
+
+  test("ignores a malformed persisted catalogue", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await fs.writeFile(
+        path.join(dataDir, "opencode-model-catalog.json"),
+        JSON.stringify({ schemaVersion: 1, models: [{ id: "missing-fields" }] }),
+      );
+      expect(await storage.getOpenCodeModelCatalog()).toBeNull();
+    });
+  });
+});

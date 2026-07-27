@@ -169,7 +169,7 @@ describe("resolveAgentDefaults", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: "Create Ork (Environment) Orkestrator",
+        name: "Create Ork (Environment) - Orkestrator",
       }),
     ).toBeTruthy();
     expect(
@@ -915,9 +915,16 @@ describe("resolveAgentDefaults", () => {
     expect(
       screen.getByRole("combobox", { name: "Reasoning effort" }).textContent,
     ).toContain("Deep");
-    fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
-    expect(await screen.findByRole("option", { name: "Model A" })).toBeTruthy();
-    fireEvent.click(await screen.findByRole("option", { name: "Model B" }));
+    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(
+      await screen.findByRole("menuitemradio", { name: /Model A/ }),
+    ).toBeTruthy();
+    fireEvent.click(
+      await screen.findByRole("menuitemradio", { name: /Model B/ }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(

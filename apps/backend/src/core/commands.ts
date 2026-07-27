@@ -18,6 +18,7 @@ import {
   type ClaudeModelCatalogSnapshot,
   type EnvironmentStatus,
   type EnvironmentType,
+  type OpenCodeModelCatalogEntry,
   type PortMapping,
   type PrState,
   type SessionStatus,
@@ -516,6 +517,49 @@ function asTerminalDimension(value: unknown, fallback: number): number {
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function asOpenCodeModelCatalog(value: unknown): OpenCodeModelCatalogEntry[] {
+  if (!Array.isArray(value)) {
+    throw new Error("Expected models to be an array");
+  }
+
+  return value.map((candidate, index) => {
+    const model = asRecord(candidate, `models[${index}]`);
+    assertOnlyKeys(
+      model,
+      [
+        "id",
+        "name",
+        "provider",
+        "variants",
+        "inputCost",
+        "outputCost",
+        "contextWindow",
+      ],
+      `models[${index}]`,
+    );
+    return {
+      id: asString(model.id, `models[${index}].id`),
+      name: asString(model.name, `models[${index}].name`),
+      provider: asString(model.provider, `models[${index}].provider`),
+      ...(model.variants === undefined ? {} : { variants: asStringArray(model.variants) }),
+      ...(model.inputCost === undefined
+        ? {}
+        : { inputCost: asNumber(model.inputCost, `models[${index}].inputCost`) }),
+      ...(model.outputCost === undefined
+        ? {}
+        : { outputCost: asNumber(model.outputCost, `models[${index}].outputCost`) }),
+      ...(model.contextWindow === undefined
+        ? {}
+        : {
+            contextWindow: asNumber(
+              model.contextWindow,
+              `models[${index}].contextWindow`,
+            ),
+          }),
+    };
+  });
 }
 
 function asFeaturePlanRole(value: unknown): "user" | "assistant" | "system" {
@@ -5297,6 +5341,12 @@ export function createCommandRegistry(
     if (!await pathExists(modelPath)) return { recent: [], favorite: [], variant: {} };
     return JSON.parse(await fs.readFile(modelPath, "utf8"));
   });
+  register("get_opencode_model_catalog_cache", (_args, { storage }) =>
+    storage.getOpenCodeModelCatalog(),
+  );
+  register("cache_opencode_model_catalog", ({ models }, { storage }) =>
+    storage.cacheOpenCodeModelCatalog(asOpenCodeModelCatalog(models)),
+  );
   register("start_claude_server", ({ containerId }) =>
     startContainerServer(
       asString(containerId, "containerId"),

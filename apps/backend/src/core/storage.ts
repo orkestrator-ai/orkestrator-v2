@@ -2,6 +2,14 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  aggregateAgentActivityState,
+  AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
+  AGENT_ACTIVITY_SOURCES,
+  AGENT_ACTIVITY_STATES,
+  isAgentActivityTimestamp,
+  parseUsableAgentActivityTime,
+} from "@orkestrator/protocol/agent-activity";
+import {
   parseStoredDesktopConnections,
   type StoredDesktopConnections,
 } from "@orkestrator/protocol/connections";
@@ -38,11 +46,6 @@ import type {
 } from "./models.js";
 
 export type JsonRecord = Record<string, unknown>;
-
-// Renderer observations originate on the same machine as the backend, so a
-// small allowance covers ordinary clock adjustments without allowing a broken
-// or malicious client clock to permanently outrank backend-owned observations.
-const AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS = 5 * 60_000;
 
 type KanbanComment = {
   id: string;
@@ -203,16 +206,30 @@ function isNonBlankString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function parseUsableAgentActivityTime(
-  value: unknown,
+/**
+ * Read back the persisted per-source snapshots, discarding any whose state or
+ * timestamp no longer parses. A poisoned entry must not be able to pin the
+ * aggregate, and dropping it here means every writer sees the same clean view.
+ */
+function readAgentActivitySources(
+  environment: Environment,
   referenceTime: number,
-): number {
-  if (typeof value !== "string") return Number.NEGATIVE_INFINITY;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed)
-    && parsed <= referenceTime + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS
-    ? parsed
-    : Number.NEGATIVE_INFINITY;
+): NonNullable<Environment["agentActivitySources"]> {
+  const sources: NonNullable<Environment["agentActivitySources"]> = {};
+  for (const candidateSource of AGENT_ACTIVITY_SOURCES) {
+    const snapshot = environment.agentActivitySources?.[candidateSource];
+    if (!snapshot || !isOneOf(snapshot.state, AGENT_ACTIVITY_STATES)) continue;
+    const snapshotTime = parseUsableAgentActivityTime(
+      snapshot.updatedAt,
+      referenceTime,
+    );
+    if (!Number.isFinite(snapshotTime)) continue;
+    sources[candidateSource] = {
+      state: snapshot.state,
+      updatedAt: new Date(snapshotTime).toISOString(),
+    };
+  }
+  return sources;
 }
 
 function nextAgentActivityTimestamp(
@@ -1330,17 +1347,17 @@ export class StorageService {
     occurredAt: string,
     source: AgentActivitySource = "frontend",
   ): Promise<Environment> {
-    if (!isOneOf(state, ["idle", "working", "waiting"])) {
+    if (!isOneOf(state, AGENT_ACTIVITY_STATES)) {
       throw new Error("state must be idle, working, or waiting");
     }
-    const occurredTime = Date.parse(occurredAt);
-    if (!Number.isFinite(occurredTime)) {
+    if (!isAgentActivityTimestamp(occurredAt)) {
       throw new Error("occurredAt must be a valid ISO timestamp");
     }
+    const occurredTime = Date.parse(occurredAt);
     if (occurredTime > Date.now() + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS) {
       throw new Error("occurredAt must not be more than 5 minutes in the future");
     }
-    if (!isOneOf(source, ["frontend", "claude-terminal"])) {
+    if (!isOneOf(source, AGENT_ACTIVITY_SOURCES)) {
       throw new Error("source must be frontend or claude-terminal");
     }
 
@@ -1350,35 +1367,20 @@ export class StorageService {
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
 
       const referenceTime = Date.now();
-      const sources: Environment["agentActivitySources"] = {};
-      for (const candidateSource of ["frontend", "claude-terminal"] as const) {
-        const snapshot = environment.agentActivitySources?.[candidateSource];
-        if (
-          snapshot
-          && isOneOf(snapshot.state, ["idle", "working", "waiting"])
-        ) {
-          const snapshotTime = parseUsableAgentActivityTime(
-            snapshot.updatedAt,
-            referenceTime,
-          );
-          if (Number.isFinite(snapshotTime)) {
-            sources[candidateSource] = {
-              state: snapshot.state,
-              updatedAt: new Date(snapshotTime).toISOString(),
-            };
-          }
-        }
-      }
+      const sources = readAgentActivitySources(environment, referenceTime);
 
+      // A source with no snapshot of its own is still ordered against the
+      // aggregate token. Falling back to -Infinity there would exempt the very
+      // first report from *every* source but one from the staleness check, so a
+      // delayed or retried report could resurrect a state the environment has
+      // already left — the exact thing this ordering exists to prevent.
       const previousSource = sources[source];
       const previousTime = previousSource
         ? Date.parse(previousSource.updatedAt)
-        : Object.keys(sources).length === 0
-          ? parseUsableAgentActivityTime(
-            environment.agentActivityUpdatedAt,
-            referenceTime,
-          )
-          : Number.NEGATIVE_INFINITY;
+        : parseUsableAgentActivityTime(
+          environment.agentActivityUpdatedAt,
+          referenceTime,
+        );
       let acceptedOccurredTime = occurredTime;
       if (Number.isFinite(previousTime) && previousTime >= occurredTime) {
         if (source === "frontend" || previousTime > occurredTime) {
@@ -1396,18 +1398,9 @@ export class StorageService {
         state,
         updatedAt: normalizedOccurredAt,
       };
-      let aggregate: AgentActivityState = "idle";
-      for (const snapshot of Object.values(sources)) {
-        if (!snapshot) continue;
-        if (snapshot.state === "working") {
-          aggregate = "working";
-          break;
-        }
-        if (snapshot.state === "waiting") aggregate = "waiting";
-      }
 
       environment.agentActivitySources = sources;
-      environment.agentActivityState = aggregate;
+      environment.agentActivityState = aggregateAgentActivityState(sources);
       const aggregateTime = parseUsableAgentActivityTime(
         environment.agentActivityUpdatedAt,
         referenceTime,
@@ -1421,6 +1414,43 @@ export class StorageService {
       await this.saveJson(this.environmentsFile(), environments);
       this.announce("environment", environmentId);
       return environment;
+    });
+  }
+
+  /**
+   * Drop every renderer-reported activity source. Returns the ids that changed.
+   *
+   * A `frontend` snapshot is only meaningful while the renderer that wrote it
+   * is still alive to retract it. The aggregate is a max, so nothing can lower
+   * a stale `working` — not a later `idle` from the backend terminal poller,
+   * not a restart — and a renderer that quit mid-turn would otherwise pin its
+   * environment to `working` in every future client, permanently. Backend
+   * startup is the one moment where every renderer is provably gone, so that is
+   * where the reset belongs.
+   */
+  async clearFrontendAgentActivity(): Promise<string[]> {
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const referenceTime = Date.now();
+      const changed: string[] = [];
+      for (const environment of environments) {
+        if (!environment.agentActivitySources?.frontend) continue;
+        const sources = readAgentActivitySources(environment, referenceTime);
+        delete sources.frontend;
+        environment.agentActivitySources = sources;
+        environment.agentActivityState = aggregateAgentActivityState(sources);
+        environment.agentActivityUpdatedAt = nextAgentActivityTimestamp(
+          environment.agentActivityUpdatedAt,
+          referenceTime,
+        );
+        changed.push(environment.id);
+      }
+      if (changed.length === 0) return changed;
+      await this.saveJson(this.environmentsFile(), environments);
+      for (const environmentId of changed) {
+        this.announce("environment", environmentId);
+      }
+      return changed;
     });
   }
 

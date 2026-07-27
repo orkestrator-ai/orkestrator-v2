@@ -74,7 +74,11 @@ import {
   workspaceFilePath,
 } from "./path-safety.js";
 import { terminateProcessTree } from "./process-tree.js";
-import { registerTmuxBackendCommands } from "./tmux.js";
+import {
+  registerTmuxBackendCommands,
+  shutdownClaudeStatePolling,
+  type ClaudeStatePollManager,
+} from "./tmux.js";
 import {
   getLinearIssue,
   listLinearIssues,
@@ -3056,6 +3060,9 @@ async function deleteEnvironment(
       });
       if (environment) await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
       if (environment?.containerId) {
+        // Retire state polling before removing the container, or the next tick
+        // execs into something that no longer exists.
+        shutdownClaudeStatePolling(environment.containerId);
         await runCommand(
           "docker",
           ["rm", "-f", environment.containerId],
@@ -3859,7 +3866,9 @@ async function refreshClaudeModelCatalog(
   return snapshot;
 }
 
-export function createCommandRegistry(): Map<string, CommandHandler> {
+export function createCommandRegistry(
+  options: { claudeStatePolls?: ClaudeStatePollManager } = {},
+): Map<string, CommandHandler> {
   const commands = new Map<string, CommandHandler>();
   const register = (name: string, handler: CommandHandler) => commands.set(name, handler);
   const pendingEnvironmentRenameTasks = new Map<string, Promise<void>>();
@@ -4408,6 +4417,12 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     if (environment.containerId) {
       await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
       await storage.updateEnvironment(environment.id, { status: "stopped", pendingAgentLaunch: false });
+      // Retired only once the stop has actually committed. Doing it earlier
+      // would leave a still-running environment with no poller if `docker stop`
+      // threw, and no renderer would re-register it — they each hold a lease
+      // they believe is live. `poll()` would reach the same conclusion on its
+      // next tick; this just skips the last pointless exec.
+      shutdownClaudeStatePolling(environment.containerId);
       return;
     }
 
@@ -5455,7 +5470,9 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     ),
   );
 
-  registerTmuxBackendCommands(register);
+  registerTmuxBackendCommands(register, {
+    claudeStatePolls: options.claudeStatePolls,
+  });
 
   return commands;
 }

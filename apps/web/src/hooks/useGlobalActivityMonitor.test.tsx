@@ -1780,6 +1780,369 @@ describe("useGlobalActivityMonitor terminal activity", () => {
       },
     );
   });
+
+  test("backs off and eventually gives up instead of warning forever", async () => {
+    // Without a cap this warns every 30s for the life of the environment and
+    // never recovers. The ladder itself also needs pinning: only its first
+    // rung was previously exercised.
+    const realSetTimeout = globalThis.setTimeout;
+    const waitUntil = async (predicate: () => boolean) => {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        if (predicate()) return;
+        await new Promise((resolve) => realSetTimeout(resolve, 5));
+      }
+      throw new Error("timed out waiting for condition");
+    };
+
+    const consoleWarn = spyOn(console, "warn").mockImplementation(() => {});
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    const retryDelays: number[] = [];
+    const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: () => void,
+      delayMs?: number,
+    ) => {
+      retryDelays.push(delayMs ?? 0);
+      // Collapse the ladder so the assertion does not take ~16 seconds.
+      return realSetTimeout(callback, 0);
+    }) as typeof globalThis.setTimeout);
+
+    let startAttempts = 0;
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === "start_claude_state_polling") {
+        startAttempts += 1;
+        return Promise.reject(new Error("backend unavailable"));
+      }
+      return Promise.resolve();
+    });
+    useEnvironmentStore.setState({
+      environments: [makeEnvironment("env-container", "container-1")],
+    });
+
+    try {
+      render(<MonitorHarness />);
+
+      await waitUntil(() => consoleError.mock.calls.length > 0);
+      // Eight attempts, then a single explicit give-up — not an endless loop.
+      expect(startAttempts).toBe(8);
+      expect(retryDelays).toEqual([0, 250, 500, 1000, 2000, 4000, 8000]);
+      expect(consoleError).toHaveBeenCalledWith(
+        "[GlobalActivityMonitor] Giving up on terminal state polling for",
+        "container-1",
+        expect.stringContaining("after 8 attempts"),
+      );
+
+      // No further attempts once it has given up.
+      await new Promise((resolve) => realSetTimeout(resolve, 30));
+      expect(startAttempts).toBe(8);
+    } finally {
+      timeoutSpy.mockRestore();
+      consoleError.mockRestore();
+      consoleWarn.mockRestore();
+    }
+  });
+
+  test("releases a registration whose start succeeds after the container stops", async () => {
+    // The environment stopped while the start request was in flight, so the
+    // backend now holds a lease nothing will ever release.
+    let resolveStart: ((value: unknown) => void) | undefined;
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === "start_claude_state_polling") {
+        return new Promise((resolve) => {
+          resolveStart = resolve;
+        });
+      }
+      return Promise.resolve();
+    });
+    useEnvironmentStore.setState({
+      environments: [makeEnvironment("env-container", "container-1")],
+    });
+    render(<MonitorHarness />);
+
+    await waitFor(() => expect(resolveStart).toBeDefined());
+    const stopCallsBefore = mockInvoke.mock.calls.filter(
+      ([command]) => command === "stop_claude_state_polling",
+    ).length;
+
+    await act(async () => {
+      useEnvironmentStore.setState({ environments: [] });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      resolveStart?.(undefined);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(mockInvoke.mock.calls.filter(
+        ([command]) => command === "stop_claude_state_polling",
+      ).length).toBeGreaterThan(stopCallsBefore);
+    });
+  });
+
+  test("compensates instead of retrying when a start fails after the container stops", async () => {
+    // A transport failure is ambiguous: the backend may already have accepted
+    // the idempotent registration, so this must release rather than retry.
+    const consoleWarn = spyOn(console, "warn").mockImplementation(() => {});
+    let rejectStart: ((reason: unknown) => void) | undefined;
+    let startAttempts = 0;
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === "start_claude_state_polling") {
+        startAttempts += 1;
+        return new Promise((_resolve, reject) => {
+          rejectStart = reject;
+        });
+      }
+      return Promise.resolve();
+    });
+    useEnvironmentStore.setState({
+      environments: [makeEnvironment("env-container", "container-1")],
+    });
+
+    try {
+      render(<MonitorHarness />);
+      await waitFor(() => expect(rejectStart).toBeDefined());
+
+      await act(async () => {
+        useEnvironmentStore.setState({ environments: [] });
+        await Promise.resolve();
+      });
+      await act(async () => {
+        rejectStart?.(new Error("transport interrupted"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(mockInvoke.mock.calls.filter(
+          ([command]) => command === "stop_claude_state_polling",
+        ).length).toBeGreaterThanOrEqual(2);
+      });
+      // Retrying a registration for a container that is gone would leak it.
+      expect(startAttempts).toBe(1);
+    } finally {
+      consoleWarn.mockRestore();
+    }
+  });
+
+  test("cancels a pending retry when the container stops", async () => {
+    // Two failures arm a 250ms retry. Removing the container must disarm it,
+    // or the timer fires against a registration that no longer exists.
+    const consoleWarn = spyOn(console, "warn").mockImplementation(() => {});
+    let startAttempts = 0;
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === "start_claude_state_polling") {
+        startAttempts += 1;
+        return Promise.reject(new Error("backend unavailable"));
+      }
+      return Promise.resolve();
+    });
+    useEnvironmentStore.setState({
+      environments: [makeEnvironment("env-container", "container-1")],
+    });
+
+    try {
+      render(<MonitorHarness />);
+      // Attempt 1 fails, attempt 2 fires immediately and fails, arming a 250ms
+      // third attempt.
+      await waitFor(() => expect(startAttempts).toBe(2));
+
+      await act(async () => {
+        useEnvironmentStore.setState({ environments: [] });
+        await Promise.resolve();
+      });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      expect(startAttempts).toBe(2);
+    } finally {
+      consoleWarn.mockRestore();
+    }
+  });
+
+  test("cancels a pending retry when the monitor unmounts", async () => {
+    const consoleWarn = spyOn(console, "warn").mockImplementation(() => {});
+    let startAttempts = 0;
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === "start_claude_state_polling") {
+        startAttempts += 1;
+        return Promise.reject(new Error("backend unavailable"));
+      }
+      return Promise.resolve();
+    });
+    useEnvironmentStore.setState({
+      environments: [makeEnvironment("env-container", "container-1")],
+    });
+
+    try {
+      const view = render(<MonitorHarness />);
+      await waitFor(() => expect(startAttempts).toBe(2));
+
+      await act(async () => {
+        view.unmount();
+        await Promise.resolve();
+      });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      expect(startAttempts).toBe(2);
+    } finally {
+      consoleWarn.mockRestore();
+    }
+  });
+
+  test("stops a registration whose listener never resolved when the monitor unmounts", async () => {
+    // Unmount walks the poller map, not the listener map: a container that was
+    // registered while listen() was still pending has no unlisten to call but
+    // still owns a backend lease.
+    let resolveListen: ((unlisten: () => void) => void) | undefined;
+    mockListen.mockImplementationOnce(
+      () =>
+        new Promise<() => void>((resolve) => {
+          resolveListen = resolve;
+        }),
+    );
+    useEnvironmentStore.setState({
+      environments: [makeEnvironment("env-container", "container-1")],
+    });
+    const view = render(<MonitorHarness />);
+    await waitFor(() => expect(resolveListen).toBeDefined());
+
+    await act(async () => {
+      view.unmount();
+      await Promise.resolve();
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "stop_claude_state_polling",
+      {
+        containerId: "container-1",
+        subscriptionId: expect.any(String),
+      },
+    );
+  });
+
+  test("mints a distinct subscription token per container and survives an unavailable crypto", async () => {
+    // The token is the whole ownership mechanism; two containers sharing one
+    // would let either release the other's lease.
+    const randomUuid = spyOn(globalThis.crypto, "randomUUID")
+      .mockImplementation(() => {
+        throw new Error("insecure context");
+      });
+    try {
+      useEnvironmentStore.setState({
+        environments: [
+          makeEnvironment("env-a", "container-a"),
+          makeEnvironment("env-b", "container-b"),
+        ],
+      });
+      render(<MonitorHarness />);
+
+      await waitFor(() => {
+        expect(mockInvoke.mock.calls.filter(
+          ([command]) => command === "start_claude_state_polling",
+        )).toHaveLength(2);
+      });
+
+      const tokens = mockInvoke.mock.calls
+        .filter(([command]) => command === "start_claude_state_polling")
+        .map(([, args]) => (args as { subscriptionId: string }).subscriptionId);
+      expect(new Set(tokens).size).toBe(2);
+      // The counter fallback still produces a usable, container-scoped token.
+      expect(tokens[0]).toContain("container-a");
+      expect(tokens[1]).toContain("container-b");
+    } finally {
+      randomUuid.mockRestore();
+    }
+  });
+
+  test("ignores a claude-state payload that is not a known activity state", async () => {
+    useEnvironmentStore.setState({
+      environments: [makeEnvironment("env-container", "container-1")],
+    });
+    render(<MonitorHarness />);
+    await waitFor(() => {
+      expect(eventCallbacks.has("claude-state-container-1")).toBe(true);
+    });
+
+    await act(async () => {
+      eventCallbacks.get("claude-state-container-1")?.({
+        payload: { container_id: "container-1", state: "busy" },
+      });
+      await Promise.resolve();
+    });
+
+    expect(useAgentActivityStore.getState().containerStates)
+      .not.toHaveProperty("env-container");
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "record_environment_activity",
+      expect.anything(),
+    );
+    expect(unreadEnvironmentIds()).toEqual([]);
+  });
+
+  test("does not resurrect a terminal observation the store refused as stale", async () => {
+    // The store rejects a token older than the one it holds. If the per-source
+    // map kept the rejected value anyway, the next observation from a different
+    // source would merge against a state that was never adopted and push the
+    // sidebar back to working.
+    const environment = makeEnvironment("env-container", "container-1");
+    useEnvironmentStore.setState({ environments: [environment] });
+    render(<MonitorHarness />);
+    await waitFor(() => {
+      expect(eventCallbacks.has("claude-state-container-1")).toBe(true);
+    });
+
+    act(() => {
+      useAgentActivityStore.setState({
+        containerStates: { "env-container": "idle" },
+        containerStateUpdatedAt: {
+          "env-container": "2026-07-27T12:00:10.000Z",
+        },
+      });
+    });
+
+    await act(async () => {
+      eventCallbacks.get("claude-state-container-1")?.({
+        payload: {
+          container_id: "container-1",
+          state: "working",
+          occurred_at: "2026-07-27T12:00:05.000Z",
+        },
+      });
+      await Promise.resolve();
+    });
+    expect(useAgentActivityStore.getState().getContainerState("env-container"))
+      .toBe("idle");
+
+    // A native source now reports idle. The rejected "working" must not merge
+    // back in and outrank it.
+    act(() => {
+      useClaudeStore.setState({
+        clients: new Map([["env-container", {} as any]]),
+        sessions: new Map([
+          [
+            createSessionKey("env-container", "tab-1"),
+            { sessionId: "s1", messages: [], isLoading: false } as any,
+          ],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-container"))
+        .toBe("idle");
+    });
+  });
+
+  test("skips persistence for an activity key no environment owns", async () => {
+    render(<MonitorHarness />);
+    await act(async () => {
+      useAgentActivityStore.getState().setContainerState("env-unknown", "working");
+      await Promise.resolve();
+    });
+
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "set_environment_agent_activity",
+      expect.anything(),
+    );
+  });
 });
 
 describe("useGlobalActivityMonitor native agent activity", () => {

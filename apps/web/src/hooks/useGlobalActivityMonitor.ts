@@ -38,6 +38,14 @@ interface EnvironmentActivityRecordedEvent {
   activity_kind?: "prompt" | "completed";
 }
 
+/**
+ * Attempts before terminal-state polling for a container is given up on.
+ * The ladder is 0ms, 250ms, 500ms … 8s — about 16 seconds in total, which
+ * rides out a backend restart while keeping a permanently broken registration
+ * from retrying and warning for the life of the environment.
+ */
+const MAX_POLL_START_ATTEMPTS = 8;
+
 let pollSubscriptionCounter = 0;
 
 function createPollSubscriptionId(containerId: string): string {
@@ -122,6 +130,7 @@ function setEnvironmentSourceActivity(
     environmentSources = new Map();
     activitySources.current.set(environmentId, environmentSources);
   }
+  const previousSourceState = environmentSources.get(source);
   environmentSources.set(source, sourceState);
 
   let desiredState: AgentActivityState = "idle";
@@ -131,14 +140,17 @@ function setEnvironmentSourceActivity(
 
   const currentState =
     useAgentActivityStore.getState().containerStates[environmentId];
-  if (currentState !== desiredState) {
-    setContainerState(
-      environmentId,
-      desiredState,
-      occurredAt,
-      notifyCallbacks,
-    );
+  if (currentState === desiredState) return;
+
+  if (setContainerState(environmentId, desiredState, occurredAt, notifyCallbacks)) {
+    return;
   }
+  // The store rejected the observation as older than the one it holds. Undo the
+  // per-source record too: leaving it applied would make this map and the store
+  // disagree, and the next call would compute its aggregate from a state that
+  // was never adopted.
+  if (previousSourceState === undefined) environmentSources.delete(source);
+  else environmentSources.set(source, previousSourceState);
 }
 
 function getSessionEnvironmentIds(
@@ -631,10 +643,9 @@ export function useGlobalActivityMonitor(): void {
         && Number.isFinite(observedTime)
         && observedTime <= persistedTime
       ) {
-        const nextPersistedTime = persistedTime + 1;
-        if (nextPersistedTime <= 8_640_000_000_000_000) {
-          observedAt = new Date(nextPersistedTime).toISOString();
-        }
+        // `parseUsableAgentActivityTime` already caps this at now + 5 minutes,
+        // so the bump can never reach the maximum representable date.
+        observedAt = new Date(persistedTime + 1).toISOString();
       }
 
       // The environment record is the cross-client authority. Apply the local
@@ -812,12 +823,20 @@ export function useGlobalActivityMonitor(): void {
                   releaseRegistration();
                   return;
                 }
+                if (attempt + 1 >= MAX_POLL_START_ATTEMPTS) {
+                  // Retrying forever would warn every 30s for the life of the
+                  // environment without ever recovering. Say so once and stop.
+                  console.error(
+                    "[GlobalActivityMonitor] Giving up on terminal state polling for",
+                    cid,
+                    `after ${MAX_POLL_START_ATTEMPTS} attempts; agent activity for this environment will not update.`,
+                  );
+                  return;
+                }
                 const retryTimer = setTimeout(() => {
                   pollRetryTimers.current.delete(cid);
                   startPolling(attempt + 1);
-                }, attempt === 0
-                  ? 0
-                  : Math.min(250 * (2 ** (attempt - 1)), 30_000));
+                }, attempt === 0 ? 0 : 250 * (2 ** (attempt - 1)));
                 pollRetryTimers.current.set(cid, retryTimer);
               });
           };

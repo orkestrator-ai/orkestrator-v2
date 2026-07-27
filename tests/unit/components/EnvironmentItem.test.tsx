@@ -471,6 +471,79 @@ describe("EnvironmentItem activity icon", () => {
       { "env-1": "also-not-a-date" },
     )).toBe("idle");
   });
+
+  test("ignores a leftover container-keyed observation for a local environment", () => {
+    // A local environment has no container, so runtime state under a container
+    // id belongs to some earlier containerized incarnation and must not leak
+    // into this one's icon.
+    const local = makeEnvironment({
+      environmentType: "local",
+      containerId: null,
+    });
+
+    expect(resolveEnvironmentAgentActivity(
+      local,
+      { "container-1": "working" },
+      { "container-1": new Date().toISOString() },
+    )).toBe("idle");
+
+    expect(resolveEnvironmentAgentActivity(
+      local,
+      { "container-1": "working", "env-1": "waiting" },
+      {
+        "container-1": new Date().toISOString(),
+        "env-1": "2026-07-27T12:00:00.000Z",
+      },
+    )).toBe("waiting");
+  });
+
+  test("discards a persisted state that carries no ordering token", () => {
+    // Legacy environments persisted before the token existed, and a backend
+    // that answers without one gives no way to order against runtime state.
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment({ agentActivityState: "working" }),
+      { "env-1": "waiting" },
+      { "env-1": "2026-07-27T12:00:00.000Z" },
+    )).toBe("waiting");
+
+    expect(resolveEnvironmentAgentActivity(
+      makeEnvironment({ agentActivityState: "working" }),
+      {},
+      {},
+    )).toBe("idle");
+  });
+
+  test("clears a stale runtime spinner from the backend snapshot", () => {
+    // This is the case the whole feature exists for: another window finished
+    // the turn, so the persisted idle must win over this window's last-seen
+    // working and turn the icon green rather than leaving it pulsing blue.
+    useAgentActivityStore.getState().setContainerState(
+      "env-1",
+      "working",
+      "2026-07-27T12:00:00.000Z",
+    );
+
+    const { container } = renderItem(makeEnvironment({
+      agentActivityState: "idle",
+      agentActivityUpdatedAt: "2026-07-27T12:00:05.000Z",
+    }));
+
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).toContain("text-green-500");
+    expect(icon?.getAttribute("class")).not.toContain("animate-pulse");
+  });
+
+  test("shows no activity colour at all while the environment is not running", () => {
+    const { container } = renderItem(makeEnvironment({
+      status: "stopped",
+      agentActivityState: "working",
+      agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+    }));
+
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).toContain("text-muted-foreground");
+    expect(icon?.getAttribute("class")).not.toContain("text-blue-500");
+  });
 });
 
 describe("EnvironmentItem tooltip port display", () => {

@@ -819,6 +819,236 @@ describe("Electron StorageService", () => {
     });
   });
 
+  test("only clears activity for statuses that end the agent's run", async () => {
+    // "stopping" is a request, not an outcome, and "creating"/"running" are
+    // mid-flight. Wiping activity on any of those would blank a live turn.
+    const dataDir = await createTempDir("ork-storage-agent-status-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const workingAt = new Date(
+      Date.parse(environment.agentActivityUpdatedAt!) + 1_000,
+    ).toISOString();
+    const working = {
+      agentActivityState: "working",
+      agentActivitySources: {
+        frontend: { state: "working", updatedAt: workingAt },
+      },
+    };
+
+    for (const status of ["creating", "running", "stopping"] as const) {
+      await storage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        workingAt,
+      );
+      await expect(storage.updateEnvironment(environment.id, { status }))
+        .resolves.toMatchObject({ status, ...working });
+    }
+
+    await expect(storage.updateEnvironment(environment.id, { name: "Renamed" }))
+      .resolves.toMatchObject(working);
+  });
+
+  test("bounds the accepted clock skew at exactly five minutes", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-skew-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+
+    // Comfortably inside the window, so a slow test runner cannot flip it.
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      new Date(Date.now() + 4 * 60_000).toISOString(),
+    )).resolves.toMatchObject({ agentActivityState: "working" });
+
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      new Date(Date.now() + 6 * 60_000).toISOString(),
+    )).rejects.toThrow("occurredAt must not be more than 5 minutes in the future");
+  });
+
+  test("rejects the loose date forms Date.parse would otherwise accept", async () => {
+    // The error message promises an ISO timestamp. Accepting "Jul 27 2026"
+    // would let two clients mint tokens that do not order against each other.
+    const dataDir = await createTempDir("ork-storage-agent-iso-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+
+    for (const occurredAt of [
+      "Jul 27 2026 12:00:00",
+      "2026-07-27",
+      "2026/07/27 12:00:00",
+    ]) {
+      expect(Number.isFinite(Date.parse(occurredAt))).toBe(true);
+      await expect(storage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        occurredAt,
+      )).rejects.toThrow("occurredAt must be a valid ISO timestamp");
+    }
+
+    expect((await storage.getEnvironment(environment.id))?.agentActivityState)
+      .toBe("idle");
+  });
+
+  test("orders a source's first report against the aggregate token", async () => {
+    // A source with no snapshot of its own still has to lose to a newer
+    // aggregate. Exempting it would let a delayed or retried report resurrect
+    // a state the environment has already left.
+    const dataDir = await createTempDir("ork-storage-agent-first-report-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const createdTime = Date.parse(environment.agentActivityUpdatedAt!);
+    const terminalIdleAt = new Date(createdTime + 5_000).toISOString();
+    const staleFrontendWorkingAt = new Date(createdTime + 1_000).toISOString();
+
+    await storage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      terminalIdleAt,
+      "claude-terminal",
+    );
+
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      staleFrontendWorkingAt,
+    )).resolves.toMatchObject({
+      agentActivityState: "idle",
+      agentActivityUpdatedAt: terminalIdleAt,
+    });
+    expect((await storage.getEnvironment(environment.id))?.agentActivitySources)
+      .not.toHaveProperty("frontend");
+
+    // A report that is genuinely newer than the aggregate still lands.
+    const freshFrontendWorkingAt = new Date(createdTime + 6_000).toISOString();
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      freshFrontendWorkingAt,
+    )).resolves.toMatchObject({
+      agentActivityState: "working",
+      agentActivityUpdatedAt: freshFrontendWorkingAt,
+    });
+  });
+
+  test("bumps a tied terminal report that has no prior source of its own", async () => {
+    // The state right after a stop/reset: sources are empty but the aggregate
+    // token survives, and the first poll back can land in the same millisecond.
+    const dataDir = await createTempDir("ork-storage-agent-tie-aggregate-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    await storage.updateEnvironment(environment.id, { status: "stopped" });
+    const reset = (await storage.getEnvironment(environment.id))!;
+    expect(reset.agentActivitySources).toEqual({});
+
+    const updated = await storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      reset.agentActivityUpdatedAt!,
+      "claude-terminal",
+    );
+
+    expect(updated.agentActivityState).toBe("working");
+    expect(Date.parse(updated.agentActivitySources!["claude-terminal"]!.updatedAt))
+      .toBe(Date.parse(reset.agentActivityUpdatedAt!) + 1);
+
+    // A frontend tie against the same token is still simply rejected: only the
+    // serialized backend poller earns the monotonic bump.
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      reset.agentActivityUpdatedAt!,
+    )).resolves.toMatchObject({ agentActivityState: "working" });
+  });
+
+  test("clears renderer-reported activity without touching backend observations", async () => {
+    // Backend startup is the one moment where every renderer is provably gone.
+    // Nothing else can lower a stale `frontend: working` — the aggregate is a
+    // max — so without this an environment stays blue across restarts forever.
+    const dataDir = await createTempDir("ork-storage-agent-clear-frontend-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const stuck = await storage.addEnvironment(createEnvironment("project-1"));
+    const untouched = await storage.addEnvironment(createEnvironment("project-1"));
+    const createdTime = Date.parse(stuck.agentActivityUpdatedAt!);
+    const terminalWaitingAt = new Date(createdTime + 1_000).toISOString();
+    const frontendWorkingAt = new Date(createdTime + 2_000).toISOString();
+
+    await storage.setEnvironmentAgentActivity(
+      stuck.id,
+      "waiting",
+      terminalWaitingAt,
+      "claude-terminal",
+    );
+    await storage.setEnvironmentAgentActivity(
+      stuck.id,
+      "working",
+      frontendWorkingAt,
+    );
+    await storage.setEnvironmentAgentActivity(
+      untouched.id,
+      "working",
+      new Date(createdTime + 3_000).toISOString(),
+      "claude-terminal",
+    );
+
+    const announced: string[] = [];
+    storage.setResourceChangeListener((change) => {
+      announced.push(`${change.resource}:${change.id}`);
+    });
+    await expect(storage.clearFrontendAgentActivity()).resolves.toEqual([stuck.id]);
+    expect(announced).toEqual([`environment:${stuck.id}`]);
+
+    const cleared = (await storage.getEnvironment(stuck.id))!;
+    // The backend's own observation survives and becomes the aggregate.
+    expect(cleared.agentActivityState).toBe("waiting");
+    expect(cleared.agentActivitySources).toEqual({
+      "claude-terminal": { state: "waiting", updatedAt: terminalWaitingAt },
+    });
+    // The token moves forward so a frontend hydrating from this snapshot
+    // prefers it over any observation it made before the restart.
+    expect(Date.parse(cleared.agentActivityUpdatedAt!))
+      .toBeGreaterThan(Date.parse(frontendWorkingAt));
+
+    await expect(storage.getEnvironment(untouched.id)).resolves.toMatchObject({
+      agentActivityState: "working",
+    });
+  });
+
+  test("clearing renderer activity is a no-op when nothing was reported", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-clear-noop-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const before = (await storage.getEnvironment(environment.id))!;
+
+    const announced: string[] = [];
+    storage.setResourceChangeListener((change) => announced.push(change.id));
+    await expect(storage.clearFrontendAgentActivity()).resolves.toEqual([]);
+
+    expect(announced).toEqual([]);
+    expect(await storage.getEnvironment(environment.id)).toEqual(before);
+  });
+
   test("serializes concurrent agent observations to the newest source timestamp", async () => {
     const dataDir = await createTempDir("ork-storage-agent-concurrent-");
     const firstStorage = new StorageService(dataDir);

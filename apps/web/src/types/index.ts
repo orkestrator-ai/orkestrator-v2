@@ -11,7 +11,11 @@ export interface Project {
 
 // Environment types
 export type EnvironmentStatus = "running" | "stopped" | "error" | "creating" | "stopping";
-export type AgentActivityState = "idle" | "working" | "waiting";
+// Shared with the backend: both sides order the same activity reports, so a
+// second definition of the vocabulary is a drift waiting to happen.
+import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
+
+export type { AgentActivityState };
 
 /** Pull request state from GitHub */
 export type PrState = "open" | "merged" | "closed";

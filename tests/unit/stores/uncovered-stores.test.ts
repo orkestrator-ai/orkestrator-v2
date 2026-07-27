@@ -230,15 +230,99 @@ describe("agentActivityStore", () => {
       .toBe("2026-07-27T12:00:01.000Z");
     expect(callback).not.toHaveBeenCalled();
 
+    // An unusable authoritative pair means "nothing to reconcile to", not
+    // "the local observation was wrong". Dropping it would turn a failed
+    // backend write into a sidebar that reads idle mid-turn.
     useAgentActivityStore.getState().reconcileContainerState(
       "env-1",
       "working",
       "not-a-date",
     );
     expect(useAgentActivityStore.getState().containerStates["env-1"])
-      .toBeUndefined();
+      .toBe("idle");
     expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-1"])
-      .toBeUndefined();
+      .toBe("2026-07-27T12:00:01.000Z");
+  });
+
+  test("keeps the local observation when there is no authoritative state to adopt", async () => {
+    // The rollback path passes `environment.agentActivityState`, which is
+    // undefined for any environment persisted before the field existed. Wiping
+    // the runtime observation there would report idle while the agent works.
+    const callback = mock(() => undefined);
+    useAgentActivityStore.getState().registerStateCallback(callback);
+    useAgentActivityStore.getState().setContainerState(
+      "env-legacy",
+      "working",
+      "2026-07-27T12:00:02.000Z",
+    );
+    await Promise.resolve();
+    callback.mockClear();
+
+    useAgentActivityStore.getState().reconcileContainerState(
+      "env-legacy",
+      undefined,
+      undefined,
+    );
+    expect(useAgentActivityStore.getState().containerStates["env-legacy"])
+      .toBe("working");
+    expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-legacy"])
+      .toBe("2026-07-27T12:00:02.000Z");
+
+    // A state with no timestamp is equally unorderable and equally ignored.
+    useAgentActivityStore.getState().reconcileContainerState(
+      "env-legacy",
+      "idle",
+      undefined,
+    );
+    expect(useAgentActivityStore.getState().containerStates["env-legacy"])
+      .toBe("working");
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  test("reports whether an observation was adopted so callers can stay in sync", () => {
+    const store = useAgentActivityStore.getState();
+    expect(store.setContainerState("env-1", "working", "2026-07-27T12:00:02.000Z"))
+      .toBe(true);
+    // Equal and older tokens both lose to the one already held.
+    expect(store.setContainerState("env-1", "idle", "2026-07-27T12:00:02.000Z"))
+      .toBe(false);
+    expect(store.setContainerState("env-1", "idle", "2026-07-27T12:00:01.000Z"))
+      .toBe(false);
+    expect(useAgentActivityStore.getState().getContainerState("env-1"))
+      .toBe("working");
+    expect(store.setContainerState("env-1", "idle", "2026-07-27T12:00:03.000Z"))
+      .toBe(true);
+  });
+
+  test("accepts any token for a key that has a state but no recorded time", () => {
+    // Legacy/raw-seeded shape: without a previous token there is nothing to
+    // order against, so the observation is taken rather than silently dropped.
+    useAgentActivityStore.setState((state) => ({
+      containerStates: { ...state.containerStates, "env-untimed": "working" },
+    }));
+
+    expect(useAgentActivityStore.getState().setContainerState(
+      "env-untimed",
+      "idle",
+      "2020-01-01T00:00:00.000Z",
+    )).toBe(true);
+    expect(useAgentActivityStore.getState().getContainerState("env-untimed"))
+      .toBe("idle");
+  });
+
+  test("keeps generated observation times independent across environments", () => {
+    // A backend token that is slightly ahead of the local clock must not drag
+    // an unrelated environment's generated token into the future with it.
+    const aheadOfLocalClock = new Date(Date.now() + 60_000).toISOString();
+    const store = useAgentActivityStore.getState();
+    store.setContainerState("env-ahead", "working", aheadOfLocalClock);
+    store.setContainerState("env-other", "working");
+
+    const otherTime = Date.parse(
+      useAgentActivityStore.getState().containerStateUpdatedAt["env-other"]!,
+    );
+    expect(otherTime).toBeLessThan(Date.parse(aheadOfLocalClock));
+    expect(otherTime).toBeLessThanOrEqual(Date.now());
   });
 
   test("preserves activity at zero references and removes all keyed state explicitly", () => {

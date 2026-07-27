@@ -1,7 +1,14 @@
 import { create } from "zustand";
+import { parseUsableAgentActivityTime } from "@orkestrator/protocol/agent-activity";
 import type { AgentActivityState } from "@/types";
 
 export type { AgentActivityState } from "@/types";
+// Re-exported so callers keep importing activity ordering from the store they
+// already depend on, while the backend and the renderer share one definition.
+export {
+  AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
+  parseUsableAgentActivityTime,
+} from "@orkestrator/protocol/agent-activity";
 
 /** Callback type for state transitions */
 export type AgentStateCallback = (
@@ -29,13 +36,21 @@ interface AgentActivityStoreState {
   // Actions
   setTabState: (tabId: string, state: AgentActivityState) => void;
   removeTabState: (tabId: string) => void;
+  /**
+   * Record an observation. Returns false when it was discarded as older than
+   * the one already held, so the caller can avoid committing to a per-source
+   * view of the world that the store did not adopt.
+   */
   setContainerState: (
     containerId: string,
     state: AgentActivityState,
     occurredAt?: string,
     notifyCallbacks?: boolean,
-  ) => void;
-  /** Replace an optimistic observation with an authoritative backend value. */
+  ) => boolean;
+  /**
+   * Replace an optimistic observation with an authoritative backend value.
+   * A missing state or unusable timestamp is a no-op — see the implementation.
+   */
   reconcileContainerState: (
     containerId: string,
     state: AgentActivityState | undefined,
@@ -58,38 +73,30 @@ interface AgentActivityStoreState {
 
 // Counter for generating unique callback IDs
 let callbackIdCounter = 0;
-let lastActivityObservationTime = 0;
 
-export const AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS = 5 * 60_000;
-
-export function parseUsableAgentActivityTime(
-  value: string | undefined,
-  referenceTime = Date.now(),
-): number {
-  if (!value) return Number.NEGATIVE_INFINITY;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed)
-    && parsed <= referenceTime + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS
-    ? parsed
-    : Number.NEGATIVE_INFINITY;
-}
-
-function nextObservationTime(requested?: string): string {
-  const referenceTime = Date.now();
-  const requestedTime = parseUsableAgentActivityTime(requested, referenceTime);
-  const previousGeneratedTime =
-    lastActivityObservationTime <= referenceTime + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS
-      ? lastActivityObservationTime
-      : Number.NEGATIVE_INFINITY;
+/**
+ * Mint the token for one observation.
+ *
+ * A caller-supplied token (the backend poller's) is authoritative and used as
+ * given. A locally-generated one only has to beat *this key's* previous token,
+ * which is what keeps two observations landing in the same millisecond
+ * distinguishable. Deriving it per key rather than from a shared counter means
+ * a backend token that is slightly ahead of the local clock cannot push an
+ * unrelated environment's token into the future.
+ */
+function nextObservationTime(
+  requestedTime: number,
+  previousTime: number,
+  referenceTime: number,
+): string {
   const time = Number.isFinite(requestedTime)
     ? requestedTime
     : Math.max(
         referenceTime,
-        Number.isFinite(previousGeneratedTime)
-          ? previousGeneratedTime + 1
+        Number.isFinite(previousTime)
+          ? previousTime + 1
           : Number.NEGATIVE_INFINITY,
       );
-  lastActivityObservationTime = Math.max(previousGeneratedTime, time);
   return new Date(time).toISOString();
 }
 
@@ -140,9 +147,13 @@ export const useAgentActivityStore = create<AgentActivityStoreState>()(
         && Number.isFinite(previousTime)
         && requestedTime <= previousTime
       ) {
-        return;
+        return false;
       }
-      const occurredAt = nextObservationTime(requestedOccurredAt);
+      const occurredAt = nextObservationTime(
+        requestedTime,
+        previousTime,
+        referenceTime,
+      );
 
       // A first idle observation is still meaningful: it must override a stale
       // persisted working snapshot and reach the persistence callback. Newer
@@ -170,20 +181,21 @@ export const useAgentActivityStore = create<AgentActivityStoreState>()(
           });
         });
       }
+      return true;
     },
 
     reconcileContainerState: (containerId, state, occurredAt) =>
       set((prev) => {
+        const occurredTime = parseUsableAgentActivityTime(occurredAt);
+        // No usable authoritative pair means there is nothing to reconcile
+        // *to* — not that the local observation was wrong. Dropping it here
+        // would turn a failed backend write into a sidebar that reads idle
+        // while the agent is still working. `removeContainerState` is the
+        // deliberate way to forget a key.
+        if (!state || !Number.isFinite(occurredTime)) return prev;
         const { [containerId]: _state, ...restStates } = prev.containerStates;
         const { [containerId]: _time, ...restUpdatedAt } =
           prev.containerStateUpdatedAt;
-        const occurredTime = parseUsableAgentActivityTime(occurredAt);
-        if (!state || !Number.isFinite(occurredTime)) {
-          return {
-            containerStates: restStates,
-            containerStateUpdatedAt: restUpdatedAt,
-          };
-        }
         return {
           containerStates: {
             ...restStates,

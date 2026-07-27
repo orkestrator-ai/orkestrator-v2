@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./agent-activity": "./src/agent-activity.ts",
     "./browser-preview": "./src/browser-preview.ts",
     "./connections": "./src/connections.ts",
     "./gateway-token": "./src/gateway-token.ts",

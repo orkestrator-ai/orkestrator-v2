@@ -1886,6 +1886,28 @@ export type ClaudeStatePollManagerOptions = {
   now?: () => string;
 };
 
+/** How long the agent has to answer before a state read is abandoned. */
+export const CLAUDE_STATE_READ_TIMEOUT_MS = 5_000;
+/** Gap between state reads. Each tick coalesces behind any in-flight read. */
+export const CLAUDE_STATE_POLL_INTERVAL_MS = 1_000;
+
+/**
+ * The command that reads the agent's self-reported state out of a container.
+ * Extracted so the argv is assertable without a Docker daemon — a typo here
+ * degrades to "always idle" rather than to a visible failure.
+ */
+export function claudeStateReadCommand(containerId: string): {
+  command: string;
+  args: string[];
+  options: { timeoutMs: number };
+} {
+  return {
+    command: "docker",
+    args: ["exec", containerId, "cat", "/tmp/.claude-state"],
+    options: { timeoutMs: CLAUDE_STATE_READ_TIMEOUT_MS },
+  };
+}
+
 export class ClaudeStatePollManager {
   private readonly polls = new Map<string, ClaudeStatePoll>();
   private readonly readState: (containerId: string) => Promise<string>;
@@ -1894,14 +1916,13 @@ export class ClaudeStatePollManager {
   private readonly now: () => string;
 
   constructor(options: ClaudeStatePollManagerOptions = {}) {
-    this.readState = options.readState ?? (async (containerId) => (
-      await runCommand(
-        "docker",
-        ["exec", containerId, "cat", "/tmp/.claude-state"],
-        { timeoutMs: 5_000 },
-      )
-    ).stdout.trim());
-    this.schedule = options.schedule ?? ((callback) => setInterval(callback, 1_000));
+    this.readState = options.readState ?? (async (containerId) => {
+      const { command, args, options: runOptions } =
+        claudeStateReadCommand(containerId);
+      return (await runCommand(command, args, runOptions)).stdout.trim();
+    });
+    this.schedule = options.schedule
+      ?? ((callback) => setInterval(callback, CLAUDE_STATE_POLL_INTERVAL_MS));
     this.cancel = options.cancel ?? ((timer) => clearInterval(timer as NodeJS.Timeout));
     this.now = options.now ?? (() => new Date().toISOString());
   }
@@ -1914,6 +1935,9 @@ export class ClaudeStatePollManager {
     const existing = this.polls.get(containerId);
     if (existing) {
       existing.subscribers.add(subscriptionId);
+      // Adopt the newest caller's context. The first registrant's may belong to
+      // a connection that has since gone away; a later one is at least as live.
+      existing.context = context;
       return;
     }
     const poll: ClaudeStatePoll = {
@@ -1935,15 +1959,31 @@ export class ClaudeStatePollManager {
     poll.subscribers.delete(subscriptionId);
     // Polling is backend-owned once started so activity remains authoritative
     // while every renderer is inactive. A release only removes that client's
-    // lease; environment lifecycle (or this release after a stop) ends the
-    // underlying process.
-    const environment = (await poll.context.storage.loadEnvironments()).find(
-      (candidate) => candidate.containerId === containerId,
-    );
+    // lease, and another client's lease still keeps it alive.
+    if (poll.subscribers.size > 0) return;
+    // A running environment keeps polling even with no lease at all: the whole
+    // point is that activity is detected while no renderer is mounted.
+    // `poll()` retires it when the environment leaves `running`.
+    let environment: Environment | undefined;
+    try {
+      environment = (await poll.context.storage.loadEnvironments()).find(
+        (candidate) => candidate.containerId === containerId,
+      );
+    } catch {
+      // Storage is unreadable, so whether this container is still running is
+      // unknown. Keeping the poll costs one read per second; retiring one that
+      // is still live would silently stop detecting activity.
+      return;
+    }
     if (environment?.status === "running") return;
     this.deactivate(containerId, poll);
   }
 
+  /**
+   * Retire a poll immediately, regardless of leases or environment status.
+   * Used when the container itself is going away, so the next `docker exec`
+   * would be against something that no longer exists.
+   */
   shutdown(containerId: string): void {
     const poll = this.polls.get(containerId);
     if (poll) this.deactivate(containerId, poll);
@@ -1995,38 +2035,55 @@ export class ClaudeStatePollManager {
     if (state !== "working" && state !== "waiting" && state !== "idle") return;
     if (state === poll.lastState) return;
     const occurredAt = this.now();
-    const persisted = environment
-      ? await poll.context.storage.setEnvironmentAgentActivity(
-          environment.id,
-          state,
-          occurredAt,
-          "claude-terminal",
-        )
-      : null;
+    const persisted = await poll.context.storage.setEnvironmentAgentActivity(
+      environment.id,
+      state,
+      occurredAt,
+      "claude-terminal",
+    );
     if (!this.isCurrent(containerId, poll)) return;
-    const persistedTerminal =
-      persisted?.agentActivitySources?.["claude-terminal"];
-    if (persisted && persistedTerminal?.state !== state) {
-      // Storage rejected a stale token. Keep the previous observed state so a
-      // later poll retries with a fresh backend timestamp.
+    const persistedTerminal = persisted?.agentActivitySources?.["claude-terminal"];
+    if (persistedTerminal?.state !== state) {
+      // Storage rejected a stale token, or answered without the source at all.
+      // Either way this observation did not land, so keep the previous observed
+      // state and let a later poll retry with a fresh backend timestamp. Note
+      // this must not emit: the renderer would adopt a state storage rejected.
       return;
     }
     poll.lastState = state;
     poll.context.emit(`claude-state-${containerId}`, {
       container_id: containerId,
       state,
-      occurred_at: persistedTerminal?.updatedAt ?? occurredAt,
+      occurred_at: persistedTerminal.updatedAt,
     });
   }
 }
 
-const claudeStatePolls = new ClaudeStatePollManager();
+const defaultClaudeStatePolls = new ClaudeStatePollManager();
+
+/**
+ * Retire state polling for a container that is being stopped or deleted.
+ *
+ * Polling deliberately outlives every renderer, and `poll()` only notices a
+ * dead environment on its next tick. Calling this from the lifecycle commands
+ * stops the read immediately instead of leaving one `docker exec` aimed at a
+ * container that is already going away.
+ */
+export function shutdownClaudeStatePolling(containerId: string): void {
+  defaultClaudeStatePolls.shutdown(containerId);
+}
 
 function environmentContainerId(environment: Environment | null | undefined): string {
   return environment?.containerId ?? "";
 }
 
-export function registerTmuxBackendCommands(register: RegisterCommand): void {
+export function registerTmuxBackendCommands(
+  register: RegisterCommand,
+  options: { claudeStatePolls?: ClaudeStatePollManager } = {},
+): void {
+  // Tests inject a manager so the polling commands can be exercised without a
+  // Docker daemon; production keeps the single process-wide instance.
+  const claudeStatePolls = options.claudeStatePolls ?? defaultClaudeStatePolls;
   register("start_claude_state_polling", ({ containerId, subscriptionId }, context) => {
     claudeStatePolls.start(
       asString(containerId, "containerId"),

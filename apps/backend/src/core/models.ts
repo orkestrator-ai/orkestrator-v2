@@ -1,3 +1,17 @@
+// Re-exported rather than redeclared: the renderer orders activity reports
+// against the same vocabulary, and two copies of it drift silently.
+import type {
+  AgentActivitySource,
+  AgentActivitySourceSnapshot,
+  AgentActivityState,
+} from "@orkestrator/protocol/agent-activity";
+
+export type {
+  AgentActivitySource,
+  AgentActivitySourceSnapshot,
+  AgentActivityState,
+};
+
 export interface Project {
   id: string;
   name: string;
@@ -8,12 +22,6 @@ export interface Project {
 }
 
 export type EnvironmentStatus = "running" | "stopped" | "error" | "creating" | "stopping";
-export type AgentActivityState = "idle" | "working" | "waiting";
-export type AgentActivitySource = "frontend" | "claude-terminal";
-export interface AgentActivitySourceSnapshot {
-  state: AgentActivityState;
-  updatedAt: string;
-}
 export type PrState = "open" | "merged" | "closed";
 export type NetworkAccessMode = "full" | "restricted";
 export type EnvironmentType = "containerized" | "local";

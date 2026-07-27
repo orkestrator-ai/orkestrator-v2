@@ -39,6 +39,15 @@ const isCodexTab = (type: TabType): boolean =>
 /** Check if a tab type is a build pipeline tab */
 const isBuildTab = (type: TabType): boolean => type === "claude-build";
 
+function getWorkflowTabTitle(tab: TabInfo): "Review" | "PR" | "Resolve" | undefined {
+  if (tab.isReviewTab) return "Review";
+  if (tab.displayTitle === "PR") return "PR";
+  if (tab.displayTitle === "Resolve" || tab.displayTitle === "Conflict") {
+    return "Resolve";
+  }
+  return undefined;
+}
+
 interface DraggableTabProps {
   tab: TabInfo;
   paneId: string;
@@ -89,8 +98,8 @@ export function DraggableTab({
   } = useSortable({
     id: createDraggableTabId(tab.id, paneId),
   });
-  const fileTooltipAnchorRef = useRef<HTMLDivElement | null>(null);
-  const fileTooltip = useHoverTooltip();
+  const tooltipAnchorRef = useRef<HTMLDivElement | null>(null);
+  const tabTooltip = useHoverTooltip();
 
   // Get session for this tab to check for custom name
   const sessions = useSessionStore((state) => state.sessions);
@@ -120,6 +129,7 @@ export function DraggableTab({
   });
   const nativeSessionTitle =
     claudeSessionTitle ?? codexSessionTitle ?? openCodeSessionTitle;
+  const workflowTitle = getWorkflowTabTitle(tab);
 
   // Get build pipeline title for claude-build tabs
   const buildPipelineTitle = useBuildPipelineStore((state) => {
@@ -145,20 +155,26 @@ export function DraggableTab({
   // Get tab title based on type and session name
   const getTabTitle = () => {
     if (tab.type === "file" && tab.fileData) {
-      const parts = tab.fileData.filePath.split("/");
-      return parts[parts.length - 1] || tab.fileData.filePath;
+      const parts = tab.fileData.filePath.split("/").filter(Boolean);
+      return parts.at(-1) ?? tab.fileData.filePath;
     }
 
     // For terminal tabs, include session name if set
     const tabNumber = index + 1;
+
+    // Workflow tabs keep a stable numbered label instead of adopting the
+    // agent-generated session title. "Conflict" supports restored tabs created
+    // before the conflict-resolution label changed to "Resolve".
+    if (workflowTitle) {
+      return `${workflowTitle} ${tabNumber}`;
+    }
 
     if (session?.name) {
       // Custom session name + number for keyboard shortcut reference
       return `${session.name} ${tabNumber}`;
     }
 
-    // Auto-generated title from the native session takes precedence over the
-    // workflow-supplied displayTitle once the agent has named the session.
+    // Ordinary native agent tabs adopt their auto-generated session title.
     if (nativeSessionTitle) {
       return nativeSessionTitle;
     }
@@ -223,9 +239,14 @@ export function DraggableTab({
   const icon = getTabIcon();
   const titleElement = <span className="max-w-[120px] truncate">{title}</span>;
   const isFileTab = tab.type === "file" && !!tab.fileData;
+  const tooltipContent = isFileTab
+    ? tab.fileData?.filePath
+    : workflowTitle
+      ? session?.name || nativeSessionTitle
+      : undefined;
   const setTabRefs = useCallback((node: HTMLDivElement | null) => {
     setNodeRef(node);
-    fileTooltipAnchorRef.current = node;
+    tooltipAnchorRef.current = node;
   }, [setNodeRef]);
   const tabTrigger = (
     <div
@@ -241,10 +262,10 @@ export function DraggableTab({
         isDragging && "opacity-50 z-50",
       )}
       onClick={onSelect}
-      onMouseEnter={isFileTab ? fileTooltip.show : undefined}
-      onMouseLeave={isFileTab ? fileTooltip.hide : undefined}
-      onFocus={isFileTab ? fileTooltip.show : undefined}
-      onBlur={isFileTab ? fileTooltip.hide : undefined}
+      onMouseEnter={tooltipContent ? tabTooltip.show : undefined}
+      onMouseLeave={tooltipContent ? tabTooltip.hide : undefined}
+      onFocus={tooltipContent ? tabTooltip.show : undefined}
+      onBlur={tooltipContent ? tabTooltip.hide : undefined}
     >
       {/* Keep the active tab identifiable when it shares the pane background. */}
       {isActive && (
@@ -279,15 +300,15 @@ export function DraggableTab({
   return (
     <ContextMenu>
       <ContextMenuTrigger className="contents">{tabTrigger}</ContextMenuTrigger>
-      {isFileTab && (
+      {tooltipContent && (
         <HoverTooltipContent
-          anchorRef={fileTooltipAnchorRef}
-          open={fileTooltip.open}
+          anchorRef={tooltipAnchorRef}
+          open={tabTooltip.open}
           side="bottom"
-          onMouseEnter={fileTooltip.show}
-          onMouseLeave={fileTooltip.hide}
+          onMouseEnter={tabTooltip.show}
+          onMouseLeave={tabTooltip.hide}
         >
-          {tab.fileData?.filePath}
+          {tooltipContent}
         </HoverTooltipContent>
       )}
 
@@ -301,14 +322,17 @@ export function DraggableTab({
         <ContextMenuItem onClick={onClose} disabled={!canClose || !onClose}>
           Close
         </ContextMenuItem>
-        <ContextMenuItem onClick={onCloseAll} disabled={!canCloseAll}>
+        <ContextMenuItem onClick={onCloseAll} disabled={!canCloseAll || !onCloseAll}>
           Close all
         </ContextMenuItem>
-        <ContextMenuItem onClick={onCloseOthers} disabled={!canCloseOthers}>
+        <ContextMenuItem onClick={onCloseOthers} disabled={!canCloseOthers || !onCloseOthers}>
           Close others
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onClick={onCloseToRight} disabled={!canCloseToRight}>
+        <ContextMenuItem
+          onClick={onCloseToRight}
+          disabled={!canCloseToRight || !onCloseToRight}
+        >
           Close to the right
         </ContextMenuItem>
       </ContextMenuContent>

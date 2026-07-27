@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, promises as fs } from "node:fs";
 import http from "node:http";
@@ -73,6 +73,7 @@ mock.module("../../../apps/backend/src/core/pty", () => ({ spawnPty: ptySpawn })
 
 const {
   __testing: commandTesting,
+  CONTAINER_UNTRACKED_STATS_SCANNER,
   createCommandRegistry,
   resolveBrowserOpenCommand,
   shutdownLocalServers,
@@ -82,6 +83,22 @@ const tempDirs: string[] = [];
 const SETUP_DONE_OSC = "\u001b]9999;setup_done\u0007";
 const SETUP_FAILED_OSC = "\u001b]9999;setup_failed\u0007";
 const TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS = 850;
+
+function framedContainerGitStatus(
+  nameStatus = "",
+  numstat = "",
+  untracked = "",
+): string {
+  return [
+    "\u001eORKESTRATOR_NAME_STATUS\u001f",
+    Buffer.from(nameStatus).toString("base64"),
+    "\u001eORKESTRATOR_NUMSTAT\u001f",
+    Buffer.from(numstat).toString("base64"),
+    "\u001eORKESTRATOR_UNTRACKED\u001f",
+    Buffer.from(untracked).toString("base64"),
+    "\u001eORKESTRATOR_END\u001f",
+  ].join("");
+}
 
 describe("resolveBrowserOpenCommand", () => {
   test("uses direct platform launchers without a command interpreter", () => {
@@ -655,6 +672,61 @@ async function withFakeDocker(scriptBody: string, run: (logs: { all: string; rm:
   }
 }
 
+/** Puts a `git` on PATH that prints `output` for `subcommand` and still exits 0. */
+async function withFakeGitSubcommandOutput(
+  subcommand: string,
+  output: string,
+  run: () => Promise<void>,
+): Promise<void> {
+  const root = await createTempDir("ork-electron-fake-git-output-");
+  const binDir = path.join(root, "bin");
+  const { stdout } = await execFileAsync("which", ["git"]);
+  const realGit = stdout.trim().replaceAll("'", "'\\''");
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(binDir, "git"), `#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = '${subcommand.replaceAll("'", "'\\''")}' ]; then
+    printf '%s\\n' '${output.replaceAll("'", "'\\''")}'
+    exit 0
+  fi
+done
+exec '${realGit}' "$@"
+`);
+  await fs.chmod(path.join(binDir, "git"), 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+  try {
+    await run();
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+}
+
+/**
+ * Provides a `base64` that understands GNU's `-w0`, so the container script can be
+ * run on a developer machine. macOS base64 rejects the flag but never wraps, and
+ * GNU base64 wraps at 76 columns without it, so each needs opposite handling.
+ */
+async function withGnuBase64Shim(run: (env: NodeJS.ProcessEnv) => Promise<void>): Promise<void> {
+  const root = await createTempDir("ork-electron-base64-shim-");
+  const binDir = path.join(root, "bin");
+  const { stdout } = await execFileAsync("which", ["base64"]);
+  const realBase64 = stdout.trim().replaceAll("'", "'\\''");
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(binDir, "base64"), `#!/bin/sh
+if printf '' | '${realBase64}' -w0 >/dev/null 2>&1; then
+  exec '${realBase64}' "$@"
+fi
+if [ "$1" = "-w0" ]; then shift; fi
+exec '${realBase64}' "$@"
+`);
+  await fs.chmod(path.join(binDir, "base64"), 0o755);
+
+  await run({ ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` });
+}
+
 async function withFailingGitSubcommand(subcommand: string, run: () => Promise<void>): Promise<void> {
   const root = await createTempDir("ork-electron-fake-git-");
   const binDir = path.join(root, "bin");
@@ -802,6 +874,14 @@ fi
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
   case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
     *rev-parse*)
       printf '1111111111111111111111111111111111111111\\n'
       ;;
@@ -1678,6 +1758,14 @@ fi
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
   case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
     *rev-parse*)
       printf '1111111111111111111111111111111111111111\\n'
       ;;
@@ -1696,7 +1784,11 @@ exit 0
       expect(environment.setupScriptsComplete).toBe(true);
       expect(environment.createdFromCommit).toBe("1111111111111111111111111111111111111111");
       const execLog = await fs.readFile(logs.exec, "utf8");
-      expect(execLog).toContain("git -C /workspace rev-parse HEAD");
+      expect(execLog).toContain("workspace-setup.sh --prepare-only");
+      expect(execLog).toContain("git -C /workspace rev-parse --verify 'HEAD^{commit}'");
+      expect(execLog.indexOf("workspace-setup.sh --prepare-only")).toBeLessThan(
+        execLog.indexOf("git -C /workspace rev-parse --verify 'HEAD^{commit}'"),
+      );
       expect(ptySpawn).toHaveBeenCalledWith(
         "docker",
         expect.arrayContaining([
@@ -1735,6 +1827,277 @@ exit 0
     });
   }, ASYNC_TEST_BUDGET_MS);
 
+  test("retries container baseline capture before any setup command runs", async () => {
+    const environment = createEnvironment({
+      id: "env-container-baseline-retry",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      exit 0
+      ;;
+    *rev-parse*)
+      if [ ! -f "$FAKE_DOCKER_LOG.capture-failed" ]; then
+        touch "$FAKE_DOCKER_LOG.capture-failed"
+        printf 'transient capture failure\\n' >&2
+        exit 1
+      fi
+      printf '4444444444444444444444444444444444444444\\n'
+      exit 0
+      ;;
+  esac
+fi
+exit 0
+`, async (logs) => {
+      await expect(commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("transient capture failure");
+      expect(ptySpawn).not.toHaveBeenCalled();
+      expect(environment.setupScriptsComplete).toBe(false);
+      expect(environment.createdFromCommit).toBeUndefined();
+
+      const retry = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+      expect(environment.createdFromCommit).toBe("4444444444444444444444444444444444444444");
+      expect(environment.setupScriptsComplete).toBe(false);
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      await expect(retry).resolves.toMatchObject({
+        createdFromCommit: "4444444444444444444444444444444444444444",
+        setupScriptsComplete: true,
+      });
+
+      const execLog = await fs.readFile(logs.exec, "utf8");
+      expect(execLog.split("\n").filter((line) => line.includes("workspace-setup.sh --prepare-only"))).toHaveLength(2);
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("rejects an invalid container HEAD without starting setup", async () => {
+    const environment = createEnvironment({
+      id: "env-container-invalid-head",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
+    *rev-parse*) printf 'not-a-commit\\n' ;;
+  esac
+  exit 0
+fi
+exit 0
+`, async () => {
+      await expect(commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("Could not resolve environment creation commit");
+      expect(ptySpawn).not.toHaveBeenCalled();
+      expect(environment.setupScriptsComplete).toBe(false);
+      expect(environment.createdFromCommit).toBeUndefined();
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("preserves an existing baseline without preparing or recapturing HEAD", async () => {
+    const originalCommit = "7777777777777777777777777777777777777777";
+    const environment = createEnvironment({
+      id: "env-container-existing-baseline",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      createdFromCommit: originalCommit,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      const setup = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      await expect(setup).resolves.toMatchObject({
+        createdFromCommit: originalCommit,
+        setupScriptsComplete: true,
+      });
+
+      const dockerLog = await fs.readFile(logs.all, "utf8");
+      expect(dockerLog).not.toContain("--prepare-only");
+      expect(dockerLog).not.toContain("rev-parse");
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("a failed baseline storage write blocks setup and succeeds on retry", async () => {
+    const environment = createEnvironment({
+      id: "env-container-baseline-storage-retry",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context, updates } = createContext(environment);
+    let failBaselineWrite = true;
+    context.storage.updateEnvironment = mock(async (
+      environmentId: string,
+      update: Partial<Environment>,
+    ) => {
+      if (environmentId !== environment.id) throw new Error(`Environment not found: ${environmentId}`);
+      if (failBaselineWrite && update.createdFromCommit) {
+        failBaselineWrite = false;
+        throw new Error("baseline storage unavailable");
+      }
+      updates.push(update);
+      Object.assign(environment, update);
+      return environment;
+    }) as typeof context.storage.updateEnvironment;
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
+    *rev-parse*) printf '5555555555555555555555555555555555555555\\n' ;;
+  esac
+  exit 0
+fi
+exit 0
+`, async () => {
+      await expect(commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("baseline storage unavailable");
+      expect(ptySpawn).not.toHaveBeenCalled();
+      expect(environment.setupScriptsComplete).toBe(false);
+
+      const retry = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      await expect(retry).resolves.toMatchObject({
+        createdFromCommit: "5555555555555555555555555555555555555555",
+        setupScriptsComplete: true,
+      });
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("serializes concurrent setup starts through one preparation and PTY", async () => {
+    const environment = createEnvironment({
+      id: "env-container-concurrent-setup",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
+    *rev-parse*) printf '6666666666666666666666666666666666666666\\n' ;;
+  esac
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      const first = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      const second = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+      expect(ptySpawn).toHaveBeenCalledTimes(1);
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+
+      const execLog = await fs.readFile(logs.exec, "utf8");
+      expect(execLog.split("\n").filter((line) => line.includes("workspace-setup.sh --prepare-only"))).toHaveLength(1);
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
   test("returns completed container environments without rerunning backend setup", async () => {
     const environment = createEnvironment({
       id: "env-container-setup-complete",
@@ -1759,7 +2122,7 @@ exit 1
   });
 
   test("ensures no-op local setup without spawning a terminal", async () => {
-    const worktreePath = await createTempDir("ork-electron-local-noop-setup-");
+    const { worktree: worktreePath } = await createGitWorktreeWithOrigin();
     const environment = createEnvironment({
       id: "env-local-noop-setup",
       environmentType: "local",
@@ -1821,8 +2184,20 @@ if [ "$1" = "inspect" ]; then
   exit 0
 fi
 if [ "$1" = "exec" ]; then
-  printf 'setup exploded\n' >&2
-  exit 9
+  case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
+    *rev-parse*)
+      printf '3333333333333333333333333333333333333333\n'
+      ;;
+  esac
+  exit 0
 fi
 exit 0
 `, async () => {
@@ -2118,7 +2493,11 @@ exit 0
     expect(buffer.startsWith("A")).toBe(true);
   }, ASYNC_TEST_BUDGET_MS);
 
-  test("captures container HEAD commit when frontend marks setup complete", async () => {
+  // The renderer calls this *after* setup ran, so a HEAD read here could already
+  // include commits made by repository-controlled setup commands. Recording that
+  // as the creation commit is worse than recording nothing, because the UI trusts
+  // it silently; the backend-managed path is what captures the real baseline.
+  test("marks setup complete from the frontend without capturing a post-setup baseline", async () => {
     const environment = createEnvironment({
       id: "env-container-frontend-complete",
       environmentType: "containerized",
@@ -2131,8 +2510,21 @@ exit 0
     const commands = createCommandRegistry();
 
     await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
 if [ "$1" = "exec" ]; then
   case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
     *rev-parse*)
       printf '2222222222222222222222222222222222222222\\n'
       ;;
@@ -2140,18 +2532,23 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 0
-`, async () => {
+`, async (logs) => {
       const updated = await commands.get("set_environment_setup_complete")?.(
         { environmentId: environment.id, complete: true },
         context,
       ) as Environment;
 
       expect(updated.setupScriptsComplete).toBe(true);
-      expect(updated.createdFromCommit).toBe("2222222222222222222222222222222222222222");
+      expect(updated.createdFromCommit).toBeUndefined();
+      // No log file at all: the handler never shelled out to the container, so it
+      // cannot have run the preparation phase or read a post-setup HEAD.
+      expect(existsSync(logs.all)).toBe(false);
     });
   });
 
-  test("does not throw when docker exec fails while capturing container HEAD commit", async () => {
+  // Fire-and-forget from the renderer (markSetupScriptsComplete only logs on
+  // rejection), so failing here would silently re-run setup on every later start.
+  test("marks setup complete even when the container is unreachable", async () => {
     const environment = createEnvironment({
       id: "env-container-commit-fail",
       environmentType: "containerized",
@@ -2164,6 +2561,10 @@ exit 0
     const commands = createCommandRegistry();
 
     await withFakeDocker(`#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  printf 'exited\\n'
+  exit 0
+fi
 if [ "$1" = "exec" ]; then
   printf 'container gone\\n' >&2
   exit 1
@@ -2177,7 +2578,30 @@ exit 0
 
       expect(updated.setupScriptsComplete).toBe(true);
       expect(updated.createdFromCommit).toBeUndefined();
+      expect(environment.setupScriptsComplete).toBe(true);
     });
+  });
+
+  test("clears the setup-complete flag without touching the baseline", async () => {
+    const environment = createEnvironment({
+      id: "env-container-uncomplete",
+      environmentType: "containerized",
+      setupScriptsComplete: true,
+      createdFromCommit: "3333333333333333333333333333333333333333",
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const updated = await commands.get("set_environment_setup_complete")?.(
+      { environmentId: environment.id, complete: false },
+      context,
+    ) as Environment;
+
+    expect(updated.setupScriptsComplete).toBe(false);
+    expect(updated.createdFromCommit).toBe("3333333333333333333333333333333333333333");
   });
 
   test("does not pass host gh auth token into newly created containers without configured token", async () => {
@@ -2210,6 +2634,14 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *ORKESTRATOR_SETUP_CAPABILITIES*)
+        printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+        exit 0
+        ;;
+      *--prepare-only*)
+        printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+        exit 0
+        ;;
       *rev-parse*) printf '3333333333333333333333333333333333333333\\n' ;;
     esac
     exit 0
@@ -2360,6 +2792,14 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *ORKESTRATOR_SETUP_CAPABILITIES*)
+        printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+        exit 0
+        ;;
+      *--prepare-only*)
+        printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+        exit 0
+        ;;
       *rev-parse*) printf '4444444444444444444444444444444444444444\\n' ;;
     esac
     exit 0
@@ -2921,6 +3361,14 @@ exit 0
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "ps" ]; then
   case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
     *'{{json .}}'*)
       printf '{"ID":"${shortAssignedId}","Names":"assigned","Status":"Up","State":"running","Image":"orkestrator"}\\n'
       printf '{"ID":"${orphanId}","Names":"orphan","Status":"Exited","State":"exited","Image":"orkestrator"}\\n'
@@ -3068,6 +3516,33 @@ exit 0
       deletions: 0,
       status: "M",
     }));
+  });
+
+  test("can limit local git stats to committed changes since environment creation", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const creationCommit = await currentGitCommit(worktree);
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "base\ncommitted\n");
+    await runGit(worktree, ["add", "tracked.txt"]);
+    await runGit(worktree, ["commit", "-m", "branch change"]);
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "base\ncommitted\nuncommitted\n");
+    await fs.writeFile(path.join(worktree, "untracked.txt"), "not committed\n");
+    const commands = createCommandRegistry();
+
+    const changes = await commands.get("get_local_git_status")?.(
+      {
+        worktreePath: worktree,
+        targetBranch: creationCommit,
+        includeUncommitted: false,
+      },
+      createContext(createEnvironment()).context,
+    ) as Array<{ path: string; additions: number; deletions: number; status: string }>;
+
+    expect(changes).toEqual([expect.objectContaining({
+      path: "tracked.txt",
+      additions: 1,
+      deletions: 0,
+      status: "M",
+    })]);
   });
 
   test("reads local branch files from origin and returns null for files missing in the base", async () => {
@@ -3339,6 +3814,682 @@ exit 0
     expect(renamed?.additions).toBe(1);
   });
 
+  test("preserves unusual Git paths and binary stats in NUL-delimited output", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const textPaths = [
+      "literal => arrow.txt",
+      "brace{name}.txt",
+      "tab\tname.txt",
+      "line\nname.txt",
+      "雪.txt",
+    ];
+    for (const filePath of textPaths) {
+      await fs.writeFile(path.join(worktree, filePath), "base\n");
+    }
+    await fs.writeFile(path.join(worktree, "binary.bin"), Buffer.from([1, 0, 2]));
+    await runGit(worktree, ["add", "-A"]);
+    await runGit(worktree, ["commit", "-m", "add unusual paths"]);
+    const base = await currentGitCommit(worktree);
+
+    for (const filePath of textPaths) {
+      await fs.writeFile(path.join(worktree, filePath), "base\nchanged\n");
+    }
+    await fs.writeFile(path.join(worktree, "binary.bin"), Buffer.from([3, 0, 4]));
+    const changes = await createCommandRegistry().get("get_local_git_status")?.(
+      { worktreePath: worktree, targetBranch: base },
+      createContext(createEnvironment()).context,
+    ) as Array<{ path: string; additions: number; deletions: number }>;
+
+    for (const filePath of textPaths) {
+      expect(changes).toContainEqual(expect.objectContaining({
+        path: filePath,
+        additions: 1,
+        deletions: 0,
+      }));
+    }
+    expect(changes).toContainEqual(expect.objectContaining({
+      path: "binary.bin",
+      additions: 0,
+      deletions: 0,
+    }));
+  });
+
+  test("parses copy tuples and rejects truncated or malformed Git tuples", () => {
+    expect(commandTesting.parseGitFileChanges(
+      "C100\0old{name}.txt\0new => \t雪.txt\0",
+      "2\t1\t\0old{name}.txt\0new => \t雪.txt\0",
+    )).toEqual([expect.objectContaining({
+      status: "C100",
+      originalPath: "old{name}.txt",
+      path: "new => \t雪.txt",
+      additions: 2,
+      deletions: 1,
+    })]);
+    expect(commandTesting.parseGitFileChanges(
+      "M\0binary.bin\0M\0without-stats.txt\0",
+      "-\t-\tbinary.bin\0",
+    )).toEqual([
+      expect.objectContaining({ path: "binary.bin", additions: 0, deletions: 0 }),
+      expect.objectContaining({ path: "without-stats.txt", additions: 0, deletions: 0 }),
+    ]);
+
+    for (const [nameStatus, numstat] of [
+      ["M\0missing-terminator", "1\t0\tfile.txt\0"],
+      ["R100\0old.txt\0", "1\t0\t\0old.txt\0new.txt\0"],
+      ["M\0file.txt\0", "bad\t0\tfile.txt\0"],
+      ["M\0file.txt\0", "1\t0\t\0old-only.txt\0"],
+    ]) {
+      expect(() => commandTesting.parseGitFileChanges(nameStatus, numstat)).toThrow("Malformed");
+    }
+    for (const malformed of ["missing-nul", "x\tpath\0", "1\t\0"]) {
+      expect(() => commandTesting.parseContainerUntrackedStats(malformed)).toThrow("Malformed");
+    }
+  });
+
+  test("counts container untracked lines with bounded binary and symlink handling", async () => {
+    const workspace = await createTempDir("ork-container-untracked-scanner-");
+    const files = new Map<string, string | Buffer>([
+      ["no-trailing.txt", "one\ntwo"],
+      ["crlf.txt", "one\r\ntwo\r\n"],
+      ["lone-cr.txt", "one\rtwo"],
+      ["tab\tline\n雪.txt", "one\n"],
+      ["empty.txt", ""],
+      ["binary.bin", Buffer.from([1, 0, 2])],
+      ["exact-limit.txt", "x".repeat(16)],
+      ["over-limit.txt", "x".repeat(17)],
+    ]);
+    for (const [filePath, content] of files) {
+      await fs.writeFile(path.join(workspace, filePath), content);
+    }
+    await fs.symlink("no-trailing.txt", path.join(workspace, "link.txt"));
+    const status = [...files.keys(), "link.txt"]
+      .map((filePath) => `?? ${filePath}\0`)
+      .join("");
+    const result = spawnSync(
+      "node",
+      ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "16"],
+      { cwd: workspace, input: Buffer.from(status), encoding: "utf8" },
+    );
+    expect(result.status).toBe(0);
+
+    const changes = commandTesting.parseContainerUntrackedStats(result.stdout);
+    expect(changes).toContainEqual(expect.objectContaining({ path: "no-trailing.txt", additions: 2 }));
+    expect(changes).toContainEqual(expect.objectContaining({ path: "crlf.txt", additions: 2 }));
+    expect(changes).toContainEqual(expect.objectContaining({ path: "lone-cr.txt", additions: 2 }));
+    expect(changes).toContainEqual(expect.objectContaining({ path: "tab\tline\n雪.txt", additions: 1 }));
+    expect(changes).toContainEqual(expect.objectContaining({ path: "empty.txt", additions: 0 }));
+    expect(changes).toContainEqual(expect.objectContaining({ path: "binary.bin", additions: 0 }));
+    expect(changes).toContainEqual(expect.objectContaining({ path: "exact-limit.txt", additions: 1 }));
+    expect(changes).toContainEqual(expect.objectContaining({ path: "over-limit.txt", additions: 0 }));
+    expect(changes).toContainEqual(expect.objectContaining({ path: "link.txt", additions: 0 }));
+  });
+
+  test("rejects every malformed Git tuple shape the framing can produce", () => {
+    for (const [nameStatus, numstat] of [
+      ["\0file.txt\0", ""],                          // name-status: empty status
+      ["M\0\0", ""],                                 // name-status: empty path
+      ["R100\0\0new.txt\0", ""],                     // name-status: empty rename source
+      ["M\0file.txt\0", "10\0"],                     // numstat: header with no tab
+      ["M\0file.txt\0", "10\t0\0"],                  // numstat: header with one tab
+      ["M\0file.txt\0", "\t0\tfile.txt\0"],          // numstat: leading tab, no additions
+      ["M\0file.txt\0", "1\t0\t\0\0\0"],             // numstat: rename record, empty result path
+    ]) {
+      expect(() => commandTesting.parseGitFileChanges(nameStatus, numstat)).toThrow("Malformed");
+    }
+  });
+
+  test("rejects untracked scanner input that is not NUL-terminated", async () => {
+    const workspace = await createTempDir("ork-container-untracked-truncated-");
+    const result = spawnSync(
+      "node",
+      ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "1024"],
+      { cwd: workspace, input: Buffer.from("?? truncated.txt"), encoding: "utf8" },
+    );
+    expect(result.status).toBe(2);
+  });
+
+  test("counts only untracked porcelain records, skipping tracked and rename fields", async () => {
+    const workspace = await createTempDir("ork-container-untracked-skip-");
+    await fs.writeFile(path.join(workspace, "tracked.txt"), "one\ntwo\nthree\n");
+    await fs.writeFile(path.join(workspace, "untracked.txt"), "one\n");
+    await fs.mkdir(path.join(workspace, "a-directory"));
+    // `git status --porcelain=v1 -z` emits a staged rename as two NUL fields, the
+    // second carrying no status prefix at all. Reading that bare path as if it were
+    // an untracked entry would report a tracked file's line count as an addition.
+    const status = [
+      " M tracked.txt\0",
+      "R  renamed.txt\0tracked.txt\0",
+      "?? untracked.txt\0",
+      "?? a-directory\0",
+    ].join("");
+    const result = spawnSync(
+      "node",
+      ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "1024"],
+      { cwd: workspace, input: Buffer.from(status), encoding: "utf8" },
+    );
+    expect(result.status).toBe(0);
+
+    const changes = commandTesting.parseContainerUntrackedStats(result.stdout);
+    expect(changes.map((change) => change.path)).toEqual(["untracked.txt", "a-directory"]);
+    expect(changes).toContainEqual(expect.objectContaining({ path: "untracked.txt", additions: 1 }));
+    // A directory is opened successfully on both Linux and macOS, so the guard that
+    // rejects it is the fstat check rather than the open itself.
+    expect(changes).toContainEqual(expect.objectContaining({ path: "a-directory", additions: 0 }));
+  });
+
+  test("accepts only a full 40-character commit sha as a HEAD commit", () => {
+    expect(commandTesting.parseHeadCommit("  1111111111111111111111111111111111111111\n"))
+      .toBe("1111111111111111111111111111111111111111");
+    expect(commandTesting.parseHeadCommit("ABCDEF1111111111111111111111111111111111"))
+      .toBe("ABCDEF1111111111111111111111111111111111");
+    for (const invalid of ["", "not-a-commit", "1111", "1".repeat(39), "1".repeat(41), "z".repeat(40)]) {
+      expect(commandTesting.parseHeadCommit(invalid)).toBeUndefined();
+    }
+  });
+
+  test("rejects a local HEAD that git did not report as a commit sha", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const environment = createEnvironment({
+      id: "env-local-bad-head",
+      environmentType: "local",
+      worktreePath: worktree,
+      setupScriptsComplete: false,
+    });
+    const { context } = createContext(environment);
+
+    await withFakeGitSubcommandOutput("rev-parse", "not-a-commit", async () => {
+      await expect(commandTesting.establishCreatedFromCommit(environment, context))
+        .rejects.toThrow("Git returned an invalid HEAD commit");
+    });
+    expect(environment.createdFromCommit).toBeUndefined();
+  });
+
+  test("refuses to establish a baseline without a usable target", async () => {
+    const local = createEnvironment({
+      id: "env-baseline-no-worktree",
+      environmentType: "local",
+      worktreePath: undefined,
+    });
+    await expect(commandTesting.establishCreatedFromCommit(local, createContext(local).context))
+      .rejects.toThrow("Local environment worktree is not available");
+
+    const noContainer = createEnvironment({
+      id: "env-baseline-no-container",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: null,
+    });
+    await expect(commandTesting.establishCreatedFromCommit(noContainer, createContext(noContainer).context))
+      .rejects.toThrow("Environment has no container");
+
+    const stopped = createEnvironment({
+      id: "env-baseline-stopped-container",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "stopped",
+    });
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'exited\\n'
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      await expect(commandTesting.establishCreatedFromCommit(stopped, createContext(stopped).context))
+        .rejects.toThrow("Container is not running");
+      const dockerLog = await fs.readFile(logs.all, "utf8");
+      expect(dockerLog).not.toContain("--prepare-only");
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("captures the baseline once for callers that race outside the setup path", async () => {
+    const environment = createEnvironment({
+      id: "env-baseline-dedup",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
+    *rev-parse*)
+      printf '5555555555555555555555555555555555555555\\n'
+      ;;
+  esac
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      const [first, second] = await Promise.all([
+        commandTesting.establishCreatedFromCommit(environment, context),
+        commandTesting.establishCreatedFromCommit(environment, context),
+      ]);
+
+      expect(first.createdFromCommit).toBe("5555555555555555555555555555555555555555");
+      // Both callers observe the identical resolution, which is only possible if
+      // the second joined the first task rather than starting its own.
+      expect(second).toBe(first);
+      const execLog = await fs.readFile(logs.exec, "utf8");
+      expect(execLog.split("\n").filter((line) => line.includes("--prepare-only"))).toHaveLength(1);
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("refuses to complete setup without a captured creation commit", async () => {
+    const environment = createEnvironment({
+      id: "env-complete-without-baseline",
+      setupScriptsComplete: false,
+    });
+    const { context, emitted } = createContext(environment);
+
+    await expect(commandTesting.completeEnvironmentSetup(environment, context))
+      .rejects.toThrow("Environment creation commit was not captured before setup completed");
+    expect(environment.setupScriptsComplete).toBe(false);
+    expect(emitted).toEqual([]);
+  });
+
+  test("refuses to prepare a workspace on a base image that predates the prepare contract", async () => {
+    const environment = createEnvironment({
+      id: "env-container-stale-image",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    // An older image's workspace-setup.sh has no argument handling at all: the
+    // capability probe finds nothing, and invoking --prepare-only there would run
+    // the whole setup - including repository-controlled commands, as root - before
+    // HEAD is read, producing a baseline that is not a pre-setup one.
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      await expect(commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("Container base image is out of date");
+
+      const dockerLog = await fs.readFile(logs.all, "utf8");
+      expect(dockerLog).not.toContain("--prepare-only");
+      expect(ptySpawn).not.toHaveBeenCalled();
+      expect(environment.createdFromCommit).toBeUndefined();
+      expect(environment.setupScriptsComplete).toBe(false);
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("rejects a preparation run that never reports completion", async () => {
+    const environment = createEnvironment({
+      id: "env-container-prepare-silent",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf 'looks fine but never reached the checkpoint\\n'
+      exit 0
+      ;;
+  esac
+  exit 0
+fi
+exit 0
+`, async () => {
+      await expect(commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("did not report completion");
+      expect(ptySpawn).not.toHaveBeenCalled();
+      expect(environment.createdFromCommit).toBeUndefined();
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("opens the setup terminal before preparation and streams the clone output into it", async () => {
+    const environment = createEnvironment({
+      id: "env-container-prepare-stream",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf 'Cloning into /workspace...\\n'
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
+    *rev-parse*)
+      printf '6666666666666666666666666666666666666666\\n'
+      ;;
+  esac
+  exit 0
+fi
+exit 0
+`, async () => {
+      const setupPromise = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      await setupPromise;
+
+      const setupOutput = emitted
+        .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
+        .map((entry) => Buffer.from(entry.payload as number[]).toString("utf8"))
+        .join("");
+      // Preparation performs the clone, so its announcement and output have to
+      // reach the terminal before the setup commands are even known.
+      expect(setupOutput).toContain("[orkestrator] Preparing workspace");
+      expect(setupOutput).toContain("Cloning into /workspace...");
+      expect(setupOutput.indexOf("[orkestrator] Preparing workspace")).toBeLessThan(
+        setupOutput.indexOf("[orkestrator] Starting environment setup"),
+      );
+      // The buffer survives into the setup phase rather than being reset by it.
+      expect(setupOutput.indexOf("Cloning into /workspace...")).toBeLessThan(
+        setupOutput.indexOf("[orkestrator] Starting environment setup"),
+      );
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("closes the setup session when preparation fails", async () => {
+    const environment = createEnvironment({
+      id: "env-container-prepare-fails",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+      pendingAgentLaunch: true,
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf 'clone failed\\n' >&2
+      exit 1
+      ;;
+  esac
+  exit 0
+fi
+exit 0
+`, async () => {
+      await expect(commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("clone failed");
+
+      // A session opened for preparation must not be left claiming to be running
+      // with no process behind it.
+      const session = await commands.get("get_environment_setup_session")?.(
+        { environmentId: environment.id },
+        context,
+      ) as { running: boolean; success?: boolean; error?: string };
+      expect(session).toMatchObject({ running: false, success: false });
+      expect(session.error).toContain("clone failed");
+      expect(emitted.some((entry) => entry.event === "environment-setup-complete"
+        && (entry.payload as { success: boolean }).success === false)).toBe(true);
+      expect(environment.pendingAgentLaunch).toBe(false);
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("decodes sections whatever whitespace the container's base64 emits", () => {
+    const nameStatus = "M\0keep.txt\0";
+    const numstat = "1\t0\tkeep.txt\0";
+    // GNU coreutils with -w0 emits no whitespace, macOS appends a trailing newline,
+    // and an implementation that ignores -w0 wraps at 76 columns. All three decode.
+    const variants = [
+      (encoded: string) => encoded,
+      (encoded: string) => `${encoded}\n`,
+      (encoded: string) => (encoded.match(/.{1,4}/g) ?? []).join("\n"),
+    ];
+    for (const wrap of variants) {
+      const response = [
+        "ORKESTRATOR_NAME_STATUS",
+        wrap(Buffer.from(nameStatus).toString("base64")),
+        "ORKESTRATOR_NUMSTAT",
+        wrap(Buffer.from(numstat).toString("base64")),
+        "ORKESTRATOR_UNTRACKED",
+        "",
+        "ORKESTRATOR_END",
+      ].join("");
+      expect(commandTesting.parseContainerGitStatusResponse(response, true)).toEqual([
+        expect.objectContaining({ path: "keep.txt", status: "M", additions: 1 }),
+      ]);
+    }
+    // Stripping whitespace must not make genuinely invalid payloads decodable.
+    expect(() => commandTesting.parseContainerGitStatusResponse(
+      framedContainerGitStatus().replace(
+        "ORKESTRATOR_NUMSTAT",
+        "%%%ORKESTRATOR_NUMSTAT",
+      ),
+      true,
+    )).toThrow("invalid base64");
+  });
+
+  test("closes the setup session when the terminal cannot be spawned after preparation", async () => {
+    const environment = createEnvironment({
+      id: "env-container-spawn-fails",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    // Preparation succeeds and opens the session, then the container disappears
+    // before the setup PTY starts. Nothing but this path can close that session,
+    // because no process was ever attached to it.
+    let preparedOnce = false;
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  if [ -f "$FAKE_DOCKER_LOG.prepared" ]; then
+    printf 'exited\\n'
+  else
+    printf 'running\\n'
+  fi
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
+    *rev-parse*)
+      printf '7777777777777777777777777777777777777777\\n'
+      touch "$FAKE_DOCKER_LOG.prepared"
+      ;;
+  esac
+  exit 0
+fi
+exit 0
+`, async () => {
+      preparedOnce = true;
+      await expect(commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("Container is not running");
+
+      const session = await commands.get("get_environment_setup_session")?.(
+        { environmentId: environment.id },
+        context,
+      ) as { running: boolean; success?: boolean };
+      expect(session).toMatchObject({ running: false, success: false });
+      // The baseline was still captured and kept, so a retry does not re-prepare.
+      expect(environment.createdFromCommit).toBe("7777777777777777777777777777777777777777");
+      expect(environment.setupScriptsComplete).toBe(false);
+      expect(ptySpawn).not.toHaveBeenCalled();
+    });
+    expect(preparedOnce).toBe(true);
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("reports a target ref the container cannot resolve", async () => {
+    const environment = createEnvironment({
+      id: "env-container-missing-ref",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '\\036ORKESTRATOR_TARGET_REF_NOT_FOUND\\037'
+  exit 0
+fi
+exit 0
+`, async () => {
+      await expect(commands.get("get_git_status")?.(
+        { containerId: "container-1", targetBranch: "main" },
+        context,
+      )).rejects.toThrow("Target ref is not present in the container: main");
+    });
+  });
+
+  test("collects real git status through the composed container script", async () => {
+    const repo = await createTempDir("ork-container-script-repo-");
+    await runGit(repo, ["init", "-b", "main", "."]);
+    await fs.writeFile(path.join(repo, "keep.txt"), "a\nb\nc\n");
+    await fs.writeFile(path.join(repo, "old name.txt"), "x\ny\n");
+    await runGit(repo, ["add", "-A"]);
+    await runGit(repo, ["commit", "-m", "base"]);
+    await runGit(repo, ["checkout", "-b", "work"]);
+    await runGit(repo, ["mv", "old name.txt", "new\tname.txt"]);
+    await fs.writeFile(path.join(repo, "keep.txt"), "a\nb\nc\nd\n");
+    await runGit(repo, ["add", "-A"]);
+    await runGit(repo, ["commit", "-m", "work"]);
+    await fs.writeFile(path.join(repo, "untracked.txt"), "1\n2\n3");
+
+    // Runs the composed program through a real shell, so `set -e -o pipefail`, the
+    // base64 framing and the piped node scanner are exercised rather than asserted
+    // as text against a fake `docker` that never interprets them.
+    const script = commandTesting.buildContainerGitStatusScript("main", true);
+    await withGnuBase64Shim(async (env) => {
+      const result = spawnSync("bash", ["-c", script], { cwd: repo, encoding: "utf8", env });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+
+      const changes = commandTesting.parseContainerGitStatusResponse(result.stdout, true);
+      expect(changes).toContainEqual(expect.objectContaining({ path: "keep.txt", status: "M", additions: 1 }));
+      expect(changes).toContainEqual(expect.objectContaining({
+        path: "new\tname.txt",
+        originalPath: "old name.txt",
+      }));
+      expect(changes).toContainEqual(expect.objectContaining({
+        path: "untracked.txt",
+        status: "?",
+        additions: 3,
+      }));
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("survives a login shell whose logout hook fails", async () => {
+    const workspace = await createTempDir("ork-container-script-nonrepo-");
+    const home = await createTempDir("ork-container-script-home-");
+    // Debian's ~/.bash_logout runs `clear_console -q`, which fails when no console
+    // is attached. Under `set -e` a failing logout hook replaces the script's own
+    // exit status, which turned an empty status into an error for every workspace
+    // that had not been cloned yet.
+    await fs.writeFile(path.join(home, ".bash_logout"), "false\n");
+    const loginEnv = { ...process.env, HOME: home };
+    const script = commandTesting.buildContainerGitStatusScript("main", true);
+
+    const nonRepo = spawnSync("bash", ["-lc", script], {
+      cwd: workspace,
+      encoding: "utf8",
+      env: loginEnv,
+    });
+    expect(nonRepo.status).toBe(0);
+    expect(nonRepo.stdout).toBe("");
+    expect(commandTesting.parseContainerGitStatusResponse(nonRepo.stdout, true)).toEqual([]);
+
+    const repo = await createTempDir("ork-container-script-missing-ref-");
+    await runGit(repo, ["init", "-b", "work", "."]);
+    await fs.writeFile(path.join(repo, "file.txt"), "a\n");
+    await runGit(repo, ["add", "-A"]);
+    await runGit(repo, ["commit", "-m", "base"]);
+    const missingRef = spawnSync("bash", ["-lc", commandTesting.buildContainerGitStatusScript(
+      "0123456789012345678901234567890123456789",
+      true,
+    )], { cwd: repo, encoding: "utf8", env: loginEnv });
+    expect(missingRef.status).toBe(0);
+    expect(commandTesting.isMissingTargetRefResponse(missingRef.stdout)).toBe(true);
+  }, ASYNC_TEST_BUDGET_MS);
+
   test("redacts the GitHub token from propagation failure messages", async () => {
     const environment = createEnvironment({
       id: "env-container",
@@ -3409,11 +4560,15 @@ exit 1
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
+    const framedStatus = framedContainerGitStatus(
+      "M\0tracked.txt\0",
+      "1\t2\ttracked.txt\0",
+    );
 
     await withFakeDocker(`#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 if [ "$1" = "exec" ]; then
-  printf 'M\ttracked.txt\n'
+  printf '%s' '${framedStatus}'
   exit 0
 fi
 exit 1
@@ -3429,7 +4584,8 @@ exit 1
       expect(dockerExec).toContain('for pattern in ".orkestrator" ".claude/settings.local.json"; do');
       expect(dockerExec).toContain('grep -qxF "$pattern" "$exclude_file"');
       expect(dockerExec).toContain("tail -c 1");
-      expect(dockerExec).toContain("git diff --name-status origin/'main'");
+      expect(dockerExec).toContain('git diff --name-status -z -M "$base" $end_ref');
+      expect(dockerExec).toContain('git diff --numstat -z -M "$base" $end_ref');
     });
   });
 
@@ -3441,10 +4597,14 @@ exit 1
       status: "running",
     });
     const commands = createCommandRegistry();
+    const framedStatus = framedContainerGitStatus(
+      "R100\0old name.ts\0new name.ts\0",
+      "2\t1\t\0old name.ts\0new name.ts\0",
+    );
 
     await withFakeDocker(`#!/bin/sh
 if [ "$1" = "exec" ]; then
-  printf 'R100\told name.ts\tnew name.ts\n'
+  printf '%s' '${framedStatus}'
   exit 0
 fi
 exit 1
@@ -3456,7 +4616,209 @@ exit 1
         path: "new name.ts",
         originalPath: "old name.ts",
         filename: "new name.ts",
+        additions: 2,
+        deletions: 1,
         status: "R100",
+      })]);
+    });
+  });
+
+  test("includes untracked container files only when working-tree changes are requested", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const commands = createCommandRegistry();
+    const framedStatus = framedContainerGitStatus("", "", "2\tuntracked.txt\0");
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '%s' '${framedStatus}'
+  exit 0
+fi
+exit 1
+`, async () => {
+      await expect(commands.get("get_git_status")?.(
+        {
+          containerId: "container-1",
+          targetBranch: "0123456789012345678901234567890123456789",
+          includeUncommitted: true,
+        },
+        createContext(environment).context,
+      )).resolves.toEqual([expect.objectContaining({
+        path: "untracked.txt",
+        additions: 2,
+        status: "?",
+      })]);
+
+      await expect(commands.get("get_git_status")?.(
+        {
+          containerId: "container-1",
+          targetBranch: "0123456789012345678901234567890123456789",
+          includeUncommitted: false,
+        },
+        createContext(environment).context,
+      )).resolves.toEqual([]);
+    });
+  });
+
+  test("uses HEAD and omits worktree scanning for committed-only container status", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const commands = createCommandRegistry();
+    const framedStatus = framedContainerGitStatus(
+      "M\0committed.txt\0",
+      "1\t0\tcommitted.txt\0",
+    );
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+if [ "$1" = "exec" ]; then
+  printf '%s' '${framedStatus}'
+  exit 0
+fi
+exit 1
+`, async (logs) => {
+      await expect(commands.get("get_git_status")?.(
+        {
+          containerId: "container-1",
+          targetBranch: "0123456789012345678901234567890123456789",
+          includeUncommitted: false,
+        },
+        createContext(environment).context,
+      )).resolves.toEqual([expect.objectContaining({
+        path: "committed.txt",
+        additions: 1,
+        status: "M",
+      })]);
+
+      const dockerExec = await fs.readFile(logs.exec, "utf8");
+      expect(dockerExec).toContain("end_ref=HEAD");
+      expect(dockerExec).toContain('git diff --name-status -z -M "$base" $end_ref');
+      expect(dockerExec).not.toContain("git status --porcelain");
+      expect(dockerExec).not.toContain("node -e");
+    });
+  });
+
+  test("rejects unsafe container target refs before invoking Docker", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+exit 0
+`, async (logs) => {
+      for (const targetBranch of ["-rf", "feature..main", "feature//main", "bad name", "refs/.hidden"]) {
+        await expect(commands.get("get_git_status")?.(
+          { containerId: "container-1", targetBranch },
+          createContext(environment).context,
+        )).rejects.toThrow("Invalid target branch");
+      }
+      await expect(fs.readFile(logs.exec, "utf8")).rejects.toThrow();
+    });
+  });
+
+  test("propagates a missing container target ref without returning an empty status", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf 'Target ref not found: missing-branch\\n' >&2
+  exit 2
+fi
+exit 1
+`, async () => {
+      await expect(commands.get("get_git_status")?.(
+        { containerId: "container-1", targetBranch: "missing-branch" },
+        createContext(environment).context,
+      )).rejects.toThrow("Target ref not found");
+    });
+  });
+
+  test("rejects malformed container status framing and invalid encoded sections", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const commands = createCommandRegistry();
+    const malformedResponses = [
+      "\u001eORKESTRATOR_NAME_STATUS\u001f",
+      [
+        "\u001eORKESTRATOR_NAME_STATUS\u001f",
+        "%%%",
+        "\u001eORKESTRATOR_NUMSTAT\u001f",
+        "",
+        "\u001eORKESTRATOR_UNTRACKED\u001f",
+        "",
+        "\u001eORKESTRATOR_END\u001f",
+      ].join(""),
+      `unexpected${framedContainerGitStatus()}`,
+      `${framedContainerGitStatus()}unexpected`,
+    ];
+
+    for (const response of malformedResponses) {
+      await withFakeDocker(`#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '%s' '${response}'
+  exit 0
+fi
+exit 1
+`, async () => {
+        await expect(commands.get("get_git_status")?.(
+          { containerId: "container-1", targetBranch: "main" },
+          createContext(environment).context,
+        )).rejects.toThrow("Malformed");
+      });
+    }
+  });
+
+  test("does not confuse marker-like text in a container path with response framing", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const commands = createCommandRegistry();
+    const markerPath = "src/\u001eORKESTRATOR_NUMSTAT\u001f.txt";
+    const framedStatus = framedContainerGitStatus(
+      `M\0${markerPath}\0`,
+      `3\t1\t${markerPath}\0`,
+    );
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '%s' '${framedStatus}'
+  exit 0
+fi
+exit 1
+`, async () => {
+      await expect(commands.get("get_git_status")?.(
+        { containerId: "container-1", targetBranch: "main" },
+        createContext(environment).context,
+      )).resolves.toEqual([expect.objectContaining({
+        path: markerPath,
+        additions: 3,
+        deletions: 1,
       })]);
     });
   });
@@ -4934,6 +6296,14 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
   case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
     *pulls/42*)
       printf '%s\\n' '{"head":{"ref":"feature/container-cleanup","repo":{"full_name":"acme/repo"}}}'
       exit 0

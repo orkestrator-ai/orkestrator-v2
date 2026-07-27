@@ -6,12 +6,46 @@ export type MenuLike = {
 
 type ContextMenuWebContents = {
   on(event: "context-menu", listener: (event: unknown, params: ContextMenuParams) => void): void;
+  replaceMisspelling(suggestion: string): void;
+  session: {
+    addWordToSpellCheckerDictionary(word: string): boolean;
+  };
 };
 
 const hasSelection = (params: ContextMenuParams): boolean => params.selectionText.length > 0;
 
-function createEditableMenuTemplate(params: ContextMenuParams): MenuItemConstructorOptions[] {
+export type ContextMenuSpellcheckActions = {
+  replaceMisspelling(suggestion: string): void;
+  addToDictionary(word: string): void;
+};
+
+function createSpellcheckMenuTemplate(
+  params: ContextMenuParams,
+  actions?: ContextMenuSpellcheckActions,
+): MenuItemConstructorOptions[] {
+  if (!params.misspelledWord || !actions) {
+    return [];
+  }
+
   return [
+    ...params.dictionarySuggestions.map((suggestion) => ({
+      label: suggestion,
+      click: () => actions.replaceMisspelling(suggestion),
+    })),
+    {
+      label: "Add to Dictionary",
+      click: () => actions.addToDictionary(params.misspelledWord),
+    },
+    { type: "separator" as const },
+  ];
+}
+
+function createEditableMenuTemplate(
+  params: ContextMenuParams,
+  spellcheckActions?: ContextMenuSpellcheckActions,
+): MenuItemConstructorOptions[] {
+  return [
+    ...createSpellcheckMenuTemplate(params, spellcheckActions),
     { role: "undo", enabled: params.editFlags.canUndo },
     { role: "redo", enabled: params.editFlags.canRedo },
     { type: "separator" },
@@ -31,9 +65,12 @@ function createSelectionMenuTemplate(params: ContextMenuParams): MenuItemConstru
   ];
 }
 
-export function createContextMenuTemplate(params: ContextMenuParams): MenuItemConstructorOptions[] {
+export function createContextMenuTemplate(
+  params: ContextMenuParams,
+  spellcheckActions?: ContextMenuSpellcheckActions,
+): MenuItemConstructorOptions[] {
   if (params.isEditable) {
-    return createEditableMenuTemplate(params);
+    return createEditableMenuTemplate(params, spellcheckActions);
   }
 
   if (hasSelection(params)) {
@@ -48,7 +85,14 @@ export function installDefaultContextMenu(
   menu: MenuLike,
 ): void {
   window.webContents.on("context-menu", (_event, params) => {
-    const template = createContextMenuTemplate(params);
+    const template = createContextMenuTemplate(params, {
+      replaceMisspelling: (suggestion) => {
+        window.webContents.replaceMisspelling(suggestion);
+      },
+      addToDictionary: (word) => {
+        window.webContents.session.addWordToSpellCheckerDictionary(word);
+      },
+    });
     if (template.length === 0) {
       return;
     }

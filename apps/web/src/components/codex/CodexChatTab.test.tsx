@@ -4622,17 +4622,25 @@ describe("CodexChatTab", () => {
 
   describe("forking from a message", () => {
     function forkButtons() {
-      return screen.getAllByRole("button", { name: "Fork Codex session from this message" });
+      return screen.getAllByRole("button", { name: "Fork Codex session from this prompt" });
     }
 
     async function renderWithUserTurn() {
       mockGetSessionMessages.mockResolvedValue([
         {
+          id: "assistant-0",
+          role: "assistant",
+          content: "Existing answer",
+          parts: [{ type: "text", content: "Existing answer" }],
+          createdAt: "2026-04-15T00:00:00.000Z",
+          turnId: "turn-0",
+        } as any,
+        {
           id: "user-1",
           role: "user",
           content: "Add pagination",
           parts: [{ type: "text", content: "Add pagination" }],
-          createdAt: "2026-04-15T00:00:00.000Z",
+          createdAt: "2026-04-15T00:01:00.000Z",
           turnId: "turn-1",
         } as any,
       ]);
@@ -4640,12 +4648,16 @@ describe("CodexChatTab", () => {
       await waitFor(() => expect(forkButtons().length).toBeGreaterThan(0));
     }
 
-    test("opens a fork tab for the chosen message", async () => {
+    test("forks before a prompt and restores that prompt as the new draft", async () => {
       await renderWithUserTurn();
       fireEvent.click(forkButtons()[0]!);
 
       await waitFor(() =>
-        expect(mockForkCodexSession).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID, "user-1"),
+        expect(mockForkCodexSession).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          SESSION_ID,
+          "assistant-0",
+        ),
       );
       await waitFor(() => {
         const tabs = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID);
@@ -4659,6 +4671,136 @@ describe("CodexChatTab", () => {
       expect(forked.displayTitle).toBe("Codex fork");
       expect(forked.codexNativeData?.sessionId).toBe("fork-session");
       expect(forked.initialPrompt).toBeUndefined();
+      expect(
+        useCodexStore.getState().getDraftText(
+          createSessionKey(ENVIRONMENT_ID, forked.id),
+        ),
+      ).toBe("Add pagination");
+    });
+
+    test("creates an empty fork when the selected prompt is the first turn", async () => {
+      mockCreateSession.mockResolvedValue({
+        sessionId: "empty-fork",
+        title: "Empty fork",
+      });
+      mockGetSessionMessages.mockResolvedValue([
+        {
+          id: "user-1",
+          role: "user",
+          content: "First prompt",
+          parts: [{ type: "text", content: "First prompt" }],
+          createdAt: "2026-04-15T00:00:00.000Z",
+          turnId: "turn-1",
+        } as any,
+      ]);
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      fireEvent.click((await screen.findAllByRole("button", {
+        name: "Fork Codex session from this prompt",
+      }))[0]!);
+
+      await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+      expect(mockForkCodexSession).not.toHaveBeenCalled();
+      const forked = usePaneLayoutStore
+        .getState()
+        .getAllTabs(ENVIRONMENT_ID)
+        .find((tab) => tab.id !== TAB_ID)!;
+      expect(forked.codexNativeData?.sessionId).toBe("empty-fork");
+      expect(
+        useCodexStore.getState().getDraftText(
+          createSessionKey(ENVIRONMENT_ID, forked.id),
+        ),
+      ).toBe("First prompt");
+    });
+
+    test("forks a response inclusively and leaves the new composer empty", async () => {
+      mockGetSessionMessages.mockResolvedValue([
+        {
+          id: "user-1",
+          role: "user",
+          content: "Add pagination",
+          parts: [{ type: "text", content: "Add pagination" }],
+          createdAt: "2026-04-15T00:00:00.000Z",
+          turnId: "turn-1",
+        } as any,
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "Done",
+          parts: [{ type: "text", content: "Done" }],
+          createdAt: "2026-04-15T00:01:00.000Z",
+          turnId: "turn-1",
+        } as any,
+      ]);
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      const responseFork = await screen.findByRole("button", {
+        name: "Fork Codex session from this response",
+      });
+      fireEvent.click(responseFork);
+
+      await waitFor(() =>
+        expect(mockForkCodexSession).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          SESSION_ID,
+          "assistant-1",
+        ),
+      );
+      const forked = usePaneLayoutStore
+        .getState()
+        .getAllTabs(ENVIRONMENT_ID)
+        .find((tab) => tab.id !== TAB_ID)!;
+      // `getDraftText` returns "" for any unseen key, so asserting on it would
+      // pass whether or not a draft was written. Assert on the backing map.
+      expect(
+        useCodexStore.getState().draftText.has(
+          createSessionKey(ENVIRONMENT_ID, forked.id),
+        ),
+      ).toBe(false);
+    });
+
+    test("offers no prompt action when the history has no turn boundary", async () => {
+      /*
+       * A rollout old enough to predate turn boundaries has nothing
+       * `thread/fork` could honour — the bridge answers `no-fork-point`. The
+       * button used to render anyway and could only ever raise a toast, so the
+       * gate and the handler now read the same plan and it is never offered.
+       */
+      mockGetSessionMessages.mockResolvedValue([
+        {
+          id: "user-1",
+          role: "user",
+          content: "First prompt",
+          parts: [{ type: "text", content: "First prompt" }],
+          createdAt: "2026-04-15T00:00:00.000Z",
+        } as any,
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "Answer",
+          parts: [{ type: "text", content: "Answer" }],
+          createdAt: "2026-04-15T00:01:00.000Z",
+        } as any,
+        {
+          id: "user-2",
+          role: "user",
+          content: "Second prompt",
+          parts: [{ type: "text", content: "Second prompt" }],
+          createdAt: "2026-04-15T00:02:00.000Z",
+        } as any,
+      ]);
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      // The opening prompt still forks: it needs no boundary, it starts a
+      // sibling session.
+      await waitFor(() => expect(forkButtons()).toHaveLength(1));
+      // No response action either — an inclusive fork needs a turn to name.
+      expect(
+        screen.queryByRole("button", {
+          name: "Fork Codex session from this response",
+        }),
+      ).toBeNull();
+      expect(mockForkCodexSession).not.toHaveBeenCalled();
     });
 
     test.each([

@@ -65,9 +65,15 @@ function formatCoverageGap(gap: ReviewCoverageGap): string {
  * The input is validated again at the display boundary on purpose. Renderers
  * can safely accept persisted or provider-originated `unknown` data without
  * accidentally presenting an incomplete result as a successful review.
+ *
+ * Legacy test results are tolerated here: this renders a report that was
+ * already accepted somewhere upstream, so refusing to display it would lose the
+ * result rather than catch a bad one.
  */
 export function formatStructuredReviewReport(value: unknown): string {
-  const report: StructuredReviewReport = parseStructuredReviewReport(value);
+  const report: StructuredReviewReport = parseStructuredReviewReport(value, {
+    allowLegacyTestResults: true,
+  });
   const commit = report.reviewScope.commit;
   const failures =
     report.testResults.failures.length > 0
@@ -155,6 +161,7 @@ export function formatStructuredReviewReport(value: unknown): string {
     bullet("Total", String(report.testResults.total)),
     bullet("Passed", String(report.testResults.passed)),
     bullet("Failed", String(report.testResults.failed)),
+    bullet("Not run", String(report.testResults.notRun)),
     "- Failures:",
     failures,
     "",

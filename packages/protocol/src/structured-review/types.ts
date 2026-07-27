@@ -107,6 +107,8 @@ export interface ReviewTestResults {
   total: number;
   passed: number;
   failed: number;
+  /** Tests discovered but not executed, including skipped, todo, pending, or disabled cases. */
+  notRun: number;
   failures: ReviewTestFailure[];
 }
 

@@ -155,6 +155,27 @@ let spawnLocalServerCommandImpl = spawnCommand;
 const CLAUDE_MODEL_CATALOG_TTL_MS = 5 * 60_000;
 const CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS = 30_000;
 const CONTAINER_WORKSPACE_SETUP_COMMAND = "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh'; else /usr/local/bin/workspace-setup.sh; fi";
+const CONTAINER_WORKSPACE_PREPARE_COMMAND = "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh --prepare-only'; else /usr/local/bin/workspace-setup.sh --prepare-only; fi";
+// The preparation phase is a contract with the script baked into the container
+// image (docker/Dockerfile COPYs it to /usr/local/bin), and the image tag is
+// unversioned, so an upgraded backend routinely meets an older script. That
+// script has no argument handling: it ignores --prepare-only and runs the whole
+// setup — including repository-controlled orkestrator-ai.json commands, as root —
+// and exits 0, so the commit we would then record is not a pre-setup baseline at
+// all. Probe for the capability by *reading* the script before executing it: any
+// probe that runs it has already done the damage it was meant to prevent.
+const CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER = "ORKESTRATOR_SETUP_CAPABILITIES=prepare-only";
+const CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL = `${String.fromCharCode(0x1e)}ORKESTRATOR_PREPARE_SUPPORTED${String.fromCharCode(0x1f)}`;
+const CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL = `${String.fromCharCode(0x1e)}ORKESTRATOR_PREPARE_OK${String.fromCharCode(0x1f)}`;
+/** Renders a sentinel as a `printf` format string, so the shell cannot drift from it. */
+function shellPrintfSentinel(sentinel: string): string {
+  return sentinel.replace(
+    // eslint-disable-next-line no-control-regex
+    /[\u0000-\u001f]/g,
+    (character) => `\\${character.charCodeAt(0).toString(8).padStart(3, "0")}`,
+  );
+}
+const CONTAINER_WORKSPACE_PREPARE_SUPPORT_COMMAND = `if grep -qxF '${CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER}' /usr/local/bin/workspace-setup.sh 2>/dev/null; then printf '${shellPrintfSentinel(CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL)}'; fi`;
 const SETUP_DONE_OSC_SEQUENCE = "\u001b]9999;setup_done\u0007";
 const SETUP_FAILED_OSC_SEQUENCE = "\u001b]9999;setup_failed\u0007";
 const SETUP_DONE_PRINTF_CMD = "printf '\\033]9999;setup_done\\007'";
@@ -245,6 +266,67 @@ try {
 }
 export const CONTAINER_SAFE_BASE64_READER = buildContainerSafeBase64Reader();
 
+export const CONTAINER_UNTRACKED_STATS_SCANNER = String.raw`
+const fs = require("node:fs");
+const limit = Number(process.argv[1]);
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  const input = Buffer.concat(chunks);
+  let offset = 0;
+  while (offset < input.length) {
+    const end = input.indexOf(0, offset);
+    if (end === -1) process.exit(2);
+    const record = input.subarray(offset, end);
+    offset = end + 1;
+    if (record.length < 4 || record[0] !== 63 || record[1] !== 63 || record[2] !== 32) continue;
+    const filePath = record.subarray(3);
+    let count = 0;
+    let fd;
+    try {
+      fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      const initial = fs.fstatSync(fd);
+      if (!initial.isFile() || initial.size === 0 || initial.size > limit) throw new Error("skip");
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      let total = 0;
+      let separators = 0;
+      let previousWasCarriageReturn = false;
+      let lastByte = -1;
+      while (true) {
+        const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+        if (bytesRead === 0) break;
+        total += bytesRead;
+        if (total > limit) throw new Error("skip");
+        for (let index = 0; index < bytesRead; index += 1) {
+          const byte = buffer[index];
+          if (byte === 0) throw new Error("skip");
+          if (byte === 13) {
+            separators += 1;
+            previousWasCarriageReturn = true;
+          } else if (byte === 10) {
+            if (!previousWasCarriageReturn) separators += 1;
+            previousWasCarriageReturn = false;
+          } else {
+            previousWasCarriageReturn = false;
+          }
+          lastByte = byte;
+        }
+      }
+      count = separators + (lastByte !== 13 && lastByte !== 10 ? 1 : 0);
+    } catch {
+      count = 0;
+    } finally {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd); } catch {}
+      }
+    }
+    process.stdout.write(Buffer.from(String(count) + "\t"));
+    process.stdout.write(filePath);
+    process.stdout.write(Buffer.from([0]));
+  }
+});
+`;
+
 type EnvironmentSetupSession = {
   environmentId: string;
   sessionId: string;
@@ -265,6 +347,8 @@ type EnvironmentSetupStartResult = {
 
 const environmentSetupSessions = new Map<string, EnvironmentSetupSession>();
 const environmentSetupTasks = new Map<string, Promise<Environment>>();
+const environmentSetupStartTasks = new Map<string, Promise<EnvironmentSetupStartResult>>();
+const environmentBaselineTasks = new Map<string, Promise<Environment>>();
 const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [".orkestrator", ".claude/settings.local.json"] as const;
 
 function asString(value: unknown, name: string): string {
@@ -2215,6 +2299,8 @@ function cleanupEnvironmentSetupState(environmentId: string): void {
   terminalOutputBuffers.delete(setupTerminalSessionId(environmentId));
   environmentSetupSessions.delete(environmentId);
   environmentSetupTasks.delete(environmentId);
+  environmentSetupStartTasks.delete(environmentId);
+  environmentBaselineTasks.delete(environmentId);
 }
 
 function buildSetupTerminalCommand(commands: string[], finalShellCommand: string): string {
@@ -2236,6 +2322,57 @@ function formatSetupTerminalIntro(environment: Environment, commands: string[]):
     "",
   ];
   return lines.join("\r\n");
+}
+
+function formatSetupPreparationIntro(environment: Environment): string {
+  const target = environment.environmentType === "local"
+    ? environment.worktreePath ?? environment.id
+    : environment.containerId ?? environment.id;
+  return [
+    "\r\n",
+    "[orkestrator] Preparing workspace",
+    `[orkestrator] Environment: ${environment.name} (${environment.id})`,
+    `[orkestrator] Target: ${target}`,
+    "[orkestrator] Cloning the repository and recording the environment creation commit.",
+    "[orkestrator] Setup commands run once this finishes.",
+    "",
+  ].join("\r\n");
+}
+
+/** Terminal output is rendered by xterm.js, which needs CRLF rather than bare LF. */
+function toTerminalText(output: string): string {
+  return output.replace(/\r?\n/g, "\r\n");
+}
+
+/**
+ * Opens the setup terminal session *before* the workspace preparation exec runs.
+ *
+ * Preparation performs the clone, so it can take minutes; without this the user
+ * watches a blank panel until it finishes, because the setup terminal used to be
+ * created only afterwards.
+ */
+function beginSetupPreparationSession(environment: Environment, context: CommandContext): string {
+  const sessionId = setupTerminalSessionId(environment.id);
+  terminalOutputBuffers.set(sessionId, "");
+  environmentSetupSessions.set(environment.id, {
+    environmentId: environment.id,
+    sessionId,
+    running: true,
+    startedAt: new Date().toISOString(),
+  });
+  logSetupTerminal("preparing workspace", {
+    environmentId: environment.id,
+    environmentName: environment.name,
+    environmentType: environment.environmentType,
+    sessionId,
+  });
+  emitTerminalOutput(sessionId, formatSetupPreparationIntro(environment), context.emit);
+  context.emit("environment-setup-started", {
+    environment_id: environment.id,
+    session_id: sessionId,
+    environment,
+  });
+  return sessionId;
 }
 
 function createSetupCompletionTracker(): {
@@ -2287,6 +2424,7 @@ async function spawnSetupTerminal(
   environment: Environment,
   commands: string[],
   context: CommandContext,
+  options: { continuesPreparationSession?: boolean } = {},
 ): Promise<{ sessionId: string; completion: Promise<boolean> }> {
   const sessionId = setupTerminalSessionId(environment.id);
   const tracker = createSetupCompletionTracker();
@@ -2300,12 +2438,17 @@ async function spawnSetupTerminal(
     containerId: environment.containerId ?? null,
   });
 
-  terminalOutputBuffers.set(sessionId, "");
+  const existingSession = options.continuesPreparationSession
+    ? environmentSetupSessions.get(environment.id)
+    : undefined;
+  // A retry starts a clean buffer; a run that already streamed its preparation
+  // output into this session keeps it, so the clone log stays visible.
+  if (!existingSession) terminalOutputBuffers.set(sessionId, "");
   environmentSetupSessions.set(environment.id, {
     environmentId: environment.id,
     sessionId,
     running: true,
-    startedAt: new Date().toISOString(),
+    startedAt: existingSession?.startedAt ?? new Date().toISOString(),
   });
 
   if (environment.environmentType === "local") {
@@ -2370,8 +2513,10 @@ async function completeEnvironmentSetup(
   environment: Environment,
   context: CommandContext,
 ): Promise<Environment> {
-  const completed = await context.storage.updateEnvironment(environment.id, { setupScriptsComplete: true });
-  const updated = await captureCreatedFromCommit(completed, context.storage);
+  if (!environment.createdFromCommit) {
+    throw new Error(`Environment creation commit was not captured before setup completed: ${environment.id}`);
+  }
+  const updated = await context.storage.updateEnvironment(environment.id, { setupScriptsComplete: true });
   const session = environmentSetupSessions.get(environment.id);
   logSetupTerminal("setup completed", {
     environmentId: environment.id,
@@ -2445,7 +2590,7 @@ async function failEnvironmentSetup(environmentId: string, error: unknown, conte
   });
 }
 
-async function startEnvironmentSetup(
+async function startEnvironmentSetupOnce(
   environment: Environment,
   context: CommandContext,
 ): Promise<EnvironmentSetupStartResult> {
@@ -2463,6 +2608,32 @@ async function startEnvironmentSetup(
       environment: current,
     };
   }
+
+  // Preparation clones the repository, so the session is opened before it starts
+  // and its output streamed there. Nothing else can move that session out of
+  // "running" until a PTY exists, so every failure between here and the spawn has
+  // to close it explicitly or it reports a setup that is running forever.
+  const preparationSessionId = current.createdFromCommit
+    ? undefined
+    : beginSetupPreparationSession(current, context);
+  try {
+    return await startEnvironmentSetupAfterPreparation(current, context, preparationSessionId);
+  } catch (error) {
+    if (preparationSessionId) await failEnvironmentSetup(current.id, error, context);
+    throw error;
+  }
+}
+
+async function startEnvironmentSetupAfterPreparation(
+  environment: Environment,
+  context: CommandContext,
+  preparationSessionId: string | undefined,
+): Promise<EnvironmentSetupStartResult> {
+  const current = await ensureCreatedFromCommitBeforeSetup(environment, context, (chunk) => {
+    if (preparationSessionId && chunk) {
+      emitTerminalOutput(preparationSessionId, toTerminalText(chunk), context.emit);
+    }
+  });
 
   const commands = await readEnvironmentSetupCommands(current);
   if (commands.length === 0) {
@@ -2500,7 +2671,9 @@ async function startEnvironmentSetup(
     };
   }
 
-  const { sessionId, completion } = await spawnSetupTerminal(current, commands, context);
+  const { sessionId, completion } = await spawnSetupTerminal(current, commands, context, {
+    continuesPreparationSession: preparationSessionId !== undefined,
+  });
   const task = completion
     .then(async (success) => {
       if (!success) {
@@ -2526,6 +2699,23 @@ async function startEnvironmentSetup(
     setupSessionId: sessionId,
     environment: current,
   };
+}
+
+function startEnvironmentSetup(
+  environment: Environment,
+  context: CommandContext,
+): Promise<EnvironmentSetupStartResult> {
+  const existing = environmentSetupStartTasks.get(environment.id);
+  if (existing) return existing;
+
+  const task = startEnvironmentSetupOnce(environment, context)
+    .finally(() => {
+      if (environmentSetupStartTasks.get(environment.id) === task) {
+        environmentSetupStartTasks.delete(environment.id);
+      }
+    });
+  environmentSetupStartTasks.set(environment.id, task);
+  return task;
 }
 
 async function runEnvironmentSetupNow(environmentId: string, context: CommandContext): Promise<Environment> {
@@ -2673,23 +2863,110 @@ async function dockerExec(
   return stdout;
 }
 
-async function readLocalHeadCommit(worktreePath: string): Promise<string> {
-  const { stdout } = await runCommand("git", ["-C", worktreePath, "rev-parse", "HEAD"], { timeoutMs: 30_000 });
-  return stdout.trim();
-}
-
-async function readContainerHeadCommit(containerId: string): Promise<string | undefined> {
-  const commit = await dockerExec(containerId, "git -C /workspace rev-parse HEAD 2>/dev/null || true", 30_000);
-  const trimmed = commit.trim();
+function parseHeadCommit(stdout: string): string | undefined {
+  const trimmed = stdout.trim();
   return /^[0-9a-f]{40}$/i.test(trimmed) ? trimmed : undefined;
 }
 
-async function captureCreatedFromCommit(environment: Environment, storage: StorageService): Promise<Environment> {
+async function readLocalHeadCommit(worktreePath: string): Promise<string> {
+  const { stdout } = await runCommand(
+    "git",
+    ["-C", worktreePath, "rev-parse", "--verify", "HEAD^{commit}"],
+    { timeoutMs: 30_000 },
+  );
+  const commit = parseHeadCommit(stdout);
+  if (!commit) {
+    throw new Error(`Git returned an invalid HEAD commit for ${worktreePath}`);
+  }
+  return commit;
+}
+
+async function readContainerHeadCommit(containerId: string): Promise<string | undefined> {
+  const commit = await dockerExec(
+    containerId,
+    "git -C /workspace rev-parse --verify 'HEAD^{commit}'",
+    30_000,
+  );
+  return parseHeadCommit(commit);
+}
+
+async function prepareContainerWorkspace(
+  containerId: string,
+  onOutput?: (chunk: string) => void,
+): Promise<void> {
+  const support = await dockerExec(containerId, CONTAINER_WORKSPACE_PREPARE_SUPPORT_COMMAND, 60_000);
+  if (!support.includes(CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL)) {
+    throw new Error(
+      `Container base image is out of date and cannot prepare the workspace safely. `
+      + `Rebuild it with \`bun run docker:build\` (${DOCKER_IMAGE}), then recreate this environment's container.`,
+    );
+  }
+
+  const output = await dockerExec(containerId, CONTAINER_WORKSPACE_PREPARE_COMMAND, 10 * 60_000);
+  onOutput?.(output);
+  if (!output.includes(CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL)) {
+    throw new Error(`Workspace preparation did not report completion for container ${containerId}`);
+  }
+}
+
+/**
+ * Resolves and durably stores the commit an environment branched from.
+ *
+ * `onPrepareOutput` only fires for the caller that actually starts the work; a
+ * caller that joins an in-flight capture gets the result but not the output,
+ * because the output already belongs to the first caller's setup terminal.
+ */
+async function establishCreatedFromCommit(
+  environment: Environment,
+  context: CommandContext,
+  onPrepareOutput?: (chunk: string) => void,
+): Promise<Environment> {
   if (environment.createdFromCommit) return environment;
-  const commit = environment.environmentType === "local"
-    ? environment.worktreePath ? await readLocalHeadCommit(environment.worktreePath).catch(() => undefined) : undefined
-    : environment.containerId ? await readContainerHeadCommit(environment.containerId).catch(() => undefined) : undefined;
-  return commit ? storage.updateEnvironment(environment.id, { createdFromCommit: commit }) : environment;
+
+  const existing = environmentBaselineTasks.get(environment.id);
+  if (existing) return existing;
+
+  const task = (async () => {
+    const current = await context.storage.getEnvironment(environment.id) ?? environment;
+    if (current.createdFromCommit) return current;
+
+    let commit: string | undefined;
+    if (current.environmentType === "local") {
+      if (!current.worktreePath) {
+        throw new Error(`Local environment worktree is not available: ${current.id}`);
+      }
+      commit = await readLocalHeadCommit(current.worktreePath);
+    } else {
+      if (!current.containerId) {
+        throw new Error(`Environment has no container: ${current.id}`);
+      }
+      if (!await isContainerRunning(current.containerId)) {
+        throw new Error(`Container is not running: ${current.containerId}`);
+      }
+      await prepareContainerWorkspace(current.containerId, onPrepareOutput);
+      commit = await readContainerHeadCommit(current.containerId);
+    }
+
+    if (!commit) {
+      throw new Error(`Could not resolve environment creation commit: ${current.id}`);
+    }
+    return context.storage.updateEnvironment(current.id, { createdFromCommit: commit });
+  })().finally(() => {
+    if (environmentBaselineTasks.get(environment.id) === task) {
+      environmentBaselineTasks.delete(environment.id);
+    }
+  });
+  environmentBaselineTasks.set(environment.id, task);
+  return task;
+}
+
+async function ensureCreatedFromCommitBeforeSetup(
+  environment: Environment,
+  context: CommandContext,
+  onPrepareOutput?: (chunk: string) => void,
+): Promise<Environment> {
+  if (environment.setupScriptsComplete || environment.createdFromCommit) return environment;
+  return establishCreatedFromCommit(environment, context, onPrepareOutput);
 }
 
 async function dockerExecDetached(
@@ -3197,49 +3474,281 @@ async function buildFileTree(rootPath: string, relativePath = ""): Promise<Array
   return nodes.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name));
 }
 
-async function getLocalGitStatus(worktreePath: string, targetBranch: string): Promise<unknown[]> {
-  validateGitRefName(targetBranch, "target branch");
-  await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
+type GitFileChange = {
+  path: string;
+  originalPath?: string;
+  filename: string;
+  directory: string;
+  additions: number;
+  deletions: number;
+  status: string;
+};
 
-  const base = await resolveLocalGitBase(worktreePath, targetBranch);
-  const [nameStatus, numstat, porcelain] = await Promise.all([
-    runCommand("git", ["-C", worktreePath, "diff", "--name-status", base], { timeoutMs: 60_000 }),
-    runCommand("git", ["-C", worktreePath, "diff", "--numstat", base], { timeoutMs: 60_000 }),
-    runCommand("git", ["-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"], { timeoutMs: 60_000 }),
-  ]);
+function splitNulTerminatedGitFields(output: string, label: string): string[] {
+  if (output.length === 0) return [];
+  if (!output.endsWith("\0")) {
+    throw new Error(`Malformed ${label}: missing NUL terminator`);
+  }
+  return output.slice(0, -1).split("\0");
+}
 
+function parseGitNumstat(numstatOutput: string): Map<string, { additions: number; deletions: number }> {
   const stats = new Map<string, { additions: number; deletions: number }>();
-  for (const line of numstat.stdout.split("\n").filter(Boolean)) {
-    const [additions = "0", deletions = "0", ...paths] = line.split("\t");
-    const normalizedPath = parseNumstatPath(paths.join("\t"));
-    stats.set(normalizedPath, {
+  const fields = splitNulTerminatedGitFields(numstatOutput, "git numstat output");
+  for (let index = 0; index < fields.length;) {
+    const header = fields[index++] ?? "";
+    const firstTab = header.indexOf("\t");
+    const secondTab = firstTab === -1 ? -1 : header.indexOf("\t", firstTab + 1);
+    if (firstTab <= 0 || secondTab === -1) {
+      throw new Error("Malformed git numstat output: invalid record header");
+    }
+    const additions = header.slice(0, firstTab);
+    const deletions = header.slice(firstTab + 1, secondTab);
+    if (
+      (additions !== "-" && !/^\d+$/.test(additions))
+      || (deletions !== "-" && !/^\d+$/.test(deletions))
+    ) {
+      throw new Error("Malformed git numstat output: invalid statistics");
+    }
+    const inlinePath = header.slice(secondTab + 1);
+    let filePath = inlinePath;
+    if (inlinePath.length === 0) {
+      if (index + 1 >= fields.length) {
+        throw new Error("Malformed git numstat output: truncated rename/copy record");
+      }
+      index += 1; // The preimage path is not the result path used by name-status.
+      filePath = fields[index++] ?? "";
+    }
+    if (!filePath) {
+      throw new Error("Malformed git numstat output: empty path");
+    }
+    stats.set(filePath, {
       additions: additions === "-" ? 0 : Number.parseInt(additions, 10) || 0,
       deletions: deletions === "-" ? 0 : Number.parseInt(deletions, 10) || 0,
     });
   }
+  return stats;
+}
 
-  const changes = nameStatus.stdout
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const parts = line.split("\t");
-      const status = parts[0] ?? "";
-      const filePath = parts.at(-1) ?? "";
-      const originalPath = (status.startsWith("R") || status.startsWith("C"))
-        ? parts[1]
-        : undefined;
-      const fileStats = stats.get(filePath) ?? { additions: 0, deletions: 0 };
-      return {
-        path: filePath,
-        originalPath,
-        filename: path.basename(filePath),
-        directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
-        additions: fileStats.additions,
-        deletions: fileStats.deletions,
-        status,
-      };
+function parseGitFileChanges(nameStatusOutput: string, numstatOutput: string): GitFileChange[] {
+  const stats = parseGitNumstat(numstatOutput);
+  const fields = splitNulTerminatedGitFields(nameStatusOutput, "git name-status output");
+  const changes: GitFileChange[] = [];
+
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++] ?? "";
+    if (!status) throw new Error("Malformed git name-status output: empty status");
+    const isRenameOrCopy = status.startsWith("R") || status.startsWith("C");
+    const pathCount = isRenameOrCopy ? 2 : 1;
+    if (index + pathCount > fields.length) {
+      throw new Error("Malformed git name-status output: truncated record");
+    }
+    const originalPath = isRenameOrCopy ? fields[index++] : undefined;
+    const filePath = fields[index++] ?? "";
+    if (!filePath || (isRenameOrCopy && !originalPath)) {
+      throw new Error("Malformed git name-status output: empty path");
+    }
+    const fileStats = stats.get(filePath) ?? { additions: 0, deletions: 0 };
+    changes.push({
+      path: filePath,
+      originalPath,
+      filename: path.basename(filePath),
+      directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
+      additions: fileStats.additions,
+      deletions: fileStats.deletions,
+      status,
     });
+  }
+  return changes;
+}
 
+function decodeGitStatusSection(payload: string, label: string): string {
+  // Whitespace is stripped before validating because it is never part of a base64
+  // payload, but base64 implementations disagree about emitting it: GNU coreutils
+  // with -w0 emits none, macOS appends a trailing newline, and an implementation
+  // that ignores -w0 wraps at 76 columns. Tolerating all three keeps the framing
+  // strict about content while not depending on the container's exact coreutils.
+  const encoded = payload.replace(/\s+/g, "");
+  if (encoded.length === 0) return "";
+  if (encoded.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    throw new Error(`Malformed ${label}: invalid base64`);
+  }
+  return Buffer.from(encoded, "base64").toString("utf8");
+}
+
+function parseContainerUntrackedStats(output: string): GitFileChange[] {
+  const fields = splitNulTerminatedGitFields(output, "container untracked stats");
+  return fields.map((field) => {
+    const separator = field.indexOf("\t");
+    if (separator <= 0) {
+      throw new Error("Malformed container untracked stats record");
+    }
+    const additionsText = field.slice(0, separator);
+    const filePath = field.slice(separator + 1);
+    if (!/^\d+$/.test(additionsText) || !filePath) {
+      throw new Error("Malformed container untracked stats record");
+    }
+    return {
+      path: filePath,
+      originalPath: undefined,
+      filename: path.basename(filePath),
+      directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
+      additions: Number.parseInt(additionsText, 10),
+      deletions: 0,
+      status: "?",
+    };
+  });
+}
+
+// Section markers are framed with ASCII record/unit separators, which git never
+// emits inside a path, so a filename can never be mistaken for a frame. They are
+// built from char codes rather than written literally: raw control bytes in source
+// are invisible in diffs and editors, and a marker that silently loses its frame
+// still "looks" correct while failing every response.
+const GIT_STATUS_FRAME_START = String.fromCharCode(0x1e);
+const GIT_STATUS_FRAME_END = String.fromCharCode(0x1f);
+function gitStatusMarker(name: string): string {
+  return `${GIT_STATUS_FRAME_START}${name}${GIT_STATUS_FRAME_END}`;
+}
+const GIT_STATUS_NAME_STATUS_MARKER = gitStatusMarker("ORKESTRATOR_NAME_STATUS");
+const GIT_STATUS_NUMSTAT_MARKER = gitStatusMarker("ORKESTRATOR_NUMSTAT");
+const GIT_STATUS_UNTRACKED_MARKER = gitStatusMarker("ORKESTRATOR_UNTRACKED");
+const GIT_STATUS_END_MARKER = gitStatusMarker("ORKESTRATOR_END");
+const GIT_STATUS_MISSING_REF_MARKER = gitStatusMarker("ORKESTRATOR_TARGET_REF_NOT_FOUND");
+
+/**
+ * Builds the single shell program that collects a container's git status.
+ *
+ * Everything is framed so a partial or reordered response is detectable, and the
+ * three git payloads are base64'd because they are NUL-delimited and may contain
+ * any byte a filename can.
+ */
+function buildContainerGitStatusScript(ref: string, includeWorkingTree: boolean): string {
+  const branch = quoteShell(ref);
+  const untrackedScanner = `node -e ${quoteShell(CONTAINER_UNTRACKED_STATS_SCANNER)} -- ${MAX_BINARY_FILE_BYTES}`;
+  return `
+      set -e -o pipefail
+      # A bare 'exit 0' here would come back as exit 1: this runs under 'bash -l',
+      # whose ~/.bash_logout calls 'clear_console -q', and that fails with no
+      # console attached. Under 'set -e' the failing logout hook replaces the
+      # explicit status, so drop errexit before exiting deliberately.
+      if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        set +e
+        exit 0
+      fi
+      # Excluding Orkestrator's own artifacts is housekeeping, not part of reading
+      # status. Running it inside a function invoked with '|| true' keeps a
+      # read-only or unwritable .git from failing the whole request under 'set -e'.
+      maintain_git_exclude() {
+        exclude_path="$(git rev-parse --git-path info/exclude 2>/dev/null || true)"
+        [ -n "$exclude_path" ] || return 0
+        case "$exclude_path" in
+          /*) exclude_file="$exclude_path" ;;
+          *) exclude_file="$(pwd)/$exclude_path" ;;
+        esac
+        mkdir -p "$(dirname "$exclude_file")" || return 0
+        for pattern in ".orkestrator" ".claude/settings.local.json"; do
+          if ! grep -qxF "$pattern" "$exclude_file" 2>/dev/null; then
+            if [ -s "$exclude_file" ] && [ "$(tail -c 1 "$exclude_file" 2>/dev/null)" != "" ]; then
+              printf '\\n' >> "$exclude_file" || return 0
+            fi
+            printf '%s\\n' "$pattern" >> "$exclude_file" || return 0
+          fi
+        done
+      }
+      maintain_git_exclude || true
+      ref=${branch}
+      git fetch origin "$ref" >/dev/null 2>&1 || true
+      if git rev-parse --verify --quiet "origin/$ref^{commit}" >/dev/null; then
+        base="origin/$ref"
+      else
+        base="$ref"
+      fi
+      # Reported on stdout as a framed marker rather than as a non-zero exit: the
+      # exec error message echoes the command back, so a literal marker in the
+      # script text would match failures that had nothing to do with the ref.
+      if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+        printf '\\036ORKESTRATOR_TARGET_REF_NOT_FOUND\\037'
+        set +e
+        exit 0
+      fi
+      end_ref=${includeWorkingTree ? "" : "HEAD"}
+      printf '\\036ORKESTRATOR_NAME_STATUS\\037'
+      git diff --name-status -z -M "$base" $end_ref | base64 -w0
+      printf '\\036ORKESTRATOR_NUMSTAT\\037'
+      git diff --numstat -z -M "$base" $end_ref | base64 -w0
+      printf '\\036ORKESTRATOR_UNTRACKED\\037'
+      ${includeWorkingTree ? `git status --porcelain=v1 -z --untracked-files=all | ${untrackedScanner} | base64 -w0` : ""}
+      printf '\\036ORKESTRATOR_END\\037'
+    `;
+}
+
+function isMissingTargetRefResponse(output: string): boolean {
+  return output === GIT_STATUS_MISSING_REF_MARKER;
+}
+
+function parseContainerGitStatusResponse(output: string, includeWorkingTree: boolean): GitFileChange[] {
+  // A workspace that is not a git repository exits before emitting any frame.
+  if (output.length === 0) return [];
+  const nameStatusStart = output.indexOf(GIT_STATUS_NAME_STATUS_MARKER);
+  const numstatStart = output.indexOf(GIT_STATUS_NUMSTAT_MARKER);
+  const untrackedStart = output.indexOf(GIT_STATUS_UNTRACKED_MARKER);
+  const endStart = output.indexOf(GIT_STATUS_END_MARKER);
+  if (
+    nameStatusStart !== 0
+    || numstatStart < nameStatusStart
+    || untrackedStart < numstatStart
+    || endStart < untrackedStart
+    || endStart + GIT_STATUS_END_MARKER.length !== output.length
+  ) {
+    throw new Error("Malformed container git status response");
+  }
+
+  const nameStatusOutput = decodeGitStatusSection(
+    output.slice(nameStatusStart + GIT_STATUS_NAME_STATUS_MARKER.length, numstatStart),
+    "container git name-status section",
+  );
+  const numstatOutput = decodeGitStatusSection(
+    output.slice(numstatStart + GIT_STATUS_NUMSTAT_MARKER.length, untrackedStart),
+    "container git numstat section",
+  );
+  const changes = parseGitFileChanges(nameStatusOutput, numstatOutput);
+  if (!includeWorkingTree) return changes;
+
+  const existingPaths = new Set(changes.map((change) => change.path));
+  const untrackedOutput = decodeGitStatusSection(
+    output.slice(untrackedStart + GIT_STATUS_UNTRACKED_MARKER.length, endStart),
+    "container untracked section",
+  );
+  for (const change of parseContainerUntrackedStats(untrackedOutput)) {
+    if (!existingPaths.has(change.path)) changes.push(change);
+  }
+  return changes;
+}
+
+async function getLocalGitStatus(
+  worktreePath: string,
+  targetBranch: string,
+  includeUncommitted: boolean,
+): Promise<GitFileChange[]> {
+  validateGitRefName(targetBranch, "target branch");
+  await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
+
+  const base = await resolveLocalGitBase(worktreePath, targetBranch);
+  const endRef = includeUncommitted ? [] : ["HEAD"];
+  const [nameStatus, numstat] = await Promise.all([
+    runCommand("git", ["-C", worktreePath, "diff", "--name-status", "-z", "-M", base, ...endRef], { timeoutMs: 60_000 }),
+    runCommand("git", ["-C", worktreePath, "diff", "--numstat", "-z", "-M", base, ...endRef], { timeoutMs: 60_000 }),
+  ]);
+
+  const changes = parseGitFileChanges(nameStatus.stdout, numstat.stdout);
+  if (!includeUncommitted) return changes;
+
+  const porcelain = await runCommand(
+    "git",
+    ["-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    { timeoutMs: 60_000 },
+  );
   const existingPaths = new Set(changes.map((change) => change.path));
   for (const line of porcelain.stdout.split("\0").filter(Boolean)) {
     if (!line.startsWith("?? ")) continue;
@@ -3258,19 +3767,6 @@ async function getLocalGitStatus(worktreePath: string, targetBranch: string): Pr
   }
 
   return changes;
-}
-
-function parseNumstatPath(token: string): string {
-  // Rename/copy numstat entries render the path as "prefix{old => new}suffix" or "old => new".
-  // Resolve to the new path so the stats line up with the --name-status path key.
-  const arrowIndex = token.indexOf(" => ");
-  if (arrowIndex === -1) return token;
-  const braceStart = token.indexOf("{");
-  const braceEnd = token.indexOf("}");
-  if (braceStart !== -1 && braceEnd > arrowIndex && braceStart < arrowIndex) {
-    return `${token.slice(0, braceStart)}${token.slice(arrowIndex + 4, braceEnd)}${token.slice(braceEnd + 1)}`;
-  }
-  return token.slice(arrowIndex + 4);
 }
 
 async function countLocalFileLines(rootPath: string, relativePath: string): Promise<number> {
@@ -4474,9 +4970,27 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const activityAt = asString(occurredAt, "occurredAt");
     return storage.recordEnvironmentCompletion(id, activityAt);
   });
-  register("set_environment_setup_complete", async ({ environmentId, complete }, { storage }) => {
-    const updated = await storage.updateEnvironment(asString(environmentId, "environmentId"), { setupScriptsComplete: asBoolean(complete) });
-    return asBoolean(complete) ? captureCreatedFromCommit(updated, storage) : updated;
+  register("set_environment_setup_complete", async ({ environmentId, complete }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const shouldComplete = asBoolean(complete);
+    if (!shouldComplete) {
+      return context.storage.updateEnvironment(id, { setupScriptsComplete: false });
+    }
+    const environment = await context.storage.getEnvironment(id);
+    if (!environment) throw new Error(`Environment not found: ${id}`);
+    // Deliberately does not capture a baseline. The renderer calls this *after*
+    // setup ran, so any HEAD read here could already contain commits made by
+    // repository-controlled setup commands — a wrong baseline is worse than none,
+    // since the UI silently trusts it. The backend-managed path captures the real
+    // one before setup starts; this only records that setup finished, and must
+    // stay infallible because the caller is fire-and-forget and only logs.
+    if (!environment.createdFromCommit) {
+      console.warn(
+        `[setup] Marking setup complete for ${id} without a creation commit; `
+        + "diff stats will compare against the repository base branch.",
+      );
+    }
+    return context.storage.updateEnvironment(id, { setupScriptsComplete: true });
   });
   register("run_environment_setup", async ({ environmentId }, context) => {
     return runEnvironmentSetupNow(asString(environmentId, "environmentId"), context);
@@ -5233,7 +5747,13 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     cleanupTerminalSession(asString(sessionId, "sessionId"));
   });
 
-  register("get_local_git_status", ({ worktreePath, targetBranch }) => getLocalGitStatus(asString(worktreePath, "worktreePath"), asString(targetBranch, "targetBranch")));
+  register("get_local_git_status", ({ worktreePath, targetBranch, includeUncommitted }) =>
+    getLocalGitStatus(
+      asString(worktreePath, "worktreePath"),
+      asString(targetBranch, "targetBranch"),
+      includeUncommitted !== false,
+    )
+  );
   register("get_local_file_tree", ({ worktreePath }) => buildFileTree(asString(worktreePath, "worktreePath")));
   register("read_local_file", ({ worktreePath, filePath }) => readTextFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath")));
   register("read_local_file_at_branch", ({ worktreePath, filePath, branch }) =>
@@ -5250,38 +5770,20 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     return deleteLocalFile(environment.worktreePath!, asString(filePath, "filePath"));
   });
 
-  register("get_git_status", async ({ containerId, targetBranch }) => {
-    const branch = quoteShell(asString(targetBranch, "targetBranch"));
-    const output = await dockerExec(asString(containerId, "containerId"), `
-      if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        exit 0
-      fi
-      exclude_path="$(git rev-parse --git-path info/exclude 2>/dev/null || true)"
-      if [ -n "$exclude_path" ]; then
-        case "$exclude_path" in
-          /*) exclude_file="$exclude_path" ;;
-          *) exclude_file="$(pwd)/$exclude_path" ;;
-        esac
-        mkdir -p "$(dirname "$exclude_file")"
-        for pattern in ".orkestrator" ".claude/settings.local.json"; do
-          if ! grep -qxF "$pattern" "$exclude_file" 2>/dev/null; then
-            if [ -s "$exclude_file" ] && [ "$(tail -c 1 "$exclude_file" 2>/dev/null)" != "" ]; then
-              printf '\\n' >> "$exclude_file"
-            fi
-            printf '%s\\n' "$pattern" >> "$exclude_file"
-          fi
-        done
-      fi
-      git fetch origin ${branch} >/dev/null 2>&1 || true
-      git diff --name-status origin/${branch} 2>/dev/null || git diff --name-status ${branch} 2>/dev/null || true
-    `);
-    return output.split("\n").filter(Boolean).map((line) => {
-      const parts = line.split("\t");
-      const status = parts[0] ?? "";
-      const filePath = parts.at(-1) ?? "";
-      const originalPath = (status.startsWith("R") || status.startsWith("C")) ? parts[1] : undefined;
-      return { path: filePath, originalPath, filename: path.basename(filePath), directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath), additions: 0, deletions: 0, status };
-    });
+  register("get_git_status", async ({ containerId, targetBranch, includeUncommitted }) => {
+    const ref = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
+    const includeWorkingTree = includeUncommitted !== false;
+    const output = await dockerExec(
+      asString(containerId, "containerId"),
+      buildContainerGitStatusScript(ref, includeWorkingTree),
+    );
+    // Distinguishes "the requested baseline is not in this container" - which
+    // happens when a container is recreated from a different clone - from a
+    // corrupt response, so callers do not see both as one opaque exec failure.
+    if (isMissingTargetRefResponse(output)) {
+      throw new Error(`Target ref is not present in the container: ${ref}`);
+    }
+    return parseContainerGitStatusResponse(output, includeWorkingTree);
   });
   register("get_file_tree", async ({ containerId }) => {
     const output = await dockerExec(asString(containerId, "containerId"), "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type l -prune -o -type f -printf '%P\\n' | head -5000");
@@ -5487,6 +5989,17 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
 
 export const __testing = {
   createExtensionCommandRunner,
+  parseGitFileChanges,
+  parseContainerUntrackedStats,
+  parseContainerGitStatusResponse,
+  isMissingTargetRefResponse,
+  buildContainerGitStatusScript,
+  parseHeadCommit,
+  establishCreatedFromCommit,
+  completeEnvironmentSetup,
+  CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER,
+  CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL,
+  CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL,
   setLocalServerProcess(
     key: string,
     child: ChildProcessWithoutNullStreams,

@@ -30,7 +30,7 @@ const report: StructuredReviewReport = {
     overallRisk: "medium",
     reasoning: "Long-running state changed.",
   },
-  testResults: { total: 1, passed: 1, failed: 0, failures: [] },
+  testResults: { total: 1, passed: 1, failed: 0, notRun: 0, failures: [] },
   strengths: [{ description: "Typed boundary", file: "src/example.ts", line: 12 }],
   issues: [{
     severity: "P1",
@@ -82,6 +82,7 @@ describe("StructuredReviewReportView", () => {
         && element.textContent?.includes("Recovery after disconnect.") === true
       ),
     ).toBeTruthy();
+    expect(screen.getByText("0 not run")).toBeTruthy();
   });
 
   test("hides raw JSON until deliberate inspection", () => {
@@ -92,6 +93,24 @@ describe("StructuredReviewReportView", () => {
       .toContain("\"reviewScope\"");
     fireEvent.click(screen.getByRole("button", { name: /Hide raw JSON/ }));
     expect(screen.queryByLabelText("Raw structured review JSON")).toBeNull();
+  });
+
+  test("infers the not-run count for a legacy report already held in memory", () => {
+    render(
+      <StructuredReviewReportView
+        report={{
+          ...report,
+          testResults: {
+            total: 8_107,
+            passed: 8_094,
+            failed: 0,
+            failures: [],
+          },
+        } as any}
+      />,
+    );
+
+    expect(screen.getByText("13 not run")).toBeTruthy();
   });
 
   test("renders commit, failed validation, skipped files, and limitations", () => {
@@ -119,6 +138,7 @@ describe("StructuredReviewReportView", () => {
             total: 2,
             passed: 1,
             failed: 1,
+            notRun: 0,
             failures: [{
               testName: "restores state",
               file: "src/recovery.test.ts",

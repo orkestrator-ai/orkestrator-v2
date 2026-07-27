@@ -3,6 +3,10 @@ import {
   parseStructuredReviewReport,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
+import type {
+  BuildPipeline,
+  PipelineSession,
+} from "@/stores/buildPipelineStore";
 
 export function structuredReviewHasFindings(report: StructuredReviewReport): boolean {
   return report.issues.length > 0 || report.testCoverageGaps.length > 0;
@@ -32,4 +36,33 @@ export async function readValidatedBuildReview(
     }
   }
   throw new Error("The review session completed without a structured review result.");
+}
+
+/**
+ * A domain-validation failure happens after the provider has already completed
+ * the expensive review. Before starting another review, re-read that durable
+ * result so contract migrations and transient observation failures can recover
+ * without rerunning tests and the production build.
+ */
+export async function readExistingValidatedBuildReview(
+  pipeline: Pick<BuildPipeline, "sessions" | "structuredReviewRequestId">,
+  load: (
+    sessionId: string,
+    requestId: string,
+  ) => Promise<StructuredOutputResult<unknown> | null>,
+): Promise<{
+  report: StructuredReviewReport;
+  session: PipelineSession;
+} | null> {
+  const requestId = pipeline.structuredReviewRequestId;
+  const session = [...pipeline.sessions]
+    .reverse()
+    .find((candidate) => candidate.phase === "review");
+  if (!requestId || !session) return null;
+
+  const report = await readValidatedBuildReview(
+    () => load(session.sdkSessionId, requestId),
+    { attempts: 1, intervalMs: 0 },
+  );
+  return { report, session };
 }

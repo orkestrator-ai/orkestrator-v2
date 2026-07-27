@@ -240,11 +240,20 @@ export const STRUCTURED_REVIEW_REPORT_JSON_SCHEMA = {
     testResults: {
       type: "object",
       additionalProperties: false,
-      required: ["total", "passed", "failed", "failures"],
+      required: ["total", "passed", "failed", "notRun", "failures"],
       properties: {
-        total: { type: "integer", minimum: 0 },
+        total: {
+          type: "integer",
+          minimum: 0,
+          description: "All discovered tests. Must equal passed plus failed plus notRun.",
+        },
         passed: { type: "integer", minimum: 0 },
         failed: { type: "integer", minimum: 0 },
+        notRun: {
+          type: "integer",
+          minimum: 0,
+          description: "Discovered tests not executed, including skipped, todo, pending, or disabled cases.",
+        },
         failures: {
           type: "array",
           items: {

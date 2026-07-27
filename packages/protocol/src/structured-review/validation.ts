@@ -508,6 +508,7 @@ function validateTestResults(value: unknown, path: string, issues: Issues): void
     "total",
     "passed",
     "failed",
+    "notRun",
     "failures",
   ]);
   if (!object) return;
@@ -515,10 +516,15 @@ function validateTestResults(value: unknown, path: string, issues: Issues): void
   const total = readRequired(object, "total", path, issues);
   const passed = readRequired(object, "passed", path, issues);
   const failed = readRequired(object, "failed", path, issues);
+  // Structured reviews originally shipped without `notRun`. Accept those
+  // persisted reports and infer the only count consistent with their totals.
+  const notRun = object.notRun;
   const failures = readRequired(object, "failures", path, issues);
   const validTotal = validateInteger(total, `${path}.total`, issues, 0);
   const validPassed = validateInteger(passed, `${path}.passed`, issues, 0);
   const validFailed = validateInteger(failed, `${path}.failed`, issues, 0);
+  const validNotRun = notRun === undefined
+    || validateInteger(notRun, `${path}.notRun`, issues, 0);
   const validFailures = validateArray(
     failures,
     `${path}.failures`,
@@ -530,13 +536,21 @@ function validateTestResults(value: unknown, path: string, issues: Issues): void
     validTotal &&
     validPassed &&
     validFailed &&
-    (total as number) !== (passed as number) + (failed as number)
+    validNotRun &&
+    (total as number) !==
+      (passed as number)
+      + (failed as number)
+      + (
+        notRun === undefined
+          ? Math.max(0, (total as number) - (passed as number) - (failed as number))
+          : (notRun as number)
+      )
   ) {
     addIssue(
       issues,
       `${path}.total`,
       "inconsistent_value",
-      "Total must equal passed plus failed.",
+      "Total must equal passed plus failed plus notRun.",
     );
   }
   if (
@@ -972,6 +986,19 @@ function normalizeOptionalAlternativeFixes(value: unknown): unknown {
     const next = normalizeOptionalAlternativeFixes(entry);
     changed ||= next !== entry;
     normalized[key] = next;
+  }
+  if (
+    Object.hasOwn(normalized, "total")
+    && Object.hasOwn(normalized, "passed")
+    && Object.hasOwn(normalized, "failed")
+    && Object.hasOwn(normalized, "failures")
+    && !Object.hasOwn(normalized, "notRun")
+    && typeof normalized.total === "number"
+    && typeof normalized.passed === "number"
+    && typeof normalized.failed === "number"
+  ) {
+    normalized.notRun = normalized.total - normalized.passed - normalized.failed;
+    changed = true;
   }
   return changed ? normalized : value;
 }

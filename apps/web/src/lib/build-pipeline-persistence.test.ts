@@ -13,6 +13,7 @@ import {
   type BuildPipeline,
 } from "@/stores/buildPipelineStore";
 import type { PersistedBuildPipeline } from "@/types";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 
 const PROJECT_ID = "project-1";
 
@@ -97,6 +98,33 @@ describe("hydrateBuildPipeline", () => {
     expect(restored).toMatchObject({ phase: "reviewing", backendRevision: 7 });
     expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1"))
       .toMatchObject({ phase: "reviewing", backendRevision: 7 });
+  });
+
+  test("normalizes legacy structured reviews before installing the snapshot", async () => {
+    const legacyReview = {
+      ...TEST_STRUCTURED_REVIEW_REPORT,
+      testResults: {
+        total: 8_107,
+        passed: 8_094,
+        failed: 0,
+        failures: [],
+      },
+    };
+    const restored = await hydrateBuildPipeline(
+      "pipeline-1",
+      async () => persisted(pipeline({
+        phase: "failed",
+        structuredReview: legacyReview as never,
+      }), 8),
+    );
+
+    expect(restored?.structuredReview?.testResults.notRun).toBe(13);
+    expect(
+      useBuildPipelineStore.getState().pipelines
+        .get("pipeline-1")
+        ?.structuredReview
+        ?.testResults.notRun,
+    ).toBe(13);
   });
 
   test("keeps a local snapshot that has already seen a newer revision", async () => {

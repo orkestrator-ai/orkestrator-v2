@@ -155,6 +155,7 @@ export function formatStructuredReviewReport(value: unknown): string {
     bullet("Total", String(report.testResults.total)),
     bullet("Passed", String(report.testResults.passed)),
     bullet("Failed", String(report.testResults.failed)),
+    bullet("Not run", String(report.testResults.notRun)),
     "- Failures:",
     failures,
     "",

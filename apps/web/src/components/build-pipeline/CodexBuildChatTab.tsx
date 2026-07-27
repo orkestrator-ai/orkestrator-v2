@@ -61,6 +61,7 @@ import {
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import {
+  readExistingValidatedBuildReview,
   readValidatedBuildReview,
   structuredReviewHasFindings,
 } from "@/lib/build-pipeline-structured-review";
@@ -1854,9 +1855,39 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
           }
           break;
         }
-        case "reviewing":
+        case "reviewing": {
+          try {
+            const activeClient = client ?? await initializeClient();
+            const recovered = await readExistingValidatedBuildReview(
+              currentPipeline,
+              (sessionId, requestId) =>
+                getStructuredOutput(activeClient, sessionId, requestId),
+            );
+            if (recovered) {
+              setStructuredReview(pipelineId, recovered.report);
+              const recoveredPipeline = {
+                ...currentPipeline,
+                structuredReview: recovered.report,
+              };
+              if (structuredReviewHasFindings(recovered.report)) {
+                await sendAddressIssuesMessage(
+                  recoveredPipeline,
+                  recovered.session,
+                );
+              } else {
+                await startVerifySession(recoveredPipeline);
+              }
+              break;
+            }
+          } catch (error) {
+            console.warn(
+              "[CodexBuildChatTab] Existing review result could not be recovered; starting a fresh review:",
+              error,
+            );
+          }
           await startReviewSession(currentPipeline);
           break;
+        }
         case "addressing": {
           const reviewSession = options.reuseAddressingSession === false
             ? undefined
@@ -1896,8 +1927,11 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     },
     [
       pipelineId,
+      client,
+      initializeClient,
       sendAddressIssuesMessage,
       setPhase,
+      setStructuredReview,
       startBuildSession,
       startFixSession,
       startPRSession,

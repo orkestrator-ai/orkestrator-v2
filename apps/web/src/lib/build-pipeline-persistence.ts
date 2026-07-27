@@ -6,6 +6,7 @@ import {
   type BuildPipeline,
 } from "@/stores/buildPipelineStore";
 import type { PersistedBuildPipeline } from "@/types";
+import { parseStructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
 export { isBuildPipeline } from "@/stores/buildPipelineStore";
 
@@ -68,23 +69,43 @@ function releaseStalePostingLease(pipeline: BuildPipeline): BuildPipeline {
   return recovered;
 }
 
+function normalizePipelineStructuredReview(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return value;
+  }
+  const pipeline = value as Record<string, unknown>;
+  if (pipeline.structuredReview === undefined) return value;
+  try {
+    const structuredReview = parseStructuredReviewReport(
+      pipeline.structuredReview,
+    );
+    return structuredReview === pipeline.structuredReview
+      ? value
+      : { ...pipeline, structuredReview };
+  } catch {
+    // Let isBuildPipeline reject the original invalid snapshot below.
+    return value;
+  }
+}
+
 function toSnapshot(
   persisted: PersistedBuildPipeline<BuildPipeline>,
 ): BuildPipeline | null {
+  const snapshot = normalizePipelineStructuredReview(persisted.snapshot);
   if (
     persisted.version !== BUILD_PIPELINE_VERSION
     || !Number.isSafeInteger(persisted.revision)
     || persisted.revision < 1
     || typeof persisted.updatedAt !== "string"
     || !Number.isFinite(Date.parse(persisted.updatedAt))
-    || !isBuildPipeline(persisted.snapshot)
-    || persisted.snapshot.id !== persisted.id
-    || persisted.snapshot.projectId !== persisted.projectId
-    || persisted.snapshot.environmentId !== persisted.environmentId
+    || !isBuildPipeline(snapshot)
+    || snapshot.id !== persisted.id
+    || snapshot.projectId !== persisted.projectId
+    || snapshot.environmentId !== persisted.environmentId
   ) {
     return null;
   }
-  return { ...persisted.snapshot, backendRevision: persisted.revision };
+  return { ...snapshot, backendRevision: persisted.revision };
 }
 
 /**
@@ -198,7 +219,10 @@ export function migrateLegacyBuildPipelines(
       if (typeof id !== "string" || !id || typeof stored !== "object" || stored === null) continue;
       // The legacy snapshot predates `backendRevision`; 0 is the correct value
       // for it anyway, since the backend has never seen this pipeline.
-      const candidate = { ...(stored as Record<string, unknown>), backendRevision: 0 };
+      const candidate = normalizePipelineStructuredReview({
+        ...(stored as Record<string, unknown>),
+        backendRevision: 0,
+      });
       if (!isBuildPipeline(candidate) || candidate.id !== id) continue;
       if (useBuildPipelineStore.getState().pipelines.has(id)) continue;
       const recovered = releaseStalePostingLease(candidate);

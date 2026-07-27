@@ -50,6 +50,7 @@ const emptyReport = {
     total: 0,
     passed: 0,
     failed: 0,
+    notRun: 0,
     failures: [],
   },
   strengths: [],
@@ -128,9 +129,10 @@ const fullyPopulatedReport = {
     reasoning: "Every native review integration consumes the new contract.",
   },
   testResults: {
-    total: 2,
+    total: 3,
     passed: 1,
     failed: 1,
+    notRun: 1,
     failures: [
       {
         testName: "shows evidence",
@@ -271,6 +273,26 @@ describe("structured review report contract", () => {
     expect(parsed.reviewScope.commit?.sha).toBe("d34db33f");
   });
 
+  test("infers not-run tests when reading legacy persisted reports", () => {
+    const legacyReport = {
+      ...emptyReport,
+      testResults: {
+        total: 8_107,
+        passed: 8_094,
+        failed: 0,
+        failures: [],
+      },
+    };
+
+    const parsed = parseStructuredReviewReport(legacyReport);
+
+    expect(parsed.testResults).toEqual({
+      ...legacyReport.testResults,
+      notRun: 13,
+    });
+    expect(parsed).not.toBe(legacyReport);
+  });
+
   test("rejects plaintext, incomplete, incompatible, and unknown data with typed errors", () => {
     for (const invalid of [
       "## Review Scope\nA plaintext report",
@@ -294,6 +316,7 @@ describe("structured review report contract", () => {
           total: 2,
           passed: 2,
           failed: 1,
+          notRun: 0,
           failures: [],
         },
       },
@@ -350,6 +373,9 @@ describe("structured review report contract", () => {
         { type: "null" },
       ],
     });
+    expect(
+      STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.testResults.required,
+    ).toEqual(["total", "passed", "failed", "notRun", "failures"]);
     expect(() => JSON.stringify(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA)).not.toThrow();
   });
 
@@ -455,6 +481,7 @@ describe("structured review readable formatting", () => {
       "- Suggestion: Validate first and persist success only after parsing succeeds.",
       "- Verification: Return malformed provider data and assert that the workflow pauses.",
       "- Alternative fixes:",
+      "- Not run: 1",
       "apps/web/src/stores/review.ts — Recovery after malformed structured output.",
       "- Ready: with-fixes",
       "One high-confidence correctness issue and one coverage weakness were found.",

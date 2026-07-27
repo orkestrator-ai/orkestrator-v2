@@ -61,6 +61,7 @@ import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import {
+  readExistingValidatedBuildReview,
   readValidatedBuildReview,
   structuredReviewHasFindings,
 } from "@/lib/build-pipeline-structured-review";
@@ -1384,11 +1385,48 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
     setIsRetryingReview(true);
     try {
+      if (client) {
+        try {
+          const recovered = await readExistingValidatedBuildReview(
+            currentPipeline,
+            (sessionId, requestId) =>
+              getStructuredOutput(client, sessionId, requestId),
+          );
+          if (recovered) {
+            setStructuredReview(pipelineId, recovered.report);
+            const recoveredPipeline = {
+              ...currentPipeline,
+              structuredReview: recovered.report,
+            };
+            if (structuredReviewHasFindings(recovered.report)) {
+              await sendAddressIssuesMessage(
+                recoveredPipeline,
+                recovered.session,
+              );
+            } else {
+              await startVerifySession(recoveredPipeline);
+            }
+            return;
+          }
+        } catch (error) {
+          console.warn(
+            "[BuildChatTab] Existing review result could not be recovered; starting a fresh review:",
+            error,
+          );
+        }
+      }
       await startReviewSession(currentPipeline);
     } finally {
       setIsRetryingReview(false);
     }
-  }, [pipelineId, startReviewSession]);
+  }, [
+    client,
+    pipelineId,
+    sendAddressIssuesMessage,
+    setStructuredReview,
+    startReviewSession,
+    startVerifySession,
+  ]);
 
   // When the bridge server is connected and environment is starting, transition to
   // waiting-for-setup. Both local and container environments must complete their setup

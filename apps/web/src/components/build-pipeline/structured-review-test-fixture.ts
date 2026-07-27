@@ -40,6 +40,7 @@ export const TEST_STRUCTURED_REVIEW_REPORT: StructuredReviewReport = {
     total: 1,
     passed: 1,
     failed: 0,
+    notRun: 0,
     failures: [],
   },
   strengths: [{

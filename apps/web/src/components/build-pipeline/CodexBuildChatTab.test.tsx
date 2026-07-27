@@ -679,6 +679,7 @@ describe("CodexBuildChatTab", () => {
     mockCreateSession.mockClear();
     mockGetSessionMessages.mockClear();
     mockGetSessionStatus.mockClear();
+    mockGetStructuredOutput.mockClear();
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
     mockDetectPr.mockClear();
@@ -2589,6 +2590,58 @@ describe("CodexBuildChatTab", () => {
     >;
     expect(sendCalls[0]?.[1]).toBe("retry-review-session");
     expect(sendCalls[0]?.[2]).not.toBe(completedBuildPrompt);
+  });
+
+  test("reconnect reuses a legacy completed review with skipped tests", async () => {
+    seedReviewPipeline();
+    seedCodexStore(false);
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          phase: "failed",
+          error:
+            "Invalid structured-review-report: $.testResults.total: Total must equal passed plus failed.",
+          structuredReviewRequestId: "review-request-with-skips",
+          failureContext: {
+            phase: "reviewing",
+            kind: "stage-transition",
+          },
+        }),
+      };
+    });
+    mockGetStructuredOutput.mockResolvedValueOnce({
+      ...TEST_STRUCTURED_REVIEW_OUTPUT,
+      value: {
+        ...TEST_STRUCTURED_REVIEW_REPORT,
+        testResults: {
+          total: 8_107,
+          passed: 8_094,
+          failed: 0,
+          failures: [],
+        },
+      },
+    } as any);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => {
+      const pipeline =
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("addressing");
+      expect(pipeline?.structuredReview?.testResults.notRun).toBe(13);
+    });
+
+    expect(mockGetStructuredOutput).toHaveBeenCalledWith(
+      { baseUrl: "http://127.0.0.1:9999" },
+      SESSION_ID,
+      "review-request-with-skips",
+    );
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    expect(mockSendPrompt.mock.calls[0]?.[1]).toBe(SESSION_ID);
   });
 
   test("reconnect adopts an authoritative running turn without resending its prompt", async () => {

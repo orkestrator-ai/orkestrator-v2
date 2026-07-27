@@ -66,6 +66,8 @@ describe("buildReviewBody", () => {
       expect(body).toContain("retry a failed file upload");
       expect(body).toContain("if there is no user-visible runtime effect");
       expect(body).toContain("## Issues");
+      expect(body).toContain("Total: N (must equal Passed + Failed + Not run)");
+      expect(body).toContain("Not run: N (all skipped, todo, pending, or disabled tests)");
       expect(body).toContain("### 1. [P0|P1|P2][conf:NN][category]\n#### Short title");
       expect(body).not.toContain("## Findings");
       expect(body.match(/^## What Changed$/gm)).toHaveLength(2);

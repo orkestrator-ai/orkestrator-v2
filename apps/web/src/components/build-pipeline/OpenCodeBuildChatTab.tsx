@@ -53,6 +53,7 @@ import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import {
+  readExistingValidatedBuildReview,
   readValidatedBuildReview,
   structuredReviewHasFindings,
 } from "@/lib/build-pipeline-structured-review";
@@ -1264,11 +1265,48 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
 
     setIsRetryingReview(true);
     try {
+      try {
+        const activeClient = client ?? await initializeClient();
+        const recovered = await readExistingValidatedBuildReview(
+          currentPipeline,
+          (sessionId, requestId) =>
+            getStructuredOutput(activeClient, sessionId, requestId),
+        );
+        if (recovered) {
+          setStructuredReview(pipelineId, recovered.report);
+          const recoveredPipeline = {
+            ...currentPipeline,
+            structuredReview: recovered.report,
+          };
+          if (structuredReviewHasFindings(recovered.report)) {
+            await sendAddressIssuesMessage(
+              recoveredPipeline,
+              recovered.session,
+            );
+          } else {
+            await startVerifySession(recoveredPipeline);
+          }
+          return;
+        }
+      } catch (error) {
+        console.warn(
+          "[OpenCodeBuildChatTab] Existing review result could not be recovered; starting a fresh review:",
+          error,
+        );
+      }
       await startReviewSession(currentPipeline);
     } finally {
       setIsRetryingReview(false);
     }
-  }, [pipelineId, startReviewSession]);
+  }, [
+    client,
+    initializeClient,
+    pipelineId,
+    sendAddressIssuesMessage,
+    setStructuredReview,
+    startReviewSession,
+    startVerifySession,
+  ]);
 
   const setupPending = isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady });
 

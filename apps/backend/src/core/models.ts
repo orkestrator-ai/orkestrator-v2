@@ -75,14 +75,15 @@ export interface OpenCodeModelCatalogEntry {
 }
 
 /**
- * Host-level OpenCode catalogue shared by every environment.
+ * Last-known-good OpenCode catalogue for one project configuration.
  *
  * `catalogVersion` is a digest of the normalized model data. Keeping it
  * separate from `updatedAt` lets the backend avoid rewriting the cache when a
  * newly-started OpenCode server reports the same catalogue.
  */
 export interface OpenCodeModelCatalogSnapshot {
-  schemaVersion: 1;
+  schemaVersion: 2;
+  projectId: string;
   catalogVersion: string;
   updatedAt: string;
   models: OpenCodeModelCatalogEntry[];

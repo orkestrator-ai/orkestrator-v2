@@ -655,7 +655,7 @@ async function exists(filePath: string): Promise<boolean> {
 function normalizeOpenCodeModelCatalogEntries(
   models: OpenCodeModelCatalogEntry[],
 ): OpenCodeModelCatalogEntry[] {
-  const byId = new Map<string, OpenCodeModelCatalogEntry>();
+  const byId = new Map<string, OpenCodeModelCatalogEntry[]>();
 
   for (const candidate of models) {
     if (!candidate || typeof candidate !== "object") continue;
@@ -669,40 +669,71 @@ function normalizeOpenCodeModelCatalogEntries(
       ? Array.from(new Set(candidate.variants.filter(
           (variant): variant is string =>
             typeof variant === "string" && variant.trim().length > 0,
-        ).map((variant) => variant.trim())))
+        ).map((variant) => variant.trim()))).sort((left, right) =>
+          left.localeCompare(right)
+        )
       : undefined;
-    const finiteNumber = (value: unknown): number | undefined =>
-      typeof value === "number" && Number.isFinite(value) ? value : undefined;
-    const contextWindow = finiteNumber(candidate.contextWindow);
+    const nonNegativeNumber = (value: unknown): number | undefined =>
+      typeof value === "number" && Number.isFinite(value) && value >= 0
+        ? value
+        : undefined;
+    const contextWindow =
+      typeof candidate.contextWindow === "number" &&
+      Number.isSafeInteger(candidate.contextWindow) &&
+      candidate.contextWindow > 0
+        ? candidate.contextWindow
+        : undefined;
 
-    byId.set(id, {
+    const normalized = {
       id,
       name,
       provider,
       ...(variants?.length ? { variants } : {}),
-      ...(finiteNumber(candidate.inputCost) !== undefined
-        ? { inputCost: finiteNumber(candidate.inputCost) }
+      ...(nonNegativeNumber(candidate.inputCost) !== undefined
+        ? { inputCost: nonNegativeNumber(candidate.inputCost) }
         : {}),
-      ...(finiteNumber(candidate.outputCost) !== undefined
-        ? { outputCost: finiteNumber(candidate.outputCost) }
+      ...(nonNegativeNumber(candidate.outputCost) !== undefined
+        ? { outputCost: nonNegativeNumber(candidate.outputCost) }
         : {}),
-      ...(contextWindow !== undefined && contextWindow > 0
-        ? { contextWindow }
-        : {}),
-    });
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+    };
+    const duplicates = byId.get(id) ?? [];
+    duplicates.push(normalized);
+    byId.set(id, duplicates);
   }
 
-  return Array.from(byId.values()).sort((left, right) =>
-    left.id.localeCompare(right.id),
-  );
+  return Array.from(byId.values())
+    .map((duplicates) =>
+      duplicates.reduce((selected, candidate) =>
+        JSON.stringify(candidate).localeCompare(JSON.stringify(selected)) < 0
+          ? candidate
+          : selected
+      )
+    )
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+type PersistedOpenCodeModelCatalogStore = {
+  schemaVersion: 2;
+  catalogs: Record<string, unknown>;
+  legacyUnscoped?: unknown;
+};
+
+function normalizeOpenCodeModelCatalogProjectId(projectId: string): string {
+  const normalized = projectId.trim();
+  if (!normalized) {
+    throw new Error("OpenCode model catalogue projectId must be a non-blank string.");
+  }
+  return normalized;
 }
 
 function parseOpenCodeModelCatalogSnapshot(
+  projectId: string,
   value: unknown,
 ): OpenCodeModelCatalogSnapshot | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
-  if (record.schemaVersion !== 1 || !Array.isArray(record.models)) return null;
+  if (!Array.isArray(record.models)) return null;
 
   const models = normalizeOpenCodeModelCatalogEntries(
     record.models as OpenCodeModelCatalogEntry[],
@@ -718,11 +749,50 @@ function parseOpenCodeModelCatalogSnapshot(
     .digest("hex");
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    projectId,
     catalogVersion,
     updatedAt,
     models,
   };
+}
+
+function parseOpenCodeModelCatalogStore(
+  value: unknown,
+): Record<string, OpenCodeModelCatalogSnapshot> {
+  if (!value || typeof value !== "object") return {};
+  const record = value as Record<string, unknown>;
+  // Schema 1 was one host-global catalogue. It is deliberately left
+  // unassigned: attaching it to whichever project reads first would leak a
+  // project-specific opencode.json catalogue into another project.
+  if (record.schemaVersion !== 2 || !record.catalogs ||
+      typeof record.catalogs !== "object" || Array.isArray(record.catalogs)) {
+    return {};
+  }
+
+  const catalogs = Object.create(null) as Record<
+    string,
+    OpenCodeModelCatalogSnapshot
+  >;
+  for (const [rawProjectId, candidate] of Object.entries(
+    record.catalogs as Record<string, unknown>,
+  )) {
+    const projectId = rawProjectId.trim();
+    if (!projectId || Object.hasOwn(catalogs, projectId)) continue;
+    const snapshot = parseOpenCodeModelCatalogSnapshot(projectId, candidate);
+    if (snapshot) catalogs[projectId] = snapshot;
+  }
+  return catalogs;
+}
+
+function getUnscopedLegacyOpenCodeModelCatalog(value: unknown): unknown {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.schemaVersion === 1) return value;
+  if (record.schemaVersion === 2 && Object.hasOwn(record, "legacyUnscoped")) {
+    return record.legacyUnscoped;
+  }
+  return undefined;
 }
 
 export type ResourceChangeListener = (change: ResourceChange) => void;
@@ -1633,17 +1703,22 @@ export class StorageService {
     this.announce("config", "app");
   }
 
-  async getOpenCodeModelCatalog(): Promise<OpenCodeModelCatalogSnapshot | null> {
-    const snapshot = await this.loadJson<unknown>(
+  async getOpenCodeModelCatalog(
+    projectId: string,
+  ): Promise<OpenCodeModelCatalogSnapshot | null> {
+    const normalizedProjectId = normalizeOpenCodeModelCatalogProjectId(projectId);
+    const store = await this.loadJson<unknown>(
       this.openCodeModelCatalogFile(),
       () => null,
     );
-    return parseOpenCodeModelCatalogSnapshot(snapshot);
+    return parseOpenCodeModelCatalogStore(store)[normalizedProjectId] ?? null;
   }
 
   async cacheOpenCodeModelCatalog(
+    projectId: string,
     models: OpenCodeModelCatalogEntry[],
   ): Promise<OpenCodeModelCatalogSnapshot> {
+    const normalizedProjectId = normalizeOpenCodeModelCatalogProjectId(projectId);
     const normalizedModels = normalizeOpenCodeModelCatalogEntries(models);
     if (normalizedModels.length === 0) {
       throw new Error("OpenCode model catalogue must contain at least one model.");
@@ -1654,17 +1729,41 @@ export class StorageService {
       .digest("hex");
 
     const run = async () => {
-      const current = await this.getOpenCodeModelCatalog();
-      if (current?.catalogVersion === catalogVersion) return current;
+      const release = await this.acquireMutationLock(
+        this.openCodeModelCatalogFile(),
+        "OpenCode model catalogue storage",
+      );
+      try {
+        const persisted = await this.loadJson<unknown>(
+          this.openCodeModelCatalogFile(),
+          () => null,
+        );
+        const catalogs = parseOpenCodeModelCatalogStore(persisted);
+        const current = catalogs[normalizedProjectId];
+        if (current?.catalogVersion === catalogVersion) return current;
 
-      const snapshot: OpenCodeModelCatalogSnapshot = {
-        schemaVersion: 1,
-        catalogVersion,
-        updatedAt: new Date().toISOString(),
-        models: normalizedModels,
-      };
-      await this.saveJson(this.openCodeModelCatalogFile(), snapshot);
-      return snapshot;
+        const snapshot: OpenCodeModelCatalogSnapshot = {
+          schemaVersion: 2,
+          projectId: normalizedProjectId,
+          catalogVersion,
+          updatedAt: new Date().toISOString(),
+          models: normalizedModels,
+        };
+        catalogs[normalizedProjectId] = snapshot;
+        const legacyUnscoped =
+          getUnscopedLegacyOpenCodeModelCatalog(persisted);
+        const store: PersistedOpenCodeModelCatalogStore = {
+          schemaVersion: 2,
+          catalogs,
+          ...(legacyUnscoped === undefined
+            ? {}
+            : { legacyUnscoped }),
+        };
+        await this.saveJson(this.openCodeModelCatalogFile(), store);
+        return snapshot;
+      } finally {
+        await release();
+      }
     };
 
     const next = this.openCodeModelCatalogMutationQueue.then(run, run);

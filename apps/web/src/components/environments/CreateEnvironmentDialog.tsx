@@ -81,6 +81,37 @@ import { openCodeModelRefToId } from "@/lib/opencode-model-preferences";
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
+const EMPTY_OPENCODE_MODEL_PREFERENCES: OpenCodeModelPreferences = {
+  recent: [],
+  favorite: [],
+  variant: {},
+};
+
+function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.filter((candidate): candidate is CachedOpenCodeModel => {
+    if (typeof candidate !== "object" || candidate === null) return false;
+    const record = candidate as Record<string, unknown>;
+    return (
+      typeof record.id === "string" &&
+      record.id.trim().length > 0 &&
+      typeof record.name === "string" &&
+      record.name.trim().length > 0 &&
+      typeof record.provider === "string" &&
+      record.provider.trim().length > 0 &&
+      (
+        record.variants === undefined ||
+        (
+          Array.isArray(record.variants) &&
+          record.variants.every(
+            (variant) =>
+              typeof variant === "string" && variant.trim().length > 0,
+          )
+        )
+      )
+    );
+  });
+}
 
 /**
  * Resolves the effective agent defaults by applying project-level overrides
@@ -191,11 +222,7 @@ export function CreateEnvironmentDialog({
     CachedOpenCodeModel[]
   >([]);
   const [openCodeModelPreferences, setOpenCodeModelPreferences] =
-    useState<OpenCodeModelPreferences>({
-      recent: [],
-      favorite: [],
-      variant: {},
-    });
+    useState<OpenCodeModelPreferences>(EMPTY_OPENCODE_MODEL_PREFERENCES);
   const configuredOpenCodeModel =
     (configDefaultAgent === "opencode" ? repoConfig?.defaultModel : undefined)
     ?? config.global.opencodeModel;
@@ -369,21 +396,40 @@ export function CreateEnvironmentDialog({
   const promptPasteRequestIdRef = useRef(0);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setCachedOpenCodeModels([]);
+      setOpenCodeModelPreferences(EMPTY_OPENCODE_MODEL_PREFERENCES);
+      return;
+    }
     let cancelled = false;
 
-    void getCachedOpenCodeModelCatalog()
-      .then((snapshot) => {
-        if (!cancelled && snapshot?.models.length) {
-          setCachedOpenCodeModels(snapshot.models);
-        }
-      })
-      .catch((error) => {
-        console.warn(
-          "[CreateEnvironmentDialog] Failed to load cached OpenCode models:",
-          error,
-        );
-      });
+    // Clear data from the previous project/open cycle synchronously. An empty,
+    // rejected, malformed, or late response must not leave another project's
+    // model catalog or preferences visible in this dialog.
+    setCachedOpenCodeModels([]);
+    setOpenCodeModelPreferences(EMPTY_OPENCODE_MODEL_PREFERENCES);
+
+    const normalizedProjectId = projectId?.trim();
+    if (normalizedProjectId) {
+      void getCachedOpenCodeModelCatalog(normalizedProjectId)
+        .then((snapshot) => {
+          const models = normalizeCachedOpenCodeModels(snapshot?.models);
+          if (
+            !cancelled &&
+            snapshot &&
+            snapshot.projectId === normalizedProjectId &&
+            models
+          ) {
+            setCachedOpenCodeModels(models);
+          }
+        })
+        .catch((error) => {
+          console.warn(
+            "[CreateEnvironmentDialog] Failed to load cached OpenCode models:",
+            error,
+          );
+        });
+    }
 
     void getOpencodeModelPreferences()
       .then((preferences) => {
@@ -406,7 +452,7 @@ export function CreateEnvironmentDialog({
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, projectId]);
 
   // Restore draft prompt when dialog opens, focus the textarea
   useEffect(() => {

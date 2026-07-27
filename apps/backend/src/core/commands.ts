@@ -519,9 +519,39 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+function asNonBlankString(value: unknown, name: string): string {
+  const normalized = asString(value, name).trim();
+  if (!normalized) throw new Error(`Expected ${name} to be a non-blank string`);
+  return normalized;
+}
+
+function asOpenCodeModelVariants(value: unknown, name: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`Expected ${name} to be an array`);
+  return value.map((variant, index) =>
+    asNonBlankString(variant, `${name}[${index}]`)
+  );
+}
+
+function asOpenCodeModelCost(value: unknown, name: string): number {
+  const cost = asNumber(value, name);
+  if (cost < 0) throw new Error(`Expected ${name} to be non-negative`);
+  return cost;
+}
+
+function asOpenCodeContextWindow(value: unknown, name: string): number {
+  const contextWindow = asNumber(value, name);
+  if (!Number.isSafeInteger(contextWindow) || contextWindow <= 0) {
+    throw new Error(`Expected ${name} to be a positive safe integer`);
+  }
+  return contextWindow;
+}
+
 function asOpenCodeModelCatalog(value: unknown): OpenCodeModelCatalogEntry[] {
   if (!Array.isArray(value)) {
     throw new Error("Expected models to be an array");
+  }
+  if (value.length === 0) {
+    throw new Error("OpenCode model catalogue must contain at least one model.");
   }
 
   return value.map((candidate, index) => {
@@ -540,20 +570,37 @@ function asOpenCodeModelCatalog(value: unknown): OpenCodeModelCatalogEntry[] {
       `models[${index}]`,
     );
     return {
-      id: asString(model.id, `models[${index}].id`),
-      name: asString(model.name, `models[${index}].name`),
-      provider: asString(model.provider, `models[${index}].provider`),
-      ...(model.variants === undefined ? {} : { variants: asStringArray(model.variants) }),
+      id: asNonBlankString(model.id, `models[${index}].id`),
+      name: asNonBlankString(model.name, `models[${index}].name`),
+      provider: asNonBlankString(model.provider, `models[${index}].provider`),
+      ...(model.variants === undefined
+        ? {}
+        : {
+            variants: asOpenCodeModelVariants(
+              model.variants,
+              `models[${index}].variants`,
+            ),
+          }),
       ...(model.inputCost === undefined
         ? {}
-        : { inputCost: asNumber(model.inputCost, `models[${index}].inputCost`) }),
+        : {
+            inputCost: asOpenCodeModelCost(
+              model.inputCost,
+              `models[${index}].inputCost`,
+            ),
+          }),
       ...(model.outputCost === undefined
         ? {}
-        : { outputCost: asNumber(model.outputCost, `models[${index}].outputCost`) }),
+        : {
+            outputCost: asOpenCodeModelCost(
+              model.outputCost,
+              `models[${index}].outputCost`,
+            ),
+          }),
       ...(model.contextWindow === undefined
         ? {}
         : {
-            contextWindow: asNumber(
+            contextWindow: asOpenCodeContextWindow(
               model.contextWindow,
               `models[${index}].contextWindow`,
             ),
@@ -5341,12 +5388,19 @@ export function createCommandRegistry(
     if (!await pathExists(modelPath)) return { recent: [], favorite: [], variant: {} };
     return JSON.parse(await fs.readFile(modelPath, "utf8"));
   });
-  register("get_opencode_model_catalog_cache", (_args, { storage }) =>
-    storage.getOpenCodeModelCatalog(),
-  );
-  register("cache_opencode_model_catalog", ({ models }, { storage }) =>
-    storage.cacheOpenCodeModelCatalog(asOpenCodeModelCatalog(models)),
-  );
+  register("get_opencode_model_catalog_cache", (args, { storage }) => {
+    assertOnlyKeys(args, ["projectId"], "arguments");
+    return storage.getOpenCodeModelCatalog(
+      asNonBlankString(args.projectId, "projectId"),
+    );
+  });
+  register("cache_opencode_model_catalog", (args, { storage }) => {
+    assertOnlyKeys(args, ["projectId", "models"], "arguments");
+    return storage.cacheOpenCodeModelCatalog(
+      asNonBlankString(args.projectId, "projectId"),
+      asOpenCodeModelCatalog(args.models),
+    );
+  });
   register("start_claude_server", ({ containerId }) =>
     startContainerServer(
       asString(containerId, "containerId"),

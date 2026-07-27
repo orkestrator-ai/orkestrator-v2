@@ -127,10 +127,14 @@ const mockGetOpencodeModelPreferences = mock<
   variant: {} as Record<string, string>,
 }));
 const mockGetCachedOpenCodeModelCatalog = mock<
-  () => Promise<OpenCodeModelCatalogSnapshot | null>
+  (_projectId: string) => Promise<OpenCodeModelCatalogSnapshot | null>
 >(async () => null);
-const mockCacheOpenCodeModelCatalog = mock(async (models: OpenCodeModel[]) => ({
-  schemaVersion: 1 as const,
+const mockCacheOpenCodeModelCatalog = mock(async (
+  projectId: string,
+  models: OpenCodeModel[],
+) => ({
+  schemaVersion: 2 as const,
+  projectId,
   catalogVersion: "test",
   updatedAt: "2026-01-01T00:00:00.000Z",
   models,
@@ -208,6 +212,7 @@ mock.module("./OpenCodeComposeBar", () => ({
     isLoading,
     showAddressAll,
     layout,
+    favoriteModelIds,
   }: {
     onSend: (text: string, attachments: typeof composeAttachments) => Promise<void>;
     onStop?: () => Promise<void>;
@@ -217,11 +222,15 @@ mock.module("./OpenCodeComposeBar", () => ({
     isLoading?: boolean;
     showAddressAll?: boolean;
     layout?: "bottom" | "centered";
+    favoriteModelIds?: string[];
   }) => (
     <>
       <div data-testid="opencode-compose-layout">{layout}</div>
       <div data-testid="opencode-address-all-state">
         {showAddressAll ? "shown" : "hidden"}
+      </div>
+      <div data-testid="opencode-favorite-models">
+        {(favoriteModelIds ?? []).join(",")}
       </div>
       <button
         type="button"
@@ -631,8 +640,9 @@ describe("OpenCodeChatTab", () => {
     mockGetCachedOpenCodeModelCatalog.mockReset();
     mockGetCachedOpenCodeModelCatalog.mockResolvedValue(null);
     mockCacheOpenCodeModelCatalog.mockReset();
-    mockCacheOpenCodeModelCatalog.mockImplementation(async (models) => ({
-      schemaVersion: 1,
+    mockCacheOpenCodeModelCatalog.mockImplementation(async (projectId, models) => ({
+      schemaVersion: 2,
+      projectId,
       catalogVersion: "test",
       updatedAt: "2026-01-01T00:00:00.000Z",
       models,
@@ -1990,12 +2000,16 @@ describe("OpenCodeChatTab", () => {
   test("dispatches the initialPrompt while the OpenCode tab is inactive", async () => {
     const initialPrompt = "Run the background OpenCode dispatch";
     composeText = initialPrompt;
-    useOpenCodeStore.getState().setModels(ENVIRONMENT_ID, [{
-      id: "openai/gpt-5.6-sol",
-      name: "GPT 5.6 Sol",
-      provider: "OpenAI",
-      variants: ["medium", "xhigh"],
-    } as any]);
+    useOpenCodeStore.setState((state) => ({ ...state, clients: new Map() }));
+    mockGetModelsWithDefaults.mockResolvedValue({
+      models: [{
+        id: "openai/gpt-5.6-sol",
+        name: "GPT 5.6 Sol",
+        provider: "OpenAI",
+        variants: ["medium", "xhigh"],
+      }],
+      defaults: {},
+    });
 
     render(
       <OpenCodeChatTab
@@ -2022,8 +2036,8 @@ describe("OpenCodeChatTab", () => {
     });
   });
 
-  test("falls back from a stale one-shot model before dispatching the initial prompt", async () => {
-    const initialPrompt = "Review with a valid model";
+  test("uses the server default when a warm cached catalog cannot validate launch options", async () => {
+    const initialPrompt = "Review with a safe default";
     useOpenCodeStore.getState().setModels(ENVIRONMENT_ID, [{
       id: "openai/gpt-5",
       name: "GPT 5",
@@ -2037,8 +2051,8 @@ describe("OpenCodeChatTab", () => {
         data={createData()}
         isActive={false}
         initialPrompt={initialPrompt}
-        initialAgentModel="removed/provider-model"
-        initialReasoningEffort="removed-variant"
+        initialAgentModel="openai/gpt-5"
+        initialReasoningEffort="fast"
       />,
     );
 
@@ -2048,7 +2062,7 @@ describe("OpenCodeChatTab", () => {
         "session-1",
         initialPrompt,
         expect.objectContaining({
-          model: "openai/gpt-5",
+          model: undefined,
           variant: undefined,
         }),
       );
@@ -2088,7 +2102,23 @@ describe("OpenCodeChatTab", () => {
     // applied. Clearing here would destroy the tab's copy — the only durable
     // one left once `TerminalContainer` has handed ownership over — so a later
     // mount could never honour it.
-    useOpenCodeStore.setState((state) => ({ ...state, clients: new Map(), models: new Map() }));
+    useOpenCodeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      models: new Map([
+        [
+          ENVIRONMENT_ID,
+          [
+            {
+              id: "openai/gpt-5",
+              name: "Cached GPT-5",
+              provider: "openai",
+              variants: ["high"],
+            },
+          ],
+        ],
+      ]),
+    }));
     seedPaneLayout(undefined, {
       initialAgentModel: "openai/gpt-5",
       initialReasoningEffort: "high",
@@ -2103,6 +2133,7 @@ describe("OpenCodeChatTab", () => {
         tabId={TAB_ID}
         data={createData()}
         isActive
+        initialPrompt="Review with a temporarily unavailable catalog"
         initialAgentModel="openai/gpt-5"
         initialReasoningEffort="high"
       />,
@@ -2115,6 +2146,12 @@ describe("OpenCodeChatTab", () => {
       .find((candidate) => candidate.id === TAB_ID);
     expect(tab?.initialAgentModel).toBe("openai/gpt-5");
     expect(tab?.initialReasoningEffort).toBe("high");
+    expect(mockSendPrompt).toHaveBeenCalledWith(
+      MOCK_CLIENT,
+      "session-1",
+      "Review with a temporarily unavailable catalog",
+      expect.objectContaining({ model: undefined, variant: undefined }),
+    );
   });
 
   test("clears one-shot launch options once the cold path resolves them", async () => {
@@ -2232,7 +2269,7 @@ describe("OpenCodeChatTab", () => {
   });
 
   test("retains later model choices after a one-shot review tab remounts", async () => {
-    useOpenCodeStore.getState().setModels(ENVIRONMENT_ID, [
+    const liveModels = [
       {
         id: "openai/review-model",
         name: "Review Model",
@@ -2245,7 +2282,12 @@ describe("OpenCodeChatTab", () => {
         provider: "OpenAI",
         variants: ["fast"],
       },
-    ] as any);
+    ] as any;
+    useOpenCodeStore.setState((state) => ({ ...state, clients: new Map() }));
+    mockGetModelsWithDefaults.mockResolvedValue({
+      models: liveModels,
+      defaults: {},
+    });
     const firstMount = render(
       <OpenCodeChatTab
         tabId={TAB_ID}
@@ -3158,9 +3200,82 @@ describe("OpenCodeChatTab", () => {
           refreshedModels,
         );
         expect(mockCacheOpenCodeModelCatalog).toHaveBeenCalledWith(
+          "project-1",
           refreshedModels,
         );
       });
+    });
+
+    test("keeps a cold initialization usable when caching the live catalog rejects", async () => {
+      const originalWarn = console.warn;
+      const consoleWarn = mock(() => {});
+      console.warn = consoleWarn as unknown as typeof console.warn;
+      useOpenCodeStore.setState((state) => ({ ...state, clients: new Map() }));
+      mockGetModelsWithDefaults.mockResolvedValue({
+        models: [
+          { id: "openai/live", name: "Live", provider: "openai" },
+        ],
+        defaults: {},
+      });
+      mockCacheOpenCodeModelCatalog.mockRejectedValueOnce(
+        new Error("cache write failed"),
+      );
+
+      try {
+        render(
+          <OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />,
+        );
+        await waitFor(() => {
+          expect(consoleWarn).toHaveBeenCalledWith(
+            "[OpenCodeChatTab] Failed to cache models:",
+            expect.any(Error),
+          );
+        });
+        expect(useOpenCodeStore.getState().models.get(ENVIRONMENT_ID)?.[0]?.id).toBe(
+          "openai/live",
+        );
+        expect(useOpenCodeStore.getState().clients.get(ENVIRONMENT_ID)).toBe(
+          MOCK_CLIENT as any,
+        );
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
+
+    test("keeps refreshed models when caching them rejects", async () => {
+      const originalWarn = console.warn;
+      const consoleWarn = mock(() => {});
+      console.warn = consoleWarn as unknown as typeof console.warn;
+      const refreshedModels = [
+        { id: "openai/refreshed", name: "Refreshed", provider: "openai" },
+      ];
+      mockGetModelsWithDefaults.mockResolvedValue({
+        models: refreshedModels,
+        defaults: {},
+      });
+      mockCacheOpenCodeModelCatalog.mockRejectedValueOnce(
+        new Error("cache write failed"),
+      );
+
+      try {
+        render(
+          <OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />,
+        );
+        await act(async () => {
+          fireEvent.click(await screen.findByTestId("opencode-refresh-models"));
+        });
+        await waitFor(() => {
+          expect(consoleWarn).toHaveBeenCalledWith(
+            "[OpenCodeChatTab] Failed to cache refreshed models:",
+            expect.any(Error),
+          );
+        });
+        expect(useOpenCodeStore.getState().models.get(ENVIRONMENT_ID)).toEqual(
+          refreshedModels,
+        );
+      } finally {
+        console.warn = originalWarn;
+      }
     });
 
     test("rehydrates cached models before an inactive tab starts its server", async () => {
@@ -3172,7 +3287,8 @@ describe("OpenCodeChatTab", () => {
         },
       ];
       mockGetCachedOpenCodeModelCatalog.mockResolvedValueOnce({
-        schemaVersion: 1,
+        schemaVersion: 2,
+        projectId: "project-1",
         catalogVersion: "cached",
         updatedAt: "2026-07-27T12:00:00.000Z",
         models: cachedModels,
@@ -3187,6 +3303,7 @@ describe("OpenCodeChatTab", () => {
           cachedModels,
         );
       });
+      expect(mockGetCachedOpenCodeModelCatalog).toHaveBeenCalledWith("project-1");
       expect(mockStartOpenCodeServer).not.toHaveBeenCalled();
     });
 
@@ -3217,6 +3334,105 @@ describe("OpenCodeChatTab", () => {
           cachedModels,
         );
       });
+      expect(mockCacheOpenCodeModelCatalog).not.toHaveBeenCalled();
+    });
+
+    test("does not overwrite models that arrived before the cached read completes", async () => {
+      const cachedRead = deferred<OpenCodeModelCatalogSnapshot | null>();
+      const liveModels = [
+        { id: "openai/live", name: "Live", provider: "openai" },
+      ];
+      const cachedModels = [
+        { id: "openai/cached", name: "Cached", provider: "openai" },
+      ];
+      mockGetCachedOpenCodeModelCatalog.mockImplementationOnce(
+        () => cachedRead.promise,
+      );
+
+      render(
+        <OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />,
+      );
+      act(() => {
+        useOpenCodeStore.getState().setModels(ENVIRONMENT_ID, liveModels);
+      });
+      await act(async () => {
+        cachedRead.resolve({
+          schemaVersion: 2,
+          projectId: "project-1",
+          catalogVersion: "cached",
+          updatedAt: "2026-07-27T12:00:00.000Z",
+          models: cachedModels,
+        });
+        await cachedRead.promise;
+      });
+
+      expect(useOpenCodeStore.getState().models.get(ENVIRONMENT_ID)).toEqual(
+        liveModels,
+      );
+    });
+
+    test("ignores a cached read that resolves after unmount", async () => {
+      const cachedRead = deferred<OpenCodeModelCatalogSnapshot | null>();
+      mockGetCachedOpenCodeModelCatalog.mockImplementationOnce(
+        () => cachedRead.promise,
+      );
+      const view = render(
+        <OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />,
+      );
+      view.unmount();
+
+      await act(async () => {
+        cachedRead.resolve({
+          schemaVersion: 2,
+          projectId: "project-1",
+          catalogVersion: "cached",
+          updatedAt: "2026-07-27T12:00:00.000Z",
+          models: [{ id: "openai/late", name: "Late", provider: "openai" }],
+        });
+        await cachedRead.promise;
+      });
+
+      expect(useOpenCodeStore.getState().models.has(ENVIRONMENT_ID)).toBe(false);
+    });
+
+    test("treats cached read rejection as non-fatal", async () => {
+      const originalWarn = console.warn;
+      const consoleWarn = mock(() => {});
+      console.warn = consoleWarn as unknown as typeof console.warn;
+      mockGetCachedOpenCodeModelCatalog.mockRejectedValueOnce(
+        new Error("cache unavailable"),
+      );
+
+      try {
+        render(
+          <OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />,
+        );
+        await waitFor(() => {
+          expect(consoleWarn).toHaveBeenCalledWith(
+            "[OpenCodeChatTab] Failed to load cached models:",
+            expect.any(Error),
+          );
+        });
+        expect(screen.getByText("Ready to build!")).toBeTruthy();
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
+
+    test("skips cache IO when the environment has no project", async () => {
+      useEnvironmentStore.setState({ environments: [] });
+      mockGetModelsWithDefaults.mockResolvedValue({
+        models: [{ id: "openai/live", name: "Live", provider: "openai" }],
+        defaults: {},
+      });
+      render(
+        <OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />,
+      );
+
+      await act(async () => {
+        fireEvent.click(await screen.findByTestId("opencode-refresh-models"));
+      });
+      expect(mockGetCachedOpenCodeModelCatalog).not.toHaveBeenCalled();
       expect(mockCacheOpenCodeModelCatalog).not.toHaveBeenCalled();
     });
 
@@ -3273,6 +3489,105 @@ describe("OpenCodeChatTab", () => {
         expect(
           useOpenCodeStore.getState().getSelectedModel(SESSION_KEY),
         ).toBe("anthropic/claude-sonnet");
+      });
+    });
+
+    test("normalizes and deduplicates string and object model preferences", async () => {
+      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "removed/model");
+      const refreshedModels = [
+        {
+          id: "anthropic/claude-sonnet",
+          name: "Claude Sonnet",
+          provider: "anthropic",
+          variants: ["high"],
+        },
+        { id: "openai/gpt-5", name: "GPT-5", provider: "openai" },
+      ];
+      mockGetModelsWithDefaults.mockResolvedValue({
+        models: refreshedModels,
+        defaults: {},
+      });
+      mockGetOpencodeModelPreferences.mockResolvedValue({
+        recent: [
+          " anthropic/claude-sonnet ",
+          { providerID: "anthropic", modelID: "claude-sonnet" },
+          "invalid",
+        ],
+        favorite: [
+          { providerID: "openai", modelID: "gpt-5" },
+          "openai/gpt-5",
+          "anthropic/claude-sonnet",
+        ],
+        variant: {
+          " anthropic/claude-sonnet ": " high ",
+          "openai/gpt-5": "",
+        },
+      });
+
+      render(
+        <OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />,
+      );
+      await act(async () => {
+        fireEvent.click(await screen.findByTestId("opencode-refresh-models"));
+      });
+
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe(
+          "anthropic/claude-sonnet",
+        );
+        expect(useOpenCodeStore.getState().getSelectedVariant(SESSION_KEY)).toBe(
+          "high",
+        );
+        expect(screen.getByTestId("opencode-favorite-models").textContent).toBe(
+          "openai/gpt-5,anthropic/claude-sonnet",
+        );
+      });
+    });
+
+    test("validates and clears preserved launch options after a successful live refresh", async () => {
+      seedPaneLayout(undefined, {
+        initialAgentModel: "openai/review",
+        initialReasoningEffort: "high",
+      });
+      useOpenCodeStore.getState().setModels(ENVIRONMENT_ID, [
+        { id: "openai/cached", name: "Cached", provider: "openai" },
+      ]);
+      mockGetModelsWithDefaults.mockResolvedValue({
+        models: [
+          {
+            id: "openai/review",
+            name: "Review",
+            provider: "openai",
+            variants: ["high"],
+          },
+        ],
+        defaults: {},
+      });
+
+      render(
+        <OpenCodeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={false}
+          initialAgentModel="openai/review"
+          initialReasoningEffort="high"
+        />,
+      );
+      await act(async () => {
+        fireEvent.click(await screen.findByTestId("opencode-refresh-models"));
+      });
+
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe(
+          "openai/review",
+        );
+        expect(useOpenCodeStore.getState().getSelectedVariant(SESSION_KEY)).toBe(
+          "high",
+        );
+        const tab = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)
+          .find((candidate) => candidate.id === TAB_ID);
+        expect(tab?.initialAgentModel).toBeUndefined();
+        expect(tab?.initialReasoningEffort).toBeUndefined();
       });
     });
 

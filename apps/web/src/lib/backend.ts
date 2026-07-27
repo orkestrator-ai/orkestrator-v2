@@ -804,7 +804,8 @@ export interface CachedOpenCodeModel {
 }
 
 export interface OpenCodeModelCatalogSnapshot {
-  schemaVersion: 1;
+  schemaVersion: 2;
+  projectId: string;
   catalogVersion: string;
   updatedAt: string;
   models: CachedOpenCodeModel[];
@@ -835,9 +836,14 @@ export async function getOpencodeModelPreferences(): Promise<OpenCodeModelPrefer
   return invoke<OpenCodeModelPreferences>("get_opencode_model_preferences");
 }
 
-/** Load the durable host-level catalogue before an OpenCode server is ready. */
-export async function getCachedOpenCodeModelCatalog(): Promise<OpenCodeModelCatalogSnapshot | null> {
-  return invoke<OpenCodeModelCatalogSnapshot | null>("get_opencode_model_catalog_cache");
+/** Load the durable project-scoped catalogue before an OpenCode server is ready. */
+export async function getCachedOpenCodeModelCatalog(
+  projectId: string,
+): Promise<OpenCodeModelCatalogSnapshot | null> {
+  return invoke<OpenCodeModelCatalogSnapshot | null>(
+    "get_opencode_model_catalog_cache",
+    { projectId },
+  );
 }
 
 /**
@@ -845,9 +851,11 @@ export async function getCachedOpenCodeModelCatalog(): Promise<OpenCodeModelCata
  * and only rewrites the cache when the catalogue version has actually changed.
  */
 export async function cacheOpenCodeModelCatalog(
+  projectId: string,
   models: CachedOpenCodeModel[],
 ): Promise<OpenCodeModelCatalogSnapshot> {
   return invoke<OpenCodeModelCatalogSnapshot>("cache_opencode_model_catalog", {
+    projectId,
     models,
   });
 }

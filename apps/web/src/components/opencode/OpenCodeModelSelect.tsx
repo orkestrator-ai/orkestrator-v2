@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Search, Star } from "lucide-react";
 import {
   DropdownMenu,
@@ -64,22 +64,37 @@ export function filterAndOrderOpenCodeModels(
 }
 
 function ModelOption({
+  id,
   option,
   selected,
   favorite,
+  active,
+  onActive,
   onSelect,
 }: {
+  id: string;
   option: OpenCodeModelSelectOption;
   selected: boolean;
   favorite: boolean;
+  active: boolean;
+  onActive: () => void;
   onSelect: () => void;
 }) {
   return (
     <DropdownMenuItem
+      id={id}
       role="menuitemradio"
       aria-checked={selected}
+      data-active={active ? "" : undefined}
+      onFocus={onActive}
+      onPointerMove={(event) => {
+        // Keep keyboard focus in the search field while still exposing a
+        // pointer-highlighted result to assistive technology.
+        event.preventDefault();
+        onActive();
+      }}
       onSelect={onSelect}
-      className="items-start py-2"
+      className="items-start py-2 data-[active]:bg-zinc-800/80 data-[active]:text-foreground"
     >
       <span className="mt-0.5 grid size-4 shrink-0 place-items-center">
         {selected ? (
@@ -114,23 +129,62 @@ export function OpenCodeModelSelect({
 }: OpenCodeModelSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const generatedId = useId().replaceAll(":", "");
+  const menuId = `${generatedId}-opencode-model-menu`;
   const selected = options.find((option) => option.id === value);
   const ordered = useMemo(
     () => filterAndOrderOpenCodeModels(options, favoriteModelIds, query),
     [favoriteModelIds, options, query],
   );
-  const resultCount = ordered.favorites.length + ordered.models.length;
+  const results = useMemo(
+    () => [...ordered.favorites, ...ordered.models],
+    [ordered],
+  );
+  const resultIndexes = useMemo(
+    () => new Map(results.map((option, index) => [option.id, index])),
+    [results],
+  );
+  const resultCount = results.length;
+  const activeIndex = results.findIndex((option) => option.id === activeModelId);
+  const activeOptionDomId =
+    activeIndex >= 0 ? `${menuId}-option-${activeIndex}` : undefined;
 
   useEffect(() => {
-    if (open) searchRef.current?.focus();
+    if (!open) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) searchRef.current?.focus();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
+
+  useEffect(() => {
+    if (!activeOptionDomId) return;
+    const activeElement = document.getElementById(activeOptionDomId);
+    activeElement?.scrollIntoView?.({ block: "nearest" });
+  }, [activeOptionDomId]);
+
+  const closeMenu = () => {
+    setOpen(false);
+    setQuery("");
+    setActiveModelId(null);
+  };
+
+  const selectModel = (modelId: string) => {
+    onValueChange(modelId);
+    closeMenu();
+  };
 
   return (
     <DropdownMenu
       open={open}
       onOpenChange={(nextOpen) => {
         setOpen(nextOpen);
+        setActiveModelId(null);
         if (!nextOpen) setQuery("");
       }}
     >
@@ -140,6 +194,7 @@ export function OpenCodeModelSelect({
           type="button"
           role="combobox"
           aria-expanded={open}
+          aria-controls={open ? menuId : undefined}
           disabled={disabled}
           className={cn(
             "border-input focus-visible:border-ring focus-visible:ring-ring/50 dark:bg-input/30 dark:hover:bg-input/50 flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-transparent px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
@@ -153,6 +208,7 @@ export function OpenCodeModelSelect({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
+        id={menuId}
         align="start"
         collisionPadding={8}
         className="w-[min(24rem,calc(100vw-1rem))] p-0"
@@ -164,12 +220,46 @@ export function OpenCodeModelSelect({
               ref={searchRef}
               type="search"
               aria-label="Search OpenCode models"
+              aria-controls={menuId}
+              aria-activedescendant={activeOptionDomId}
               placeholder="Search models or providers…"
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setActiveModelId(null);
+              }}
               onClick={(event) => event.stopPropagation()}
               onKeyDown={(event) => {
-                if (event.key !== "Escape") event.stopPropagation();
+                if (event.key === "Escape") return;
+
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (resultCount === 0) return;
+
+                  const nextIndex =
+                    event.key === "ArrowDown"
+                      ? activeIndex < 0
+                        ? 0
+                        : (activeIndex + 1) % resultCount
+                      : activeIndex < 0
+                        ? resultCount - 1
+                        : (activeIndex - 1 + resultCount) % resultCount;
+                  setActiveModelId(results[nextIndex]?.id ?? null);
+                  return;
+                }
+
+                if (event.key === "Enter" && activeIndex >= 0) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const activeModel = results[activeIndex];
+                  if (activeModel) selectModel(activeModel.id);
+                  return;
+                }
+
+                // Radix implements menu typeahead on the content. Keep typed
+                // characters, Space, and editing keys scoped to the search.
+                event.stopPropagation();
               }}
               className="border-input bg-background h-8 w-full rounded-md border py-1 pl-8 pr-2 text-xs outline-none placeholder:text-muted-foreground/70 focus:border-ring focus:ring-2 focus:ring-ring/30"
             />
@@ -189,10 +279,13 @@ export function OpenCodeModelSelect({
               {ordered.favorites.map((option) => (
                 <ModelOption
                   key={`favorite-${option.id}`}
+                  id={`${menuId}-option-${resultIndexes.get(option.id) ?? -1}`}
                   option={option}
                   selected={option.id === value}
                   favorite
-                  onSelect={() => onValueChange(option.id)}
+                  active={option.id === activeModelId}
+                  onActive={() => setActiveModelId(option.id)}
+                  onSelect={() => selectModel(option.id)}
                 />
               ))}
               {ordered.models.length > 0 && <DropdownMenuSeparator />}
@@ -209,10 +302,13 @@ export function OpenCodeModelSelect({
               {ordered.models.map((option) => (
                 <ModelOption
                   key={option.id}
+                  id={`${menuId}-option-${resultIndexes.get(option.id) ?? -1}`}
                   option={option}
                   selected={option.id === value}
                   favorite={false}
-                  onSelect={() => onValueChange(option.id)}
+                  active={option.id === activeModelId}
+                  onActive={() => setActiveModelId(option.id)}
+                  onSelect={() => selectModel(option.id)}
                 />
               ))}
             </>

@@ -4,6 +4,7 @@ import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { invoke } from "@/lib/native/backend";
 import { mockReadImage } from "../../mocks/clipboard";
 import {
   mockToastError as toastErrorMock,
@@ -15,6 +16,7 @@ const defaultConfig = structuredClone(useConfigStore.getState().config);
 const defaultClaudeModels = useClaudeStore.getState().models;
 const defaultCodexModels = useCodexStore.getState().models;
 const defaultOpenCodeModels = useOpenCodeStore.getState().models;
+const invokeMock = invoke as ReturnType<typeof mock>;
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {
@@ -57,6 +59,16 @@ describe("resolveAgentDefaults", () => {
     useClaudeStore.setState({ models: defaultClaudeModels });
     useCodexStore.setState({ models: defaultCodexModels });
     useOpenCodeStore.setState({ models: new Map(defaultOpenCodeModels) });
+    invokeMock.mockReset();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_opencode_model_preferences") {
+        return Promise.resolve({ recent: [], favorite: [], variant: {} });
+      }
+      if (command === "get_opencode_model_catalog_cache") {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve(undefined);
+    });
     mockReadImage.mockReset();
     putImageData.mockReset();
     toastSuccessMock.mockReset();
@@ -874,7 +886,7 @@ describe("resolveAgentDefaults", () => {
     ).toContain("Default");
   });
 
-  test("offers cached OpenCode models and a configured project variant", async () => {
+  test("offers live OpenCode models and a configured project variant", async () => {
     useOpenCodeStore.getState().setModels("existing-env", [
       {
         id: "provider/model-a",
@@ -935,6 +947,521 @@ describe("resolveAgentDefaults", () => {
         }),
       )
     );
+  });
+
+  test("loads the project-scoped durable OpenCode catalog, switches models, resets an incompatible effort, and submits", async () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "opencode";
+    config.global.opencodeModel = undefined;
+    config.repositories["durable-project"] = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      defaultAgent: "opencode",
+      defaultModel: "provider/model-a",
+      defaultEffort: "fast",
+    };
+    useConfigStore.setState({ config });
+    invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "get_opencode_model_catalog_cache") {
+        expect(args).toEqual({ projectId: "durable-project" });
+        return Promise.resolve({
+          schemaVersion: 2,
+          projectId: "durable-project",
+          catalogVersion: "catalog-v1",
+          updatedAt: "2026-07-27T12:00:00.000Z",
+          models: [
+            {
+              id: "provider/model-a",
+              name: "Durable Model A",
+              provider: "Provider",
+              variants: ["fast"],
+            },
+            {
+              id: "provider/model-b",
+              name: "Durable Model B",
+              provider: "Provider",
+              variants: ["deep"],
+            },
+          ],
+        });
+      }
+      if (command === "get_opencode_model_preferences") {
+        return Promise.resolve({ recent: [], favorite: [], variant: {} });
+      }
+      return Promise.resolve(undefined);
+    });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        projectId="durable-project"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .toContain("Durable Model A");
+      expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+        .toContain("Fast");
+    });
+
+    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(
+      await screen.findByRole("menuitemradio", { name: /Durable Model B/ }),
+    );
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      .toContain("Durable Model B");
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      .toContain("Default");
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Reasoning effort" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Deep" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "opencode",
+          model: "provider/model-b",
+          reasoningEffort: "deep",
+        }),
+      );
+    });
+  });
+
+  test("deduplicates mixed-format OpenCode favorites and propagates their order to the picker", async () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    const config = structuredClone(defaultConfig);
+    config.global.opencodeModel = undefined;
+    useConfigStore.setState({ config });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_opencode_model_catalog_cache") {
+        return Promise.resolve({
+          schemaVersion: 2,
+          projectId: "favorite-project",
+          catalogVersion: "catalog-v1",
+          updatedAt: "2026-07-27T12:00:00.000Z",
+          models: [
+            { id: "provider/model-a", name: "Model A", provider: "Provider" },
+            { id: "provider/model-b", name: "Model B", provider: "Provider" },
+            { id: "provider/model-c", name: "Model C", provider: "Provider" },
+          ],
+        });
+      }
+      if (command === "get_opencode_model_preferences") {
+        return Promise.resolve({
+          recent: [],
+          favorite: [
+            "provider/model-b",
+            { providerID: "provider", modelID: "model-b" },
+            { providerID: "provider", modelID: "model-a" },
+            "invalid",
+          ],
+          variant: {},
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        projectId="favorite-project"
+      />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .toContain("Model A")
+    );
+    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    const options = await screen.findAllByRole("menuitemradio");
+    expect(options.map((option) => option.textContent)).toEqual([
+      "Model Bprovider/model-b",
+      "Model Aprovider/model-a",
+      "Model Cprovider/model-c",
+    ]);
+  });
+
+  test("prefers a live OpenCode catalog over the durable project cache", async () => {
+    useOpenCodeStore.setState({
+      models: new Map([
+        ["live-environment", [{
+          id: "live/model",
+          name: "Live Model",
+          provider: "Live Provider",
+          variants: ["live"],
+        }]],
+      ]),
+    });
+    const config = structuredClone(defaultConfig);
+    config.global.opencodeModel = undefined;
+    useConfigStore.setState({ config });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_opencode_model_catalog_cache") {
+        return Promise.resolve({
+          schemaVersion: 2,
+          projectId: "live-project",
+          catalogVersion: "stale",
+          updatedAt: "2026-07-27T12:00:00.000Z",
+          models: [{
+            id: "cached/model",
+            name: "Cached Model",
+            provider: "Cached Provider",
+          }],
+        });
+      }
+      if (command === "get_opencode_model_preferences") {
+        return Promise.resolve({ recent: [], favorite: [], variant: {} });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        projectId="live-project"
+      />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .toContain("Live Model")
+    );
+    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(await screen.findByRole("menuitemradio", { name: /Live Model/ }))
+      .toBeTruthy();
+    expect(screen.queryByRole("menuitemradio", { name: /Cached Model/ }))
+      .toBeNull();
+  });
+
+  test("does not read an unscoped durable catalog without a project id", async () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    const config = structuredClone(defaultConfig);
+    config.global.opencodeModel = undefined;
+    useConfigStore.setState({ config });
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "get_opencode_model_preferences",
+      )
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "get_opencode_model_catalog_cache",
+      expect.anything(),
+    );
+  });
+
+  test("ignores a late cache response after the project changes", async () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    const config = structuredClone(defaultConfig);
+    config.global.opencodeModel = undefined;
+    useConfigStore.setState({ config });
+    const projectA = deferred<Record<string, unknown>>();
+    invokeMock.mockImplementation(
+      (command: string, args?: Record<string, unknown>) => {
+        if (command === "get_opencode_model_catalog_cache") {
+          if (args?.projectId === "project-a") return projectA.promise;
+          return Promise.resolve({
+            schemaVersion: 2,
+            projectId: "project-b",
+            catalogVersion: "b",
+            updatedAt: "2026-07-27T12:00:00.000Z",
+            models: [{
+              id: "provider/model-b",
+              name: "Project B Model",
+              provider: "Provider",
+            }],
+          });
+        }
+        if (command === "get_opencode_model_preferences") {
+          return Promise.resolve({ recent: [], favorite: [], variant: {} });
+        }
+        return Promise.resolve(undefined);
+      },
+    );
+    const props = {
+      open: true,
+      onOpenChange: () => {},
+      onCreate: mock(async () => {}),
+    };
+    const { rerender } = render(
+      <CreateEnvironmentDialog {...props} projectId="project-a" />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    rerender(<CreateEnvironmentDialog {...props} projectId="project-b" />);
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .toContain("Project B Model")
+    );
+
+    await act(async () => {
+      projectA.resolve({
+        schemaVersion: 2,
+        projectId: "project-a",
+        catalogVersion: "a",
+        updatedAt: "2026-07-27T12:00:00.000Z",
+        models: [{
+          id: "provider/model-a",
+          name: "Project A Model",
+          provider: "Provider",
+        }],
+      });
+      await projectA.promise;
+    });
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      .toContain("Project B Model");
+  });
+
+  test("clears a previous durable catalog when a repeated open returns empty", async () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    const config = structuredClone(defaultConfig);
+    config.global.opencodeModel = undefined;
+    useConfigStore.setState({ config });
+    let cacheRead = 0;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_opencode_model_catalog_cache") {
+        cacheRead += 1;
+        return Promise.resolve(
+          cacheRead === 1
+            ? {
+                schemaVersion: 2,
+                projectId: "repeat-project",
+                catalogVersion: "first",
+                updatedAt: "2026-07-27T12:00:00.000Z",
+                models: [{
+                  id: "provider/old-model",
+                  name: "Old Cached Model",
+                  provider: "Provider",
+                }],
+              }
+            : null,
+        );
+      }
+      if (command === "get_opencode_model_preferences") {
+        return Promise.resolve({ recent: [], favorite: [], variant: {} });
+      }
+      return Promise.resolve(undefined);
+    });
+    const props = {
+      onOpenChange: () => {},
+      onCreate: mock(async () => {}),
+      projectId: "repeat-project",
+    };
+    const { rerender } = render(
+      <CreateEnvironmentDialog open {...props} />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .toContain("Old Cached Model")
+    );
+
+    rerender(<CreateEnvironmentDialog open={false} {...props} />);
+    rerender(<CreateEnvironmentDialog open {...props} />);
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .not.toContain("Old Cached Model")
+    );
+  });
+
+  test.each([
+    {
+      name: "rejected",
+      cacheResult: () => Promise.reject(new Error("cache unavailable")),
+    },
+    {
+      name: "invalid",
+      cacheResult: () => Promise.resolve({
+        schemaVersion: 2,
+        projectId: "another-project",
+        models: [{
+          id: "provider/wrong-project",
+          name: "Wrong Project Model",
+          provider: "Provider",
+        }],
+      }),
+    },
+  ])("keeps durable state empty for a $name cache payload", async ({ cacheResult }) => {
+    useOpenCodeStore.setState({ models: new Map() });
+    const config = structuredClone(defaultConfig);
+    config.global.opencodeModel = undefined;
+    useConfigStore.setState({ config });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_opencode_model_catalog_cache") return cacheResult();
+      if (command === "get_opencode_model_preferences") {
+        return Promise.resolve({ recent: [], favorite: [], variant: {} });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        projectId="current-project"
+      />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .not.toContain("Wrong Project Model")
+    );
+    expect(invokeMock).toHaveBeenCalledWith(
+      "get_opencode_model_catalog_cache",
+      { projectId: "current-project" },
+    );
+  });
+
+  test("augments the durable catalog with a missing configured OpenCode model and effort", async () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "opencode";
+    config.global.opencodeModel = undefined;
+    config.repositories["configured-project"] = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      defaultAgent: "opencode",
+      defaultModel: "configured/missing-model",
+      defaultEffort: "turbo",
+    };
+    useConfigStore.setState({ config });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_opencode_model_catalog_cache") {
+        return Promise.resolve({
+          schemaVersion: 2,
+          projectId: "configured-project",
+          catalogVersion: "catalog-v1",
+          updatedAt: "2026-07-27T12:00:00.000Z",
+          models: [{
+            id: "provider/cached-model",
+            name: "Cached Model",
+            provider: "Provider",
+            variants: ["normal"],
+          }],
+        });
+      }
+      if (command === "get_opencode_model_preferences") {
+        return Promise.resolve({ recent: [], favorite: [], variant: {} });
+      }
+      return Promise.resolve(undefined);
+    });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        projectId="configured-project"
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .toContain("configured/missing-model");
+      expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+        .toContain("Turbo");
+    });
+    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    const configuredOption = await screen.findByRole("menuitemradio", {
+      name: /configured\/missing-model/,
+    });
+    expect(configuredOption).toBeTruthy();
+    expect(
+      screen.getByRole("menuitemradio", { name: /Cached Model/ }),
+    ).toBeTruthy();
+    fireEvent.click(configuredOption);
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: "configured/missing-model",
+          reasoningEffort: "turbo",
+        }),
+      )
+    );
+  });
+
+  test("augments an existing durable OpenCode model with a missing configured effort", async () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "opencode";
+    config.global.opencodeModel = undefined;
+    config.repositories["configured-effort-project"] = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      defaultAgent: "opencode",
+      defaultModel: "provider/configured-model",
+      defaultEffort: "turbo",
+    };
+    useConfigStore.setState({ config });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_opencode_model_catalog_cache") {
+        return Promise.resolve({
+          schemaVersion: 2,
+          projectId: "configured-effort-project",
+          catalogVersion: "catalog-v1",
+          updatedAt: "2026-07-27T12:00:00.000Z",
+          models: [{
+            id: "provider/configured-model",
+            name: "Configured Model",
+            provider: "Provider",
+            variants: ["normal"],
+          }],
+        });
+      }
+      if (command === "get_opencode_model_preferences") {
+        return Promise.resolve({ recent: [], favorite: [], variant: {} });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        projectId="configured-effort-project"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+        .toContain("Configured Model");
+      expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+        .toContain("Turbo");
+    });
   });
 
   test("resets effort for an incompatible model and reconciles a refreshed catalog", async () => {

@@ -231,7 +231,8 @@ describe("backend setup wrappers", () => {
 
   test("loads and updates the durable OpenCode model catalogue", async () => {
     const snapshot = {
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
+      projectId: "project-1",
       catalogVersion: "catalog-v1",
       updatedAt: "2026-07-27T12:00:00.000Z",
       models: [
@@ -244,13 +245,18 @@ describe("backend setup wrappers", () => {
     };
     invokeMock.mockResolvedValue(snapshot);
 
-    await expect(getCachedOpenCodeModelCatalog()).resolves.toEqual(snapshot);
-    await expect(cacheOpenCodeModelCatalog(snapshot.models)).resolves.toEqual(
+    await expect(getCachedOpenCodeModelCatalog("project-1")).resolves.toEqual(
       snapshot,
     );
+    await expect(
+      cacheOpenCodeModelCatalog("project-1", snapshot.models),
+    ).resolves.toEqual(snapshot);
     expect(invokeMock.mock.calls).toEqual([
-      ["get_opencode_model_catalog_cache", undefined],
-      ["cache_opencode_model_catalog", { models: snapshot.models }],
+      ["get_opencode_model_catalog_cache", { projectId: "project-1" }],
+      [
+        "cache_opencode_model_catalog",
+        { projectId: "project-1", models: snapshot.models },
+      ],
     ]);
   });
 

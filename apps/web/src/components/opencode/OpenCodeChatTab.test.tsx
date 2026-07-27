@@ -2367,11 +2367,13 @@ describe("OpenCodeChatTab", () => {
           ENVIRONMENT_ID,
         )?.tabs ?? [];
         expect(tabs).toHaveLength(2);
+        // `getDraftText` returns "" for any unseen key, so asserting on it would
+        // pass whether or not a draft was written. Assert on the backing map.
         expect(
-          useOpenCodeStore.getState().getDraftText(
+          useOpenCodeStore.getState().draftText.has(
             createOpenCodeSessionKey(ENVIRONMENT_ID, tabs[1]!.id),
           ),
-        ).toBe("");
+        ).toBe(false);
       });
     });
 

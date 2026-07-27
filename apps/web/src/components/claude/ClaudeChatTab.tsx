@@ -59,9 +59,9 @@ import {
 } from "@/lib/backend";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
 import {
-  buildMessageForkActionKinds,
+  buildMessageForkPlan,
   findPreviousForkMessage,
-  getForkPromptText,
+  forkAttachmentNotice,
   type MessageForkKind,
 } from "@/components/chat/message-fork";
 import { ClaudeComposeBar } from "./ClaudeComposeBar";
@@ -570,13 +570,35 @@ export function ClaudeChatTab({
     ),
     [sessionMessages],
   );
-  const forkActionKinds = useMemo(
-    () => buildMessageForkActionKinds(
-      displayMessages,
-      session?.isLoading ?? false,
-    ),
+  const forkPlan = useMemo(
+    () => buildMessageForkPlan(displayMessages, {
+      responseInProgress: session?.isLoading ?? false,
+      // Claude's boundary is inclusive, so branching *before* a prompt means
+      // forking at the message before it; the first prompt has nothing to fork
+      // at and starts an empty sibling session instead.
+      resolvePromptBoundary: (message, messages) => {
+        const previous = findPreviousForkMessage(messages, message.id);
+        return previous
+          ? {
+              type: "message",
+              messageId: getClaudeSourceMessageId(previous.id),
+            }
+          : { type: "session-start" };
+      },
+      // A response is inclusive of itself. Display rows split by timestamp
+      // resolve back to the one message the bridge can find on disk.
+      resolveResponseBoundary: (message) => ({
+        type: "message",
+        messageId: getClaudeSourceMessageId(message.id),
+      }),
+    }),
     [displayMessages, session?.isLoading],
   );
+  // Read by the fork handler so it does not have to depend on the transcript:
+  // `displayMessages` is a fresh array on every streaming tick, and a handler
+  // that changed with it would rebuild every fork button on every tick.
+  const forkPlanRef = useRef(forkPlan);
+  forkPlanRef.current = forkPlan;
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
 
@@ -1839,47 +1861,33 @@ export function ClaudeChatTab({
     forkInFlightRef.current = true;
     setForkInFlight(true);
     try {
-      const selectedMessage = displayMessages.find(
-        (message) => getClaudeSourceMessageId(message.id) === messageId,
-      );
-      if (!selectedMessage) {
+      const planned = forkPlanRef.current.get(messageId);
+      if (!planned || planned.kind !== kind) {
         throw new Error("The selected message is no longer in this session");
       }
 
-      let draftPrompt: string | undefined;
       let fork: Awaited<ReturnType<typeof forkClaudeSession>>;
-      if (kind === "prompt") {
-        draftPrompt = getForkPromptText(selectedMessage);
-        const previousMessage = findPreviousForkMessage(
-          displayMessages,
-          selectedMessage.id,
-        );
-        if (previousMessage) {
-          fork = await forkClaudeSession(client, session.sessionId, {
-            upToMessageId: getClaudeSourceMessageId(previousMessage.id),
-          });
-        } else {
-          const created = await createSession(
-            client,
-            session.title ? `${session.title} (fork)` : "Forked session",
-          );
-          if (!created) {
-            throw new Error("Claude did not return a new session");
-          }
-          fork = created;
-        }
-      } else {
+      if (planned.boundary.type === "message") {
         fork = await forkClaudeSession(client, session.sessionId, {
-          upToMessageId: messageId,
+          upToMessageId: planned.boundary.messageId,
         });
+      } else {
+        const created = await createSession(
+          client,
+          session.title ? `${session.title} (fork)` : "Forked session",
+        );
+        if (!created) {
+          throw new Error("Claude did not return a new session");
+        }
+        fork = created;
       }
 
       const paneStore = usePaneLayoutStore.getState();
       const forkTabId = createUuid();
-      if (draftPrompt !== undefined) {
+      if (planned.kind === "prompt") {
         useClaudeStore.getState().setDraftText(
           createSessionKey(environmentId, forkTabId),
-          draftPrompt,
+          planned.draftText,
         );
       }
       paneStore.addTab(
@@ -1892,6 +1900,9 @@ export function ClaudeChatTab({
         },
         environmentId,
       );
+
+      const attachmentNotice = forkAttachmentNotice(planned.droppedAttachmentCount);
+      if (attachmentNotice) toast.warning(attachmentNotice);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to fork Claude session");
     } finally {
@@ -1901,14 +1912,15 @@ export function ClaudeChatTab({
   }, [
     client,
     data,
-    displayMessages,
     environmentId,
     session?.sessionId,
     session?.title,
   ]);
 
-  // Referentially stable per message id, so `memo(NativeMessage)` still holds
-  // for every visible message while an answer streams in.
+  // None of these change while an answer streams in — the transcript is read
+  // through `forkPlanRef` precisely so it cannot drag the handler's identity
+  // with it. That keeps the cached fork elements below referentially stable per
+  // message id, which is what lets `memo(NativeMessage)` hold on every tick.
   const forkAction = useMessageForkAction({
     agentLabel: "Claude",
     disabled: forkInFlight,
@@ -1943,10 +1955,10 @@ export function ClaudeChatTab({
       virtuosoRef={virtuosoRef}
       onResumeClick={client ? () => setResumeDialogOpen(true) : undefined}
       messageActions={(message) => {
-        const kind = forkActionKinds.get(message.id);
-        return kind
-          ? forkAction(getClaudeSourceMessageId(message.id), kind)
-          : undefined;
+        // Keyed by display row id: the plan already resolved a split row back
+        // to the persisted message the bridge can find.
+        const planned = forkPlan.get(message.id);
+        return planned ? forkAction(message.id, planned.kind) : undefined;
       }}
       topAccessory={
         promptSuggestion ? (

@@ -16,11 +16,13 @@ function Harness({
   disabled,
   onFork,
   collect,
+  kind = "prompt",
 }: {
   messageIds: string[];
   disabled: boolean;
   onFork: (messageId: string, kind: MessageForkKind) => void;
   collect: (elements: ReactNode[]) => void;
+  kind?: MessageForkKind;
 }) {
   const [tick, setTick] = useState(0);
   const forkAction = useMessageForkAction({
@@ -28,7 +30,7 @@ function Harness({
     disabled,
     onFork,
   });
-  collect(messageIds.map((id) => forkAction(id, "prompt")));
+  collect(messageIds.map((id) => forkAction(id, kind)));
   return (
     <div>
       <button type="button" onClick={() => setTick((value) => value + 1)}>
@@ -36,7 +38,7 @@ function Harness({
       </button>
       <span data-testid="tick">{tick}</span>
       {messageIds.map((id) => (
-        <span key={id}>{forkAction(id, "prompt")}</span>
+        <span key={id}>{forkAction(id, kind)}</span>
       ))}
     </div>
   );
@@ -123,6 +125,98 @@ describe("useMessageForkAction", () => {
     );
 
     expect(onFork.mock.calls).toEqual([["user-2", "prompt"]]);
+  });
+
+  test("names and describes a response action by its kind", () => {
+    const onFork = mock((_messageId: string, _kind: MessageForkKind) => {});
+    render(
+      <Harness
+        messageIds={["assistant-1"]}
+        disabled={false}
+        onFork={onFork}
+        collect={() => {}}
+        kind="response"
+      />,
+    );
+
+    const button = screen.getByRole("button", {
+      name: "Fork Codex session from this response",
+    });
+    expect(button.getAttribute("title")).toBe("Fork after response");
+
+    fireEvent.click(button);
+    expect(onFork.mock.calls).toEqual([["assistant-1", "response"]]);
+  });
+
+  test("describes a prompt action as an edit", () => {
+    render(
+      <Harness
+        messageIds={["user-1"]}
+        disabled={false}
+        onFork={() => {}}
+        collect={() => {}}
+      />,
+    );
+
+    expect(
+      screen
+        .getByRole("button", { name: "Fork Codex session from this prompt" })
+        .getAttribute("title"),
+    ).toBe("Fork and edit prompt");
+  });
+
+  test("keys the cache by kind as well as message id", () => {
+    // A Claude prompt and the response to it can share a source message id once
+    // split rows are resolved; a message-id-only cache would serve the wrong
+    // button for one of them.
+    const seen: ReactNode[] = [];
+    function BothKinds() {
+      const forkAction = useMessageForkAction({
+        agentLabel: "Codex",
+        disabled: false,
+        onFork: () => {},
+      });
+      seen.push(
+        forkAction("shared-1", "prompt"),
+        forkAction("shared-1", "response"),
+        forkAction("shared-1", "prompt"),
+      );
+      return null;
+    }
+    render(<BothKinds />);
+
+    expect(seen[0]).not.toBe(seen[1]);
+    expect(seen[0]).toBe(seen[2]);
+  });
+
+  test("drops the cache when the fork handler identity changes", () => {
+    /*
+     * The cached element closes over `onFork`. A tab whose handler depends on
+     * the transcript hands over a new function on every streaming tick — the
+     * cache must follow it, or a click would run a handler built against a
+     * transcript that has since moved on.
+     */
+    const renders: ReactNode[][] = [];
+    const view = render(
+      <Harness
+        messageIds={["user-1"]}
+        disabled={false}
+        onFork={() => {}}
+        collect={(elements) => renders.push(elements)}
+      />,
+    );
+    const beforeSwap = renders.at(-1)![0];
+
+    view.rerender(
+      <Harness
+        messageIds={["user-1"]}
+        disabled={false}
+        onFork={() => {}}
+        collect={(elements) => renders.push(elements)}
+      />,
+    );
+
+    expect(renders.at(-1)![0]).not.toBe(beforeSwap);
   });
 });
 

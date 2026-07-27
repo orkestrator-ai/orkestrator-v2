@@ -66,9 +66,9 @@ import {
 } from "@/lib/opencode-client";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
 import {
-  buildMessageForkActionKinds,
+  buildMessageForkPlan,
   findPreviousForkMessage,
-  getForkPromptText,
+  forkAttachmentNotice,
   type MessageForkKind,
 } from "@/components/chat/message-fork";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
@@ -425,13 +425,46 @@ export function CodexChatTab({
     () => sessionMessages.map(normalizeCodexNativeMessage),
     [sessionMessages],
   );
-  const forkActionKinds = useMemo(
-    () => buildMessageForkActionKinds(
-      displayMessages,
-      session?.isLoading ?? false,
-    ),
+  const forkPlan = useMemo(
+    () => buildMessageForkPlan(displayMessages, {
+      responseInProgress: session?.isLoading ?? false,
+      /*
+       * Codex forks at *turn* granularity, so branching before a prompt means
+       * forking at the last message of the previous turn. A prompt that opens
+       * the transcript instead starts an empty sibling session. Anything else —
+       * history with no recorded turn boundaries, which the bridge answers with
+       * `no-fork-point` — resolves to null so the button is never offered: it
+       * could only ever raise a toast.
+       */
+      resolvePromptBoundary: (message, messages) => {
+        const previousTurn = findPreviousForkMessage(
+          messages,
+          message.id,
+          (candidate) => (
+            Boolean(candidate.turnId)
+            && candidate.turnId !== message.turnId
+          ),
+        );
+        if (previousTurn) {
+          return { type: "message", messageId: previousTurn.id };
+        }
+        return findPreviousForkMessage(messages, message.id)
+          ? null
+          : { type: "session-start" };
+      },
+      // A response is inclusive, so Codex must be able to attribute it to a
+      // turn before it can be used as a boundary at all.
+      resolveResponseBoundary: (message) => (
+        message.turnId ? { type: "message", messageId: message.id } : null
+      ),
+    }),
     [displayMessages, session?.isLoading],
   );
+  // Read by the fork handler so it does not have to depend on the transcript:
+  // `displayMessages` is a fresh array on every streaming tick, and a handler
+  // that changed with it would rebuild every fork button on every tick.
+  const forkPlanRef = useRef(forkPlan);
+  forkPlanRef.current = forkPlan;
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
   const latestAssistantMessage = useMemo(() => {
@@ -1026,59 +1059,39 @@ export function CodexChatTab({
     forkInFlightRef.current = true;
     setForkInFlight(true);
     try {
-      const selectedMessage = displayMessages.find(
-        (message) => message.id === messageId,
-      );
-      if (!selectedMessage) {
-        throw new Error("The selected message is no longer in this session");
+      const planned = forkPlanRef.current.get(messageId);
+      if (!planned || planned.kind !== kind) {
+        // Typed so the catch below surfaces the reason rather than replacing it
+        // with the generic fallback, which tells the user nothing.
+        throw new CodexForkError(
+          404,
+          "The selected message is no longer in this session",
+        );
       }
 
-      let draftPrompt: string | undefined;
       let fork: Awaited<ReturnType<typeof forkCodexSession>>;
-      if (kind === "prompt") {
-        draftPrompt = getForkPromptText(selectedMessage);
-        const previousMessage = findPreviousForkMessage(
-          displayMessages,
-          messageId,
-          (candidate) => (
-            Boolean(candidate.turnId)
-            && candidate.turnId !== selectedMessage.turnId
-          ),
+      if (planned.boundary.type === "message") {
+        fork = await forkCodexSession(
+          client,
+          session.sessionId,
+          planned.boundary.messageId,
         );
-        const hasEarlierHistory = Boolean(
-          findPreviousForkMessage(displayMessages, messageId),
-        );
-
-        if (previousMessage) {
-          fork = await forkCodexSession(
-            client,
-            session.sessionId,
-            previousMessage.id,
-          );
-        } else if (!hasEarlierHistory) {
-          fork = await createSession(client, {
-            title: session.title ? `${session.title} (fork)` : "Forked session",
-            model: selectedModel,
-            modelReasoningEffort: selectedReasoningEffort,
-            mode: selectedMode,
-            fastMode: fastModeEnabled,
-          });
-        } else {
-          throw new CodexForkError(
-            422,
-            "The history before this prompt has no usable Codex turn boundary",
-          );
-        }
       } else {
-        fork = await forkCodexSession(client, session.sessionId, messageId);
+        fork = await createSession(client, {
+          title: session.title ? `${session.title} (fork)` : "Forked session",
+          model: selectedModel,
+          modelReasoningEffort: selectedReasoningEffort,
+          mode: selectedMode,
+          fastMode: fastModeEnabled,
+        });
       }
 
       const paneStore = usePaneLayoutStore.getState();
       const forkTabId = createUuid();
-      if (draftPrompt !== undefined) {
+      if (planned.kind === "prompt") {
         useCodexStore.getState().setDraftText(
           createSessionKey(environmentId, forkTabId),
-          draftPrompt,
+          planned.draftText,
         );
       }
       paneStore.addTab(
@@ -1091,6 +1104,9 @@ export function CodexChatTab({
         },
         environmentId,
       );
+
+      const attachmentNotice = forkAttachmentNotice(planned.droppedAttachmentCount);
+      if (attachmentNotice) toast.warning(attachmentNotice);
     } catch (error) {
       /*
        * The bridge answers a fork refusal with a differentiated status and its
@@ -1112,7 +1128,6 @@ export function CodexChatTab({
   }, [
     client,
     data,
-    displayMessages,
     environmentId,
     fastModeEnabled,
     selectedMode,
@@ -1122,8 +1137,10 @@ export function CodexChatTab({
     session?.title,
   ]);
 
-  // Referentially stable per message id, so `memo(NativeMessage)` still holds
-  // for every visible message while an answer streams in.
+  // None of these change while an answer streams in — the transcript is read
+  // through `forkPlanRef` precisely so it cannot drag the handler's identity
+  // with it. That keeps the cached fork elements below referentially stable per
+  // message id, which is what lets `memo(NativeMessage)` hold on every tick.
   const forkAction = useMessageForkAction({
     agentLabel: "Codex",
     disabled: forkInFlight,
@@ -2225,13 +2242,11 @@ export function CodexChatTab({
       // h-32 ≈ compose bar; h-80 adds room for the plan card (~230px) above it
       bottomSpacerClassName={showPlanModeCard ? "h-80" : "h-32"}
       messageActions={(message) => {
-        const kind = forkActionKinds.get(message.id);
-        if (!kind) return undefined;
-        // A response is inclusive, so Codex must be able to attribute it to a
-        // turn. A first prompt needs no boundary because it creates an empty
-        // sibling session and restores that prompt as a draft.
-        if (kind === "response" && !message.turnId) return undefined;
-        return forkAction(message.id, kind);
+        // Presence in the plan *is* the gate: a message Codex has no usable
+        // turn boundary for never made it in, so it cannot render a button the
+        // click handler would then have to refuse.
+        const planned = forkPlan.get(message.id);
+        return planned ? forkAction(message.id, planned.kind) : undefined;
       }}
       blockingCards={
         showApprovals || showInteractions ? (

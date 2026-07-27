@@ -70,9 +70,9 @@ import {
 } from "@/lib/backend";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
 import {
-  buildMessageForkActionKinds,
+  buildMessageForkPlan,
   findNextForkMessage,
-  getForkPromptText,
+  forkAttachmentNotice,
   type MessageForkKind,
 } from "@/components/chat/message-fork";
 import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
@@ -310,13 +310,33 @@ export function OpenCodeChatTab({
     ),
     [sessionMessages],
   );
-  const forkActionKinds = useMemo(
-    () => buildMessageForkActionKinds(
-      displayMessages,
-      session?.isLoading ?? false,
-    ),
+  const forkPlan = useMemo(
+    () => buildMessageForkPlan(displayMessages, {
+      responseInProgress: session?.isLoading ?? false,
+      /*
+       * OpenCode's boundary is exclusive: it clones the messages *before*
+       * messageID. A prompt therefore branches at its own id, while a response
+       * branches at the message after it — or, when it ends the transcript, at
+       * no boundary at all, which clones everything.
+       */
+      resolvePromptBoundary: (message) => ({
+        type: "message",
+        messageId: message.id,
+      }),
+      resolveResponseBoundary: (message, messages) => {
+        const next = findNextForkMessage(messages, message.id);
+        return next
+          ? { type: "message", messageId: next.id }
+          : { type: "whole-session" };
+      },
+    }),
     [displayMessages, session?.isLoading],
   );
+  // Read by the fork handler so it does not have to depend on the transcript:
+  // `displayMessages` is a fresh array on every streaming tick, and a handler
+  // that changed with it would rebuild every fork button on every tick.
+  const forkPlanRef = useRef(forkPlan);
+  forkPlanRef.current = forkPlan;
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
   const showAddressAll = Boolean(
@@ -2043,32 +2063,24 @@ export function OpenCodeChatTab({
     forkInFlightRef.current = true;
     setForkInFlight(true);
     try {
-      const selectedMessage = displayMessages.find(
-        (message) => message.id === messageId,
-      );
-      if (!selectedMessage) {
+      const planned = forkPlanRef.current.get(messageId);
+      if (!planned || planned.kind !== kind) {
         throw new Error("The selected message is no longer in this session");
       }
 
-      /*
-       * OpenCode's boundary is exclusive: it clones messages before messageID.
-       * A prompt therefore uses its own id, while a response uses the next
-       * message (or no boundary when it is the end of the transcript).
-       */
-      const boundaryMessageId = kind === "prompt"
-        ? messageId
-        : findNextForkMessage(displayMessages, messageId)?.id;
       const fork = await forkOpenCodeSession(
         client,
         session.sessionId,
-        boundaryMessageId,
+        planned.boundary.type === "message"
+          ? planned.boundary.messageId
+          : undefined,
       );
       const paneStore = usePaneLayoutStore.getState();
       const forkTabId = createUuid();
-      if (kind === "prompt") {
+      if (planned.kind === "prompt") {
         useOpenCodeStore.getState().setDraftText(
           createSessionKey(environmentId, forkTabId),
-          getForkPromptText(selectedMessage),
+          planned.draftText,
         );
       }
       paneStore.addTab(
@@ -2081,16 +2093,21 @@ export function OpenCodeChatTab({
         },
         environmentId,
       );
+
+      const attachmentNotice = forkAttachmentNotice(planned.droppedAttachmentCount);
+      if (attachmentNotice) toast.warning(attachmentNotice);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to fork OpenCode session");
     } finally {
       forkInFlightRef.current = false;
       setForkInFlight(false);
     }
-  }, [client, data, displayMessages, environmentId, session?.sessionId]);
+  }, [client, data, environmentId, session?.sessionId]);
 
-  // Referentially stable per message id, so `memo(NativeMessage)` still holds
-  // for every visible message while an answer streams in.
+  // None of these change while an answer streams in — the transcript is read
+  // through `forkPlanRef` precisely so it cannot drag the handler's identity
+  // with it. That keeps the cached fork elements below referentially stable per
+  // message id, which is what lets `memo(NativeMessage)` hold on every tick.
   const forkAction = useMessageForkAction({
     agentLabel: "OpenCode",
     disabled: forkInFlight,
@@ -2173,8 +2190,8 @@ export function OpenCodeChatTab({
       onResumeClick={client ? () => setResumeDialogOpen(true) : undefined}
       emptyStateMessage="No messages yet. Start a conversation!"
       messageActions={(message) => {
-        const kind = forkActionKinds.get(message.id);
-        return kind ? forkAction(message.id, kind) : undefined;
+        const planned = forkPlan.get(message.id);
+        return planned ? forkAction(message.id, planned.kind) : undefined;
       }}
       blockingCards={
         session && client && (pendingPermissions.length > 0 || pendingQuestions.length > 0) ? (

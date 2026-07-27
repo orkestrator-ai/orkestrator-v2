@@ -4673,11 +4673,57 @@ describe("CodexChatTab", () => {
         .getState()
         .getAllTabs(ENVIRONMENT_ID)
         .find((tab) => tab.id !== TAB_ID)!;
+      // `getDraftText` returns "" for any unseen key, so asserting on it would
+      // pass whether or not a draft was written. Assert on the backing map.
       expect(
-        useCodexStore.getState().getDraftText(
+        useCodexStore.getState().draftText.has(
           createSessionKey(ENVIRONMENT_ID, forked.id),
         ),
-      ).toBe("");
+      ).toBe(false);
+    });
+
+    test("offers no prompt action when the history has no turn boundary", async () => {
+      /*
+       * A rollout old enough to predate turn boundaries has nothing
+       * `thread/fork` could honour — the bridge answers `no-fork-point`. The
+       * button used to render anyway and could only ever raise a toast, so the
+       * gate and the handler now read the same plan and it is never offered.
+       */
+      mockGetSessionMessages.mockResolvedValue([
+        {
+          id: "user-1",
+          role: "user",
+          content: "First prompt",
+          parts: [{ type: "text", content: "First prompt" }],
+          createdAt: "2026-04-15T00:00:00.000Z",
+        } as any,
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "Answer",
+          parts: [{ type: "text", content: "Answer" }],
+          createdAt: "2026-04-15T00:01:00.000Z",
+        } as any,
+        {
+          id: "user-2",
+          role: "user",
+          content: "Second prompt",
+          parts: [{ type: "text", content: "Second prompt" }],
+          createdAt: "2026-04-15T00:02:00.000Z",
+        } as any,
+      ]);
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      // The opening prompt still forks: it needs no boundary, it starts a
+      // sibling session.
+      await waitFor(() => expect(forkButtons()).toHaveLength(1));
+      // No response action either — an inclusive fork needs a turn to name.
+      expect(
+        screen.queryByRole("button", {
+          name: "Fork Codex session from this response",
+        }),
+      ).toBeNull();
+      expect(mockForkCodexSession).not.toHaveBeenCalled();
     });
 
     test.each([

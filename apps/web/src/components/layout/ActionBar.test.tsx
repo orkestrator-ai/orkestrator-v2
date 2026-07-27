@@ -13,6 +13,7 @@ import * as realContexts from "@/contexts";
 import * as realBackend from "@/lib/backend";
 import * as realKanbanStore from "@/stores/kanbanStore";
 import type { Environment, Project } from "@/types";
+import type { KanbanTask } from "@/lib/backend";
 import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
@@ -115,8 +116,10 @@ let currentRepositoryConfig: Record<string, { prBaseBranch?: string }> = {
 let currentWorkspaceReady = false;
 let currentSetupScriptsRunning = false;
 let currentTabCount = 0;
+let currentKanbanNotes = "";
+let currentKanbanNotesProjectId: string | null = null;
 let currentTaskAssociation: {
-  task: { prMergeCommented?: boolean } | undefined;
+  task: Partial<KanbanTask> | undefined;
   taskId: string | undefined;
 } = { task: undefined, taskId: undefined };
 
@@ -461,6 +464,8 @@ mock.module("@/stores/kanbanStore", () => ({
   useKanbanStore: {
     getState: () => ({
       addComment: addCommentMock,
+      currentNotesProjectId: currentKanbanNotesProjectId,
+      notes: currentKanbanNotes,
       updateTask: updateTaskMock,
     }),
   },
@@ -545,6 +550,8 @@ beforeEach(() => {
   currentWorkspaceReady = false;
   currentSetupScriptsRunning = false;
   currentTabCount = 0;
+  currentKanbanNotes = "";
+  currentKanbanNotesProjectId = null;
   currentTaskAssociation = { task: undefined, taskId: undefined };
 });
 
@@ -983,6 +990,16 @@ describe("ActionBar editor and run commands", () => {
     expect(screen.getByText("editor unavailable")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "OK" }));
     expect(screen.queryByText("Failed to Open Editor")).toBeNull();
+  });
+
+  test("reports non-Error editor launch rejections", async () => {
+    openInEditorMock.mockRejectedValueOnce("editor backend unavailable");
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
+
+    expect(await screen.findByText("Failed to Open Editor")).toBeTruthy();
+    expect(screen.getByText("editor backend unavailable")).toBeTruthy();
   });
 
   test("loads and runs container commands from orkestrator-ai.json", async () => {
@@ -1501,6 +1518,11 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
     expect(createTabMock).not.toHaveBeenCalled();
 
+    // Mobile browsers synthesize a click after the completed pointer gesture.
+    // It must be consumed instead of launching an unconfigured review.
+    fireEvent.click(reviewButton);
+    expect(createTabMock).not.toHaveBeenCalled();
+
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(createTabMock).toHaveBeenCalledWith(
       "codex",
@@ -1510,6 +1532,59 @@ describe("ActionBar workflow tabs", () => {
         isReviewTab: true,
       }),
     );
+  });
+
+  test("allows ordinary review clicks after long-press suppression expires", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar presentation="grid" />);
+
+    const reviewButton = screen.getByRole("button", { name: "Code review" });
+    fireEvent.pointerDown(reviewButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 575));
+    expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
+
+    await new Promise((resolve) => setTimeout(resolve, 1_025));
+    fireEvent.click(reviewButton);
+
+    expect(createTabMock).toHaveBeenCalledTimes(1);
+    expect(createTabMock).toHaveBeenCalledWith(
+      "codex",
+      expect.objectContaining({ displayTitle: "Review", isReviewTab: true }),
+    );
+  });
+
+  test("clears active long-press click suppression when the action bar unmounts", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar presentation="grid" />);
+
+    const reviewButton = screen.getByRole("button", { name: "Code review" });
+    fireEvent.pointerDown(reviewButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 575));
+    expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
+
+    view.unmount();
+
+    expect(createTabMock).not.toHaveBeenCalled();
   });
 
   test("cancels a pending mobile long press after movement or pointer cancellation", async () => {
@@ -1617,6 +1692,82 @@ describe("ActionBar workflow tabs", () => {
     expect(removeLoopedWorkflowMock).not.toHaveBeenCalled();
   });
 
+  test("passes linked ticket details and current project notes into looped review", () => {
+    currentWorkspaceReady = true;
+    currentKanbanNotesProjectId = "project-1";
+    currentKanbanNotes = "Prefer small, independently deployable changes.";
+    currentTaskAssociation = {
+      taskId: "task-1",
+      task: {
+        id: "task-1",
+        projectId: "project-1",
+        title: "Retry failed uploads",
+        description: "Keep failed uploads available for retry.",
+        acceptanceCriteria: "Retry without selecting the file again.",
+        status: "in-progress",
+        comments: [
+          { id: "comment-1", text: "Preserve the original file.", createdAt: "2026-07-20" },
+        ],
+        images: [
+          { id: "image-1", filename: "failed-upload.png", createdAt: "2026-07-20" },
+        ],
+        createdAt: "2026-07-20",
+        order: 0,
+        environmentId: "env-1",
+      },
+    };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    expect(createLoopedWorkflowMock).toHaveBeenCalledWith(expect.objectContaining({
+      context: {
+        ticketTitle: "Retry failed uploads",
+        ticketDescription: "Keep failed uploads available for retry.",
+        acceptanceCriteria: "Retry without selecting the file again.",
+        comments: ["Preserve the original file."],
+        imageNames: ["failed-upload.png"],
+        projectNotes: "Prefer small, independently deployable changes.",
+      },
+    }));
+  });
+
+  test("passes current project notes without requiring a linked ticket", () => {
+    currentWorkspaceReady = true;
+    currentKanbanNotesProjectId = "project-1";
+    currentKanbanNotes = "Review database migrations carefully.";
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    expect(createLoopedWorkflowMock).toHaveBeenCalledWith(expect.objectContaining({
+      context: {
+        ticketTitle: undefined,
+        ticketDescription: undefined,
+        acceptanceCriteria: undefined,
+        comments: undefined,
+        imageNames: undefined,
+        projectNotes: "Review database migrations carefully.",
+      },
+    }));
+  });
+
+  test("excludes notes loaded for another project from looped review", () => {
+    currentWorkspaceReady = true;
+    currentKanbanNotesProjectId = "other-project";
+    currentKanbanNotes = "Unrelated project notes";
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    expect(createLoopedWorkflowMock).toHaveBeenCalledWith(expect.objectContaining({
+      context: undefined,
+    }));
+  });
+
   test("requires a running, workspace-ready environment with setup complete", () => {
     const assertUnavailable = () => {
       const button = screen.getByRole("button", { name: "Looped code review" });
@@ -1644,6 +1795,19 @@ describe("ActionBar workflow tabs", () => {
     currentSetupScriptsRunning = true;
     render(<ActionBar />);
     assertUnavailable();
+  });
+
+  test("revalidates looped-review readiness when the configured launch is submitted", () => {
+    currentWorkspaceReady = true;
+    const view = render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+
+    currentWorkspaceReady = false;
+    view.rerender(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    expect(createLoopedWorkflowMock).not.toHaveBeenCalled();
+    expect(createTabMock).not.toHaveBeenCalled();
   });
 
   test("rolls back the workflow when tab creation is refused", () => {

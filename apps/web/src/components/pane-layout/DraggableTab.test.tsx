@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import * as realSortable from "@dnd-kit/sortable";
 import * as realUtilities from "@dnd-kit/utilities";
 import type { TabInfo } from "@/types/paneLayout";
+import { createDraggableTabId } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
@@ -18,21 +19,51 @@ const realUtilitiesSnapshot = { ...realUtilities };
 // Mutable so a test can exercise the isDragging styling branch. The factory
 // result is cached by Bun, but the hook body re-reads this on every render.
 let sortableIsDragging = false;
+let sortableAttributes: Record<string, unknown> = {};
+let sortableListeners: Record<string, unknown> = {};
+let sortableTransform: unknown = null;
+let sortableTransition: string | null = null;
+let sortableHookId: unknown;
+let sortableTransformInput: unknown;
+let sortableTransformString = "";
+const sortableSetNodeRefMock = mock((_node: HTMLElement | null) => {});
+const sortablePointerDownMock = mock((_event: unknown) => {});
+
+function resetSortableMock() {
+  sortableIsDragging = false;
+  sortableAttributes = {};
+  sortableListeners = {};
+  sortableTransform = null;
+  sortableTransition = null;
+  sortableHookId = undefined;
+  sortableTransformInput = undefined;
+  sortableTransformString = "";
+  sortableSetNodeRefMock.mockReset();
+  sortablePointerDownMock.mockReset();
+}
 
 mock.module("@dnd-kit/sortable", () => ({
-  useSortable: () => ({
-    attributes: {},
-    listeners: {},
-    setNodeRef: () => {},
-    transform: null,
-    transition: null,
-    isDragging: sortableIsDragging,
-  }),
+  useSortable: ({ id }: { id: unknown }) => {
+    sortableHookId = id;
+    return {
+      attributes: sortableAttributes,
+      listeners: sortableListeners,
+      setNodeRef: sortableSetNodeRefMock,
+      transform: sortableTransform,
+      transition: sortableTransition,
+      isDragging: sortableIsDragging,
+    };
+  },
 }));
 
 mock.module("@dnd-kit/utilities", () => ({
   CSS: {
-    Transform: { toString: () => "" },
+    Transform: {
+      toString: (transform: unknown) => {
+        sortableTransformInput = transform;
+        return sortableTransformString;
+      },
+    },
   },
 }));
 
@@ -66,7 +97,7 @@ function seedPipeline(pipelineId: string, taskTitle: string) {
 describe("DraggableTab title precedence", () => {
   beforeEach(() => {
     cleanup();
-    sortableIsDragging = false;
+    resetSortableMock();
     useSessionStore.setState({ sessions: new Map() });
     useClaudeStore.setState({ sessions: new Map() });
     useCodexStore.setState({ sessions: new Map() });
@@ -134,6 +165,72 @@ describe("DraggableTab title precedence", () => {
 
     expect(screen.getByText("Review 1")).toBeDefined();
     expect(screen.queryByText("Auto Title")).toBeNull();
+  });
+
+  test("workflow tabs keep their label and reveal the user-defined session name on hover", async () => {
+    const tab: TabInfo = {
+      id: "tab-review",
+      type: "claude-native",
+      displayTitle: "Review",
+      isReviewTab: true,
+      claudeNativeData: { environmentId: "env-1" },
+    };
+    useSessionStore.setState({
+      sessions: new Map([
+        ["session-review", {
+          id: "session-review",
+          environmentId: "env-1",
+          tabId: "tab-review",
+          name: "Payment retry review",
+          status: "connected",
+          sessionType: "claude",
+          containerId: "container-1",
+          createdAt: "2026-07-20T10:00:00.000Z",
+          lastActivityAt: "2026-07-20T10:00:00.000Z",
+          order: 0,
+        }],
+      ]),
+    });
+    useClaudeStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-review"), { title: "Generated review title" } as never],
+      ]),
+    });
+
+    renderTab(tab);
+
+    const trigger = screen.getByText("Review 1").closest("div")!;
+    expect(screen.queryByText("Payment retry review")).toBeNull();
+    expect(screen.queryByText("Generated review title")).toBeNull();
+    fireEvent.mouseEnter(trigger);
+
+    await waitFor(() => {
+      expect(screen.getByText("Payment retry review")).toBeTruthy();
+    });
+    expect(screen.queryByText("Generated review title")).toBeNull();
+  });
+
+  test("workflow hover text falls back to the agent-generated session title", async () => {
+    const tab: TabInfo = {
+      id: "tab-pr",
+      type: "codex-native",
+      displayTitle: "PR",
+      codexNativeData: { environmentId: "env-1" },
+    };
+    useCodexStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-pr"), { title: "Prepare release pull request" } as never],
+      ]),
+    });
+
+    renderTab(tab);
+
+    const trigger = screen.getByText("PR 1").closest("div")!;
+    fireEvent.mouseEnter(trigger);
+
+    await waitFor(() => {
+      expect(screen.getByText("Prepare release pull request")).toBeTruthy();
+    });
   });
 
   test("PR tabs keep their numbered workflow title after Codex names the session", () => {
@@ -369,6 +466,17 @@ describe("DraggableTab title precedence", () => {
     expect(screen.getByText("Bar.tsx")).toBeDefined();
   });
 
+  test("file tab title ignores trailing path separators", () => {
+    renderTab({
+      id: "tab-directory-like-path",
+      type: "file",
+      fileData: { filePath: "src/components/Foo/" },
+    });
+
+    expect(screen.getByText("Foo")).toBeDefined();
+    expect(screen.queryByText("src/components/Foo/")).toBeNull();
+  });
+
   test("a Claude-native tab ignores a same-key Codex session title", () => {
     // The ?? chain is claude ?? codex ?? openCode, and each selector is scoped
     // to its own tab type. A stale Codex entry under the same key must never
@@ -493,7 +601,7 @@ describe("DraggableTab title precedence", () => {
 describe("DraggableTab icons", () => {
   beforeEach(() => {
     cleanup();
-    sortableIsDragging = false;
+    resetSortableMock();
     useSessionStore.setState({ sessions: new Map() });
     useClaudeStore.setState({ sessions: new Map() });
     useCodexStore.setState({ sessions: new Map() });
@@ -625,7 +733,7 @@ describe("DraggableTab icons", () => {
 describe("DraggableTab tooltip and context menu structure", () => {
   beforeEach(() => {
     cleanup();
-    sortableIsDragging = false;
+    resetSortableMock();
     useSessionStore.setState({ sessions: new Map() });
     useClaudeStore.setState({ sessions: new Map() });
     useCodexStore.setState({ sessions: new Map() });
@@ -844,6 +952,27 @@ describe("DraggableTab tooltip and context menu structure", () => {
     expect(tab.className).toContain("z-50");
   });
 
+  test("wires the pane-scoped sortable identity, ref, styles, attributes, and listeners", () => {
+    sortableAttributes = { "data-sortable-attribute": "attached" };
+    sortableListeners = { onPointerDown: sortablePointerDownMock };
+    sortableTransform = { x: 12, y: 6, scaleX: 1, scaleY: 1 };
+    sortableTransition = "transform 200ms ease";
+    sortableTransformString = "translate3d(12px, 6px, 0)";
+
+    renderTab({ id: "tab-terminal", type: "plain" });
+
+    const tab = screen.getByText("Terminal 1").closest("div")!;
+    expect(sortableHookId).toBe(createDraggableTabId("tab-terminal", "pane-1"));
+    expect(sortableSetNodeRefMock).toHaveBeenCalledWith(tab);
+    expect(sortableTransformInput).toEqual(sortableTransform);
+    expect(tab.style.transform).toBe("translate3d(12px, 6px, 0)");
+    expect(tab.style.transition).toBe("transform 200ms ease");
+    expect(tab.getAttribute("data-sortable-attribute")).toBe("attached");
+
+    fireEvent.pointerDown(tab);
+    expect(sortablePointerDownMock).toHaveBeenCalledTimes(1);
+  });
+
   test("does not dim the tab when it is not being dragged", () => {
     renderTab({ id: "tab-terminal", type: "plain" }, 0);
 
@@ -953,6 +1082,26 @@ describe("DraggableTab tooltip and context menu structure", () => {
     }
     // Close itself stays available: canClose is true and onClose was provided.
     expect(screen.getByText("Close").getAttribute("aria-disabled")).toBeNull();
+  });
+
+  test("disables bulk close items when their handlers are absent", () => {
+    render(
+      <DraggableTab
+        tab={{ id: "tab-terminal", type: "plain" }}
+        paneId="pane-1"
+        index={0}
+        isActive={false}
+        canClose
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByText("Terminal 1"));
+
+    for (const label of ["Close all", "Close others", "Close to the right"]) {
+      expect(screen.getByText(label).getAttribute("aria-disabled")).toBe("true");
+    }
   });
 
   test("disables Close when the tab cannot be closed", () => {

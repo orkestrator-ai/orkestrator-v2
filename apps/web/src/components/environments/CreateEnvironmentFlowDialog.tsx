@@ -1,5 +1,20 @@
 import { useState } from "react";
-import { updateEnvironmentAgentSettings } from "@/lib/backend";
+import { AlertTriangle, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  getContainerGitHubCredentialStatus,
+  updateEnvironmentAgentSettings,
+  type GitHubCredentialStatus,
+} from "@/lib/backend";
 import {
   resolveAgentModeSettings,
   type AgentModeSettings,
@@ -37,6 +52,13 @@ interface CreateEnvironmentFlowDialogProps extends CreateEnvironmentFlowOperatio
   onOpenChange: (open: boolean) => void;
   projectId: string | null;
   projectName?: string;
+}
+
+interface PendingGitHubCredentialWarning {
+  options: ClaudeOptions;
+  status: GitHubCredentialStatus | null;
+  resolve: (created: boolean) => void;
+  reject: (error: unknown) => void;
 }
 
 export function resolveEnvironmentCreateRequest(options: ClaudeOptions) {
@@ -88,6 +110,8 @@ export function CreateEnvironmentFlowDialog({
   startEnvironment,
 }: CreateEnvironmentFlowDialogProps) {
   const [isCreating, setIsCreating] = useState(false);
+  const [pendingCredentialWarning, setPendingCredentialWarning] =
+    useState<PendingGitHubCredentialWarning | null>(null);
   const setOptions = useClaudeOptionsStore((state) => state.setOptions);
   const config = useConfigStore((state) => state.config);
   const storedProjectName = useProjectStore((state) =>
@@ -101,7 +125,7 @@ export function CreateEnvironmentFlowDialog({
     (state) => state.selectProjectAndEnvironment,
   );
 
-  const handleCreate = async (options: ClaudeOptions) => {
+  const performCreate = async (options: ClaudeOptions) => {
     if (!projectId) return;
 
     setIsCreating(true);
@@ -160,17 +184,115 @@ export function CreateEnvironmentFlowDialog({
     }
   };
 
+  const handleCreate = async (options: ClaudeOptions): Promise<boolean> => {
+    if (!projectId) return false;
+    if (options.environmentType === "local") {
+      await performCreate(options);
+      return true;
+    }
+
+    setIsCreating(true);
+    let status: GitHubCredentialStatus | null = null;
+    try {
+      status = await getContainerGitHubCredentialStatus();
+    } catch (error) {
+      console.error("Failed to check GitHub credential status:", error);
+    } finally {
+      setIsCreating(false);
+    }
+
+    if (status?.available) {
+      await performCreate(options);
+      return true;
+    }
+
+    return new Promise<boolean>((resolve, reject) => {
+      setPendingCredentialWarning({ options, status, resolve, reject });
+    });
+  };
+
+  const dismissCredentialWarning = () => {
+    if (isCreating) return;
+    const pending = pendingCredentialWarning;
+    setPendingCredentialWarning(null);
+    pending?.resolve(false);
+  };
+
+  const createWithoutGitHubCredential = async () => {
+    const pending = pendingCredentialWarning;
+    if (!pending) return;
+
+    try {
+      await performCreate(pending.options);
+      setPendingCredentialWarning(null);
+      pending.resolve(true);
+    } catch (error) {
+      setPendingCredentialWarning(null);
+      pending.reject(error);
+    }
+  };
+
+  const warningTitle =
+    pendingCredentialWarning?.status?.source === "host-cli"
+      ? "No GitHub CLI credentials found"
+      : pendingCredentialWarning?.status?.source === "pat"
+        ? "No GitHub token configured"
+        : "GitHub credentials could not be verified";
+  const warningDescription =
+    pendingCredentialWarning?.status?.source === "host-cli"
+      ? "Orkestrator could not read an active GitHub CLI login from the host running Orkestrator. Private repositories will not clone until you run gh auth login or switch to a personal access token in General Settings."
+      : pendingCredentialWarning?.status?.source === "pat"
+        ? "Personal access token mode is selected, but no token is stored. Private repositories will not clone until you add a token in General Settings or switch to host GitHub CLI credentials."
+        : "Orkestrator could not confirm that GitHub credentials are available. Private repositories may fail to clone.";
+
   return (
-    <CreateEnvironmentDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      onCreate={handleCreate}
-      isLoading={isCreating}
-      projectId={projectId}
-      projectName={projectName}
-      defaultPortMappings={
-        projectId ? config.repositories[projectId]?.defaultPortMappings : undefined
-      }
-    />
+    <>
+      <CreateEnvironmentDialog
+        open={open}
+        onOpenChange={onOpenChange}
+        onCreate={handleCreate}
+        isLoading={isCreating}
+        projectId={projectId}
+        projectName={projectName}
+        defaultPortMappings={
+          projectId ? config.repositories[projectId]?.defaultPortMappings : undefined
+        }
+      />
+
+      <AlertDialog
+        open={pendingCredentialWarning !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) dismissCredentialWarning();
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-full bg-amber-500/10 p-2 text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="h-4 w-4" aria-hidden />
+              </div>
+              <div className="min-w-0 space-y-2">
+                <AlertDialogTitle>{warningTitle}</AlertDialogTitle>
+                <AlertDialogDescription>{warningDescription}</AlertDialogDescription>
+              </div>
+            </div>
+          </AlertDialogHeader>
+          <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-muted-foreground">
+            Public repositories can still be created without GitHub credentials.
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isCreating}>Go back</AlertDialogCancel>
+            <Button
+              type="button"
+              onClick={() => void createWithoutGitHubCredential()}
+              disabled={isCreating}
+            >
+              {isCreating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Create anyway
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

@@ -40,6 +40,10 @@ describe("defaultConfig", () => {
     expect(defaultConfig().global.webClientEnabled).toBe(true);
   });
 
+  test("uses host GitHub CLI credentials by default", () => {
+    expect(defaultConfig().global.useHostGitHubCredentials).toBe(true);
+  });
+
   test("allows five concurrent Codex subagent threads by default", () => {
     expect(defaultConfig().global.codexMaxConcurrentThreads).toBe(5);
     expectTypeOf<AppConfig["global"]["codexMaxConcurrentThreads"]>().toEqualTypeOf<number>();

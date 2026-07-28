@@ -2635,4 +2635,20 @@ describe("resolveAgentDefaults", () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
+
+  test("keeps the form intact when a creation preflight defers submission", async () => {
+    const onOpenChange = mock(() => {});
+    const onCreate = mock(async () => false);
+    render(
+      <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={onCreate} />,
+    );
+    const nameInput = screen.getByLabelText(/Environment Name/i);
+    fireEvent.change(nameInput, { target: { value: "Keep this name" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect((nameInput as HTMLInputElement).value).toBe("Keep this name");
+  });
 });

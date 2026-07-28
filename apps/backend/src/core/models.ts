@@ -341,6 +341,8 @@ export interface AppConfig {
     envFilePatterns: string[];
     anthropicApiKey?: string;
     githubToken?: string;
+    /** Reuse the host's active `gh auth login` token for container GitHub access. */
+    useHostGitHubCredentials?: boolean;
     allowedDomains: string[];
     preferredEditor?: "vscode" | "cursor";
     defaultAgent: DefaultAgent;

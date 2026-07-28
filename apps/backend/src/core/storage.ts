@@ -606,7 +606,11 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
   const codexMaxConcurrentThreads = resolveCodexMaxConcurrentThreads(
     global.codexMaxConcurrentThreads,
   );
-  if (global.codexMaxConcurrentThreads === codexMaxConcurrentThreads) {
+  const useHostGitHubCredentials = global.useHostGitHubCredentials !== false;
+  if (
+    global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
+    && global.useHostGitHubCredentials === useHostGitHubCredentials
+  ) {
     return reviewInstructionSanitized;
   }
 
@@ -615,6 +619,7 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
     global: {
       ...global,
       codexMaxConcurrentThreads,
+      useHostGitHubCredentials,
     } as unknown as AppConfig["global"],
   };
 }
@@ -664,6 +669,7 @@ export function defaultConfig(): AppConfig {
     global: {
       containerResources: { cpuCores: 2, memoryGb: 4 },
       envFilePatterns: [".env", ".env.local"],
+      useHostGitHubCredentials: true,
       allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],
       defaultAgent: "claude",
       opencodeModel: "opencode/claude-sonnet-5",

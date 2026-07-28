@@ -1557,7 +1557,15 @@ function createLocalGhRunner(cwd: string): GhCliRunner {
 
 function createContainerGhRunner(containerId: string): GhCliRunner {
   return (args, timeoutMs = 60_000) =>
-    dockerExec(containerId, ["gh", ...args].map(quoteShell).join(" "), timeoutMs);
+    dockerExec(
+      containerId,
+      [
+        "source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true",
+        "orkestrator_source_runtime_env 2>/dev/null || true",
+        ["gh", ...args].map(quoteShell).join(" "),
+      ].join("\n"),
+      timeoutMs,
+    );
 }
 
 type EnvironmentCommandRunner = (
@@ -5406,28 +5414,83 @@ async function readLocalFileAtBranch(worktreePath: string, filePath: string, bra
   }
 }
 
-function clearGitHubTokenGitConfigCommand(): string {
-  return "git config --global --list 2>/dev/null | grep '^url\\.https://x-access-token:' | sed 's/\\.insteadof=.*//' | sort -u | while read -r section; do git config --global --remove-section \"$section\" 2>/dev/null || true; done";
+const SYNC_CONTAINER_GITHUB_CREDENTIAL_COMMAND = `
+  set -e
+  credential_dir=/tmp/orkestrator-ai
+  credential_file="$credential_dir/github-token"
+  mkdir -p "$credential_dir"
+  umask 077
+  cat > "$credential_file"
+  chmod 600 "$credential_file"
+
+  git config --global --list 2>/dev/null |
+    grep '^url\\.https://x-access-token:' |
+    sed 's/\\.insteadof=.*//' |
+    sort -u |
+    while read -r section; do
+      git config --global --remove-section "$section" 2>/dev/null || true
+    done
+
+  token="$(cat "$credential_file")"
+  if [ -n "$token" ]; then
+    token_url="https://x-access-token:$token@github.com/"
+    git config --global --add "url.$token_url.insteadOf" "https://github.com/"
+    git config --global --add "url.$token_url.insteadOf" "https://github.com"
+    git config --global --add "url.$token_url.insteadOf" "git@github.com:"
+  fi
+  unset token token_url
+`;
+
+async function getHostGitHubToken(): Promise<string | undefined> {
+  try {
+    const { stdout } = await runCommand(
+      "gh",
+      ["auth", "token", "--hostname", "github.com"],
+      { timeoutMs: 10_000 },
+    );
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
-function setGitHubTokenGitConfigCommand(token: string): string {
-  const tokenUrl = `https://x-access-token:${token}@github.com/`;
-  const rewrites = ["https://github.com/", "https://github.com", "git@github.com:"];
-  return [
-    clearGitHubTokenGitConfigCommand(),
-    ...rewrites.map((rewrite) => `git config --global --add ${quoteShell(`url.${tokenUrl}.insteadOf`)} ${quoteShell(rewrite)}`),
-  ].join("\n");
+async function resolveContainerGitHubToken(
+  globalConfig: AppConfig["global"],
+): Promise<string | undefined> {
+  if (globalConfig.useHostGitHubCredentials !== false) {
+    return getHostGitHubToken();
+  }
+  return globalConfig.githubToken?.trim() || undefined;
 }
 
-function githubTokenPropagationCommand(newToken: string | undefined): string {
-  const token = newToken?.trim();
-  return token ? setGitHubTokenGitConfigCommand(token) : clearGitHubTokenGitConfigCommand();
+async function getContainerGitHubCredentialStatus(
+  globalConfig: AppConfig["global"],
+): Promise<{ source: "host-cli" | "pat"; available: boolean }> {
+  if (globalConfig.useHostGitHubCredentials !== false) {
+    return {
+      source: "host-cli",
+      available: Boolean(await getHostGitHubToken()),
+    };
+  }
+  return {
+    source: "pat",
+    available: Boolean(globalConfig.githubToken?.trim()),
+  };
 }
 
-function redactSecret(message: string, secret: string | undefined): string {
-  const trimmed = secret?.trim();
-  if (!trimmed) return message;
-  return message.split(trimmed).join("***");
+async function syncContainerGitHubCredential(
+  containerId: string,
+  token: string | undefined,
+): Promise<void> {
+  await runCommand(
+    "docker",
+    ["exec", "-i", containerId, "bash", "-lc", SYNC_CONTAINER_GITHUB_CREDENTIAL_COMMAND],
+    {
+      stdin: token ?? "",
+      timeoutMs: 30_000,
+      redactValues: [token],
+    },
+  );
 }
 
 async function createDockerContainer(environment: Environment, context: CommandContext): Promise<string> {
@@ -5463,7 +5526,7 @@ async function createDockerContainer(environment: Environment, context: CommandC
     "TERM=xterm-256color",
   ];
 
-  const githubToken = config.global.githubToken?.trim();
+  const githubToken = await resolveContainerGitHubToken(config.global);
   const dockerEnvironment: NodeJS.ProcessEnv = { ...process.env };
   const redactValues: string[] = [];
   if (githubToken) {
@@ -6420,6 +6483,9 @@ export function createCommandRegistry(
         await storage.updateEnvironment(environment.id, { containerId });
       }
       await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
+      const config = await storage.loadConfig();
+      const githubToken = await resolveContainerGitHubToken(config.global);
+      await syncContainerGitHubCredential(containerId, githubToken);
       const hostEntryPort = environment.entryPort ? await getHostPort(containerId, environment.entryPort) : null;
       const updated = await storage.updateEnvironment(environment.id, {
         status: "running",
@@ -6778,18 +6844,20 @@ export function createCommandRegistry(
     env.status = await getDockerStatus(env.containerId).catch(() => "stopped");
     return storage.addEnvironment(env);
   });
-  register("propagate_github_token_to_containers", async ({ newToken }, { storage }) => {
+  register("propagate_github_token_to_containers", async (_args, { storage }) => {
+    const config = await storage.loadConfig();
+    const githubToken = await resolveContainerGitHubToken(config.global);
     const environments = await storage.loadEnvironments();
     const updated: string[] = [];
     const failed: [string, string][] = [];
     for (const env of environments) {
       if (!env.containerId || await getDockerStatus(env.containerId).catch(() => "stopped") !== "running") continue;
       try {
-        await dockerExec(env.containerId, githubTokenPropagationCommand(asOptionalString(newToken)));
+        await syncContainerGitHubCredential(env.containerId, githubToken);
         updated.push(env.id);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        failed.push([env.id, redactSecret(message, asOptionalString(newToken))]);
+        failed.push([env.id, message]);
       }
     }
     return { updated, failed };
@@ -7039,6 +7107,8 @@ export function createCommandRegistry(
   register("check_opencode_cli", (_args, context) => hasPackagedOrPathBinary(context, "opencode"));
   register("check_codex_cli", (_args, context) => hasPackagedOrPathBinary(context, "codex"));
   register("check_github_cli", () => commandExists("gh"));
+  register("get_container_github_credential_status", async (_args, context) =>
+    getContainerGitHubCredentialStatus((await context.storage.loadConfig()).global));
   register("check_any_ai_cli", async (_args, context) =>
     await hasPackagedOrPathBinary(context, "claude")
     || await hasPackagedOrPathBinary(context, "opencode")

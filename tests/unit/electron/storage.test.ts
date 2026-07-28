@@ -484,6 +484,20 @@ describe("Electron StorageService", () => {
     expect(Object.hasOwn(persisted.global, "reviewPrompt")).toBe(false);
   });
 
+  test("defaults legacy configs to host GitHub CLI credentials", async () => {
+    const dataDir = await createTempDir("ork-storage-github-auth-default-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const config = defaultConfig();
+    delete config.global.useHostGitHubCredentials;
+    await fs.writeFile(
+      path.join(dataDir, "config.json"),
+      `${JSON.stringify(config)}\n`,
+    );
+
+    expect((await storage.loadConfig()).global.useHostGitHubCredentials).toBe(true);
+  });
+
   test("validates review instructions at save and global-update boundaries", async () => {
     const dataDir = await createTempDir("ork-storage-review-validation-");
     const storage = new StorageService(dataDir);

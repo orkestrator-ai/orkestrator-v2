@@ -19,7 +19,7 @@ const mockSetGitHubToken = mock(async (token: string | null) => ({
   repositories: {},
 }));
 const mockGetLogDirectory = mock(async () => null);
-const mockPropagateGithubTokenToContainers = mock(async () => ({ updated: [] }));
+const mockPropagateGithubCredentialsToContainers = mock(async () => ({ updated: [] }));
 const mockGetWebClientStatus = mock(async () => ({
   enabled: true,
   running: true,
@@ -61,7 +61,7 @@ mock.module("@/lib/backend", () => ({
   updateGlobalConfig: mockUpdateGlobalConfig,
   setGitHubToken: mockSetGitHubToken,
   getLogDirectory: mockGetLogDirectory,
-  propagateGithubTokenToContainers: mockPropagateGithubTokenToContainers,
+  propagateGithubCredentialsToContainers: mockPropagateGithubCredentialsToContainers,
   getWebClientStatus: mockGetWebClientStatus,
   setWebClientEnabled: mockSetWebClientEnabled,
   resetWebClientServe: mockResetWebClientServe,
@@ -93,7 +93,7 @@ describe("GlobalSettings", () => {
     mockUpdateGlobalConfig.mockClear();
     mockSetGitHubToken.mockClear();
     mockGetLogDirectory.mockClear();
-    mockPropagateGithubTokenToContainers.mockClear();
+    mockPropagateGithubCredentialsToContainers.mockClear();
     mockGetWebClientStatus.mockClear();
     mockSetWebClientEnabled.mockClear();
     mockResetWebClientServe.mockClear();
@@ -852,6 +852,7 @@ describe("GlobalSettings", () => {
     fireEvent.change(anthropicInput, { target: { value: "test-anthropic-key" } });
 
     rerender(<GlobalSettings activeSection="general" />);
+    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     const githubInput = screen.getByLabelText("GitHub token") as HTMLInputElement;
     expect(githubInput.type).toBe("password");
     fireEvent.click(githubInput.parentElement!.querySelector("button")!);
@@ -882,6 +883,7 @@ describe("GlobalSettings", () => {
     }));
     render(<GlobalSettings activeSection="general" />);
 
+    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     const githubInput = screen.getByLabelText("GitHub token") as HTMLInputElement;
     expect(githubInput.value).toBe("");
     expect(githubInput.placeholder).toBe(
@@ -897,9 +899,7 @@ describe("GlobalSettings", () => {
     expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
       "githubToken",
     );
-    expect(mockPropagateGithubTokenToContainers).toHaveBeenCalledWith(
-      "replacement-token",
-    );
+    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
   });
 
   test("clears a configured GitHub token through the write-only command", async () => {
@@ -914,6 +914,7 @@ describe("GlobalSettings", () => {
     }));
     render(<GlobalSettings activeSection="general" />);
 
+    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear stored token" }));
     expect(
       screen.getByText("The stored GitHub token will be cleared when you save."),
@@ -923,7 +924,26 @@ describe("GlobalSettings", () => {
     await waitFor(() => {
       expect(mockSetGitHubToken).toHaveBeenCalledWith(null);
     });
-    expect(mockPropagateGithubTokenToContainers).toHaveBeenCalledWith(null);
+    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
+  });
+
+  test("uses host GitHub CLI credentials by default and can switch to PAT mode", async () => {
+    render(<GlobalSettings activeSection="general" />);
+
+    const hostCredentials = screen.getByRole("switch", {
+      name: "Use host GitHub CLI credentials",
+    });
+    expect(hostCredentials.getAttribute("data-state")).toBe("checked");
+    expect(screen.queryByLabelText("GitHub token")).toBeNull();
+
+    fireEvent.click(hostCredentials);
+    expect(screen.getByLabelText("GitHub token")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ useHostGitHubCredentials: false }),
+    ));
+    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
   });
 
   test("saves debug logging and opens its log directory", async () => {
@@ -1222,24 +1242,26 @@ describe("GlobalSettings", () => {
   });
 
   test("propagates changed GitHub credentials without failing a saved config", async () => {
-    mockPropagateGithubTokenToContainers.mockResolvedValueOnce({ updated: ["container-1"] });
+    mockPropagateGithubCredentialsToContainers.mockResolvedValueOnce({ updated: ["container-1"] });
     render(<GlobalSettings activeSection="general" />);
 
+    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     fireEvent.change(screen.getByLabelText("GitHub token"), { target: { value: "new-token" } });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockPropagateGithubTokenToContainers).toHaveBeenCalledWith("new-token"));
-    expect(mockToastSuccess).toHaveBeenCalledWith("Updated GitHub token in 1 container(s)");
+    await waitFor(() => expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith());
+    expect(mockToastSuccess).toHaveBeenCalledWith("Updated GitHub credentials in 1 container(s)");
   });
 
   test("keeps the config saved when GitHub credential propagation fails", async () => {
-    mockPropagateGithubTokenToContainers.mockRejectedValueOnce(new Error("container unavailable"));
+    mockPropagateGithubCredentialsToContainers.mockRejectedValueOnce(new Error("container unavailable"));
     render(<GlobalSettings activeSection="general" />);
 
+    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     fireEvent.change(screen.getByLabelText("GitHub token"), { target: { value: "new-token" } });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockPropagateGithubTokenToContainers).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledTimes(1));
     expect(mockToastSuccess).toHaveBeenCalledWith("Settings saved");
     expect(mockToastError).not.toHaveBeenCalled();
   });

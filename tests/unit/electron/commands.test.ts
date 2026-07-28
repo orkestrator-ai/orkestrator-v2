@@ -3224,7 +3224,7 @@ exit 0
     expect(updated.createdFromCommit).toBe("3333333333333333333333333333333333333333");
   });
 
-  test("does not pass host gh auth token into newly created containers without configured token", async () => {
+  test("passes the host gh auth token into newly created containers by default", async () => {
     const environment = createEnvironment({
       id: "env-container-create",
       environmentType: "containerized",
@@ -3288,15 +3288,123 @@ exit 0
         ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
 
         const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
-        expect(ghCalls).toBe("");
+        expect(ghCalls).toContain("auth token --hostname github.com");
 
         const dockerCalls = await fs.readFile(logs.all, "utf8");
+        expect(dockerCalls).toContain("-e GITHUB_TOKEN -e GH_TOKEN");
         expect(dockerCalls).not.toContain("GITHUB_TOKEN=host-gh-token");
         expect(dockerCalls).not.toContain("GH_TOKEN=host-gh-token");
+        expect(dockerCalls).not.toContain("host-gh-token");
         expect(environment.containerId).toBe("container-created");
       });
     });
   }, ASYNC_TEST_BUDGET_MS);
+
+  test("reports whether the selected host GitHub CLI credential is available", async () => {
+    const { context } = createContext(createEnvironment());
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "token" ]; then
+  printf 'host-gh-token\\n'
+  exit 0
+fi
+exit 1
+`, async () => {
+      await expect(
+        commands.get("get_container_github_credential_status")?.({}, context),
+      ).resolves.toEqual({
+        source: "host-cli",
+        available: true,
+      });
+    });
+
+    await withFakeGh(`#!/bin/sh
+exit 1
+`, async () => {
+      await expect(
+        commands.get("get_container_github_credential_status")?.({}, context),
+      ).resolves.toEqual({
+        source: "host-cli",
+        available: false,
+      });
+    });
+  });
+
+  test("reports missing PAT credentials without reading host GitHub CLI auth", async () => {
+    const { context } = createContext(createEnvironment(), {
+      globalConfig: { useHostGitHubCredentials: false },
+    });
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+exit 0
+`, async (ghLog) => {
+      await expect(
+        commands.get("get_container_github_credential_status")?.({}, context),
+      ).resolves.toEqual({
+        source: "pat",
+        available: false,
+      });
+      expect(await fs.readFile(ghLog, "utf8").catch(() => "")).toBe("");
+    });
+
+    const configuredContext = createContext(createEnvironment(), {
+      globalConfig: {
+        useHostGitHubCredentials: false,
+        githubToken: "configured-pat",
+      },
+    }).context;
+    await expect(
+      commands.get("get_container_github_credential_status")?.({}, configuredContext),
+    ).resolves.toEqual({
+      source: "pat",
+      available: true,
+    });
+  });
+
+  test("uses the configured PAT without reading host gh auth when host credentials are disabled", async () => {
+    const environment = createEnvironment({
+      id: "env-container-pat",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment, {
+      globalConfig: {
+        useHostGitHubCredentials: false,
+        githubToken: "configured-pat",
+      },
+    });
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+exit 1
+`, async (ghLog) => {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "create" ]; then
+  printf 'container-created\\n'
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+        await expect(commands.get("provision_environment")?.(
+          { environmentId: environment.id },
+          context,
+        )).resolves.toBe("container-created");
+
+        expect(await fs.readFile(ghLog, "utf8").catch(() => "")).toBe("");
+        const dockerCalls = await fs.readFile(logs.all, "utf8");
+        expect(dockerCalls).toContain("-e GITHUB_TOKEN -e GH_TOKEN");
+        expect(dockerCalls).not.toContain("configured-pat");
+      });
+    });
+  });
 
   test("does not expose configured credentials in Docker argv or container creation errors", async () => {
     const githubToken = "github_secret_token";
@@ -3313,7 +3421,7 @@ exit 0
     Object.assign(context.storage, {
       loadConfig: mock(async () => ({
         version: "1.0.0",
-        global: { githubToken, anthropicApiKey },
+        global: { useHostGitHubCredentials: false, githubToken, anthropicApiKey },
         repositories: {
           "project-1": { defaultBranch: "main", prBaseBranch: "main" },
         },
@@ -4023,14 +4131,19 @@ exit 0
     });
   });
 
-  test("persists GitHub token propagation with container git config updates", async () => {
+  test("persists the selected GitHub credential through stdin and container git config", async () => {
     const environment = createEnvironment({
       id: "env-container",
       environmentType: "containerized",
       containerId: "container-1",
       status: "running",
     });
-    const { context } = createContext(environment);
+    const { context } = createContext(environment, {
+      globalConfig: {
+        useHostGitHubCredentials: false,
+        githubToken: "token-value",
+      },
+    });
     const commands = createCommandRegistry();
 
     await withFakeDocker(`#!/bin/sh
@@ -4041,11 +4154,12 @@ if [ "$1" = "inspect" ]; then
 fi
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  cat > "$FAKE_DOCKER_EXEC_LOG.stdin"
   exit 0
 fi
 exit 0
 `, async (logs) => {
-      await expect(commands.get("propagate_github_token_to_containers")?.({ newToken: "token-value" }, context)).resolves.toEqual({
+      await expect(commands.get("propagate_github_token_to_containers")?.({}, context)).resolves.toEqual({
         updated: ["env-container"],
         failed: [],
       });
@@ -4053,10 +4167,11 @@ exit 0
       const execLog = await fs.readFile(logs.exec, "utf8");
       expect(execLog).toContain("git config --global --list");
       expect(execLog).toContain("--remove-section");
-      expect(execLog).toContain("url.https://x-access-token:token-value@github.com/.insteadOf");
+      expect(execLog).toContain("token_url=\"https://x-access-token:$token@github.com/\"");
       expect(execLog).toContain("https://github.com/");
       expect(execLog).toContain("git@github.com:");
-      expect(execLog).not.toContain("export GH_TOKEN");
+      expect(execLog).not.toContain("token-value");
+      expect(await fs.readFile(`${logs.exec}.stdin`, "utf8")).toBe("token-value");
     });
   });
 
@@ -4067,7 +4182,9 @@ exit 0
       containerId: "container-1",
       status: "running",
     });
-    const { context } = createContext(environment);
+    const { context } = createContext(environment, {
+      globalConfig: { useHostGitHubCredentials: false },
+    });
     const commands = createCommandRegistry();
 
     await withFakeDocker(`#!/bin/sh
@@ -4078,11 +4195,12 @@ if [ "$1" = "inspect" ]; then
 fi
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  cat > "$FAKE_DOCKER_EXEC_LOG.stdin"
   exit 0
 fi
 exit 0
 `, async (logs) => {
-      await expect(commands.get("propagate_github_token_to_containers")?.({ newToken: "" }, context)).resolves.toEqual({
+      await expect(commands.get("propagate_github_token_to_containers")?.({}, context)).resolves.toEqual({
         updated: ["env-container"],
         failed: [],
       });
@@ -4090,7 +4208,7 @@ exit 0
       const execLog = await fs.readFile(logs.exec, "utf8");
       expect(execLog).toContain("grep '^url\\.https://x-access-token:'");
       expect(execLog).toContain("--remove-section");
-      expect(execLog).not.toContain(".insteadOf");
+      expect(await fs.readFile(`${logs.exec}.stdin`, "utf8")).toBe("");
     });
   });
 
@@ -6100,7 +6218,12 @@ exit 0
       containerId: "container-1",
       status: "running",
     });
-    const { context } = createContext(environment);
+    const { context } = createContext(environment, {
+      globalConfig: {
+        useHostGitHubCredentials: false,
+        githubToken: "secret-token-123",
+      },
+    });
     const commands = createCommandRegistry();
 
     await withFakeDocker(`#!/bin/sh
@@ -6109,13 +6232,14 @@ if [ "$1" = "inspect" ]; then
   exit 0
 fi
 if [ "$1" = "exec" ]; then
-  printf '%s\\n' "$*" >&2
+  secret="$(cat)"
+  printf 'credential update failed for %s\\n' "$secret" >&2
   exit 1
 fi
 exit 0
 `, async () => {
       const result = await commands.get("propagate_github_token_to_containers")?.(
-        { newToken: "secret-token-123" },
+        {},
         context,
       ) as { updated: string[]; failed: [string, string][] };
 
@@ -6123,7 +6247,7 @@ exit 0
       expect(result.failed).toHaveLength(1);
       const [, message] = result.failed[0]!;
       expect(message).not.toContain("secret-token-123");
-      expect(message).toContain("***");
+      expect(message).toContain("[REDACTED]");
     });
   });
 
@@ -6688,6 +6812,7 @@ exit 0
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 command=""
 for arg in "$@"; do command="$arg"; done
+command="$(printf '%s\\n' "$command" | tail -n 1)"
 if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
   printf '%s\\n' 'https://github.com/acme/repo/pull/42'
   exit 0
@@ -6725,6 +6850,7 @@ exit 1
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 command=""
 for arg in "$@"; do command="$arg"; done
+command="$(printf '%s\\n' "$command" | tail -n 1)"
 if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
   printf '%s\\n' 'https://github.com/acme/repo/pull/42'
   exit 0
@@ -6768,6 +6894,7 @@ exit 1
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 command=""
 for arg in "$@"; do command="$arg"; done
+command="$(printf '%s\\n' "$command" | tail -n 1)"
 if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
   printf '%s\\n' 'https://github.com/acme/repo/pull/42'
   exit 0
@@ -6800,6 +6927,7 @@ exit 43
     await withFakeDocker(`#!/bin/sh
 command=""
 for arg in "$@"; do command="$arg"; done
+command="$(printf '%s\\n' "$command" | tail -n 1)"
 if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
   printf '%s\\n' 'https://github.com/acme/repo/pull/42'
   exit 0
@@ -6832,6 +6960,7 @@ exit 1
     await withFakeDocker(`#!/bin/sh
 command=""
 for arg in "$@"; do command="$arg"; done
+command="$(printf '%s\\n' "$command" | tail -n 1)"
 if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
   printf '%s\\n' 'https://github.com/acme/repo/pull/42'
   exit 0

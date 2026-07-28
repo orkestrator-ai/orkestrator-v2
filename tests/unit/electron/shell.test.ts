@@ -127,6 +127,18 @@ describe("runCommand", () => {
     expect(stdout).toBe("eof:0");
   });
 
+  test("writes an explicit stdin payload before closing the pipe", async () => {
+    const { stdout } = await runCommand(
+      "node",
+      [
+        "-e",
+        "let data = '';process.stdin.on('data', (c) => { data += c; });process.stdin.on('end', () => { process.stdout.write(data); });",
+      ],
+      { stdin: "credential-from-stdin", timeoutMs: 5_000 },
+    );
+    expect(stdout).toBe("credential-from-stdin");
+  });
+
   test("throws with stderr text when the command exits non-zero", async () => {
     await expect(
       runCommand("node", ["-e", "process.stderr.write('boom');process.exit(1)"]),

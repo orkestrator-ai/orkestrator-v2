@@ -47,6 +47,7 @@ const {
   getWebClientStatus,
   postLinearCompletionComment,
   openInBrowser,
+  propagateGithubCredentialsToContainers,
   recordEnvironmentActivity,
   recordEnvironmentCompletion,
   setEnvironmentAgentActivity,
@@ -815,6 +816,16 @@ describe("backend setup wrappers", () => {
     expect(invokeMock.mock.calls).toEqual([
       ["set_github_token", { token: "ghp_replacement" }],
       ["set_github_token", { token: null }],
+    ]);
+  });
+
+  test("refreshes running containers from the backend-selected GitHub credential source", async () => {
+    const result = { updated: ["env-1"], failed: [] };
+    invokeMock.mockResolvedValueOnce(result);
+
+    await expect(propagateGithubCredentialsToContainers()).resolves.toBe(result);
+    expect(invokeMock.mock.calls).toEqual([
+      ["propagate_github_token_to_containers"],
     ]);
   });
 

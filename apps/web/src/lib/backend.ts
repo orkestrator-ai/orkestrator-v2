@@ -829,7 +829,7 @@ export async function getContainerHostPort(containerId: string, containerPort: n
   return invoke<number | null>("get_container_host_port", { containerId, containerPort });
 }
 
-/** Result of propagating GitHub token to containers */
+/** Result of applying GitHub credentials to running containers. */
 export interface PropagateTokenResult {
   /** Environment IDs where token was successfully updated */
   updated: string[];
@@ -837,9 +837,9 @@ export interface PropagateTokenResult {
   failed: [string, string][];
 }
 
-/** Propagate GitHub token to all running containerized environments */
-export async function propagateGithubTokenToContainers(newToken: string | null): Promise<PropagateTokenResult> {
-  return invoke<PropagateTokenResult>("propagate_github_token_to_containers", { newToken });
+/** Apply the selected GitHub credential source to all running containers. */
+export async function propagateGithubCredentialsToContainers(): Promise<PropagateTokenResult> {
+  return invoke<PropagateTokenResult>("propagate_github_token_to_containers");
 }
 
 // --- OpenCode Server Commands ---
@@ -1057,12 +1057,22 @@ export interface CredentialStatus {
   expiresAt: number | null;
 }
 
+export interface GitHubCredentialStatus {
+  source: "host-cli" | "pat";
+  available: boolean;
+}
+
 export async function hasClaudeCredentials(): Promise<boolean> {
   return invoke<boolean>("has_claude_credentials");
 }
 
 export async function getCredentialStatus(): Promise<CredentialStatus> {
   return invoke<CredentialStatus>("get_credential_status");
+}
+
+/** Report whether the credential source selected for container Git operations is usable. */
+export async function getContainerGitHubCredentialStatus(): Promise<GitHubCredentialStatus> {
+  return invoke<GitHubCredentialStatus>("get_container_github_credential_status");
 }
 
 // --- CLI Detection and Onboarding Commands ---

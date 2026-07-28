@@ -342,6 +342,11 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+function isCanonicalUuid(value: unknown): value is string {
+  return typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+}
+
 function isPortNumber(value: unknown): value is number {
   return isPositiveInteger(value) && value <= 65_535;
 }
@@ -1119,6 +1124,9 @@ export class StorageService {
   }
 
   private kanbanImageFile(imageId: string): string {
+    if (!isCanonicalUuid(imageId)) {
+      throw new Error("Kanban image ID is invalid");
+    }
     return path.join(this.kanbanImagesDir(), `${imageId}.webp`);
   }
 
@@ -1667,7 +1675,14 @@ export class StorageService {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
       const filtered = environments.filter((environment) => environment.id !== environmentId);
-      if (filtered.length === environments.length) throw new Error(`Environment not found: ${environmentId}`);
+      if (filtered.length === environments.length) {
+        // A previous attempt may have committed the primary removal and then
+        // failed while sanitizing retained backups. Keep deletion idempotent so
+        // retrying can finish the privacy cleanup before preserving the public
+        // not-found contract.
+        await this.scrubEnvironmentBackups(environmentId, true);
+        throw new Error(`Environment not found: ${environmentId}`);
+      }
       await this.saveEnvironments(filtered);
       await this.scrubEnvironmentBackups(environmentId, true);
       this.announce("environment", environmentId);
@@ -1842,7 +1857,16 @@ export class StorageService {
       // A merge that changed nothing persists nothing. Rewriting the whole
       // store — and announcing a change that makes every client refetch every
       // project — for a field-equal record is pure churn.
-      if (JSON.stringify(environment) === beforeJson) return environment;
+      if (JSON.stringify(environment) === beforeJson) {
+        // Attachment cleanup is a retryable two-step operation: the primary
+        // may already be clean while a retained backup still contains the
+        // payload. Explicit attachment updates must therefore finish scrubbing
+        // even when the primary record no longer changes.
+        if ("initialPromptAttachments" in updates) {
+          await this.scrubEnvironmentBackups(environmentId, false);
+        }
+        return environment;
+      }
 
       await this.saveEnvironments(environments);
       if ("initialPromptAttachments" in updates) {
@@ -2919,12 +2943,25 @@ export class StorageService {
     });
   }
 
-  async deleteComposeDraft(draftKey: string): Promise<void> {
+  async deleteComposeDraft(
+    draftKey: string,
+    expectedRevision?: number,
+  ): Promise<void> {
     if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
+      throw new Error("Compose draft expected revision must be a non-negative integer");
+    }
     await this.enqueueComposeDraftMutation(async () => {
       const stored = await this.loadJson<unknown>(this.composeDraftsFile(), () => ({}));
       const drafts = this.validComposeDrafts(stored);
       const previous = drafts[draftKey];
+      if (
+        previous
+        && expectedRevision !== undefined
+        && previous.revision !== expectedRevision
+      ) {
+        throw new Error("Compose draft revision conflict");
+      }
       const hasStoredKey = isRecord(stored) && Object.hasOwn(stored, draftKey);
       if (hasStoredKey) {
         delete drafts[draftKey];
@@ -3037,12 +3074,16 @@ export class StorageService {
     filePath: string,
     content: string,
     originalContent: string,
+    expectedRevision?: number,
   ): Promise<PersistedFileDraft> {
     if (!isNonBlankString(draftKey)) throw new Error("File draft key must not be blank");
     if (!isNonBlankString(environmentId)) {
       throw new Error("File draft environment ID must not be blank");
     }
     if (!isNonBlankString(filePath)) throw new Error("File draft path must not be blank");
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
+      throw new Error("File draft expected revision must be a non-negative integer");
+    }
     const size = Buffer.byteLength(content, "utf8") + Buffer.byteLength(originalContent, "utf8");
     if (size > 32 * 1024 * 1024) throw new Error("File draft exceeds the 32 MB limit");
 
@@ -3058,6 +3099,12 @@ export class StorageService {
         )
       ) {
         throw new Error("File draft key belongs to another file");
+      }
+      if (
+        expectedRevision !== undefined
+        && (previous?.revision ?? 0) !== expectedRevision
+      ) {
+        throw new Error("File draft revision conflict");
       }
       const saved: PersistedFileDraft = {
         draftKey,
@@ -3075,12 +3122,25 @@ export class StorageService {
     });
   }
 
-  async deleteFileDraft(draftKey: string): Promise<void> {
+  async deleteFileDraft(
+    draftKey: string,
+    expectedRevision?: number,
+  ): Promise<void> {
     if (!isNonBlankString(draftKey)) throw new Error("File draft key must not be blank");
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
+      throw new Error("File draft expected revision must be a non-negative integer");
+    }
     await this.enqueueFileDraftMutation(async () => {
       const stored = await this.loadJson<unknown>(this.fileDraftsFile(), () => ({}));
       const drafts = this.validFileDrafts(stored);
       const previous = drafts[draftKey];
+      if (
+        previous
+        && expectedRevision !== undefined
+        && previous.revision !== expectedRevision
+      ) {
+        throw new Error("File draft revision conflict");
+      }
       const hasStoredKey = isRecord(stored) && Object.hasOwn(stored, draftKey);
       if (hasStoredKey) {
         delete drafts[draftKey];
@@ -3723,6 +3783,18 @@ export class StorageService {
   }
 
   async updateKanbanTask(taskId: string, updates: Partial<KanbanTask>): Promise<KanbanTask> {
+    if (
+      updates.status !== undefined
+      && !isOneOf(updates.status, ["backlog", "in-progress", "review", "done"])
+    ) {
+      throw new Error("Kanban task status is invalid");
+    }
+    if (
+      updates.prState !== undefined
+      && !isOneOf(updates.prState, ["open", "merged", "closed"])
+    ) {
+      throw new Error("Kanban task pull request state is invalid");
+    }
     return this.enqueueKanbanMutation(async () => {
       const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
@@ -3802,6 +3874,12 @@ export class StorageService {
       const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+      if (!isCanonicalUuid(imageId)) {
+        throw new Error("Kanban image ID is invalid");
+      }
+      if (!task.images.some((image) => image.id === imageId)) {
+        throw new Error(`Kanban image not found on task: ${imageId}`);
+      }
       task.images = task.images.filter((image) => image.id !== imageId);
       await this.saveJson(this.kanbanFile(), tasks);
       this.announce("kanban", task.projectId);
@@ -3811,6 +3889,9 @@ export class StorageService {
   }
 
   async getKanbanImageData(imageId: string): Promise<string> {
+    if (!isCanonicalUuid(imageId)) {
+      throw new Error("Kanban image ID is invalid");
+    }
     return (await fs.readFile(this.kanbanImageFile(imageId))).toString("base64");
   }
 
@@ -3899,6 +3980,32 @@ export class StorageService {
       plan.updatedAt = nowIso();
       return plan;
     }, (plan) => plan.projectId);
+  }
+
+  async claimFeaturePlanBuild(
+    featureId: string,
+    taskId: string,
+  ): Promise<{ claimed: boolean; feature: FeaturePlan }> {
+    return this.mutateFeaturePlans((plans) => {
+      const plan = plans.find((candidate) => candidate.id === featureId);
+      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+
+      if (plan.status === "building" && plan.buildTaskId === taskId) {
+        return { claimed: true, feature: plan };
+      }
+      if (
+        plan.status === "building"
+        || Boolean(plan.buildTaskId)
+        || Boolean(plan.buildPipelineId)
+      ) {
+        return { claimed: false, feature: plan };
+      }
+
+      plan.status = "building";
+      plan.buildTaskId = taskId;
+      plan.updatedAt = nowIso();
+      return { claimed: true, feature: plan };
+    }, (result) => result.feature.projectId);
   }
 
   async appendFeaturePlanMessage(

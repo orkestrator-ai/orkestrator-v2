@@ -10,7 +10,27 @@ export interface SavedInitialPromptAttachment {
 
 function sanitizeFilename(name: string): string {
   const trimmed = name.trim() || "clipboard.png";
-  return trimmed.replace(/[^a-zA-Z0-9._-]/g, "-");
+  const sanitized = trimmed.replace(/[^a-zA-Z0-9._-]/g, "-");
+  return sanitized === "." || sanitized === ".." ? "clipboard.png" : sanitized;
+}
+
+function allocateUniqueFilename(
+  requestedName: string,
+  usedNames: Set<string>,
+): string {
+  const sanitized = sanitizeFilename(requestedName);
+  const lastDot = sanitized.lastIndexOf(".");
+  const hasExtension = lastDot > 0;
+  const stem = hasExtension ? sanitized.slice(0, lastDot) : sanitized;
+  const extension = hasExtension ? sanitized.slice(lastDot) : "";
+  let candidate = sanitized;
+  let suffix = 2;
+  while (usedNames.has(candidate.toLowerCase())) {
+    candidate = `${stem}-${suffix}${extension}`;
+    suffix += 1;
+  }
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
 }
 
 export function buildInitialPromptWithAttachmentReferences(
@@ -44,9 +64,10 @@ export async function saveInitialPromptAttachments(options: {
   }
 
   const saved: SavedInitialPromptAttachment[] = [];
+  const usedNames = new Set<string>();
   let failed = 0;
   for (const attachment of attachments) {
-    const filename = sanitizeFilename(attachment.name);
+    const filename = allocateUniqueFilename(attachment.name, usedNames);
     const relativePath = `.orkestrator/initial-prompt/${filename}`;
 
     try {

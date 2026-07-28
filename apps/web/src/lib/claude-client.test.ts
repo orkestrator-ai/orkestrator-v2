@@ -334,12 +334,23 @@ describe("claude-client", () => {
         return new Response(JSON.stringify({ planMode: true }), { status: 200 });
       }) as unknown as typeof fetch;
 
-      await updateSessionPreferences(client, "session-1", { planMode: true });
+      const authenticatedClient = createClient(
+        "http://127.0.0.1:4001",
+        "bridge-token",
+      );
+      await updateSessionPreferences(
+        authenticatedClient,
+        "session-1",
+        { planMode: true },
+      );
 
       expect(request?.url).toBe(
         "http://127.0.0.1:4001/session/session-1/preferences",
       );
       expect(request?.method).toBe("PUT");
+      expect(request?.headers.get("X-Orkestrator-Claude-Token")).toBe(
+        "bridge-token",
+      );
       expect(await request?.json()).toEqual({ planMode: true });
     });
 
@@ -351,15 +362,25 @@ describe("claude-client", () => {
     });
 
     test("dismisses suggestions and treats an already-missing suggestion as success", async () => {
-      const methods: string[] = [];
-      globalThis.fetch = mock(async (_input, init) => {
-        methods.push(init?.method ?? "GET");
-        return new Response(null, { status: methods.length === 1 ? 204 : 404 });
+      const requests: Request[] = [];
+      globalThis.fetch = mock(async (input, init) => {
+        requests.push(new Request(input, init));
+        return new Response(null, { status: requests.length === 1 ? 204 : 404 });
       }) as unknown as typeof fetch;
 
-      await dismissPromptSuggestion(client, "session-1");
-      await dismissPromptSuggestion(client, "session-1");
-      expect(methods).toEqual(["DELETE", "DELETE"]);
+      const authenticatedClient = createClient(
+        "http://127.0.0.1:4001",
+        "bridge-token",
+      );
+      await dismissPromptSuggestion(authenticatedClient, "session-1");
+      await dismissPromptSuggestion(authenticatedClient, "session-1");
+      expect(requests.map((request) => request.method)).toEqual(["DELETE", "DELETE"]);
+      expect(
+        requests.every(
+          (request) =>
+            request.headers.get("X-Orkestrator-Claude-Token") === "bridge-token",
+        ),
+      ).toBe(true);
     });
 
     test("reports non-404 suggestion dismissal failures", async () => {

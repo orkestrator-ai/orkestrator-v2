@@ -7,11 +7,16 @@ import {
   useRef,
   useState,
 } from "react";
+import { toast } from "sonner";
 import {
   composeDraftKey,
+  createDraftRevisionState,
   discardComposeDraft,
+  DraftRevisionConflictError,
   loadComposeDraft,
   persistComposeDraft,
+  resolveComposeDraftDiscardConflict,
+  resolveComposeDraftSaveConflict,
 } from "@/lib/compose-draft-persistence";
 
 interface DurableComposeDraftOptions<T> {
@@ -52,6 +57,7 @@ export function useDurableComposeDraft<T>({
     () => composeDraftKey(namespace, ownerId, localKey),
     [localKey, namespace, ownerId],
   );
+  const revisionState = useMemo(createDraftRevisionState, [key]);
   const [value, setValue] = useState(initialValue);
   const valueRef = useRef(value);
   const initialRef = useRef(initialValue);
@@ -71,9 +77,53 @@ export function useDurableComposeDraft<T>({
     nextValue: T,
   ): Promise<void> => (
     clearedKeyRef.current === draftKey || isEmptyRef.current(nextValue)
-      ? discardComposeDraft(draftKey)
-      : persistComposeDraft(draftKey, ownerType, ownerId, nextValue)
-  ), [ownerId, ownerType]);
+      ? discardComposeDraft(draftKey, revisionState)
+      : persistComposeDraft(
+          draftKey,
+          ownerType,
+          ownerId,
+          nextValue,
+          revisionState,
+        )
+  ), [ownerId, ownerType, revisionState]);
+
+  const reportPersistenceError = useCallback((
+    error: unknown,
+    draftKey: string,
+  ): void => {
+    if (!(error instanceof DraftRevisionConflictError)) {
+      console.warn(`[${namespace}] Failed to persist draft:`, error);
+      return;
+    }
+    const discarding = clearedKeyRef.current === draftKey
+      || isEmptyRef.current(valueRef.current);
+    toast.error("Draft changed in another window", {
+      id: `compose-draft-conflict:${draftKey}`,
+      description: discarding
+        ? "A newer saved draft was preserved. Discard it explicitly to finish clearing this input."
+        : "Your input is still here. Choose Save mine to replace the other saved draft.",
+      action: {
+        label: discarding ? "Discard saved draft" : "Save mine",
+        onClick: () => {
+          const latest = valueRef.current;
+          const operation = (
+            clearedKeyRef.current === draftKey || isEmptyRef.current(latest)
+          )
+            ? resolveComposeDraftDiscardConflict(draftKey, revisionState)
+            : resolveComposeDraftSaveConflict(
+                draftKey,
+                ownerType,
+                ownerId,
+                latest,
+                revisionState,
+              );
+          void operation.catch((retryError) => {
+            reportPersistenceError(retryError, draftKey);
+          });
+        },
+      },
+    });
+  }, [namespace, ownerId, ownerType, revisionState]);
 
   useEffect(() => {
     if (!enabled) {
@@ -87,7 +137,7 @@ export function useDurableComposeDraft<T>({
     setValue(initialRef.current);
     valueRef.current = initialRef.current;
 
-    void loadComposeDraft<T>(key)
+    void loadComposeDraft<T>(key, revisionState)
       .then((persisted) => {
         loadSucceeded = true;
         if (
@@ -119,21 +169,35 @@ export function useDurableComposeDraft<T>({
       // same unmount/key-change cleanup.
       if (hydrated || editRevisionRef.current !== revisionAtRequest) {
         void persistValue(key, valueRef.current).catch((error) => {
-          console.warn(`[${namespace}] Failed to persist draft during cleanup:`, error);
+          reportPersistenceError(error, key);
         });
       }
     };
-  }, [enabled, key, namespace, persistValue]);
+  }, [
+    enabled,
+    key,
+    persistValue,
+    reportPersistenceError,
+    revisionState,
+  ]);
 
   useEffect(() => {
     if (!enabled || hydratedKey !== key) return;
     const timer = setTimeout(() => {
       void persistValue(key, value).catch((error) => {
-        console.warn(`[${namespace}] Failed to persist draft:`, error);
+        reportPersistenceError(error, key);
       });
     }, debounceMs);
     return () => clearTimeout(timer);
-  }, [debounceMs, enabled, hydratedKey, key, namespace, persistValue, value]);
+  }, [
+    debounceMs,
+    enabled,
+    hydratedKey,
+    key,
+    persistValue,
+    reportPersistenceError,
+    value,
+  ]);
 
   const setDraftValue = useCallback<Dispatch<SetStateAction<T>>>((action) => {
     const nextValue = typeof action === "function"
@@ -151,8 +215,13 @@ export function useDurableComposeDraft<T>({
     clearedKeyRef.current = key;
     valueRef.current = initialRef.current;
     setValue(initialRef.current);
-    await discardComposeDraft(key);
-  }, [key]);
+    try {
+      await discardComposeDraft(key, revisionState);
+    } catch (error) {
+      reportPersistenceError(error, key);
+      throw error;
+    }
+  }, [key, reportPersistenceError, revisionState]);
 
   return [value, setDraftValue, clear];
 }

@@ -32,6 +32,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
+import {
+  composeDraftKey,
+  discardComposeDraft,
+} from "@/lib/compose-draft-persistence";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import {
   connectLinear,
@@ -226,6 +230,11 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const connectionRequestRef = useRef(0);
   const issuesRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
+  const selectedIssueIdRef = useRef(selectedIssueId);
+  const commentBodyRef = useRef(commentBody);
+  const commentEditRevisionsRef = useRef(new Map<string, number>());
+  selectedIssueIdRef.current = selectedIssueId;
+  commentBodyRef.current = commentBody;
 
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
   const clearCompletionCommentStatus = useBuildPipelineStore((state) => state.clearCompletionCommentStatus);
@@ -368,26 +377,61 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const handlePostComment = async () => {
     const body = commentBody.trim();
     if (!detail || !body || commentState === "loading") return;
+    const submittedIssueId = detail.id;
+    const submittedDraftValue = commentBody;
+    const submittedEditRevision =
+      commentEditRevisionsRef.current.get(submittedIssueId) ?? 0;
 
     setCommentState("loading");
     setCommentError(null);
     try {
-      const comment = await postLinearIssueComment(detail.id, body);
+      const comment = await postLinearIssueComment(submittedIssueId, body);
       setDetail((current) => {
-        if (!current || current.id !== detail.id) return current;
+        if (!current || current.id !== submittedIssueId) return current;
         return {
           ...current,
           comments: [...current.comments, comment].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
         };
       });
-      void clearCommentDraft().catch((error) => {
-        console.warn("[LinearTicketsView] Failed to clear posted comment draft:", error);
-      });
-      setCommentState("loaded");
+      const submittedDraftGenerationIsCurrent =
+        (commentEditRevisionsRef.current.get(submittedIssueId) ?? 0)
+          === submittedEditRevision;
+      const submittedDraftIsCurrent =
+        submittedDraftGenerationIsCurrent
+        && (
+          selectedIssueIdRef.current !== submittedIssueId
+          || commentBodyRef.current === submittedDraftValue
+        );
+      if (submittedDraftIsCurrent) {
+        const clearSubmittedDraft =
+          selectedIssueIdRef.current === submittedIssueId
+            ? clearCommentDraft()
+            : discardComposeDraft(composeDraftKey(
+                "linear-comment",
+                projectId,
+                submittedIssueId,
+              ));
+        void clearSubmittedDraft.catch((error) => {
+          console.warn("[LinearTicketsView] Failed to clear posted comment draft:", error);
+        });
+      }
+      if (
+        selectedIssueIdRef.current === submittedIssueId
+        && submittedDraftIsCurrent
+      ) {
+        setCommentState("loaded");
+      }
       toast.success("Linear comment added");
     } catch (error) {
-      setCommentState("error");
-      setCommentError(error instanceof Error ? error.message : "Failed to add Linear comment");
+      if (
+        selectedIssueIdRef.current === submittedIssueId
+        && (commentEditRevisionsRef.current.get(submittedIssueId) ?? 0)
+          === submittedEditRevision
+        && commentBodyRef.current === submittedDraftValue
+      ) {
+        setCommentState("error");
+        setCommentError(error instanceof Error ? error.message : "Failed to add Linear comment");
+      }
     }
   };
 
@@ -528,6 +572,12 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                     <Textarea
                       value={commentBody}
                       onChange={(event) => {
+                        if (selectedIssueId) {
+                          commentEditRevisionsRef.current.set(
+                            selectedIssueId,
+                            (commentEditRevisionsRef.current.get(selectedIssueId) ?? 0) + 1,
+                          );
+                        }
                         setCommentBody(event.target.value);
                         if (commentError) setCommentError(null);
                       }}

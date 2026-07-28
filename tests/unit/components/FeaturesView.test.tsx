@@ -61,6 +61,14 @@ const updateFeatureMock = mock(async (
   _id: string,
   _updates: Partial<FeaturePlan>,
 ) => undefined as FeaturePlan | undefined);
+const claimFeatureBuildMock = mock(async (
+  _id: string,
+  _taskId: string,
+) => undefined as {
+  claimed: boolean;
+  feature: FeaturePlan;
+} | undefined);
+const deleteTaskMock = mock(async (_taskId: string) => undefined);
 const loadFeaturesMock = mock(async () => true);
 const createEnvironmentMock = mock(async () => makeEnvironment());
 const startEnvironmentMock = mock(async () => undefined);
@@ -465,12 +473,14 @@ function seedStores(featureOrFeatures: FeaturePlan | FeaturePlan[]) {
     loadFeatures: loadFeaturesMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["loadFeatures"],
     createFeature: createFeatureMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["createFeature"],
     updateFeature: updateFeatureMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["updateFeature"],
+    claimFeatureBuild: claimFeatureBuildMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["claimFeatureBuild"],
     appendMessage: appendMessageMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["appendMessage"],
     appendStoryMessage: appendStoryMessageMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["appendStoryMessage"],
   });
   useKanbanStore.setState({
     tasks: [makeTask()],
     addTask: addTaskMock as unknown as ReturnType<typeof useKanbanStore.getState>["addTask"],
+    deleteTask: deleteTaskMock as unknown as ReturnType<typeof useKanbanStore.getState>["deleteTask"],
     updateTask: updateTaskMock as unknown as ReturnType<typeof useKanbanStore.getState>["updateTask"],
   });
 }
@@ -568,6 +578,16 @@ beforeEach(() => {
   updateFeatureMock.mockImplementation(async (featureId, updates) =>
     updateFeatureInStore(featureId, updates)
   );
+  claimFeatureBuildMock.mockClear();
+  claimFeatureBuildMock.mockImplementation(async (featureId, taskId) => {
+    const feature = await updateFeatureInStore(featureId, {
+      status: "building",
+      buildTaskId: taskId,
+    });
+    return feature ? { claimed: true, feature } : undefined;
+  });
+  deleteTaskMock.mockClear();
+  deleteTaskMock.mockImplementation(async () => undefined);
   loadFeaturesMock.mockClear();
   createEnvironmentMock.mockClear();
   createEnvironmentMock.mockImplementation(async () => makeEnvironment());
@@ -736,6 +756,7 @@ describe("FeaturesView message drafts", () => {
       "project",
       "project-1",
       { "feature:feature-1": "Persist before unmount" },
+      1,
     ));
   });
 
@@ -4726,6 +4747,49 @@ describe("FeaturesView build action", () => {
     expect(screen.getByRole("button", { name: "Build" })).toBeTruthy();
   });
 
+  test("keeps Build disabled after remount when the feature has a durable reservation", () => {
+    seedStores(featureWithStories({
+      status: "building",
+      buildTaskId: "task-existing",
+      buildPipelineId: "pipeline-existing",
+    }));
+
+    const first = render(<FeaturesView projectId="project-1" />);
+    expect(screen.getByRole("button", { name: "Build" }).hasAttribute("disabled")).toBe(true);
+    first.unmount();
+
+    render(<FeaturesView projectId="project-1" />);
+    const build = screen.getByRole("button", { name: "Build" });
+    expect(build.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(build);
+    expect(addTaskMock).not.toHaveBeenCalled();
+    expect(startBuildMock).not.toHaveBeenCalled();
+  });
+
+  test("deletes the losing task when another client owns the feature reservation", async () => {
+    const winner = featureWithStories({
+      status: "building",
+      buildTaskId: "task-winner",
+    });
+    claimFeatureBuildMock.mockResolvedValueOnce({
+      claimed: false,
+      feature: winner,
+    });
+    seedStores(featureWithStories());
+
+    render(<FeaturesView projectId="project-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+
+    await waitFor(() =>
+      expect(claimFeatureBuildMock).toHaveBeenCalledWith("feature-1", "task-1"),
+    );
+    expect(deleteTaskMock).toHaveBeenCalledWith("task-1");
+    expect(startBuildMock).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith(
+      "This feature already has an active build",
+    );
+  });
+
   test("blocks Build while any project conversation is active", async () => {
     seedStores([
       featureWithStories({
@@ -4912,6 +4976,7 @@ describe("FeaturesView build action", () => {
       "Failed to start feature build",
       { description: "Created build task was not found in the Kanban store" },
     ));
+    expect(deleteTaskMock).toHaveBeenCalledWith("task-1");
     expect(startBuildMock).not.toHaveBeenCalled();
   });
 
@@ -5049,9 +5114,6 @@ describe("FeaturesView build action", () => {
     seedStores(featureWithStories());
     seedPipeline();
     updateFeatureMock
-      .mockImplementationOnce(async (featureId, updates) =>
-        updateFeatureInStore(featureId, updates)
-      )
       .mockImplementationOnce(async () => undefined);
     render(<FeaturesView projectId="project-1" />);
 

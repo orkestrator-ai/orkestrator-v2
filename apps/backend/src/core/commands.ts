@@ -555,7 +555,7 @@ type StoredKanbanTask = Awaited<ReturnType<StorageService["getKanbanTasks"]>>[nu
  * the build flow (which associates the pipeline, not the task, with the
  * environment). Mirrors the renderer's `findTaskForEnvironment`.
  */
-async function findKanbanTaskForEnvironment(
+export async function findKanbanTaskForEnvironment(
   storage: StorageService,
   environmentId: string,
 ): Promise<PrMonitorKanbanTask | null> {
@@ -599,33 +599,84 @@ async function findKanbanTaskForEnvironment(
   };
 }
 
-/** Runs the same `gh pr list --head` detection the one-shot commands use. */
+export interface PrMonitorDetectionRequest {
+  args: string[];
+  shellCommand: string;
+  knownPrUrl: string | null;
+  branch: string;
+}
+
+/**
+ * Selects immutable-URL lookup while a known PR is nonterminal. A branch
+ * lookup is suitable for discovery but GitHub commonly deletes the head branch
+ * as part of merging, at which point it can no longer find the open PR whose
+ * terminal state the monitor still needs to observe. Once terminal, branch
+ * discovery resumes so a replacement PR on the same branch can be found.
+ */
+export function getPrMonitorDetectionRequest(
+  target: PrMonitorTarget,
+): PrMonitorDetectionRequest {
+  const headBranch = validatePrDetectionBranch(target.branch);
+  if (target.prUrl && target.prState !== "merged" && target.prState !== "closed") {
+    const args = [
+      "pr",
+      "view",
+      target.prUrl,
+      "--json",
+      "url,state,mergeable",
+    ];
+    return {
+      args,
+      shellCommand: `gh pr view ${quoteShell(target.prUrl)} --json url,state,mergeable`,
+      knownPrUrl: target.prUrl,
+      branch: headBranch,
+    };
+  }
+  const args = [
+    "pr",
+    "list",
+    "--head",
+    headBranch,
+    "--state",
+    "all",
+    "--limit",
+    "30",
+    "--json",
+    "url,state,mergeable,updatedAt",
+  ];
+  return {
+    args,
+    shellCommand: `gh pr list --head ${quoteShell(headBranch)} --state all --limit 30 --json url,state,mergeable,updatedAt`,
+    knownPrUrl: null,
+    branch: headBranch,
+  };
+}
+
+export function parsePrMonitorDetectionResponse(
+  request: PrMonitorDetectionRequest,
+  stdout: string,
+): PrDetectionResult | null {
+  return request.knownPrUrl
+    ? parseKnownPrDetectionOutput(stdout, request.knownPrUrl)
+    : parsePrDetectionOutput(stdout, request.branch);
+}
+
+/** Runs immutable lookup for known PRs and branch discovery for unknown PRs. */
 async function detectEnvironmentPullRequest(
   target: PrMonitorTarget,
 ): Promise<PrDetection | null> {
-  const headBranch = validatePrDetectionBranch(target.branch);
+  const request = getPrMonitorDetectionRequest(target);
   if (target.kind === "local") {
     if (!target.worktreePath) throw new Error("Local environment has no worktree path");
-    const { stdout } = await runCommand("gh", [
-      "pr",
-      "list",
-      "--head",
-      headBranch,
-      "--state",
-      "all",
-      "--limit",
-      "30",
-      "--json",
-      "url,state,mergeable,updatedAt",
-    ], { cwd: target.worktreePath, timeoutMs: 30_000 });
-    return parsePrDetectionOutput(stdout, headBranch);
+    const { stdout } = await runCommand("gh", request.args, {
+      cwd: target.worktreePath,
+      timeoutMs: 30_000,
+    });
+    return parsePrMonitorDetectionResponse(request, stdout);
   }
   if (!target.containerId) throw new Error("Container environment has no container id");
-  const output = await dockerExec(
-    target.containerId,
-    `gh pr list --head ${quoteShell(headBranch)} --state all --limit 30 --json url,state,mergeable,updatedAt`,
-  );
-  return parsePrDetectionOutput(output, headBranch);
+  const output = await dockerExec(target.containerId, request.shellCommand);
+  return parsePrMonitorDetectionResponse(request, output);
 }
 
 const prMonitorService = new PrMonitorService({
@@ -1412,7 +1463,7 @@ async function renameEnvironmentFromPrompt(
   context.emit("environment-renamed", { environment_id: updated.id, new_name: updated.name, new_branch: updated.branch });
 }
 
-type PrDetectionResult = {
+export type PrDetectionResult = {
   url: string;
   state: PrState;
   hasMergeConflicts: boolean;
@@ -2397,6 +2448,26 @@ function parsePrDetectionOutput(stdout: string, branch: string): PrDetectionResu
     throw new Error("Failed to parse gh pr list output");
   }
   return result;
+}
+
+function parseKnownPrDetectionOutput(
+  stdout: string,
+  expectedUrl: string,
+): PrDetectionResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    throw new Error("Failed to parse gh pr view output");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Failed to parse gh pr view output");
+  }
+  const candidate = buildPrDetectionCandidate(parsed as GhPrListEntry);
+  if (!candidate || candidate.result.url !== expectedUrl) {
+    throw new Error("GitHub returned unexpected pull request metadata");
+  }
+  return candidate.result;
 }
 
 function validatePrDetectionBranch(branch: unknown): string {
@@ -7170,25 +7241,48 @@ export function createCommandRegistry(
           : asNumber(expectedRevision, "expectedRevision"),
       ),
   );
-  register("delete_compose_draft", ({ draftKey }, { storage }) =>
-    storage.deleteComposeDraft(asString(draftKey, "draftKey")),
+  register("delete_compose_draft", ({ draftKey, expectedRevision }, { storage }) =>
+    storage.deleteComposeDraft(
+      asString(draftKey, "draftKey"),
+      expectedRevision === undefined
+        ? undefined
+        : asNumber(expectedRevision, "expectedRevision"),
+    ),
   );
   register("get_file_draft", ({ draftKey }, { storage }) =>
     storage.getFileDraft(asString(draftKey, "draftKey")),
   );
   register(
     "save_file_draft",
-    ({ draftKey, environmentId, filePath, content, originalContent }, { storage }) =>
+    (
+      {
+        draftKey,
+        environmentId,
+        filePath,
+        content,
+        originalContent,
+        expectedRevision,
+      },
+      { storage },
+    ) =>
       storage.saveFileDraft(
         asString(draftKey, "draftKey"),
         asString(environmentId, "environmentId"),
         asString(filePath, "filePath"),
         asString(content, "content"),
         asString(originalContent, "originalContent"),
+        expectedRevision === undefined
+          ? undefined
+          : asNumber(expectedRevision, "expectedRevision"),
       ),
   );
-  register("delete_file_draft", ({ draftKey }, { storage }) =>
-    storage.deleteFileDraft(asString(draftKey, "draftKey")),
+  register("delete_file_draft", ({ draftKey, expectedRevision }, { storage }) =>
+    storage.deleteFileDraft(
+      asString(draftKey, "draftKey"),
+      expectedRevision === undefined
+        ? undefined
+        : asNumber(expectedRevision, "expectedRevision"),
+    ),
   );
   register("get_agent_handoff", ({ handoffId }, { storage }) =>
     storage.getAgentHandoff(asString(handoffId, "handoffId")),
@@ -7826,6 +7920,11 @@ export function createCommandRegistry(
   register("get_feature_plans", ({ projectId }, { storage }) => storage.getFeaturePlans(asString(projectId, "projectId")));
   register("create_feature_plan", ({ projectId }, { storage }) => storage.createFeaturePlan(asString(projectId, "projectId")));
   register("update_feature_plan", ({ featureId, updates }, { storage }) => storage.updateFeaturePlan(asString(featureId, "featureId"), parseUpdateObject(updates) as never));
+  register("claim_feature_plan_build", ({ featureId, taskId }, { storage }) =>
+    storage.claimFeaturePlanBuild(
+      asString(featureId, "featureId"),
+      asString(taskId, "taskId"),
+    ));
   register("append_feature_plan_message", ({ featureId, role, content, stateApplication, modelId }, { storage }) =>
     storage.appendFeaturePlanMessage(
       asString(featureId, "featureId"),

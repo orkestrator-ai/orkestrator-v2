@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import * as realBuildChatTab from "./BuildChatTab";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -131,6 +131,81 @@ describe("BuildPipelineSupervisor", () => {
     render(<BuildPipelineSupervisor />);
 
     expect(screen.queryByTestId("driver-pipeline-1")).toBeNull();
+  });
+
+  test("finds a pane-owned pipeline recursively inside a split layout", () => {
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        ["env-1", {
+          root: {
+            kind: "split",
+            id: "split-1",
+            direction: "horizontal",
+            sizes: [50, 50],
+            depth: 0,
+            children: [
+              {
+                kind: "leaf",
+                id: "pane-left",
+                tabs: [{ id: "terminal-1", type: "plain" }],
+                activeTabId: "terminal-1",
+              },
+              {
+                kind: "leaf",
+                id: "pane-right",
+                tabs: [{
+                  id: "build-pipeline-1",
+                  type: "claude-build",
+                  buildTabData: {
+                    environmentId: "env-1",
+                    pipelineId: "pipeline-1",
+                    taskId: "task-1",
+                    isLocal: false,
+                  },
+                }],
+                activeTabId: "build-pipeline-1",
+              },
+            ],
+          },
+          activePaneId: "pane-right",
+          containerId: "container-1",
+        }],
+      ]),
+    });
+
+    render(<BuildPipelineSupervisor />);
+
+    expect(screen.queryByTestId("driver-pipeline-1")).toBeNull();
+  });
+
+  test("hands ownership to the app driver when a tab closes and back when it reopens", async () => {
+    usePaneLayoutStore.getState().addTab("pane-1", {
+      id: "build-pipeline-1",
+      type: "claude-build",
+      buildTabData: {
+        environmentId: "env-1",
+        pipelineId: "pipeline-1",
+        taskId: "task-1",
+        isLocal: false,
+      },
+    }, "env-1");
+    render(<BuildPipelineSupervisor />);
+    expect(screen.queryByTestId("driver-pipeline-1")).toBeNull();
+
+    usePaneLayoutStore.getState().removeTab("pane-1", "build-pipeline-1", "env-1");
+    await waitFor(() => expect(screen.getByTestId("driver-pipeline-1")).toBeTruthy());
+
+    usePaneLayoutStore.getState().addTab("pane-1", {
+      id: "build-pipeline-1",
+      type: "claude-build",
+      buildTabData: {
+        environmentId: "env-1",
+        pipelineId: "pipeline-1",
+        taskId: "task-1",
+        isLocal: false,
+      },
+    }, "env-1");
+    await waitFor(() => expect(screen.queryByTestId("driver-pipeline-1")).toBeNull());
   });
 
   test("drives active pipelines before pane hydration while skipping terminal pipelines", () => {

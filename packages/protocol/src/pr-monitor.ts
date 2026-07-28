@@ -172,6 +172,7 @@ export function isPrMonitorEvent(value: unknown): value is PrMonitorEvent {
   }
   if (candidate.removed === true) return true;
   if (!isPrMonitorEnvironmentState(candidate.state)) return false;
+  if (candidate.state.environmentId !== candidate.environmentId) return false;
   return candidate.transition === undefined || isPrMonitorTransition(candidate.transition);
 }
 

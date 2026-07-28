@@ -89,6 +89,34 @@ describe("usePullRequest", () => {
     expect(result.current.prUrl).toBe("https://github.com/test/repo/pull/123");
   });
 
+  test("reacts to authoritative environment and monitor snapshot changes", () => {
+    useEnvironmentStore.setState({
+      environments: [createMockEnvironment({ id: "env-1", prUrl: null })],
+      isLoading: false,
+      error: null,
+    });
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    act(() => {
+      useEnvironmentStore.getState().setEnvironmentPR(
+        "env-1",
+        "https://github.com/test/repo/pull/789",
+        "open",
+        true,
+      );
+      usePrMonitorStore.setState({
+        states: new Map([["env-1", monitorState("env-1", { checkInProgress: true })]]),
+      });
+    });
+
+    expect(result.current).toMatchObject({
+      prUrl: "https://github.com/test/repo/pull/789",
+      prState: "open",
+      hasMergeConflicts: true,
+      isDetecting: true,
+    });
+  });
+
   test("viewPR opens browser with prUrl", async () => {
     const env = createMockEnvironment({
       id: "env-1",
@@ -213,6 +241,24 @@ describe("usePullRequest", () => {
     expect(mockClearEnvironmentPr).toHaveBeenCalledWith("env-1");
     // The store should be updated to clear the PR
     expect(useEnvironmentStore.getState().environments[0]?.prUrl).toBeNull();
+  });
+
+  test("resetPR preserves the snapshot and reports backend rejection", async () => {
+    mockClearEnvironmentPr.mockRejectedValueOnce("backend offline");
+    const env = createMockEnvironment({
+      id: "env-1",
+      prUrl: "https://github.com/test/repo/pull/123",
+      prState: "open",
+    });
+    useEnvironmentStore.setState({ environments: [env], isLoading: false, error: null });
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    await act(async () => {
+      await result.current.resetPR();
+    });
+
+    expect(result.current.error).toBe("Failed to reset PR");
+    expect(result.current.prUrl).toBe(env.prUrl);
   });
 
   test("resetPR does nothing when no environmentId", async () => {

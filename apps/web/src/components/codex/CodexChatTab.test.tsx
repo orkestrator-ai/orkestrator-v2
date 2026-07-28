@@ -5,6 +5,10 @@ import {useCodexStore} from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import {
+  codexInteractionDraftKey,
+  usePromptDraftStore,
+} from "@/stores/promptDraftStore";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import type {
   CodexAbortOutcome,
@@ -1334,6 +1338,11 @@ describe("CodexChatTab", () => {
         SESSION_KEY,
         [createInteraction("old-interaction")],
       );
+      usePromptDraftStore.getState().setDraftValue(
+        codexInteractionDraftKey("old-interaction"),
+        "answer",
+        "unfinished",
+      );
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
@@ -1344,6 +1353,11 @@ describe("CodexChatTab", () => {
     );
     expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false);
     expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        codexInteractionDraftKey("old-interaction"),
+      ),
+    ).toBe(false);
 
     await act(async () => {
       staleApprovals.resolve([createApproval("late-old-approval")]);

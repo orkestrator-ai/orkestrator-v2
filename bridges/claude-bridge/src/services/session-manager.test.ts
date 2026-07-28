@@ -357,6 +357,7 @@ const {
   stopBackgroundTask,
   claimPromptDispatch,
   setSessionPreferences,
+  clearPromptSuggestion,
   getPromptDispatchState,
   getPromptDispatchRecordCountForTesting,
   seedSettledPromptDispatchForTesting,
@@ -580,6 +581,26 @@ describe("session lifecycle", () => {
     track(session.id);
     expect(getSessionMessages(session.id)).toEqual([]);
     expect(getSessionMessages("session-missing")).toEqual([]);
+  });
+
+  test("clears prompt suggestions authoritatively and emits the removal", () => {
+    const session = createSession("suggestion");
+    track(session.id);
+    session.promptSuggestion = "Try the next step";
+    const { events, stop } = captureEvents();
+    try {
+      expect(clearPromptSuggestion(session.id)).toBe(true);
+      expect(session.promptSuggestion).toBeUndefined();
+      expect(events).toContainEqual({
+        type: "session.updated",
+        sessionId: session.id,
+        data: { promptSuggestion: null },
+      });
+      expect(clearPromptSuggestion(session.id)).toBe(true);
+      expect(clearPromptSuggestion("session-missing")).toBe(false);
+    } finally {
+      stop();
+    }
   });
 
   test("durably deduplicates stable prompt request ids", async () => {
@@ -918,6 +939,7 @@ describe("session lifecycle", () => {
       expect(mockQuery).not.toHaveBeenCalled();
       expect(session.dispatchedRequestIds?.has(requestId)).toBe(false);
       expect(await readSessionPreferences(sdkSessionId)).toEqual({});
+      expect(getPromptDispatchState(session.id, requestId)).toBe("new");
     } finally {
       setClaudeHomeForTesting(sessionManagerTestHome);
       await rm(directory, { recursive: true, force: true });
@@ -977,6 +999,42 @@ describe("session lifecycle", () => {
         sessionId: session.id,
         data: { planMode: true },
       });
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("restores a claimed turn when plan-mode persistence fails before SDK startup", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-plan-startup-failure-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("plan startup");
+      track(session.id);
+      const requestId = "initial-prompt:env-1:plan-startup-failure";
+
+      const claim = claimPromptDispatch(session.id, requestId, () => {
+        const completion = (async () => {
+          await rm(join(directory, ".claude"), {
+            recursive: true,
+            force: true,
+          });
+          await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+          await sendPrompt(session.id, "Plan this", {
+            permissionMode: "plan",
+            requestId,
+          });
+        })();
+        return { started: completion, completion };
+      });
+
+      await expect(claim).rejects.toBeTruthy();
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(session.status).toBe("idle");
+      expect(session.abortController).toBeUndefined();
+      expect(session.persistedMessagesLoaded).toBeUndefined();
+      expect(session.dispatchedRequestIds?.has(requestId)).toBe(false);
+      expect(getPromptDispatchState(session.id, requestId)).toBe("new");
     } finally {
       setClaudeHomeForTesting(sessionManagerTestHome);
       await rm(directory, { recursive: true, force: true });
@@ -4062,6 +4120,10 @@ describe("plan approval flow", () => {
 
       const result = (await canUseToolPromise) as { behavior: string };
       expect(result.behavior).toBe("allow");
+      expect(session.planMode).toBe(false);
+      expect(await readSessionPreferences(
+        session.id.slice("session-".length),
+      )).toMatchObject({ planMode: false });
 
       const exitEvent = events.find(
         (e) => e.type === "plan.exit-requested" && e.sessionId === session.id,
@@ -4290,11 +4352,85 @@ describe("plan approval flow", () => {
         behavior: "allow",
         updatedInput: { file_path: "a.ts" },
       });
+      expect(session.planMode).toBe(true);
+      expect(await readSessionPreferences(
+        session.id.slice("session-".length),
+      )).toMatchObject({ planMode: true });
       call.finish();
       await promptPromise;
       expect(events.some((event) => event.type === "plan.enter-requested")).toBe(true);
     } finally {
       stop();
+    }
+  });
+
+  test("denies EnterPlanMode when its durable preference cannot be written", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-enter-plan-failure-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("enter-plan-failure");
+      track(session.id);
+      const { events, stop } = captureEvents();
+      try {
+        const promptPromise = sendPrompt(session.id, "tools", {
+          permissionMode: "default",
+        });
+        const call = await nextQueryCall();
+        await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+
+        const result = await call.options.canUseTool!(
+          "EnterPlanMode",
+          { reason: "plan" },
+        );
+        expect(result.behavior).toBe("deny");
+        expect(result.message).toContain("could not be persisted safely");
+        expect(session.planMode).toBeUndefined();
+        expect(events.some((event) => event.type === "plan.enter-requested")).toBe(false);
+
+        call.finish();
+        await promptPromise;
+      } finally {
+        stop();
+      }
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps plan mode enabled when an approved exit cannot be persisted", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-exit-plan-failure-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("exit-plan-failure");
+      track(session.id);
+      session.planMode = true;
+      const { events, stop } = captureEvents();
+      try {
+        const promptPromise = sendPrompt(session.id, "tools", {
+          permissionMode: "default",
+        });
+        const call = await nextQueryCall();
+        const toolPromise = call.options.canUseTool!("ExitPlanMode", {});
+        await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
+        await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+        const approval = getPendingPlanApprovals(session.id)[0];
+        expect(respondToPlanApproval(approval.id, true)).toBe(true);
+
+        const result = await toolPromise;
+        expect(result.behavior).toBe("deny");
+        expect(result.message).toContain("could not be exited safely");
+        expect(session.planMode).toBe(true);
+        expect(events.some((event) => event.type === "plan.exit-requested")).toBe(false);
+
+        call.finish();
+        await promptPromise;
+      } finally {
+        stop();
+      }
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
     }
   });
 
@@ -5062,6 +5198,82 @@ describe("reconcilePersistedSessions", () => {
     expect(mockSdkGetSessionMessages).not.toHaveBeenCalled();
   });
 
+  test("rehydrates durable plan mode and suppresses a journaled request after restart", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-reconcile-preferences-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      await updateSessionPreferences(PERSISTED_SDK_ID, {
+        planMode: true,
+        dispatchedRequestIds: ["initial-prompt:after-restart"],
+      });
+      mockSdkListSessions.mockImplementation(async () => [
+        sdkSessionInfo({ cwd: "/repo/env-a" }),
+      ]);
+
+      await withWorkspaceCwd("/repo/env-a", async () => {
+        await reconcilePersistedSessions();
+      });
+      const id = track(`session-${PERSISTED_SDK_ID}`);
+      const adopted = getSession(id);
+      expect(adopted?.planMode).toBe(true);
+      expect(adopted?.dispatchedRequestIds).toEqual(
+        new Set(["initial-prompt:after-restart"]),
+      );
+
+      const dispatch = mock(async () => {});
+      await expect(
+        claimPromptDispatch(id, "initial-prompt:after-restart", dispatch),
+      ).resolves.toBe("duplicate");
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("blocks stable-id prompts when the durable journal is corrupt after restart", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-reconcile-corrupt-journal-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const preferencesDirectory = join(
+        directory,
+        ".claude",
+        "orkestrator",
+        "session-preferences",
+      );
+      await mkdir(preferencesDirectory, { recursive: true });
+      await writeFile(
+        join(preferencesDirectory, `${PERSISTED_SDK_ID}.json`),
+        "{",
+        "utf-8",
+      );
+      mockSdkListSessions.mockImplementation(async () => [
+        sdkSessionInfo({ cwd: "/repo/env-a" }),
+      ]);
+
+      await withWorkspaceCwd("/repo/env-a", async () => {
+        await reconcilePersistedSessions();
+      });
+      const id = track(`session-${PERSISTED_SDK_ID}`);
+      expect(getSession(id)).toMatchObject({
+        planMode: true,
+        dispatchJournalUnavailable: true,
+      });
+
+      const dispatch = mock(async () => {});
+      await expect(
+        claimPromptDispatch(id, "initial-prompt:unsafe-retry", dispatch),
+      ).rejects.toMatchObject({
+        code: "conflict",
+        message: expect.stringContaining("durable prompt journal is unavailable"),
+      });
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("updates an existing session in place instead of replacing it", async () => {
     const existing = createSession("Local title");
     track(existing.id);
@@ -5253,6 +5465,25 @@ describe("ensurePersistedSession", () => {
     expect(mockSdkGetSessionInfo).toHaveBeenCalledWith(PERSISTED_SDK_ID, {
       dir: process.env.CWD || process.cwd(),
     });
+  });
+
+  test("materializes durable preferences with the point-read session", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-materialize-preferences-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      await updateSessionPreferences(PERSISTED_SDK_ID, {
+        planMode: false,
+        dispatchedRequestIds: ["request-from-disk"],
+      });
+      const state = await materializePersistedSession();
+      expect(state.planMode).toBe(false);
+      expect(state.dispatchedRequestIds).toEqual(
+        new Set(["request-from-disk"]),
+      );
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   test("shares one materialization between concurrent callers", async () => {
@@ -7092,10 +7323,9 @@ describe("prompt suggestions", () => {
           && (event.data as object | undefined) !== undefined
           && "promptSuggestion" in (event.data as object),
       );
-      // The client tests for presence of the key, not truthiness, so an
-      // explicit `undefined` is the clear signal.
+      // JSON preserves null, so it is the explicit wire-level clear signal.
       expect(cleared).toBeDefined();
-      expect((cleared?.data as { promptSuggestion?: string }).promptSuggestion).toBeUndefined();
+      expect((cleared?.data as { promptSuggestion?: string | null }).promptSuggestion).toBeNull();
 
       secondCall.finish();
       await second;

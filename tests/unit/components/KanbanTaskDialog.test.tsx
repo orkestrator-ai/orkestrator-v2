@@ -459,6 +459,7 @@ describe("KanbanTaskDialog", () => {
       "project",
       "project-1",
       expect.objectContaining({ title: "Flush on environment switch" }),
+      0,
     ));
   });
 
@@ -485,6 +486,7 @@ describe("KanbanTaskDialog", () => {
         "project",
         "project-1",
         expect.objectContaining({ title: "Task worth recovering" }),
+        1,
       );
     });
     expect(deleteComposeDraftMock).not.toHaveBeenCalled();
@@ -517,7 +519,10 @@ describe("KanbanTaskDialog", () => {
     await waitFor(() => {
       expect(addTaskMock).toHaveBeenCalledWith("project-1", "New task", "New description");
       expect(updateTaskMock).toHaveBeenCalledWith("task-created", { acceptanceCriteria: "Done means shipped" });
-      expect(deleteComposeDraftMock).toHaveBeenCalledWith("kanban-create:project-1:task");
+      expect(deleteComposeDraftMock).toHaveBeenCalledWith(
+        "kanban-create:project-1:task",
+        1,
+      );
     });
   });
 
@@ -1071,105 +1076,6 @@ describe("KanbanTaskDialog", () => {
 
     expect(navigateToBuildMock).toHaveBeenCalledWith(task);
     expect(onOpenChange).toHaveBeenCalledWith(false);
-  });
-
-  test("detects merged pull requests on open and records the merge comment once", async () => {
-    detectPrMock.mockImplementation(async () => ({
-      url: "https://github.com/org/repo/pull/1",
-      state: "merged",
-      hasMergeConflicts: false,
-    }));
-    useEnvironmentStore.setState({
-      environments: [makeEnvironment()],
-    });
-
-    render(
-      <KanbanTaskDialog
-        task={makeTask({
-          environmentId: "env-1",
-          prUrl: "https://github.com/org/repo/pull/1",
-          prState: "open",
-          prMergeCommented: false,
-        })}
-        open
-        onOpenChange={() => {}}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(detectPrMock).toHaveBeenCalledWith("container-1", "feature/test");
-      expect(addCommentMock).toHaveBeenCalledWith("task-1", expect.stringContaining("PR merged"));
-      expect(updateTaskMock).toHaveBeenCalledWith("task-1", {
-        prState: "merged",
-        prMergeCommented: true,
-      });
-    });
-  });
-
-  test("detects closed pull requests for local environments", async () => {
-    detectPrLocalMock.mockImplementation(async () => ({
-      url: "https://github.com/org/repo/pull/2",
-      state: "closed",
-      hasMergeConflicts: false,
-    }));
-    useEnvironmentStore.setState({
-      environments: [makeEnvironment({
-        id: "local-env",
-        environmentType: "local",
-        containerId: undefined,
-        worktreePath: "/tmp/worktree",
-        branch: "feature/local",
-      })],
-    });
-    render(
-      <KanbanTaskDialog
-        task={makeTask({
-          environmentId: "local-env",
-          prUrl: "https://github.com/org/repo/pull/2",
-          prState: "open",
-          prMergeCommented: false,
-        })}
-        open
-        onOpenChange={() => {}}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(detectPrLocalMock).toHaveBeenCalledWith("local-env", "feature/local");
-      expect(addCommentMock).toHaveBeenCalledWith("task-1", "❌ PR closed");
-      expect(updateTaskMock).toHaveBeenCalledWith("task-1", {
-        prState: "closed",
-        prMergeCommented: true,
-      });
-    });
-  });
-
-  test("logs and contains PR lookup failures", async () => {
-    const warn = mock(() => {});
-    console.warn = warn;
-    detectPrMock.mockRejectedValueOnce(new Error("lookup failed"));
-    useEnvironmentStore.setState({ environments: [makeEnvironment()] });
-    render(
-      <KanbanTaskDialog
-        task={makeTask({
-          environmentId: "env-1",
-          prUrl: "https://github.com/org/repo/pull/1",
-          prState: "open",
-          prMergeCommented: false,
-        })}
-        open
-        onOpenChange={() => {}}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(warn).toHaveBeenCalledWith(
-        "[KanbanTaskDialog] Failed to check PR state on dialog open:",
-        expect.any(Error),
-      );
-    });
-    expect(updateTaskMock).not.toHaveBeenCalled();
-    expect(addCommentMock).not.toHaveBeenCalled();
   });
 
   test("delete task control removes the task and closes the dialog", () => {

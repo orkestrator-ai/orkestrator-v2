@@ -30,8 +30,6 @@ import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { readImage } from "@/lib/native/clipboard";
 import {
   getKanbanImageData,
-  detectPr,
-  detectPrLocal,
   openInBrowser,
 } from "@/lib/backend";
 import {
@@ -40,7 +38,6 @@ import {
   loadComposeDraft,
   persistComposeDraft,
 } from "@/lib/compose-draft-persistence";
-import { useEnvironmentStore } from "@/stores";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 import { createUuid } from "@/lib/uuid";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
@@ -292,46 +289,6 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- imageUrlCache intentionally excluded to avoid re-fetch loop
   }, [open, task]);
-
-  // Check PR state when dialog opens for a task with a PR that hasn't been merge-commented yet.
-  // This handles the case where a PR was merged or closed outside the app.
-  useEffect(() => {
-    if (!open || !task || !task.prUrl || task.prMergeCommented) return;
-    // Only check if PR state is not already known as merged/closed
-    if (task.prState === "merged" || task.prState === "closed") return;
-    if (!task.environmentId) return;
-
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        const env = useEnvironmentStore.getState().getEnvironmentById(task.environmentId!);
-        if (!env) return;
-
-        const isLocal = env.environmentType === "local";
-        const isRunning = isLocal ? !!env.worktreePath : env.status === "running";
-        if (!isRunning) return;
-
-        const result = isLocal
-          ? await detectPrLocal(task.environmentId!, env.branch)
-          : env.containerId ? await detectPr(env.containerId, env.branch) : null;
-
-        if (cancelled || !result) return;
-
-        if (result.state === "merged" || result.state === "closed") {
-          const commentText = result.state === "merged" ? "🎉 PR merged" : "❌ PR closed";
-          await addComment(task.id, commentText);
-          await updateTask(task.id, { prState: result.state, prMergeCommented: true });
-          console.log(`[KanbanTaskDialog] PR ${result.state} detected on open, added comment to task ${task.id}`);
-        }
-      } catch (error) {
-        console.warn("[KanbanTaskDialog] Failed to check PR state on dialog open:", error);
-      }
-    })();
-
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, task?.id, task?.prUrl, task?.prMergeCommented, task?.prState]);
 
   // Reset create mode fields when dialog opens in create mode
   const handleOpenChange = (newOpen: boolean, discardDraft = true) => {

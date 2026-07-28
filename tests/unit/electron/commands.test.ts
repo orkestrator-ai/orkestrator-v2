@@ -1272,6 +1272,10 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
   printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/42","state":"OPEN","mergeable":"MERGEABLE","updatedAt":"2026-01-03T00:00:00Z"}]'
   exit 0
 fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","state":"OPEN","mergeable":"MERGEABLE"}'
+  exit 0
+fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
 `, async (logPath) => {
@@ -1280,7 +1284,7 @@ exit 1
       await waitForCondition(() => existsSync(logPath), "resumed PR monitor check");
 
       expect(await fs.readFile(logPath, "utf8")).toContain(
-        "pr list --head feature-pr-monitor --state all",
+        "pr view https://github.com/acme/repo/pull/42 --json url,state,mergeable",
       );
     });
   }, ASYNC_TEST_BUDGET_MS);

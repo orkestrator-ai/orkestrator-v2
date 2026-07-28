@@ -429,7 +429,83 @@ describe("FileViewerTab component", () => {
       "notes.txt",
       "unsaved text",
       "container text",
+      0,
     ), { timeout: 1_500 });
+  });
+
+  test("flushes an edit when the tab unmounts before the debounce expires", async () => {
+    const view = render(
+      <FileViewerTab
+        tabId="unmount-flush-tab"
+        environmentId="env-unmount"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    fireEvent.change(editor, { target: { value: "latest unsaved text" } });
+
+    view.unmount();
+
+    await waitFor(() => expect(saveFileDraftMock).toHaveBeenCalledWith(
+      "file:env-unmount:notes.txt",
+      "env-unmount",
+      "notes.txt",
+      "latest unsaved text",
+      "container text",
+      0,
+    ));
+  });
+
+  test("flushes the current edit on pagehide", async () => {
+    render(
+      <FileViewerTab
+        tabId="pagehide-flush-tab"
+        environmentId="env-pagehide"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    fireEvent.change(editor, { target: { value: "leaving page" } });
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    await waitFor(() => expect(saveFileDraftMock).toHaveBeenCalledWith(
+      "file:env-pagehide:notes.txt",
+      "env-pagehide",
+      "notes.txt",
+      "leaving page",
+      "container text",
+      0,
+    ));
+  });
+
+  test("flushes draft deletion after a successful save and immediate unmount", async () => {
+    const view = render(
+      <FileViewerTab
+        tabId="save-unmount-tab"
+        environmentId="env-save"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    fireEvent.change(editor, { target: { value: "saved text" } });
+    fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
+    await waitFor(() =>
+      expect(useFileDirtyStore.getState().isDirty("save-unmount-tab")).toBe(false),
+    );
+
+    view.unmount();
+
+    await waitFor(() => expect(deleteFileDraftMock).toHaveBeenCalledWith(
+      "file:env-save:notes.txt",
+      0,
+    ));
   });
 
   test("continues with the disk buffer when backend draft restore fails", async () => {

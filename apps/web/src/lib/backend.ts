@@ -1819,8 +1819,14 @@ export async function saveComposeDraft<T>(
   });
 }
 
-export async function deleteComposeDraft(draftKey: string): Promise<void> {
-  return invoke("delete_compose_draft", { draftKey });
+export async function deleteComposeDraft(
+  draftKey: string,
+  expectedRevision?: number,
+): Promise<void> {
+  return invoke("delete_compose_draft", {
+    draftKey,
+    ...(expectedRevision === undefined ? {} : { expectedRevision }),
+  });
 }
 
 export async function getFileDraft(
@@ -1835,6 +1841,7 @@ export async function saveFileDraft(
   filePath: string,
   content: string,
   originalContent: string,
+  expectedRevision?: number,
 ): Promise<PersistedFileDraft> {
   return invoke<PersistedFileDraft>("save_file_draft", {
     draftKey,
@@ -1842,11 +1849,18 @@ export async function saveFileDraft(
     filePath,
     content,
     originalContent,
+    ...(expectedRevision === undefined ? {} : { expectedRevision }),
   });
 }
 
-export async function deleteFileDraft(draftKey: string): Promise<void> {
-  return invoke("delete_file_draft", { draftKey });
+export async function deleteFileDraft(
+  draftKey: string,
+  expectedRevision?: number,
+): Promise<void> {
+  return invoke("delete_file_draft", {
+    draftKey,
+    ...(expectedRevision === undefined ? {} : { expectedRevision }),
+  });
 }
 
 // --- Agent Handoffs ---
@@ -2186,6 +2200,16 @@ export async function updateFeaturePlan(
   >>,
 ): Promise<FeaturePlan> {
   return invoke<FeaturePlan>("update_feature_plan", { featureId, updates });
+}
+
+export async function claimFeaturePlanBuild(
+  featureId: string,
+  taskId: string,
+): Promise<{ claimed: boolean; feature: FeaturePlan }> {
+  return invoke<{ claimed: boolean; feature: FeaturePlan }>(
+    "claim_feature_plan_build",
+    { featureId, taskId },
+  );
 }
 
 export async function appendFeaturePlanMessage(

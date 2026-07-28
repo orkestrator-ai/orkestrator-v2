@@ -84,6 +84,7 @@ describe("StorageService drafts", () => {
         "README.md",
         "edited",
         "original",
+        0,
       );
       expect(saved).toMatchObject({
         content: "edited",
@@ -96,9 +97,10 @@ describe("StorageService drafts", () => {
         "README.md",
         "edited again",
         "original",
+        saved.revision,
       );
       expect(updated.revision).toBe(2);
-      await storage.deleteFileDraft(saved.draftKey);
+      await storage.deleteFileDraft(saved.draftKey, updated.revision);
       expect(await storage.getFileDraft(saved.draftKey)).toBeNull();
     });
   });
@@ -207,8 +209,15 @@ describe("StorageService drafts", () => {
       await expect(
         storage.saveFileDraft("file", "missing", "a.ts", "draft", "disk"),
       ).rejects.toThrow("environment not found");
+      await expect(
+        storage.saveFileDraft("file", "e1", "a.ts", "draft", "disk", -1),
+      ).rejects.toThrow("expected revision");
       await expect(storage.getFileDraft("")).rejects.toThrow("key must not be blank");
       await expect(storage.deleteFileDraft("")).rejects.toThrow("key must not be blank");
+      await expect(storage.deleteComposeDraft("key", -1))
+        .rejects.toThrow("expected revision");
+      await expect(storage.deleteFileDraft("file", -1))
+        .rejects.toThrow("expected revision");
       await expect(
         storage.deleteFileDraftsByEnvironment(""),
       ).rejects.toThrow("environment ID must not be blank");
@@ -348,24 +357,153 @@ describe("StorageService drafts", () => {
     });
   });
 
+  test("rejects stale same-key saves and deletes across service instances", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const other = new StorageService(dataDir);
+      await other.init();
+
+      const compose = await storage.saveComposeDraft(
+        "compose:shared",
+        "environment",
+        "e1",
+        "initial",
+        0,
+      );
+      const file = await storage.saveFileDraft(
+        "file:shared-cas",
+        "e1",
+        "shared.ts",
+        "initial",
+        "disk",
+        0,
+      );
+      const [otherCompose, otherFile] = await Promise.all([
+        other.getComposeDraft(compose.draftKey),
+        other.getFileDraft(file.draftKey),
+      ]);
+
+      const currentCompose = await storage.saveComposeDraft(
+        compose.draftKey,
+        "environment",
+        "e1",
+        "current",
+        compose.revision,
+      );
+      const currentFile = await storage.saveFileDraft(
+        file.draftKey,
+        "e1",
+        "shared.ts",
+        "current",
+        "disk",
+        file.revision,
+      );
+
+      await expect(other.saveComposeDraft(
+        compose.draftKey,
+        "environment",
+        "e1",
+        "stale",
+        otherCompose!.revision,
+      )).rejects.toThrow("revision conflict");
+      await expect(other.deleteComposeDraft(
+        compose.draftKey,
+        otherCompose!.revision,
+      )).rejects.toThrow("revision conflict");
+      await expect(other.saveFileDraft(
+        file.draftKey,
+        "e1",
+        "shared.ts",
+        "stale",
+        "disk",
+        otherFile!.revision,
+      )).rejects.toThrow("revision conflict");
+      await expect(other.deleteFileDraft(
+        file.draftKey,
+        otherFile!.revision,
+      )).rejects.toThrow("revision conflict");
+
+      expect(await storage.getComposeDraft(compose.draftKey)).toMatchObject({
+        value: "current",
+        revision: currentCompose.revision,
+      });
+      expect(await storage.getFileDraft(file.draftKey)).toMatchObject({
+        content: "current",
+        revision: currentFile.revision,
+      });
+    });
+  });
+
+  test("bulk draft cleanup scrubs every backup and preserves restrictive permissions", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const composeSecret = "bulk compose secret";
+      const fileSecret = "bulk file secret";
+      await storage.saveComposeDraft(
+        "compose:bulk",
+        "environment",
+        "e1",
+        composeSecret,
+      );
+      await storage.saveComposeDraft(
+        "compose:project",
+        "project",
+        "p1",
+        "project secret",
+      );
+      await storage.saveFileDraft(
+        "file:bulk",
+        "e1",
+        "secret.ts",
+        fileSecret,
+        "disk",
+      );
+      // Rotate the sensitive snapshots into more than one retained copy.
+      await storage.saveComposeDraft("compose:other", "environment", "e1", "other");
+      await storage.saveComposeDraft("compose:third", "environment", "e1", "third");
+      await storage.saveFileDraft("file:other", "e1", "other.ts", "other", "disk");
+      await storage.saveFileDraft("file:third", "e1", "third.ts", "third", "disk");
+
+      await storage.deleteComposeDraftsByEnvironment("e1");
+      await storage.deleteComposeDraftsByProject("p1");
+      await storage.deleteFileDraftsByEnvironment("e1");
+
+      for (const entry of (await fs.readdir(dataDir)).filter((name) =>
+        name.startsWith("compose-drafts.json")
+        || name.startsWith("file-drafts.json")
+      )) {
+        const target = path.join(dataDir, entry);
+        const contents = await fs.readFile(target, "utf8");
+        expect(contents).not.toContain(composeSecret);
+        expect(contents).not.toContain(fileSecret);
+        expect(contents).not.toContain("project secret");
+        expect((await fs.stat(target)).mode & 0o777).toBe(0o600);
+      }
+    });
+  });
+
   test("individual deletes scrub sensitive backups even when the primary is absent", async () => {
     await withStorage(async (storage, dataDir) => {
       const changes: string[] = [];
       storage.setResourceChangeListener((change) => changes.push(change.resource));
       const composeKey = "compose:secret";
       const fileKey = "file:secret";
-      await storage.saveComposeDraft(
+      const compose = await storage.saveComposeDraft(
         composeKey,
         "environment",
         "e1",
         { text: "compose secret" },
       );
       await storage.saveComposeDraft("compose:other", "environment", "e1", "other");
-      await storage.saveFileDraft(fileKey, "e1", "secret.ts", "file secret", "disk");
+      const file = await storage.saveFileDraft(
+        fileKey,
+        "e1",
+        "secret.ts",
+        "file secret",
+        "disk",
+      );
       await storage.saveFileDraft("file:other", "e1", "other.ts", "other", "disk");
 
-      await storage.deleteComposeDraft(composeKey);
-      await storage.deleteFileDraft(fileKey);
+      await storage.deleteComposeDraft(composeKey, compose.revision);
+      await storage.deleteFileDraft(fileKey, file.revision);
 
       const composeBackup = path.join(dataDir, "compose-drafts.json.bak.1");
       const fileBackup = path.join(dataDir, "file-drafts.json.bak.1");
@@ -396,8 +534,11 @@ describe("StorageService drafts", () => {
       }), { mode: 0o600 });
 
       changes.length = 0;
-      await storage.deleteComposeDraft(composeKey);
-      await storage.deleteFileDraft(fileKey);
+      // A real caller still holds the formerly current positive revision when
+      // retrying after the primary commit. Absence must be treated as an
+      // idempotent delete so the retained copies can still be scrubbed.
+      await storage.deleteComposeDraft(composeKey, compose.revision);
+      await storage.deleteFileDraft(fileKey, file.revision);
       expect(changes).toEqual([]);
 
       for (const [filename, secret] of [

@@ -57,7 +57,10 @@ const mockGetSessionMessages = mock(() => [
 ]);
 
 type SendPromptParams = Parameters<typeof realSessionManager.sendPrompt>;
-const mockSendPrompt = mock(async (..._args: SendPromptParams) => {});
+const successfulPromptStart = async (...args: SendPromptParams) => {
+  args[3]?.onQueryStarted?.();
+};
+const mockSendPrompt = mock(successfulPromptStart);
 const mockAbortSession = mock(() => true);
 const mockDeleteSession = mock((id: string) => id === "s-1");
 const mockGetPendingQuestions = mock<
@@ -82,7 +85,8 @@ const mockGetPromptDispatchState = mock<
 const mockClaimPromptDispatch = mock<
   typeof realSessionManager.claimPromptDispatch
 >(async (_sessionId, _requestId, startDispatch) => {
-  void startDispatch();
+  const dispatch = startDispatch();
+  await dispatch.started;
   return "claimed";
 });
 const mockReconcilePersistedSessions = mock(async () => {});
@@ -208,7 +212,8 @@ describe("session routes", () => {
     mockGetSession.mockClear();
     mockListSessions.mockClear();
     mockGetSessionMessages.mockClear();
-    mockSendPrompt.mockClear();
+    mockSendPrompt.mockReset();
+    mockSendPrompt.mockImplementation(successfulPromptStart);
     mockAbortSession.mockClear();
     mockDeleteSession.mockClear();
     mockReconcilePersistedSessions.mockClear();
@@ -226,7 +231,8 @@ describe("session routes", () => {
       _requestId,
       startDispatch,
     ) => {
-      void startDispatch();
+      const dispatch = startDispatch();
+      await dispatch.started;
       return "claimed";
     });
     mockSetSessionPreferences.mockClear();
@@ -274,6 +280,7 @@ describe("session routes", () => {
       expect(res.status).toBe(200);
       const data = await jsonBody(res);
       expect(data.id).toBe("s-1");
+      expect(Object.hasOwn(data, "planMode")).toBe(false);
     });
 
     test("returns 404 for unknown session", async () => {
@@ -333,6 +340,17 @@ describe("session routes", () => {
       const res = await jsonRequest("PUT", "/session/s-1/preferences", { planMode: "yes" });
 
       expect(res.status).toBe(400);
+      expect(mockSetSessionPreferences).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      [{}, "planMode is required"],
+      [{ planMode: true, future: true }, "Unexpected session preference field: future"],
+    ])("rejects incomplete or unknown preference fields", async (body, message) => {
+      const res = await jsonRequest("PUT", "/session/s-1/preferences", body);
+
+      expect(res.status).toBe(400);
+      expect(await jsonBody(res)).toEqual({ error: message });
       expect(mockSetSessionPreferences).not.toHaveBeenCalled();
     });
 
@@ -617,6 +635,20 @@ describe("session routes", () => {
       expect(res.status).toBe(500);
       expect(await jsonBody(res)).toEqual({ error: "journal unavailable" });
       expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("does not acknowledge a claimed prompt whose SDK startup barrier rejects", async () => {
+      mockSendPrompt.mockRejectedValueOnce(new Error("attachment unreadable"));
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Launch with attachment",
+        requestId: "initial-prompt:env-1:tab-startup-failure",
+      });
+
+      expect(res.status).toBe(500);
+      expect(await jsonBody(res)).toEqual({ error: "attachment unreadable" });
+      expect(mockClaimPromptDispatch).toHaveBeenCalledTimes(1);
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
     });
 
     test("maps a request-id reservation conflict to 409", async () => {

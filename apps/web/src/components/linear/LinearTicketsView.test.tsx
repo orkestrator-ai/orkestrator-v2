@@ -298,8 +298,91 @@ describe("LinearTicketsView", () => {
       expect(toastSuccessMock).toHaveBeenCalledWith("Linear comment added");
       expect(deleteComposeDraftMock).toHaveBeenCalledWith(
         "linear-comment:project-1:issue-1",
+        expect.any(Number),
       );
     });
+  });
+
+  test("does not clear a newly selected ticket draft when an older comment finishes", async () => {
+    const pendingComment = deferred<Awaited<ReturnType<typeof postLinearIssueCommentMock>>>();
+    postLinearIssueCommentMock.mockImplementationOnce(() => pendingComment.promise);
+    getLinearIssueMock.mockImplementation(async (issueId) =>
+      issueId === "issue-2" ? issue2Detail : issueDetail
+    );
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    await screen.findByText("Initial Linear comment");
+    fireEvent.change(screen.getByLabelText("Add Linear comment"), {
+      target: { value: "Comment for the first ticket" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
+    await waitFor(() => expect(postLinearIssueCommentMock).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to Linear tickets" }));
+    fireEvent.click(await screen.findByText("Polish dashboard"));
+    await screen.findByText("Polish dashboard details");
+    fireEvent.change(screen.getByLabelText("Add Linear comment"), {
+      target: { value: "Keep this second-ticket draft" },
+    });
+
+    pendingComment.resolve({
+      id: "comment-late",
+      body: "Comment for the first ticket",
+      createdAt: "2026-06-28T12:10:00.000Z",
+      authorName: "Ada",
+    });
+
+    await waitFor(() => expect(deleteComposeDraftMock).toHaveBeenCalledWith(
+      "linear-comment:project-1:issue-1",
+      expect.any(Number),
+    ));
+    expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value)
+      .toBe("Keep this second-ticket draft");
+    expect(screen.queryByText("Comment for the first ticket")).toBeNull();
+  });
+
+  test("does not clear a newer draft after returning to the submitted ticket", async () => {
+    const pendingComment = deferred<Awaited<ReturnType<typeof postLinearIssueCommentMock>>>();
+    postLinearIssueCommentMock.mockImplementationOnce(() => pendingComment.promise);
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    await screen.findByText("Initial Linear comment");
+    fireEvent.change(screen.getByLabelText("Add Linear comment"), {
+      target: { value: "First submitted comment" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
+    await waitFor(() => expect(postLinearIssueCommentMock).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to Linear tickets" }));
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    await screen.findByText("Initial Linear comment");
+    fireEvent.change(screen.getByLabelText("Add Linear comment"), {
+      target: { value: "New draft for the same ticket" },
+    });
+    const submittedDraftDeletesBeforeResolution =
+      deleteComposeDraftMock.mock.calls.filter(
+        ([draftKey]) => draftKey === "linear-comment:project-1:issue-1",
+      ).length;
+
+    pendingComment.resolve({
+      id: "comment-late-same-ticket",
+      body: "First submitted comment",
+      createdAt: "2026-06-28T12:15:00.000Z",
+      authorName: "Ada",
+    });
+
+    await waitFor(() =>
+      expect(toastSuccessMock).toHaveBeenCalledWith("Linear comment added"),
+    );
+    expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value)
+      .toBe("New draft for the same ticket");
+    expect(
+      deleteComposeDraftMock.mock.calls.filter(
+        ([draftKey]) => draftKey === "linear-comment:project-1:issue-1",
+      ),
+    ).toHaveLength(submittedDraftDeletesBeforeResolution);
   });
 
   test("restores a persisted Linear comment draft for the selected ticket", async () => {
@@ -349,6 +432,7 @@ describe("LinearTicketsView", () => {
       "project",
       "project-1",
       "Draft that should survive",
+      expect.any(Number),
     ));
   });
 

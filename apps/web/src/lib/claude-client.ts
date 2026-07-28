@@ -885,8 +885,9 @@ export async function updateSessionPreferences(
   sessionId: string,
   preferences: { planMode?: boolean },
 ): Promise<void> {
-  const response = await fetchWithTimeout(
-    `${client.baseUrl}/session/${sessionId}/preferences`,
+  const response = await fetchClaude(
+    client,
+    `/session/${sessionId}/preferences`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -902,8 +903,9 @@ export async function dismissPromptSuggestion(
   client: ClaudeClient,
   sessionId: string,
 ): Promise<void> {
-  const response = await fetchWithTimeout(
-    `${client.baseUrl}/session/${sessionId}/prompt-suggestion`,
+  const response = await fetchClaude(
+    client,
+    `/session/${sessionId}/prompt-suggestion`,
     { method: "DELETE" },
   );
   if (!response.ok && response.status !== 404) {

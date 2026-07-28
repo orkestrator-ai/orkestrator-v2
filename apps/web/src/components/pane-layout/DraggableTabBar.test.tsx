@@ -23,6 +23,9 @@ beforeEach(() => {
     activeEnvironmentId: null,
   });
   (invoke as unknown as { mockClear: () => void }).mockClear();
+  (invoke as unknown as {
+    mockImplementation: (implementation: () => Promise<unknown>) => void;
+  }).mockImplementation(() => Promise.resolve());
 });
 
 afterEach(() => {
@@ -220,6 +223,101 @@ describe("DraggableTabBar", () => {
     });
     expect(invoke).toHaveBeenCalledWith("delete_compose_draft", {
       draftKey: `claude:${environmentId}:${encodeURIComponent(sessionKey)}`,
+      expectedRevision: 0,
+    });
+  });
+
+  test("close all confirms mixed dirty tabs before removing the complete set", async () => {
+    const environmentId = "environment";
+    usePaneLayoutStore.getState().initialize("container", environmentId);
+    usePaneLayoutStore.getState().addTab("default", {
+      id: "dirty-file",
+      type: "file",
+      fileData: { filePath: "src/dirty.ts", containerId: "container" },
+    }, environmentId);
+    usePaneLayoutStore.getState().addTab("default", {
+      id: "terminal",
+      type: "plain",
+    }, environmentId);
+    useFileDirtyStore.getState().hydrateDraft("dirty-file", "changed", "disk");
+    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+
+    render(
+      <DndContext>
+        <DraggableTabBar
+          pane={pane}
+          environmentId={environmentId}
+          onTabSelect={() => undefined}
+        />
+      </DndContext>,
+    );
+
+    fireEvent.contextMenu(screen.getByText("Terminal 2"));
+    fireEvent.click(await screen.findByText(/close all/i));
+    expect(screen.getByText(/unsaved changes in dirty\.ts/i)).toBeTruthy();
+    expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs)
+      .toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Without Saving" }));
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs)
+        .toEqual([]);
+      expect(useFileDirtyStore.getState().dirtyFiles.has("dirty-file")).toBe(false);
+    });
+  });
+
+  test("rechecks dirtiness after draft cleanup before closing all requested tabs", async () => {
+    const environmentId = "environment";
+    let resolveDelete!: () => void;
+    const deletePending = new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    });
+    (invoke as unknown as {
+      mockImplementation: (
+        implementation: (command: string) => Promise<unknown>,
+      ) => void;
+    }).mockImplementation((command) =>
+      command === "delete_file_draft" ? deletePending : Promise.resolve()
+    );
+    usePaneLayoutStore.getState().initialize("container", environmentId);
+    usePaneLayoutStore.getState().addTab("default", {
+      id: "file",
+      type: "file",
+      fileData: { filePath: "src/racing.ts", containerId: "container" },
+    }, environmentId);
+    usePaneLayoutStore.getState().addTab("default", {
+      id: "terminal",
+      type: "plain",
+    }, environmentId);
+    useFileDirtyStore.getState().setOriginalContent("file", "disk");
+    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+
+    render(
+      <DndContext>
+        <DraggableTabBar
+          pane={pane}
+          environmentId={environmentId}
+          onTabSelect={() => undefined}
+        />
+      </DndContext>,
+    );
+    fireEvent.contextMenu(screen.getByText("Terminal 2"));
+    fireEvent.click(await screen.findByText(/close all/i));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      "delete_file_draft",
+      expect.any(Object),
+    ));
+
+    useFileDirtyStore.getState().setContent("file", "changed while closing");
+    resolveDelete();
+
+    expect(await screen.findByText(/unsaved changes in racing\.ts/i)).toBeTruthy();
+    expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs)
+      .toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Close Without Saving" }));
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs)
+        .toEqual([]);
     });
   });
 });

@@ -71,6 +71,14 @@ function seed(...pipelines: BuildPipeline[]): void {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function waitForCondition(
@@ -438,6 +446,37 @@ describe("persistBuildPipelineNow", () => {
 });
 
 describe("startBuildPipelinePersistence", () => {
+  test("serializes an immediate reservation behind an in-flight mirror write", async () => {
+    const firstSave = deferred<PersistedBuildPipeline<BuildPipeline>>();
+    const save = mock(async (...args: unknown[]) => {
+      const snapshot = args[4] as BuildPipeline;
+      if (save.mock.calls.length === 1) return firstSave.promise;
+      return persisted(snapshot, 2);
+    });
+    const stop = startBuildPipelinePersistence({
+      debounceMs: 1,
+      save: save as never,
+    });
+    try {
+      seed(pipeline({ backendRevision: 0 }));
+      await waitForCondition(() => save.mock.calls.length === 1);
+
+      const immediate = persistBuildPipelineNow("pipeline-1");
+      await tick(5);
+      expect(save).toHaveBeenCalledTimes(1);
+
+      firstSave.resolve(persisted(pipeline(), 1));
+      await immediate;
+
+      expect(save).toHaveBeenCalledTimes(2);
+      expect(save.mock.calls[1]?.[5]).toBe(1);
+      expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1")?.backendRevision)
+        .toBe(2);
+    } finally {
+      stop();
+    }
+  });
+
   test("mirrors a transition to the backend after the debounce", async () => {
     const save = mock(async (..._args: unknown[]) => persisted(pipeline(), 1));
     const stop = startBuildPipelinePersistence({ debounceMs: 5, save: save as never });

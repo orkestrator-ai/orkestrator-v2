@@ -8,8 +8,13 @@ import {
 import { OPTIMISTIC_MESSAGE_PREFIX } from "../lib/chat/client-only-messages";
 import { type OpenCodeAttachment, useOpenCodeStore } from "./openCodeStore";
 import type { ContextUsageSnapshot } from "../lib/context-usage";
+import {
+  openCodeQuestionDraftKey,
+  usePromptDraftStore,
+} from "./promptDraftStore";
 
 function resetOpenCodeStore() {
+  usePromptDraftStore.getState().reset();
   useOpenCodeStore.setState({
     serverStatus: new Map(),
     sessions: new Map(),
@@ -254,6 +259,16 @@ describe("openCodeStore clearSession", () => {
       sessionId: "session-kept",
       questions: [],
     });
+    usePromptDraftStore.getState().setDraftValue(
+      openCodeQuestionDraftKey("question-closed"),
+      "answer",
+      "target",
+    );
+    usePromptDraftStore.getState().setDraftValue(
+      openCodeQuestionDraftKey("question-kept"),
+      "answer",
+      "other",
+    );
     store.addPendingPermission({
       id: "permission-kept",
       sessionId: "session-kept",
@@ -290,6 +305,16 @@ describe("openCodeStore clearSession", () => {
     expect(next.getAttachments(kept)).toHaveLength(1);
     expect(next.getPendingQuestion("question-kept")).toBeTruthy();
     expect(next.getPendingPermission("permission-kept")).toBeTruthy();
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        openCodeQuestionDraftKey("question-closed"),
+      ),
+    ).toBe(false);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        openCodeQuestionDraftKey("question-kept"),
+      ),
+    ).toBe(true);
   });
 
   test("sweeps pending requests belonging to the closed tab's session", () => {
@@ -313,12 +338,32 @@ describe("openCodeStore clearSession", () => {
       sessionId: "session-other",
       questions: [],
     } as never);
+    usePromptDraftStore.getState().setDraftValue(
+      openCodeQuestionDraftKey("req-1"),
+      "answer",
+      "target",
+    );
+    usePromptDraftStore.getState().setDraftValue(
+      openCodeQuestionDraftKey("req-2"),
+      "answer",
+      "other",
+    );
 
     store.clearSession(closed);
 
     const next = useOpenCodeStore.getState();
     expect(next.getPendingQuestion("req-1")).toBeUndefined();
     expect(next.getPendingQuestion("req-2")).toBeTruthy();
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        openCodeQuestionDraftKey("req-1"),
+      ),
+    ).toBe(false);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        openCodeQuestionDraftKey("req-2"),
+      ),
+    ).toBe(true);
   });
 
   test("clears a tab with no session id without sweeping pending requests", () => {
@@ -896,12 +941,42 @@ describe("openCodeStore pending permissions", () => {
       metadata: {},
       always: ["/workspace/c/**"],
     });
+    store.addPendingQuestion({
+      id: "question-a",
+      sessionId: "session-1",
+      questions: [],
+    });
+    store.addPendingQuestion({
+      id: "question-c",
+      sessionId: "session-3",
+      questions: [],
+    });
+    usePromptDraftStore.getState().setDraftValue(
+      openCodeQuestionDraftKey("question-a"),
+      "answer",
+      "target",
+    );
+    usePromptDraftStore.getState().setDraftValue(
+      openCodeQuestionDraftKey("question-c"),
+      "answer",
+      "other",
+    );
 
     store.clearEnvironment("env-123");
 
     expect(useOpenCodeStore.getState().getPendingPermission("perm-a")).toBeUndefined();
     expect(useOpenCodeStore.getState().getPendingPermission("perm-b")).toBeUndefined();
     expect(useOpenCodeStore.getState().getPendingPermission("perm-c")).toBeDefined();
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        openCodeQuestionDraftKey("question-a"),
+      ),
+    ).toBe(false);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        openCodeQuestionDraftKey("question-c"),
+      ),
+    ).toBe(true);
   });
 });
 

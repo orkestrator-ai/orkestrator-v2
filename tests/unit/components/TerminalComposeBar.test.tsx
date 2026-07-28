@@ -268,6 +268,7 @@ describe("Terminal ComposeBar", () => {
       "environment",
       "env-pending",
       { text: "local terminal prompt", images: [] },
+      1,
     ));
   });
 

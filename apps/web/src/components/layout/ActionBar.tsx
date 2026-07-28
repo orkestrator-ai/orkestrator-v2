@@ -919,18 +919,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         console.warn("[ActionBar] Failed to save merged state:", saveErr);
       }
 
-      // Add "PR merged" comment to the associated ticket
-      try {
-        const { task, taskId } = findTaskForEnvironment(selectedEnvironmentId);
-        if (taskId && !task?.prMergeCommented) {
-          const kanbanState = useKanbanStore.getState();
-          await kanbanState.addComment(taskId, "🎉 PR merged");
-          await kanbanState.updateTask(taskId, { prState: "merged", prMergeCommented: true });
-        }
-      } catch (commentErr) {
-        console.warn("[ActionBar] Failed to add PR merged comment:", commentErr);
-      }
-
       // Clear the merging spinner
       setMergingEnvironmentId((current) =>
         current === operationEnvironmentId ? null : current

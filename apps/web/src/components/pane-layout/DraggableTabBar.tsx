@@ -1,4 +1,5 @@
 import { useMemo, useState, useCallback } from "react";
+import { toast } from "sonner";
 import {
   SortableContext,
   horizontalListSortingStrategy,
@@ -7,10 +8,17 @@ import { usePaneLayoutStore, useFileDirtyStore } from "@/stores";
 import type { PaneLeaf } from "@/types/paneLayout";
 import { createDraggableTabId, parseDraggableTabId } from "@/types/paneLayout";
 import { cn, createSessionKey } from "@/lib/utils";
-import { discardFileDraft } from "@/lib/file-draft-persistence";
+import {
+  discardFileDraft,
+  getFileDraftRevisionState,
+  releaseFileDraftRevisionState,
+  resolveFileDraftDiscardConflict,
+} from "@/lib/file-draft-persistence";
 import {
   composeDraftKey,
   discardComposeDraft,
+  DraftRevisionConflictError,
+  resolveComposeDraftDiscardConflict,
 } from "@/lib/compose-draft-persistence";
 import { DraggableTab } from "./DraggableTab";
 import {
@@ -55,7 +63,38 @@ export function DraggableTabBar({
   const discardTabDraft = useCallback((tabId: string): Promise<void> => {
     const tab = pane.tabs.find((candidate) => candidate.id === tabId);
     if (tab?.type === "file" && tab.fileData?.filePath) {
-      return discardFileDraft(environmentId, tab.fileData.filePath);
+      const filePath = tab.fileData.filePath;
+      const revisionState = getFileDraftRevisionState(tabId);
+      return discardFileDraft(
+        environmentId,
+        filePath,
+        revisionState,
+      ).then(() => {
+        releaseFileDraftRevisionState(tabId);
+      }).catch((error) => {
+        if (error instanceof DraftRevisionConflictError) {
+          toast.error("File draft changed in another window", {
+            id: `file-draft-close-conflict:${tabId}`,
+            description: "The tab stayed open. Discard the newer saved draft explicitly, then close it again.",
+            action: {
+              label: "Discard saved draft",
+              onClick: () => {
+                void resolveFileDraftDiscardConflict(
+                  environmentId,
+                  filePath,
+                  revisionState,
+                ).then(() => {
+                  releaseFileDraftRevisionState(tabId);
+                }).catch((retryError) => {
+                  console.warn("[DraggableTabBar] Failed to resolve file draft conflict:", retryError);
+                  toast.error("The saved draft changed again. Try discarding it once more.");
+                });
+              },
+            },
+          });
+        }
+        throw error;
+      });
     }
     const namespace = tab?.type === "claude-native"
       ? "claude"
@@ -66,9 +105,27 @@ export function DraggableTabBar({
           : null;
     if (!namespace) return Promise.resolve();
     const sessionKey = createSessionKey(environmentId, tabId);
-    return discardComposeDraft(
-      composeDraftKey(namespace, environmentId, sessionKey),
-    );
+    const draftKey = composeDraftKey(namespace, environmentId, sessionKey);
+    return discardComposeDraft(draftKey).catch((error) => {
+      if (error instanceof DraftRevisionConflictError) {
+        toast.error("Draft changed in another window", {
+          id: `compose-draft-close-conflict:${tabId}`,
+          description: "The tab stayed open. Discard the newer saved draft explicitly, then close it again.",
+          action: {
+            label: "Discard saved draft",
+            onClick: () => {
+              void resolveComposeDraftDiscardConflict(draftKey).catch(
+                (retryError) => {
+                  console.warn("[DraggableTabBar] Failed to resolve compose draft conflict:", retryError);
+                  toast.error("The saved draft changed again. Try discarding it once more.");
+                },
+              );
+            },
+          },
+        });
+      }
+      throw error;
+    });
   }, [environmentId, pane.tabs]);
 
   // State for unsaved changes confirmation dialog
@@ -147,7 +204,13 @@ export function DraggableTabBar({
 
       const becameDirty = idsInPane.filter((tabId) => isDirty(tabId));
       if (becameDirty.length > 0) {
-        setPendingCloseTabIds(becameDirty);
+        setPendingCloseTabIds(idsInPane);
+        setPendingCloseTabNames(
+          becameDirty.map((tabId) => {
+            const dirtyTab = pane.tabs.find((tab) => tab.id === tabId);
+            return dirtyTab?.fileData?.filePath.split("/").pop() ?? "file";
+          }),
+        );
         return;
       }
 

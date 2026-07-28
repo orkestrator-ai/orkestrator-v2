@@ -67,3 +67,47 @@ test("startup remains available when the tmux runtime reaper fails", async () =>
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test("shutdown clears backend-owned PR watch state before a new backend starts", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-pr-shutdown-"));
+  const options = {
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    startupReapers: {
+      localServers: async () => [],
+      claudeTmuxRuntimes: async () => [],
+    },
+  };
+  const first = new OrkestratorBackend(options);
+  let second: OrkestratorBackend | undefined;
+  try {
+    await first.init();
+    const project = await first.invoke<{ id: string }>("add_project", {
+      gitUrl: "https://github.com/acme/repo.git",
+    });
+    const environment = await first.invoke<{ id: string }>("create_environment", {
+      projectId: project.id,
+      name: "PR watch",
+      environmentType: "local",
+    });
+    await first.invoke("pr_monitor_watch", {
+      environmentId: environment.id,
+      mode: "create-pending",
+    });
+    await expect(first.invoke<{ entries: unknown[] }>("get_pr_monitor_state"))
+      .resolves.toMatchObject({ entries: [expect.objectContaining({ mode: "create-pending" })] });
+
+    await first.shutdown();
+    second = new OrkestratorBackend(options);
+    await second.init();
+    await expect(second.invoke<{ entries: unknown[] }>("get_pr_monitor_state"))
+      .resolves.toEqual({ entries: [] });
+  } finally {
+    await first.shutdown().catch(() => undefined);
+    await second?.shutdown().catch(() => undefined);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

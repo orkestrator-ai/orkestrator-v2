@@ -256,6 +256,13 @@ export interface SessionState {
    * metadata into an unbounded transcript.
    */
   dispatchedRequestIds?: Set<string>;
+  /**
+   * The durable request-id journal existed but could not be trusted.
+   *
+   * Stable-id prompts must remain blocked in this state: treating an unknown
+   * journal as empty could replay destructive launch work after a restart.
+   */
+  dispatchJournalUnavailable?: boolean;
   /** Live background/subagent tasks keyed by provider task id. */
   backgroundTasks?: Record<string, BackgroundTaskSnapshot>;
   /**

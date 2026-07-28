@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
   appendFeaturePlanMessage,
   appendFeatureStoryMessage,
+  claimFeaturePlanBuild,
   createFeaturePlan,
   getFeaturePlans,
   updateFeaturePlan,
@@ -74,6 +75,10 @@ interface FeaturePlanState {
       | "buildPipelineId"
     >>,
   ) => Promise<FeaturePlan | undefined>;
+  claimFeatureBuild: (
+    featureId: string,
+    taskId: string,
+  ) => Promise<{ claimed: boolean; feature: FeaturePlan } | undefined>;
   appendMessage: (
     featureId: string,
     role: FeaturePlanMessage["role"],
@@ -166,6 +171,19 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       return feature;
     } catch (error) {
       console.error("[FeaturePlanStore] Failed to update feature:", error);
+      return undefined;
+    }
+  },
+
+  claimFeatureBuild: async (featureId, taskId) => {
+    try {
+      const result = await claimFeaturePlanBuild(featureId, taskId);
+      set((state) => ({
+        features: upsertFeature(state.features, result.feature),
+      }));
+      return result;
+    } catch (error) {
+      console.error("[FeaturePlanStore] Failed to claim feature build:", error);
       return undefined;
     }
   },

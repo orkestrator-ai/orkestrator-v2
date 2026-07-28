@@ -262,7 +262,38 @@ describe("GitHubIssueDetail", () => {
       "project",
       "project-1",
       "Unsaved discussion draft",
+      expect.any(Number),
     ));
+  });
+
+  test("initializes editing from fresh detail rather than a stale list summary", async () => {
+    render(
+      <GitHubIssueDetailContent
+        projectId="project-1"
+        repository={repository}
+        issueNumber={42}
+        summary={{
+          ...detail,
+          title: "Stale list title",
+          body: "Stale list body",
+        }}
+        onBack={() => {}}
+        onClosed={() => {}}
+        buildPipeline={{
+          startBuildFromGitHubIssue: startBuildMock,
+          navigateToPipeline: navigateToPipelineMock,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit issue" }));
+
+    await waitFor(() => {
+      expect((screen.getByRole("textbox", { name: "Issue title" }) as HTMLInputElement).value)
+        .toBe(detail.title);
+      expect((screen.getByRole("textbox", { name: "Issue body" }) as HTMLTextAreaElement).value)
+        .toBe(detail.body);
+    });
   });
 
   test("restores a persisted new-comment draft", async () => {
@@ -327,6 +358,7 @@ describe("GitHubIssueDetail", () => {
       expect(newComment.value).toBe("");
       expect(deleteComposeDraftMock).toHaveBeenCalledWith(
         "github-comment:project-1:acme%2Fwidget%2342",
+        expect.any(Number),
       );
     });
   });

@@ -83,6 +83,91 @@ describe("saveInitialPromptAttachments", () => {
     );
   });
 
+  test("allocates distinct paths for duplicate and sanitization-colliding names", async () => {
+    const saved = await saveInitialPromptAttachments({
+      containerId: "container-1",
+      attachments: [
+        {
+          id: "img-1",
+          name: "screen shot.png",
+          previewUrl: "data:image/png;base64,QUJD",
+          base64Data: "QUJD",
+        },
+        {
+          id: "img-2",
+          name: "screen-shot.png",
+          previewUrl: "data:image/png;base64,REVG",
+          base64Data: "REVG",
+        },
+        {
+          id: "img-3",
+          name: "SCREEN-SHOT.PNG",
+          previewUrl: "data:image/png;base64,R0hJ",
+          base64Data: "R0hJ",
+        },
+      ],
+    });
+
+    expect(saved.map((attachment) => attachment.name)).toEqual([
+      "screen-shot.png",
+      "screen-shot-2.png",
+      "SCREEN-SHOT-3.PNG",
+    ]);
+    expect(
+      invokeMock.mock.calls.map((call) => (call[1] as { filePath: string }).filePath),
+    ).toEqual([
+      ".orkestrator/initial-prompt/screen-shot.png",
+      ".orkestrator/initial-prompt/screen-shot-2.png",
+      ".orkestrator/initial-prompt/SCREEN-SHOT-3.PNG",
+    ]);
+  });
+
+  test("uses locale-independent ASCII case folding for filename collisions", async () => {
+    const saved = await saveInitialPromptAttachments({
+      containerId: "container-1",
+      attachments: [
+        {
+          id: "img-upper-i",
+          name: "INITIAL.PNG",
+          previewUrl: "data:image/png;base64,QUJD",
+          base64Data: "QUJD",
+        },
+        {
+          id: "img-lower-i",
+          name: "initial.png",
+          previewUrl: "data:image/png;base64,REVG",
+          base64Data: "REVG",
+        },
+      ],
+    });
+
+    expect(saved.map((attachment) => attachment.name)).toEqual([
+      "INITIAL.PNG",
+      "initial-2.png",
+    ]);
+  });
+
+  test("does not allow dot-only filenames to escape the attachment directory", async () => {
+    const saved = await saveInitialPromptAttachments({
+      containerId: "container-1",
+      attachments: [
+        {
+          id: "img-1",
+          name: "..",
+          previewUrl: "data:image/png;base64,QUJD",
+          base64Data: "QUJD",
+        },
+      ],
+    });
+
+    expect(saved[0]?.name).toBe("clipboard.png");
+    expect(invokeMock).toHaveBeenCalledWith("write_container_file", {
+      containerId: "container-1",
+      filePath: ".orkestrator/initial-prompt/clipboard.png",
+      base64Data: "QUJD",
+    });
+  });
+
   test("requires either a container id or worktree path", async () => {
     await expect(
       saveInitialPromptAttachments({

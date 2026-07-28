@@ -76,6 +76,24 @@ describe("StorageService Kanban mutation serialization", () => {
     });
   });
 
+  test("rejects invalid task and pull request states without corrupting storage", async () => {
+    await withStoragePair(async (storage) => {
+      const task = await storage.addKanbanTask("project-1", "Valid", "");
+
+      await expect(storage.updateKanbanTask(task.id, {
+        status: "invalid" as never,
+      })).rejects.toThrow("status is invalid");
+      await expect(storage.updateKanbanTask(task.id, {
+        prState: "invalid" as never,
+      })).rejects.toThrow("pull request state is invalid");
+
+      expect((await storage.getKanbanTasks("project-1"))[0]).toMatchObject({
+        id: task.id,
+        status: "backlog",
+      });
+    });
+  });
+
   test("keeps image files when authoritative deletion persistence fails", async () => {
     await withStoragePair(async (storage, _second, dataDir) => {
       const validImageBase64 = Buffer.from(
@@ -171,6 +189,87 @@ describe("StorageService Kanban mutation serialization", () => {
       expect(warnings).toBe(1);
       expect((await storage.getKanbanTasks("project-1"))[0]?.images).toEqual([]);
       expect((await fs.stat(imagePath)).isFile()).toBe(true);
+    });
+  });
+
+  test("rejects cross-task image deletion and traversal-shaped image IDs", async () => {
+    await withStoragePair(async (storage, _second, dataDir) => {
+      const validImageBase64 = Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">'
+        + '<rect width="1" height="1"/></svg>',
+      ).toString("base64");
+      const owner = await storage.addKanbanTask("project-1", "Owner", "");
+      const other = await storage.addKanbanTask("project-1", "Other", "");
+      const withImage = await storage.addKanbanImage(
+        owner.id,
+        "image.svg",
+        validImageBase64,
+      );
+      const imageId = withImage.images[0]!.id;
+      const imagePath = path.join(dataDir, "kanban-images", `${imageId}.webp`);
+      const outsidePath = path.join(dataDir, "outside.webp");
+      await fs.writeFile(outsidePath, "sentinel");
+
+      await expect(storage.deleteKanbanImage(other.id, imageId))
+        .rejects.toThrow("not found on task");
+      await expect(storage.deleteKanbanImage(owner.id, "../outside"))
+        .rejects.toThrow("image ID is invalid");
+      await expect(storage.getKanbanImageData("../outside"))
+        .rejects.toThrow("image ID is invalid");
+      await expect(storage.getKanbanImageData("/tmp/outside"))
+        .rejects.toThrow("image ID is invalid");
+
+      expect((await fs.stat(imagePath)).isFile()).toBe(true);
+      expect(await fs.readFile(outsidePath, "utf8")).toBe("sentinel");
+      expect((await storage.getKanbanTasks("project-1"))
+        .find((task) => task.id === owner.id)?.images)
+        .toContainEqual(expect.objectContaining({ id: imageId }));
+
+      const storedTasks = await storage.getKanbanTasks("project-1");
+      storedTasks.find((task) => task.id === owner.id)!.images.push({
+        id: "../outside",
+        filename: "malformed.webp",
+        createdAt: new Date(0).toISOString(),
+      });
+      await fs.writeFile(
+        path.join(dataDir, "kanban.json"),
+        JSON.stringify(storedTasks),
+      );
+      const originalWarn = console.warn;
+      console.warn = () => undefined;
+      try {
+        await storage.deleteKanbanTask(owner.id);
+      } finally {
+        console.warn = originalWarn;
+      }
+      expect(await fs.readFile(outsidePath, "utf8")).toBe("sentinel");
+    });
+  });
+
+  test("preserves concurrent image and comment deletions across service instances", async () => {
+    await withStoragePair(async (first, second) => {
+      const validImageBase64 = Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">'
+        + '<rect width="1" height="1"/></svg>',
+      ).toString("base64");
+      const task = await first.addKanbanTask("project-1", "Concurrent", "");
+      const withComment = await first.addKanbanComment(task.id, "remove me");
+      const withImage = await first.addKanbanImage(
+        task.id,
+        "remove.svg",
+        validImageBase64,
+      );
+      const commentId = withComment.comments[0]!.id;
+      const imageId = withImage.images[0]!.id;
+
+      await Promise.all([
+        first.deleteKanbanComment(task.id, commentId),
+        second.deleteKanbanImage(task.id, imageId),
+      ]);
+
+      const saved = (await first.getKanbanTasks("project-1"))[0]!;
+      expect(saved.comments).toEqual([]);
+      expect(saved.images).toEqual([]);
     });
   });
 });

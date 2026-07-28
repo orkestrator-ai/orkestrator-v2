@@ -2241,7 +2241,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 });
 
 describe("ActionBar merge completion", () => {
-  test("merges a container PR, persists state, and comments on its task", async () => {
+  test("merges a container PR and leaves task reconciliation to the backend monitor", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
@@ -2273,12 +2273,9 @@ describe("ActionBar merge completion", () => {
         "merged",
         false,
       );
-      expect(addCommentMock).toHaveBeenCalledWith("task-1", "🎉 PR merged");
-      expect(updateTaskMock).toHaveBeenCalledWith("task-1", {
-        prState: "merged",
-        prMergeCommented: true,
-      });
     });
+    expect(addCommentMock).not.toHaveBeenCalled();
+    expect(updateTaskMock).not.toHaveBeenCalled();
   });
 
   test("merges a local PR through the environment-scoped backend", async () => {
@@ -2348,24 +2345,6 @@ describe("ActionBar merge completion", () => {
     expect(updateTaskMock).not.toHaveBeenCalled();
   });
 
-  test("does not duplicate task comments that were already recorded", async () => {
-    currentEnvironment = { ...selectedEnvironment, prState: "open" };
-    currentTaskAssociation = {
-      task: { prMergeCommented: true },
-      taskId: "task-1",
-    };
-    render(<ActionBar />);
-
-    confirmMerge();
-
-    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith(
-      "Branch merged",
-      expect.any(Object),
-    ));
-    expect(addCommentMock).not.toHaveBeenCalled();
-    expect(updateTaskMock).not.toHaveBeenCalled();
-  });
-
   test("completes a merge when no task is associated", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     currentTaskAssociation = { task: undefined, taskId: undefined };
@@ -2376,28 +2355,6 @@ describe("ActionBar merge completion", () => {
     await waitFor(() => expect(setEnvironmentPrBackendMock).toHaveBeenCalledTimes(1));
     expect(addCommentMock).not.toHaveBeenCalled();
     expect(updateTaskMock).not.toHaveBeenCalled();
-  });
-
-  test("reports a task update failure after its merge comment was added", async () => {
-    currentEnvironment = { ...selectedEnvironment, prState: "open" };
-    currentTaskAssociation = {
-      task: { prMergeCommented: false },
-      taskId: "task-1",
-    };
-    updateTaskMock.mockRejectedValueOnce(new Error("task update failed"));
-    render(<ActionBar />);
-
-    confirmMerge();
-
-    await waitFor(() => expect(console.warn).toHaveBeenCalledWith(
-      "[ActionBar] Failed to add PR merged comment:",
-      expect.objectContaining({ message: "task update failed" }),
-    ));
-    expect(addCommentMock).toHaveBeenCalledWith("task-1", "🎉 PR merged");
-    expect(updateTaskMock).toHaveBeenCalledWith("task-1", {
-      prState: "merged",
-      prMergeCommented: true,
-    });
   });
 
   test("finishes an in-flight merge for the environment that initiated it after selection changes", async () => {
@@ -2465,7 +2422,7 @@ describe("ActionBar merge completion", () => {
     });
   });
 
-  test("keeps a successful merge complete when state persistence and task comments fail", async () => {
+  test("keeps a successful merge complete when state persistence fails", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
@@ -2475,7 +2432,6 @@ describe("ActionBar merge completion", () => {
       taskId: "task-1",
     };
     setEnvironmentPrBackendMock.mockRejectedValueOnce(new Error("save failed"));
-    addCommentMock.mockRejectedValueOnce(new Error("comment failed"));
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
@@ -2486,12 +2442,9 @@ describe("ActionBar merge completion", () => {
         "[ActionBar] Failed to save merged state:",
         expect.any(Error),
       );
-      expect(console.warn).toHaveBeenCalledWith(
-        "[ActionBar] Failed to add PR merged comment:",
-        expect.any(Error),
-      );
     });
     expect(mergePrMock).toHaveBeenCalledTimes(1);
+    expect(addCommentMock).not.toHaveBeenCalled();
     expect(updateTaskMock).not.toHaveBeenCalled();
   });
 });

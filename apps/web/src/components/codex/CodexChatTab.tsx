@@ -12,6 +12,10 @@ import { useEscapeToStop } from "@/hooks/useEscapeToStop";
 import { useManualSessionRefresh } from "@/hooks/useManualSessionRefresh";
 import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
+import {
+  codexInteractionDraftKey,
+  usePromptDraftStore,
+} from "@/stores/promptDraftStore";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -1102,6 +1106,11 @@ export function CodexChatTab({
       // The tab key is stable across resume, while approvals/interactions are
       // bridge-session scoped. Replace the session and clear both collections
       // atomically so no render can post an old request to the resumed session.
+      const withdrawnInteractionDraftKeys = (
+        useCodexStore.getState().pendingInteractions.get(sessionKey) ?? []
+      ).map((interaction) =>
+        codexInteractionDraftKey(interaction.interactionId)
+      );
       useCodexStore.setState((state) => {
         const sessions = new Map(state.sessions);
         sessions.set(sessionKey, {
@@ -1126,6 +1135,9 @@ export function CodexChatTab({
           contextUsage,
         };
       });
+      usePromptDraftStore
+        .getState()
+        .clearDrafts(withdrawnInteractionDraftKeys);
       updateTabNativeSessionId(tabId, resumed.session.sessionId, environmentId);
       clearTabAgentHandoff(tabId, environmentId);
       setResumeDialogOpen(false);

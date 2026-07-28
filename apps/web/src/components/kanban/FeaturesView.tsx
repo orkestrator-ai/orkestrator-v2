@@ -530,6 +530,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const loadFeatures = useFeaturePlanStore((state) => state.loadFeatures);
   const createFeature = useFeaturePlanStore((state) => state.createFeature);
   const updateFeature = useFeaturePlanStore((state) => state.updateFeature);
+  const claimFeatureBuild = useFeaturePlanStore((state) => state.claimFeatureBuild);
   const appendMessage = useFeaturePlanStore((state) => state.appendMessage);
   const appendStoryMessage = useFeaturePlanStore((state) => state.appendStoryMessage);
   const chatDrafts = useFeaturePlanStore((state) => state.chatDrafts);
@@ -547,6 +548,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   );
   const settleConversation = useFeaturePlanStore((state) => state.settleConversation);
   const addTask = useKanbanStore((state) => state.addTask);
+  const deleteTask = useKanbanStore((state) => state.deleteTask);
   const { startBuild } = useBuildPipeline();
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
@@ -2017,13 +2019,19 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       if (
         buildingFeatureId
         || hasBlockingConversation
+        || feature.status === "building"
+        || !!feature.buildTaskId
+        || !!feature.buildPipelineId
         || feature.stories.length === 0
       ) return;
       setBuildingFeatureId(feature.id);
+      let ownsBuildReservation = false;
+      let unreservedTaskId: string | null = null;
       try {
         const taskDetails = formatFeatureStoriesForBuild(feature);
         const taskId = await addTask(projectId, taskDetails.title, taskDetails.description);
         if (!taskId) throw new Error("Failed to create Kanban task for feature build");
+        unreservedTaskId = taskId;
 
         const task = useKanbanStore.getState().tasks.find((candidate) => candidate.id === taskId);
         if (!task) throw new Error("Created build task was not found in the Kanban store");
@@ -2032,11 +2040,20 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         // unmount this view. A restarted client now sees an in-progress feature
         // instead of offering a duplicate build while the pipeline is being
         // created.
-        const reservedFeature = await updateFeature(feature.id, {
-          status: "building",
-          buildTaskId: taskId,
-        });
-        if (!reservedFeature) throw new Error("Failed to reserve the feature build");
+        const reservation = await claimFeatureBuild(feature.id, taskId);
+        if (!reservation) {
+          await deleteTask(taskId);
+          unreservedTaskId = null;
+          throw new Error("Failed to reserve the feature build");
+        }
+        if (!reservation.claimed) {
+          await deleteTask(taskId);
+          unreservedTaskId = null;
+          toast.error("This feature already has an active build");
+          return;
+        }
+        ownsBuildReservation = true;
+        unreservedTaskId = null;
 
         await startBuild(task, getPreferredEnvironmentType(projectId), "codex", {
           existingEnvironmentId: feature.codexEnvironmentId,
@@ -2060,6 +2077,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             buildTaskId: feature.buildTaskId,
             buildPipelineId: feature.buildPipelineId,
           }).catch(() => undefined);
+          ownsBuildReservation = false;
           return;
         }
         const updated = await updateFeature(feature.id, {
@@ -2071,11 +2089,16 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         if (!updated) throw new Error("Failed to persist the feature build state");
       } catch (error) {
         console.error("[FeaturesView] Failed to start feature build:", error);
-        await updateFeature(feature.id, {
-          status: feature.status,
-          buildTaskId: feature.buildTaskId,
-          buildPipelineId: feature.buildPipelineId,
-        }).catch(() => undefined);
+        if (unreservedTaskId) {
+          await deleteTask(unreservedTaskId);
+        }
+        if (ownsBuildReservation) {
+          await updateFeature(feature.id, {
+            status: feature.status,
+            buildTaskId: feature.buildTaskId,
+            buildPipelineId: feature.buildPipelineId,
+          }).catch(() => undefined);
+        }
         toast.error("Failed to start feature build", {
           description: error instanceof Error ? error.message : "Unknown error",
         });
@@ -2086,6 +2109,8 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     [
       addTask,
       buildingFeatureId,
+      claimFeatureBuild,
+      deleteTask,
       hasBlockingConversation,
       projectId,
       startBuild,
@@ -2197,10 +2222,16 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                   disabled={
                     buildingFeatureId === selectedFeature.id
                     || hasBlockingConversation
+                    || selectedFeature.status === "building"
+                    || !!selectedFeature.buildTaskId
+                    || !!selectedFeature.buildPipelineId
                   }
                   onClick={() => void handleBuildFeature(selectedFeature)}
                 >
-                  {buildingFeatureId === selectedFeature.id ? (
+                  {buildingFeatureId === selectedFeature.id
+                    || selectedFeature.status === "building"
+                    || !!selectedFeature.buildTaskId
+                    || !!selectedFeature.buildPipelineId ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <Wrench className="h-3.5 w-3.5" />

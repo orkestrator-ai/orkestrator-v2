@@ -84,4 +84,72 @@ describe("StorageService environment attachment privacy", () => {
       }
     });
   });
+
+  test("retries attachment cleanup after the primary was already cleared", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const secret = "cmV0cnktY2xlYXItc2VjcmV0";
+      await storage.updateEnvironment(environment.id, {
+        initialPromptAttachments: [{
+          id: "attachment-retry-clear",
+          name: "private.png",
+          previewUrl: "blob:private",
+          base64Data: secret,
+        }],
+      });
+      await storage.updateEnvironment(environment.id, {
+        initialPromptAttachments: null,
+      });
+      const backup = path.join(dataDir, "environments.json.bak.1");
+      await fs.writeFile(backup, JSON.stringify([{
+        ...environment,
+        initialPromptAttachments: [{
+          id: "attachment-retry-clear",
+          name: "private.png",
+          previewUrl: "blob:private",
+          base64Data: secret,
+        }],
+      }]), { mode: 0o600 });
+
+      await storage.updateEnvironment(environment.id, {
+        initialPromptAttachments: null,
+      });
+
+      expect(await fs.readFile(backup, "utf8")).not.toContain(secret);
+      expect((await fs.stat(backup)).mode & 0o777).toBe(0o600);
+    });
+  });
+
+  test("retries backup cleanup after the environment primary was already removed", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const secret = "cmV0cnktZGVsZXRlLXNlY3JldA==";
+      await storage.updateEnvironment(environment.id, {
+        initialPromptAttachments: [{
+          id: "attachment-retry-delete",
+          name: "private.png",
+          previewUrl: "blob:private",
+          base64Data: secret,
+        }],
+      });
+      await storage.removeEnvironment(environment.id);
+      const backup = path.join(dataDir, "environments.json.bak.1");
+      await fs.writeFile(backup, JSON.stringify([{
+        ...environment,
+        initialPromptAttachments: [{
+          id: "attachment-retry-delete",
+          name: "private.png",
+          previewUrl: "blob:private",
+          base64Data: secret,
+        }],
+      }]), { mode: 0o600 });
+
+      await expect(storage.removeEnvironment(environment.id))
+        .rejects.toThrow("Environment not found");
+
+      expect(await fs.readFile(backup, "utf8")).not.toContain(secret);
+      expect(await fs.readFile(backup, "utf8")).not.toContain(environment.id);
+      expect((await fs.stat(backup)).mode & 0o777).toBe(0o600);
+    });
+  });
 });

@@ -9,6 +9,7 @@ import {
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createStore } from "zustand/vanilla";
 import * as realBackend from "@/lib/backend";
+import { mockToastError as toastError } from "../../../../tests/mocks/sonner";
 
 const realBackendSnapshot = { ...realBackend };
 const saveComposeDraft = mock(
@@ -33,7 +34,6 @@ const getFileDraft = mock(
     ..._args: unknown[]
   ): Promise<Awaited<ReturnType<typeof realBackend.getFileDraft>>> => null,
 );
-
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   saveComposeDraft,
@@ -73,6 +73,7 @@ beforeEach(() => {
   ]) {
     fn.mockReset();
   }
+  toastError.mockClear();
   saveComposeDraft.mockImplementation(async () => undefined);
   deleteComposeDraft.mockImplementation(async () => undefined);
   getComposeDraft.mockImplementation(async () => null);
@@ -166,6 +167,124 @@ describe("compose draft persistence", () => {
       process.off("unhandledRejection", handler);
     }
   });
+
+  test("carries the hydrated revision through saves and deletes", async () => {
+    const key = "draft:revision-aware";
+    getComposeDraft.mockResolvedValueOnce({
+      draftKey: key,
+      ownerType: "project",
+      ownerId: "project",
+      value: "stored",
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 3,
+    });
+    saveComposeDraft.mockResolvedValueOnce({
+      draftKey: key,
+      ownerType: "project",
+      ownerId: "project",
+      value: "edited",
+      updatedAt: "2026-07-28T00:01:00.000Z",
+      revision: 4,
+    });
+
+    await compose.loadComposeDraft(key);
+    await compose.persistComposeDraft(key, "project", "project", "edited");
+    await compose.discardComposeDraft(key);
+
+    expect(saveComposeDraft).toHaveBeenCalledWith(
+      key,
+      "project",
+      "project",
+      "edited",
+      3,
+    );
+    expect(deleteComposeDraft).toHaveBeenCalledWith(key, 4);
+  });
+
+  test("blocks later writes after a revision conflict until explicit resolution", async () => {
+    const key = "draft:stale-revision";
+    getComposeDraft.mockResolvedValueOnce({
+      draftKey: key,
+      ownerType: "environment",
+      ownerId: "env",
+      value: "stored",
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 2,
+    });
+    saveComposeDraft.mockRejectedValue(new Error("Compose draft revision conflict"));
+
+    await compose.loadComposeDraft(key);
+    await expect(compose.persistComposeDraft(
+      key,
+      "environment",
+      "env",
+      "stale",
+    )).rejects.toBeInstanceOf(compose.DraftRevisionConflictError);
+    await expect(compose.persistComposeDraft(
+      key,
+      "environment",
+      "env",
+      "still stale",
+    )).rejects.toBeInstanceOf(compose.DraftRevisionConflictError);
+
+    expect(saveComposeDraft.mock.calls.map(
+      (call) => (call as unknown[])[4],
+    )).toEqual([2]);
+  });
+
+  test("keeps revisions isolated between two same-key consumers", async () => {
+    const key = "draft:two-consumers";
+    const firstState = compose.createDraftRevisionState();
+    const secondState = compose.createDraftRevisionState();
+    const revisionOne = {
+      draftKey: key,
+      ownerType: "project" as const,
+      ownerId: "project",
+      value: "initial",
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 1,
+    };
+    getComposeDraft
+      .mockResolvedValueOnce(revisionOne)
+      .mockResolvedValueOnce(revisionOne)
+      .mockResolvedValueOnce({ ...revisionOne, value: "first", revision: 2 });
+    saveComposeDraft
+      .mockResolvedValueOnce({ ...revisionOne, value: "first", revision: 2 })
+      .mockRejectedValueOnce(new Error("Compose draft revision conflict"))
+      .mockResolvedValueOnce({ ...revisionOne, value: "second", revision: 3 });
+
+    await compose.loadComposeDraft(key, firstState);
+    await compose.loadComposeDraft(key, secondState);
+    await compose.persistComposeDraft(
+      key,
+      "project",
+      "project",
+      "first",
+      firstState,
+    );
+    await expect(compose.persistComposeDraft(
+      key,
+      "project",
+      "project",
+      "second",
+      secondState,
+    )).rejects.toBeInstanceOf(compose.DraftRevisionConflictError);
+
+    expect(saveComposeDraft.mock.calls.map(
+      (call) => (call as unknown[])[4],
+    )).toEqual([1, 1]);
+
+    await compose.resolveComposeDraftSaveConflict(
+      key,
+      "project",
+      "project",
+      "second",
+      secondState,
+    );
+    expect(saveComposeDraft.mock.calls.map(
+      (call) => (call as unknown[])[4],
+    )).toEqual([1, 1, 2]);
+  });
 });
 
 describe("file draft persistence", () => {
@@ -182,18 +301,10 @@ describe("file draft persistence", () => {
     await pendingFirst;
   });
 
-  test("an explicit discard tombstones a rapid reopen until a new save", async () => {
+  test("a rapid reopen waits for an in-flight discard and reads authoritative state", async () => {
     const deletion = deferred<void>();
     deleteFileDraft.mockImplementationOnce(() => deletion.promise);
-    getFileDraft.mockImplementation(async () => ({
-      draftKey: files.fileDraftKey("env", "src/index.ts"),
-      environmentId: "env",
-      filePath: "src/index.ts",
-      content: "stale",
-      originalContent: "disk",
-      updatedAt: "2026-07-28T00:00:00.000Z",
-      revision: 1,
-    }));
+    getFileDraft.mockResolvedValue(null);
 
     const deleting = files.discardFileDraft("env", "src/index.ts");
     const reopening = files.loadFileDraft("env", "src/index.ts");
@@ -203,12 +314,114 @@ describe("file draft persistence", () => {
     deletion.resolve();
     await deleting;
     expect(await reopening).toBeNull();
-    expect(getFileDraft).not.toHaveBeenCalled();
+    expect(getFileDraft).toHaveBeenCalledTimes(1);
+  });
 
-    await files.persistFileDraft("env", "src/index.ts", "new", "disk");
-    expect(await files.loadFileDraft("env", "src/index.ts")).toMatchObject({
-      content: "stale",
+  test("carries file revisions through saves and deletes", async () => {
+    const key = files.fileDraftKey("env-revision", "src/index.ts");
+    getFileDraft.mockResolvedValueOnce({
+      draftKey: key,
+      environmentId: "env-revision",
+      filePath: "src/index.ts",
+      content: "stored",
+      originalContent: "disk",
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 7,
     });
+    saveFileDraft.mockResolvedValueOnce({
+      draftKey: key,
+      environmentId: "env-revision",
+      filePath: "src/index.ts",
+      content: "edited",
+      originalContent: "disk",
+      updatedAt: "2026-07-28T00:01:00.000Z",
+      revision: 8,
+    });
+
+    await files.loadFileDraft("env-revision", "src/index.ts");
+    await files.persistFileDraft("env-revision", "src/index.ts", "edited", "disk");
+    await files.discardFileDraft("env-revision", "src/index.ts");
+
+    expect(saveFileDraft).toHaveBeenCalledWith(
+      key,
+      "env-revision",
+      "src/index.ts",
+      "edited",
+      "disk",
+      7,
+    );
+    expect(deleteFileDraft).toHaveBeenCalledWith(key, 8);
+  });
+
+  test("blocks later file writes after a conflict until explicit resolution", async () => {
+    const key = files.fileDraftKey("env-stale", "src/index.ts");
+    getFileDraft.mockResolvedValueOnce({
+      draftKey: key,
+      environmentId: "env-stale",
+      filePath: "src/index.ts",
+      content: "stored",
+      originalContent: "disk",
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 5,
+    });
+    saveFileDraft.mockRejectedValue(new Error("File draft revision conflict"));
+
+    await files.loadFileDraft("env-stale", "src/index.ts");
+    await expect(files.persistFileDraft(
+      "env-stale",
+      "src/index.ts",
+      "stale",
+      "disk",
+    )).rejects.toBeInstanceOf(compose.DraftRevisionConflictError);
+    await expect(files.persistFileDraft(
+      "env-stale",
+      "src/index.ts",
+      "still stale",
+      "disk",
+    )).rejects.toBeInstanceOf(compose.DraftRevisionConflictError);
+
+    expect(saveFileDraft.mock.calls.map(
+      (call) => (call as unknown[])[5],
+    )).toEqual([5]);
+  });
+
+  test("a failed stale delete does not hide the newer authoritative file draft", async () => {
+    const key = files.fileDraftKey("env-delete-conflict", "src/index.ts");
+    const state = files.createDraftRevisionState();
+    const stale = {
+      draftKey: key,
+      environmentId: "env-delete-conflict",
+      filePath: "src/index.ts",
+      content: "stale",
+      originalContent: "disk",
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 1,
+    };
+    const current = { ...stale, content: "newer elsewhere", revision: 2 };
+    getFileDraft
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValueOnce(current)
+      .mockResolvedValueOnce(current);
+    deleteFileDraft.mockRejectedValueOnce(
+      new Error("File draft revision conflict"),
+    );
+
+    await files.loadFileDraft(
+      "env-delete-conflict",
+      "src/index.ts",
+      state,
+    );
+    await expect(files.discardFileDraft(
+      "env-delete-conflict",
+      "src/index.ts",
+      state,
+    )).rejects.toBeInstanceOf(compose.DraftRevisionConflictError);
+
+    expect(await files.loadFileDraft(
+      "env-delete-conflict",
+      "src/index.ts",
+      files.createDraftRevisionState(),
+    )).toEqual(current);
   });
 });
 
@@ -216,6 +429,52 @@ const isString = (value: unknown): value is string => typeof value === "string";
 const isBlank = (value: string) => value.length === 0;
 
 describe("useDurableComposeDraft", () => {
+  test("preserves local input and offers explicit conflict resolution", async () => {
+    const key = "test:project-hook-conflict:value";
+    const revisionOne = {
+      draftKey: key,
+      ownerType: "project" as const,
+      ownerId: "project-hook-conflict",
+      value: "stored",
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 1,
+    };
+    getComposeDraft
+      .mockResolvedValueOnce(revisionOne)
+      .mockResolvedValueOnce({ ...revisionOne, value: "other edit", revision: 2 });
+    saveComposeDraft
+      .mockRejectedValueOnce(new Error("Compose draft revision conflict"))
+      .mockResolvedValueOnce({ ...revisionOne, value: "local edit", revision: 3 });
+
+    const { result, unmount } = renderHook(() => useDurableComposeDraft({
+      ownerType: "project",
+      ownerId: "project-hook-conflict",
+      namespace: "test",
+      localKey: "value",
+      initialValue: "",
+      isEmpty: isBlank,
+      isValid: isString,
+      debounceMs: 5,
+    }));
+    await waitFor(() => expect(result.current[0]).toBe("stored"));
+
+    act(() => result.current[1]("local edit"));
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(result.current[0]).toBe("local edit");
+    const options = toastError.mock.calls.at(-1)?.[1] as {
+      action?: { onClick?: () => void };
+    };
+    expect(typeof options.action?.onClick).toBe("function");
+
+    act(() => options.action?.onClick?.());
+    await waitFor(() => expect(saveComposeDraft.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(saveComposeDraft.mock.calls.slice(0, 2).map(
+      (call) => (call as unknown[])[4],
+    )).toEqual([1, 2]);
+    expect(result.current[0]).toBe("local edit");
+    unmount();
+  });
+
   test("preserves input typed while hydration is pending and persists it", async () => {
     const snapshot = deferred<Awaited<ReturnType<typeof realBackend.getComposeDraft<string>>>>();
     getComposeDraft.mockImplementationOnce(() => snapshot.promise);
@@ -247,6 +506,7 @@ describe("useDurableComposeDraft", () => {
       "project",
       "project-hook-pending",
       "typed while loading",
+      1,
     ));
     unmount();
   });
@@ -273,6 +533,7 @@ describe("useDurableComposeDraft", () => {
       "environment",
       "env-hook-unmount",
       "latest",
+      0,
     ));
   });
 
@@ -301,6 +562,7 @@ describe("useDurableComposeDraft", () => {
       "project",
       "project-hook-key",
       "first value",
+      0,
     ));
     await waitFor(() => expect(result.current[0]).toBe(""));
     unmount();
@@ -333,6 +595,7 @@ describe("useDurableComposeDraft", () => {
     expect(result.current[0]).toBe("initial");
     expect(deleteComposeDraft).toHaveBeenCalledWith(
       "test:project-hook-malformed:value",
+      1,
     );
     unmount();
     await Promise.resolve();
@@ -362,18 +625,34 @@ describe("useDurableComposeDraft", () => {
       "project",
       "project-hook-failed-read",
       "authoritative local edit",
+      0,
     ));
   });
 });
 
 interface NativeState {
   draftText: Map<string, string>;
-  draftMentions: Map<string, string[]>;
-  attachments: Map<string, { id: string }[]>;
+  draftMentions: Map<string, Array<{
+    id: string;
+    filename: string;
+    relativePath: string;
+  }>>;
+  attachments: Map<string, Array<{
+    id: string;
+    type: "file" | "image";
+    path: string;
+    name: string;
+    previewUrl?: string;
+  }>>;
   setDraftText: (key: string, value: string) => void;
-  setDraftMentions: (key: string, value: string[]) => void;
+  setDraftMentions: (key: string, value: NativeState["draftMentions"] extends Map<string, infer T> ? T : never) => void;
   clearAttachments: (key: string) => void;
-  addAttachment: (key: string, value: { id: string }) => void;
+  addAttachment: (
+    key: string,
+    value: NativeState["attachments"] extends Map<string, Array<infer T>>
+      ? T
+      : never,
+  ) => void;
 }
 
 function createNativeStore() {
@@ -455,6 +734,7 @@ describe("useNativeComposeDraftPersistence", () => {
       "environment",
       "env-native",
       { text: "local", mentions: [], attachments: [] },
+      1,
     ));
   });
 
@@ -553,6 +833,7 @@ describe("useNativeComposeDraftPersistence", () => {
 
     await waitFor(() => expect(deleteComposeDraft).toHaveBeenCalledWith(
       compose.composeDraftKey("codex", "env-close", sessionKey),
+      0,
     ));
   });
 
@@ -578,6 +859,7 @@ describe("useNativeComposeDraftPersistence", () => {
       "environment",
       "env-debounce",
       { text: "latest", mentions: [], attachments: [] },
+      0,
     ), { timeout: 1_500 });
     expect(saveComposeDraft).toHaveBeenCalledTimes(1);
     act(() => store.getState().setDraftText(sessionKey, ""));
@@ -593,8 +875,17 @@ describe("useNativeComposeDraftPersistence", () => {
         ownerId: "env-valid",
         value: {
           text: "restored",
-          mentions: ["src/a.ts"],
-          attachments: [{ id: "image" }],
+          mentions: [{
+            id: "mention",
+            filename: "a.ts",
+            relativePath: "src/a.ts",
+          }],
+          attachments: [{
+            id: "image",
+            type: "image",
+            path: "/workspace/image.png",
+            name: "image.png",
+          }],
         },
         updatedAt: "2026-07-28T00:00:00.000Z",
         revision: 1,
@@ -623,11 +914,98 @@ describe("useNativeComposeDraftPersistence", () => {
     ));
 
     await waitFor(() => expect(valid.getState().draftText.get("session")).toBe("restored"));
-    expect(valid.getState().draftMentions.get("session")).toEqual(["src/a.ts"]);
-    expect(valid.getState().attachments.get("session")).toEqual([{ id: "image" }]);
+    expect(valid.getState().draftMentions.get("session")).toEqual([{
+      id: "mention",
+      filename: "a.ts",
+      relativePath: "src/a.ts",
+    }]);
+    expect(valid.getState().attachments.get("session")).toEqual([{
+      id: "image",
+      type: "image",
+      path: "/workspace/image.png",
+      name: "image.png",
+    }]);
     expect(invalid.getState().draftText.has("session")).toBe(false);
 
     validHook.unmount();
     invalidHook.unmount();
   });
+
+  for (const namespace of ["claude", "codex", "opencode"] as const) {
+    test(`${namespace} drops malformed mention and attachment elements`, async () => {
+      getComposeDraft.mockResolvedValueOnce({
+        draftKey: `${namespace}:env-elements:session`,
+        ownerType: "environment",
+        ownerId: "env-elements",
+        value: {
+          text: "safe text",
+          mentions: [
+            null,
+            "src/a.ts",
+            { id: "partial", filename: "missing-path.ts" },
+            { id: "valid", filename: "valid.ts", relativePath: "src/valid.ts" },
+          ],
+          attachments: [
+            null,
+            42,
+            { id: "partial" },
+            {
+              id: "valid-image",
+              type: "image",
+              path: "/workspace/image.png",
+              name: "image.png",
+            },
+            {
+              id: "file",
+              type: "file",
+              path: "/workspace/file.txt",
+              name: "file.txt",
+            },
+          ],
+        },
+        updatedAt: "2026-07-28T00:00:00.000Z",
+        revision: 1,
+      });
+      const store = createNativeStore();
+      const hook = renderHook(() => useNativeComposeDraftPersistence(
+        namespace,
+        "env-elements",
+        "session",
+        store,
+      ));
+
+      await waitFor(() =>
+        expect(store.getState().draftText.get("session")).toBe("safe text"),
+      );
+      expect(store.getState().draftMentions.get("session")).toEqual([{
+        id: "valid",
+        filename: "valid.ts",
+        relativePath: "src/valid.ts",
+      }]);
+      expect(store.getState().attachments.get("session")).toEqual(
+        namespace === "codex"
+          ? [{
+              id: "valid-image",
+              type: "image",
+              path: "/workspace/image.png",
+              name: "image.png",
+            }]
+          : [
+              {
+                id: "valid-image",
+                type: "image",
+                path: "/workspace/image.png",
+                name: "image.png",
+              },
+              {
+                id: "file",
+                type: "file",
+                path: "/workspace/file.txt",
+                name: "file.txt",
+              },
+            ],
+      );
+      hook.unmount();
+    });
+  }
 });

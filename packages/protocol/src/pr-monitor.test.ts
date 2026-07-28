@@ -77,6 +77,10 @@ describe("isPrMonitorEvent", () => {
     expect(isPrMonitorEvent({})).toBe(false);
     expect(isPrMonitorEvent({ environmentId: "", removed: true })).toBe(false);
     expect(isPrMonitorEvent({ environmentId: "env-1" })).toBe(false);
+    expect(isPrMonitorEvent({
+      environmentId: "env-1",
+      state: state({ environmentId: "env-2" }),
+    })).toBe(false);
     expect(isPrMonitorEvent({ environmentId: "env-1", state: state({ mode: "idle" as never }) })).toBe(false);
     expect(isPrMonitorEvent({ environmentId: "env-1", state: state({ consecutiveErrors: -1 }) })).toBe(false);
     expect(isPrMonitorEvent({

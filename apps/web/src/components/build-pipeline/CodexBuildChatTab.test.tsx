@@ -79,6 +79,7 @@ const mockSaveBuildPipeline = mock(async (
   updatedAt: "2026-04-15T00:00:00.000Z",
 }));
 const mockGetBuildPipeline = mock(async (_pipelineId: string): Promise<any> => null);
+const mockPrMonitorWatch = mock(async () => undefined);
 
 mock.module("@/lib/codex-client", () => ({
   abortSession: mockAbortSession,
@@ -144,6 +145,7 @@ mock.module("@/lib/backend", () => ({
   getBuildPipeline: mockGetBuildPipeline,
   getLocalCodexServerStatus: mockGetLocalCodexServerStatus,
   getProjectNotes: mockGetProjectNotes,
+  prMonitorWatch: mockPrMonitorWatch,
   startCodexServer: mockStartCodexServer,
   startLocalCodexServer: mockStartLocalCodexServer,
   saveBuildPipeline: mockSaveBuildPipeline,
@@ -710,6 +712,8 @@ describe("CodexBuildChatTab", () => {
     mockAbortSession.mockClear();
     mockDetectPr.mockClear();
     mockDetectPrLocal.mockClear();
+    mockPrMonitorWatch.mockReset();
+    mockPrMonitorWatch.mockResolvedValue(undefined);
     mockGetProjectNotes.mockClear();
     mockAddKanbanComment.mockClear();
     mockUpdateKanbanTask.mockClear();
@@ -3637,6 +3641,24 @@ describe("CodexBuildChatTab", () => {
     });
 
     expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    expect(mockPrMonitorWatch).toHaveBeenCalledWith(ENV_ID, "create-pending");
+  });
+
+  test("continues PR creation when the backend watch request is rejected", async () => {
+    mockPrMonitorWatch.mockRejectedValueOnce(new Error("monitor unavailable"));
+    seedVerifyPipeline("All acceptance criteria are satisfied", { complete: true });
+    mockCreateSession.mockResolvedValueOnce({ sessionId: "pr-session", title: "PR Creation Session" });
+    mockGetSessionStatus
+      .mockResolvedValueOnce({ status: "idle" })
+      .mockResolvedValue({ status: "running" });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase)
+        .toBe("creating-pr");
+    });
+    expect(mockPrMonitorWatch).toHaveBeenCalledWith(ENV_ID, "create-pending");
   });
 
   test("fails the pipeline when the PR creation prompt is rejected", async () => {

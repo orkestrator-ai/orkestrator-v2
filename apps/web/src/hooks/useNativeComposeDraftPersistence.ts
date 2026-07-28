@@ -1,9 +1,13 @@
 import { useEffect } from "react";
+import { toast } from "sonner";
 import {
   composeDraftKey,
   discardComposeDraft,
+  DraftRevisionConflictError,
   loadComposeDraft,
   persistComposeDraft,
+  resolveComposeDraftDiscardConflict,
+  resolveComposeDraftSaveConflict,
 } from "@/lib/compose-draft-persistence";
 
 interface NativeComposeDraftState<TMention, TAttachment> {
@@ -32,6 +36,39 @@ interface PersistedNativeComposeDraft {
   attachments: unknown[];
 }
 
+type NativeDraftNamespace = "claude" | "codex" | "opencode";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPersistedFileMention(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.id === "string"
+    && typeof value.filename === "string"
+    && typeof value.relativePath === "string";
+}
+
+function isPersistedAttachment(
+  namespace: NativeDraftNamespace,
+  value: unknown,
+): boolean {
+  if (
+    !isRecord(value)
+    || typeof value.id !== "string"
+    || typeof value.name !== "string"
+    || typeof value.path !== "string"
+    || (
+      value.previewUrl !== undefined
+      && typeof value.previewUrl !== "string"
+    )
+  ) {
+    return false;
+  }
+  if (namespace === "codex") return value.type === "image";
+  return value.type === "file" || value.type === "image";
+}
+
 function readDraft<TMention, TAttachment>(
   state: NativeComposeDraftState<TMention, TAttachment>,
   sessionKey: string,
@@ -56,7 +93,7 @@ function isEmptyDraft(draft: PersistedNativeComposeDraft): boolean {
  * flight. Writes are debounced and serialized by the shared persistence helper.
  */
 export function useNativeComposeDraftPersistence<TMention, TAttachment>(
-  namespace: "claude" | "codex" | "opencode",
+  namespace: NativeDraftNamespace,
   environmentId: string,
   sessionKey: string,
   store: NativeComposeDraftStore<TMention, TAttachment>,
@@ -69,6 +106,35 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
     let applyingHydration = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const key = composeDraftKey(namespace, environmentId, sessionKey);
+
+    const reportPersistenceError = (error: unknown): void => {
+      if (!(error instanceof DraftRevisionConflictError)) {
+        console.warn(`[${namespace}] Failed to persist compose draft:`, error);
+        return;
+      }
+      const discarding = isEmptyDraft(readDraft(store.getState(), sessionKey));
+      toast.error("Draft changed in another window", {
+        id: `compose-draft-conflict:${key}`,
+        description: discarding
+          ? "A newer saved draft was preserved. Discard it explicitly to finish closing this input."
+          : "Your input is still here. Choose Save mine to replace the other saved draft.",
+        action: {
+          label: discarding ? "Discard saved draft" : "Save mine",
+          onClick: () => {
+            const current = readDraft(store.getState(), sessionKey);
+            const operation = isEmptyDraft(current)
+              ? resolveComposeDraftDiscardConflict(key)
+              : resolveComposeDraftSaveConflict(
+                  key,
+                  "environment",
+                  environmentId,
+                  current,
+                );
+            void operation.catch(reportPersistenceError);
+          },
+        },
+      });
+    };
 
     const persist = (
       state: NativeComposeDraftState<TMention, TAttachment>,
@@ -85,7 +151,7 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       timer = setTimeout(() => {
         timer = undefined;
         void persist(state).catch((error) => {
-          console.warn(`[${namespace}] Failed to persist compose draft:`, error);
+          reportPersistenceError(error);
         });
       }, 400);
     };
@@ -127,12 +193,16 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
         ) {
           return;
         }
+        const mentions = value.mentions.filter(isPersistedFileMention);
+        const attachments = value.attachments.filter((attachment) =>
+          isPersistedAttachment(namespace, attachment)
+        );
         applyingHydration = true;
         try {
           state.setDraftText(sessionKey, value.text);
-          state.setDraftMentions(sessionKey, value.mentions as TMention[]);
+          state.setDraftMentions(sessionKey, mentions as TMention[]);
           state.clearAttachments(sessionKey);
-          for (const attachment of value.attachments) {
+          for (const attachment of attachments) {
             state.addAttachment(sessionKey, attachment as TAttachment);
           }
         } finally {
@@ -158,7 +228,7 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       // unmounts preserve their latest non-empty value.
       if (hydrated || locallyChanged) {
         void persist(store.getState()).catch((error) => {
-          console.warn(`[${namespace}] Failed to persist compose draft during cleanup:`, error);
+          reportPersistenceError(error);
         });
       }
     };

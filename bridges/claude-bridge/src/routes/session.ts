@@ -212,6 +212,18 @@ session.put("/:id/preferences", async (c) => {
       return c.json({ error: "Request body must be a JSON object" }, 400);
     }
     const record = body as Record<string, unknown>;
+    const unexpectedField = Object.keys(record).find(
+      (key) => key !== "planMode",
+    );
+    if (unexpectedField) {
+      return c.json(
+        { error: `Unexpected session preference field: ${unexpectedField}` },
+        400,
+      );
+    }
+    if (!Object.hasOwn(record, "planMode")) {
+      return c.json({ error: "planMode is required" }, 400);
+    }
     if (
       Object.hasOwn(record, "planMode")
       && typeof record.planMode !== "boolean"

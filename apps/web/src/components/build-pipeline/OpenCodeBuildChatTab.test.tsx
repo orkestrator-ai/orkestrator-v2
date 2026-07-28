@@ -29,6 +29,7 @@ const mockDetectPr = mock(async () => null as {
   hasMergeConflicts: boolean;
 } | null);
 const mockDetectPrLocal = mockDetectPr;
+const mockPrMonitorWatch = mock(async () => undefined);
 // Named so the local/container server-start branches can be asserted on.
 const mockGetLocalOpencodeServerStatus = mock(async (_environmentId: string) => ({
   running: true,
@@ -98,6 +99,7 @@ mock.module("@/lib/backend", () => ({
   getLocalOpencodeServerStatus: mockGetLocalOpencodeServerStatus,
   getOpenCodeServerStatus: mockGetOpenCodeServerStatus,
   getProjectNotes: mockGetProjectNotes,
+  prMonitorWatch: mockPrMonitorWatch,
   startLocalOpencodeServer: mockStartLocalOpencodeServer,
   startOpenCodeServer: mockStartOpenCodeServer,
 }));
@@ -551,6 +553,8 @@ describe("OpenCodeBuildChatTab", () => {
     mockRejectQuestion.mockClear();
     mockGetProjectNotes.mockClear();
     mockDetectPr.mockClear();
+    mockPrMonitorWatch.mockReset();
+    mockPrMonitorWatch.mockResolvedValue(undefined);
     mockGetLocalOpencodeServerStatus.mockClear();
     mockStartLocalOpencodeServer.mockClear();
     mockGetOpenCodeServerStatus.mockClear();
@@ -1373,7 +1377,7 @@ describe("OpenCodeBuildChatTab", () => {
     await waitFor(() => {
       const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
       expect(pipeline?.phase).toBe("failed");
-      expect(pipeline?.error).toBe("Failed to send verification prompt");
+      expect(pipeline?.error).toBe("verification prompt rejected");
     });
     const verifySession = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions.at(-1);
     expect(useOpenCodeStore.getState().sessions.get(verifySession!.sessionKey)?.messages.at(-1)?.content).toBe(
@@ -1670,6 +1674,20 @@ describe("OpenCodeBuildChatTab", () => {
       expect(pipeline?.verificationResult).toBe("pass");
       expect(pipeline?.sessions.at(-1)?.phase).toBe("pr");
     });
+    expect(mockPrMonitorWatch).toHaveBeenCalledWith(ENV_ID, "create-pending");
+  });
+
+  test("continues PR creation when the backend watch request is rejected", async () => {
+    mockPrMonitorWatch.mockRejectedValueOnce(new Error("monitor unavailable"));
+    seedVerifyPipeline("All acceptance criteria are satisfied", { complete: true });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase)
+        .toBe("creating-pr");
+    });
+    expect(mockPrMonitorWatch).toHaveBeenCalledWith(ENV_ID, "create-pending");
   });
 
   test("starts conflict resolution when the created PR has merge conflicts", async () => {

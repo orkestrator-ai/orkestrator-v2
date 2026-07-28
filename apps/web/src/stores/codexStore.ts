@@ -99,6 +99,16 @@ interface CodexState extends CodexChatSlice {
   contextUsage: Map<string, ContextUsageSnapshot>;
   /** Ambiguous prompt sends that the next mount must settle authoritatively. */
   unconfirmedDispatches: Map<string, CodexUnconfirmedDispatch>;
+  /**
+   * Logical prompt requests claimed by this renderer.
+   *
+   * Component-local refs cannot coordinate React StrictMode's repeated effects
+   * or a background-to-foreground remount. The durable pane prompt survives a
+   * renderer crash; this map only prevents two live mounts in the same renderer
+   * from creating two optimistic bubbles for that one durable request. Accepted
+   * one-shot launch claims remain until the tab/session is cleaned up.
+   */
+  promptDispatchClaims: Map<string, Set<string>>;
 
   // Agent-specific actions
   setModels: (models: CodexModel[]) => void;
@@ -138,6 +148,9 @@ interface CodexState extends CodexChatSlice {
     dispatch: CodexUnconfirmedDispatch,
   ) => void;
   clearUnconfirmedDispatch: (sessionKey: string) => void;
+  /** Atomically claims one logical request for a live mount. */
+  claimPromptDispatch: (sessionKey: string, requestId: string) => boolean;
+  releasePromptDispatch: (sessionKey: string, requestId: string) => void;
   isFastMode: (sessionKey: string) => boolean;
   clearEnvironment: (environmentId: string) => void;
   /** Drop every session-keyed entry for one closed tab. */
@@ -226,6 +239,7 @@ const CODEX_SESSION_KEYED_MAPS = [
   "pendingInteractions",
   "contextUsage",
   "unconfirmedDispatches",
+  "promptDispatchClaims",
 ] as const satisfies ReadonlyArray<keyof CodexState>;
 
 export const useCodexStore = create<CodexState>()((set, get, api) => ({
@@ -248,6 +262,7 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
   pendingInteractions: new Map(),
   contextUsage: new Map(),
   unconfirmedDispatches: new Map(),
+  promptDispatchClaims: new Map(),
 
   // Agent-specific actions
   setModels: (models) => set({ models: models.length > 0 ? models : CODEX_MODELS }),
@@ -442,6 +457,31 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       const next = new Map(state.unconfirmedDispatches);
       next.delete(sessionKey);
       return { unconfirmedDispatches: next };
+    }),
+
+  claimPromptDispatch: (sessionKey, requestId) => {
+    let claimed = false;
+    set((state) => {
+      const current = state.promptDispatchClaims.get(sessionKey);
+      if (current?.has(requestId)) return state;
+      const next = new Map(state.promptDispatchClaims);
+      next.set(sessionKey, new Set([...(current ?? []), requestId]));
+      claimed = true;
+      return { promptDispatchClaims: next };
+    });
+    return claimed;
+  },
+
+  releasePromptDispatch: (sessionKey, requestId) =>
+    set((state) => {
+      const current = state.promptDispatchClaims.get(sessionKey);
+      if (!current?.has(requestId)) return state;
+      const remaining = new Set(current);
+      remaining.delete(requestId);
+      const next = new Map(state.promptDispatchClaims);
+      if (remaining.size === 0) next.delete(sessionKey);
+      else next.set(sessionKey, remaining);
+      return { promptDispatchClaims: next };
     }),
 
   isFastMode: (sessionKey) => get().fastMode.get(sessionKey) ?? false,

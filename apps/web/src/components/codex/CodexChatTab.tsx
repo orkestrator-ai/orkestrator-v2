@@ -93,6 +93,7 @@ import {
   resolveCodexPreferenceSelection,
   resolveReasoningEffort,
 } from "./codex-preferences";
+import { requireCodexForkPlanEntry } from "./codex-message-fork";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
@@ -266,6 +267,7 @@ export function CodexChatTab({
     () => createSessionKey(environmentId, tabId),
     [environmentId, tabId],
   );
+  const initialPromptRequestId = `initial-prompt:${environmentId}:${tabId}`;
   useNativeComposeDraftPersistence("codex", environmentId, sessionKey, useCodexStore);
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
@@ -347,6 +349,8 @@ export function CodexChatTab({
   const setSelectedReasoningEffort = useCodexStore((state) => state.setSelectedReasoningEffort);
   const setFastMode = useCodexStore((state) => state.setFastMode);
   const addToQueue = useCodexStore((state) => state.addToQueue);
+  const claimPromptDispatch = useCodexStore((state) => state.claimPromptDispatch);
+  const releasePromptDispatch = useCodexStore((state) => state.releasePromptDispatch);
   const client = useCodexStore(
     useCallback((state) => state.clients.get(environmentId), [environmentId]),
   );
@@ -355,6 +359,14 @@ export function CodexChatTab({
   );
   const sessionPhase = useCodexStore(
     useCallback((state) => state.sessionPhase.get(sessionKey), [sessionKey]),
+  );
+  const initialPromptDispatchClaimed = useCodexStore(
+    useCallback(
+      (state) =>
+        state.promptDispatchClaims.get(sessionKey)?.has(initialPromptRequestId)
+        ?? false,
+      [initialPromptRequestId, sessionKey],
+    ),
   );
   const storedPendingApprovals = useCodexStore(
     useCallback((state) => state.pendingApprovals.get(sessionKey), [sessionKey]),
@@ -474,7 +486,6 @@ export function CodexChatTab({
   );
   const displayMessages = handoff.displayMessages;
   const launchPrompt = initialPrompt ?? handoff.initialPrompt;
-  const initialPromptRequestId = `initial-prompt:${environmentId}:${tabId}`;
   /*
    * Read through a ref inside the initialization effect. `launchPrompt` resolves
    * a few milliseconds after mount for a handoff tab, so listing it as a
@@ -644,6 +655,10 @@ export function CodexChatTab({
       // spent.
       retryablePromptRef.current = null;
       if (pending.requestId === initialPromptRequestId) {
+        // The earlier ambiguous outcome released this mount's claim. Restore the
+        // spent request claim before clearing durable pane intent so a remount
+        // holding stale launch props cannot dispatch the same prompt again.
+        store.claimPromptDispatch(sessionKey, pending.requestId);
         clearTabInitialPrompt(tabId, environmentId);
       }
       return;
@@ -737,6 +752,11 @@ export function CodexChatTab({
           attachments: promptAttachments.length > 0 ? promptAttachments : undefined,
           requestId,
         });
+      } catch (error) {
+        retryablePromptRef.current = { fingerprint, requestId };
+        removeMessage(sessionKey, userMessage.id);
+        setSessionLoading(sessionKey, false);
+        throw error;
       } finally {
         dispatchInFlightRef.current -= 1;
       }
@@ -800,28 +820,22 @@ export function CodexChatTab({
           reconciliation === "applied"
           && reconciledSession?.isLoading !== true
         ) {
-          const optimisticStillPresent = reconciledSession?.messages.some(
-            (message) => message.id === userMessage.id,
-          ) === true;
-          useCodexStore.getState().clearUnconfirmedDispatch(sessionKey);
           setSessionPhase(sessionKey, undefined);
-          if (optimisticStillPresent) {
-            // Authoritative idle state did not echo the prompt, so expose a
-            // retryable failure rather than leaving a local-only user message.
-            removeMessage(sessionKey, userMessage.id);
-            setSessionError(
-              sessionKey,
-              "Could not confirm whether Codex received the prompt. You can send it again safely.",
-            );
+          if (
+            retryablePromptRef.current?.fingerprint === fingerprint
+            && retryablePromptRef.current.requestId === requestId
+          ) {
+            // The reconcile already settled this no-echo prompt as retryable.
+            // Preserve its key and error instead of overwriting that rejection
+            // merely because the optimistic bubble has now been removed.
             return "rejected";
-          } else {
-            // The transcript proves the request completed despite the lost
-            // response; its idempotency key is now spent.
-            retryablePromptRef.current = null;
-            setSessionError(sessionKey, undefined);
-            clearMatchingUnconfirmedDispatch();
-            return "accepted";
           }
+          // The transcript proves the request completed despite the lost
+          // response; its idempotency key is now spent.
+          retryablePromptRef.current = null;
+          setSessionError(sessionKey, undefined);
+          clearMatchingUnconfirmedDispatch();
+          return "accepted";
         }
         if (reconciliation === "applied" && reconciledSession?.isLoading === true) {
           // The authoritative status proves this request is running even though
@@ -842,6 +856,30 @@ export function CodexChatTab({
        */
       retryablePromptRef.current = null;
       clearMatchingUnconfirmedDispatch();
+
+      if (sent.status === "processing" && sent.duplicate) {
+        /**
+         * This logical request is already running.
+         *
+         * A StrictMode effect or a remount may have created a second local
+         * optimistic bubble before the bridge attached this retry to the first
+         * turn. Only one user message will exist in the authoritative
+         * transcript. Refresh before discarding the extra bubble so a transient
+         * transcript failure cannot erase the user's visible history.
+         */
+        try {
+          const refreshed = await refreshMessages(client, session.sessionId, {
+            throwOnError: true,
+          });
+          if (refreshed) {
+            removeMessage(sessionKey, userMessage.id);
+          }
+        } catch {
+          // The bridge already accepted this request, so keep its key spent and
+          // preserve local messages until SSE or a later refresh reconciles them.
+        }
+        return "accepted";
+      }
 
       if (sent.status === "already-processed" && sent.duplicate) {
         /**
@@ -1170,15 +1208,11 @@ export function CodexChatTab({
     forkInFlightRef.current = true;
     setForkInFlight(true);
     try {
-      const planned = forkPlanRef.current.get(messageId);
-      if (!planned || planned.kind !== kind) {
-        // Typed so the catch below surfaces the reason rather than replacing it
-        // with the generic fallback, which tells the user nothing.
-        throw new CodexForkError(
-          404,
-          "The selected message is no longer in this session",
-        );
-      }
+      const planned = requireCodexForkPlanEntry(
+        forkPlanRef.current,
+        messageId,
+        kind,
+      );
 
       let fork: Awaited<ReturnType<typeof forkCodexSession>>;
       if (planned.boundary.type === "message") {
@@ -1938,13 +1972,17 @@ export function CodexChatTab({
     if (status.status === "idle") {
       setSessionLoading(sessionKey, false);
       setSessionError(sessionKey, undefined);
-      await refreshMessages(client, session.sessionId, {
+      const refreshed = await refreshMessages(client, session.sessionId, {
         throwOnError: options?.throwOnError,
         shouldApply,
       });
       // Authoritative idle plus a fresh transcript is exactly what an earlier
-      // unresolved dispatch was waiting for.
-      if (shouldApply()) resolveUnconfirmedDispatch();
+      // unresolved dispatch was waiting for. A superseded refresh is not proof:
+      // resolving from whatever transcript happens to be in the store can
+      // classify a landed prompt as missing while a newer refresh is applying
+      // its authoritative echo.
+      if (!shouldApply() || !refreshed) return "stale";
+      resolveUnconfirmedDispatch();
       return "applied";
     }
 
@@ -2309,11 +2347,16 @@ export function CodexChatTab({
       || !handoff.ready
       || !launchPrompt
       || initialPromptSent
+      || initialPromptDispatchClaimed
       || setupPending
     ) {
       return;
     }
 
+    if (!claimPromptDispatch(sessionKey, initialPromptRequestId)) {
+      return;
+    }
+    let accepted = false;
     setInitialPromptSent(true);
     // Keep the durable launch intent until the bridge accepts the turn (or
     // authoritative reconciliation proves that it did). If the renderer
@@ -2325,6 +2368,7 @@ export function CodexChatTab({
       initialPromptRequestId,
     ).then((result) => {
       if (result === "accepted") {
+        accepted = true;
         initialPromptRetryCountRef.current = 0;
         clearTabInitialPrompt(tabId, environmentId);
       } else if (
@@ -2350,15 +2394,28 @@ export function CodexChatTab({
           setInitialPromptSent(false);
         }, 1_000);
       }
+    }).finally(() => {
+      /**
+       * An accepted initial request is one-shot for the lifetime of this tab.
+       * Keep its claim until session cleanup so another live mount cannot race
+       * the pane-store update and recreate the optimistic bubble. A renderer
+       * restart recreates the store, so durable crash recovery remains intact.
+       */
+      if (!accepted) {
+        releasePromptDispatch(sessionKey, initialPromptRequestId);
+      }
     });
   }, [
+    claimPromptDispatch,
     clearTabInitialPrompt,
     connectionState,
     environmentId,
     handleSend,
     handoff.ready,
+    initialPromptDispatchClaimed,
     initialPromptRequestId,
     launchPrompt,
+    releasePromptDispatch,
     sessionKey,
     setSessionError,
     initialPromptSent,

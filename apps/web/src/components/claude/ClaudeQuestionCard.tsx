@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import type { ClaudeClient, ClaudeQuestionRequest } from "@/lib/claude-client";
 import { answerQuestion, dismissQuestion } from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
+import { claudeQuestionDraftKey } from "@/stores/promptDraftStore";
 import {
   QuestionCard,
   type QuestionCardQuestion,
@@ -16,6 +17,14 @@ interface ClaudeQuestionCardBaseProps {
   submitOnOptionSelect?: boolean;
   onDismiss?: () => Promise<void> | void;
   hideDismiss?: boolean;
+  /**
+   * Draft-store key for in-progress answers (see `QuestionCard.draftKey`).
+   * The bridge-backed variant derives it from the pending request id, which
+   * `claudeStore.removePendingQuestion` clears on resolution. Callback-mode
+   * callers whose pending request lives elsewhere (e.g. the tmux tab) pass
+   * their own key; those without a durable request pass none.
+   */
+  draftKey?: string;
 }
 
 /**
@@ -46,6 +55,7 @@ export function ClaudeQuestionCard({
   onSubmitAnswers,
   onDismiss,
   hideDismiss = false,
+  draftKey,
 }: ClaudeQuestionCardProps) {
   const { removePendingQuestion } = useClaudeStore();
 
@@ -103,6 +113,9 @@ export function ClaudeQuestionCard({
       allowOptionDeselect={allowOptionDeselect}
       submitOnOptionSelect={submitOnOptionSelect}
       hideDismiss={hideDismiss}
+      draftKey={
+        draftKey ?? (client ? claudeQuestionDraftKey(question.id) : undefined)
+      }
     />
   );
 }

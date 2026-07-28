@@ -507,8 +507,7 @@ function resetStores() {
     currentNotesProjectId: null,
   });
   usePrMonitorStore.setState({
-    monitoredEnvironments: {},
-    activeEnvironmentId: null,
+    states: new Map(),
   });
 }
 

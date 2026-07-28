@@ -12,6 +12,7 @@ import {
   getPendingQuestions,
   getSessionInitData,
   getStructuredPromptDispatchState,
+  claimPromptDispatch,
   respondToPlanApproval,
   getPendingPlanApprovals,
   reconcilePersistedSessions,
@@ -22,6 +23,8 @@ import {
   forkPersistedSession,
   rewindSessionFiles,
   stopBackgroundTask,
+  setSessionPreferences,
+  clearPromptSuggestion,
 } from "../services/session-manager.js";
 import type {
   CreateSessionResponse,
@@ -170,9 +173,40 @@ session.get("/:id", async (c) => {
     // arrive mid-turn, long before there is a usage snapshot to carry them.
     rateLimits: sessionData.rateLimits,
     promptSuggestion: sessionData.promptSuggestion,
+    planMode: sessionData.planMode,
     backgroundTasks: sessionData.backgroundTasks ?? {},
     rewindInProgress: sessionData.rewindInProgress === true,
   });
+});
+
+session.put("/:id/preferences", async (c) => {
+  const id = c.req.param("id");
+  try {
+    const body = await c.req.json();
+    if (
+      Object.hasOwn(body, "planMode")
+      && typeof body.planMode !== "boolean"
+    ) {
+      return c.json({ error: "planMode must be a boolean" }, 400);
+    }
+    const updated = setSessionPreferences(id, {
+      ...(typeof body.planMode === "boolean" ? { planMode: body.planMode } : {}),
+    });
+    return c.json({ planMode: updated.planMode ?? false });
+  } catch (error) {
+    return c.json(
+      { error: errorMessage(error, "Failed to update session preferences") },
+      sessionErrorStatus(error),
+    );
+  }
+});
+
+session.delete("/:id/prompt-suggestion", (c) => {
+  const id = c.req.param("id");
+  if (!clearPromptSuggestion(id)) {
+    return c.json({ error: "Session not found" }, 404);
+  }
+  return c.body(null, 204);
 });
 
 // Get the authoritative result of the latest (or requested) structured turn.
@@ -341,6 +375,19 @@ session.post("/:id/prompt", async (c) => {
     }
     if (sessionData.rewindInProgress === true) {
       return c.json({ error: "Session is restoring files from a checkpoint" }, 409);
+    }
+    if (requestId && outputSchema === undefined) {
+      const dispatchState = await claimPromptDispatch(id, requestId);
+      if (dispatchState === "not-found") {
+        return c.json({ error: "Session not found" }, 404);
+      }
+      if (dispatchState === "duplicate") {
+        return c.json({
+          status: "already-processed",
+          requestId,
+          duplicate: true,
+        });
+      }
     }
 
     console.debug("[session] Prompt received", {

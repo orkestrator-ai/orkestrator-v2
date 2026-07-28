@@ -48,6 +48,11 @@ import {
   stripStoryRefinementStateBlocks,
 } from "@/lib/feature-planner";
 import * as backend from "@/lib/backend";
+import {
+  composeDraftKey,
+  discardComposeDraft,
+  persistComposeDraft,
+} from "@/lib/compose-draft-persistence";
 import { cn } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
 import { useConfigStore, useEnvironmentStore, useFeaturePlanStore, useKanbanStore, useProjectStore } from "@/stores";
@@ -532,6 +537,78 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   useEffect(() => {
     void loadFeatures(projectId);
   }, [loadFeatures, projectId]);
+
+  useEffect(() => {
+    let disposed = false;
+    let hydrated = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const draftKey = composeDraftKey("feature-chat", projectId, "all");
+
+    const projectDrafts = () => {
+      const state = useFeaturePlanStore.getState();
+      const featureIds = new Set(
+        state.features
+          .filter((feature) => feature.projectId === projectId)
+          .map((feature) => feature.id),
+      );
+      return Object.fromEntries(
+        Array.from(state.chatDrafts.entries()).filter(([key]) => {
+          const featureId = key.split(":")[1];
+          return featureId !== undefined && featureIds.has(featureId);
+        }),
+      );
+    };
+
+    const schedule = () => {
+      if (!hydrated || disposed) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        const drafts = projectDrafts();
+        const operation = Object.keys(drafts).length === 0
+          ? discardComposeDraft(draftKey)
+          : persistComposeDraft(
+              draftKey,
+              "project",
+              projectId,
+              drafts,
+            );
+        void operation.catch((error) => {
+          console.warn("[FeaturesView] Failed to persist chat drafts:", error);
+        });
+      }, 400);
+    };
+
+    const unsubscribe = useFeaturePlanStore.subscribe((state, previous) => {
+      if (state.chatDrafts !== previous.chatDrafts || state.features !== previous.features) {
+        schedule();
+      }
+    });
+
+    void backend.getComposeDraft<Record<string, string>>(draftKey)
+      .then((persisted) => {
+        if (disposed || !persisted || typeof persisted.value !== "object" || !persisted.value) {
+          return;
+        }
+        for (const [key, value] of Object.entries(persisted.value)) {
+          if (typeof value === "string" && !useFeaturePlanStore.getState().chatDrafts.has(key)) {
+            useFeaturePlanStore.getState().setChatDraft(key, value);
+          }
+        }
+      })
+      .catch((error) => {
+        console.warn("[FeaturesView] Failed to restore chat drafts:", error);
+      })
+      .finally(() => {
+        hydrated = true;
+        schedule();
+      });
+
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [projectId]);
 
   const projectFeatures = useMemo(
     () => features
@@ -1844,14 +1921,38 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         const task = useKanbanStore.getState().tasks.find((candidate) => candidate.id === taskId);
         if (!task) throw new Error("Created build task was not found in the Kanban store");
 
+        // Persist the feature→task half of the launch before navigation can
+        // unmount this view. A restarted client now sees an in-progress feature
+        // instead of offering a duplicate build while the pipeline is being
+        // created.
+        const reservedFeature = await updateFeature(feature.id, {
+          status: "building",
+          buildTaskId: taskId,
+        });
+        if (!reservedFeature) throw new Error("Failed to reserve the feature build");
+
         await startBuild(task, getPreferredEnvironmentType(projectId), "codex", {
           existingEnvironmentId: feature.codexEnvironmentId,
+          onPipelineLinked: ({ pipelineId, environmentId }) =>
+            updateFeature(feature.id, {
+              status: "building",
+              buildTaskId: taskId,
+              buildPipelineId: pipelineId,
+              codexEnvironmentId: environmentId,
+            }).then((updated) => {
+              if (!updated) throw new Error("Failed to persist the feature build linkage");
+            }),
         });
         const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId(taskId);
         if (!pipeline || pipeline.phase === "failed") {
           // startBuild surfaces its own error toast and clears or fails the
-          // pipeline when it cannot start. Leave the feature in its prior state
-          // rather than marking it as building.
+          // pipeline when it cannot start. Undo the durable reservation so the
+          // feature does not remain stuck in "building" with no live pipeline.
+          await updateFeature(feature.id, {
+            status: feature.status,
+            buildTaskId: feature.buildTaskId,
+            buildPipelineId: feature.buildPipelineId,
+          }).catch(() => undefined);
           return;
         }
         const updated = await updateFeature(feature.id, {
@@ -1863,6 +1964,11 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         if (!updated) throw new Error("Failed to persist the feature build state");
       } catch (error) {
         console.error("[FeaturesView] Failed to start feature build:", error);
+        await updateFeature(feature.id, {
+          status: feature.status,
+          buildTaskId: feature.buildTaskId,
+          buildPipelineId: feature.buildPipelineId,
+        }).catch(() => undefined);
         toast.error("Failed to start feature build", {
           description: error instanceof Error ? error.message : "Unknown error",
         });

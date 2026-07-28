@@ -27,6 +27,7 @@ export type EnvironmentStatus = "running" | "stopped" | "error" | "creating" | "
 export type PrState = "open" | "merged" | "closed";
 export type NetworkAccessMode = "full" | "restricted";
 export type EnvironmentType = "containerized" | "local";
+export type EnvironmentLifecycleOperation = "deleting" | "merging";
 export type PortProtocol = "tcp" | "udp";
 
 export interface PortMapping {
@@ -91,6 +92,13 @@ export interface OpenCodeModelCatalogSnapshot {
   models: OpenCodeModelCatalogEntry[];
 }
 
+export interface InitialPromptImageAttachment {
+  id: string;
+  name: string;
+  previewUrl: string;
+  base64Data: string;
+}
+
 export interface Environment {
   id: string;
   projectId: string;
@@ -105,6 +113,9 @@ export interface Environment {
    * continue deletion, but background work must not resume in the meantime.
    */
   deletionRequestedAt?: string;
+  /** Backend-owned long-running operation currently affecting this environment. */
+  lifecycleOperation?: EnvironmentLifecycleOperation;
+  lifecycleOperationStartedAt?: string;
   name: string;
   branch: string;
   containerId: string | null;
@@ -168,6 +179,8 @@ export interface Environment {
   /** One-shot reasoning effort for the agent tab created from pendingAgentLaunch. */
   initialReasoningEffort?: string;
   initialPrompt?: string;
+  /** Images waiting to be written into the workspace before the first prompt. */
+  initialPromptAttachments?: InitialPromptImageAttachment[];
   /** Prompt awaiting a backend-owned rename after the environment starts. */
   pendingRenamePrompt?: string;
 }
@@ -258,6 +271,33 @@ export interface PersistedPromptQueue {
   queueKey: string;
   environmentId: string;
   messages: unknown[];
+  updatedAt: string;
+  revision: number;
+}
+
+/**
+ * Unsent user input owned by an environment or project.
+ *
+ * `value` is intentionally opaque: terminal/native composers and feature
+ * conversations carry different attachment and mention shapes. The backend
+ * owns durability and revisions while each frontend validates its own value.
+ */
+export interface PersistedComposeDraft {
+  draftKey: string;
+  ownerType: "environment" | "project";
+  ownerId: string;
+  value: unknown;
+  updatedAt: string;
+  revision: number;
+}
+
+/** A recoverable unsaved text-file buffer. */
+export interface PersistedFileDraft {
+  draftKey: string;
+  environmentId: string;
+  filePath: string;
+  content: string;
+  originalContent: string;
   updatedAt: string;
   revision: number;
 }

@@ -11,6 +11,10 @@ import { cn } from "@/lib/utils";
 import type { ClaudePlanApprovalRequest, ClaudeClient, ClaudeMessage } from "@/lib/claude-client";
 import { respondToPlanApproval } from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
+import {
+  claudePlanApprovalDraftKey,
+  usePromptDraftField,
+} from "@/stores/promptDraftStore";
 
 interface ClaudePlanApprovalCardProps {
   approval: ClaudePlanApprovalRequest;
@@ -100,8 +104,20 @@ export function ClaudePlanApprovalCard({
 }: ClaudePlanApprovalCardProps) {
   const { removePendingPlanApproval } = useClaudeStore();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showFeedback, setShowFeedback] = useState(false);
-  const [feedback, setFeedback] = useState("");
+  // The rejection-feedback draft survives the card unmounting (environment
+  // switches) by living in the prompt-draft store; `claudeStore.
+  // removePendingPlanApproval` clears it when this approval resolves.
+  const draftKey = claudePlanApprovalDraftKey(approval.id);
+  const [showFeedback, setShowFeedback] = usePromptDraftField<boolean>(
+    draftKey,
+    "showFeedback",
+    () => false,
+  );
+  const [feedback, setFeedback] = usePromptDraftField<string>(
+    draftKey,
+    "feedback",
+    () => "",
+  );
   const [isPlanExpanded, setIsPlanExpanded] = useState(true);
 
   // Extract plan content from messages

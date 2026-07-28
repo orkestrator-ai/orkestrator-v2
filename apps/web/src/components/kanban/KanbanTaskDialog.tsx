@@ -28,7 +28,18 @@ import { useKanbanStore } from "@/stores/kanbanStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { readImage } from "@/lib/native/clipboard";
-import { getKanbanImageData, detectPr, detectPrLocal, openInBrowser } from "@/lib/backend";
+import {
+  getComposeDraft,
+  getKanbanImageData,
+  detectPr,
+  detectPrLocal,
+  openInBrowser,
+} from "@/lib/backend";
+import {
+  composeDraftKey,
+  discardComposeDraft,
+  persistComposeDraft,
+} from "@/lib/compose-draft-persistence";
 import { useEnvironmentStore } from "@/stores";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 import { createUuid } from "@/lib/uuid";
@@ -69,6 +80,29 @@ interface PendingImage {
   filename: string;
   data: string; // base64
   previewUrl: string; // data URL for display
+}
+
+interface KanbanCreateDraft {
+  title: string;
+  description: string;
+  acceptanceCriteria: string;
+  images: PendingImage[];
+}
+
+function isKanbanCreateDraft(value: unknown): value is KanbanCreateDraft {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Partial<KanbanCreateDraft>;
+  return typeof candidate.title === "string"
+    && typeof candidate.description === "string"
+    && typeof candidate.acceptanceCriteria === "string"
+    && Array.isArray(candidate.images)
+    && candidate.images.every((image) =>
+      image
+      && typeof image.id === "string"
+      && typeof image.filename === "string"
+      && typeof image.data === "string"
+      && typeof image.previewUrl === "string"
+    );
 }
 
 /** Renders comment text with clickable URLs */
@@ -132,11 +166,80 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
   // Image state
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const createDraftHydratedRef = useRef<string | null>(null);
   const [previewImage, setPreviewImage] = useState<{ url: string; filename: string } | null>(null);
   const dialogContentRef = useRef<HTMLDivElement>(null);
 
   // Cache of loaded image data URLs keyed by image ID (for on-demand loading from disk)
   const [imageUrlCache, setImageUrlCache] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!createForProjectId) return;
+    let disposed = false;
+    const draftKey = composeDraftKey("kanban-create", createForProjectId, "task");
+    createDraftHydratedRef.current = null;
+    void getComposeDraft<KanbanCreateDraft>(draftKey)
+      .then((persisted) => {
+        if (
+          disposed
+          || !persisted
+          || !isKanbanCreateDraft(persisted.value)
+          || editTitle.length > 0
+          || editDescription.length > 0
+          || editAC.length > 0
+          || pendingImages.length > 0
+        ) {
+          return;
+        }
+        setEditTitle(persisted.value.title);
+        setEditDescription(persisted.value.description);
+        setEditAC(persisted.value.acceptanceCriteria);
+        setPendingImages(persisted.value.images);
+      })
+      .catch((error) => {
+        console.warn("[KanbanTaskDialog] Failed to restore create draft:", error);
+      })
+      .finally(() => {
+        if (!disposed) createDraftHydratedRef.current = draftKey;
+      });
+    return () => {
+      disposed = true;
+      if (createDraftHydratedRef.current === draftKey) {
+        createDraftHydratedRef.current = null;
+      }
+    };
+    // The local fields are intentionally sampled once. User input entered
+    // during hydration wins over the backend snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createForProjectId]);
+
+  useEffect(() => {
+    if (!createForProjectId) return;
+    const draftKey = composeDraftKey("kanban-create", createForProjectId, "task");
+    if (createDraftHydratedRef.current !== draftKey) return;
+    const timer = setTimeout(() => {
+      const draft: KanbanCreateDraft = {
+        title: editTitle,
+        description: editDescription,
+        acceptanceCriteria: editAC,
+        images: pendingImages,
+      };
+      const empty = !draft.title && !draft.description
+        && !draft.acceptanceCriteria && draft.images.length === 0;
+      const operation = empty
+        ? discardComposeDraft(draftKey)
+        : persistComposeDraft(
+            draftKey,
+            "project",
+            createForProjectId,
+            draft,
+          );
+      void operation.catch((error) => {
+        console.warn("[KanbanTaskDialog] Failed to persist create draft:", error);
+      });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [createForProjectId, editAC, editDescription, editTitle, pendingImages]);
 
   // Load image data on demand when dialog opens with a task that has images
   useEffect(() => {
@@ -206,6 +309,12 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   // Reset create mode fields when dialog opens in create mode
   const handleOpenChange = (newOpen: boolean) => {
     if (!newOpen) {
+      if (createForProjectId) {
+        const draftKey = composeDraftKey("kanban-create", createForProjectId, "task");
+        void discardComposeDraft(draftKey).catch((error) => {
+          console.warn("[KanbanTaskDialog] Failed to discard create draft:", error);
+        });
+      }
       setEditTitle("");
       setEditDescription("");
       setEditAC("");

@@ -1,29 +1,39 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, waitFor } from "@testing-library/react";
+import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { usePrMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
 import { createMockEnvironment } from "../utils/testFactories";
 
 // Mock backend module BEFORE importing the hook
 const mockGetEnvironmentPrUrl = mock<(environmentId: string) => Promise<string | null>>(() => Promise.resolve(null));
 const mockClearEnvironmentPr = mock<(environmentId: string) => Promise<void>>(() => Promise.resolve());
 const mockOpenInBrowser = mock<(url: string) => Promise<void>>(() => Promise.resolve());
+const mockPrMonitorWatch = mock<(environmentId: string, mode: string) => Promise<void>>(() => Promise.resolve());
 
 mock.module("@/lib/backend", () => ({
   getEnvironmentPrUrl: mockGetEnvironmentPrUrl,
   clearEnvironmentPr: mockClearEnvironmentPr,
   openInBrowser: mockOpenInBrowser,
+  prMonitorWatch: mockPrMonitorWatch,
 }));
 
-// Mock prMonitorStore
-const mockSetMonitoringMode = mock(() => {});
-const mockGetMonitoringState = mock(() => null as { checkInProgress: boolean } | null);
-
-mock.module("@/stores/prMonitorStore", () => ({
-  usePrMonitorStore: () => ({
-    setMonitoringMode: mockSetMonitoringMode,
-    getMonitoringState: mockGetMonitoringState,
-  }),
-}));
+function monitorState(
+  environmentId: string,
+  overrides: Partial<PrMonitorEnvironmentState> = {},
+): PrMonitorEnvironmentState {
+  return {
+    environmentId,
+    mode: "normal",
+    checkInProgress: false,
+    consecutiveErrors: 0,
+    lastCheckAt: null,
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    ...overrides,
+  };
+}
 
 // Import hook AFTER mocking
 import { usePullRequest } from "../../../apps/web/src/hooks/usePullRequest";
@@ -37,18 +47,19 @@ describe("usePullRequest", () => {
       error: null,
     });
 
+    usePrMonitorStore.setState({ states: new Map() });
+
     // Reset mocks
     mockGetEnvironmentPrUrl.mockClear();
     mockClearEnvironmentPr.mockClear();
     mockOpenInBrowser.mockClear();
-    mockSetMonitoringMode.mockClear();
-    mockGetMonitoringState.mockClear();
+    mockPrMonitorWatch.mockClear();
 
     // Reset to default implementations
     mockGetEnvironmentPrUrl.mockImplementation(() => Promise.resolve(null));
     mockClearEnvironmentPr.mockImplementation(() => Promise.resolve());
     mockOpenInBrowser.mockImplementation(() => Promise.resolve());
-    mockGetMonitoringState.mockImplementation(() => null);
+    mockPrMonitorWatch.mockImplementation(() => Promise.resolve());
   });
 
   test("returns initial state with no environment", () => {
@@ -214,32 +225,51 @@ describe("usePullRequest", () => {
     expect(mockClearEnvironmentPr).not.toHaveBeenCalled();
   });
 
-  test("isDetecting reflects monitor store checkInProgress", () => {
-    mockGetMonitoringState.mockImplementation(() => ({ checkInProgress: true }));
+  test("isDetecting mirrors the backend monitor's checkInProgress", () => {
+    usePrMonitorStore.setState({
+      states: new Map([["env-1", monitorState("env-1", { checkInProgress: true })]]),
+    });
 
     const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
 
     expect(result.current.isDetecting).toBe(true);
   });
 
-  test("setModeCreatePending calls setMonitoringMode with create-pending", () => {
+  test("isDetecting is false for an unmonitored environment", () => {
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    expect(result.current.isDetecting).toBe(false);
+  });
+
+  test("setModeCreatePending requests backend create-pending monitoring", () => {
     const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
 
     act(() => {
       result.current.setModeCreatePending();
     });
 
-    expect(mockSetMonitoringMode).toHaveBeenCalledWith("env-1", "create-pending");
+    expect(mockPrMonitorWatch).toHaveBeenCalledWith("env-1", "create-pending");
   });
 
-  test("setModeMergePending calls setMonitoringMode with merge-pending", () => {
+  test("setModeMergePending requests backend merge-pending monitoring", () => {
     const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
 
     act(() => {
       result.current.setModeMergePending();
     });
 
-    expect(mockSetMonitoringMode).toHaveBeenCalledWith("env-1", "merge-pending");
+    expect(mockPrMonitorWatch).toHaveBeenCalledWith("env-1", "merge-pending");
+  });
+
+  test("a failed mode request is swallowed rather than thrown into the caller", async () => {
+    mockPrMonitorWatch.mockImplementation(() => Promise.reject(new Error("backend offline")));
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    act(() => {
+      result.current.setModeMergePending();
+    });
+
+    await waitFor(() => expect(mockPrMonitorWatch).toHaveBeenCalledTimes(1));
   });
 
   test("setModeCreatePending does nothing when no environmentId", () => {
@@ -249,6 +279,6 @@ describe("usePullRequest", () => {
       result.current.setModeCreatePending();
     });
 
-    expect(mockSetMonitoringMode).not.toHaveBeenCalled();
+    expect(mockPrMonitorWatch).not.toHaveBeenCalled();
   });
 });

@@ -16,6 +16,10 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import {
+  openCodeQuestionDraftKey,
+  usePromptDraftStore,
+} from "@/stores/promptDraftStore";
 import type {
   OpencodeClient,
   QuestionRequest,
@@ -73,6 +77,9 @@ beforeEach(() => {
   useOpenCodeStore.setState({
     pendingQuestions: new Map(),
   });
+  // Drafts persist across unmount by design and every test reuses question-1;
+  // the setState above bypasses removePendingQuestion, which would clear them.
+  usePromptDraftStore.getState().reset();
 });
 
 afterEach(cleanup);
@@ -177,6 +184,36 @@ describe("OpenCodeQuestionCard", () => {
     await act(async () => {
       resolveReply(true);
     });
+  });
+
+  test("in-progress answers survive a remount and clear once the question resolves", async () => {
+    // Unmount/remount mirrors an environment switch; the question rehydrates
+    // from the store, and so must the half-entered answer.
+    const question = makeQuestion();
+    useOpenCodeStore.getState().addPendingQuestion(question);
+    const { unmount } = render(
+      <OpenCodeQuestionCard question={question} client={CLIENT} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Web/ }));
+
+    unmount();
+    render(<OpenCodeQuestionCard question={question} client={CLIENT} />);
+
+    // Selection still applied, so submission is immediately possible.
+    const submit = screen.getByRole("button", { name: "Submit" });
+    expect(submit.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(submit);
+
+    await waitFor(() => {
+      expect(replyMock).toHaveBeenCalledWith(CLIENT, "question-1", [["Web"]]);
+      expect(useOpenCodeStore.getState().getPendingQuestion(question.id)).toBeUndefined();
+    });
+    // Resolution clears the draft so a reused id starts blank.
+    expect(
+      usePromptDraftStore
+        .getState()
+        .drafts.has(openCodeQuestionDraftKey(question.id)),
+    ).toBe(false);
   });
 
   test("dismisses through the reject API and only removes on success", async () => {

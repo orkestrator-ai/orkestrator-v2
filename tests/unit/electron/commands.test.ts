@@ -79,6 +79,7 @@ const {
   resolveBrowserOpenCommand,
   shutdownDiffStatsTracking,
   shutdownLocalServers,
+  shutdownPrMonitorTracking,
 } = await import("../../../apps/backend/src/core/commands");
 
 const tempDirs: string[] = [];
@@ -412,6 +413,8 @@ function createContext(
       deleteLoopedReviewWorkflowsByEnvironment: mock(async () => undefined),
       deleteBuildPipelinesByEnvironment: mock(async () => [] as string[]),
       deletePromptQueuesByEnvironment: mock(async () => [] as string[]),
+      deleteComposeDraftsByEnvironment: mock(async () => undefined),
+      deleteFileDraftsByEnvironment: mock(async () => undefined),
       deleteAgentHandoffsByEnvironment: mock(async () => [] as string[]),
       deletePaneLayout: mock(async () => undefined),
       getProject: mock(async (projectId: string) => {
@@ -934,6 +937,10 @@ afterEach(async () => {
     await shutdownLocalServers();
   } finally {
     shutdownDiffStatsTracking();
+    // Commands like set_environment_pr arm PR monitoring as a side effect;
+    // dropping the entries here keeps a scheduled poll from spawning `gh`
+    // against a fixture worktree later in the run.
+    shutdownPrMonitorTracking();
     commandTesting.resetLocalServerLifecycle();
     await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
     showOpenDialog.mockClear();

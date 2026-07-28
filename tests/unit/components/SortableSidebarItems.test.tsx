@@ -371,7 +371,9 @@ describe("sortable sidebar items", () => {
     expect(onDeleteProject).toHaveBeenCalledTimes(1);
     expect(onDeleteProject).toHaveBeenCalledWith("project-1");
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-  });
+  // Radix transitions for a menu followed by a modal can exceed Bun's default
+  // ceiling when all root UI suites are sharing a saturated runner.
+  }, 15_000);
 
   test("SortableProjectGroup keeps the delete confirmation open after deletion fails", async () => {
     const onDeleteProject = mock(async () => {

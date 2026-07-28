@@ -80,6 +80,24 @@ const mockUpdateEnvironmentAgentSettings = mock<(
   codexMode: codexMode ?? undefined,
 }));
 const actualBackend = await import("../lib/backend");
+const mockSaveBuildPipeline = mock(
+  async (
+    pipelineId: string,
+    projectId: string,
+    environmentId: string,
+    version: number,
+    snapshot: unknown,
+    expectedRevision = 0,
+  ) => ({
+    id: pipelineId,
+    projectId,
+    environmentId,
+    version,
+    snapshot,
+    revision: expectedRevision + 1,
+    updatedAt: "2026-07-28T00:00:00.000Z",
+  }),
+);
 
 mock.module("@/lib/backend", () => ({
   ...actualBackend,
@@ -135,6 +153,7 @@ mock.module("@/lib/backend", () => ({
   })),
   getKanbanImageData: mock(async () => "data:image/png;base64,ZmFrZQ=="),
   updateEnvironmentAgentSettings: mockUpdateEnvironmentAgentSettings,
+  saveBuildPipeline: mockSaveBuildPipeline,
 }));
 
 const { useBuildPipeline } = await import("./useBuildPipeline");
@@ -194,6 +213,7 @@ describe("useBuildPipeline", () => {
     mockRenameEnvironmentFromPrompt.mockClear();
     mockGetEnvironment.mockClear();
     mockUpdateEnvironmentAgentSettings.mockClear();
+    mockSaveBuildPipeline.mockClear();
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
 

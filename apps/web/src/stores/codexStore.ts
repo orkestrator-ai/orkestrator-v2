@@ -16,9 +16,14 @@ import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { FileMention } from "@/types";
 import {
+  codexInteractionDraftKey,
+  usePromptDraftStore,
+} from "./promptDraftStore";
+import {
   buildClearEnvironmentPatch,
   buildClearSessionPatch,
   createNativeChatStoreSlice,
+  sessionKeyPrefixFor,
   type NativeChatStoreSlice,
   type NativeServerStatus,
   type NativeSessionState,
@@ -50,6 +55,12 @@ export interface CodexQueuedMessage {
   mode: CodexConversationMode;
   reasoningEffort: CodexReasoningEffort;
   fastMode: boolean;
+}
+
+export interface CodexUnconfirmedDispatch {
+  userMessageId: string;
+  fingerprint: string;
+  requestId: string;
 }
 
 type CodexChatSlice = NativeChatStoreSlice<
@@ -85,6 +96,8 @@ interface CodexState extends CodexChatSlice {
   pendingApprovals: Map<string, CodexApproval[]>;
   pendingInteractions: Map<string, CodexInteraction[]>;
   contextUsage: Map<string, ContextUsageSnapshot>;
+  /** Ambiguous prompt sends that the next mount must settle authoritatively. */
+  unconfirmedDispatches: Map<string, CodexUnconfirmedDispatch>;
 
   // Agent-specific actions
   setModels: (models: CodexModel[]) => void;
@@ -119,6 +132,11 @@ interface CodexState extends CodexChatSlice {
     usage: ContextUsageSnapshot | null,
   ) => void;
   getContextUsage: (sessionKey: string) => ContextUsageSnapshot | undefined;
+  setUnconfirmedDispatch: (
+    sessionKey: string,
+    dispatch: CodexUnconfirmedDispatch,
+  ) => void;
+  clearUnconfirmedDispatch: (sessionKey: string) => void;
   isFastMode: (sessionKey: string) => boolean;
   clearEnvironment: (environmentId: string) => void;
   /** Drop every session-keyed entry for one closed tab. */
@@ -181,6 +199,7 @@ const CODEX_SESSION_KEYED_MAPS = [
   "pendingApprovals",
   "pendingInteractions",
   "contextUsage",
+  "unconfirmedDispatches",
 ] as const satisfies ReadonlyArray<keyof CodexState>;
 
 export const useCodexStore = create<CodexState>()((set, get, api) => ({
@@ -202,6 +221,7 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
   pendingApprovals: new Map(),
   pendingInteractions: new Map(),
   contextUsage: new Map(),
+  unconfirmedDispatches: new Map(),
 
   // Agent-specific actions
   setModels: (models) => set({ models: models.length > 0 ? models : CODEX_MODELS }),
@@ -294,7 +314,14 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       return { pendingApprovals: next };
     }),
 
-  setPendingInteractions: (sessionKey, interactions) =>
+  setPendingInteractions: (sessionKey, interactions) => {
+    // An interaction absent from the authoritative snapshot was resolved or
+    // withdrawn elsewhere, so its in-progress input draft goes with it.
+    const kept = new Set(interactions.map((entry) => entry.interactionId));
+    const withdrawnDraftKeys = (get().pendingInteractions.get(sessionKey) ?? [])
+      .filter((entry) => !kept.has(entry.interactionId))
+      .map((entry) => codexInteractionDraftKey(entry.interactionId));
+
     set((state) => {
       const existing = state.pendingInteractions.get(sessionKey) ?? [];
       // Same rationale as `setPendingApprovals`: reconcile calls this on every
@@ -315,7 +342,9 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       if (interactions.length === 0) next.delete(sessionKey);
       else next.set(sessionKey, interactions);
       return { pendingInteractions: next };
-    }),
+    });
+    usePromptDraftStore.getState().clearDrafts(withdrawnDraftKeys);
+  },
 
   addPendingInteraction: (sessionKey, interaction) =>
     set((state) => {
@@ -328,7 +357,7 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       return { pendingInteractions: next };
     }),
 
-  removePendingInteraction: (sessionKey, interactionId) =>
+  removePendingInteraction: (sessionKey, interactionId) => {
     set((state) => {
       const existing = state.pendingInteractions.get(sessionKey);
       if (!existing?.some((entry) => entry.interactionId === interactionId)) return state;
@@ -339,7 +368,13 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       if (remaining.length === 0) next.delete(sessionKey);
       else next.set(sessionKey, remaining);
       return { pendingInteractions: next };
-    }),
+    });
+    // The interaction is resolved, so the in-progress input draft must not
+    // survive to a future interaction that happens to reuse this id.
+    usePromptDraftStore
+      .getState()
+      .clearDraft(codexInteractionDraftKey(interactionId));
+  },
 
   setContextUsage: (sessionKey, usage) =>
     set((state) => {
@@ -351,20 +386,53 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
 
   getContextUsage: (sessionKey) => get().contextUsage.get(sessionKey),
 
+  setUnconfirmedDispatch: (sessionKey, dispatch) =>
+    set((state) => {
+      const next = new Map(state.unconfirmedDispatches);
+      next.set(sessionKey, dispatch);
+      return { unconfirmedDispatches: next };
+    }),
+
+  clearUnconfirmedDispatch: (sessionKey) =>
+    set((state) => {
+      if (!state.unconfirmedDispatches.has(sessionKey)) return state;
+      const next = new Map(state.unconfirmedDispatches);
+      next.delete(sessionKey);
+      return { unconfirmedDispatches: next };
+    }),
+
   isFastMode: (sessionKey) => get().fastMode.get(sessionKey) ?? false,
 
-  clearEnvironment: (environmentId) =>
+  clearEnvironment: (environmentId) => {
+    // `pendingInteractions` is session-keyed, so the generic patch drops the
+    // entries; the request-id-keyed drafts need an explicit sweep.
+    const prefix = sessionKeyPrefixFor(environmentId);
+    const sweptDraftKeys: string[] = [];
+    for (const [sessionKey, interactions] of get().pendingInteractions) {
+      if (!sessionKey.startsWith(prefix)) continue;
+      for (const entry of interactions) {
+        sweptDraftKeys.push(codexInteractionDraftKey(entry.interactionId));
+      }
+    }
+
     set((state) =>
       buildClearEnvironmentPatch(state, environmentId, {
         environmentKeyed: ["serverStatus", "clients", "slashCommands"],
         sessionKeyed: CODEX_SESSION_KEYED_MAPS,
       }),
-    ),
+    );
+    usePromptDraftStore.getState().clearDrafts(sweptDraftKeys);
+  },
 
-  clearSession: (sessionKey) =>
+  clearSession: (sessionKey) => {
+    const sweptDraftKeys = (get().pendingInteractions.get(sessionKey) ?? []).map(
+      (entry) => codexInteractionDraftKey(entry.interactionId),
+    );
     set((state) =>
       buildClearSessionPatch(state, sessionKey, CODEX_SESSION_KEYED_MAPS),
-    ),
+    );
+    usePromptDraftStore.getState().clearDrafts(sweptDraftKeys);
+  },
 }));
 
 // Re-export for callers that still import types/helpers from here

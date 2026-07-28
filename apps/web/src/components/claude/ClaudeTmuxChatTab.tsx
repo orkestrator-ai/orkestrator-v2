@@ -105,6 +105,12 @@ import {
 } from "@/lib/claude-tmux-usage";
 import type { ClaudeEffortLevel, ClaudeModel } from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
+import {
+  tmuxElicitationDraftKey,
+  tmuxPlanDraftKey,
+  tmuxQuestionDraftKey,
+  usePromptDraftField,
+} from "@/stores/promptDraftStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -1522,6 +1528,8 @@ export function ClaudeTmuxChatTab({
                     }}
                     onSubmitAnswers={(answers) => handleQuestionAnswer(q, answers)}
                     onDismiss={() => handleQuestionReject(q)}
+                    // Cleared by claudeTmuxStore when the question resolves.
+                    draftKey={tmuxQuestionDraftKey(q.eventId)}
                   />
                 ))}
 
@@ -1770,8 +1778,20 @@ function TmuxPlanCard({
   plan: TmuxPendingPlan;
   onRespond: (approved: boolean, feedback?: string) => void;
 }) {
-  const [showFeedback, setShowFeedback] = useState(false);
-  const [feedback, setFeedback] = useState("");
+  // The feedback draft survives the tab unmounting (environment switches) by
+  // living in the prompt-draft store; claudeTmuxStore clears it when the plan
+  // request resolves or is withdrawn.
+  const draftKey = tmuxPlanDraftKey(plan.eventId);
+  const [showFeedback, setShowFeedback] = usePromptDraftField<boolean>(
+    draftKey,
+    "showFeedback",
+    () => false,
+  );
+  const [feedback, setFeedback] = usePromptDraftField<string>(
+    draftKey,
+    "feedback",
+    () => "",
+  );
   return (
     <div className="rounded-lg border border-amber-700/60 bg-amber-950/20 px-3 py-3 mb-3">
       <div className="text-xs uppercase tracking-wide text-amber-300 mb-2">
@@ -1871,7 +1891,13 @@ function TmuxElicitationCard({
   ) => void;
 }) {
   const fields = elicitationSchemaFields(elicitation.requestedSchema);
-  const [values, setValues] = useState<Record<string, string>>({});
+  // Typed field values survive the tab unmounting; claudeTmuxStore clears the
+  // draft when the elicitation resolves or is withdrawn.
+  const [values, setValues] = usePromptDraftField<Record<string, string>>(
+    tmuxElicitationDraftKey(elicitation.eventId),
+    "values",
+    () => ({}),
+  );
 
   return (
     <div className="rounded-lg border border-purple-700/60 bg-purple-950/20 px-3 py-3 mb-3">

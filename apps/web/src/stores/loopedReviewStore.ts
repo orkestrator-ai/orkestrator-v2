@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 import {
   isReviewFindingPool,
   isReviewReconciliation,
@@ -16,6 +15,7 @@ export const LOOPED_REVIEW_WORKFLOW_VERSION = 1;
 export const LOOPED_REVIEW_DEFAULT_ALLOWANCE = 6;
 export const LOOPED_REVIEW_MIN_ALLOWANCE = 1;
 export const LOOPED_REVIEW_MAX_ALLOWANCE = 10;
+/** Legacy key retained only so upgrades/tests can remove the obsolete mirror. */
 export const LOOPED_REVIEW_STORAGE_KEY = "orkestrator-looped-reviews";
 
 export type LoopedReviewPhase =
@@ -1091,10 +1091,6 @@ interface LoopedReviewState {
   completePr: (workflowId: string, url: string) => void;
 }
 
-type PersistedLoopedReviewState = {
-  workflows: Array<[string, LoopedReviewWorkflow]>;
-};
-
 function updateWorkflow(
   state: LoopedReviewState,
   workflowId: string,
@@ -1109,8 +1105,7 @@ function updateWorkflow(
   return { workflows };
 }
 
-export const useLoopedReviewStore = create<LoopedReviewState>()(
-  persist<LoopedReviewState, [], [], PersistedLoopedReviewState>((set, get) => ({
+export const useLoopedReviewStore = create<LoopedReviewState>()((set, get) => ({
     workflows: new Map(),
 
     createWorkflow: (input) => {
@@ -1675,29 +1670,4 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
           pr: { ...workflow.pr, status: "created", url, error: undefined },
         };
       })),
-  }), {
-    name: LOOPED_REVIEW_STORAGE_KEY,
-    version: LOOPED_REVIEW_WORKFLOW_VERSION,
-    partialize: (state) => ({
-      workflows: Array.from(state.workflows.entries()),
-    }),
-    merge: (persisted, current) => {
-      const workflows = new Map<string, LoopedReviewWorkflow>();
-      const entries = (persisted as PersistedLoopedReviewState | undefined)?.workflows;
-      for (const entry of Array.isArray(entries) ? entries : []) {
-        if (!Array.isArray(entry) || entry.length !== 2) continue;
-        const [id, stored] = entry;
-        const workflow = normalizeLoopedReviewWorkflow(stored);
-        if (
-          typeof id !== "string"
-          || !isLoopedReviewWorkflow(workflow)
-          || workflow.id !== id
-        ) {
-          continue;
-        }
-        workflows.set(id, workflow);
-      }
-      return { ...current, workflows };
-    },
-  }),
-);
+}));

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import type {
   ReviewCoverageGap,
   ReviewIssue,
@@ -12,7 +12,6 @@ import {
   isLoopedReviewTerminalPhase,
   isLoopedReviewWorkflow,
   LOOPED_REVIEW_DEFAULT_ALLOWANCE,
-  LOOPED_REVIEW_STORAGE_KEY,
   LOOPED_REVIEW_WORKFLOW_VERSION,
   nextReviewAllowance,
   normalizeReviewAllowance,
@@ -23,7 +22,6 @@ import {
   type LoopedReviewWorkflow,
   type ReviewPackage,
 } from "./loopedReviewStore";
-import { TEST_LEGACY_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 
 const issue: ReviewIssue = {
   severity: "P1",
@@ -125,11 +123,6 @@ function addSession(
 
 beforeEach(() => {
   useLoopedReviewStore.setState({ workflows: new Map() });
-  localStorage.removeItem(LOOPED_REVIEW_STORAGE_KEY);
-});
-
-afterEach(() => {
-  localStorage.removeItem(LOOPED_REVIEW_STORAGE_KEY);
 });
 
 describe("looped review allowance", () => {
@@ -1341,153 +1334,5 @@ describe("looped review recovery validation", () => {
       phase: "cancelled",
       pausedFromPhase: "preparing",
     })).toBe(false);
-  });
-});
-
-describe("looped review persistence", () => {
-  test("round-trips valid workflow maps with optional and dispatch state", async () => {
-    const id = createWorkflow({
-      agent: "claude",
-      allowance: 3,
-      reviewInstruction: "Check persisted work.",
-    });
-    const sessionId = addSession(id);
-    useLoopedReviewStore.getState().claimDispatch(id, {
-      id: "dispatch-1",
-      requestId: "request-1",
-      sessionId,
-      phase: "preparing",
-      kind: "prepare",
-    });
-    useLoopedReviewStore.getState().markDispatchSent(id, "dispatch-1");
-    const stored = localStorage.getItem(LOOPED_REVIEW_STORAGE_KEY);
-    expect(stored).not.toBeNull();
-
-    useLoopedReviewStore.setState({ workflows: new Map() });
-    if (stored) localStorage.setItem(LOOPED_REVIEW_STORAGE_KEY, stored);
-    await useLoopedReviewStore.persist.rehydrate();
-
-    expect(useLoopedReviewStore.getState().workflows).toBeInstanceOf(Map);
-    expect(workflow(id)).toMatchObject({
-      reviewInstruction: "Check persisted work.",
-      currentAllowance: 3,
-      dispatch: {
-        id: "dispatch-1",
-        requestId: "request-1",
-        state: "sent",
-      },
-      sessions: [{
-        id: sessionId,
-        requestIds: ["request-1"],
-      }],
-    });
-  });
-
-  test("skips malformed entries without preventing valid workflows from loading", async () => {
-    const id = createWorkflow();
-    const valid = workflow(id);
-    const nullDispatch = {
-      ...valid,
-      id: "null-dispatch",
-      dispatch: null,
-    };
-    const nullFailure = {
-      ...valid,
-      id: "null-failure",
-      failure: null,
-    };
-    useLoopedReviewStore.setState({ workflows: new Map() });
-    localStorage.setItem(LOOPED_REVIEW_STORAGE_KEY, JSON.stringify({
-      state: {
-        workflows: [
-          null,
-          ["short"],
-          [42, valid],
-          ["mismatched-id", valid],
-          ["null-dispatch", nullDispatch],
-          ["null-failure", nullFailure],
-          ["bad-optional", { ...valid, id: "bad-optional", context: "invalid" }],
-          [id, valid],
-        ],
-      },
-      version: LOOPED_REVIEW_WORKFLOW_VERSION,
-    }));
-
-    await useLoopedReviewStore.persist.rehydrate();
-    expect(Array.from(useLoopedReviewStore.getState().workflows.keys())).toEqual([id]);
-  });
-
-  test("restores a persisted pass report written before notRun existed", async () => {
-    // The build pipeline normalizes its own persisted reports; this store keeps
-    // the same shape in `localStorage` and must not drop a whole workflow just
-    // because a pass predates the field.
-    const id = createWorkflow();
-    const valid = workflow(id);
-    const legacy = {
-      ...valid,
-      rounds: [{
-        round: 1,
-        allowance: 3,
-        status: "completed" as const,
-        startedAt: valid.createdAt,
-        passes: [{
-          pass: 1,
-          sessionId: "discovery-session",
-          status: "completed" as const,
-          startedAt: valid.createdAt,
-          report: TEST_LEGACY_STRUCTURED_REVIEW_REPORT,
-        }],
-      }],
-    };
-    useLoopedReviewStore.setState({ workflows: new Map() });
-    localStorage.setItem(LOOPED_REVIEW_STORAGE_KEY, JSON.stringify({
-      state: { workflows: [[id, legacy]] },
-      version: LOOPED_REVIEW_WORKFLOW_VERSION,
-    }));
-
-    await useLoopedReviewStore.persist.rehydrate();
-
-    expect(workflow(id).rounds[0]?.passes[0]?.report?.testResults).toEqual({
-      total: 8_107,
-      passed: 8_094,
-      failed: 0,
-      notRun: 13,
-      failures: [],
-    });
-  });
-
-  test("treats missing or non-array persisted workflow collections as empty", async () => {
-    const id = createWorkflow();
-    const inMemory = workflow(id);
-    for (const persistedState of [{}, { workflows: "invalid" }]) {
-      useLoopedReviewStore.setState({
-        workflows: new Map([["in-memory", inMemory]]),
-      });
-      localStorage.setItem(LOOPED_REVIEW_STORAGE_KEY, JSON.stringify({
-        state: persistedState,
-        version: LOOPED_REVIEW_WORKFLOW_VERSION,
-      }));
-
-      await useLoopedReviewStore.persist.rehydrate();
-      expect(useLoopedReviewStore.getState().workflows.size).toBe(0);
-    }
-  });
-
-  test("uses the last valid duplicate persisted entry", async () => {
-    const id = createWorkflow();
-    const valid = workflow(id);
-    useLoopedReviewStore.setState({ workflows: new Map() });
-    localStorage.setItem(LOOPED_REVIEW_STORAGE_KEY, JSON.stringify({
-      state: {
-        workflows: [
-          [id, { ...valid, model: "first" }],
-          [id, { ...valid, model: "last" }],
-        ],
-      },
-      version: LOOPED_REVIEW_WORKFLOW_VERSION,
-    }));
-
-    await useLoopedReviewStore.persist.rehydrate();
-    expect(workflow(id).model).toBe("last");
   });
 });

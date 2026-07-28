@@ -2263,9 +2263,14 @@ describe("ClaudeChatTab", () => {
         MOCK_CLIENT,
         "session-1",
         reviewPrompt,
-        expect.not.objectContaining({ outputSchema: expect.anything() }),
+        expect.objectContaining({
+          requestId: "initial-prompt:env-1:tab-1",
+        }),
       );
     });
+    expect(mockSendPrompt.mock.calls.at(-1)?.[3]).not.toHaveProperty(
+      "outputSchema",
+    );
     expect(mockGetStructuredOutput).not.toHaveBeenCalled();
   });
 

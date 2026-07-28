@@ -14,6 +14,10 @@ import {
 import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-messages";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import {
+  openCodeQuestionDraftKey,
+  usePromptDraftStore,
+} from "./promptDraftStore";
+import {
   buildClearEnvironmentPatch,
   buildClearSessionPatch,
   createEventSubscriptionSlice,
@@ -298,6 +302,9 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
     }),
 
   clearSession: (sessionKey) => {
+    // Draft keys for the requests the sweep below removes; cleared after the
+    // set so the store update itself stays a pure state computation.
+    const sweptDraftKeys: string[] = [];
     set((state) => {
       const session = state.sessions.get(sessionKey);
       const patch = buildClearSessionPatch(
@@ -313,6 +320,7 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       for (const [requestId, question] of pendingQuestions) {
         if (question.sessionId === session.sessionId) {
           pendingQuestions.delete(requestId);
+          sweptDraftKeys.push(openCodeQuestionDraftKey(requestId));
         }
       }
       const pendingPermissions = new Map(state.pendingPermissions);
@@ -323,6 +331,7 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       }
       return { ...patch, pendingQuestions, pendingPermissions };
     });
+    usePromptDraftStore.getState().clearDrafts(sweptDraftKeys);
   },
 
   clearEnvironment: (environmentId) => {
@@ -336,6 +345,9 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       );
       teardownEventSubscription(subscription);
     }
+
+    // See clearSession for why draft keys are collected and cleared outside.
+    const sweptDraftKeys: string[] = [];
 
     set((state) => {
       const prefix = sessionKeyPrefixFor(environmentId);
@@ -352,6 +364,7 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       for (const [requestId, question] of newPendingQuestions) {
         if (environmentSessionIds.has(question.sessionId)) {
           newPendingQuestions.delete(requestId);
+          sweptDraftKeys.push(openCodeQuestionDraftKey(requestId));
         }
       }
 
@@ -379,6 +392,7 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
         pendingPermissions: newPendingPermissions,
       };
     });
+    usePromptDraftStore.getState().clearDrafts(sweptDraftKeys);
   },
 
   addPendingQuestion: (question) =>
@@ -388,12 +402,19 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       return { pendingQuestions: next };
     }),
 
-  removePendingQuestion: (requestId) =>
+  removePendingQuestion: (requestId) => {
     set((state) => {
       const next = new Map(state.pendingQuestions);
       next.delete(requestId);
       return { pendingQuestions: next };
-    }),
+    });
+    // The request is resolved (answered, rejected, or withdrawn), so the
+    // in-progress answer draft must not survive to a future request that
+    // happens to reuse this id.
+    usePromptDraftStore
+      .getState()
+      .clearDraft(openCodeQuestionDraftKey(requestId));
+  },
 
   addPendingPermission: (permission) =>
     set((state) => {

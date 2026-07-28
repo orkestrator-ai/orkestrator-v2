@@ -1,6 +1,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useCodexStore } from "@/stores/codexStore";
+import {
+  codexInteractionDraftKey,
+  usePromptDraftStore,
+} from "@/stores/promptDraftStore";
 import type {
   CodexApprovalResponseResult,
   CodexInteraction,
@@ -101,6 +105,9 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useCodexStore.setState({ pendingInteractions: new Map() });
+  // Drafts persist across unmount by design and this suite reuses interaction
+  // ids; the setState above bypasses the store actions that would clear them.
+  usePromptDraftStore.getState().reset();
 });
 
 describe("CodexInteractionCard question branch", () => {
@@ -430,6 +437,74 @@ describe("CodexInteractionCard failure handling", () => {
   });
 });
 
+describe("CodexInteractionCard draft persistence", () => {
+  test("a selection and typed answer survive unmount and remount", () => {
+    /**
+     * The tab unmounts when the user switches environments while the pending
+     * interaction rehydrates from the store — so in-progress input must
+     * rehydrate with it rather than vanish.
+     */
+    const interaction = createInteraction({
+      questions: [
+        {
+          id: "q1",
+          header: "Other",
+          question: "Anything else?",
+          isOther: true,
+          isSecret: false,
+          options: [{ label: "no" }],
+        },
+      ],
+    });
+    seedPending(interaction);
+    const { unmount } = renderCard(interaction);
+
+    fireEvent.change(screen.getByPlaceholderText("Type your answer"), {
+      target: { value: "half-typed reply" },
+    });
+
+    unmount();
+    renderCard(interaction);
+
+    expect(
+      (screen.getByPlaceholderText("Type your answer") as HTMLInputElement).value,
+    ).toBe("half-typed reply");
+    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  test("a successful submit clears the stored draft", async () => {
+    const interaction = createInteraction();
+    seedPending(interaction);
+    renderCard(interaction);
+
+    fireEvent.click(screen.getByRole("button", { name: /staging/ }));
+    const draftKey = codexInteractionDraftKey(interaction.interactionId);
+    expect(usePromptDraftStore.getState().drafts.has(draftKey)).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() =>
+      expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY) ?? []).toEqual([]),
+    );
+
+    // A future interaction reusing this id must not inherit the selection.
+    expect(usePromptDraftStore.getState().drafts.has(draftKey)).toBe(false);
+  });
+
+  test("a reconcile that withdraws the interaction clears its draft", () => {
+    const interaction = createInteraction();
+    seedPending(interaction);
+    renderCard(interaction);
+
+    fireEvent.click(screen.getByRole("button", { name: /staging/ }));
+    const draftKey = codexInteractionDraftKey(interaction.interactionId);
+    expect(usePromptDraftStore.getState().drafts.has(draftKey)).toBe(true);
+
+    useCodexStore.getState().setPendingInteractions(SESSION_KEY, []);
+
+    expect(usePromptDraftStore.getState().drafts.has(draftKey)).toBe(false);
+  });
+});
+
 describe("CodexInteractionCard mcp-form branch", () => {
   const formInteraction = createInteraction({
     interactionId: "interaction-form",
@@ -475,6 +550,10 @@ describe("CodexInteractionCard mcp-form branch", () => {
   });
 
   test("coerces numeric fields to numbers and keeps an emptied one as an empty string", async () => {
+    // Keep the interaction unresolved between the two submits: a successful
+    // submit removes it from the store and clears the form draft with it, so
+    // the second payload would no longer describe the same filled-in form.
+    mockRespondToInteraction.mockImplementation(async () => "error");
     seedPending(formInteraction);
     const { container } = renderCard(formInteraction);
 

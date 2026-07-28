@@ -14,6 +14,7 @@ import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
 import type { TaskSnapshot } from "@/prompts";
 import type { LinearIssueDetail } from "@/types/linear";
+import { persistBuildPipelineNow } from "@/lib/build-pipeline-persistence";
 
 /**
  * Wait for setup scripts to be initiated by the TerminalContainer.
@@ -80,6 +81,7 @@ type BuildPipelineTicketInput = {
 
 type StartBuildOptions = {
   existingEnvironmentId?: string | null;
+  onPipelineLinked?: (params: { pipelineId: string; environmentId: string }) => Promise<void>;
 };
 
 export type GitHubIssueBuildComment = {
@@ -272,6 +274,11 @@ export function useBuildPipeline() {
           taskSnapshot: ticket.taskSnapshot,
           source: ticket.source,
         });
+        // Reserve the source in the backend before creating an environment.
+        // saveBuildPipeline performs the GitHub issue uniqueness check under
+        // its cross-process mutation lock, so two clients cannot both pass a
+        // renderer snapshot check and launch duplicate builds.
+        await persistBuildPipelineNow(pipelineId);
 
         let environment = reusableEnvironment;
         if (!environment) {
@@ -422,11 +429,13 @@ export function useBuildPipeline() {
           comments: task.comments.map((c) => ({ text: c.text })),
           images: snapshotImages,
         },
-        onPipelineLinked: ({ environmentId, pipelineId }) =>
-          updateTask(task.id, {
+        onPipelineLinked: async ({ environmentId, pipelineId }) => {
+          await updateTask(task.id, {
             environmentId,
             buildPipelineId: pipelineId,
-          }),
+          });
+          await options?.onPipelineLinked?.({ environmentId, pipelineId });
+        },
       }, environmentType, agentOverride, options);
     },
     [startBuildFromTicket, updateTask]

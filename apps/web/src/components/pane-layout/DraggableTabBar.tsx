@@ -7,6 +7,7 @@ import { usePaneLayoutStore, useFileDirtyStore } from "@/stores";
 import type { PaneLeaf } from "@/types/paneLayout";
 import { createDraggableTabId, parseDraggableTabId } from "@/types/paneLayout";
 import { cn } from "@/lib/utils";
+import { discardFileDraft } from "@/lib/file-draft-persistence";
 import { DraggableTab } from "./DraggableTab";
 import {
   AlertDialog,
@@ -45,6 +46,14 @@ export function DraggableTabBar({
 }: DraggableTabBarProps) {
   const { removeTab } = usePaneLayoutStore();
   const { isDirty, clearDirty } = useFileDirtyStore();
+
+  const discardTabDraft = useCallback((tabId: string) => {
+    const tab = pane.tabs.find((candidate) => candidate.id === tabId);
+    if (tab?.type !== "file" || !tab.fileData?.filePath) return;
+    void discardFileDraft(environmentId, tab.fileData.filePath).catch((error) => {
+      console.warn("[DraggableTabBar] Failed to discard file draft:", error);
+    });
+  }, [environmentId, pane.tabs]);
 
   // State for unsaved changes confirmation dialog
   const [pendingCloseTabIds, setPendingCloseTabIds] = useState<string[]>([]);
@@ -114,10 +123,11 @@ export function DraggableTabBar({
       }
 
       for (let i = idsInPane.length - 1; i >= 0; i--) {
+        discardTabDraft(idsInPane[i]!);
         removeTab(pane.id, idsInPane[i]!, environmentId);
       }
     },
-    [environmentId, pane.id, pane.tabs, removeTab, isDirty],
+    [discardTabDraft, environmentId, pane.id, pane.tabs, removeTab, isDirty],
   );
 
   const handleClose = useCallback(
@@ -163,6 +173,7 @@ export function DraggableTabBar({
 
     for (const tabId of pendingCloseTabIds) {
       clearDirty(tabId);
+      discardTabDraft(tabId);
     }
 
     for (let i = pendingCloseTabIds.length - 1; i >= 0; i--) {
@@ -171,7 +182,7 @@ export function DraggableTabBar({
 
     setPendingCloseTabIds([]);
     setPendingCloseTabNames([]);
-  }, [environmentId, pendingCloseTabIds, pane.id, clearDirty, removeTab]);
+  }, [discardTabDraft, environmentId, pendingCloseTabIds, pane.id, clearDirty, removeTab]);
 
   const handleCancelClose = useCallback(() => {
     setPendingCloseTabIds([]);

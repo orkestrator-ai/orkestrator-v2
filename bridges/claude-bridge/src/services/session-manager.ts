@@ -34,6 +34,12 @@ import {
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
+import {
+  deleteSessionPreferences,
+  MAX_DISPATCHED_REQUEST_IDS,
+  readSessionPreferences,
+  updateSessionPreferences,
+} from "./session-preferences.js";
 import { debugLog, isDebugLoggingEnabled } from "./logger.js";
 import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
 import { getMcpRuntimeConfig } from "./mcp-config.js";
@@ -638,6 +644,86 @@ export function createSession(title?: string): SessionState {
 }
 
 /**
+ * Best-effort write-through of a session's plan mode to the durable store.
+ *
+ * A session that has not run a turn yet has no SDK session id and therefore no
+ * durable key; its in-memory value is flushed when the first init message
+ * assigns one. A failed disk write is logged, not surfaced: the in-memory
+ * value the renderer just confirmed is still correct for this bridge's
+ * lifetime.
+ */
+function persistSessionPlanMode(session: SessionState): void {
+  if (!session.sdkSessionId || session.planMode === undefined) return;
+  void updateSessionPreferences(session.sdkSessionId, {
+    planMode: session.planMode,
+  }).catch((error) => {
+    console.error(
+      "[session-manager] Failed to persist plan mode preference:",
+      error instanceof Error ? error.message : String(error),
+    );
+  });
+}
+
+/**
+ * Record a plan-mode change on the session, durably and observably.
+ *
+ * Emitted unconditionally (not only on change) so a renderer whose optimistic
+ * toggle raced an authoritative snapshot converges on what the bridge actually
+ * holds.
+ */
+function applySessionPlanMode(session: SessionState, planMode: boolean): void {
+  session.planMode = planMode;
+  persistSessionPlanMode(session);
+  eventEmitter.emit({
+    type: "session.updated",
+    sessionId: session.id,
+    data: { planMode },
+  });
+}
+
+/**
+ * Update the caller-settable per-session preferences.
+ *
+ * The bridge owns these so they survive renderer restarts; the renderer calls
+ * this on every explicit toggle and rehydrates from the session snapshot.
+ */
+export function setSessionPreferences(
+  sessionId: string,
+  preferences: { planMode?: boolean },
+): SessionState {
+  const session = sessions.get(sessionId);
+  if (!session) {
+    throw sessionOperationError("not_found", "Session not found");
+  }
+  if (typeof preferences.planMode === "boolean") {
+    applySessionPlanMode(session, preferences.planMode);
+  }
+  return session;
+}
+
+/**
+ * Server-side dismissal of the pending prompt suggestion.
+ *
+ * The bridge replays `promptSuggestion` in every authoritative snapshot and
+ * only clears it when the next prompt runs, so a dismissal held solely in
+ * renderer state resurfaces after a restart or in a second client. Clearing it
+ * here makes the dismissal durable for as long as the suggestion itself was.
+ */
+export function clearPromptSuggestion(sessionId: string): boolean {
+  const session = sessions.get(sessionId);
+  if (!session) return false;
+  if (session.promptSuggestion !== undefined) {
+    session.promptSuggestion = undefined;
+    eventEmitter.emit({
+      type: "session.updated",
+      sessionId,
+      data: { promptSuggestion: undefined },
+    });
+  }
+  return true;
+}
+
+/**
  * Get a session by ID
  */
 export function getSession(sessionId: string): SessionState | undefined {
@@ -653,6 +739,55 @@ export function getStructuredPromptDispatchState(
   if (session.structuredOutputRequestId !== requestId) return "new";
   if (session.structuredOutput) return "already-processed";
   return session.status === "running" ? "processing" : "new";
+}
+
+/**
+ * Atomically reserve an idempotent prompt request id before dispatch.
+ *
+ * The in-memory Set makes concurrent retries atomic without awaiting. The
+ * durable write is completed before the route returns 202, so a renderer or
+ * bridge restart cannot turn an accepted one-shot launch prompt into a second
+ * agent turn. A failed write rolls the claim back and rejects the request.
+ */
+export async function claimPromptDispatch(
+  sessionId: string,
+  requestId: string,
+): Promise<"claimed" | "duplicate" | "not-found"> {
+  const session = sessions.get(sessionId);
+  if (!session) return "not-found";
+
+  const dispatchedRequestIds =
+    session.dispatchedRequestIds ?? new Set<string>();
+  if (dispatchedRequestIds.has(requestId)) return "duplicate";
+
+  dispatchedRequestIds.add(requestId);
+  session.dispatchedRequestIds = dispatchedRequestIds;
+
+  const recentRequestIds = [...dispatchedRequestIds].slice(
+    -MAX_DISPATCHED_REQUEST_IDS,
+  );
+  session.dispatchedRequestIds = new Set(recentRequestIds);
+
+  const sdkSessionId =
+    session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
+  if (!sdkSessionId) {
+    session.dispatchedRequestIds.delete(requestId);
+    throw sessionOperationError(
+      "invalid",
+      "Session does not have a durable request-id key",
+    );
+  }
+
+  try {
+    await updateSessionPreferences(sdkSessionId, {
+      dispatchedRequestIds: recentRequestIds,
+    });
+  } catch (error) {
+    session.dispatchedRequestIds.delete(requestId);
+    throw error;
+  }
+
+  return "claimed";
 }
 
 /**
@@ -1277,6 +1412,23 @@ export async function reconcilePersistedSessions(): Promise<void> {
     // environment's sessions — which rename, delete and fork would then act on.
     includeWorktrees: false,
   });
+  // Durable preferences are read before the adoption loop below: the loop's
+  // race-safety against concurrent prompts and deletions depends on it never
+  // awaiting between its `sessions.get` check and `sessions.set`. Sequential
+  // rather than fanned out so a large Claude home cannot open hundreds of
+  // files at once; entries that already live in memory are skipped, and memory
+  // stays authoritative for them.
+  const storedPreferencesBySdkId = new Map<
+    string,
+    Awaited<ReturnType<typeof readSessionPreferences>>
+  >();
+  for (const info of infos) {
+    if (sessions.has(bridgeSessionIdFromSdkId(info.sessionId))) continue;
+    const preferences = await readSessionPreferences(info.sessionId);
+    if (preferences) {
+      storedPreferencesBySdkId.set(info.sessionId, preferences);
+    }
+  }
   for (const info of infos) {
     // Belt and braces: an SDK that ignores `includeWorktrees` (or a store
     // backend where it does not apply) must still not leak another
@@ -1306,6 +1458,7 @@ export async function reconcilePersistedSessions(): Promise<void> {
       existing.sdkSessionId = info.sessionId;
       continue;
     }
+    const storedPreferences = storedPreferencesBySdkId.get(info.sessionId);
     sessions.set(id, {
       id,
       title: info.customTitle || info.summary || `Session ${info.sessionId.slice(-6)}`,
@@ -1315,6 +1468,16 @@ export async function reconcilePersistedSessions(): Promise<void> {
       lastActivity: new Date(info.lastModified),
       sdkSessionId: info.sessionId,
       persistedMessagesLoaded: false,
+      ...(storedPreferences?.planMode !== undefined
+        ? { planMode: storedPreferences.planMode }
+        : {}),
+      ...(storedPreferences?.dispatchedRequestIds?.length
+        ? {
+            dispatchedRequestIds: new Set(
+              storedPreferences.dispatchedRequestIds,
+            ),
+          }
+        : {}),
     });
   }
 }
@@ -1341,9 +1504,12 @@ async function materializePersistedSessionState(
   if (racedDuringImport) return racedDuringImport;
 
   if (typeof sdk.getSessionInfo !== "function") return undefined;
-  const info = await sdk.getSessionInfo(sdkId, {
-    dir: currentWorkingDirectory(),
-  });
+  const [info, preferences] = await Promise.all([
+    sdk.getSessionInfo(sdkId, {
+      dir: currentWorkingDirectory(),
+    }),
+    readSessionPreferences(sdkId),
+  ]);
   const racedDuringRead = sessions.get(sessionId);
   if (racedDuringRead) return racedDuringRead;
 
@@ -1360,6 +1526,10 @@ async function materializePersistedSessionState(
     lastActivity: new Date(info.lastModified),
     sdkSessionId: sdkId,
     persistedMessagesLoaded: false,
+    ...(preferences?.planMode !== undefined ? { planMode: preferences.planMode } : {}),
+    ...(preferences?.dispatchedRequestIds?.length
+      ? { dispatchedRequestIds: new Set(preferences.dispatchedRequestIds) }
+      : {}),
   };
   sessions.set(sessionId, state);
   return state;
@@ -2395,6 +2565,19 @@ export async function sendPrompt(
     });
   }
 
+  // The UI maps its plan-mode toggle onto exactly these two permission modes,
+  // so a prompt carrying one of them is an authoritative statement of the
+  // toggle. Recording it here is a safety net behind the explicit preferences
+  // endpoint (e.g. a toggle made before this session had a durable identity).
+  // Other permission modes say nothing about the toggle and are left alone.
+  if (
+    (options?.permissionMode === "plan"
+      || options?.permissionMode === "bypassPermissions")
+    && session.planMode !== (options.permissionMode === "plan")
+  ) {
+    applySessionPlanMode(session, options.permissionMode === "plan");
+  }
+
   if (needsTranscriptHydration) {
     try {
       const hydrated = await readPersistedSessionMessagesOnce(session);
@@ -2683,6 +2866,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           if (toolName === "EnterPlanMode") {
             console.log("[session-manager] EnterPlanMode requested", { sessionId });
 
+            // The agent itself switched the session into plan mode; record it
+            // like a user toggle so the preference survives a restart.
+            applySessionPlanMode(session, true);
+
             // Emit event so frontend knows to enter plan mode
             eventEmitter.emit({
               type: "plan.enter-requested",
@@ -2741,6 +2928,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
                 // the case where the SDK still fails the ExitPlanMode tool
                 // (override the failure + re-prompt Claude to continue).
                 planApprovedThisTurn = true;
+                // Approval ends plan mode; record it so the preference the
+                // next prompt rehydrates from matches what the UI shows.
+                applySessionPlanMode(session, false);
                 eventEmitter.emit({
                   type: "plan.exit-requested",
                   sessionId,
@@ -3158,8 +3348,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         const initMsg = message as any;
         const sdkSessionId = initMsg.session_id;
         if (sdkSessionId) {
+          const gainedDurableIdentity = session.sdkSessionId !== sdkSessionId;
           session.sdkSessionId = sdkSessionId;
           console.log("[session-manager] Session initialized, stored SDK session ID:", sdkSessionId);
+          // A plan-mode preference set before the first turn had no durable key
+          // to be written under; the id assigned here is that key.
+          if (gainedDurableIdentity) persistSessionPlanMode(session);
         }
 
         // Capture MCP servers and plugins from init message

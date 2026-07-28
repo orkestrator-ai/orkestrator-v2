@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import type { OpencodeClient, QuestionRequest } from "@/lib/opencode-client";
 import { replyToQuestion, rejectQuestion } from "@/lib/opencode-client";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { openCodeQuestionDraftKey } from "@/stores/promptDraftStore";
 import {
   QuestionCard,
   type QuestionCardQuestion,
@@ -60,6 +61,9 @@ export function OpenCodeQuestionCard({
       // `multiple: false` means exactly one answer on this protocol, so a
       // custom answer replaces the selected option instead of joining it.
       exclusiveSingleSelect
+      // Cleared by `openCodeStore.removePendingQuestion` when the request
+      // resolves, so in-progress answers survive tab switches until then.
+      draftKey={openCodeQuestionDraftKey(question.id)}
     />
   );
 }

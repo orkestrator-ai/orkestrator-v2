@@ -2,10 +2,11 @@
  * Hook for managing pull request state and actions.
  *
  * This hook provides access to PR state stored in the environment store
- * and actions for viewing/resetting PRs and setting monitoring modes.
+ * and actions for viewing/resetting PRs and requesting monitoring modes.
  *
- * Note: PR detection and polling is handled centrally by usePrMonitorService.
- * This hook no longer manages its own polling intervals.
+ * Note: PR detection and polling is owned by the backend PR monitor service;
+ * mode requests are backend commands so they survive a renderer reload, and
+ * detection status is mirrored into prMonitorStore by usePrMonitorService.
  */
 import { useCallback, useState } from "react";
 import * as backend from "@/lib/backend";
@@ -39,7 +40,6 @@ export function usePullRequest({
   const [error, setError] = useState<string | null>(null);
 
   const { getEnvironmentById, setEnvironmentPR } = useEnvironmentStore();
-  const { setMonitoringMode, getMonitoringState } = usePrMonitorStore();
 
   // Get PR state from environment store
   const environment = environmentId ? getEnvironmentById(environmentId) : null;
@@ -47,8 +47,10 @@ export function usePullRequest({
   const prState = environment?.prState ?? null;
   const hasMergeConflicts = environment?.hasMergeConflicts ?? null;
 
-  // Get detection status from PR monitor store
-  const monitorState = environmentId ? getMonitoringState(environmentId) : null;
+  // Detection status mirrored from the backend monitor
+  const monitorState = usePrMonitorStore((state) =>
+    environmentId ? state.states.get(environmentId) ?? null : null
+  );
   const isDetecting = monitorState?.checkInProgress ?? false;
 
   // View the PR in the default browser
@@ -93,21 +95,25 @@ export function usePullRequest({
     }
   }, [environmentId, setEnvironmentPR]);
 
-  // Set monitoring mode to create-pending (faster polling after Create PR button)
+  // Request create-pending mode (faster polling after Create PR button).
+  // A backend command rather than a store write, so the request survives a
+  // renderer reload and keeps polling while another environment is active.
   const setModeCreatePending = useCallback(() => {
     if (environmentId) {
-      console.log(`[usePullRequest] Setting create-pending mode for ${environmentId}`);
-      setMonitoringMode(environmentId, "create-pending");
+      void backend.prMonitorWatch(environmentId, "create-pending").catch((err) => {
+        console.warn(`[usePullRequest] Failed to request create-pending mode for ${environmentId}:`, err);
+      });
     }
-  }, [environmentId, setMonitoringMode]);
+  }, [environmentId]);
 
-  // Set monitoring mode to merge-pending (fast polling after Merge PR button)
+  // Request merge-pending mode (fast polling after Merge PR button)
   const setModeMergePending = useCallback(() => {
     if (environmentId) {
-      console.log(`[usePullRequest] Setting merge-pending mode for ${environmentId}`);
-      setMonitoringMode(environmentId, "merge-pending");
+      void backend.prMonitorWatch(environmentId, "merge-pending").catch((err) => {
+        console.warn(`[usePullRequest] Failed to request merge-pending mode for ${environmentId}:`, err);
+      });
     }
-  }, [environmentId, setMonitoringMode]);
+  }, [environmentId]);
 
   return {
     prUrl,

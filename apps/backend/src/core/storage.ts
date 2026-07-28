@@ -42,6 +42,8 @@ import type {
   PersistedPaneLayout,
   PersistedLoopedReviewWorkflow,
   PersistedBuildPipeline,
+  PersistedComposeDraft,
+  PersistedFileDraft,
   PersistedPromptQueue,
   PersistedAgentHandoff,
   RepositoryConfig,
@@ -204,6 +206,16 @@ function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isInitialPromptImageAttachment(
+  value: unknown,
+): value is NonNullable<Environment["initialPromptAttachments"]>[number] {
+  return isRecord(value)
+    && isNonBlankString(value.id)
+    && isNonBlankString(value.name)
+    && typeof value.previewUrl === "string"
+    && isNonBlankString(value.base64Data);
+}
+
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   return typeof value === "string" && allowed.includes(value as T);
 }
@@ -347,6 +359,37 @@ function isPersistedPromptQueue(
     && isPositiveInteger(value.revision);
 }
 
+function isPersistedComposeDraft(
+  value: unknown,
+  expectedKey?: string,
+): value is PersistedComposeDraft {
+  return isRecord(value)
+    && isNonBlankString(value.draftKey)
+    && (expectedKey === undefined || value.draftKey === expectedKey)
+    && (value.ownerType === "environment" || value.ownerType === "project")
+    && isNonBlankString(value.ownerId)
+    && Object.hasOwn(value, "value")
+    && typeof value.updatedAt === "string"
+    && Number.isFinite(Date.parse(value.updatedAt))
+    && isPositiveInteger(value.revision);
+}
+
+function isPersistedFileDraft(
+  value: unknown,
+  expectedKey?: string,
+): value is PersistedFileDraft {
+  return isRecord(value)
+    && isNonBlankString(value.draftKey)
+    && (expectedKey === undefined || value.draftKey === expectedKey)
+    && isNonBlankString(value.environmentId)
+    && isNonBlankString(value.filePath)
+    && typeof value.content === "string"
+    && typeof value.originalContent === "string"
+    && typeof value.updatedAt === "string"
+    && Number.isFinite(Date.parse(value.updatedAt))
+    && isPositiveInteger(value.revision);
+}
+
 function isPersistedAgentHandoff(
   value: unknown,
   expectedId?: string,
@@ -376,6 +419,22 @@ function isPersistedBuildPipeline(
     && typeof value.updatedAt === "string"
     && Number.isFinite(Date.parse(value.updatedAt))
     && isPositiveInteger(value.revision);
+}
+
+function activeGitHubBuildReservation(snapshot: unknown): string | null {
+  if (!isRecord(snapshot)) return null;
+  if (snapshot.phase === "complete" || snapshot.phase === "failed") return null;
+  const source = snapshot.source;
+  if (
+    !isRecord(source)
+    || source.type !== "github"
+    || !isNonBlankString(source.repositoryOwner)
+    || !isNonBlankString(source.repositoryName)
+    || !isPositiveInteger(source.issueNumber)
+  ) {
+    return null;
+  }
+  return `${source.repositoryOwner.toLowerCase()}/${source.repositoryName.toLowerCase()}#${source.issueNumber}`;
 }
 
 function isClaudeModelCatalogSnapshot(
@@ -872,6 +931,8 @@ export class StorageService {
   private loopedReviewMutation: Promise<unknown> = Promise.resolve();
   private buildPipelineMutation: Promise<unknown> = Promise.resolve();
   private promptQueueMutation: Promise<unknown> = Promise.resolve();
+  private composeDraftMutation: Promise<unknown> = Promise.resolve();
+  private fileDraftMutation: Promise<unknown> = Promise.resolve();
   private agentHandoffMutation: Promise<unknown> = Promise.resolve();
   private changeListener: ResourceChangeListener | null = null;
   private changeRevision = 0;
@@ -953,6 +1014,14 @@ export class StorageService {
 
   private promptQueuesFile(): string {
     return this.file("prompt-queues.json");
+  }
+
+  private composeDraftsFile(): string {
+    return this.file("compose-drafts.json");
+  }
+
+  private fileDraftsFile(): string {
+    return this.file("file-drafts.json");
   }
 
   private agentHandoffsFile(): string {
@@ -1328,6 +1397,7 @@ export class StorageService {
     const filtered = projects.filter((project) => project.id !== projectId);
     if (filtered.length === projects.length) throw new Error(`Project not found: ${projectId}`);
     await this.saveJson(this.projectsFile(), filtered);
+    await this.deleteComposeDraftsByProject(projectId);
     this.announce("project", projectId);
   }
 
@@ -1431,6 +1501,7 @@ export class StorageService {
         "createdFromCommit",
         "lastActivityAt",
         "deletionRequestedAt",
+        "lifecycleOperationStartedAt",
       ] as const;
       for (const field of optionalStringFields) {
         if (field in updates) {
@@ -1438,6 +1509,16 @@ export class StorageService {
           if (value === null || value === undefined || typeof value === "string") {
             (environment as unknown as Record<string, unknown>)[field] = value ?? undefined;
           }
+        }
+      }
+      if ("lifecycleOperation" in updates) {
+        if (updates.lifecycleOperation == null) {
+          environment.lifecycleOperation = undefined;
+        } else if (
+          updates.lifecycleOperation === "deleting"
+          || updates.lifecycleOperation === "merging"
+        ) {
+          environment.lifecycleOperation = updates.lifecycleOperation;
         }
       }
 
@@ -1493,6 +1574,22 @@ export class StorageService {
       }
       if ("pendingAgentLaunch" in updates && typeof updates.pendingAgentLaunch === "boolean") {
         environment.pendingAgentLaunch = updates.pendingAgentLaunch;
+      }
+      if ("initialPromptAttachments" in updates) {
+        if (updates.initialPromptAttachments == null) {
+          environment.initialPromptAttachments = undefined;
+        } else if (
+          Array.isArray(updates.initialPromptAttachments)
+          && updates.initialPromptAttachments.every(isInitialPromptImageAttachment)
+        ) {
+          const serialized = JSON.stringify(updates.initialPromptAttachments);
+          if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
+            throw new Error("Initial prompt attachments exceed the 32 MB limit");
+          }
+          environment.initialPromptAttachments = updates.initialPromptAttachments;
+        } else {
+          throw new Error("Initial prompt attachments are malformed");
+        }
       }
       if ("claudeModelCatalog" in updates) {
         if (updates.claudeModelCatalog == null) {
@@ -2455,6 +2552,295 @@ export class StorageService {
     });
   }
 
+  private enqueueComposeDraftMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.composeDraftsFile(),
+        "compose draft storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.composeDraftMutation.then(run, run);
+    this.composeDraftMutation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async loadComposeDrafts(): Promise<Record<string, PersistedComposeDraft>> {
+    const stored = await this.loadJson<Record<string, PersistedComposeDraft>>(
+      this.composeDraftsFile(),
+      () => ({}),
+    );
+    return Object.fromEntries(
+      Object.entries(stored).filter(([storedKey, draft]) =>
+        isPersistedComposeDraft(draft, storedKey)
+      ),
+    ) as Record<string, PersistedComposeDraft>;
+  }
+
+  async getComposeDraft(draftKey: string): Promise<PersistedComposeDraft | null> {
+    if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
+    return (await this.loadComposeDrafts())[draftKey] ?? null;
+  }
+
+  async listComposeDrafts(
+    ownerType: "environment" | "project",
+    ownerId: string,
+  ): Promise<PersistedComposeDraft[]> {
+    if (ownerType !== "environment" && ownerType !== "project") {
+      throw new Error("Compose draft owner type is invalid");
+    }
+    if (!isNonBlankString(ownerId)) {
+      throw new Error("Compose draft owner ID must not be blank");
+    }
+    return Object.values(await this.loadComposeDrafts())
+      .filter((draft) => draft.ownerType === ownerType && draft.ownerId === ownerId);
+  }
+
+  async saveComposeDraft(
+    draftKey: string,
+    ownerType: "environment" | "project",
+    ownerId: string,
+    value: unknown,
+    expectedRevision?: number,
+  ): Promise<PersistedComposeDraft> {
+    if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
+    if (ownerType !== "environment" && ownerType !== "project") {
+      throw new Error("Compose draft owner type is invalid");
+    }
+    if (!isNonBlankString(ownerId)) {
+      throw new Error("Compose draft owner ID must not be blank");
+    }
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
+      throw new Error("Compose draft expected revision must be a non-negative integer");
+    }
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(value);
+    } catch {
+      throw new Error("Compose draft value must be JSON serializable");
+    }
+    if (
+      serialized === undefined
+      || Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024
+    ) {
+      throw new Error("Compose draft exceeds the 32 MB limit");
+    }
+
+    return this.enqueueComposeDraftMutation(async () => {
+      if (ownerType === "environment") {
+        await this.assertEnvironmentAcceptsBackgroundState(ownerId, "Compose draft");
+      } else if (!await this.getProject(ownerId)) {
+        throw new Error(`Compose draft project not found: ${ownerId}`);
+      }
+      const drafts = await this.loadComposeDrafts();
+      const previous = drafts[draftKey];
+      if (
+        previous
+        && (previous.ownerType !== ownerType || previous.ownerId !== ownerId)
+      ) {
+        throw new Error("Compose draft belongs to another owner");
+      }
+      if (
+        expectedRevision !== undefined
+        && (previous?.revision ?? 0) !== expectedRevision
+      ) {
+        throw new Error("Compose draft revision conflict");
+      }
+      const saved: PersistedComposeDraft = {
+        draftKey,
+        ownerType,
+        ownerId,
+        value,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      drafts[draftKey] = saved;
+      await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
+      this.announce("compose-draft", ownerId);
+      return saved;
+    });
+  }
+
+  async deleteComposeDraft(draftKey: string): Promise<void> {
+    if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
+    await this.enqueueComposeDraftMutation(async () => {
+      const drafts = await this.loadComposeDrafts();
+      const previous = drafts[draftKey];
+      if (!previous) return;
+      delete drafts[draftKey];
+      await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
+      this.announce("compose-draft", previous.ownerId);
+    });
+  }
+
+  async deleteComposeDraftsByEnvironment(environmentId: string): Promise<void> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Compose draft environment ID must not be blank");
+    }
+    await this.enqueueComposeDraftMutation(async () => {
+      const drafts = await this.loadComposeDrafts();
+      const keys = Object.values(drafts)
+        .filter((draft) =>
+          draft.ownerType === "environment" && draft.ownerId === environmentId
+        )
+        .map((draft) => draft.draftKey);
+      for (const key of keys) delete drafts[key];
+      if (keys.length > 0) {
+        await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
+        this.announce("compose-draft", environmentId);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.composeDraftsFile(),
+        (storedKey, draft) =>
+          isPersistedComposeDraft(draft, storedKey)
+          && (
+            draft.ownerType !== "environment"
+            || draft.ownerId !== environmentId
+          ),
+      );
+    });
+  }
+
+  async deleteComposeDraftsByProject(projectId: string): Promise<void> {
+    if (!isNonBlankString(projectId)) {
+      throw new Error("Compose draft project ID must not be blank");
+    }
+    await this.enqueueComposeDraftMutation(async () => {
+      const drafts = await this.loadComposeDrafts();
+      const keys = Object.values(drafts)
+        .filter((draft) => draft.ownerType === "project" && draft.ownerId === projectId)
+        .map((draft) => draft.draftKey);
+      for (const key of keys) delete drafts[key];
+      if (keys.length > 0) {
+        await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
+        this.announce("compose-draft", projectId);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.composeDraftsFile(),
+        (storedKey, draft) =>
+          isPersistedComposeDraft(draft, storedKey)
+          && (draft.ownerType !== "project" || draft.ownerId !== projectId),
+      );
+    });
+  }
+
+  private enqueueFileDraftMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.fileDraftsFile(),
+        "file draft storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.fileDraftMutation.then(run, run);
+    this.fileDraftMutation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async loadFileDrafts(): Promise<Record<string, PersistedFileDraft>> {
+    const stored = await this.loadJson<Record<string, PersistedFileDraft>>(
+      this.fileDraftsFile(),
+      () => ({}),
+    );
+    return Object.fromEntries(
+      Object.entries(stored).filter(([storedKey, draft]) =>
+        isPersistedFileDraft(draft, storedKey)
+      ),
+    ) as Record<string, PersistedFileDraft>;
+  }
+
+  async getFileDraft(draftKey: string): Promise<PersistedFileDraft | null> {
+    if (!isNonBlankString(draftKey)) throw new Error("File draft key must not be blank");
+    return (await this.loadFileDrafts())[draftKey] ?? null;
+  }
+
+  async saveFileDraft(
+    draftKey: string,
+    environmentId: string,
+    filePath: string,
+    content: string,
+    originalContent: string,
+  ): Promise<PersistedFileDraft> {
+    if (!isNonBlankString(draftKey)) throw new Error("File draft key must not be blank");
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("File draft environment ID must not be blank");
+    }
+    if (!isNonBlankString(filePath)) throw new Error("File draft path must not be blank");
+    const size = Buffer.byteLength(content, "utf8") + Buffer.byteLength(originalContent, "utf8");
+    if (size > 32 * 1024 * 1024) throw new Error("File draft exceeds the 32 MB limit");
+
+    return this.enqueueFileDraftMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "File draft");
+      const drafts = await this.loadFileDrafts();
+      const previous = drafts[draftKey];
+      if (
+        previous
+        && (
+          previous.environmentId !== environmentId
+          || previous.filePath !== filePath
+        )
+      ) {
+        throw new Error("File draft key belongs to another file");
+      }
+      const saved: PersistedFileDraft = {
+        draftKey,
+        environmentId,
+        filePath,
+        content,
+        originalContent,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      drafts[draftKey] = saved;
+      await this.saveSensitiveJson(this.fileDraftsFile(), drafts);
+      this.announce("file-draft", environmentId);
+      return saved;
+    });
+  }
+
+  async deleteFileDraft(draftKey: string): Promise<void> {
+    if (!isNonBlankString(draftKey)) throw new Error("File draft key must not be blank");
+    await this.enqueueFileDraftMutation(async () => {
+      const drafts = await this.loadFileDrafts();
+      const previous = drafts[draftKey];
+      if (!previous) return;
+      delete drafts[draftKey];
+      await this.saveSensitiveJson(this.fileDraftsFile(), drafts);
+      this.announce("file-draft", previous.environmentId);
+    });
+  }
+
+  async deleteFileDraftsByEnvironment(environmentId: string): Promise<void> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("File draft environment ID must not be blank");
+    }
+    await this.enqueueFileDraftMutation(async () => {
+      const drafts = await this.loadFileDrafts();
+      const keys = Object.values(drafts)
+        .filter((draft) => draft.environmentId === environmentId)
+        .map((draft) => draft.draftKey);
+      for (const key of keys) delete drafts[key];
+      if (keys.length > 0) {
+        await this.saveSensitiveJson(this.fileDraftsFile(), drafts);
+        this.announce("file-draft", environmentId);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.fileDraftsFile(),
+        (storedKey, draft) =>
+          isPersistedFileDraft(draft, storedKey)
+          && draft.environmentId !== environmentId,
+      );
+    });
+  }
+
   private enqueueAgentHandoffMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
       const release = await this.acquireMutationLock(
@@ -2781,6 +3167,16 @@ export class StorageService {
         && (previous?.revision ?? 0) !== expectedRevision
       ) {
         throw new Error("Build pipeline revision conflict");
+      }
+      const reservation = activeGitHubBuildReservation(snapshot);
+      if (
+        reservation
+        && Object.values(pipelines).some((pipeline) =>
+          pipeline.id !== pipelineId
+          && activeGitHubBuildReservation(pipeline.snapshot) === reservation
+        )
+      ) {
+        throw new Error(`An active build already exists for ${reservation}`);
       }
       const saved: PersistedBuildPipeline = {
         version,

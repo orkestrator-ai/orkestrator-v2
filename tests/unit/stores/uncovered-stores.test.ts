@@ -2,7 +2,7 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { useAgentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
 import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
 import { useFileDirtyStore } from "../../../apps/web/src/stores/fileDirtyStore";
-import { getEffectiveInterval, usePrMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
+import { usePrMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
 import { useSessionStore } from "../../../apps/web/src/stores/sessionStore";
 import {
   createPortalTargetKey,
@@ -16,7 +16,7 @@ afterEach(() => {
   });
   useErrorDialogStore.setState({ error: null });
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
-  usePrMonitorStore.setState({ monitoredEnvironments: {}, activeEnvironmentId: null });
+  usePrMonitorStore.setState({ states: new Map() });
   useSessionStore.setState({ sessions: new Map(), loadingEnvironments: new Set(), error: null });
   useTerminalPortalStore.setState({ paneHosts: new Map(), terminals: new Map() });
 });
@@ -376,25 +376,56 @@ describe("errorDialogStore and fileDirtyStore", () => {
 });
 
 describe("prMonitorStore", () => {
-  test("calculates bounded backoff and updates every monitoring field", () => {
-    expect(getEffectiveInterval("idle", 10)).toBe(Infinity);
-    expect(getEffectiveInterval("normal", 0)).toBe(20_000);
-    expect(getEffectiveInterval("merge-pending", 99)).toBe(32_000);
+  const monitorEntry = (environmentId: string, overrides: Record<string, unknown> = {}) => ({
+    environmentId,
+    mode: "normal" as const,
+    checkInProgress: false,
+    consecutiveErrors: 0,
+    lastCheckAt: null,
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    ...overrides,
+  });
 
+  test("mirrors backend snapshots and incremental events", () => {
     const state = usePrMonitorStore.getState();
-    state.startMonitoring("env-1", "normal");
-    state.setActiveEnvironment("env-1");
-    state.setMonitoringMode("env-1", "merge-pending");
-    state._setCheckInProgress("env-1", true);
-    state._updateLastCheckTime("env-1");
-    state._incrementErrors("env-1");
-    expect(state.getMonitoringState("env-1")).toMatchObject({
-      mode: "merge-pending", checkInProgress: true, consecutiveErrors: 1,
+
+    state.applySnapshot([
+      monitorEntry("env-1", { mode: "merge-pending", consecutiveErrors: 1 }),
+      monitorEntry("env-2"),
+    ]);
+    expect(usePrMonitorStore.getState().getMonitoringState("env-1")).toMatchObject({
+      mode: "merge-pending", checkInProgress: false, consecutiveErrors: 1,
     });
-    state._resetErrors("env-1");
-    expect(state.getMonitoringState("env-1")?.consecutiveErrors).toBe(0);
-    state.stopMonitoring("env-1");
-    expect(state.getMonitoringState("env-1")).toBeNull();
+
+    state.applyEvent({
+      environmentId: "env-1",
+      state: monitorEntry("env-1", { prState: "merged", prUrl: "https://github.com/org/repo/pull/1" }),
+    });
+    expect(usePrMonitorStore.getState().getMonitoringState("env-1")?.prState).toBe("merged");
+
+    state.applyEvent({ environmentId: "env-1", removed: true });
+    expect(usePrMonitorStore.getState().getMonitoringState("env-1")).toBeNull();
+
+    // The snapshot is the complete truth: an entry absent from it is dropped.
+    state.applySnapshot([]);
+    expect(usePrMonitorStore.getState().getMonitoringState("env-2")).toBeNull();
+  });
+
+  test("skips updates when the payload matches what is already held", () => {
+    const state = usePrMonitorStore.getState();
+    state.applySnapshot([monitorEntry("env-1")]);
+    const before = usePrMonitorStore.getState().states;
+
+    state.applySnapshot([monitorEntry("env-1")]);
+    expect(usePrMonitorStore.getState().states).toBe(before);
+
+    state.applyEvent({ environmentId: "env-1", state: monitorEntry("env-1") });
+    expect(usePrMonitorStore.getState().states).toBe(before);
+
+    state.applyEvent({ environmentId: "env-9", removed: true });
+    expect(usePrMonitorStore.getState().states).toBe(before);
   });
 });
 

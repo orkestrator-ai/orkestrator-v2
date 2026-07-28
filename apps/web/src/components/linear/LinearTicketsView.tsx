@@ -31,6 +31,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
+import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import {
   connectLinear,
@@ -58,6 +59,9 @@ interface LinearTicketsViewContentProps extends LinearTicketsViewProps {
 }
 
 type LoadState = "idle" | "loading" | "loaded" | "error";
+
+const isStringDraft = (value: unknown): value is string => typeof value === "string";
+const isBlankDraft = (value: string): boolean => value.length === 0;
 
 function formatUpdatedDate(value: string): string {
   const date = new Date(value);
@@ -207,7 +211,16 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const [detailError, setDetailError] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [startingType, setStartingType] = useState<EnvironmentType | null>(null);
-  const [commentBody, setCommentBody] = useState("");
+  const [commentBody, setCommentBody, clearCommentDraft] = useDurableComposeDraft({
+    ownerType: "project",
+    ownerId: projectId,
+    namespace: "linear-comment",
+    localKey: selectedIssueId ?? "none",
+    initialValue: "",
+    isEmpty: isBlankDraft,
+    isValid: isStringDraft,
+    enabled: selectedIssueId !== null,
+  });
   const [commentState, setCommentState] = useState<LoadState>("idle");
   const [commentError, setCommentError] = useState<string | null>(null);
   const connectionRequestRef = useRef(0);
@@ -317,7 +330,6 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
     setSelectedIssueId(issueId);
     setDetail(null);
     setDetailError(null);
-    setCommentBody("");
     setCommentError(null);
     setCommentState("idle");
     void loadDetail(issueId);
@@ -330,7 +342,6 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
     setDetailError(null);
     setDetailState("idle");
     setStartingType(null);
-    setCommentBody("");
     setCommentError(null);
     setCommentState("idle");
   };
@@ -369,7 +380,9 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
           comments: [...current.comments, comment].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
         };
       });
-      setCommentBody("");
+      void clearCommentDraft().catch((error) => {
+        console.warn("[LinearTicketsView] Failed to clear posted comment draft:", error);
+      });
       setCommentState("loaded");
       toast.success("Linear comment added");
     } catch (error) {

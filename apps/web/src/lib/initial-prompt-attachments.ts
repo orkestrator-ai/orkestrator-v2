@@ -1,11 +1,7 @@
 import { writeContainerFile, writeLocalFile } from "@/lib/backend";
+import type { InitialPromptImageAttachment } from "@/types";
 
-export interface InitialPromptImageAttachment {
-  id: string;
-  name: string;
-  previewUrl: string;
-  base64Data: string;
-}
+export type { InitialPromptImageAttachment } from "@/types";
 
 export interface SavedInitialPromptAttachment {
   name: string;

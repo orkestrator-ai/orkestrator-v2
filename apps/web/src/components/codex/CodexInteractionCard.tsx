@@ -11,6 +11,10 @@ import {
   type CodexInteraction,
 } from "@/lib/codex-client";
 import { useCodexStore } from "@/stores/codexStore";
+import {
+  codexInteractionDraftKey,
+  usePromptDraftField,
+} from "@/stores/promptDraftStore";
 
 interface CodexInteractionCardProps {
   interaction: CodexInteraction;
@@ -61,13 +65,29 @@ export function CodexInteractionCard({
   sessionKey,
 }: CodexInteractionCardProps) {
   const remove = useCodexStore((state) => state.removePendingInteraction);
+  // In-progress input lives in the prompt-draft store so it survives the tab
+  // unmounting; `codexStore` clears it when the interaction resolves or is
+  // withdrawn (removePendingInteraction / setPendingInteractions / sweeps).
+  const draftKey = codexInteractionDraftKey(interaction.interactionId);
   // Selection is tracked by option *index*, never by label: labels are
   // untrusted MCP-supplied text and are not de-duplicated upstream, so two
   // options can share one. Keying/selecting by label would make them a single
   // control. The submitted answer is still the label — that is the wire format.
-  const [answers, setAnswers] = useState<Record<string, number[]>>({});
-  const [form, setForm] = useState<Record<string, unknown>>({});
-  const [freeText, setFreeText] = useState<Record<string, string>>({});
+  const [answers, setAnswers] = usePromptDraftField<Record<string, number[]>>(
+    draftKey,
+    "answers",
+    () => ({}),
+  );
+  const [form, setForm] = usePromptDraftField<Record<string, unknown>>(
+    draftKey,
+    "form",
+    () => ({}),
+  );
+  const [freeText, setFreeText] = usePromptDraftField<Record<string, string>>(
+    draftKey,
+    "freeText",
+    () => ({}),
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const schema = object(interaction.schema);

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
+import { usePromptDraftField } from "@/stores/promptDraftStore";
 
 /** Agent-neutral option shape. `value` falls back to `label` when absent. */
 export interface QuestionCardOption {
@@ -56,6 +57,14 @@ interface QuestionCardProps {
    */
   exclusiveSingleSelect?: boolean;
   hideDismiss?: boolean;
+  /**
+   * Stable key for keeping in-progress answers in the prompt-draft store so
+   * they survive the card unmounting (environment/tab switches). Wrappers
+   * backed by a durable pending request pass their namespaced request id;
+   * without one the card falls back to plain component state. The store that
+   * owns the pending request clears the draft when the request resolves.
+   */
+  draftKey?: string;
 }
 
 function optionValue(option: QuestionCardOption): string {
@@ -324,20 +333,26 @@ export function QuestionCard({
   submitOnOptionSelect = false,
   exclusiveSingleSelect = false,
   hideDismiss = false,
+  draftKey,
 }: QuestionCardProps) {
-  const [answers, setAnswers] = useState<string[][]>(() =>
-    questions.map((_, i) => [...(initialAnswers?.[i] ?? [])]),
+  const [answers, setAnswers] = usePromptDraftField<string[][]>(
+    draftKey,
+    "answers",
+    () => questions.map((_, i) => [...(initialAnswers?.[i] ?? [])]),
   );
   /**
    * In-progress custom text per question, lifted here so it survives navigation
    * between questions (QuestionItem remounts on index change) and so it can be
    * included at submit even if the user never pressed Enter.
    */
-  const [customTexts, setCustomTexts] = useState<string[]>(() =>
-    questions.map(() => ""),
+  const [customTexts, setCustomTexts] = usePromptDraftField<string[]>(
+    draftKey,
+    "customTexts",
+    () => questions.map(() => ""),
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [currentQuestionIndex, setCurrentQuestionIndex] =
+    usePromptDraftField<number>(draftKey, "currentQuestionIndex", () => 0);
 
   const questionCount = questions.length;
   const currentQuestion = questions[currentQuestionIndex];

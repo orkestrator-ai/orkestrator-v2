@@ -1615,17 +1615,22 @@ describe("FeaturesView lifecycle and navigation", () => {
     ];
 
     try {
-      for (const scenario of cases) {
+      for (const [scenarioIndex, scenario] of cases.entries()) {
+        const scenarioSessionId = `session-unreachable-${scenarioIndex}`;
+        const scenarioBaseUrl = `http://127.0.0.1:${5_200 + scenarioIndex}`;
         await drainReconcileMonitors();
         useEnvironmentStore.setState({ environments: scenario.environment ? [scenario.environment] : [] });
-        seedStores(chatFeature({ messages: [pendingUser()] }));
+        seedStores(chatFeature({
+          codexSessionId: scenarioSessionId,
+          messages: [pendingUser()],
+        }));
         getEnvironmentMock.mockClear();
         getEnvironmentMock.mockImplementation(async () => scenario.backendEnvironment ?? null);
         getCodexServerStatusMock.mockClear();
         getCodexServerStatusMock.mockImplementation(async () => (
           scenario.bridge ?? {
             running: true,
-            hostPort: 4200,
+            hostPort: 5_200 + scenarioIndex,
             authToken: "container-token",
           }
         ));
@@ -1633,20 +1638,30 @@ describe("FeaturesView lifecycle and navigation", () => {
         createClientMock.mockClear();
 
         render(<FeaturesView projectId="project-1" />);
-        await act(async () => {
-          await new Promise<void>((resolve) => realSetTimeout(resolve, 50));
-        });
+        const unavailableDeadline = Date.now() + 3_000;
+        while (
+          useFeaturePlanStore.getState().activeConversations.get("feature-1")?.phase !== "unavailable"
+          && Date.now() < unavailableDeadline
+        ) {
+          await act(async () => {
+            await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
+          });
+        }
         expect(
           useFeaturePlanStore.getState().activeConversations.get("feature-1"),
         ).toMatchObject({
           featureId: "feature-1",
           phase: "unavailable",
         });
-        // Safe as an absolute count: both spies are cleared inside this loop
-        // iteration, immediately before the render above, so nothing an earlier
-        // test leaked can reach these assertions.
-        expect(getSessionStatusMock).not.toHaveBeenCalled();
-        expect(createClientMock).not.toHaveBeenCalled();
+        // Match this iteration's unique identifiers. An abortable monitor from
+        // an earlier full-suite test can finish a request after its component
+        // unmounts; that must not make this test's assertion load-dependent.
+        expect(
+          getSessionStatusMock.mock.calls.some(([, sessionId]) => sessionId === scenarioSessionId),
+        ).toBe(false);
+        expect(
+          createClientMock.mock.calls.some(([baseUrl]) => baseUrl === scenarioBaseUrl),
+        ).toBe(false);
       }
     } finally {
       timeoutSpy.mockRestore();
@@ -4605,7 +4620,10 @@ describe("FeaturesView build action", () => {
       expect.objectContaining({ id: "task-1" }),
       "containerized",
       "codex",
-      { existingEnvironmentId: "env-feature" },
+      expect.objectContaining({
+        existingEnvironmentId: "env-feature",
+        onPipelineLinked: expect.any(Function),
+      }),
     );
     await waitFor(() => {
       expect(updateFeatureMock).toHaveBeenCalledWith(
@@ -4631,12 +4649,16 @@ describe("FeaturesView build action", () => {
     await waitFor(() => {
       expect(startBuildMock).toHaveBeenCalledTimes(1);
     });
-    // The pipeline ended in a failed state, so the feature must not be flipped
-    // to "building" (startBuild already surfaced the error to the user).
-    expect(updateFeatureMock).not.toHaveBeenCalledWith(
-      "feature-1",
-      expect.objectContaining({ status: "building" }),
-    );
+    // The pre-launch reservation is durable, but a failed launch must restore
+    // the original feature state.
+    await waitFor(() => {
+      expect(useFeaturePlanStore.getState().features[0]?.status).toBe("stories");
+    });
+    expect(updateFeatureMock.mock.calls.at(-1)?.[1]).toMatchObject({
+      status: "stories",
+      buildTaskId: undefined,
+      buildPipelineId: undefined,
+    });
   });
 
   test("formats every story into the created Kanban task", async () => {
@@ -4732,10 +4754,10 @@ describe("FeaturesView build action", () => {
       "Failed to start feature build",
       { description: "build launch failed" },
     ));
-    expect(updateFeatureMock).not.toHaveBeenCalledWith(
-      "feature-1",
-      expect.objectContaining({ status: "building" }),
-    );
+    expect(useFeaturePlanStore.getState().features[0]?.status).toBe("stories");
+    expect(updateFeatureMock.mock.calls.at(-1)?.[1]).toMatchObject({
+      status: "stories",
+    });
   });
 
   test("leaves the feature unchanged when startBuild creates no pipeline", async () => {
@@ -4745,10 +4767,12 @@ describe("FeaturesView build action", () => {
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
     await waitFor(() => expect(startBuildMock).toHaveBeenCalledTimes(1));
-    expect(updateFeatureMock).not.toHaveBeenCalledWith(
-      "feature-1",
-      expect.objectContaining({ status: "building" }),
-    );
+    await waitFor(() => {
+      expect(useFeaturePlanStore.getState().features[0]?.status).toBe("stories");
+    });
+    expect(updateFeatureMock.mock.calls.at(-1)?.[1]).toMatchObject({
+      status: "stories",
+    });
   });
 
   test("omits the environment update when the pipeline has no environment id", async () => {
@@ -4785,7 +4809,10 @@ describe("FeaturesView build action", () => {
       expect.objectContaining({ id: "task-1" }),
       "local",
       "codex",
-      { existingEnvironmentId: undefined },
+      expect.objectContaining({
+        existingEnvironmentId: undefined,
+        onPipelineLinked: expect.any(Function),
+      }),
     ));
   });
 
@@ -4818,7 +4845,10 @@ describe("FeaturesView build action", () => {
       expect.objectContaining({ id: "task-1" }),
       "containerized",
       "codex",
-      { existingEnvironmentId: undefined },
+      expect.objectContaining({
+        existingEnvironmentId: undefined,
+        onPipelineLinked: expect.any(Function),
+      }),
     ));
   });
 
@@ -4844,7 +4874,11 @@ describe("FeaturesView build action", () => {
   test("reports feature-state persistence failure after a healthy pipeline", async () => {
     seedStores(featureWithStories());
     seedPipeline();
-    updateFeatureMock.mockImplementationOnce(async () => undefined);
+    updateFeatureMock
+      .mockImplementationOnce(async (featureId, updates) =>
+        updateFeatureInStore(featureId, updates)
+      )
+      .mockImplementationOnce(async () => undefined);
     render(<FeaturesView projectId="project-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));

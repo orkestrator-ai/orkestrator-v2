@@ -19,6 +19,11 @@ import {
 } from "@/lib/claude-client";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import {
+  claudePlanApprovalDraftKey,
+  claudeQuestionDraftKey,
+  usePromptDraftStore,
+} from "./promptDraftStore";
+import {
   buildClearEnvironmentPatch,
   buildClearSessionPatch,
   createEventSubscriptionSlice,
@@ -450,6 +455,10 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       teardownEventSubscription(subscription);
     }
 
+    // Draft keys for the requests the sweep below removes; cleared after the
+    // set so the store update itself stays a pure state computation.
+    const sweptDraftKeys: string[] = [];
+
     set((state) => {
       const prefix = sessionKeyPrefixFor(environmentId);
 
@@ -466,11 +475,13 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       for (const [requestId, question] of nextPendingQuestions) {
         if (sessionIdsToCleanup.has(question.sessionId)) {
           nextPendingQuestions.delete(requestId);
+          sweptDraftKeys.push(claudeQuestionDraftKey(requestId));
         }
       }
       for (const [requestId, approval] of nextPendingPlanApprovals) {
         if (sessionIdsToCleanup.has(approval.sessionId)) {
           nextPendingPlanApprovals.delete(requestId);
+          sweptDraftKeys.push(claudePlanApprovalDraftKey(requestId));
         }
       }
 
@@ -490,9 +501,12 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
         pendingPlanApprovals: nextPendingPlanApprovals,
       };
     });
+
+    usePromptDraftStore.getState().clearDrafts(sweptDraftKeys);
   },
 
   clearSession: (sessionKey) => {
+    const sweptDraftKeys: string[] = [];
     set((state) => {
       const session = state.sessions.get(sessionKey);
       const patch = buildClearSessionPatch(
@@ -508,16 +522,19 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       for (const [requestId, question] of pendingQuestions) {
         if (question.sessionId === session.sessionId) {
           pendingQuestions.delete(requestId);
+          sweptDraftKeys.push(claudeQuestionDraftKey(requestId));
         }
       }
       const pendingPlanApprovals = new Map(state.pendingPlanApprovals);
       for (const [requestId, approval] of pendingPlanApprovals) {
         if (approval.sessionId === session.sessionId) {
           pendingPlanApprovals.delete(requestId);
+          sweptDraftKeys.push(claudePlanApprovalDraftKey(requestId));
         }
       }
       return { ...patch, pendingQuestions, pendingPlanApprovals };
     });
+    usePromptDraftStore.getState().clearDrafts(sweptDraftKeys);
   },
 
   addPendingQuestion: (question) =>
@@ -527,12 +544,17 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       return { pendingQuestions: next };
     }),
 
-  removePendingQuestion: (requestId) =>
+  removePendingQuestion: (requestId) => {
     set((state) => {
       const next = new Map(state.pendingQuestions);
       next.delete(requestId);
       return { pendingQuestions: next };
-    }),
+    });
+    // The request is resolved (answered, dismissed, or withdrawn), so the
+    // in-progress answer draft must not survive to a future request that
+    // happens to reuse this id.
+    usePromptDraftStore.getState().clearDraft(claudeQuestionDraftKey(requestId));
+  },
 
   addPendingPlanApproval: (approval) =>
     set((state) => {
@@ -541,12 +563,17 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       return { pendingPlanApprovals: next };
     }),
 
-  removePendingPlanApproval: (requestId) =>
+  removePendingPlanApproval: (requestId) => {
     set((state) => {
       const next = new Map(state.pendingPlanApprovals);
       next.delete(requestId);
       return { pendingPlanApprovals: next };
-    }),
+    });
+    // See removePendingQuestion: resolved requests drop their feedback draft.
+    usePromptDraftStore
+      .getState()
+      .clearDraft(claudePlanApprovalDraftKey(requestId));
+  },
 
   // Selectors
   getSelectedModel: (sessionKey) => get().selectedModel.get(sessionKey),

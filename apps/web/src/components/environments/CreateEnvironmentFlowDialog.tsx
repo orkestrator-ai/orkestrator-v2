@@ -112,6 +112,7 @@ export function CreateEnvironmentFlowDialog({
         options.launchAgent,
         options.launchAgent ? options.model : undefined,
         options.launchAgent ? options.reasoningEffort : undefined,
+        options.launchAgent ? options.initialPromptAttachments : undefined,
       );
       updateEnvironment(environment.id, configuredEnvironment);
 

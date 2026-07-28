@@ -464,8 +464,7 @@ function resetStores() {
   });
 
   usePrMonitorStore.setState({
-    monitoredEnvironments: {},
-    activeEnvironmentId: null,
+    states: new Map(),
   });
 }
 

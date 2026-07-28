@@ -47,6 +47,7 @@ import {
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { LoopedReviewSupervisor } from "@/components/review/LoopedReviewSupervisor";
+import { BuildPipelineSupervisor } from "@/components/build-pipeline/BuildPipelineSupervisor";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
@@ -566,7 +567,9 @@ function App() {
           launchAgent: true,
           agentType: existingOptions?.agentType ?? environment?.defaultAgent ?? config.global.defaultAgent ?? "claude",
           initialPrompt: launchPrompt,
-          initialPromptAttachments: existingOptions?.initialPromptAttachments,
+          initialPromptAttachments:
+            existingOptions?.initialPromptAttachments
+            ?? environment?.initialPromptAttachments,
         });
       } else if (existingOptions?.initialPrompt?.trim()) {
         clearClaudeOptions(environmentId);
@@ -612,6 +615,7 @@ function App() {
       <TerminalProvider>
         <AppShell>
           <LoopedReviewSupervisor />
+          <BuildPipelineSupervisor />
           <LinearPipelineCompletionMonitor />
           <GitHubPipelineCompletionMonitor />
           {selectedEnvironment ? (

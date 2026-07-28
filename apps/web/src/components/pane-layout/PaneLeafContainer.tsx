@@ -154,6 +154,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
               <FileViewerTab
                 key={tab.id}
                 tabId={tab.id}
+                environmentId={environmentId}
                 filePath={tab.fileData.filePath}
                 containerId={tab.fileData.containerId}
                 worktreePath={tab.fileData.worktreePath}

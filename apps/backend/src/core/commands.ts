@@ -29,6 +29,16 @@ import {
   type EnvironmentDiffStatsSnapshot,
 } from "@orkestrator/protocol/diff-stats";
 import { DiffStatsService } from "./diff-stats-service.js";
+import {
+  PrMonitorService,
+  type PrDetection,
+  type PrMonitorKanbanTask,
+  type PrMonitorTarget,
+} from "./pr-monitor.js";
+import {
+  isPrMonitorMode,
+  type PrMonitorSnapshot,
+} from "@orkestrator/protocol/pr-monitor";
 import { GitFetchScheduler } from "./git-fetch-scheduler.js";
 import { spawnPty, type PtyProcess } from "./pty.js";
 import {
@@ -152,6 +162,7 @@ const CODEX_BRIDGE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const localServerEnvironmentOperations = new Map<string, Promise<void>>();
 const containerCodexOperations = new Map<string, Promise<void>>();
 const deletingLocalServerEnvironments = new Set<string>();
+const mergingEnvironments = new Set<string>();
 type LocalServerKind = "opencode" | "claude" | "codex";
 const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = ["opencode", "claude", "codex"];
 // Codex bridge shutdown can spend five seconds draining app-server before its
@@ -490,6 +501,201 @@ async function syncDiffStatsTracking(context: CommandContext): Promise<void> {
 export function shutdownDiffStatsTracking(): void {
   invalidatePendingDiffStatsSync();
   diffStatsService.shutdown();
+}
+
+/**
+ * PR monitoring composition root. Same shape as the diff-stats block above: the
+ * service is module-level state, `emit` and `storage` arrive with the first
+ * command context, and tracking is reconciled against storage rather than
+ * patched so every lifecycle path converges on the same monitored set.
+ */
+let prMonitorEmit: BackendEmit | undefined;
+let prMonitorStorage: StorageService | undefined;
+let prMonitorSyncGeneration = 0;
+let prMonitorSyncQueue: Promise<void> = Promise.resolve();
+
+function requirePrMonitorStorage(): StorageService {
+  if (!prMonitorStorage) throw new Error("PR monitor storage is not initialised");
+  return prMonitorStorage;
+}
+
+type StoredKanbanTask = Awaited<ReturnType<StorageService["getKanbanTasks"]>>[number];
+
+/**
+ * Finds the kanban task linked to an environment: directly via the task's
+ * `environmentId`, or through a persisted build pipeline for tasks launched by
+ * the build flow (which associates the pipeline, not the task, with the
+ * environment). Mirrors the renderer's `findTaskForEnvironment`.
+ */
+async function findKanbanTaskForEnvironment(
+  storage: StorageService,
+  environmentId: string,
+): Promise<PrMonitorKanbanTask | null> {
+  const environment = await storage.getEnvironment(environmentId);
+  if (!environment) return null;
+  const tasks = await storage.getKanbanTasks(environment.projectId);
+  let task: StoredKanbanTask | undefined = tasks.find(
+    (candidate) => candidate.environmentId === environmentId,
+  );
+  if (!task) {
+    const pipelines = await storage.listBuildPipelines(environment.projectId);
+    for (const pipeline of pipelines) {
+      if (pipeline.environmentId !== environmentId) continue;
+      const snapshot = pipeline.snapshot as Record<string, unknown> | null | undefined;
+      if (typeof snapshot?.taskId !== "string" || !snapshot.taskId) continue;
+      const source = snapshot.source as Record<string, unknown> | undefined;
+      if (source !== undefined && source?.type !== "kanban") continue;
+      task = tasks.find((candidate) => candidate.id === snapshot.taskId);
+      if (task) break;
+      // The pipeline knows the task id but the task body is not in this
+      // project's board (or was pruned); operate on the id alone.
+      return {
+        taskId: snapshot.taskId,
+        status: null,
+        prUrl: null,
+        prMergeCommented: false,
+        hasCommentText: () => false,
+      };
+    }
+  }
+  if (!task) return null;
+  const located = task;
+  return {
+    taskId: located.id,
+    status: located.status,
+    prUrl: located.prUrl ?? null,
+    prMergeCommented: located.prMergeCommented === true,
+    hasCommentText: (text) => located.comments.some((comment) => comment.text === text),
+  };
+}
+
+/** Runs the same `gh pr list --head` detection the one-shot commands use. */
+async function detectEnvironmentPullRequest(
+  target: PrMonitorTarget,
+): Promise<PrDetection | null> {
+  const headBranch = validatePrDetectionBranch(target.branch);
+  if (target.kind === "local") {
+    if (!target.worktreePath) throw new Error("Local environment has no worktree path");
+    const { stdout } = await runCommand("gh", [
+      "pr",
+      "list",
+      "--head",
+      headBranch,
+      "--state",
+      "all",
+      "--limit",
+      "30",
+      "--json",
+      "url,state,mergeable,updatedAt",
+    ], { cwd: target.worktreePath, timeoutMs: 30_000 });
+    return parsePrDetectionOutput(stdout, headBranch);
+  }
+  if (!target.containerId) throw new Error("Container environment has no container id");
+  const output = await dockerExec(
+    target.containerId,
+    `gh pr list --head ${quoteShell(headBranch)} --state all --limit 30 --json url,state,mergeable,updatedAt`,
+  );
+  return parsePrDetectionOutput(output, headBranch);
+}
+
+const prMonitorService = new PrMonitorService({
+  emit: (event, payload) => prMonitorEmit?.(event, payload),
+  effects: {
+    detect: (target) => detectEnvironmentPullRequest(target),
+    persistPr: async (environmentId, detection) => {
+      await requirePrMonitorStorage().updateEnvironment(environmentId, {
+        prUrl: detection.url,
+        prState: detection.state,
+        hasMergeConflicts: detection.hasMergeConflicts,
+      });
+    },
+    clearPr: async (environmentId) => {
+      await requirePrMonitorStorage().updateEnvironment(environmentId, {
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+      });
+    },
+    findTaskForEnvironment: (environmentId) =>
+      findKanbanTaskForEnvironment(requirePrMonitorStorage(), environmentId),
+    moveTaskToReview: async (taskId) => {
+      await requirePrMonitorStorage().updateKanbanTask(taskId, { status: "review" });
+    },
+    addTaskComment: async (taskId, text) => {
+      await requirePrMonitorStorage().addKanbanComment(taskId, text);
+    },
+    updateTaskPrMetadata: async (taskId, updates) => {
+      await requirePrMonitorStorage().updateKanbanTask(taskId, updates);
+    },
+  },
+  onWarning: (message, error) => {
+    console.warn(`[pr-monitor] ${message}:`, error instanceof Error ? error.message : error);
+  },
+});
+
+function environmentToPrMonitorTarget(environment: Environment): PrMonitorTarget {
+  const kind = environment.environmentType === "local" ? "local" as const : "container" as const;
+  return {
+    environmentId: environment.id,
+    branch: environment.branch,
+    kind,
+    worktreePath: environment.worktreePath,
+    containerId: environment.containerId ?? undefined,
+    ready: kind === "local"
+      ? !!environment.worktreePath
+      : environment.status === "running" && !!environment.containerId,
+    prUrl: environment.prUrl ?? null,
+    prState: environment.prState ?? null,
+    hasMergeConflicts: environment.hasMergeConflicts ?? null,
+  };
+}
+
+function invalidatePendingPrMonitorSync(): void {
+  prMonitorSyncGeneration += 1;
+}
+
+async function syncPrMonitorTracking(context: CommandContext): Promise<void> {
+  prMonitorEmit = context.emit;
+  prMonitorStorage = context.storage;
+  const generation = prMonitorSyncGeneration;
+  const operation = prMonitorSyncQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const environments = await context.storage.loadEnvironments();
+      // A stop, delete, shutdown, or newer reconciliation may have happened
+      // while storage was loading; applying this older snapshot would recreate
+      // a poller the later lifecycle action deliberately removed.
+      if (generation !== prMonitorSyncGeneration) return;
+      prMonitorService.sync(environments.map(environmentToPrMonitorTarget));
+    });
+  prMonitorSyncQueue = operation;
+  await operation;
+}
+
+/**
+ * One-shot discovery when an agent goes idle: it may have just created a PR
+ * the backend knows nothing about. Fire-and-forget by design — the activity
+ * command that triggers it must not fail because GitHub is slow.
+ */
+function probePrMonitorEnvironment(environmentId: string, context: CommandContext): void {
+  prMonitorEmit = context.emit;
+  prMonitorStorage = context.storage;
+  void (async () => {
+    const environment = await context.storage.getEnvironment(environmentId);
+    if (!environment) return;
+    prMonitorService.probe(environmentToPrMonitorTarget(environment));
+  })().catch((error) => {
+    console.warn(
+      `[pr-monitor] Failed to probe environment ${environmentId}:`,
+      error instanceof Error ? error.message : error,
+    );
+  });
+}
+
+/** Releases every PR polling timer; called on backend shutdown. */
+export function shutdownPrMonitorTracking(): void {
+  invalidatePendingPrMonitorSync();
+  prMonitorService.shutdown();
 }
 
 /** Untracked files whose lines are counted at once during a local git status. */
@@ -2804,6 +3010,7 @@ function clearPendingAgentLaunchUpdates(): Partial<Environment> {
     pendingAgentLaunch: false,
     initialAgentModel: undefined,
     initialReasoningEffort: undefined,
+    initialPromptAttachments: undefined,
   };
 }
 
@@ -3602,6 +3809,8 @@ async function deleteEnvironment(
       // rejected even if cleanup pauses or fails.
       await storage.updateEnvironment(environmentId, {
         deletionRequestedAt: new Date().toISOString(),
+        lifecycleOperation: "deleting",
+        lifecycleOperationStartedAt: new Date().toISOString(),
       });
       if (environment) await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
       if (environment?.containerId) {
@@ -3628,6 +3837,8 @@ async function deleteEnvironment(
       );
       // Queued prompts for a deleted environment can never be dispatched.
       await storage.deletePromptQueuesByEnvironment(environmentId);
+      await storage.deleteComposeDraftsByEnvironment(environmentId);
+      await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);
       await storage.removeEnvironment(environmentId);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);
@@ -3636,6 +3847,10 @@ async function deleteEnvironment(
       // discarding is right: the worktree they described is gone.
       invalidatePendingDiffStatsSync();
       diffStatsService.untrack(environmentId);
+      // The PR belonged to a branch whose environment is gone; polling it would
+      // resurrect state for an id no client can display.
+      invalidatePendingPrMonitorSync();
+      prMonitorService.untrack(environmentId);
       if (environment?.worktreePath) gitFetchScheduler.forget(environment.worktreePath);
     });
   } finally {
@@ -5236,6 +5451,18 @@ export function createCommandRegistry(
     const synced = await Promise.all(
       environments.map((environment) => syncStoredEnvironmentStatus(environment, storage)),
     );
+    for (let index = 0; index < synced.length; index += 1) {
+      const environment = synced[index]!;
+      if (
+        environment.lifecycleOperation === "merging"
+        && !mergingEnvironments.has(environment.id)
+      ) {
+        synced[index] = await storage.updateEnvironment(environment.id, {
+          lifecycleOperation: null,
+          lifecycleOperationStartedAt: null,
+        });
+      }
+    }
     // Rehydration is also the recovery path after a backend restart. If startup
     // completed before the process exited, resume any persisted rename intent
     // without requiring the user to stop and start the environment again.
@@ -5409,6 +5636,10 @@ export function createCommandRegistry(
       // disk, it just cannot be read until the container is back.
       invalidatePendingDiffStatsSync();
       diffStatsService.pause(environment.id);
+      // A stopped container cannot run `gh`; keep the last persisted PR
+      // reading and stop polling until the container is back.
+      invalidatePendingPrMonitorSync();
+      prMonitorService.pause(environment.id);
       return;
     }
 
@@ -5444,12 +5675,17 @@ export function createCommandRegistry(
     await context.storage.updateEnvironment(environment.id, { containerId: null, status: "stopped" });
     return commands.get("start_environment")?.({ environmentId }, context);
   });
-  register("set_environment_pr", ({ environmentId, prUrl, prState, hasMergeConflicts }, { storage }) =>
-    storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: asString(prUrl, "prUrl"), prState, hasMergeConflicts }),
-  );
-  register("clear_environment_pr", ({ environmentId }, { storage }) =>
-    storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: null, prState: null, hasMergeConflicts: null }).then(() => undefined),
-  );
+  register("set_environment_pr", async ({ environmentId, prUrl, prState, hasMergeConflicts }, context) => {
+    const updated = await context.storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: asString(prUrl, "prUrl"), prState, hasMergeConflicts });
+    // A PR recorded outside the monitor (e.g. right after a merge command) must
+    // enter the monitored set without waiting for a client to rehydrate.
+    void syncPrMonitorTracking(context).catch(() => undefined);
+    return updated;
+  });
+  register("clear_environment_pr", async ({ environmentId }, context) => {
+    await context.storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: null, prState: null, hasMergeConflicts: null });
+    void syncPrMonitorTracking(context).catch(() => undefined);
+  });
   register("get_environment_pr_url", async ({ environmentId }, { storage }) => (await storage.getEnvironment(asString(environmentId, "environmentId")))?.prUrl ?? null);
   register("record_environment_activity", async ({ environmentId, occurredAt }, { storage }) => {
     const id = asString(environmentId, "environmentId");
@@ -5461,7 +5697,7 @@ export function createCommandRegistry(
     state,
     occurredAt,
     observerId,
-  }, { storage }) => {
+  }, context) => {
     const activityState = asString(state, "state");
     if (
       activityState !== "idle"
@@ -5470,7 +5706,7 @@ export function createCommandRegistry(
     ) {
       throw new Error("state must be idle, working, or waiting");
     }
-    return storage.setEnvironmentAgentActivity(
+    const environment = await context.storage.setEnvironmentAgentActivity(
       asString(environmentId, "environmentId"),
       activityState,
       asString(occurredAt, "occurredAt"),
@@ -5479,6 +5715,12 @@ export function createCommandRegistry(
         ? undefined
         : asString(observerId, "observerId"),
     );
+    // An agent that just went idle may have created or merged a PR the backend
+    // has not seen yet; probe once rather than keep a standing poller.
+    if (activityState === "idle") {
+      probePrMonitorEnvironment(asString(environmentId, "environmentId"), context);
+    }
+    return environment;
   });
   register("record_environment_completion", async ({ environmentId, occurredAt }, { storage }) => {
     const id = asString(environmentId, "environmentId");
@@ -5563,6 +5805,7 @@ export function createCommandRegistry(
     pendingAgentLaunch,
     initialAgentModel,
     initialReasoningEffort,
+    initialPromptAttachments,
   }, { storage }) => {
     const updates = {
       defaultAgent,
@@ -5584,6 +5827,10 @@ export function createCommandRegistry(
     if (pendingAgentLaunch !== false && typeof initialReasoningEffort === "string") {
       updates.initialReasoningEffort = initialReasoningEffort;
     }
+    if (pendingAgentLaunch !== false && Array.isArray(initialPromptAttachments)) {
+      updates.initialPromptAttachments =
+        initialPromptAttachments as Environment["initialPromptAttachments"];
+    }
     return storage.updateEnvironment(asString(environmentId, "environmentId"), updates);
   });
   register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) => {
@@ -5598,9 +5845,10 @@ export function createCommandRegistry(
   // dialog's attachments and knows their in-workspace paths. Persisting that
   // rewritten text is what lets a post-eviction launch recover a prompt whose
   // attachment references still resolve.
-  register("set_environment_initial_prompt", ({ environmentId, initialPrompt }, { storage }) =>
+  register("set_environment_initial_prompt", ({ environmentId, initialPrompt, initialPromptAttachments }, { storage }) =>
     storage.updateEnvironment(asString(environmentId, "environmentId"), {
       initialPrompt: asString(initialPrompt, "initialPrompt"),
+      ...(Array.isArray(initialPromptAttachments) ? { initialPromptAttachments } : {}),
     }),
   );
   register("get_environment_extensions", async ({ environmentId, refresh }, context) => {
@@ -6122,6 +6370,48 @@ export function createCommandRegistry(
         candidateMessages as unknown[],
       ),
   );
+  register("get_compose_draft", ({ draftKey }, { storage }) =>
+    storage.getComposeDraft(asString(draftKey, "draftKey")),
+  );
+  register("list_compose_drafts", ({ ownerType, ownerId }, { storage }) =>
+    storage.listComposeDrafts(
+      asString(ownerType, "ownerType") as "environment" | "project",
+      asString(ownerId, "ownerId"),
+    ),
+  );
+  register(
+    "save_compose_draft",
+    ({ draftKey, ownerType, ownerId, value, expectedRevision }, { storage }) =>
+      storage.saveComposeDraft(
+        asString(draftKey, "draftKey"),
+        asString(ownerType, "ownerType") as "environment" | "project",
+        asString(ownerId, "ownerId"),
+        value,
+        expectedRevision === undefined
+          ? undefined
+          : asNumber(expectedRevision, "expectedRevision"),
+      ),
+  );
+  register("delete_compose_draft", ({ draftKey }, { storage }) =>
+    storage.deleteComposeDraft(asString(draftKey, "draftKey")),
+  );
+  register("get_file_draft", ({ draftKey }, { storage }) =>
+    storage.getFileDraft(asString(draftKey, "draftKey")),
+  );
+  register(
+    "save_file_draft",
+    ({ draftKey, environmentId, filePath, content, originalContent }, { storage }) =>
+      storage.saveFileDraft(
+        asString(draftKey, "draftKey"),
+        asString(environmentId, "environmentId"),
+        asString(filePath, "filePath"),
+        asString(content, "content"),
+        asString(originalContent, "originalContent"),
+      ),
+  );
+  register("delete_file_draft", ({ draftKey }, { storage }) =>
+    storage.deleteFileDraft(asString(draftKey, "draftKey")),
+  );
   register("get_agent_handoff", ({ handoffId }, { storage }) =>
     storage.getAgentHandoff(asString(handoffId, "handoffId")),
   );
@@ -6532,21 +6822,97 @@ export function createCommandRegistry(
     return parsePrDetectionOutput(output, headBranch);
   });
   register("merge_pr_local", async ({ environmentId, method, deleteBranch }, { storage }) => {
-    const env = await storage.getEnvironment(asString(environmentId, "environmentId"));
+    const id = asString(environmentId, "environmentId");
+    const env = await storage.getEnvironment(id);
     if (!env?.worktreePath) throw new Error("Local environment worktree is not available");
     if (!env.prUrl) throw new Error("Local environment PR URL is not available");
-    return mergePullRequestViaGitHubApi(
-      env.prUrl,
-      parseMergeMethod(method),
-      asBoolean(deleteBranch, true),
-      env.worktreePath,
-    );
+    if (mergingEnvironments.has(id)) throw new Error(`Environment is already being merged: ${id}`);
+    mergingEnvironments.add(id);
+    await storage.updateEnvironment(id, {
+      lifecycleOperation: "merging",
+      lifecycleOperationStartedAt: new Date().toISOString(),
+    });
+    try {
+      return await mergePullRequestViaGitHubApi(
+        env.prUrl,
+        parseMergeMethod(method),
+        asBoolean(deleteBranch, true),
+        env.worktreePath,
+      );
+    } finally {
+      mergingEnvironments.delete(id);
+      await storage.updateEnvironment(id, {
+        lifecycleOperation: null,
+        lifecycleOperationStartedAt: null,
+      }).catch(() => undefined);
+    }
   });
-  register("merge_pr", ({ containerId, method, deleteBranch }) => mergePullRequestInContainer(
-    asString(containerId, "containerId"),
-    parseMergeMethod(method),
-    asBoolean(deleteBranch, true),
-  ));
+  register("merge_pr", async ({ containerId, method, deleteBranch }, { storage }) => {
+    const resolvedContainerId = asString(containerId, "containerId");
+    const environment = findEnvironmentByContainerId(
+      await storage.loadEnvironments(),
+      resolvedContainerId,
+    );
+    if (environment && mergingEnvironments.has(environment.id)) {
+      throw new Error(`Environment is already being merged: ${environment.id}`);
+    }
+    if (environment) {
+      mergingEnvironments.add(environment.id);
+      await storage.updateEnvironment(environment.id, {
+        lifecycleOperation: "merging",
+        lifecycleOperationStartedAt: new Date().toISOString(),
+      });
+    }
+    try {
+      return await mergePullRequestInContainer(
+        resolvedContainerId,
+        parseMergeMethod(method),
+        asBoolean(deleteBranch, true),
+      );
+    } finally {
+      if (environment) {
+        mergingEnvironments.delete(environment.id);
+        await storage.updateEnvironment(environment.id, {
+          lifecycleOperation: null,
+          lifecycleOperationStartedAt: null,
+        }).catch(() => undefined);
+      }
+    }
+  });
+
+  /**
+   * Authoritative PR-monitor snapshot.
+   *
+   * A client that mounts, remounts, or reconnects reads this rather than trying
+   * to reconstruct state from the events it happened to be listening for. It
+   * also arms tracking, so the first client to ask starts the polling even if
+   * no lifecycle command has run since the backend started.
+   */
+  register("get_pr_monitor_state", async (_args, context) => {
+    await syncPrMonitorTracking(context);
+    return { entries: prMonitorService.snapshot() } satisfies PrMonitorSnapshot;
+  });
+  /**
+   * A client pressed "Create PR" or "Merge": poll this environment faster until
+   * the outcome is visible. Durable in the backend, so a renderer reload no
+   * longer forgets that an answer is being waited for.
+   */
+  register("pr_monitor_watch", async ({ environmentId, mode }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const requestedMode = asString(mode, "mode");
+    if (!isPrMonitorMode(requestedMode)) {
+      throw new Error("mode must be normal, create-pending, or merge-pending");
+    }
+    await syncPrMonitorTracking(context);
+    const environment = await context.storage.getEnvironment(id);
+    if (!environment) throw new Error(`Environment not found: ${id}`);
+    prMonitorService.requestMode(environmentToPrMonitorTarget(environment), requestedMode);
+  });
+  /** Requests an immediate check for an environment already being monitored. */
+  register("pr_monitor_refresh", async ({ environmentId }, context) => {
+    await syncPrMonitorTracking(context);
+    prMonitorService.requestCheck(asString(environmentId, "environmentId"));
+  });
 
   register("start_local_opencode_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "opencode"));
   register("stop_local_opencode_server_cmd", ({ environmentId }, context) => stopLocalServer(asString(environmentId, "environmentId"), context, "opencode"));
@@ -6665,6 +7031,7 @@ export const __testing = {
     localServerProcesses.clear();
     localCodexBridgeTokens.clear();
     deletingLocalServerEnvironments.clear();
+    mergingEnvironments.clear();
     localServerShutdownRequested = false;
     localServerShutdownPromise = null;
     terminateProcessTreeImpl = terminateProcessTree;

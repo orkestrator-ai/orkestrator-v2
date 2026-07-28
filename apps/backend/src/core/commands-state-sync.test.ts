@@ -3,7 +3,12 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { createCommandRegistry, type CommandContext } from "./commands.js";
+import { isPrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
+import {
+  createCommandRegistry,
+  shutdownPrMonitorTracking,
+  type CommandContext,
+} from "./commands.js";
 import { StorageService } from "./storage.js";
 import { ClaudeStatePollManager } from "./tmux.js";
 
@@ -648,6 +653,85 @@ describe("set_environment_unread", () => {
       await expect(invoke("record_environment_completion", {
         environmentId: "e1", occurredAt: "2026-01-01T00:00:00.000Z",
       })).resolves.toMatchObject({ lastActivityAt: newest, hasUnreadWork: false });
+    });
+  });
+});
+
+describe("pr monitor commands", () => {
+  // The module-level PR monitor service outlives each temporary storage
+  // directory; dropping its entries keeps one test's watch requests (and any
+  // scheduled polls) from leaking into the next.
+  test("pr_monitor_watch validates its arguments", async () => {
+    await withCommands(async (invoke) => {
+      try {
+        await expect(invoke("pr_monitor_watch", {
+          environmentId: "e1", mode: "idle",
+        })).rejects.toThrow("mode must be normal, create-pending, or merge-pending");
+        await expect(invoke("pr_monitor_watch", {
+          environmentId: 42, mode: "merge-pending",
+        })).rejects.toThrow("Expected environmentId to be a string");
+        await expect(invoke("pr_monitor_watch", {
+          environmentId: "missing", mode: "merge-pending",
+        })).rejects.toThrow("Environment not found: missing");
+      } finally {
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
+  test("watch requests are durable in the authoritative snapshot", async () => {
+    await withCommands(async (invoke) => {
+      try {
+        const empty = await invoke("get_pr_monitor_state", {});
+        expect(isPrMonitorSnapshot(empty)).toBe(true);
+        expect((empty as { entries: unknown[] }).entries).toEqual([]);
+
+        await invoke("pr_monitor_watch", { environmentId: "e1", mode: "create-pending" });
+
+        // A later snapshot — the rehydration path a freshly mounted client
+        // uses — still carries the pending request; nothing about it lived in
+        // the client that asked.
+        const snapshot = await invoke("get_pr_monitor_state", {}) as {
+          entries: Array<Record<string, unknown>>;
+        };
+        expect(isPrMonitorSnapshot(snapshot)).toBe(true);
+        expect(snapshot.entries).toHaveLength(1);
+        expect(snapshot.entries[0]).toMatchObject({
+          environmentId: "e1",
+          mode: "create-pending",
+          prUrl: null,
+          consecutiveErrors: 0,
+        });
+
+        await expect(invoke("pr_monitor_refresh", { environmentId: "e1" })).resolves.toBeUndefined();
+      } finally {
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
+  test("snapshot reconciliation tracks environments with a stored PR", async () => {
+    await withCommands(async (invoke, storage) => {
+      try {
+        await storage.updateEnvironment("e1", {
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: false,
+        });
+
+        const snapshot = await invoke("get_pr_monitor_state", {}) as {
+          entries: Array<Record<string, unknown>>;
+        };
+        expect(snapshot.entries).toHaveLength(1);
+        expect(snapshot.entries[0]).toMatchObject({
+          environmentId: "e1",
+          mode: "normal",
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+        });
+      } finally {
+        shutdownPrMonitorTracking();
+      }
     });
   });
 });

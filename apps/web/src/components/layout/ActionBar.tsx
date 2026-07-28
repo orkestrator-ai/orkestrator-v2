@@ -229,10 +229,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const [runCommands, setRunCommands] = useState<string[] | null>(null);
   const [isLoadingRunCommands, setIsLoadingRunCommands] = useState(false);
   const [cleanupDialogOpen, setCleanupDialogOpen] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [deletingEnvironmentId, setDeletingEnvironmentId] = useState<string | null>(null);
   const [cleanupError, setCleanupError] = useState<string | null>(null);
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
-  const [isMerging, setIsMerging] = useState(false);
+  const [mergingEnvironmentId, setMergingEnvironmentId] = useState<string | null>(null);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [loopedReviewDialogOpen, setLoopedReviewDialogOpen] = useState(false);
@@ -254,6 +254,21 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     ? getProjectById(selectedProjectId)
     : null;
   const isProjectBoardView = !!selectedProject && !selectedEnvironment;
+  const isDeleting = Boolean(
+    selectedEnvironmentId
+    && (
+      deletingEnvironmentId === selectedEnvironmentId
+      || selectedEnvironment?.lifecycleOperation === "deleting"
+      || selectedEnvironment?.deletionRequestedAt
+    ),
+  );
+  const isMerging = Boolean(
+    selectedEnvironmentId
+    && (
+      mergingEnvironmentId === selectedEnvironmentId
+      || selectedEnvironment?.lifecycleOperation === "merging"
+    ),
+  );
 
   const repoName = selectedProject?.name ?? null;
   const isLocalEnvironment = selectedEnvironment?.environmentType === "local";
@@ -816,7 +831,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const handleCleanup = useCallback(async () => {
     if (!selectedEnvironmentId) return;
 
-    setIsDeleting(true);
+    const operationEnvironmentId = selectedEnvironmentId;
+    setDeletingEnvironmentId(operationEnvironmentId);
     setCleanupError(null);
     try {
       await deleteEnvironment(selectedEnvironmentId);
@@ -826,7 +842,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       const message = err instanceof Error ? err.message : "An unexpected error occurred";
       setCleanupError(message);
     } finally {
-      setIsDeleting(false);
+      setDeletingEnvironmentId((current) =>
+        current === operationEnvironmentId ? null : current
+      );
     }
   }, [selectedEnvironmentId, deleteEnvironment]);
 
@@ -840,7 +858,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
     // Close dialog immediately and show spinner on main button
     setMergeDialogOpen(false);
-    setIsMerging(true);
+    const operationEnvironmentId = selectedEnvironmentId;
+    setMergingEnvironmentId(operationEnvironmentId);
     setMergeError(null);
 
     try {
@@ -857,7 +876,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           id: `branch-merge-submitted-${selectedEnvironmentId}`,
         });
         setModeMergePending();
-        setIsMerging(false);
+        setMergingEnvironmentId((current) =>
+          current === operationEnvironmentId ? null : current
+        );
         return;
       }
 
@@ -896,7 +917,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       }
 
       // Clear the merging spinner
-      setIsMerging(false);
+      setMergingEnvironmentId((current) =>
+        current === operationEnvironmentId ? null : current
+      );
 
     } catch (err) {
       console.error("[ActionBar] Failed to merge PR:", err);
@@ -904,7 +927,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       const message = err instanceof Error ? err.message : typeof err === "string" ? err : "An unexpected error occurred";
       setMergeError(message);
       setMergeDialogOpen(true); // Re-open dialog to show error
-      setIsMerging(false);
+      setMergingEnvironmentId((current) =>
+        current === operationEnvironmentId ? null : current
+      );
     }
   }, [selectedEnvironment?.branch, selectedEnvironment?.containerId, selectedEnvironmentId, prUrl, isLocalEnvironment, setEnvironmentPR, setModeMergePending]);
 

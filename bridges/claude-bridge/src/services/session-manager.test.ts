@@ -299,6 +299,12 @@ mock.module("./plugin-config.js", () => ({
 // Import AFTER mocks are installed so session-manager picks them up.
 const sessionManager = await import("./session-manager.js");
 const { eventEmitter } = await import("./event-emitter.js");
+const { setClaudeHomeForTesting } = await import("./claude-home.js");
+const { readSessionPreferences } = await import("./session-preferences.js");
+const sessionManagerTestHome = await mkdtemp(
+  join(tmpdir(), "claude-session-manager-home-"),
+);
+setClaudeHomeForTesting(sessionManagerTestHome);
 import type {
   BackgroundTaskSnapshot,
   MessagePatchEventData,
@@ -339,6 +345,7 @@ const {
   rewindSessionFiles,
   stopBackgroundTask,
   getStructuredPromptDispatchState,
+  claimPromptDispatch,
 } = sessionManager;
 
 // ---------------------------------------------------------------------------
@@ -392,6 +399,7 @@ function track(id: string): string {
 }
 
 afterEach(() => {
+  setClaudeHomeForTesting(sessionManagerTestHome);
   // Clean up any sessions/abortable work the test created.
   for (const id of createdSessionIds.splice(0)) {
     deleteSession(id);
@@ -415,13 +423,15 @@ afterEach(() => {
   queryControlOverrides = {};
 });
 
-afterAll(() => {
+afterAll(async () => {
   // Restore the real mcp-config / plugin-config modules so other test files
   // in the same `bun test` run get the real implementations.
   mock.module("./mcp-config.js", () => mcpConfigSnapshot);
   mock.module("./plugin-config.js", () => pluginConfigSnapshot);
   mock.module("node:child_process", () => childProcessSnapshot);
   mock.module("node:fs", () => fsSnapshot);
+  setClaudeHomeForTesting(null);
+  await rm(sessionManagerTestHome, { recursive: true, force: true });
 });
 
 async function readSdkPrompt(call: QueryCall): Promise<unknown> {
@@ -553,6 +563,31 @@ describe("session lifecycle", () => {
     track(session.id);
     expect(getSessionMessages(session.id)).toEqual([]);
     expect(getSessionMessages("session-missing")).toEqual([]);
+  });
+
+  test("durably deduplicates stable prompt request ids", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-dispatch-journal-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("launch");
+      track(session.id);
+      const sdkSessionId = session.id.slice("session-".length);
+
+      expect(
+        await claimPromptDispatch(session.id, "initial-prompt:env-1:tab-1"),
+      ).toBe("claimed");
+      expect(
+        await claimPromptDispatch(session.id, "initial-prompt:env-1:tab-1"),
+      ).toBe("duplicate");
+      expect(
+        await readSessionPreferences(sdkSessionId),
+      ).toMatchObject({
+        dispatchedRequestIds: ["initial-prompt:env-1:tab-1"],
+      });
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

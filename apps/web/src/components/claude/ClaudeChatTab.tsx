@@ -8,6 +8,7 @@ import {
   type RefreshSessionOptions,
 } from "@/hooks/useManualSessionRefresh";
 import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
+import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { createUuid } from "@/lib/uuid";
@@ -45,6 +46,8 @@ import {
   type PlanApprovalRespondedEventData,
   type SystemMessageEventData,
   type ClaudeEffortLevel,
+  dismissPromptSuggestion,
+  updateSessionPreferences,
 } from "@/lib/claude-client";
 import {
   extractContextUsage,
@@ -168,7 +171,7 @@ export function ClaudeChatTab({
    */
   const backgroundRefreshSequenceRef = useRef(0);
   const resumeSequenceRef = useRef(0);
-  const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => Promise<void>) | null>(null);
+  const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean, requestId?: string) => Promise<void>) | null>(null);
 
   const {
     setClient,
@@ -246,6 +249,7 @@ export function ClaudeChatTab({
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
   const sessionKey = useMemo(() => createSessionKey(environmentId, tabId), [environmentId, tabId]);
+  useNativeComposeDraftPersistence("claude", environmentId, sessionKey, useClaudeStore);
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
@@ -342,6 +346,9 @@ export function ClaudeChatTab({
       ) {
         applyPromptSuggestion(key, serverSession.promptSuggestion);
       }
+      if (!invalidFields.has("planMode") && typeof serverSession.planMode === "boolean") {
+        setPlanMode(key, serverSession.planMode);
+      }
       if (invalidFields.has("backgroundTasks")) {
         // Preserve the last valid snapshot when only this optional wire field
         // was malformed.
@@ -354,7 +361,7 @@ export function ClaudeChatTab({
         }
       }
     },
-    [applyPromptSuggestion, setBackgroundTasks, setContextUsage],
+    [applyPromptSuggestion, setBackgroundTasks, setContextUsage, setPlanMode],
   );
   const showAddressAll = Boolean(
     isReviewTab &&
@@ -1129,6 +1136,7 @@ export function ClaudeChatTab({
               effort: effortLevel,
               permissionMode,
               fastMode: fastModeEnabled && modelSupportsFastMode,
+              requestId: `initial-prompt:${environmentId}:${tabId}`,
             });
 
             if (!success) {
@@ -1580,7 +1588,7 @@ export function ClaudeChatTab({
   startSharedEventSubscriptionRef.current = startSharedEventSubscription;
 
   const handleSend = useCallback(
-    async (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => {
+    async (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean, requestId?: string) => {
       if (!client || !session) return;
 
       const selectedModel = getSelectedModel(sessionKey);
@@ -1648,6 +1656,7 @@ export function ClaudeChatTab({
           .includesLocalSettings(sessionKey),
         promptSuggestions:
           useClaudeStore.getState().promptSuggestionOptIn.get(sessionKey) === true,
+        requestId,
       });
 
       if (!success) {
@@ -1720,6 +1729,14 @@ export function ClaudeChatTab({
     }
   }, [client, session, sessionKey, promoteNextQueuedPromptToDraft, setSessionLoading, addMessage]);
 
+  const handlePlanModeChange = useCallback((enabled: boolean) => {
+    if (!client || !session) return;
+    void updateSessionPreferences(client, session.sessionId, { planMode: enabled })
+      .catch((error) => {
+        console.warn("[ClaudeChatTab] Failed to persist plan mode:", error);
+      });
+  }, [client, session]);
+
   useEscapeToStop({
     isActive,
     isLoading: session?.isLoading ?? false,
@@ -1753,7 +1770,14 @@ export function ClaudeChatTab({
       // Also clear the initialPrompt from the pane store to prevent re-submission on remount
       clearTabInitialPrompt(tabId, environmentId);
       console.debug("[ClaudeChatTab] Sending initial prompt on reconnection for tab:", tabId);
-      handleSendRef.current?.(launchPrompt, [], effortValue, planModeEnabledValue, fastModeEnabledValue);
+      handleSendRef.current?.(
+        launchPrompt,
+        [],
+        effortValue,
+        planModeEnabledValue,
+        fastModeEnabledValue,
+        `initial-prompt:${environmentId}:${tabId}`,
+      );
     }
   }, [connectionState, client, session, handoff.ready, launchPrompt, setupPending, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
 
@@ -2037,6 +2061,11 @@ export function ClaudeChatTab({
               );
               store.setDismissedPromptSuggestion(sessionKey, promptSuggestion);
               setPromptSuggestion(sessionKey, undefined);
+              if (client && session?.sessionId) {
+                void dismissPromptSuggestion(client, session.sessionId).catch((error) => {
+                  console.warn("[ClaudeChatTab] Failed to dismiss prompt suggestion:", error);
+                });
+              }
             }}
             className="max-w-[min(70vw,34rem)] truncate rounded-full border border-border/60 bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground"
             title={promptSuggestion}
@@ -2080,6 +2109,7 @@ export function ClaudeChatTab({
           queueLength={queueLength}
           onStop={handleStop}
           onQueue={handleQueue}
+          onPlanModeChange={handlePlanModeChange}
           showAddressAll={showAddressAll}
           layout={centerCompose ? "centered" : "bottom"}
         />

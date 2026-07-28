@@ -6,6 +6,11 @@ import { useConfigStore, useFileDirtyStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { useFileSave } from "@/hooks/useFileSave";
 import { MarkdownEditorTab } from "@/components/markdown/MarkdownEditorTab";
+import {
+  discardFileDraft,
+  fileDraftKey,
+  persistFileDraft,
+} from "@/lib/file-draft-persistence";
 import { DiffViewerTab } from "./DiffViewerTab";
 import { MonacoFileEditor } from "./MonacoFileEditor";
 import type { GitFileStatus } from "@/types/paneLayout";
@@ -72,6 +77,8 @@ function getImageMimeType(filePath: string): string | undefined {
 
 interface FileViewerTabProps {
   tabId: string;
+  /** Owning environment; required by production callers for draft recovery. */
+  environmentId?: string;
   filePath: string;
   /** Container ID (for containerized environments) */
   containerId?: string;
@@ -89,6 +96,7 @@ interface FileViewerTabProps {
 
 export function FileViewerTab({
   tabId,
+  environmentId,
   filePath,
   containerId,
   worktreePath,
@@ -118,10 +126,12 @@ export function FileViewerTab({
   );
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [draftHydrated, setDraftHydrated] = useState(false);
   // Dirty file tracking
   const setOriginalContent = useFileDirtyStore((state) => state.setOriginalContent);
   const setDirtyContent = useFileDirtyStore((state) => state.setContent);
-  const clearDirty = useFileDirtyStore((state) => state.clearDirty);
+  const hydrateDraft = useFileDirtyStore((state) => state.hydrateDraft);
+  const dirtyEntry = useFileDirtyStore((state) => state.dirtyFiles.get(tabId));
   const dirtyContent = useFileDirtyStore(
     (state) => state.dirtyFiles.get(tabId)?.content,
   );
@@ -140,12 +150,9 @@ export function FileViewerTab({
     isLocalEnvironment,
   });
 
-  // Clean up dirty state when tab is unmounted
-  useEffect(() => {
-    return () => {
-      clearDirty(tabId);
-    };
-  }, [tabId, clearDirty]);
+  // An environment switch commonly unmounts this component while the tab and
+  // its editor buffer are still real. Do not clear on unmount; explicit tab
+  // closure owns discarding the buffer.
 
   // Reset showDiff when isDiff prop changes (e.g., when switching tabs)
   useEffect(() => {
@@ -163,6 +170,7 @@ export function FileViewerTab({
 
     async function loadFile() {
       setIsLoading(true);
+      setDraftHydrated(false);
       setError(null);
       setContent(null);
       setImageDataUrl(null);
@@ -202,8 +210,28 @@ export function FileViewerTab({
           if (!cancelled) {
             setContent(fileContent.content);
             setDetectedLanguage(fileContent.language || language || "plaintext");
-            // Set original content for dirty tracking
-            setOriginalContent(tabId, fileContent.content);
+            const persistedDraft = environmentId
+              ? await backend.getFileDraft(fileDraftKey(environmentId, filePath))
+                  .catch((draftError) => {
+                    console.warn("[FileViewerTab] Failed to restore file draft:", draftError);
+                    return null;
+                  })
+              : null;
+            if (cancelled) return;
+            if (
+              persistedDraft
+              && persistedDraft.environmentId === environmentId
+              && persistedDraft.filePath === filePath
+            ) {
+              // Disk may have changed while the app was closed. Preserve the
+              // user's buffer but compare it with the current disk content so
+              // the editor never silently treats an externally changed file as
+              // saved.
+              hydrateDraft(tabId, persistedDraft.content, fileContent.content);
+            } else {
+              setOriginalContent(tabId, fileContent.content);
+            }
+            setDraftHydrated(true);
           }
         }
       } catch (err) {
@@ -222,7 +250,35 @@ export function FileViewerTab({
       cancelled = true;
     };
   // Note: isImage is derived from filePath, so it doesn't need to be in the dependency array
-  }, [containerId, worktreePath, isLocalEnvironment, filePath, language, showDiff, tabId, setOriginalContent]);
+  }, [containerId, worktreePath, isLocalEnvironment, filePath, language, showDiff, tabId, environmentId, hydrateDraft, setOriginalContent]);
+
+  // Write through after a short debounce. The persistence helper serializes
+  // save/delete operations per file, preventing an older in-flight save from
+  // resurrecting a draft after the user saves or discards it.
+  useEffect(() => {
+    if (!environmentId || isImage || !draftHydrated || !dirtyEntry) return;
+    const timer = setTimeout(() => {
+      const operation = dirtyEntry.content !== dirtyEntry.originalContent
+        ? persistFileDraft(
+            environmentId,
+            filePath,
+            dirtyEntry.content,
+            dirtyEntry.originalContent,
+          )
+        : discardFileDraft(environmentId, filePath);
+      void operation.catch((draftError) => {
+        console.warn("[FileViewerTab] Failed to persist file draft:", draftError);
+      });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [
+    dirtyEntry?.content,
+    dirtyEntry?.originalContent,
+    draftHydrated,
+    environmentId,
+    filePath,
+    isImage,
+  ]);
 
   // If in diff mode and we have the required data, render DiffViewerTab
   // Image files can't be diffed in Monaco, so they fall through to the image preview

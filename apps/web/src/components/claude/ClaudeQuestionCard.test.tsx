@@ -32,6 +32,10 @@ afterAll(() => {
 
 import { ClaudeQuestionCard } from "./ClaudeQuestionCard";
 import type { ClaudeClient, ClaudeQuestionRequest } from "@/lib/claude-client";
+import {
+  claudeQuestionDraftKey,
+  usePromptDraftStore,
+} from "@/stores/promptDraftStore";
 
 const client = { baseUrl: "http://127.0.0.1:9999" } as ClaudeClient;
 
@@ -110,6 +114,10 @@ afterEach(() => {
   mockDismissQuestion.mockReset();
   mockDismissQuestion.mockImplementation(async () => true);
   mockRemovePendingQuestion.mockClear();
+  // Bridge-backed cards persist drafts under the request id, and this suite
+  // reuses ids across tests (removePendingQuestion — which normally clears
+  // them — is mocked here).
+  usePromptDraftStore.getState().reset();
 });
 
 describe("ClaudeQuestionCard", () => {
@@ -567,6 +575,54 @@ test("dismiss releases the server question before removing it locally", async ()
       resolveDismiss(true);
     });
     expect(mockRemovePendingQuestion).toHaveBeenCalledWith("q-1");
+  });
+
+  test("bridge-backed cards persist in-progress answers under the request id", () => {
+    // The wrapper derives the draft key from the pending request, so answers
+    // survive the tab unmounting and `claudeStore.removePendingQuestion`
+    // knows which draft to clear on resolution.
+    const { unmount } = render(
+      <ClaudeQuestionCard
+        question={singleQuestionWithOptions()}
+        client={client}
+        sessionId="s-1"
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText(/Type your own answer/i), {
+      target: { value: "half-typed" },
+    });
+    expect(
+      usePromptDraftStore.getState().drafts.has(claudeQuestionDraftKey("q-1")),
+    ).toBe(true);
+
+    unmount();
+    render(
+      <ClaudeQuestionCard
+        question={singleQuestionWithOptions()}
+        client={client}
+        sessionId="s-1"
+      />
+    );
+    expect(
+      (screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement).value,
+    ).toBe("half-typed");
+  });
+
+  test("callback mode without a draftKey does not write to the draft store", () => {
+    // The tmux selection prompt reuses this wrapper with a content-derived
+    // question id; persisting that would resurrect stale selections.
+    render(
+      <ClaudeQuestionCard
+        question={singleQuestionWithOptions()}
+        onSubmitAnswers={mock(async () => true)}
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText(/Type your own answer/i), {
+      target: { value: "ephemeral" },
+    });
+    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
   });
 
   test("dismiss delegates to the callback path when provided", async () => {

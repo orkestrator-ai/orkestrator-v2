@@ -68,6 +68,8 @@ interface ClaudeComposeBarProps {
   onStop?: () => void;
   /** Callback when a message should be added to the queue */
   onQueue?: (text: string, attachments: ClaudeAttachment[], effort: ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => void | Promise<void>;
+  /** Persist an explicit user mode change in the bridge-owned session. */
+  onPlanModeChange?: (enabled: boolean) => void | Promise<void>;
   /** Show the review follow-up action for review workflow tabs. */
   showAddressAll?: boolean;
   layout?: "bottom" | "centered";
@@ -84,6 +86,7 @@ export function ClaudeComposeBar({
   queueLength = 0,
   onStop,
   onQueue,
+  onPlanModeChange,
   showAddressAll = false,
   layout = "bottom",
 }: ClaudeComposeBarProps) {
@@ -135,6 +138,10 @@ export function ClaudeComposeBar({
   const selectedModel = getSelectedModel(sessionKey);
   const effort = getEffort(sessionKey);
   const planModeEnabled = isPlanMode(sessionKey);
+  const applyPlanMode = useCallback((enabled: boolean) => {
+    setPlanMode(sessionKey, enabled);
+    void onPlanModeChange?.(enabled);
+  }, [onPlanModeChange, sessionKey, setPlanMode]);
   const fastModeEnabled = isFastMode(sessionKey);
   const queuedMessages = getQueuedMessages(sessionKey);
 
@@ -363,7 +370,7 @@ export function ClaudeComposeBar({
     // Shift+Tab toggles between plan mode and edit mode (bypassPermissions)
     if (event.key === "Tab" && event.shiftKey) {
       event.preventDefault();
-      setPlanMode(sessionKey, !planModeEnabled);
+      applyPlanMode(!planModeEnabled);
       return;
     }
 
@@ -404,12 +411,12 @@ export function ClaudeComposeBar({
       setDraftText(sessionKey, message.text);
       setDraftMentions(sessionKey, []);
       setEffort(sessionKey, message.effort);
-      setPlanMode(sessionKey, message.planModeEnabled);
+      applyPlanMode(message.planModeEnabled);
       setFastMode(sessionKey, message.fastModeEnabled);
       setQueueDialogOpen(false);
       inputRef.current?.focus();
     },
-    [removeQueueItem, sessionKey, clearAttachments, addAttachment, setDraftText, setDraftMentions, setEffort, setPlanMode, setFastMode]
+    [removeQueueItem, sessionKey, clearAttachments, addAttachment, setDraftText, setDraftMentions, setEffort, applyPlanMode, setFastMode]
   );
 
   const handleRemoveAttachment = (id: string) => {
@@ -582,13 +589,13 @@ export function ClaudeComposeBar({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
-            <DropdownMenuItem onClick={() => setPlanMode(sessionKey, false)}>
+            <DropdownMenuItem onClick={() => applyPlanMode(false)}>
               <div className="w-4 h-4 shrink-0 mr-2">
                 {!planModeEnabled && <Check className="w-4 h-4 text-primary" />}
               </div>
               Build
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setPlanMode(sessionKey, true)}>
+            <DropdownMenuItem onClick={() => applyPlanMode(true)}>
               <div className="w-4 h-4 shrink-0 mr-2">
                 {planModeEnabled && <Check className="w-4 h-4 text-primary" />}
               </div>

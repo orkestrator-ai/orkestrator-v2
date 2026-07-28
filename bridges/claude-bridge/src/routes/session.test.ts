@@ -72,9 +72,16 @@ const mockAnswerQuestion = mock(() => true);
 const mockDismissQuestion = mock(() => true);
 const mockGetPendingPlanApprovals = mock(() => []);
 const mockRespondToPlanApproval = mock(() => true);
+const mockSetSessionPreferences = mock(
+  (_id: string, preferences: { planMode?: boolean }) => preferences,
+);
+const mockClearPromptSuggestion = mock((id: string) => id === "s-1");
 const mockGetStructuredPromptDispatchState = mock<
   typeof realSessionManager.getStructuredPromptDispatchState
 >(() => "new");
+const mockClaimPromptDispatch = mock<
+  typeof realSessionManager.claimPromptDispatch
+>(async () => "claimed");
 const mockReconcilePersistedSessions = mock(async () => {});
 const mockEnsurePersistedSession = mock(async (id: string) => mockGetSession(id));
 const mockHydratePersistedSessionMessages = mock(async () => mockGetSessionMessages());
@@ -129,7 +136,10 @@ mock.module("../services/session-manager.js", () => ({
   dismissQuestion: mockDismissQuestion,
   getPendingPlanApprovals: mockGetPendingPlanApprovals,
   respondToPlanApproval: mockRespondToPlanApproval,
+  setSessionPreferences: mockSetSessionPreferences,
+  clearPromptSuggestion: mockClearPromptSuggestion,
   getStructuredPromptDispatchState: mockGetStructuredPromptDispatchState,
+  claimPromptDispatch: mockClaimPromptDispatch,
 }));
 
 /**
@@ -207,6 +217,14 @@ describe("session routes", () => {
     mockDismissQuestion.mockClear();
     mockGetPendingPlanApprovals.mockClear();
     mockRespondToPlanApproval.mockClear();
+    mockClaimPromptDispatch.mockReset();
+    mockClaimPromptDispatch.mockImplementation(async () => "claimed");
+    mockSetSessionPreferences.mockClear();
+    mockSetSessionPreferences.mockImplementation(
+      (_id: string, preferences: { planMode?: boolean }) => preferences,
+    );
+    mockClearPromptSuggestion.mockClear();
+    mockClearPromptSuggestion.mockImplementation((id: string) => id === "s-1");
     mockGetStructuredPromptDispatchState.mockReset();
     mockGetStructuredPromptDispatchState.mockImplementation(() => "new");
     resetPersistenceMocks();
@@ -273,6 +291,38 @@ describe("session routes", () => {
       const res = await app.request("/session/s-1");
       expect(res.status).toBe(500);
       expect(await jsonBody(res)).toEqual({ error: "claude home unreadable" });
+    });
+  });
+
+  describe("PUT /session/:id/preferences", () => {
+    test("persists plan mode in the authoritative session", async () => {
+      const res = await jsonRequest("PUT", "/session/s-1/preferences", { planMode: true });
+
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({ planMode: true });
+      expect(mockSetSessionPreferences).toHaveBeenCalledWith("s-1", { planMode: true });
+    });
+
+    test("rejects a non-boolean plan mode", async () => {
+      const res = await jsonRequest("PUT", "/session/s-1/preferences", { planMode: "yes" });
+
+      expect(res.status).toBe(400);
+      expect(mockSetSessionPreferences).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("DELETE /session/:id/prompt-suggestion", () => {
+    test("dismisses the persisted suggestion", async () => {
+      const res = await jsonRequest("DELETE", "/session/s-1/prompt-suggestion");
+
+      expect(res.status).toBe(204);
+      expect(mockClearPromptSuggestion).toHaveBeenCalledWith("s-1");
+    });
+
+    test("returns 404 for an unknown session", async () => {
+      const res = await jsonRequest("DELETE", "/session/s-unknown/prompt-suggestion");
+
+      expect(res.status).toBe(404);
     });
   });
 
@@ -420,6 +470,43 @@ describe("session routes", () => {
       expect(res.status).toBe(202);
       const data = await jsonBody(res);
       expect(data.status).toBe("processing");
+    });
+
+    test("durably claims a stable request id before dispatch", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Launch once",
+        requestId: "initial-prompt:env-1:tab-1",
+      });
+
+      expect(res.status).toBe(202);
+      expect(mockClaimPromptDispatch).toHaveBeenCalledWith(
+        "s-1",
+        "initial-prompt:env-1:tab-1",
+      );
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        "s-1",
+        "Launch once",
+        expect.objectContaining({
+          requestId: "initial-prompt:env-1:tab-1",
+        }),
+      );
+    });
+
+    test("acknowledges a duplicate stable request id without dispatching it again", async () => {
+      mockClaimPromptDispatch.mockResolvedValueOnce("duplicate");
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Launch once",
+        requestId: "initial-prompt:env-1:tab-1",
+      });
+
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({
+        status: "already-processed",
+        requestId: "initial-prompt:env-1:tab-1",
+        duplicate: true,
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
     test("forwards a structured schema and stable request id", async () => {

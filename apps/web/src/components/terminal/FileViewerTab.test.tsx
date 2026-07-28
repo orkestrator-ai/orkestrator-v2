@@ -300,7 +300,7 @@ describe("FileViewerTab component", () => {
     expect(readLocalFileMock).toHaveBeenCalledWith("/repo", "README.md");
   });
 
-  test("clears per-tab dirty state when the file tab unmounts", async () => {
+  test("keeps per-tab dirty state when the file tab temporarily unmounts", async () => {
     const view = render(
       <FileViewerTab
         tabId="closing-tab"
@@ -317,6 +317,6 @@ describe("FileViewerTab component", () => {
 
     view.unmount();
 
-    expect(useFileDirtyStore.getState().getContent("closing-tab")).toBeNull();
+    expect(useFileDirtyStore.getState().getContent("closing-tab")).toBe("unsaved");
   });
 });

@@ -612,7 +612,11 @@ describe("ActionBar grid presentation", () => {
     await waitFor(() => {
       expect(screen.queryByText("New Tab with Claude")).toBeNull();
     });
-  });
+  // Radix closes the portalled tooltip on a timer. Under the repository's
+  // concurrent workspace run this file shares a saturated runner with the web
+  // build and can exceed Bun's default 10s test ceiling despite passing in
+  // about a second alone.
+  }, 20_000);
 
   test("renders mobile tools as two columns with labels after their icons", () => {
     const { container } = render(<ActionBar presentation="grid" />);

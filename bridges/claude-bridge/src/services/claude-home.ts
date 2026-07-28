@@ -32,6 +32,19 @@ export function claudePluginsDir(): string {
 }
 
 /**
+ * Bridge-owned directory for per-session preference files.
+ *
+ * Lives under `~/.claude` because that is the only durable location the bridge
+ * already depends on in both container and local modes; the bridge process
+ * itself dies with the backend, so anything that must survive an app restart
+ * cannot live in bridge memory. Namespaced under `orkestrator/` so nothing here
+ * can be mistaken for (or collide with) files the Claude CLI owns.
+ */
+export function claudeSessionPreferencesDir(): string {
+  return join(claudeHome(), ".claude", "orkestrator", "session-preferences");
+}
+
+/**
  * Point every resolver at a different home directory.
  *
  * Exported for tests. Mocking `node:os` instead would be visible to every

@@ -655,6 +655,185 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByRole("button", { name: /\bbash\b/i })).toBeNull();
   });
 
+  test("shows the derived command beside a custom exec tool", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "exec",
+          toolName: "exec",
+          toolArgs: {
+            input: "const r = await tools.exec_command({ cmd: \"git status --short\" });",
+            command: "git status --short",
+          },
+          toolState: "success",
+        }])}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /Exec git status --short success/i,
+    })).toBeTruthy();
+  });
+
+  test("previews raw custom-tool input when no command can be derived", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "exec",
+          toolName: "exec",
+          toolArgs: { input: "const result = await tools.some_custom_action();" },
+          toolState: "success",
+        }])}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /Exec const result = await tools\.some_custom_action\(\); success/i,
+    })).toBeTruthy();
+  });
+
+  test.each([
+    ["file_path", { file_path: "/repo/src/deep/example.ts" }, "example.ts"],
+    ["file_path with no directory", { file_path: "example.ts" }, "example.ts"],
+    ["pattern", { pattern: "**/*.tsx" }, "**/*.tsx"],
+    ["regex", { regex: "function\\s+\\w+" }, "function\\s+\\w+"],
+    ["url", { url: "https://example.test/a/b?c=d" }, "example.test"],
+    ["malformed url", { url: "not a url" }, "not a url"],
+    ["query", { query: "how to configure vite" }, "how to configure vite"],
+  ])("summarizes %s in the collapsed row", (_label, toolArgs, expected) => {
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "tool",
+          toolName: "tool",
+          toolArgs,
+          toolState: "success",
+        }])}
+      />,
+    );
+
+    expect(container.textContent).toContain(expected);
+  });
+
+  test("prefers a command over every other collapsed-row summary", () => {
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "tool",
+          toolName: "tool",
+          toolArgs: { command: "ls -la", file_path: "/repo/a.ts", query: "unused" },
+          toolState: "success",
+        }])}
+      />,
+    );
+
+    const row = screen.getByRole("button", { name: /ls -la/i });
+    expect(row.textContent).not.toContain("a.ts");
+    expect(container.textContent).not.toContain("unused");
+  });
+
+  test("keeps a descriptive tool title alongside a raw-input preview", () => {
+    // The raw-input fallback is generic, so it must not displace a title that
+    // says which server the tool came from.
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "query_docs",
+          toolName: "query_docs",
+          toolTitle: "context7:query_docs",
+          toolArgs: { input: "how do I configure routing" },
+          toolState: "success",
+        }])}
+      />,
+    );
+
+    const row = screen.getByRole("button", { name: /context7:query_docs/i });
+    expect(row.textContent).toContain("how do I configure routing");
+  });
+
+  test("lets a specific command displace the tool title", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "exec",
+          toolName: "exec",
+          toolTitle: "functions:exec",
+          toolArgs: { input: "tools.exec_command({cmd:'ls'})", command: "ls" },
+          toolState: "success",
+        }])}
+      />,
+    );
+
+    const row = screen.getByRole("button", { name: /Exec ls success/i });
+    expect(row.textContent).not.toContain("functions:exec");
+  });
+
+  test("flattens and caps an oversized command in the collapsed row", () => {
+    const command = `echo ${"a".repeat(400)}\n\n\tsecond line`;
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "exec",
+          toolName: "exec",
+          toolArgs: { command },
+          toolState: "success",
+        }])}
+      />,
+    );
+
+    const row = screen.getByRole("button", { name: /Exec echo a+…/i });
+    const preview = row.textContent ?? "";
+    expect(preview).toContain("…");
+    expect(preview).not.toContain("\n");
+    // 180-char cap plus the tool name and state labels around it.
+    expect(preview.length).toBeLessThan(220);
+  });
+
+  test("collapses interior whitespace in a raw-input preview", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "exec",
+          toolName: "exec",
+          toolArgs: { input: "  const a = 1;\n\n\tconst b = 2;  " },
+          toolState: "success",
+        }])}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /Exec const a = 1; const b = 2; success/i,
+    })).toBeTruthy();
+  });
+
+  test("keeps the full exec source visible when the row is expanded", () => {
+    const input = `const r = await tools.exec_command({ cmd: "${"echo hi; ".repeat(40)}" });`;
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "exec",
+          toolName: "exec",
+          // `command` is a capped label; the authoritative source is `input`.
+          toolArgs: { input, command: "echo hi; echo hi;…" },
+          toolState: "success",
+        }])}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Exec/i }));
+    expect(container.textContent).toContain(input);
+    expect(container.textContent).toContain("$ echo hi; echo hi;…");
+  });
+
   test("uses uniform outer spacing for native part wrapper variants", () => {
     const message = makeMessage([
       {

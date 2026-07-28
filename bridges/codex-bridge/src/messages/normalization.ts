@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import type { ThreadItem } from "../codex-item-types.js";
+import { normalizeTranscriptToolArgs } from "../subagent-transcript.js";
 import { mapTodoArgs, summarizeTodoList } from "../todo-helpers.js";
 import type { EngineItem } from "../engine/types.js";
 import { DEFAULT_MAX_COMMAND_OUTPUT_CHARS } from "../sessions/turn-accumulator.js";
@@ -56,6 +57,36 @@ export function stringifyUnknown(value: unknown): string | undefined {
   } catch {
     return String(value);
   }
+}
+
+/**
+ * Media arrives as a URL, which for tool results is routinely an inline
+ * `data:` payload. Emitting those verbatim would push megabytes of base64
+ * through SSE and into a `<pre>`, so only referenceable URLs survive.
+ */
+function describeMediaUrl(url: string, kind: "image" | "audio"): string {
+  return url.startsWith("data:") ? `[${kind}]` : url;
+}
+
+function stringifyDynamicToolContent(items: unknown[]): string | undefined {
+  const content = items.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return stringifyUnknown(item);
+    }
+    const record = item as Record<string, unknown>;
+    if (record.type === "inputText" && typeof record.text === "string") {
+      return record.text;
+    }
+    if (record.type === "inputImage" && typeof record.imageUrl === "string") {
+      return describeMediaUrl(record.imageUrl, "image");
+    }
+    if (record.type === "inputAudio" && typeof record.audioUrl === "string") {
+      return describeMediaUrl(record.audioUrl, "audio");
+    }
+    return stringifyUnknown(item);
+  }).filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  return content.length > 0 ? content.join("\n") : undefined;
 }
 
 export async function readTextFileIfPresent(path: string): Promise<string | undefined> {
@@ -323,6 +354,28 @@ export async function itemToParts(
         toolOutput: stringifyUnknown(item.result),
         toolError: item.error?.message,
       }];
+    case "dynamic_tool_call": {
+      const output = capCommandOutput(
+        stringifyDynamicToolContent(item.content_items) ?? "",
+      ) || undefined;
+      return [{
+        type: "tool-invocation",
+        content: item.tool,
+        toolName: item.tool,
+        toolArgs: normalizeTranscriptToolArgs(item.tool, item.arguments),
+        toolState:
+          item.status === "failed"
+            ? "failure"
+            : item.status === "completed"
+              ? "success"
+              : "pending",
+        // Dynamic tools are namespaced by the protocol, so two same-named tools
+        // are only distinguishable by it. Mirrors the `mcp_tool_call` title.
+        toolTitle: item.namespace ? `${item.namespace}:${item.tool}` : item.tool,
+        toolOutput: item.status === "failed" ? undefined : output,
+        toolError: item.status === "failed" ? output ?? "Tool failed" : undefined,
+      }];
+    }
     case "web_search":
       return [{
         type: "tool-invocation",

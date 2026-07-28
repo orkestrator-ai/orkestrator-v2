@@ -181,6 +181,30 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
       };
     }
 
+    case "dynamicToolCall": {
+      const tool = str(raw.tool);
+      if (!tool) return { item: null, unsupportedType: type };
+      return {
+        item: {
+          id,
+          type: "dynamic_tool_call",
+          ...(str(raw.namespace) ? { namespace: str(raw.namespace)! } : {}),
+          tool,
+          arguments: raw.arguments,
+          content_items: Array.isArray(raw.contentItems) ? raw.contentItems : [],
+          // `success` is authoritative for a call that has finished, but it must
+          // not settle one that is still running: reporting a terminal outcome
+          // for an in-flight call is the same class of mistake as reporting
+          // `idle` for a turn that is still executing.
+          status: raw.status === "inProgress"
+            ? "in_progress"
+            : raw.success === false
+              ? "failed"
+              : commandStatus(raw.status),
+        } as EngineItem,
+      };
+    }
+
     case "webSearch":
       return { item: { id, type: "web_search", query: str(raw.query) ?? "" } as EngineItem };
 
@@ -249,7 +273,6 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
      */
     case "userMessage":
     case "hookPrompt":
-    case "dynamicToolCall":
     case "imageView":
     case "imageGeneration":
     case "sleep":

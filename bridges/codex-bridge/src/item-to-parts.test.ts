@@ -8,8 +8,10 @@ import type { FileChangeDiffContext } from "./index.js";
 import { BaselineMap } from "./messages/diff-budget.js";
 import type { ThreadItem } from "./codex-item-types.js";
 import type { EngineItem } from "./engine/types.js";
+import { DEFAULT_MAX_COMMAND_OUTPUT_CHARS } from "./sessions/turn-accumulator.js";
 
 const DUMMY_CWD = "/tmp/test-workspace";
+const COMMAND_OUTPUT_TRUNCATION_NOTICE = "\n… output truncated";
 
 async function withGitWorkspace<T>(callback: (dir: string) => Promise<T> | T): Promise<T> {
   const dir = mkdtempSync(join(tmpdir(), "codex-bridge-item-to-parts-"));
@@ -146,6 +148,153 @@ describe("itemToParts", () => {
 
     expect(parts).toHaveLength(1);
     expect(parts[0]!.toolState).toBe("pending");
+  });
+
+  test("converts dynamic exec calls to command-labelled tool invocations", async () => {
+    const item: EngineItem = {
+      id: "dynamic-1",
+      type: "dynamic_tool_call",
+      namespace: "functions",
+      tool: "exec",
+      arguments:
+        "const r = await tools.exec_command({\"cmd\":\"git status --short\",\"yield_time_ms\":10000});",
+      content_items: [
+        { type: "inputText", text: " M src/example.ts" },
+        { type: "inputImage", imageUrl: "data:image/png;base64,abc" },
+      ],
+      status: "completed",
+    };
+
+    expect(await itemToParts(item, DUMMY_CWD)).toEqual([{
+      type: "tool-invocation",
+      content: "exec",
+      toolName: "exec",
+      toolArgs: {
+        input:
+          "const r = await tools.exec_command({\"cmd\":\"git status --short\",\"yield_time_ms\":10000});",
+        command: "git status --short",
+      },
+      toolState: "success",
+      toolTitle: "functions:exec",
+      toolOutput: " M src/example.ts\n[image]",
+      toolError: undefined,
+    }]);
+  });
+
+  test("renders failed dynamic tool output as an error", async () => {
+    const item: EngineItem = {
+      id: "dynamic-2",
+      type: "dynamic_tool_call",
+      tool: "exec",
+      arguments: "throw new Error('nope')",
+      content_items: [{ type: "inputText", text: "nope" }],
+      status: "failed",
+    };
+
+    expect((await itemToParts(item, DUMMY_CWD))[0]).toMatchObject({
+      toolState: "failure",
+      toolOutput: undefined,
+      toolError: "nope",
+      // No namespace, so the title stays the bare tool name.
+      toolTitle: "exec",
+    });
+  });
+
+  test("reports an unfinished dynamic tool call as pending", async () => {
+    const item: EngineItem = {
+      id: "dynamic-3",
+      type: "dynamic_tool_call",
+      tool: "exec",
+      arguments: null,
+      content_items: [],
+      status: "in_progress",
+    };
+
+    expect((await itemToParts(item, DUMMY_CWD))[0]).toMatchObject({
+      toolState: "pending",
+      toolArgs: undefined,
+      toolOutput: undefined,
+      toolError: undefined,
+    });
+  });
+
+  test("falls back to a generic error when a failed dynamic call produced no output", async () => {
+    const item: EngineItem = {
+      id: "dynamic-4",
+      type: "dynamic_tool_call",
+      tool: "exec",
+      arguments: null,
+      content_items: [],
+      status: "failed",
+    };
+
+    expect((await itemToParts(item, DUMMY_CWD))[0]).toMatchObject({
+      toolState: "failure",
+      toolError: "Tool failed",
+    });
+  });
+
+  test("summarizes inline media instead of inlining the payload", async () => {
+    const item: EngineItem = {
+      id: "dynamic-5",
+      type: "dynamic_tool_call",
+      tool: "exec",
+      arguments: null,
+      content_items: [
+        { type: "inputImage", imageUrl: `data:image/png;base64,${"A".repeat(500_000)}` },
+        { type: "inputAudio", audioUrl: "data:audio/wav;base64,AAAA" },
+        // A referenceable URL is still useful, so it survives intact.
+        { type: "inputImage", imageUrl: "https://example.test/a.png" },
+      ],
+      status: "completed",
+    };
+
+    expect((await itemToParts(item, DUMMY_CWD))[0]!.toolOutput)
+      .toBe("[image]\n[audio]\nhttps://example.test/a.png");
+  });
+
+  test("stringifies dynamic content entries it does not recognize", async () => {
+    const item: EngineItem = {
+      id: "dynamic-6",
+      type: "dynamic_tool_call",
+      tool: "exec",
+      arguments: null,
+      content_items: [
+        { type: "inputText" },
+        { type: "somethingElse", value: 1 },
+        42,
+        null,
+        undefined,
+        "",
+        ["a"],
+        { type: "inputImage", imageUrl: 7 },
+      ],
+      status: "completed",
+    };
+
+    expect((await itemToParts(item, DUMMY_CWD))[0]!.toolOutput).toBe([
+      JSON.stringify({ type: "inputText" }, null, 2),
+      JSON.stringify({ type: "somethingElse", value: 1 }, null, 2),
+      "42",
+      "null",
+      JSON.stringify(["a"], null, 2),
+      JSON.stringify({ type: "inputImage", imageUrl: 7 }, null, 2),
+    ].join("\n"));
+  });
+
+  test("caps oversized dynamic tool output", async () => {
+    const item: EngineItem = {
+      id: "dynamic-7",
+      type: "dynamic_tool_call",
+      tool: "exec",
+      arguments: null,
+      content_items: [{ type: "inputText", text: "x".repeat(400_000) }],
+      status: "completed",
+    };
+
+    const output = (await itemToParts(item, DUMMY_CWD))[0]!.toolOutput!;
+    expect(output.length).toBeLessThanOrEqual(DEFAULT_MAX_COMMAND_OUTPUT_CHARS);
+    expect(output.endsWith(COMMAND_OUTPUT_TRUNCATION_NOTICE)).toBe(true);
   });
 
   test("converts failed command with empty output to default error message", async () => {

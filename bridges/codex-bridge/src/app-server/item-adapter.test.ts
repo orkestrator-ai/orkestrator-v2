@@ -60,6 +60,107 @@ describe("item adapter edge cases", () => {
     });
   });
 
+  test("renders dynamic tool calls and trusts an explicit failed outcome", () => {
+    expect(adaptAppServerItem({
+      id: "dynamic",
+      type: "dynamicToolCall",
+      namespace: "functions",
+      tool: "exec",
+      status: "completed",
+      success: false,
+      arguments: "const r = await tools.exec_command({ cmd: \"git status\" });",
+      contentItems: [{ type: "inputText", text: "command failed" }],
+    }).item).toEqual({
+      id: "dynamic",
+      type: "dynamic_tool_call",
+      namespace: "functions",
+      tool: "exec",
+      status: "failed",
+      arguments: "const r = await tools.exec_command({ cmd: \"git status\" });",
+      content_items: [{ type: "inputText", text: "command failed" }],
+    });
+
+    expect(adaptAppServerItem({
+      id: "pending",
+      type: "dynamicToolCall",
+      tool: "exec",
+      status: "inProgress",
+      arguments: null,
+      contentItems: null,
+    }).item).toMatchObject({
+      type: "dynamic_tool_call",
+      status: "in_progress",
+      content_items: [],
+    });
+  });
+
+  test("never settles a dynamic tool call that is still running", () => {
+    // Reporting a terminal outcome for an in-flight call is the same class of
+    // mistake as reporting `idle` for a turn that is still executing.
+    expect(adaptAppServerItem({
+      id: "dynamic",
+      type: "dynamicToolCall",
+      tool: "exec",
+      status: "inProgress",
+      success: false,
+      arguments: null,
+      contentItems: null,
+    }).item).toMatchObject({ status: "in_progress" });
+
+    // A finished call trusts its own status even when `success` disagrees,
+    // matching how `mcpToolCall` and `commandStatus` already behave.
+    expect(adaptAppServerItem({
+      id: "dynamic",
+      type: "dynamicToolCall",
+      tool: "exec",
+      status: "failed",
+      success: true,
+      arguments: null,
+      contentItems: null,
+    }).item).toMatchObject({ status: "failed" });
+
+    expect(adaptAppServerItem({
+      id: "dynamic",
+      type: "dynamicToolCall",
+      tool: "exec",
+      status: "completed",
+      success: true,
+      arguments: null,
+      contentItems: null,
+    }).item).toMatchObject({ status: "completed" });
+  });
+
+  test("drops a dynamic tool call with no usable identity, and a malformed namespace", () => {
+    // Without a tool name there is nothing to render or key on.
+    expect(adaptAppServerItem({
+      id: "dynamic",
+      type: "dynamicToolCall",
+      status: "completed",
+      arguments: null,
+      contentItems: null,
+    })).toEqual({ item: null, unsupportedType: "dynamicToolCall" });
+
+    expect(adaptAppServerItem({
+      id: "dynamic",
+      type: "dynamicToolCall",
+      tool: "exec",
+      namespace: 42,
+      status: "completed",
+      arguments: null,
+      contentItems: null,
+    }).item).not.toHaveProperty("namespace");
+
+    // Non-array content is normalized rather than passed through.
+    expect(adaptAppServerItem({
+      id: "dynamic",
+      type: "dynamicToolCall",
+      tool: "exec",
+      status: "completed",
+      arguments: { cmd: "ls" },
+      contentItems: "nope",
+    }).item).toMatchObject({ content_items: [], arguments: { cmd: "ls" } });
+  });
+
   test("rejects malformed collaboration and subagent identities", () => {
     expect(adaptAppServerItem({
       id: "collab",
@@ -77,7 +178,6 @@ describe("item adapter edge cases", () => {
     for (const type of [
       "userMessage",
       "hookPrompt",
-      "dynamicToolCall",
       "imageView",
       "imageGeneration",
       "sleep",

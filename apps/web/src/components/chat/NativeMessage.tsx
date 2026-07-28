@@ -267,49 +267,67 @@ function ToolPart({
   const hasExpandableContent =
     toolOutput || toolError || (toolArgs && Object.keys(toolArgs).length > 0);
 
-  // Extract display info from toolArgs based on tool type
-  const getDisplayInfo = (): string | null => {
+  // The collapsed row is a single truncating line, so anything shown there is
+  // flattened and capped rather than relying on CSS alone — the accessible name
+  // and the DOM string are otherwise unbounded.
+  const toSingleLinePreview = (value: string): string => {
+    const preview = value.trim().replace(/\s+/g, " ");
+    return preview.length > 180 ? `${preview.slice(0, 179)}…` : preview;
+  };
+
+  // Extract display info from toolArgs based on tool type. `generic` marks a
+  // fallback preview of raw input, which is not specific enough to justify
+  // hiding a descriptive tool title the way a real command or path does.
+  const getDisplayInfo = (): { text: string; generic: boolean } | null => {
     if (!toolArgs) return null;
 
     // For shell commands, show the command in the collapsed row.
     const command = toolArgs.command as string | undefined;
     if (command) {
-      return command;
+      return { text: toSingleLinePreview(command), generic: false };
     }
 
     // For Read tool - show filename
     const filePath = toolArgs.file_path as string | undefined;
     if (filePath) {
-      return filePath.split("/").pop() || null;
+      const name = filePath.split("/").pop();
+      return name ? { text: name, generic: false } : null;
     }
 
     // For Glob tool - show pattern
     const pattern = toolArgs.pattern as string | undefined;
     if (pattern) {
-      return pattern;
+      return { text: toSingleLinePreview(pattern), generic: false };
     }
 
     // For Grep tool - show search pattern
     const grepPattern = toolArgs.regex as string | undefined;
     if (grepPattern) {
-      return grepPattern;
+      return { text: toSingleLinePreview(grepPattern), generic: false };
     }
 
     // For WebFetch tool - show hostname from URL
     const url = toolArgs.url as string | undefined;
     if (url) {
       try {
-        const hostname = new URL(url).hostname;
-        return hostname;
+        return { text: new URL(url).hostname, generic: false };
       } catch {
-        return url;
+        return { text: toSingleLinePreview(url), generic: false };
       }
     }
 
     // For WebSearch tool - show search query
     const query = toolArgs.query as string | undefined;
     if (query) {
-      return query;
+      return { text: toSingleLinePreview(query), generic: false };
+    }
+
+    // Custom tools such as Codex's `exec` carry raw input rather than a
+    // provider-standard argument shape. Keep the collapsed row informative
+    // even when the bridge cannot safely derive a more specific command.
+    const input = toolArgs.input;
+    if (typeof input === "string" && input.trim()) {
+      return { text: toSingleLinePreview(input), generic: true };
     }
 
     return null;
@@ -318,7 +336,7 @@ function ToolPart({
   const displayInfo = getDisplayInfo();
   const shouldShowToolTitle =
     Boolean(displayToolTitle) &&
-    !displayInfo &&
+    (!displayInfo || displayInfo.generic) &&
     displayToolTitle !== displayToolName;
 
   // Format the command input for shell-like display
@@ -326,7 +344,12 @@ function ToolPart({
     if (!toolArgs) return null;
     // For shell commands, show the command
     if (toolArgs.command && typeof toolArgs.command === "string") {
-      return `$ ${toolArgs.command}`;
+      // `command` may be a derived, length-capped label rather than the literal
+      // arguments, so keep the authoritative source visible alongside it.
+      const input = typeof toolArgs.input === "string" ? toolArgs.input.trim() : "";
+      return input
+        ? `$ ${toolArgs.command}\n\n${input}`
+        : `$ ${toolArgs.command}`;
     }
     // For other tools, show a JSON representation of args
     return JSON.stringify(toolArgs, null, 2);
@@ -355,7 +378,7 @@ function ToolPart({
         <span className="font-medium">{displayToolName}</span>
         {displayInfo && (
           <span className="font-mono text-muted-foreground/80 truncate flex-1 text-left">
-            {displayInfo}
+            {displayInfo.text}
           </span>
         )}
         {shouldShowToolTitle && (

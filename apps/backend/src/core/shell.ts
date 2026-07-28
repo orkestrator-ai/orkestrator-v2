@@ -19,6 +19,8 @@ export type ExecResult = {
 type RunCommandOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  /** Optional stdin payload. When omitted, stdin is closed immediately. */
+  stdin?: string | Buffer;
   timeoutMs?: number;
   /**
    * Values that must never escape this process boundary. Both successful
@@ -55,11 +57,9 @@ export async function runCommand(
       timeout: options.timeoutMs ?? 60_000,
       maxBuffer: 50 * 1024 * 1024,
     });
-    // execFile leaves the child's stdin pipe open without ever writing to it.
-    // CLIs that read piped (non-TTY) stdin — e.g. `codex exec` — block waiting
-    // for an EOF that never arrives and hang until the timeout. We never feed
-    // stdin here, so close it immediately to signal EOF.
-    execPromise.child.stdin?.end();
+    // execFile leaves the child's stdin pipe open. Close it immediately when
+    // there is no payload so non-TTY CLIs cannot hang waiting for EOF.
+    execPromise.child.stdin?.end(options.stdin);
     const { stdout, stderr } = await execPromise;
     return {
       stdout: redactCommandValues(stdout.toString(), options.redactValues),

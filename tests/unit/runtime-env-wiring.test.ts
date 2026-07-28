@@ -248,6 +248,98 @@ describe("container runtime environment wiring", () => {
     });
   });
 
+  test("runtime helper applies the backend-managed GitHub credential override", () => {
+    withTempDir((dir) => {
+      const helper = join(repoRoot, "docker/runtime-env.sh");
+      const credentialFile = join(dir, "github-token");
+      writeFileSync(credentialFile, "host-gh-token", { mode: 0o600 });
+
+      const selected = runShell(
+        `
+          . ${shellQuote(helper)}
+          export GITHUB_TOKEN="stale-container-token"
+          export GH_TOKEN="stale-container-token"
+          orkestrator_source_runtime_env
+          printf "%s|%s" "$GITHUB_TOKEN" "$GH_TOKEN"
+        `,
+        {
+          HOME: join(dir, "home"),
+          PATH: "/usr/bin:/bin",
+          ORKESTRATOR_RUNTIME_ENV_FILE: join(dir, "runtime-env.sh"),
+          ORKESTRATOR_BASH_ENV_FILE: join(dir, "bash-env.sh"),
+          ORKESTRATOR_GITHUB_CREDENTIAL_FILE: credentialFile,
+        },
+      );
+      expect(selected.exitCode).toBe(0);
+      expect(selected.stdout).toBe("host-gh-token|host-gh-token");
+
+      writeFileSync(credentialFile, "", { mode: 0o600 });
+      const cleared = runShell(
+        `
+          . ${shellQuote(helper)}
+          export GITHUB_TOKEN="stale-container-token"
+          export GH_TOKEN="stale-container-token"
+          orkestrator_source_runtime_env
+          printf "%s|%s" "\${GITHUB_TOKEN:-}" "\${GH_TOKEN:-}"
+        `,
+        {
+          HOME: join(dir, "home"),
+          PATH: "/usr/bin:/bin",
+          ORKESTRATOR_RUNTIME_ENV_FILE: join(dir, "runtime-env.sh"),
+          ORKESTRATOR_BASH_ENV_FILE: join(dir, "bash-env.sh"),
+          ORKESTRATOR_GITHUB_CREDENTIAL_FILE: credentialFile,
+        },
+      );
+      expect(cleared.exitCode).toBe(0);
+      expect(cleared.stdout).toBe("|");
+    });
+  });
+
+  test("runtime helper distinguishes a missing credential file from an unreadable authoritative file", () => {
+    withTempDir((dir) => {
+      const helper = join(repoRoot, "docker/runtime-env.sh");
+      const credentialFile = join(dir, "github-token");
+      const baseEnv = {
+        HOME: join(dir, "home"),
+        PATH: "/usr/bin:/bin",
+        ORKESTRATOR_RUNTIME_ENV_FILE: join(dir, "runtime-env.sh"),
+        ORKESTRATOR_BASH_ENV_FILE: join(dir, "bash-env.sh"),
+        ORKESTRATOR_GITHUB_CREDENTIAL_FILE: credentialFile,
+      };
+
+      const missing = runShell(
+        `
+          . ${shellQuote(helper)}
+          export GITHUB_TOKEN="inherited-token"
+          export GH_TOKEN="inherited-token"
+          orkestrator_source_runtime_env
+          printf "%s|%s" "$GITHUB_TOKEN" "$GH_TOKEN"
+        `,
+        baseEnv,
+      );
+      expect(missing.exitCode).toBe(0);
+      expect(missing.stdout).toBe("inherited-token|inherited-token");
+
+      writeFileSync(credentialFile, "unreadable-token", { mode: 0o600 });
+      const failingBin = join(dir, "failing-bin");
+      mkdirSync(failingBin);
+      writeFileSync(join(failingBin, "cat"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+      const unreadable = runShell(
+        `
+          . ${shellQuote(helper)}
+          export GITHUB_TOKEN="inherited-token"
+          export GH_TOKEN="inherited-token"
+          orkestrator_source_runtime_env
+          printf "%s|%s" "\${GITHUB_TOKEN:-}" "\${GH_TOKEN:-}"
+        `,
+        { ...baseEnv, PATH: `${failingBin}:/usr/bin:/bin` },
+      );
+      expect(unreadable.exitCode).toBe(0);
+      expect(unreadable.stdout).toBe("|");
+      expect(unreadable.stderr).toBe("");
+    });
+  });
+
   test("runtime helper preserves caller PATH additions in non-interactive bash", () => {
     withTempDir((dir) => {
       const bashCheck = Bun.spawnSync({

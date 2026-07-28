@@ -376,6 +376,8 @@ export interface GlobalConfig {
   anthropicApiKey?: string;
   /** Whether a write-only GitHub token is stored by the backend. */
   githubTokenConfigured?: boolean;
+  /** Reuse the host's active `gh auth login` token for container GitHub access. */
+  useHostGitHubCredentials?: boolean;
   /** Domains allowed when environments are in restricted network mode */
   allowedDomains: string[];
   /** Preferred editor for opening containers (VS Code or Cursor) */

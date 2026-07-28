@@ -14,8 +14,11 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
     expect(initialGlobal.codexModel).toBe("gpt-5.4");
     expect(initialGlobal.codexReasoningEffort).toBe("medium");
     expect(initialGlobal.codexMaxConcurrentThreads).toBe(5);
+    expect(initialGlobal.useHostGitHubCredentials).toBe(true);
     expectTypeOf<GlobalConfig["codexMaxConcurrentThreads"]>()
       .toEqualTypeOf<number | undefined>();
+    expectTypeOf<GlobalConfig["useHostGitHubCredentials"]>()
+      .toEqualTypeOf<boolean | undefined>();
   });
 
   test("does not default to any retired model id", () => {
@@ -46,6 +49,8 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
     expect(initialGlobal.defaultAgent).toBe(backendGlobal.defaultAgent);
     expect(initialGlobal.webClientEnabled).toBe(backendGlobal.webClientEnabled);
     expect(initialGlobal.reviewInstruction).toBe(backendGlobal.reviewInstruction);
+    expect(initialGlobal.useHostGitHubCredentials)
+      .toBe(backendGlobal.useHostGitHubCredentials);
   });
 });
 

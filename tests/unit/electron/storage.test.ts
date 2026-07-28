@@ -484,6 +484,51 @@ describe("Electron StorageService", () => {
     expect(Object.hasOwn(persisted.global, "reviewPrompt")).toBe(false);
   });
 
+  test("defaults legacy configs without a PAT to host GitHub CLI credentials", async () => {
+    const dataDir = await createTempDir("ork-storage-github-auth-default-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const config = defaultConfig();
+    delete config.global.useHostGitHubCredentials;
+    await fs.writeFile(
+      path.join(dataDir, "config.json"),
+      `${JSON.stringify(config)}\n`,
+    );
+
+    expect((await storage.loadConfig()).global.useHostGitHubCredentials).toBe(true);
+  });
+
+  test("preserves the PAT source for legacy configs with a stored token", async () => {
+    const dataDir = await createTempDir("ork-storage-github-auth-pat-migration-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const config = defaultConfig();
+    config.global.githubToken = "legacy-pat";
+    delete config.global.useHostGitHubCredentials;
+    await fs.writeFile(
+      path.join(dataDir, "config.json"),
+      `${JSON.stringify(config)}\n`,
+    );
+
+    const loaded = await storage.loadConfig();
+    expect(loaded.global.useHostGitHubCredentials).toBe(false);
+    expect(loaded.global.githubToken).toBe("legacy-pat");
+  });
+
+  test("preserves an explicit PAT source even when no PAT is stored", async () => {
+    const dataDir = await createTempDir("ork-storage-github-auth-explicit-pat-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const config = defaultConfig();
+    config.global.useHostGitHubCredentials = false;
+    await fs.writeFile(
+      path.join(dataDir, "config.json"),
+      `${JSON.stringify(config)}\n`,
+    );
+
+    expect((await storage.loadConfig()).global.useHostGitHubCredentials).toBe(false);
+  });
+
   test("validates review instructions at save and global-update boundaries", async () => {
     const dataDir = await createTempDir("ork-storage-review-validation-");
     const storage = new StorageService(dataDir);

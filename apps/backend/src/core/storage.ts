@@ -606,7 +606,20 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
   const codexMaxConcurrentThreads = resolveCodexMaxConcurrentThreads(
     global.codexMaxConcurrentThreads,
   );
-  if (global.codexMaxConcurrentThreads === codexMaxConcurrentThreads) {
+  const hasExplicitGitHubCredentialSource =
+    typeof global.useHostGitHubCredentials === "boolean";
+  const hasLegacyGitHubToken =
+    typeof global.githubToken === "string" && global.githubToken.trim().length > 0;
+  // Before the source selector existed, a stored PAT was the user's explicit
+  // GitHub credential. Preserve that choice during migration instead of
+  // silently replacing it with the host's potentially broader `gh` token.
+  const useHostGitHubCredentials = hasExplicitGitHubCredentialSource
+    ? global.useHostGitHubCredentials
+    : !hasLegacyGitHubToken;
+  if (
+    global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
+    && global.useHostGitHubCredentials === useHostGitHubCredentials
+  ) {
     return reviewInstructionSanitized;
   }
 
@@ -615,6 +628,7 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
     global: {
       ...global,
       codexMaxConcurrentThreads,
+      useHostGitHubCredentials,
     } as unknown as AppConfig["global"],
   };
 }
@@ -664,6 +678,7 @@ export function defaultConfig(): AppConfig {
     global: {
       containerResources: { cpuCores: 2, memoryGb: 4 },
       envFilePatterns: [".env", ".env.local"],
+      useHostGitHubCredentials: true,
       allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],
       defaultAgent: "claude",
       opencodeModel: "opencode/claude-sonnet-5",

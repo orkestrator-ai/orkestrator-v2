@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Environment } from "@/types";
+import type { GitHubCredentialStatus } from "@/lib/backend";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useProjectStore } from "@/stores/projectStore";
 
@@ -12,9 +13,14 @@ const realBackendSnapshot = { ...realBackend };
 const updateEnvironmentAgentSettingsMock = mock(
   async (environmentId: string, ..._rest: unknown[]) => ({ id: environmentId }) as Environment,
 );
+const getContainerGitHubCredentialStatusMock = mock(async () => ({
+  source: "host-cli" as const,
+  available: true,
+}));
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
+  getContainerGitHubCredentialStatus: getContainerGitHubCredentialStatusMock,
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
 }));
 
@@ -78,8 +84,267 @@ async function submitCreateFlow(options: { turnOffLaunchAgent?: boolean } = {}) 
 describe("CreateEnvironmentFlowDialog", () => {
   beforeEach(() => {
     updateEnvironmentAgentSettingsMock.mockClear();
+    getContainerGitHubCredentialStatusMock.mockClear();
+    getContainerGitHubCredentialStatusMock.mockResolvedValue({
+      source: "host-cli",
+      available: true,
+    });
     useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
     useProjectStore.setState({ projects: [] });
+  });
+
+  test("warns before creating a container when host GitHub CLI credentials are unavailable", async () => {
+    getContainerGitHubCredentialStatusMock.mockResolvedValueOnce({
+      source: "host-cli",
+      available: false,
+    });
+    const createEnvironment = mock(async () => ({ id: "env-no-host-auth" }) as Environment);
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={createEnvironment}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    expect(await screen.findByText("No GitHub CLI credentials found")).toBeTruthy();
+    expect(screen.getByText(/run gh auth login/i)).toBeTruthy();
+    expect(createEnvironment).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create anyway" }));
+    await waitFor(() => expect(createEnvironment).toHaveBeenCalledTimes(1));
+  });
+
+  test("warns when PAT mode is selected without a stored token", async () => {
+    getContainerGitHubCredentialStatusMock.mockResolvedValueOnce({
+      source: "pat",
+      available: false,
+    });
+    const createEnvironment = mock(async () => ({ id: "env-no-pat" }) as Environment);
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={createEnvironment}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    expect(await screen.findByText("No GitHub token configured")).toBeTruthy();
+    expect(screen.getByText(/no token is stored/i)).toBeTruthy();
+    expect(createEnvironment).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Go back" }));
+    expect(createEnvironment).not.toHaveBeenCalled();
+    expect(screen.queryByText("No GitHub token configured")).toBeNull();
+  });
+
+  test("shows the generic warning when credential status cannot be checked", async () => {
+    getContainerGitHubCredentialStatusMock.mockRejectedValueOnce(
+      new Error("credential service unavailable"),
+    );
+    const createEnvironment = mock(async () => ({ id: "env-status-error" }) as Environment);
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={createEnvironment}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    expect(
+      await screen.findByText("GitHub credentials could not be verified"),
+    ).toBeTruthy();
+    expect(screen.getByText(/could not confirm that GitHub credentials are available/i))
+      .toBeTruthy();
+    expect(createEnvironment).not.toHaveBeenCalled();
+  });
+
+  test("cancels a delayed credential preflight when the dialog closes", async () => {
+    let resolveStatus:
+      | ((status: GitHubCredentialStatus) => void)
+      | undefined;
+    getContainerGitHubCredentialStatusMock.mockImplementationOnce(
+      () =>
+        new Promise<GitHubCredentialStatus>((resolve) => {
+          resolveStatus = resolve;
+        }),
+    );
+    const createEnvironment = mock(async () => ({ id: "env-too-late" }) as Environment);
+    const props = {
+      onOpenChange: () => {},
+      projectId: "project-1",
+      createEnvironment,
+      updateEnvironment: () => {},
+      startEnvironment: async () => {},
+    };
+    const view = render(<CreateEnvironmentFlowDialog open {...props} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() =>
+      expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1),
+    );
+
+    view.rerender(<CreateEnvironmentFlowDialog open={false} {...props} />);
+    await act(async () => {
+      resolveStatus?.({ source: "host-cli", available: false });
+      await Promise.resolve();
+    });
+
+    expect(createEnvironment).not.toHaveBeenCalled();
+    expect(screen.queryByText("No GitHub CLI credentials found")).toBeNull();
+  });
+
+  test("ignores a delayed credential result after switching projects", async () => {
+    let resolveStatus:
+      | ((status: GitHubCredentialStatus) => void)
+      | undefined;
+    getContainerGitHubCredentialStatusMock.mockImplementationOnce(
+      () =>
+        new Promise<GitHubCredentialStatus>((resolve) => {
+          resolveStatus = resolve;
+        }),
+    );
+    const createEnvironment = mock(async () => ({ id: "env-project-2" }) as Environment);
+    const sharedProps = {
+      open: true,
+      onOpenChange: () => {},
+      createEnvironment,
+      updateEnvironment: () => {},
+      startEnvironment: async () => {},
+    };
+    const view = render(
+      <CreateEnvironmentFlowDialog projectId="project-1" {...sharedProps} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() =>
+      expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1),
+    );
+
+    view.rerender(
+      <CreateEnvironmentFlowDialog projectId="project-2" {...sharedProps} />,
+    );
+    await act(async () => {
+      resolveStatus?.({ source: "host-cli", available: false });
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText("No GitHub CLI credentials found")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() =>
+      expect(createEnvironment).toHaveBeenCalledWith(
+        "project-2",
+        undefined,
+        "full",
+        undefined,
+        undefined,
+        "containerized",
+        undefined,
+      ),
+    );
+  });
+
+  test("settles a delayed credential preflight when unmounted", async () => {
+    let resolveStatus:
+      | ((status: GitHubCredentialStatus) => void)
+      | undefined;
+    getContainerGitHubCredentialStatusMock.mockImplementationOnce(
+      () =>
+        new Promise<GitHubCredentialStatus>((resolve) => {
+          resolveStatus = resolve;
+        }),
+    );
+    const createEnvironment = mock(async () => ({ id: "env-unmounted" }) as Environment);
+    const view = render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={createEnvironment}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() =>
+      expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1),
+    );
+    view.unmount();
+
+    await act(async () => {
+      resolveStatus?.({ source: "host-cli", available: true });
+      await Promise.resolve();
+    });
+    expect(createEnvironment).not.toHaveBeenCalled();
+  });
+
+  test("cleans up the warning when create-anyway fails", async () => {
+    getContainerGitHubCredentialStatusMock.mockResolvedValueOnce({
+      source: "host-cli",
+      available: false,
+    });
+    const createEnvironment = mock(async () => ({ id: "env-retry" }) as Environment);
+    createEnvironment.mockRejectedValueOnce(new Error("container creation failed"));
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={createEnvironment}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    expect(await screen.findByText("No GitHub CLI credentials found")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Create anyway" }));
+
+    await waitFor(() => expect(createEnvironment).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.queryByText("No GitHub CLI credentials found")).toBeNull(),
+    );
+  });
+
+  test("does not check container GitHub credentials for a local worktree", async () => {
+    const createEnvironment = mock(async () => ({ id: "env-local" }) as Environment);
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={createEnvironment}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Local/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => expect(createEnvironment).toHaveBeenCalledTimes(1));
+    expect(getContainerGitHubCredentialStatusMock).not.toHaveBeenCalled();
   });
 
   test("persists the durable launch intent when the agent will be launched", async () => {

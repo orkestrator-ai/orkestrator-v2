@@ -127,6 +127,32 @@ describe("runCommand", () => {
     expect(stdout).toBe("eof:0");
   });
 
+  test("writes an explicit stdin payload before closing the pipe", async () => {
+    const { stdout } = await runCommand(
+      "node",
+      [
+        "-e",
+        "let data = '';process.stdin.on('data', (c) => { data += c; });process.stdin.on('end', () => { process.stdout.write(data); });",
+      ],
+      { stdin: "credential-from-stdin", timeoutMs: 5_000 },
+    );
+    expect(stdout).toBe("credential-from-stdin");
+  });
+
+  test("preserves binary stdin payloads including NUL bytes", async () => {
+    const payload = Buffer.from([0x00, 0xff, 0x41, 0x00]);
+    const { stdout } = await runCommand(
+      "node",
+      [
+        "-e",
+        "const chunks=[];process.stdin.on('data',(chunk)=>chunks.push(chunk));process.stdin.on('end',()=>process.stdout.write(Buffer.concat(chunks).toString('hex')));",
+      ],
+      { stdin: payload, timeoutMs: 5_000 },
+    );
+
+    expect(stdout).toBe(payload.toString("hex"));
+  });
+
   test("throws with stderr text when the command exits non-zero", async () => {
     await expect(
       runCommand("node", ["-e", "process.stderr.write('boom');process.exit(1)"]),

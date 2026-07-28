@@ -7,6 +7,7 @@
 
 ORKESTRATOR_RUNTIME_ENV_FILE="${ORKESTRATOR_RUNTIME_ENV_FILE:-/tmp/orkestrator-ai/runtime-env.sh}"
 ORKESTRATOR_BASH_ENV_FILE="${ORKESTRATOR_BASH_ENV_FILE:-/tmp/orkestrator-ai/bash-env.sh}"
+ORKESTRATOR_GITHUB_CREDENTIAL_FILE="${ORKESTRATOR_GITHUB_CREDENTIAL_FILE:-/tmp/orkestrator-ai/github-token}"
 
 orkestrator_prepend_path() {
     if [ -z "${1:-}" ] || [ ! -d "$1" ]; then
@@ -242,6 +243,21 @@ orkestrator_source_runtime_env() {
             # shellcheck source=/dev/null
             . "$ORKESTRATOR_RUNTIME_ENV_FILE"
         fi
+    fi
+
+    # The backend refreshes this owner-only file whenever a container starts.
+    # Its presence is authoritative even when empty, so switching credential
+    # modes can override immutable environment variables from container creation.
+    if [ -f "$ORKESTRATOR_GITHUB_CREDENTIAL_FILE" ]; then
+        github_token="$(cat "$ORKESTRATOR_GITHUB_CREDENTIAL_FILE" 2>/dev/null || true)"
+        if [ -n "$github_token" ]; then
+            GITHUB_TOKEN="$github_token"
+            GH_TOKEN="$github_token"
+            export GITHUB_TOKEN GH_TOKEN
+        else
+            unset GITHUB_TOKEN GH_TOKEN
+        fi
+        unset github_token
     fi
 
     orkestrator_add_common_runtime_paths_floor

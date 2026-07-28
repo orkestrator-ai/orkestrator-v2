@@ -11,6 +11,7 @@ const DEFAULT_CONFIG: AppConfig = {
       memoryGb: 4,
     },
     envFilePatterns: [".env.local", ".env"],
+    useHostGitHubCredentials: true,
     allowedDomains: [
       // Package registries and runtimes
       "registry.npmjs.org",

@@ -40,6 +40,12 @@ describe("defaultConfig", () => {
     expect(defaultConfig().global.webClientEnabled).toBe(true);
   });
 
+  test("uses host GitHub CLI credentials by default", () => {
+    expect(defaultConfig().global.useHostGitHubCredentials).toBe(true);
+    expectTypeOf<AppConfig["global"]["useHostGitHubCredentials"]>()
+      .toEqualTypeOf<boolean | undefined>();
+  });
+
   test("allows five concurrent Codex subagent threads by default", () => {
     expect(defaultConfig().global.codexMaxConcurrentThreads).toBe(5);
     expectTypeOf<AppConfig["global"]["codexMaxConcurrentThreads"]>().toEqualTypeOf<number>();
@@ -77,6 +83,42 @@ describe("defaultConfig", () => {
       prBaseBranch: "main",
     });
   });
+});
+
+describe("GitHub credential source config migration", () => {
+  test.each([
+    ["missing source without a PAT", undefined, undefined, true],
+    ["missing source with an empty PAT", undefined, "   ", true],
+    ["missing source with a legacy PAT", undefined, "legacy-pat", false],
+    ["explicit host source with a legacy PAT", true, "legacy-pat", true],
+    ["explicit PAT source without a PAT", false, undefined, false],
+  ] as const)(
+    "%s",
+    async (_label, source, githubToken, expected) => {
+      await withTemporaryStorage(async (storage, dataDir) => {
+        const config = defaultConfig();
+        if (source === undefined) {
+          delete config.global.useHostGitHubCredentials;
+        } else {
+          config.global.useHostGitHubCredentials = source;
+        }
+        if (githubToken === undefined) {
+          delete config.global.githubToken;
+        } else {
+          config.global.githubToken = githubToken;
+        }
+        await fs.writeFile(
+          path.join(dataDir, "config.json"),
+          `${JSON.stringify(config)}\n`,
+          "utf8",
+        );
+
+        const loaded = await storage.loadConfig();
+        expect(loaded.global.useHostGitHubCredentials).toBe(expected);
+        expect(loaded.global.githubToken).toBe(githubToken);
+      });
+    },
+  );
 });
 
 describe("Codex max concurrent thread config storage", () => {

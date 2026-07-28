@@ -211,6 +211,18 @@ const CONTAINER_WORKSPACE_PREPARE_COMMAND = "if command -v flock >/dev/null 2>&1
 const CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER = "ORKESTRATOR_SETUP_CAPABILITIES=prepare-only";
 const CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL = `${String.fromCharCode(0x1e)}ORKESTRATOR_PREPARE_SUPPORTED${String.fromCharCode(0x1f)}`;
 const CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL = `${String.fromCharCode(0x1e)}ORKESTRATOR_PREPARE_OK${String.fromCharCode(0x1f)}`;
+const CONTAINER_INTERACTIVE_SHELL_COMMAND = [
+  "source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true",
+  "orkestrator_source_runtime_env 2>/dev/null || true",
+  "exec zsh -l",
+].join("\n");
+function withContainerRuntimeCredential(command: string): string {
+  return [
+    "source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true",
+    "orkestrator_source_runtime_env 2>/dev/null || true",
+    command,
+  ].join("\n");
+}
 /** Renders a sentinel as a `printf` format string, so the shell cannot drift from it. */
 function shellPrintfSentinel(sentinel: string): string {
   return sentinel.replace(
@@ -675,7 +687,10 @@ async function detectEnvironmentPullRequest(
     return parsePrMonitorDetectionResponse(request, stdout);
   }
   if (!target.containerId) throw new Error("Container environment has no container id");
-  const output = await dockerExec(target.containerId, request.shellCommand);
+  const output = await dockerExec(
+    target.containerId,
+    withContainerRuntimeCredential(request.shellCommand),
+  );
   return parsePrMonitorDetectionResponse(request, output);
 }
 
@@ -1557,7 +1572,11 @@ function createLocalGhRunner(cwd: string): GhCliRunner {
 
 function createContainerGhRunner(containerId: string): GhCliRunner {
   return (args, timeoutMs = 60_000) =>
-    dockerExec(containerId, ["gh", ...args].map(quoteShell).join(" "), timeoutMs);
+    dockerExec(
+      containerId,
+      withContainerRuntimeCredential(["gh", ...args].map(quoteShell).join(" ")),
+      timeoutMs,
+    );
 }
 
 type EnvironmentCommandRunner = (
@@ -5406,28 +5425,90 @@ async function readLocalFileAtBranch(worktreePath: string, filePath: string, bra
   }
 }
 
-function clearGitHubTokenGitConfigCommand(): string {
-  return "git config --global --list 2>/dev/null | grep '^url\\.https://x-access-token:' | sed 's/\\.insteadof=.*//' | sort -u | while read -r section; do git config --global --remove-section \"$section\" 2>/dev/null || true; done";
+function buildSyncContainerGitHubCredentialCommand(
+  credentialFile = "/tmp/orkestrator-ai/github-token",
+): string {
+  return `
+  set -e
+  credential_file=${quoteShell(credentialFile)}
+  credential_dir="$(dirname "$credential_file")"
+  mkdir -p "$credential_dir"
+  umask 077
+  cat > "$credential_file"
+  chmod 600 "$credential_file"
+
+  git config --global --list 2>/dev/null |
+    grep '^url\\.https://x-access-token:' |
+    sed 's/\\.insteadof=.*//' |
+    sort -u |
+    while read -r section; do
+      git config --global --remove-section "$section" 2>/dev/null || true
+    done
+
+  token="$(cat "$credential_file")"
+  if [ -n "$token" ]; then
+    token_url="https://x-access-token:$token@github.com/"
+    git config --global --replace-all "url.$token_url.insteadOf" "https://github.com/"
+    git config --global --add "url.$token_url.insteadOf" "https://github.com"
+    git config --global --add "url.$token_url.insteadOf" "git@github.com:"
+  fi
+  unset token token_url
+`;
 }
 
-function setGitHubTokenGitConfigCommand(token: string): string {
-  const tokenUrl = `https://x-access-token:${token}@github.com/`;
-  const rewrites = ["https://github.com/", "https://github.com", "git@github.com:"];
-  return [
-    clearGitHubTokenGitConfigCommand(),
-    ...rewrites.map((rewrite) => `git config --global --add ${quoteShell(`url.${tokenUrl}.insteadOf`)} ${quoteShell(rewrite)}`),
-  ].join("\n");
+const SYNC_CONTAINER_GITHUB_CREDENTIAL_COMMAND =
+  buildSyncContainerGitHubCredentialCommand();
+
+async function getHostGitHubToken(): Promise<string | undefined> {
+  try {
+    const { stdout } = await runCommand(
+      "gh",
+      ["auth", "token", "--hostname", "github.com"],
+      { timeoutMs: 10_000 },
+    );
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
-function githubTokenPropagationCommand(newToken: string | undefined): string {
-  const token = newToken?.trim();
-  return token ? setGitHubTokenGitConfigCommand(token) : clearGitHubTokenGitConfigCommand();
+async function resolveContainerGitHubToken(
+  globalConfig: AppConfig["global"],
+): Promise<string | undefined> {
+  if (globalConfig.useHostGitHubCredentials !== false) {
+    return getHostGitHubToken();
+  }
+  return globalConfig.githubToken?.trim() || undefined;
 }
 
-function redactSecret(message: string, secret: string | undefined): string {
-  const trimmed = secret?.trim();
-  if (!trimmed) return message;
-  return message.split(trimmed).join("***");
+async function getContainerGitHubCredentialStatus(
+  globalConfig: AppConfig["global"],
+): Promise<{ source: "host-cli" | "pat"; available: boolean }> {
+  if (globalConfig.useHostGitHubCredentials !== false) {
+    return {
+      source: "host-cli",
+      available: Boolean(await getHostGitHubToken()),
+    };
+  }
+  return {
+    source: "pat",
+    available: Boolean(globalConfig.githubToken?.trim()),
+  };
+}
+
+async function syncContainerGitHubCredential(
+  containerId: string,
+  token: string | undefined,
+): Promise<void> {
+  await runCommand(
+    "docker",
+    ["exec", "-i", containerId, "bash", "-lc", SYNC_CONTAINER_GITHUB_CREDENTIAL_COMMAND],
+    {
+      stdin: token ?? "",
+      timeoutMs: 30_000,
+      redactValues: [token],
+    },
+  );
 }
 
 async function createDockerContainer(environment: Environment, context: CommandContext): Promise<string> {
@@ -5463,18 +5544,8 @@ async function createDockerContainer(environment: Environment, context: CommandC
     "TERM=xterm-256color",
   ];
 
-  const githubToken = config.global.githubToken?.trim();
   const dockerEnvironment: NodeJS.ProcessEnv = { ...process.env };
   const redactValues: string[] = [];
-  if (githubToken) {
-    // Use Docker's host-environment passthrough form so credentials are not
-    // present in the process argv (and therefore cannot appear in command
-    // failure messages or process listings).
-    dockerEnvironment.GITHUB_TOKEN = githubToken;
-    dockerEnvironment.GH_TOKEN = githubToken;
-    redactValues.push(githubToken);
-    args.push("-e", "GITHUB_TOKEN", "-e", "GH_TOKEN");
-  }
   const anthropicApiKey = config.global.anthropicApiKey?.trim();
   if (anthropicApiKey) {
     dockerEnvironment.ANTHROPIC_API_KEY = anthropicApiKey;
@@ -5609,6 +5680,7 @@ async function startContainerOpenCodeServer(
     printf '%s' ${quoteShell(authToken)} > /tmp/opencode-server-password
     source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
     orkestrator_source_runtime_env 2>/dev/null || true
+    unset GITHUB_TOKEN GH_TOKEN
     export OPENCODE_SERVER_USERNAME=opencode
     export OPENCODE_SERVER_PASSWORD=${quoteShell(authToken)}
     setsid opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0 > /tmp/opencode-serve.log 2>&1 &
@@ -5661,6 +5733,7 @@ async function startContainerClaudeServer(
       printf '%s' ${quoteShell(authToken)} > /tmp/claude-bridge-token
       source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
       orkestrator_source_runtime_env 2>/dev/null || true
+      unset GITHUB_TOKEN GH_TOKEN
       export PORT=${CLAUDE_BRIDGE_PORT}
       export HOSTNAME=0.0.0.0
       export CLAUDE_BRIDGE_TOKEN=${quoteShell(authToken)}
@@ -6420,6 +6493,9 @@ export function createCommandRegistry(
         await storage.updateEnvironment(environment.id, { containerId });
       }
       await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
+      const config = await storage.loadConfig();
+      const githubToken = await resolveContainerGitHubToken(config.global);
+      await syncContainerGitHubCredential(containerId, githubToken);
       const hostEntryPort = environment.entryPort ? await getHostPort(containerId, environment.entryPort) : null;
       const updated = await storage.updateEnvironment(environment.id, {
         status: "running",
@@ -6721,7 +6797,15 @@ export function createCommandRegistry(
     await context.storage.updateEnvironment(environment.id, { containerId });
     return containerId;
   });
-  register("docker_start_container", ({ containerId }) => runCommand("docker", ["start", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
+  register("docker_start_container", async ({ containerId }, { storage }) => {
+    const id = asString(containerId, "containerId");
+    await runCommand("docker", ["start", id], { timeoutMs: 60_000 });
+    const config = await storage.loadConfig();
+    await syncContainerGitHubCredential(
+      id,
+      await resolveContainerGitHubToken(config.global),
+    );
+  });
   register("docker_stop_container", ({ containerId }) => runCommand("docker", ["stop", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
   register("docker_remove_container", ({ containerId }) => runCommand("docker", ["rm", "-f", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
   register("docker_container_status", ({ containerId }) => getDockerStatus(asString(containerId, "containerId")));
@@ -6778,18 +6862,20 @@ export function createCommandRegistry(
     env.status = await getDockerStatus(env.containerId).catch(() => "stopped");
     return storage.addEnvironment(env);
   });
-  register("propagate_github_token_to_containers", async ({ newToken }, { storage }) => {
+  register("propagate_github_token_to_containers", async (_args, { storage }) => {
+    const config = await storage.loadConfig();
+    const githubToken = await resolveContainerGitHubToken(config.global);
     const environments = await storage.loadEnvironments();
     const updated: string[] = [];
     const failed: [string, string][] = [];
     for (const env of environments) {
       if (!env.containerId || await getDockerStatus(env.containerId).catch(() => "stopped") !== "running") continue;
       try {
-        await dockerExec(env.containerId, githubTokenPropagationCommand(asOptionalString(newToken)));
+        await syncContainerGitHubCredential(env.containerId, githubToken);
         updated.push(env.id);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        failed.push([env.id, redactSecret(message, asOptionalString(newToken))]);
+        failed.push([env.id, message]);
       }
     }
     return { updated, failed };
@@ -6971,6 +7057,7 @@ export function createCommandRegistry(
           printf '%s' ${quoteShell(authToken)} > /tmp/codex-bridge-token
           source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
           orkestrator_source_runtime_env 2>/dev/null || true
+          unset GITHUB_TOKEN GH_TOKEN
           export PORT=${CODEX_BRIDGE_PORT}
           export HOSTNAME=0.0.0.0
           export CWD=/workspace
@@ -7039,6 +7126,8 @@ export function createCommandRegistry(
   register("check_opencode_cli", (_args, context) => hasPackagedOrPathBinary(context, "opencode"));
   register("check_codex_cli", (_args, context) => hasPackagedOrPathBinary(context, "codex"));
   register("check_github_cli", () => commandExists("gh"));
+  register("get_container_github_credential_status", async (_args, context) =>
+    getContainerGitHubCredentialStatus((await context.storage.loadConfig()).global));
   register("check_any_ai_cli", async (_args, context) =>
     await hasPackagedOrPathBinary(context, "claude")
     || await hasPackagedOrPathBinary(context, "opencode")
@@ -7397,7 +7486,12 @@ export function createCommandRegistry(
     rememberTerminalSession(id, config);
     const dockerArgs = ["exec", "-it"];
     if (config.user) dockerArgs.push("--user", config.user);
-    dockerArgs.push(config.containerId, "zsh", "-l");
+    dockerArgs.push(
+      config.containerId,
+      "bash",
+      "-lc",
+      CONTAINER_INTERACTIVE_SHELL_COMMAND,
+    );
     spawnTerminalProcess(id, "docker", dockerArgs, config, emit);
     return id;
   });
@@ -7426,7 +7520,12 @@ export function createCommandRegistry(
     }
     const dockerArgs = ["exec", "-it"];
     if (config.user) dockerArgs.push("--user", config.user);
-    dockerArgs.push(config.containerId, "zsh", "-l");
+    dockerArgs.push(
+      config.containerId,
+      "bash",
+      "-lc",
+      CONTAINER_INTERACTIVE_SHELL_COMMAND,
+    );
     spawnTerminalProcess(id, "docker", dockerArgs, config, emit, trackedTerminalActivityHooks(id, context));
   });
   register("terminal_write", ({ sessionId, data }, context) => {
@@ -7784,7 +7883,9 @@ export function createCommandRegistry(
     const headBranch = validatePrDetectionBranch(branch);
     const output = await dockerExec(
       asString(containerId, "containerId"),
-      `gh pr list --head ${quoteShell(headBranch)} --state all --limit 30 --json url,state,mergeable,updatedAt`,
+      withContainerRuntimeCredential(
+        `gh pr list --head ${quoteShell(headBranch)} --state all --limit 30 --json url,state,mergeable,updatedAt`,
+      ),
     );
     return parsePrDetectionOutput(output, headBranch);
   });
@@ -7963,6 +8064,7 @@ export const __testing = {
   isMissingTargetRefResponse,
   buildContainerGitStatusScript,
   parseHeadCommit,
+  buildSyncContainerGitHubCredentialCommand,
   countLocalFileLines,
   establishCreatedFromCommit,
   completeEnvironmentSetup,

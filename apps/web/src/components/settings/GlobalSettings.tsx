@@ -85,6 +85,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [memoryGb, setMemoryGb] = useState(global.containerResources.memoryGb);
   const [envPatterns, setEnvPatterns] = useState(global.envFilePatterns.join(", "));
   const [anthropicApiKey, setAnthropicApiKey] = useState(global.anthropicApiKey || "");
+  const [useHostGitHubCredentials, setUseHostGitHubCredentials] = useState(
+    global.useHostGitHubCredentials ?? true
+  );
   const [githubToken, setGithubToken] = useState("");
   const [clearGithubToken, setClearGithubToken] = useState(false);
   const [allowedDomains, setAllowedDomains] = useState(
@@ -160,6 +163,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
+  const [githubCredentialPropagationPending, setGithubCredentialPropagationPending] =
+    useState(false);
   const [domainErrors, setDomainErrors] = useState<string[]>([]);
   const [colorError, setColorError] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState(false);
@@ -172,6 +177,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setMemoryGb(global.containerResources.memoryGb);
     setEnvPatterns(global.envFilePatterns.join(", "));
     setAnthropicApiKey(global.anthropicApiKey || "");
+    setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
     setGithubToken("");
     setClearGithubToken(false);
     setAllowedDomains((global.allowedDomains || []).join("\n"));
@@ -268,8 +274,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       memoryGb !== global.containerResources.memoryGb ||
       envPatterns !== global.envFilePatterns.join(", ") ||
       anthropicApiKey !== (global.anthropicApiKey || "") ||
+      useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true) ||
       githubToken.trim().length > 0 ||
       clearGithubToken ||
+      githubCredentialPropagationPending ||
       allowedDomains !== (global.allowedDomains || []).join("\n") ||
       preferredEditor !== (global.preferredEditor || "vscode") ||
       defaultAgent !== (global.defaultAgent || "claude") ||
@@ -296,7 +304,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, clearGithubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, useHostGitHubCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -369,6 +377,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         envFilePatterns: string[];
         allowedDomains: string[];
         anthropicApiKey?: string;
+        useHostGitHubCredentials: boolean;
         preferredEditor?: PreferredEditor;
         defaultAgent: DefaultAgent;
         opencodeModel: string;
@@ -399,6 +408,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         containerResources: { cpuCores, memoryGb },
         envFilePatterns: patterns,
         allowedDomains: domains,
+        useHostGitHubCredentials,
         preferredEditor,
         defaultAgent,
         opencodeModel,
@@ -430,8 +440,11 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
       let newConfig = await backend.updateGlobalConfig(newGlobal);
       const nextGitHubToken = githubToken.trim();
-      const githubCredentialChanged = clearGithubToken || nextGitHubToken.length > 0;
-      if (githubCredentialChanged) {
+      const githubCredentialSourceChanged =
+        useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true);
+      const githubTokenChanged = clearGithubToken || nextGitHubToken.length > 0;
+      const githubCredentialChanged = githubCredentialSourceChanged || githubTokenChanged;
+      if (githubTokenChanged) {
         newConfig = await backend.setGitHubToken(
           clearGithubToken ? null : nextGitHubToken,
         );
@@ -464,26 +477,54 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         setSavedGatewayToken(nextGatewayTokenSettings.token);
       }
 
-      // Propagate GitHub token to running containers if it changed
-      if (githubCredentialChanged) {
+      // Apply the selected credential source to running containers if it changed,
+      // or retry a previous partial propagation failure.
+      let githubCredentialPropagationFailed = false;
+      if (githubCredentialChanged || githubCredentialPropagationPending) {
         try {
-          const propagateResult = await backend.propagateGithubTokenToContainers(
-            clearGithubToken ? null : nextGitHubToken,
-          );
-          if (propagateResult.updated.length > 0) {
-            toast.success(`Updated GitHub token in ${propagateResult.updated.length} container(s)`);
+          const propagateResult = await backend.propagateGithubCredentialsToContainers();
+          if (propagateResult.failed.length > 0) {
+            githubCredentialPropagationFailed = true;
+            setGithubCredentialPropagationPending(true);
+            const failureDetails = propagateResult.failed
+              .slice(0, 3)
+              .map(([environmentId, message]) => `${environmentId}: ${message}`)
+              .join("; ");
+            const remainingFailureCount = Math.max(0, propagateResult.failed.length - 3);
+            toast.error("Settings saved, but some containers were not updated", {
+              description: [
+                propagateResult.updated.length > 0
+                  ? `Updated ${propagateResult.updated.length} container(s).`
+                  : null,
+                `Failed: ${failureDetails}${remainingFailureCount > 0 ? `; and ${remainingFailureCount} more` : ""}.`,
+                "Save Changes to retry.",
+              ].filter(Boolean).join(" "),
+            });
+          } else {
+            setGithubCredentialPropagationPending(false);
+          }
+          if (propagateResult.updated.length > 0 && propagateResult.failed.length === 0) {
+            toast.success(`Updated GitHub credentials in ${propagateResult.updated.length} container(s)`);
           }
         } catch (err) {
-          console.error("[settings] Failed to propagate token:", err);
+          console.error("[settings] Failed to propagate GitHub credentials:", err);
+          githubCredentialPropagationFailed = true;
+          setGithubCredentialPropagationPending(true);
+          const message = err instanceof Error ? err.message : String(err);
+          toast.error("Settings saved, but containers were not updated", {
+            description: `${message}. Save Changes to retry.`,
+          });
         }
       }
 
       setGithubToken("");
       setClearGithubToken(false);
-      setHasChanges(false);
-      setSaveSuccess(true);
-      toast.success("Settings saved");
-      setTimeout(() => { onSaveSuccess?.(); }, 500);
+      setHasChanges(githubCredentialPropagationFailed);
+      setSaveSuccess(!githubCredentialPropagationFailed);
+      if (!githubCredentialPropagationFailed) {
+        toast.success("Settings saved");
+        setTimeout(() => { onSaveSuccess?.(); }, 500);
+      }
     } catch (err) {
       console.error("[settings] Failed to save config:", err);
       const message = err instanceof Error ? err.message : "Failed to save settings";
@@ -498,6 +539,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setMemoryGb(global.containerResources.memoryGb);
     setEnvPatterns(global.envFilePatterns.join(", "));
     setAnthropicApiKey(global.anthropicApiKey || "");
+    setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
     setGithubToken("");
     setClearGithubToken(false);
     setAllowedDomains((global.allowedDomains || []).join("\n"));
@@ -729,60 +771,106 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         <div>
           <h3 className="text-sm font-medium text-foreground flex items-center gap-2">
             <Github className="h-4 w-4" />
-            GitHub Token
+            GitHub authentication
           </h3>
-          <p className="text-xs text-muted-foreground mt-1">For cloning private repos and pushing via HTTPS</p>
-        </div>
-        <div className="relative">
-          <Input
-            aria-label="GitHub token"
-            type={showGithubToken ? "text" : "password"}
-            value={githubToken}
-            onChange={(e) => {
-              setGithubToken(e.target.value);
-              if (e.target.value) setClearGithubToken(false);
-            }}
-            placeholder={
-              global.githubTokenConfigured && !clearGithubToken
-                ? "Token configured — enter a replacement"
-                : "ghp_..."
-            }
-            className="pr-10 font-mono"
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
-            onClick={() => setShowGithubToken(!showGithubToken)}
-          >
-            {showGithubToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-          </Button>
-        </div>
-        {global.githubTokenConfigured && !clearGithubToken && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setGithubToken("");
-              setClearGithubToken(true);
-            }}
-          >
-            Clear stored token
-          </Button>
-        )}
-        {clearGithubToken && (
-          <p className="text-xs text-amber-500">
-            The stored GitHub token will be cleared when you save.
+          <p className="text-xs text-muted-foreground mt-1">
+            Used by containers to clone private repositories and push over HTTPS.
           </p>
-        )}
-        <p className="text-xs text-muted-foreground">
-          Create at{" "}
-          <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
-            github.com/settings/tokens
-          </a>
-        </p>
+        </div>
+        <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
+          <div className="flex items-center justify-between gap-6 p-4">
+            <div className="min-w-0 space-y-1">
+              <Label htmlFor="use-host-github-credentials" className="flex items-center gap-2 text-sm font-medium">
+                <Terminal className="h-3.5 w-3.5 text-emerald-400" />
+                Use host GitHub CLI credentials
+              </Label>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Reuses the account signed in with <code className="font-mono text-zinc-300">gh auth login</code> on this computer.
+              </p>
+            </div>
+            <Switch
+              id="use-host-github-credentials"
+              aria-label="Use host GitHub CLI credentials"
+              checked={useHostGitHubCredentials}
+              disabled={isSaving}
+              onCheckedChange={setUseHostGitHubCredentials}
+            />
+          </div>
+
+          {useHostGitHubCredentials ? (
+            <div className="border-t border-zinc-800 bg-emerald-500/[0.04] px-4 py-3">
+              <p className="text-xs text-muted-foreground">
+                Host CLI authentication is selected.
+                {global.githubTokenConfigured && !clearGithubToken
+                  ? " Your stored PAT remains available if you turn this off."
+                  : ""}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3 border-t border-zinc-800 p-4">
+              <div className="space-y-1">
+                <Label htmlFor="github-token" className="text-sm font-medium">
+                  Personal access token
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Stored securely by Orkestrator and used instead of the host CLI account.
+                </p>
+              </div>
+              <div className="relative">
+                <Input
+                  id="github-token"
+                  aria-label="GitHub token"
+                  type={showGithubToken ? "text" : "password"}
+                  value={githubToken}
+                  onChange={(e) => {
+                    setGithubToken(e.target.value);
+                    if (e.target.value) setClearGithubToken(false);
+                  }}
+                  placeholder={
+                    global.githubTokenConfigured && !clearGithubToken
+                      ? "Token configured — enter a replacement"
+                      : "ghp_..."
+                  }
+                  className="pr-10 font-mono"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2"
+                  onClick={() => setShowGithubToken(!showGithubToken)}
+                  aria-label={showGithubToken ? "Hide GitHub token" : "Show GitHub token"}
+                >
+                  {showGithubToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
+              </div>
+              {global.githubTokenConfigured && !clearGithubToken && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setGithubToken("");
+                    setClearGithubToken(true);
+                  }}
+                >
+                  Clear stored token
+                </Button>
+              )}
+              {clearGithubToken && (
+                <p className="text-xs text-amber-500">
+                  The stored GitHub token will be cleared when you save.
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Create one at{" "}
+                <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                  github.com/settings/tokens
+                </a>
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Environment Files */}

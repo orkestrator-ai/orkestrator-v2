@@ -180,7 +180,11 @@ export interface ClaudeOptions {
 interface CreateEnvironmentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreate: (options: ClaudeOptions) => Promise<void>;
+  /**
+   * Return false when creation has been deferred or cancelled by a preflight.
+   * Any other successful result completes the form submission normally.
+   */
+  onCreate: (options: ClaudeOptions) => Promise<void | boolean>;
   isLoading?: boolean;
   /** Project ID for persisting draft prompt text */
   projectId?: string | null;
@@ -763,7 +767,7 @@ export function CreateEnvironmentDialog({
       }
 
       try {
-        await onCreate({
+        const created = await onCreate({
           environmentType,
           environmentName: environmentName.trim(),
           launchAgent,
@@ -782,6 +786,7 @@ export function CreateEnvironmentDialog({
           networkAccessMode,
           portMappings: environmentType === "containerized" ? portMappings : [],
         });
+        if (created === false) return;
         // Clear the draft on successful creation and close directly
         // (bypass handleOpenChange which would re-save the draft)
         if (projectId) {

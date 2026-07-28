@@ -362,10 +362,13 @@ git config --global --replace-all credential.helper "" 2>/dev/null || true
 export GIT_TERMINAL_PROMPT=0
 if [ -n "$TOKEN" ]; then
     echo -e "${BLUE}>>> Configuring GitHub token for HTTPS <<<${NC}"
-    git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-    git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com"
+    # Credential synchronization may already have installed this multi-valued
+    # rewrite before setup starts. Replace the first value explicitly, then add
+    # the remaining URL forms so rerunning setup stays idempotent.
+    git config --global --replace-all url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+    git config --global --add url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com"
     # Also rewrite SSH URLs to use token auth (belt and suspenders)
-    git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"
+    git config --global --add url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"
 fi
 
 print_workspace_disk_status() {

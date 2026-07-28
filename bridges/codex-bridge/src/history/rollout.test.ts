@@ -1207,6 +1207,27 @@ describe("rollout public helpers (continued)", () => {
         },
       },
       {
+        timestamp: "2026-07-25T12:01:05.100Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "exec",
+          call_id: "call-custom-exec",
+          input:
+            "const r = await tools.exec_command({\"cmd\":\"bun test --parallel\",\"yield_time_ms\":30000});",
+          status: "completed",
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:01:05.200Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "call-custom-exec",
+          output: "All tests passed",
+        },
+      },
+      {
         type: "response_item",
         payload: {
           type: "function_call_output",
@@ -1270,6 +1291,20 @@ describe("rollout public helpers (continued)", () => {
           toolState: "success",
           toolTitle: "apply_patch",
           toolOutput: "Patch applied to 1 file",
+          toolError: undefined,
+        },
+        {
+          type: "tool-invocation",
+          content: "exec",
+          toolName: "exec",
+          toolArgs: {
+            input:
+              "const r = await tools.exec_command({\"cmd\":\"bun test --parallel\",\"yield_time_ms\":30000});",
+            command: "bun test --parallel",
+          },
+          toolState: "success",
+          toolTitle: "exec",
+          toolOutput: "All tests passed",
           toolError: undefined,
         },
         { type: "text", content: "The repository has one modified file." },

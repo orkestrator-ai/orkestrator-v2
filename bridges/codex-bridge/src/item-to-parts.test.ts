@@ -148,6 +148,54 @@ describe("itemToParts", () => {
     expect(parts[0]!.toolState).toBe("pending");
   });
 
+  test("converts dynamic exec calls to command-labelled tool invocations", async () => {
+    const item: EngineItem = {
+      id: "dynamic-1",
+      type: "dynamic_tool_call",
+      namespace: "functions",
+      tool: "exec",
+      arguments:
+        "const r = await tools.exec_command({\"cmd\":\"git status --short\",\"yield_time_ms\":10000});",
+      content_items: [
+        { type: "inputText", text: " M src/example.ts" },
+        { type: "inputImage", imageUrl: "data:image/png;base64,abc" },
+      ],
+      status: "completed",
+    };
+
+    expect(await itemToParts(item, DUMMY_CWD)).toEqual([{
+      type: "tool-invocation",
+      content: "exec",
+      toolName: "exec",
+      toolArgs: {
+        input:
+          "const r = await tools.exec_command({\"cmd\":\"git status --short\",\"yield_time_ms\":10000});",
+        command: "git status --short",
+      },
+      toolState: "success",
+      toolTitle: "exec",
+      toolOutput: " M src/example.ts\ndata:image/png;base64,abc",
+      toolError: undefined,
+    }]);
+  });
+
+  test("renders failed dynamic tool output as an error", async () => {
+    const item: EngineItem = {
+      id: "dynamic-2",
+      type: "dynamic_tool_call",
+      tool: "exec",
+      arguments: "throw new Error('nope')",
+      content_items: [{ type: "inputText", text: "nope" }],
+      status: "failed",
+    };
+
+    expect((await itemToParts(item, DUMMY_CWD))[0]).toMatchObject({
+      toolState: "failure",
+      toolOutput: undefined,
+      toolError: "nope",
+    });
+  });
+
   test("converts failed command with empty output to default error message", async () => {
     const item = {
       id: "cmd-4",

@@ -63,6 +63,16 @@ export interface McpToolCallItem {
   status: McpToolCallStatus;
 }
 
+export interface DynamicToolCallItem {
+  id: string;
+  type: "dynamic_tool_call";
+  namespace?: string;
+  tool: string;
+  arguments: unknown;
+  content_items: unknown[];
+  status: McpToolCallStatus;
+}
+
 export interface AgentMessageItem {
   id: string;
   type: "agent_message";
@@ -106,6 +116,7 @@ export type ThreadItem =
   | CommandExecutionItem
   | FileChangeItem
   | McpToolCallItem
+  | DynamicToolCallItem
   | WebSearchItem
   | TodoListItem
   | ErrorItem;

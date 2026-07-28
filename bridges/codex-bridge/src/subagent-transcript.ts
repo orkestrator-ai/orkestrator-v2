@@ -111,6 +111,92 @@ function parseJson<T>(value: unknown): T | null {
   }
 }
 
+function decodeJavascriptStringBody(body: string): string {
+  return body.replace(
+    /\\(?:u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|([\\'"`bfnrtv0]))/g,
+    (_match, codePoint: string | undefined, unicode: string | undefined, hex: string | undefined, simple: string | undefined) => {
+      if (codePoint) {
+        const value = Number.parseInt(codePoint, 16);
+        return Number.isSafeInteger(value) && value <= 0x10ffff
+          ? String.fromCodePoint(value)
+          : _match;
+      }
+      if (unicode) return String.fromCharCode(Number.parseInt(unicode, 16));
+      if (hex) return String.fromCharCode(Number.parseInt(hex, 16));
+      switch (simple) {
+        case "b": return "\b";
+        case "f": return "\f";
+        case "n": return "\n";
+        case "r": return "\r";
+        case "t": return "\t";
+        case "v": return "\v";
+        case "0": return "\0";
+        default: return simple ?? _match;
+      }
+    },
+  );
+}
+
+function readJavascriptStringLiteral(
+  source: string,
+  start: number,
+): { value: string; end: number } | null {
+  const quote = source[start];
+  if (quote !== "\"" && quote !== "'" && quote !== "`") return null;
+
+  let escaped = false;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character !== quote) continue;
+
+    const literal = source.slice(start, index + 1);
+    if (quote === "\"") {
+      try {
+        const value = JSON.parse(literal);
+        if (typeof value === "string") return { value, end: index + 1 };
+      } catch {
+        // JavaScript permits a few escapes JSON does not; use the bounded
+        // decoder below rather than evaluating transcript content.
+      }
+    }
+    return {
+      value: decodeJavascriptStringBody(literal.slice(1, -1)),
+      end: index + 1,
+    };
+  }
+  return null;
+}
+
+/**
+ * Pulls a useful shell-command preview out of the raw JavaScript accepted by
+ * Codex's custom `exec` tool. This deliberately recognizes only static string
+ * literals in `cmd` object properties and never evaluates rollout content.
+ */
+export function extractExecCommandPreview(input: string): string | undefined {
+  const commands: string[] = [];
+  const commandProperty = /(?:^|[,{])\s*(?:"cmd"|'cmd'|cmd)\s*:\s*/g;
+
+  for (const match of input.matchAll(commandProperty)) {
+    const valueStart = (match.index ?? 0) + match[0].length;
+    const literal = readJavascriptStringLiteral(input, valueStart);
+    const command = literal?.value.trim();
+    if (command && !commands.includes(command)) commands.push(command);
+  }
+
+  if (commands.length === 0) return undefined;
+  return commands.length === 1
+    ? commands[0]
+    : `${commands[0]} (+${commands.length - 1} more)`;
+}
+
 export function normalizeTranscriptToolArgs(
   toolName: string,
   rawArgs: unknown,
@@ -118,9 +204,16 @@ export function normalizeTranscriptToolArgs(
   const parsed = typeof rawArgs === "string" ? parseJson<Record<string, unknown>>(rawArgs) : rawArgs;
 
   if (!isRecord(parsed)) {
-    return typeof rawArgs === "string" && rawArgs.trim().length > 0
-      ? { input: rawArgs }
+    if (typeof rawArgs !== "string" || rawArgs.trim().length === 0) {
+      return undefined;
+    }
+    const command = toolName === "exec"
+      ? extractExecCommandPreview(rawArgs)
       : undefined;
+    return {
+      input: rawArgs,
+      ...(command ? { command } : {}),
+    };
   }
 
   let normalized = parsed;
@@ -144,6 +237,16 @@ export function normalizeTranscriptToolArgs(
       ...normalized,
       command: normalized.cmd,
     };
+  }
+
+  if (toolName === "exec") {
+    const input = typeof normalized.input === "string"
+      ? normalized.input
+      : typeof rawArgs === "string"
+        ? rawArgs
+        : undefined;
+    const command = input ? extractExecCommandPreview(input) : undefined;
+    if (command) return { ...normalized, command };
   }
 
   return normalized;

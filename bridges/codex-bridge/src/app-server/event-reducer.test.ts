@@ -604,6 +604,38 @@ describe("item adaptation", () => {
     });
   });
 
+  test("dynamicToolCall becomes a renderable live item", () => {
+    expect(reduce("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "dynamic-1",
+        type: "dynamicToolCall",
+        namespace: "functions",
+        tool: "exec",
+        arguments: "const r = await tools.exec_command({ cmd: \"git status\" });",
+        status: "inProgress",
+        contentItems: null,
+        success: null,
+      },
+    })).toEqual([{
+      kind: "item.started",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "dynamic-1",
+        type: "dynamic_tool_call",
+        namespace: "functions",
+        tool: "exec",
+        arguments: "const r = await tools.exec_command({ cmd: \"git status\" });",
+        content_items: [],
+        status: "in_progress",
+      },
+      engineGeneration: 1,
+      handle: "handle-1",
+    }]);
+  });
+
   test("collabAgentToolCall converts to the existing snake_case collab shape", () => {
     // Matching the shape the rollout-based subagent reconciler already consumes
     // is what lets native and rollout sources be compared during rollout.

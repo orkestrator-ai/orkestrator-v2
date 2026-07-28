@@ -312,6 +312,15 @@ function ToolPart({
       return query;
     }
 
+    // Custom tools such as Codex's `exec` carry raw input rather than a
+    // provider-standard argument shape. Keep the collapsed row informative
+    // even when the bridge cannot safely derive a more specific command.
+    const input = toolArgs.input;
+    if (typeof input === "string" && input.trim()) {
+      const preview = input.trim().replace(/\s+/g, " ");
+      return preview.length > 180 ? `${preview.slice(0, 179)}…` : preview;
+    }
+
     return null;
   };
 

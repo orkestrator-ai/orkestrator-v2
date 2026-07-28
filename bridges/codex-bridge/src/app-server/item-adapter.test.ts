@@ -60,6 +60,40 @@ describe("item adapter edge cases", () => {
     });
   });
 
+  test("renders dynamic tool calls and trusts an explicit failed outcome", () => {
+    expect(adaptAppServerItem({
+      id: "dynamic",
+      type: "dynamicToolCall",
+      namespace: "functions",
+      tool: "exec",
+      status: "completed",
+      success: false,
+      arguments: "const r = await tools.exec_command({ cmd: \"git status\" });",
+      contentItems: [{ type: "inputText", text: "command failed" }],
+    }).item).toEqual({
+      id: "dynamic",
+      type: "dynamic_tool_call",
+      namespace: "functions",
+      tool: "exec",
+      status: "failed",
+      arguments: "const r = await tools.exec_command({ cmd: \"git status\" });",
+      content_items: [{ type: "inputText", text: "command failed" }],
+    });
+
+    expect(adaptAppServerItem({
+      id: "pending",
+      type: "dynamicToolCall",
+      tool: "exec",
+      status: "inProgress",
+      arguments: null,
+      contentItems: null,
+    }).item).toMatchObject({
+      type: "dynamic_tool_call",
+      status: "in_progress",
+      content_items: [],
+    });
+  });
+
   test("rejects malformed collaboration and subagent identities", () => {
     expect(adaptAppServerItem({
       id: "collab",
@@ -77,7 +111,6 @@ describe("item adapter edge cases", () => {
     for (const type of [
       "userMessage",
       "hookPrompt",
-      "dynamicToolCall",
       "imageView",
       "imageGeneration",
       "sleep",

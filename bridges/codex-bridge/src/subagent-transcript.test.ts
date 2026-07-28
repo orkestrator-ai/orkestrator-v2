@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   capActionOutput,
   deriveSubagentPartsFromTranscriptRecords,
+  extractExecCommandPreview,
   MAX_SUBAGENT_ACTION_OUTPUT_CHARS,
   mergeSubagentPartsIntoMessageParts,
   parseSubAgentActivityRecords,
@@ -9,6 +10,30 @@ import {
   SUBAGENT_OUTPUT_TRUNCATION_NOTICE,
   type TranscriptRecord,
 } from "./subagent-transcript.js";
+
+describe("exec transcript previews", () => {
+  test("extracts a static nested exec_command command without evaluating input", () => {
+    expect(extractExecCommandPreview(
+      String.raw`const result = await tools.exec_command({"cmd":"git status --short\nbun test","yield_time_ms":10000});`,
+    )).toBe("git status --short\nbun test");
+
+    expect(extractExecCommandPreview(
+      "const result = await tools.exec_command({ cmd: process.env.SECRET });",
+    )).toBeUndefined();
+  });
+
+  test("summarizes multi-command orchestration and deduplicates repeats", () => {
+    expect(extractExecCommandPreview(
+      [
+        "const results = await Promise.all([",
+        "  tools.exec_command({cmd: 'git status'}),",
+        "  tools.exec_command({cmd: 'bun test'}),",
+        "  tools.exec_command({cmd: 'git status'}),",
+        "]);",
+      ].join("\n"),
+    )).toBe("git status (+1 more)");
+  });
+});
 
 function recordsFromLines(lines: string[]): TranscriptRecord[] {
   return parseTranscriptRecords(lines);

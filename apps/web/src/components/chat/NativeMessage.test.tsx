@@ -655,6 +655,45 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByRole("button", { name: /\bbash\b/i })).toBeNull();
   });
 
+  test("shows the derived command beside a custom exec tool", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "exec",
+          toolName: "exec",
+          toolArgs: {
+            input: "const r = await tools.exec_command({ cmd: \"git status --short\" });",
+            command: "git status --short",
+          },
+          toolState: "success",
+        }])}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /Exec git status --short success/i,
+    })).toBeTruthy();
+  });
+
+  test("previews raw custom-tool input when no command can be derived", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "exec",
+          toolName: "exec",
+          toolArgs: { input: "const result = await tools.some_custom_action();" },
+          toolState: "success",
+        }])}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /Exec const result = await tools\.some_custom_action\(\); success/i,
+    })).toBeTruthy();
+  });
+
   test("uses uniform outer spacing for native part wrapper variants", () => {
     const message = makeMessage([
       {

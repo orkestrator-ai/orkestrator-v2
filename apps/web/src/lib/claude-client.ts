@@ -597,6 +597,7 @@ export interface ClaudeEvent {
   type:
     | "connected"
     | "keepalive"
+    | "replay.required"
     | "session.updated"
     | "session.idle"
     | "session.error"
@@ -631,6 +632,7 @@ export const USAGE_SCAN_EXEMPT_EVENT_TYPES: ReadonlySet<string> = new Set([
   "message.patched",
   "keepalive",
   "connected",
+  "replay.required",
 ]);
 
 /** Attachment for prompts */
@@ -1413,6 +1415,66 @@ export async function getSlashCommands(
  * Subscribe to SSE events from the server
  * Returns an async iterator for events
  */
+const claudeEventCursorByBaseUrl = new Map<string, string>();
+
+/**
+ * One cursor per bridge, and a renderer only ever talks to a handful at once.
+ * The map is module-level and nothing removes an entry when an environment is
+ * deleted, so without a bound it grows for the lifetime of the renderer.
+ */
+const MAX_TRACKED_EVENT_CURSORS = 32;
+
+// Cursors are opaque bridge-issued identifiers. Keep the accepted character
+// set deliberately narrow before reflecting one into a query parameter.
+const VALID_CLAUDE_EVENT_CURSOR = /^[A-Za-z0-9._~-]+(?::[A-Za-z0-9._~-]+)*$/;
+
+/** Split `"<generation>:<revision>"`; null for any other shape. */
+function parseClaudeEventCursor(
+  cursor: string,
+): { generation: string; revision: number } | null {
+  const separator = cursor.lastIndexOf(":");
+  if (separator <= 0) return null;
+  const revisionText = cursor.slice(separator + 1);
+  if (!/^\d+$/.test(revisionText)) return null;
+  const revision = Number(revisionText);
+  if (!Number.isSafeInteger(revision)) return null;
+  return { generation: cursor.slice(0, separator), revision };
+}
+
+/**
+ * Store a cursor only when it actually moves the client forward.
+ *
+ * `EventSource` adopts the id of every frame it sees, including one that
+ * arrived out of order. Storing that verbatim would *regress* the cursor and
+ * make the next reconnect ask for frames it has already applied. Within one
+ * bridge generation the revision may therefore only increase; a generation
+ * change is always accepted, because that is a restarted bridge whose
+ * revisions are unrelated to the previous process's.
+ */
+function rememberClaudeEventCursor(baseUrl: string, cursor: string): void {
+  const previous = claudeEventCursorByBaseUrl.get(baseUrl);
+  if (previous !== undefined) {
+    const next = parseClaudeEventCursor(cursor);
+    const current = parseClaudeEventCursor(previous);
+    if (
+      next
+      && current
+      && next.generation === current.generation
+      && next.revision <= current.revision
+    ) {
+      return;
+    }
+  }
+  // Re-insert so the eviction below drops the least recently updated bridge.
+  claudeEventCursorByBaseUrl.delete(baseUrl);
+  claudeEventCursorByBaseUrl.set(baseUrl, cursor);
+  while (claudeEventCursorByBaseUrl.size > MAX_TRACKED_EVENT_CURSORS) {
+    const oldest = claudeEventCursorByBaseUrl.keys().next();
+    if (oldest.done) break;
+    claudeEventCursorByBaseUrl.delete(oldest.value);
+  }
+}
+
 export function subscribeToEvents(
   client: ClaudeClient,
   signal?: AbortSignal
@@ -1428,6 +1490,10 @@ export function subscribeToEvents(
       const handleEvent = (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data);
+          const cursor = event.lastEventId;
+          if (cursor && VALID_CLAUDE_EVENT_CURSOR.test(cursor)) {
+            rememberClaudeEventCursor(client.baseUrl, cursor);
+          }
           // Guarded rather than passed through `rendererDebugLog`: this runs on
           // every frame of every running turn, so the object literal would be
           // allocated per frame only to be dropped.
@@ -1457,6 +1523,9 @@ export function subscribeToEvents(
 
       const cleanup = () => {
         done = true;
+        // Detach from the (often long-lived) AbortSignal so a closed
+        // subscription does not keep leaking listeners onto it. `once` below
+        // covers the abort-triggered path; this covers every other exit.
         signal?.removeEventListener("abort", cleanup);
         if (eventSource) {
           eventSource.close();
@@ -1467,61 +1536,80 @@ export function subscribeToEvents(
         }
       };
 
+      // Handle abort signal. An already-aborted signal never fires the
+      // listener, so short-circuit instead of opening a doomed EventSource.
       if (signal?.aborted) {
         done = true;
-      } else {
-        signal?.addEventListener("abort", cleanup, { once: true });
-
-        const url = new URL(`${client.baseUrl}/event/subscribe`);
-        // Native EventSource cannot set Authorization headers. The bridge
-        // accepts its per-process bearer token only on this SSE query path.
-        if (client.authToken) {
-          url.searchParams.set("token", client.authToken);
-        }
-
-        eventSource = new EventSource(url.toString());
-        eventSource.onopen = () => {
-          console.debug("[claude-client] SSE connection opened");
-        };
-
-        // Listen for different event types
-        const eventTypes = [
-          "connected",
-          "keepalive",
-          "session.updated",
-          "session.idle",
-          "session.error",
-          "session.init",
-          "session.title-updated",
-          "session.structured-output",
-          "message.updated",
-          "message.patched",
-          "question.asked",
-          "question.answered",
-          "plan.enter-requested",
-          "plan.exit-requested",
-          "plan.approval-requested",
-          "plan.approval-responded",
-          "system.compact",
-          "system.message",
-        ];
-
-        for (const eventType of eventTypes) {
-          eventSource.addEventListener(eventType, handleEvent);
-        }
-
-        eventSource.onerror = () => {
-          console.error("[claude-client] SSE connection error", {
-            readyState: eventSource?.readyState,
-          });
-          if (rejecter && !done) {
-            rejecter(new Error("SSE connection error"));
-            resolver = null;
-            rejecter = null;
-          }
-          cleanup();
+        return {
+          next: () =>
+            Promise.resolve({
+              value: undefined as unknown as ClaudeEvent,
+              done: true,
+            }),
+          return: () =>
+            Promise.resolve({
+              value: undefined as unknown as ClaudeEvent,
+              done: true,
+            }),
+          throw: (error: Error) => Promise.reject(error),
         };
       }
+      signal?.addEventListener("abort", cleanup, { once: true });
+
+      const url = new URL(`${client.baseUrl}/event/subscribe`);
+      const cursor = claudeEventCursorByBaseUrl.get(client.baseUrl);
+      if (cursor !== undefined) {
+        url.searchParams.set("since", cursor);
+      }
+      // Native EventSource cannot set Authorization headers. The bridge
+      // accepts its per-process bearer token only on this SSE query path.
+      if (client.authToken) {
+        url.searchParams.set("token", client.authToken);
+      }
+
+      eventSource = new EventSource(url.toString());
+      eventSource.onopen = () => {
+        console.debug("[claude-client] SSE connection opened");
+      };
+
+      // Listen for different event types
+      const eventTypes = [
+        "connected",
+        "keepalive",
+        "replay.required",
+        "session.updated",
+        "session.idle",
+        "session.error",
+        "session.init",
+        "session.title-updated",
+        "session.structured-output",
+        "message.updated",
+        "message.patched",
+        "question.asked",
+        "question.answered",
+        "plan.enter-requested",
+        "plan.exit-requested",
+        "plan.approval-requested",
+        "plan.approval-responded",
+        "system.compact",
+        "system.message",
+      ];
+
+      for (const eventType of eventTypes) {
+        eventSource.addEventListener(eventType, handleEvent);
+      }
+
+      eventSource.onerror = () => {
+        console.error("[claude-client] SSE connection error", {
+          readyState: eventSource?.readyState,
+        });
+        if (rejecter && !done) {
+          rejecter(new Error("SSE connection error"));
+          resolver = null;
+          rejecter = null;
+        }
+        cleanup();
+      };
 
       return {
         next(): Promise<IteratorResult<ClaudeEvent>> {

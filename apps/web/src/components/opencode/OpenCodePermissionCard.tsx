@@ -31,7 +31,9 @@ export function OpenCodePermissionCard({
   permission,
   client,
 }: OpenCodePermissionCardProps) {
-  const { removePendingPermission } = useOpenCodeStore();
+  const removePendingPermission = useOpenCodeStore(
+    (state) => state.removePendingPermission,
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleReply = useCallback(

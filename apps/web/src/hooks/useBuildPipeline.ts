@@ -228,10 +228,17 @@ function githubIssueToTicketInput(
 
 export function useBuildPipeline() {
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
-  const { createPipeline, setPipelineEnvironment, setPhase, setPipelineError, removePipeline } = useBuildPipelineStore();
-  const { updateTask } = useKanbanStore();
-  const { selectProjectAndEnvironment, setProjectCollapsed } = useUIStore();
-  const { setOptions } = useClaudeOptionsStore();
+  const createPipeline = useBuildPipelineStore((state) => state.createPipeline);
+  const setPipelineEnvironment = useBuildPipelineStore((state) => state.setPipelineEnvironment);
+  const setPhase = useBuildPipelineStore((state) => state.setPhase);
+  const setPipelineError = useBuildPipelineStore((state) => state.setPipelineError);
+  const removePipeline = useBuildPipelineStore((state) => state.removePipeline);
+  const updateTask = useKanbanStore((state) => state.updateTask);
+  const selectProjectAndEnvironment = useUIStore(
+    (state) => state.selectProjectAndEnvironment,
+  );
+  const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
+  const setOptions = useClaudeOptionsStore((state) => state.setOptions);
   const config = useConfigStore((state) => state.config);
 
   const startBuildFromTicket = useCallback(

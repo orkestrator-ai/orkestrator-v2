@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, jest, mock, test } from "bun:tes
 import { EventEmitter } from "node:events";
 import * as realChildProcess from "node:child_process";
 import * as realFs from "node:fs";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -19,11 +19,11 @@ const pluginConfigSnapshot = { ...realPluginConfig };
 const childProcessSnapshot = { ...realChildProcess };
 const fsSnapshot = { ...realFs };
 const originalExistsSync = realFs.existsSync;
-const originalExecFileSync = realChildProcess.execFileSync;
+const originalExecFile = realChildProcess.execFile;
 const originalSpawn = realChildProcess.spawn;
 
 const mockExistsSync = mock((path: realFs.PathLike) => originalExistsSync(path));
-const mockExecFileSync = mock(originalExecFileSync);
+const mockExecFile = mock(originalExecFile);
 const mockSpawn = mock(originalSpawn);
 
 mock.module("node:fs", () => ({
@@ -33,7 +33,7 @@ mock.module("node:fs", () => ({
 
 mock.module("node:child_process", () => ({
   ...realChildProcess,
-  execFileSync: mockExecFileSync,
+  execFile: mockExecFile,
   spawn: mockSpawn,
 }));
 
@@ -332,9 +332,12 @@ const {
   getAvailableModels,
   getClaudeRuntimeVersions,
   MAX_IMAGE_ATTACHMENT_BYTES,
+  MAX_STREAM_CONTENT_BLOCK_INDEX,
   reconcilePersistedSessions,
   ensurePersistedSession,
   hydratePersistedSessionMessages,
+  evictIdleHydratedTranscripts,
+  IDLE_TRANSCRIPT_EVICTION_MS,
   deleteSessionDurably,
   renameSessionDurably,
   forkPersistedSession,
@@ -408,8 +411,8 @@ afterEach(() => {
   mockQuery.mockClear();
   mockExistsSync.mockReset();
   mockExistsSync.mockImplementation((path) => originalExistsSync(path));
-  mockExecFileSync.mockReset();
-  mockExecFileSync.mockImplementation(originalExecFileSync);
+  mockExecFile.mockReset();
+  mockExecFile.mockImplementation(originalExecFile);
   mockSpawn.mockReset();
   mockSpawn.mockImplementation(originalSpawn);
   mockGetMcpServersForSdk.mockReset();
@@ -613,6 +616,8 @@ describe("sendPrompt", () => {
       expect(stored.messages[1]?.role).toBe("assistant");
       expect(stored.messages[1]?.content).toBe("Hi there!");
       expect(stored.messages[1]?.modelId).toBe("claude-sonnet-4-6");
+      expect(stored.lastStreamedRevisionAt).toBeGreaterThan(0);
+      expect(stored.lastStreamedRevisionAt).toBeLessThanOrEqual(Date.now());
 
       const initData = getSessionInitData(session.id);
       expect(initData?.slashCommands).toEqual(["help"]);
@@ -2032,6 +2037,8 @@ describe("sendPrompt", () => {
       1.5,
       Number.NaN,
       Number.POSITIVE_INFINITY,
+      MAX_STREAM_CONTENT_BLOCK_INDEX + 1,
+      1_000_000_000,
     ].map((index) => ({
       type: "stream_event",
       uuid: "bad-stream",
@@ -2057,6 +2064,34 @@ describe("sendPrompt", () => {
     ]);
 
     expect(session.messages.filter((message) => message.role === "assistant")).toHaveLength(0);
+  });
+
+  test("keeps streamed block ordering sparse-safe at the accepted index boundary", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "stream_event",
+        uuid: "bounded-stream",
+        event: {
+          type: "content_block_delta",
+          index: MAX_STREAM_CONTENT_BLOCK_INDEX,
+          delta: { type: "text_delta", text: "last" },
+        },
+      },
+      {
+        type: "stream_event",
+        uuid: "bounded-stream",
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "first" },
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    const assistant = session.messages.find((message) => message.role === "assistant");
+    expect(assistant?.content).toBe("firstlast");
+    expect(assistant?.parts.map((part) => part.content)).toEqual(["first", "last"]);
   });
 
   test("uses a stream uuid fallback when no message_start arrives", async () => {
@@ -4300,13 +4335,26 @@ describe("getClaudeRuntimeVersions", () => {
     executable: string,
     output: string | (() => never),
   ): void {
-    mockExecFileSync.mockImplementation(((file: string, args?: string[]) => {
+    mockExecFile.mockImplementation(((
+      file: string,
+      args: string[] | undefined,
+      options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
       if (file === executable && args?.[0] === "--version") {
-        return typeof output === "function" ? output() : output;
+        try {
+          const stdout = typeof output === "function" ? output() : output;
+          callback(null, stdout, "");
+        } catch (error) {
+          callback(error as Error, "", "");
+        }
+        return undefined as never;
       }
-      return originalExecFileSync(
+      return originalExecFile(
         file as never,
         args as never,
+        options as never,
+        callback as never,
       ) as never;
     }) as never);
   }
@@ -4320,7 +4368,7 @@ describe("getClaudeRuntimeVersions", () => {
       expect(versions.cliVersion).toBe(manifest.claudeCodeVersion);
       // The managed CLI is not probed when CLAUDE_CLI_PATH is unset.
       expect(
-        mockExecFileSync.mock.calls.some((call) =>
+        mockExecFile.mock.calls.some((call) =>
           (call[1] as string[] | undefined)?.includes("--version"),
         ),
       ).toBe(false);
@@ -4338,7 +4386,7 @@ describe("getClaudeRuntimeVersions", () => {
 
       expect(versions.cliVersion).toBe("5.4.2");
       expect(versions.sdkVersion).toBe((await readBundledManifest()).version);
-      const call = mockExecFileSync.mock.calls.find(
+      const call = mockExecFile.mock.calls.find(
         (c) => c[0] === "/managed/toolchain/claude",
       );
       expect(call?.[1]).toEqual(["--version"]);
@@ -4369,6 +4417,37 @@ describe("getClaudeRuntimeVersions", () => {
       expect(versions.cliVersion).toBe(manifest.claudeCodeVersion);
     });
   });
+
+  test("a real slow executable times out without blocking the event loop", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-version-timeout-"));
+    const executable = join(directory, "slow-claude");
+    await writeFile(executable, "#!/bin/sh\nexec /bin/sleep 30\n");
+    await chmod(executable, 0o755);
+    mockExecFile.mockImplementation(originalExecFile);
+
+    try {
+      await withClaudeCliPath(executable, async () => {
+        let timerFired = false;
+        setTimeout(() => {
+          timerFired = true;
+        }, 25);
+        const startedAt = Date.now();
+        const versionsPromise = getClaudeRuntimeVersions();
+
+        await waitFor(() => timerFired, 500);
+        expect(timerFired).toBe(true);
+
+        const manifest = await readBundledManifest();
+        const versions = await versionsPromise;
+        const elapsedMs = Date.now() - startedAt;
+        expect(elapsedMs).toBeGreaterThanOrEqual(4_500);
+        expect(elapsedMs).toBeLessThan(10_000);
+        expect(versions.cliVersion).toBe(manifest.claudeCodeVersion);
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 12_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -4970,6 +5049,244 @@ describe("hydratePersistedSessionMessages", () => {
     const recovered = await hydratePersistedSessionMessages(state.id);
     expect(recovered.length).toBeGreaterThan(0);
     expect(getSession(state.id)?.persistedMessagesLoaded).toBe(true);
+  });
+});
+
+describe("evictIdleHydratedTranscripts", () => {
+  let hydratedSessionSequence = 0;
+
+  async function hydratedIdleSession() {
+    mockSdkGetSessionMessages.mockImplementation(async () => transcriptWithToolResult());
+    hydratedSessionSequence += 1;
+    const state = await materializePersistedSession({
+      sessionId: `11111111-2222-4333-8444-${hydratedSessionSequence
+        .toString(16)
+        .padStart(12, "0")}`,
+    });
+    await hydratePersistedSessionMessages(state.id);
+    return state;
+  }
+
+  function markStale(state: { lastAccessedAt?: number }) {
+    state.lastAccessedAt = Date.now() - IDLE_TRANSCRIPT_EVICTION_MS - 1;
+  }
+
+  test("drops a stale hydrated transcript and re-hydrates on the next read", async () => {
+    const state = await hydratedIdleSession();
+    expect(state.messages.length).toBeGreaterThan(0);
+    expect(state.taskRegistry).toBeDefined();
+    markStale(state);
+
+    expect(evictIdleHydratedTranscripts()).toEqual([state.id]);
+    expect(state.messages).toEqual([]);
+    expect(state.taskRegistry).toBeUndefined();
+    expect(state.persistedMessagesLoaded).toBe(false);
+
+    // The next read is indistinguishable from a first read after restart.
+    const rehydrated = await hydratePersistedSessionMessages(state.id);
+    expect(rehydrated.map((message) => message.id)).toEqual([U1, A1, A2, U2]);
+    expect(state.persistedMessagesLoaded).toBe(true);
+    expect(mockSdkGetSessionMessages).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps a transcript that was read recently", async () => {
+    const state = await hydratedIdleSession();
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(state.messages.length).toBeGreaterThan(0);
+  });
+
+  test("a read refreshes the idle clock", async () => {
+    const state = await hydratedIdleSession();
+    markStale(state);
+    getSessionMessages(state.id);
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+  });
+
+  test("falls back to last activity when an older session has no access clock", async () => {
+    const state = await hydratedIdleSession();
+    state.lastAccessedAt = undefined;
+    state.lastActivity = new Date(Date.now() - IDLE_TRANSCRIPT_EVICTION_MS - 1);
+
+    expect(evictIdleHydratedTranscripts()).toEqual([state.id]);
+  });
+
+  test("keeps sessions claimed by destructive or hydration work", async () => {
+    const deleting = await hydratedIdleSession();
+    markStale(deleting);
+    deleting.deleting = true;
+
+    const rewinding = await hydratedIdleSession();
+    markStale(rewinding);
+    rewinding.rewindInProgress = true;
+
+    const abortable = await hydratedIdleSession();
+    markStale(abortable);
+    abortable.abortController = new AbortController();
+
+    const hydrating = await hydratedIdleSession();
+    markStale(hydrating);
+    hydrating.persistedHydration = new Promise(() => {});
+
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(deleting.messages.length).toBeGreaterThan(0);
+    expect(rewinding.messages.length).toBeGreaterThan(0);
+    expect(abortable.messages.length).toBeGreaterThan(0);
+    expect(hydrating.messages.length).toBeGreaterThan(0);
+  });
+
+  test("keeps sessions with live background task state or controls", async () => {
+    const controlled = await hydratedIdleSession();
+    markStale(controlled);
+    controlled.backgroundTaskControls = new Map([
+      ["task-controlled", { close: () => undefined }],
+    ]);
+
+    const running = await hydratedIdleSession();
+    markStale(running);
+    running.backgroundTasks = {
+      "task-running": {
+        id: "task-running",
+        status: "running",
+        startedAt: Date.now(),
+      },
+    };
+
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(controlled.messages.length).toBeGreaterThan(0);
+    expect(running.messages.length).toBeGreaterThan(0);
+  });
+
+  test("keeps a transcript referenced by a pending question", async () => {
+    const state = await hydratedIdleSession();
+    markStale(state);
+    const promptPromise = sendPrompt(state.id, "ask");
+    const call = await nextQueryCall();
+    const toolPromise = call.options.canUseTool!("AskUserQuestion", {
+      questions: [{ question: "Keep this transcript?" }],
+    });
+    await waitFor(() => getPendingQuestions(state.id).length === 1);
+
+    // Isolate the interaction guard from the running-turn guards. Production
+    // normally has all of these at once, but each is independently required
+    // because cleanup ordering can clear the control fields first.
+    state.status = "idle";
+    state.abortController = undefined;
+    state.queryControl = undefined;
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(state.messages.length).toBeGreaterThan(0);
+
+    const [question] = getPendingQuestions(state.id);
+    expect(dismissQuestion(question!.id)).toBe(true);
+    expect((await toolPromise).behavior).toBe("deny");
+    call.finish();
+    await promptPromise;
+  });
+
+  test("keeps a transcript referenced by a pending plan approval", async () => {
+    const state = await hydratedIdleSession();
+    markStale(state);
+    const promptPromise = sendPrompt(state.id, "plan", {
+      permissionMode: "plan",
+    });
+    const call = await nextQueryCall();
+    const toolPromise = call.options.canUseTool!("ExitPlanMode", {
+      plan: "Keep this transcript",
+    });
+    await waitFor(() => getPendingPlanApprovals(state.id).length === 1);
+
+    state.status = "idle";
+    state.abortController = undefined;
+    state.queryControl = undefined;
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(state.messages.length).toBeGreaterThan(0);
+
+    const [approval] = getPendingPlanApprovals(state.id);
+    expect(respondToPlanApproval(approval!.id, true)).toBe(true);
+    expect((await toolPromise).behavior).toBe("allow");
+    call.finish();
+    await promptPromise;
+  });
+
+  test("does not mark an already-empty hydrated session for rehydration", async () => {
+    const state = await hydratedIdleSession();
+    markStale(state);
+    state.messages = [];
+    state.taskRegistry = undefined;
+
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(state.persistedMessagesLoaded).toBe(true);
+  });
+
+  test("never evicts a running session", async () => {
+    const state = await hydratedIdleSession();
+    markStale(state);
+    state.status = "running";
+    try {
+      expect(evictIdleHydratedTranscripts()).toEqual([]);
+    } finally {
+      state.status = "idle";
+    }
+  });
+
+  test("never evicts a session holding a query control", async () => {
+    const state = await hydratedIdleSession();
+    markStale(state);
+    state.queryControl = { close: () => undefined };
+    try {
+      expect(evictIdleHydratedTranscripts()).toEqual([]);
+    } finally {
+      state.queryControl = undefined;
+    }
+  });
+
+  test("keeps a streamed transcript when its replay-safety clock is unknown", async () => {
+    // A turn that ran here leaves `revision` counters on its messages, which a
+    // reconnecting SSE client resumes patches from; hydration from disk cannot
+    // reproduce them.
+    const state = await hydratedIdleSession();
+    markStale(state);
+    state.messages[state.messages.length - 1]!.revision = 3;
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+  });
+
+  test("evicts a streamed transcript after its replay-safety window expires", async () => {
+    const state = await hydratedIdleSession();
+    const now = Date.now();
+    state.lastAccessedAt = now - IDLE_TRANSCRIPT_EVICTION_MS - 1;
+    state.messages[state.messages.length - 1]!.revision = 3;
+    state.lastStreamedRevisionAt = now - IDLE_TRANSCRIPT_EVICTION_MS - 1;
+
+    expect(evictIdleHydratedTranscripts(now)).toEqual([state.id]);
+    expect(state.messages).toEqual([]);
+    expect(state.persistedMessagesLoaded).toBe(false);
+  });
+
+  test("keeps a recently streamed transcript even when its last read is stale", async () => {
+    const state = await hydratedIdleSession();
+    const now = Date.now();
+    state.lastAccessedAt = now - IDLE_TRANSCRIPT_EVICTION_MS - 1;
+    state.messages[state.messages.length - 1]!.revision = 3;
+    state.lastStreamedRevisionAt = now - IDLE_TRANSCRIPT_EVICTION_MS + 1;
+
+    expect(evictIdleHydratedTranscripts(now)).toEqual([]);
+    expect(state.messages.length).toBeGreaterThan(0);
+  });
+
+  test("never evicts a session that was not hydrated from disk", async () => {
+    // A fresh in-memory session has no rollout to re-hydrate from; dropping
+    // its messages would lose them outright.
+    const state = createSession("in-memory");
+    track(state.id);
+    state.messages.push({
+      id: "msg-live",
+      role: "user",
+      content: "hello",
+      parts: [],
+      timestamp: new Date().toISOString(),
+    });
+    markStale(state);
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(state.messages).toHaveLength(1);
   });
 });
 

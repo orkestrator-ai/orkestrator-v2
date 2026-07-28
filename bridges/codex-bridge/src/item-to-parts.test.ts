@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { itemToParts, stringifyUnknown } from "./index.js";
 import type { FileChangeDiffContext } from "./index.js";
+import { BaselineMap } from "./messages/diff-budget.js";
 import type { ThreadItem } from "./codex-item-types.js";
 import type { EngineItem } from "./engine/types.js";
 
@@ -237,7 +238,7 @@ describe("itemToParts", () => {
       });
 
       const context: FileChangeDiffContext = {
-        baselines: new Map(),
+        baselines: new BaselineMap(),
         cache: new Map(),
       };
       const firstItem: ThreadItem = {
@@ -273,7 +274,7 @@ describe("itemToParts", () => {
     await withGitWorkspace(async (dir) => {
       const filePath = join(dir, "lifecycle.txt");
       const context: FileChangeDiffContext = {
-        baselines: new Map(),
+        baselines: new BaselineMap(),
         cache: new Map(),
       };
 
@@ -330,7 +331,7 @@ describe("itemToParts", () => {
         ],
         status: "failed",
       }, dir, {
-        baselines: new Map(),
+        baselines: new BaselineMap(),
         cache: new Map(),
       });
 
@@ -396,7 +397,7 @@ describe("itemToParts", () => {
         changes: [{ path: "missing.txt", kind: "delete" }],
         status: "completed",
       }, dir, {
-        baselines: new Map(),
+        baselines: new BaselineMap(),
         cache: new Map(),
       });
 
@@ -427,7 +428,7 @@ describe("itemToParts", () => {
         changes: [{ path: filePath, kind: "update" }],
         status: "completed",
       }, dir, {
-        baselines: new Map(),
+        baselines: new BaselineMap(),
         cache: new Map(),
       });
 

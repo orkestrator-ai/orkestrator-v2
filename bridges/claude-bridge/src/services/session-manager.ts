@@ -44,7 +44,7 @@ import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
 import { getMcpRuntimeConfig } from "./mcp-config.js";
 import { getPluginsForSdk } from "./plugin-config.js";
 import type { McpToolMetadata } from "../types/mcp.js";
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { constants, existsSync, type Stats } from "node:fs";
 import { lstat, open, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -52,6 +52,22 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // Store for active sessions
 const sessions = new Map<string, SessionState>();
+
+/**
+ * How long a hydrated transcript may sit unread on an idle session before it
+ * is dropped and left to re-hydrate from the SDK's rollout on demand.
+ *
+ * The `sessions` map lives for the whole process, so without eviction every
+ * transcript ever opened — a one-off `GET /messages` on a large session
+ * included — stayed pinned in memory until the bridge restarted.
+ */
+export const IDLE_TRANSCRIPT_EVICTION_MS = 30 * 60 * 1000;
+const IDLE_TRANSCRIPT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+/** Record that a caller read or hydrated this session's state. */
+function touchSession(session: SessionState): void {
+  session.lastAccessedAt = Date.now();
+}
 
 function claudeExecutableOptions(): { pathToClaudeCodeExecutable: string } | Record<string, never> {
   const executable = process.env.CLAUDE_CLI_PATH?.trim();
@@ -452,6 +468,31 @@ const SESSION_TITLE_SYSTEM_PROMPT =
   + "Return only the title text.";
 
 /**
+ * Run an executable and resolve with its trimmed stdout.
+ *
+ * Wraps the callback form of `execFile` rather than blocking on
+ * `execFileSync`: these probes run on the bridge's single event loop, and a
+ * slow `which` child must not freeze SSE writes and HTTP responses.
+ */
+function execFileText(
+  file: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      file,
+      args,
+      { encoding: "utf8", timeout: timeoutMs },
+      (error, stdout) => {
+        if (error) reject(error);
+        else resolve(stdout.trim());
+      },
+    );
+  });
+}
+
+/**
  * Find the Claude CLI executable used for title generation.
  *
  * The backend sets `CLAUDE_CLI_PATH` to the managed toolchain binary when it
@@ -459,7 +500,7 @@ const SESSION_TITLE_SYSTEM_PROMPT =
  * as the session itself. The probes below are a fallback for dev runs where
  * the env var is absent.
  */
-function findClaudeCliExecutable(): string | null {
+async function findClaudeCliExecutable(): Promise<string | null> {
   const managed = process.env.CLAUDE_CLI_PATH?.trim();
   if (managed && existsSync(managed)) return managed;
 
@@ -474,7 +515,7 @@ function findClaudeCliExecutable(): string | null {
 
   // Fall back to PATH lookup
   try {
-    const result = execFileSync("which", ["claude"], { encoding: "utf-8", timeout: 5000 }).trim();
+    const result = await execFileText("which", ["claude"], 5000);
     if (result && existsSync(result)) return result;
   } catch {
     // Not found in PATH
@@ -650,7 +691,7 @@ export function runClaudeTitleCommand(
  * the unavailable case.
  */
 async function generateTitleViaCli(userMessage: string): Promise<string | null> {
-  const cliPath = findClaudeCliExecutable();
+  const cliPath = await findClaudeCliExecutable();
   if (!cliPath) {
     console.debug("[session-manager] Claude CLI not found for title generation");
     return null;
@@ -789,7 +830,9 @@ export function createSession(title?: string): SessionState {
  * Get a session by ID
  */
 export function getSession(sessionId: string): SessionState | undefined {
-  return sessions.get(sessionId);
+  const session = sessions.get(sessionId);
+  if (session) touchSession(session);
+  return session;
 }
 
 /**
@@ -979,6 +1022,17 @@ function cleanupPendingInteractions(sessionId: string): void {
   cleanupPendingPlanApprovals(sessionId);
 }
 
+/** True while a question or plan approval is waiting on the user. */
+function sessionHasPendingInteractions(sessionId: string): boolean {
+  for (const question of pendingQuestions.values()) {
+    if (question.sessionId === sessionId) return true;
+  }
+  for (const approval of pendingPlanApprovals.values()) {
+    if (approval.sessionId === sessionId) return true;
+  }
+  return false;
+}
+
 /**
  * Delete a session
  */
@@ -1006,6 +1060,7 @@ export function deleteSession(sessionId: string): boolean {
  */
 export function getSessionMessages(sessionId: string): NormalizedMessage[] {
   const session = sessions.get(sessionId);
+  if (session) touchSession(session);
   return session?.messages || [];
 }
 
@@ -1088,6 +1143,15 @@ interface OrderedPartEntry {
   type: "thinking" | "tool-ref" | "text";
   /** For thinking: the thinking content. For tool-ref: the tool use ID. For text: the text content */
   value: string;
+  /**
+   * Streamed deltas not yet folded into `value`.
+   *
+   * Deltas arrive once per token, and appending each one to `value` directly
+   * rebuilt the block's whole string per token — O(n²) over a large block.
+   * The streaming path buffers them here and `materializeEntryValue` joins
+   * them once per coalesced flush; nothing reads `value` in between.
+   */
+  pendingChunks?: string[];
   /** When this content block first arrived from the SDK. */
   timestamp?: string;
   /** Message UUID this part belongs to (for streaming updates) */
@@ -1649,6 +1713,7 @@ async function materializePersistedSessionState(
     sdkSessionId: sdkId,
     persistedMessagesLoaded: false,
   };
+  touchSession(state);
   sessions.set(sessionId, state);
   return state;
 }
@@ -1657,7 +1722,10 @@ export async function ensurePersistedSession(
   sessionId: string,
 ): Promise<SessionState | undefined> {
   const existing = sessions.get(sessionId);
-  if (existing) return existing;
+  if (existing) {
+    touchSession(existing);
+    return existing;
+  }
 
   const inFlight = persistedMaterializations.get(sessionId);
   if (inFlight) return inFlight;
@@ -1744,9 +1812,148 @@ export async function hydratePersistedSessionMessages(
       session.taskRegistry = hydrated.taskRegistry;
     }
     session.persistedMessagesLoaded = true;
+    touchSession(session);
   }
   return session.messages;
 }
+
+/** Why a session survived a sweep, counted so the sweep is observable. */
+export interface IdleTranscriptSweepStats {
+  scanned: number;
+  evicted: number;
+  /** Skip reason → count. Only non-zero reasons appear. */
+  skipped: Record<string, number>;
+}
+
+let lastIdleTranscriptSweep: IdleTranscriptSweepStats | undefined;
+
+/**
+ * Stats from the most recent sweep, or undefined before the first one.
+ *
+ * The sweep used to report only the sessions it evicted, which made "evicted
+ * nothing" indistinguishable from "was disqualified by the same guard every
+ * time" — the exact failure mode that let a permanent guard go unnoticed.
+ */
+export function getLastIdleTranscriptSweep(): IdleTranscriptSweepStats | undefined {
+  return lastIdleTranscriptSweep;
+}
+
+/**
+ * Drop hydrated transcripts nobody has read in {@link IDLE_TRANSCRIPT_EVICTION_MS}.
+ *
+ * Conservative, but time-scoped rather than permanent. A session that is
+ * running, that still holds turn control handles or background tasks, or that
+ * a pending question or plan approval points into is never touched: those hold
+ * direct references into the live transcript.
+ *
+ * Streamed messages are the one guard that used to be permanent. They carry
+ * `revision` counters a reconnecting SSE client resumes `message.patched`
+ * from, and hydration from disk cannot reproduce them — but `revision` is
+ * stamped on every assistant message of every turn and never cleared, so that
+ * exempted every session the user had actually run, which are precisely the
+ * large transcripts. The counters only matter while a client could still be
+ * resuming from them, and the SSE replay ring retains a bounded window: a
+ * client whose cursor is `IDLE_TRANSCRIPT_EVICTION_MS` stale has already been
+ * told `replay.required` and will rehydrate from REST regardless. So the guard
+ * now expires with {@link SessionState.lastStreamedRevisionAt}. A session
+ * carrying revisions with no such timestamp is still never evicted.
+ *
+ * Eviction is invisible to clients: the next `GET /messages` (or `/tasks`, or
+ * prompt) sees `persistedMessagesLoaded === false` and re-hydrates from the
+ * SDK rollout, exactly as after a bridge restart.
+ *
+ * Returns the evicted session ids. Exported for tests; production runs it on
+ * the unref'd sweep timer below.
+ */
+export function evictIdleHydratedTranscripts(now: number = Date.now()): string[] {
+  const evicted: string[] = [];
+  const skipped: Record<string, number> = {};
+  let scanned = 0;
+  const skip = (reason: string): void => {
+    skipped[reason] = (skipped[reason] ?? 0) + 1;
+  };
+
+  for (const session of sessions.values()) {
+    scanned += 1;
+    // Only a transcript hydrated from disk can be re-hydrated from disk. This
+    // also excludes fresh `createSession` sessions (flag undefined) and
+    // sessions whose hydration is pending or previously failed (flag false).
+    if (session.persistedMessagesLoaded !== true) { skip("not-hydrated"); continue; }
+    if (!session.sdkSessionId) { skip("no-rollout"); continue; }
+    // `error` is deliberately included alongside `running`: a failed turn's
+    // control handles are torn down, but `status` stays `error` until the next
+    // prompt, so excluding it would pin that transcript for the process
+    // lifetime. The remaining guards below still cover anything it left live.
+    if (session.status === "running") { skip("running"); continue; }
+    if (session.deleting || session.rewindInProgress) { skip("claimed"); continue; }
+    if (session.abortController) { skip("abort-controller"); continue; }
+    if (session.persistedHydration) { skip("hydrating"); continue; }
+    // A live or recently completed turn: control handles may still own
+    // background work, and the turn holds direct references into `messages`.
+    if (session.queryControl) { skip("query-control"); continue; }
+    if (session.backgroundTaskControls && session.backgroundTaskControls.size > 0) {
+      skip("background-task-controls");
+      continue;
+    }
+    if (
+      Object.values(session.backgroundTasks ?? {}).some(
+        (task) =>
+          task.status === "pending"
+          || task.status === "running"
+          || task.status === "paused",
+      )
+    ) {
+      skip("background-tasks");
+      continue;
+    }
+    if (sessionHasPendingInteractions(session.id)) { skip("pending-interaction"); continue; }
+    if (session.messages.length === 0 && !session.taskRegistry) { skip("empty"); continue; }
+    const lastAccessedAt = session.lastAccessedAt ?? session.lastActivity.getTime();
+    if (now - lastAccessedAt < IDLE_TRANSCRIPT_EVICTION_MS) { skip("recently-read"); continue; }
+    // A message with a revision was streamed by this process; see above. With
+    // no recorded stream time we cannot tell how stale it is, so keep it.
+    if (session.messages.some((message) => message.revision !== undefined)) {
+      const streamedAt = session.lastStreamedRevisionAt ?? now;
+      if (now - streamedAt < IDLE_TRANSCRIPT_EVICTION_MS) {
+        skip("recently-streamed");
+        continue;
+      }
+    }
+
+    session.messages = [];
+    session.taskRegistry = undefined;
+    session.persistedMessagesLoaded = false;
+    evicted.push(session.id);
+  }
+
+  lastIdleTranscriptSweep = { scanned, evicted: evicted.length, skipped };
+  if (isDebugLoggingEnabled || evicted.length > 0) {
+    console.debug("[session-manager] Idle hydrated transcript sweep", {
+      scanned,
+      evicted: evicted.length,
+      sessionIds: evicted,
+      skipped,
+    });
+  }
+  return evicted;
+}
+
+/**
+ * Arm the periodic sweep.
+ *
+ * Unref'd so it never holds an exiting bridge open. Exported (with an
+ * injectable interval) so a test can prove eviction actually runs on a timer
+ * rather than only when a test calls it directly.
+ */
+export function startIdleTranscriptSweep(
+  intervalMs: number = IDLE_TRANSCRIPT_SWEEP_INTERVAL_MS,
+): ReturnType<typeof setInterval> {
+  const timer = setInterval(() => evictIdleHydratedTranscripts(), intervalMs);
+  timer.unref?.();
+  return timer;
+}
+
+startIdleTranscriptSweep();
 
 export async function deleteSessionDurably(sessionId: string): Promise<boolean> {
   // Do not introduce an `await` for an already registered session: deletion
@@ -2668,6 +2875,16 @@ function holdSdkPromptOpen(
 const STREAM_EVENT_COALESCE_MS = 100;
 
 /**
+ * Highest content-block index accepted from a streamed SDK event.
+ *
+ * Real assistant responses use a small, dense sequence of content blocks.
+ * Treat a larger index as malformed instead of retaining attacker-controlled
+ * sparse state for the rest of the turn. The map-based storage below also
+ * keeps iteration proportional to the number of blocks actually received.
+ */
+export const MAX_STREAM_CONTENT_BLOCK_INDEX = 4_095;
+
+/**
  * Send a prompt to a session and process the response
  */
 export async function sendPrompt(
@@ -3260,6 +3477,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     //     by `uuid` appends a duplicate copy of already-streamed content.
     // Grouping by (api message id, block index) makes deltas collapse onto the
     // block they belong to and makes the final block overwrite what it streamed.
+    // Each message's blocks live in a map keyed by block index. A malformed
+    // large index therefore cannot create a huge sparse array whose iteration
+    // stalls the bridge; the small set of received indices is sorted on flush.
     const blocksByApiMessage = new Map<string, Map<number, OrderedPartEntry>>();
     // Streaming deltas do not consistently repeat their parent relationship.
     // Remember it from whichever frame supplies it so subagent thinking/text
@@ -3281,17 +3501,30 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     const getBlocksForMessage = (messageKey: string): Map<number, OrderedPartEntry> => {
       let blocks = blocksByApiMessage.get(messageKey);
       if (!blocks) {
-        blocks = new Map<number, OrderedPartEntry>();
+        blocks = new Map();
         blocksByApiMessage.set(messageKey, blocks);
       }
       return blocks;
     };
 
+    /** Fold any buffered streamed deltas into the entry's `value`. */
+    const materializeEntryValue = (entry: OrderedPartEntry): void => {
+      if (entry.pendingChunks) {
+        entry.value += entry.pendingChunks.join("");
+        entry.pendingChunks = undefined;
+      }
+    };
+
     const rebuildAccumulatedOrderedParts = () => {
       const parts: OrderedPartEntry[] = [];
-      // Map iteration is insertion-ordered, which is API message arrival order.
+      // Map iteration is insertion-ordered, which is API message arrival order;
+      // block indices may arrive out of order, so sort only the received keys.
       for (const blocks of blocksByApiMessage.values()) {
-        for (const [, entry] of Array.from(blocks.entries()).sort(([a], [b]) => a - b)) {
+        const blockIndices = Array.from(blocks.keys()).sort((a, b) => a - b);
+        for (const blockIndex of blockIndices) {
+          const entry = blocks.get(blockIndex);
+          if (!entry) continue;
+          materializeEntryValue(entry);
           parts.push(entry);
         }
       }
@@ -3500,7 +3733,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         return false;
       }
 
-      const blockIndex = Number.isInteger(streamEvent?.index) && streamEvent.index >= 0
+      const blockIndex = Number.isInteger(streamEvent?.index)
+        && streamEvent.index >= 0
+        && streamEvent.index <= MAX_STREAM_CONTENT_BLOCK_INDEX
         ? streamEvent.index
         : undefined;
       if (blockIndex === undefined) {
@@ -3522,6 +3757,29 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
       const entriesForMessage = getBlocksForMessage(messageKey);
       let entry = entriesForMessage.get(blockIndex);
+
+      // Append a streamed delta without rebuilding the block's string: chunks
+      // are buffered on the entry and joined once per flush. A delta whose
+      // type disagrees with the existing entry starts a fresh entry seeded
+      // with the old (materialized) value, preserving the previous behavior.
+      const appendStreamedDelta = (
+        type: "text" | "thinking",
+        chunk: string,
+      ): OrderedPartEntry => {
+        if (entry?.type === type) {
+          entry.parentTaskUseId ??= parentTaskUseId;
+          (entry.pendingChunks ??= []).push(chunk);
+          return entry;
+        }
+        if (entry) materializeEntryValue(entry);
+        return {
+          type,
+          value: `${entry?.value ?? ""}${chunk}`,
+          timestamp: entry?.timestamp ?? new Date().toISOString(),
+          messageUuid: messageKey,
+          parentTaskUseId: entry?.parentTaskUseId ?? parentTaskUseId,
+        };
+      };
 
       if (eventType === "content_block_start") {
         const contentBlock = streamEvent.content_block;
@@ -3547,21 +3805,15 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       } else if (eventType === "content_block_delta") {
         const delta = streamEvent.delta;
         if (delta?.type === "text_delta") {
-          entry = {
-            type: "text",
-            value: `${entry?.value ?? ""}${typeof delta.text === "string" ? delta.text : ""}`,
-            timestamp: entry?.timestamp ?? new Date().toISOString(),
-            messageUuid: messageKey,
-            parentTaskUseId: entry?.parentTaskUseId ?? parentTaskUseId,
-          };
+          entry = appendStreamedDelta(
+            "text",
+            typeof delta.text === "string" ? delta.text : "",
+          );
         } else if (delta?.type === "thinking_delta") {
-          entry = {
-            type: "thinking",
-            value: `${entry?.value ?? ""}${typeof delta.thinking === "string" ? delta.thinking : ""}`,
-            timestamp: entry?.timestamp ?? new Date().toISOString(),
-            messageUuid: messageKey,
-            parentTaskUseId: entry?.parentTaskUseId ?? parentTaskUseId,
-          };
+          entry = appendStreamedDelta(
+            "thinking",
+            typeof delta.thinking === "string" ? delta.thinking : "",
+          );
         } else {
           return false;
         }
@@ -4334,6 +4586,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     }
     throw error;
   } finally {
+    // The turn has stopped producing frames. From here the `revision` counters
+    // it stamped only matter for as long as a disconnected client could still
+    // be resuming from them; see `evictIdleHydratedTranscripts`.
+    session.lastStreamedRevisionAt = Date.now();
     closeSdkInput?.();
     if (session.finishTurnInputIfSettled === finishTurnInputForThisTurn) {
       session.finishTurnInputIfSettled = undefined;
@@ -4653,11 +4909,7 @@ export async function getClaudeRuntimeVersions(): Promise<{
   }
 
   try {
-    const output = execFileSync(executable, ["--version"], {
-      encoding: "utf8",
-      timeout: 5_000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
+    const output = await execFileText(executable, ["--version"], 5_000);
     return {
       sdkVersion,
       cliVersion: output.match(/\d+\.\d+\.\d+/)?.[0] ?? bundledCliVersion,

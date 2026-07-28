@@ -351,22 +351,23 @@ export function TerminalContainer({
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [dragOverPaneId, setDragOverPaneId] = useState<string | null>(null);
 
-  // Get Claude options for this environment
-  const {
-    getOptions,
-    clearOptions,
-    setOptions,
-    setPendingNativeLaunch,
-    clearPendingNativeLaunch,
-  } = useClaudeOptionsStore();
-  const claudeOptions = getOptions(environmentId);
+  // Get Claude options for this environment. Actions are stable references;
+  // the options record is selected narrowly so writes for other environments
+  // do not rerender this container.
+  const clearOptions = useClaudeOptionsStore((state) => state.clearOptions);
+  const setOptions = useClaudeOptionsStore((state) => state.setOptions);
+  const setPendingNativeLaunch = useClaudeOptionsStore((state) => state.setPendingNativeLaunch);
+  const clearPendingNativeLaunch = useClaudeOptionsStore((state) => state.clearPendingNativeLaunch);
+  const claudeOptions = useClaudeOptionsStore(
+    (state) => state.options[environmentId]
+  );
   const pendingNativeLaunch = useClaudeOptionsStore(
     (state) => state.pendingNativeLaunches[environmentId]
   );
   const [hasAppliedClaudeOptions, setHasAppliedClaudeOptions] = useState(false);
 
   // Get config for agent modes - per-environment overrides take precedence over global
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const {
     envOpencodeMode,
     envClaudeMode,
@@ -514,16 +515,18 @@ export function TerminalContainer({
   }, [environmentId, setSetupCommandsResolved, setSetupScriptsRunning, setWorkspaceReady]);
 
   // Pane layout store - use selectors for reactive state
-  const environments = usePaneLayoutStore((state) => state.environments);
   const hydrationStatus = usePaneLayoutStore((state) => state.hydration.get(environmentId));
 
-  // Get derived state for THIS environment (not the globally active one)
-  // Each TerminalContainer should render its own environment's tabs
-  const currentEnvState = environments.get(environmentId);
+  // Get derived state for THIS environment (not the globally active one).
+  // Selected narrowly (the per-environment record has a stable reference) so
+  // layout changes in OTHER environments do not rerender this container.
+  const currentEnvState = usePaneLayoutStore(
+    (state) => state.environments.get(environmentId)
+  );
   const root = currentEnvState?.root ?? { kind: "leaf" as const, id: "default", tabs: [], activeTabId: null };
   const activePaneId = currentEnvState?.activePaneId ?? "default";
 
-  // Pane layout actions
+  // Pane layout actions (stable references, shallow-compared bundle)
   const {
     setActiveEnvironment,
     initialize,
@@ -539,7 +542,24 @@ export function TerminalContainer({
     getAllTabs,
     getOpenFilePaths,
     getPane,
-  } = usePaneLayoutStore();
+  } = usePaneLayoutStore(
+    useShallow((state) => ({
+      setActiveEnvironment: state.setActiveEnvironment,
+      initialize: state.initialize,
+      reset: state.reset,
+      beginHydration: state.beginHydration,
+      finishHydration: state.finishHydration,
+      addTab: state.addTab,
+      removeTab: state.removeTab,
+      reorderTabs: state.reorderTabs,
+      moveTab: state.moveTab,
+      splitPaneAtEdge: state.splitPaneAtEdge,
+      getActivePane: state.getActivePane,
+      getAllTabs: state.getAllTabs,
+      getOpenFilePaths: state.getOpenFilePaths,
+      getPane: state.getPane,
+    }))
+  );
 
   const {
     setTerminalWrite,

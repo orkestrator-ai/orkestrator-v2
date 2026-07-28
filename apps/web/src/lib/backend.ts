@@ -292,7 +292,7 @@ export interface TerminalOutputSnapshot {
 }
 
 export interface TerminalOutputEvent {
-  data: number[];
+  bytesBase64: string;
   revision: number;
   generation: number;
 }

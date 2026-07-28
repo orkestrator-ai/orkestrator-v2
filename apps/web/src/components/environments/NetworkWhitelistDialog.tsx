@@ -39,7 +39,7 @@ export function NetworkWhitelistDialog({
   environment,
   onUpdate,
 }: NetworkWhitelistDialogProps) {
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const globalDomains = config.global.allowedDomains || [];
 
   const [useGlobalDefaults, setUseGlobalDefaults] = useState(
@@ -205,12 +205,16 @@ export function NetworkWhitelistDialog({
               {/* Global defaults toggle */}
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
-                  <Label>Use Global Defaults</Label>
+                  <Label htmlFor="network-use-global-defaults">
+                    Use Global Defaults
+                  </Label>
                   <p className="text-xs text-muted-foreground">
                     Use the default allowed domains from global settings
                   </p>
                 </div>
                 <Switch
+                  id="network-use-global-defaults"
+                  aria-label="Use Global Defaults"
                   checked={useGlobalDefaults}
                   onCheckedChange={setUseGlobalDefaults}
                 />
@@ -218,8 +222,9 @@ export function NetworkWhitelistDialog({
 
               {/* Custom domains textarea */}
               <div className="space-y-2">
-                <Label>Allowed Domains</Label>
+                <Label htmlFor="network-allowed-domains">Allowed Domains</Label>
                 <Textarea
+                  id="network-allowed-domains"
                   value={customDomains}
                   onChange={handleDomainsChange}
                   disabled={useGlobalDefaults}

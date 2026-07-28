@@ -122,6 +122,71 @@ describe("StorageService resource change announcements", () => {
     });
   });
 
+  test("does not announce pure agent-activity lease renewals", async () => {
+    await withStorage(async (storage, changes) => {
+      await storage.addProject(project("p1"));
+      await storage.addEnvironment(environment("e1", "p1"));
+      const base = Date.now();
+      const at = (offset: number) => new Date(base + offset).toISOString();
+
+      // First observation is a genuine transition and must announce.
+      await storage.setEnvironmentAgentActivity(
+        "e1", "working", at(1_000), "frontend", "renderer-token",
+      );
+      expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
+
+      changes.length = 0;
+      // Same observer, same state: a pure renewal refreshes only timestamps
+      // and must not fan out a refetch to every connected client.
+      await storage.setEnvironmentAgentActivity(
+        "e1", "working", at(2_000), "frontend", "renderer-token",
+      );
+      expect(changes).toEqual([]);
+      // ...but the lease itself still persisted.
+      const renewed = await storage.getEnvironment("e1");
+      const observer = Object.values(
+        renewed!.frontendAgentActivityObservers ?? {},
+      )[0]!;
+      expect(observer.updatedAt).toBe(at(2_000));
+
+      // A new source appearing is structural and announces.
+      await storage.setEnvironmentAgentActivity(
+        "e1", "working", at(3_000), "claude-terminal",
+      );
+      expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
+
+      changes.length = 0;
+      // A same-state terminal refresh is also a pure timestamp refresh.
+      await storage.setEnvironmentAgentActivity(
+        "e1", "working", at(4_000), "claude-terminal",
+      );
+      expect(changes).toEqual([]);
+
+      // A real per-observer state change announces even though the aggregate
+      // stays "working" via the terminal source.
+      await storage.setEnvironmentAgentActivity(
+        "e1", "idle", at(5_000), "frontend", "renderer-token",
+      );
+      expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
+    });
+  });
+
+  test("does not rewrite or announce a field-equal environment update", async () => {
+    await withStorage(async (storage, changes) => {
+      await storage.addProject(project("p1"));
+      await storage.addEnvironment(environment("e1", "p1"));
+      // First stop clears activity state and legitimately announces.
+      await storage.updateEnvironment("e1", { name: "renamed", status: "stopped" });
+
+      changes.length = 0;
+      const before = await storage.getEnvironment("e1");
+      // Re-applying the identical update merges to a field-equal record.
+      await storage.updateEnvironment("e1", { name: "renamed", status: "stopped" });
+      expect(changes).toEqual([]);
+      expect(await storage.getEnvironment("e1")).toEqual(before!);
+    });
+  });
+
   test("announces kanban changes against the owning project", async () => {
     await withStorage(async (storage, changes) => {
       await storage.addProject(project("p1"));

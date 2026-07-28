@@ -1195,3 +1195,80 @@ describe("getClaudeSourceMessageId", () => {
     );
   });
 });
+
+describe("normalization identity cache", () => {
+  const makeMessage = (): NativeMessage => ({
+    id: "native-1",
+    role: "assistant",
+    content: "Done",
+    createdAt: "2026-06-18T12:00:00.000Z",
+    parts: [
+      { type: "text", content: "Before" },
+      { type: "tool-invocation", content: "Read", toolName: "Read" },
+      { type: "text", content: "After" },
+    ],
+  });
+
+  test("returns the identical normalized object for an unchanged source message", () => {
+    const message = makeMessage();
+
+    const first = normalizeCodexNativeMessage(message);
+    const second = normalizeCodexNativeMessage(message);
+    const third = normalizeOpenCodeNativeMessage(message);
+
+    expect(second).toBe(first);
+    // Codex and OpenCode share the provider-neutral normalizer, so the cache
+    // must be shared too.
+    expect(third).toBe(first);
+    // Normalized content is still correct.
+    expect(first.parts.map((part) => part.type)).toEqual([
+      "text",
+      "tool-group",
+      "text",
+    ]);
+  });
+
+  test("returns a new normalized object when the source message object changes", () => {
+    const message = makeMessage();
+    const first = normalizeCodexNativeMessage(message);
+
+    // Stores replace the message object on every update, so a changed message
+    // is a new object and must miss the cache.
+    const updated: NativeMessage = {
+      ...message,
+      parts: [...message.parts, { type: "text", content: "More" }],
+    };
+    const second = normalizeCodexNativeMessage(updated);
+
+    expect(second).not.toBe(first);
+    expect(second.parts.map((part) => part.type)).toEqual([
+      "text",
+      "tool-group",
+      "text",
+      "text",
+    ]);
+    expect(second.parts.at(-1)?.content).toBe("More");
+  });
+
+  test("caches Claude normalization and display splitting per source object", () => {
+    const claudeMessage: ClaudeMessage = {
+      id: "assistant-1",
+      role: "assistant",
+      content: "Hello",
+      timestamp: "2026-06-18T12:00:00.000Z",
+      parts: [
+        { type: "text", content: "Hello", timestamp: "2026-06-18T12:00:00.000Z" },
+      ],
+    };
+
+    expect(normalizeClaudeMessage(claudeMessage)).toBe(
+      normalizeClaudeMessage(claudeMessage),
+    );
+
+    const [firstRows, secondRows] = [
+      normalizeClaudeMessagesForDisplay([claudeMessage]),
+      normalizeClaudeMessagesForDisplay([claudeMessage]),
+    ];
+    expect(firstRows[0]).toBe(secondRows[0]!);
+  });
+});

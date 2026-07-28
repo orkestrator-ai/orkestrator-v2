@@ -1,5 +1,5 @@
 export { useProjects } from "./useProjects";
-export { useEnvironments } from "./useEnvironments";
+export { useEnvironments, useEnvironmentLifecycleService } from "./useEnvironments";
 export { useTerminal } from "./useTerminal";
 export { usePullRequest } from "./usePullRequest";
 export { useFilesPanel } from "./useFilesPanel";

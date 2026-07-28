@@ -13,7 +13,8 @@ import { Copy } from "lucide-react";
 import { toast } from "sonner";
 
 export function ErrorDetailsDialog() {
-  const { error, closeError } = useErrorDialogStore();
+  const error = useErrorDialogStore((state) => state.error);
+  const closeError = useErrorDialogStore((state) => state.closeError);
 
   const handleCopyError = async () => {
     if (!error) return;

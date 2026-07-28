@@ -219,8 +219,12 @@ export function PersistentTerminal({
 
   const [hasReconnected, setHasReconnected] = useState(false);
 
-  // Get terminal store functions
-  const { markTerminalOpened, setTerminalContainer, setTerminalPane, recreateTerminal } = useTerminalPortalStore();
+  // Get terminal store functions via narrow selectors (stable references) —
+  // a selector-less subscription rerendered every terminal on any store write.
+  const markTerminalOpened = useTerminalPortalStore((state) => state.markTerminalOpened);
+  const setTerminalContainer = useTerminalPortalStore((state) => state.setTerminalContainer);
+  const setTerminalPane = useTerminalPortalStore((state) => state.setTerminalPane);
+  const recreateTerminal = useTerminalPortalStore((state) => state.recreateTerminal);
 
   // Subscribe to containerElement and isOpened from store to ensure we have the latest values
   // (props might be stale if store was updated after TerminalPortalHost rendered)
@@ -426,7 +430,10 @@ export function PersistentTerminal({
         hasRenderedOutputRef.current = true;
       }
 
-      const text = new TextDecoder().decode(data);
+      // Readiness detection is the only decoded-text consumer. Once ready,
+      // bytes go straight to xterm without allocating a decoder and a
+      // duplicate string for every output chunk.
+      const text = isEnvironmentReady ? "" : new TextDecoder().decode(data);
 
       // For first tab only: detect environment ready state
       if (isFirstTab && !isEnvironmentReady) {
@@ -658,18 +665,17 @@ export function PersistentTerminal({
   const creationInProgressRef = useRef(false);
   const hasRestoredFromPersistentRef = useRef(false);
 
-  const {
-    createSession: createPersistentSession,
-    updateSessionActivity,
-    saveSessionBuffer: savePersistentSessionBuffer,
-    loadSessionBuffer: loadPersistentSessionBuffer,
-    getSessionsByEnvironment,
-    updateSessionStatus,
-    isLoadingEnvironment,
-    loadSessionsForEnvironment,
-  } = useSessionStore();
+  // Narrow selectors: actions are stable references; only the loading flag for
+  // THIS environment is subscribed to reactively.
+  const createPersistentSession = useSessionStore((state) => state.createSession);
+  const updateSessionActivity = useSessionStore((state) => state.updateSessionActivity);
+  const savePersistentSessionBuffer = useSessionStore((state) => state.saveSessionBuffer);
+  const loadPersistentSessionBuffer = useSessionStore((state) => state.loadSessionBuffer);
+  const getSessionsByEnvironment = useSessionStore((state) => state.getSessionsByEnvironment);
+  const updateSessionStatus = useSessionStore((state) => state.updateSessionStatus);
+  const loadSessionsForEnvironment = useSessionStore((state) => state.loadSessionsForEnvironment);
   const setPersistentSessionId = useTerminalSessionStore((state) => state.setPersistentSessionId);
-  const isSessionsLoading = isLoadingEnvironment(environmentId);
+  const isSessionsLoading = useSessionStore((state) => state.isLoadingEnvironment(environmentId));
 
   // Ensure sessions are loaded for this environment
   useEffect(() => {
@@ -888,9 +894,14 @@ export function PersistentTerminal({
   // Monitor Claude activity state
   useAgentState(containerId, tabId);
 
+  const fitAnimationFrameRef = useRef<number | null>(null);
   const scheduleFit = useCallback(() => {
     if (!fitAddon || !terminal) return;
-    requestAnimationFrame(() => {
+    if (fitAnimationFrameRef.current !== null) {
+      cancelAnimationFrame(fitAnimationFrameRef.current);
+    }
+    fitAnimationFrameRef.current = requestAnimationFrame(() => {
+      fitAnimationFrameRef.current = null;
       if (!fitAddon || !terminal) return;
       fitAddon.fit();
       const { cols, rows } = terminal;
@@ -1290,11 +1301,7 @@ export function PersistentTerminal({
   useEffect(() => {
     if (!fitAddon || !terminal || !terminalRef.current) return;
 
-    const handleResize = () => {
-      fitAddon.fit();
-      const { cols, rows } = terminal;
-      resize(cols, rows);
-    };
+    const handleResize = () => scheduleFit();
 
     handleResize();
 
@@ -1306,8 +1313,12 @@ export function PersistentTerminal({
     return () => {
       resizeObserver.disconnect();
       window.removeEventListener("resize", handleResize);
+      if (fitAnimationFrameRef.current !== null) {
+        cancelAnimationFrame(fitAnimationFrameRef.current);
+        fitAnimationFrameRef.current = null;
+      }
     };
-  }, [terminal, fitAddon, resize]);
+  }, [terminal, fitAddon, scheduleFit]);
 
   // Connect when terminal is opened to DOM
   // This is a fallback - primary connection happens immediately after terminal.open()

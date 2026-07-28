@@ -1,5 +1,5 @@
 // Context for sharing terminal functionality across components
-import { createContext, useContext, useCallback, useState, ReactNode } from "react";
+import { createContext, useContext, useCallback, useMemo, useState, ReactNode } from "react";
 
 // Terminal-specific tab types
 export type TerminalTabType = "plain" | "claude" | "opencode" | "codex" | "root";
@@ -122,27 +122,48 @@ export function TerminalProvider({ children }: TerminalProviderProps) {
     setCreateFileTabFn(() => fn);
   }, []);
 
+  // Memoized so a re-render of the provider's parent (App re-renders on every
+  // environment-store write) does not hand consumers a brand-new context value
+  // when none of the terminal state actually changed. The registered functions
+  // and state values are the dependencies; the setters are all stable.
+  const value = useMemo<TerminalContextValue>(
+    () => ({
+      terminalWrite,
+      setTerminalWrite,
+      lastPrUrl,
+      setLastPrUrl,
+      createTab: createTabFn,
+      setCreateTab,
+      selectTab: selectTabFn,
+      setSelectTab,
+      closeActiveTab: closeActiveTabFn,
+      setCloseActiveTab,
+      tabCount,
+      setTabCount,
+      createFileTab: createFileTabFn,
+      setCreateFileTab,
+      openFilePaths,
+      setOpenFilePaths,
+    }),
+    [
+      terminalWrite,
+      setTerminalWrite,
+      lastPrUrl,
+      createTabFn,
+      setCreateTab,
+      selectTabFn,
+      setSelectTab,
+      closeActiveTabFn,
+      setCloseActiveTab,
+      tabCount,
+      createFileTabFn,
+      setCreateFileTab,
+      openFilePaths,
+    ]
+  );
+
   return (
-    <TerminalContext.Provider
-      value={{
-        terminalWrite,
-        setTerminalWrite,
-        lastPrUrl,
-        setLastPrUrl,
-        createTab: createTabFn,
-        setCreateTab,
-        selectTab: selectTabFn,
-        setSelectTab,
-        closeActiveTab: closeActiveTabFn,
-        setCloseActiveTab,
-        tabCount,
-        setTabCount,
-        createFileTab: createFileTabFn,
-        setCreateFileTab,
-        openFilePaths,
-        setOpenFilePaths,
-      }}
-    >
+    <TerminalContext.Provider value={value}>
       {children}
     </TerminalContext.Provider>
   );

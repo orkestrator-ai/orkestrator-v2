@@ -14,10 +14,14 @@ import {
   abortSession,
   checkClientHealth,
   checkHealth,
+  buildOpenCodeMessageFromPart,
+  carryOverOpenCodeSubagentHydration,
   createClient,
   createSession,
   getSessionMessages,
   getStructuredOutput,
+  mergeOpenCodeMessageInfo,
+  normalizeOpenCodePart,
   replyToPermission,
   rejectQuestion,
   sendPrompt,
@@ -202,40 +206,49 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
   const jumpInTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(pipelineId));
-  const { config } = useConfigStore();
-  const {
-    setPhase,
-    addSession: addPipelineSession,
-    markSessionIdle,
-    markSessionRunning,
-    setVerificationResult,
-    beginStructuredReview,
-    setStructuredReview,
-    incrementIteration,
-    setPipelineError,
-    pausePipeline,
-    resumePipeline,
-  } = useBuildPipelineStore();
+  const config = useConfigStore((state) => state.config);
+  const setPhase = useBuildPipelineStore((state) => state.setPhase);
+  const addPipelineSession = useBuildPipelineStore((state) => state.addSession);
+  const markSessionIdle = useBuildPipelineStore((state) => state.markSessionIdle);
+  const markSessionRunning = useBuildPipelineStore((state) => state.markSessionRunning);
+  const setVerificationResult = useBuildPipelineStore((state) => state.setVerificationResult);
+  const beginStructuredReview = useBuildPipelineStore((state) => state.beginStructuredReview);
+  const setStructuredReview = useBuildPipelineStore((state) => state.setStructuredReview);
+  const incrementIteration = useBuildPipelineStore((state) => state.incrementIteration);
+  const setPipelineError = useBuildPipelineStore((state) => state.setPipelineError);
+  const pausePipeline = useBuildPipelineStore((state) => state.pausePipeline);
+  const resumePipeline = useBuildPipelineStore((state) => state.resumePipeline);
   const isPipelinePaused = useCallback(
     () => useBuildPipelineStore.getState().pipelines.get(pipelineId)?.phase === "paused",
     [pipelineId],
   );
-  const {
-    setServerStatus,
-    setClient,
-    setSession,
-    addMessage,
-    setMessages,
-    setSessionLoading,
-    setEventStream,
-    setContextUsage,
-    getOrCreateEventSubscription,
-    hasActiveEventSubscription,
-    closeEventSubscription,
-    clients: clientsMap,
-    sessions: sessionsMap,
-  } = useOpenCodeStore();
-  const client = useMemo(() => clientsMap.get(environmentId), [clientsMap, environmentId]);
+  // Narrow store subscriptions: actions are stable references, and the client
+  // read is per-environment, so unrelated openCodeStore writes no longer
+  // re-render the whole pipeline tab. `sessions` stays a map-level
+  // subscription — the transcript view and idle-detection effects below need
+  // to react to every pipeline session's messages.
+  const setServerStatus = useOpenCodeStore((state) => state.setServerStatus);
+  const setClient = useOpenCodeStore((state) => state.setClient);
+  const setSession = useOpenCodeStore((state) => state.setSession);
+  const addMessage = useOpenCodeStore((state) => state.addMessage);
+  const setMessages = useOpenCodeStore((state) => state.setMessages);
+  const upsertMessage = useOpenCodeStore((state) => state.upsertMessage);
+  const setSessionLoading = useOpenCodeStore((state) => state.setSessionLoading);
+  const setEventStream = useOpenCodeStore((state) => state.setEventStream);
+  const setContextUsage = useOpenCodeStore((state) => state.setContextUsage);
+  const getOrCreateEventSubscription = useOpenCodeStore(
+    (state) => state.getOrCreateEventSubscription,
+  );
+  const hasActiveEventSubscription = useOpenCodeStore(
+    (state) => state.hasActiveEventSubscription,
+  );
+  const closeEventSubscription = useOpenCodeStore(
+    (state) => state.closeEventSubscription,
+  );
+  const sessionsMap = useOpenCodeStore((state) => state.sessions);
+  const client = useOpenCodeStore(
+    useCallback((state) => state.clients.get(environmentId), [environmentId]),
+  );
   const models = useOpenCodeStore(
     useCallback(
       (state) => state.models.get(environmentId) ?? EMPTY_MODELS,
@@ -370,24 +383,48 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
 
         const lastReloadTimeBySession = new Map<string, number>();
         const pendingReloads = new Map<string, number>();
+        const reloadGenerations = new Map<string, number>();
         const DEBOUNCE_MS = 200;
 
+        // Final events (`immediate`) fetch the fully hydrated transcript,
+        // subagents included — they are the authoritative reconcile point.
+        // Streaming-triggered fallback refetches skip the recursive subagent
+        // hydration for cost; already-hydrated Agent rows are carried over so
+        // they do not blank until the final reconcile.
         const fetchMessagesDebounced = (sessionId: string, sessionKey: string, immediate = false) => {
-          const timeout = pendingReloads.get(sessionId);
+          const reloadKey = `${sessionId}:${sessionKey}`;
+          const generation = (reloadGenerations.get(reloadKey) ?? 0) + 1;
+          reloadGenerations.set(reloadKey, generation);
+          const timeout = pendingReloads.get(reloadKey);
           if (timeout) {
             window.clearTimeout(timeout);
-            pendingReloads.delete(sessionId);
+            pendingReloads.delete(reloadKey);
           }
 
+          const includeSubagents = immediate;
           const doFetch = async () => {
+            pendingReloads.delete(reloadKey);
             lastReloadTimeBySession.set(sessionId, Date.now());
-            const messages = await getSessionMessages(activeClient, sessionId);
-            setMessages(sessionKey, messages);
+            const messages = await getSessionMessages(activeClient, sessionId, {
+              ...(includeSubagents ? {} : { includeSubagents: false }),
+            });
+            if (reloadGenerations.get(reloadKey) !== generation) return false;
+            const currentSession = useOpenCodeStore.getState().sessions.get(sessionKey);
+            if (currentSession?.sessionId !== sessionId) return false;
+            setMessages(
+              sessionKey,
+              includeSubagents || !currentSession
+                ? messages
+                : carryOverOpenCodeSubagentHydration(
+                    currentSession.messages,
+                    messages,
+                  ),
+            );
+            return true;
           };
 
           if (immediate) {
-            void doFetch();
-            return;
+            return doFetch();
           }
 
           const now = Date.now();
@@ -398,8 +435,60 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
             const nextTimeout = window.setTimeout(() => {
               void doFetch();
             }, DEBOUNCE_MS);
-            pendingReloads.set(sessionId, nextTimeout);
+            pendingReloads.set(reloadKey, nextTimeout);
           }
+          return undefined;
+        };
+
+        /**
+         * Sessions whose `message.part.updated` frames are currently applying
+         * cleanly; while streaming via parts, `message.updated` and
+         * `session.updated` frames carry nothing the parts don't, so the full
+         * refetch is reserved for failures and final events.
+         */
+        const partStreamHealthyBySession = new Set<string>();
+
+        const applyPartUpdate = (
+          sessionKey: string,
+          rawPart: unknown,
+          delta?: string,
+        ) => {
+          const part = normalizeOpenCodePart(rawPart);
+          if (!part?.sourceMessageId) {
+            partStreamHealthyBySession.delete(sessionKey);
+            return null;
+          }
+          const sessionState = useOpenCodeStore.getState().sessions.get(sessionKey);
+          const existingMessage = sessionState?.messages.find(
+            (message) => message.id === part.sourceMessageId,
+          );
+          upsertMessage(
+            sessionKey,
+            buildOpenCodeMessageFromPart(
+              existingMessage,
+              part.sourceMessageId,
+              part,
+              delta,
+            ),
+          );
+          partStreamHealthyBySession.add(sessionKey);
+          return part;
+        };
+
+        const applyMessageInfoUpdate = (
+          sessionKey: string,
+          rawInfo: unknown,
+        ): boolean => {
+          const sessionState = useOpenCodeStore.getState().sessions.get(sessionKey);
+          const info = rawInfo as { id?: unknown } | null | undefined;
+          const messageId = typeof info?.id === "string" ? info.id : undefined;
+          const existingMessage = messageId
+            ? sessionState?.messages.find((message) => message.id === messageId)
+            : undefined;
+          const merged = mergeOpenCodeMessageInfo(existingMessage, rawInfo);
+          if (!merged) return false;
+          upsertMessage(sessionKey, merged);
+          return true;
         };
 
         for await (const event of eventStream) {
@@ -446,13 +535,54 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
               eventType === "session.idle"
               || (eventType === "session.status" && props?.status?.type === "idle");
 
-            if (
-              eventType === "message.part.updated"
-              || eventType === "message.updated"
-              || eventType === "session.updated"
-              || isFinalEvent
-            ) {
-              fetchMessagesDebounced(eventSessionId, sessionKey, isFinalEvent);
+            // Apply streamed parts and message metadata incrementally (same
+            // shape as OpenCodeChatTab); a full-transcript refetch is reserved
+            // for frames that cannot be applied and for the authoritative
+            // final reconcile, instead of running at ~5Hz for every turn.
+            if (isFinalEvent) {
+              partStreamHealthyBySession.delete(sessionKey);
+              // The turn is over whether or not the transcript refetch succeeds,
+              // and no second idle frame will arrive for a finished turn. Gating
+              // the flag on the refetch wedges the pipeline (which bails on
+              // `isLoading`) the moment the server dies right after emitting
+              // idle, so clear it first — a failed reconcile then degrades to a
+              // stale transcript, matching the three sibling tabs.
+              setSessionLoading(sessionKey, false);
+              // Never await here: this is the environment-wide shared
+              // subscription, so awaiting one transcript request blocks every
+              // subsequent frame for every other session in the environment.
+              // The reload generation guard already orders the writes.
+              void fetchMessagesDebounced(
+                eventSessionId,
+                sessionKey,
+                true,
+              )?.catch((error) => {
+                setPipelineError(
+                  pipelineId,
+                  error instanceof Error
+                    ? `Failed to reconcile OpenCode transcript: ${error.message}`
+                    : "Failed to reconcile OpenCode transcript",
+                  null,
+                );
+              });
+            } else if (eventType === "message.part.updated") {
+              if (
+                !applyPartUpdate(
+                  sessionKey,
+                  props?.part,
+                  typeof props?.delta === "string" ? props.delta : undefined,
+                )
+              ) {
+                fetchMessagesDebounced(eventSessionId, sessionKey, false);
+              }
+            } else if (eventType === "message.updated") {
+              if (!applyMessageInfoUpdate(sessionKey, props?.info)) {
+                fetchMessagesDebounced(eventSessionId, sessionKey, false);
+              }
+            } else if (eventType === "session.updated") {
+              if (!partStreamHealthyBySession.has(sessionKey)) {
+                fetchMessagesDebounced(eventSessionId, sessionKey, false);
+              }
             }
 
             if (usageFromEvent) {
@@ -460,10 +590,6 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
                 ...usageFromEvent,
                 modelId: usageFromEvent.modelId ?? undefined,
               });
-            }
-
-            if (isFinalEvent) {
-              setSessionLoading(sessionKey, false);
             }
 
             if (eventType === "session.error") {
@@ -487,7 +613,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
         setEventStream(environmentId, null);
       }
     },
-    [addMessage, environmentId, getOrCreateEventSubscription, hasActiveEventSubscription, pipelineId, setContextUsage, setEventStream, setMessages, setPipelineError, setSessionLoading],
+    [addMessage, environmentId, getOrCreateEventSubscription, hasActiveEventSubscription, pipelineId, setContextUsage, setEventStream, setMessages, upsertMessage, setPipelineError, setSessionLoading],
   );
 
   useEffect(() => {

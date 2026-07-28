@@ -1,5 +1,6 @@
 import { afterEach, describe, test, expect, mock, beforeEach } from "bun:test";
 import { act, cleanup, render, fireEvent, screen, waitFor } from "@testing-library/react";
+import { Profiler } from "react";
 import type { Environment } from "../../../apps/web/src/types";
 import {
   mockToastError as toastErrorMock,
@@ -238,6 +239,51 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+});
+
+test("memoizes stable row props", () => {
+  const environment = makeEnvironment();
+  const originalToLocaleDateString = Date.prototype.toLocaleDateString;
+  const formatDate = mock(() => "formatted date");
+  Date.prototype.toLocaleDateString = formatDate;
+  try {
+    const view = renderItem(environment);
+    expect(formatDate).toHaveBeenCalledTimes(1);
+    view.rerender(itemElement(environment));
+    expect(formatDate).toHaveBeenCalledTimes(1);
+  } finally {
+    Date.prototype.toLocaleDateString = originalToLocaleDateString;
+  }
+});
+
+test("only reacts to its own resolved activity state", () => {
+  const environment = makeEnvironment();
+  const onRender = mock(() => undefined);
+  render(
+    <Profiler id="environment-row" onRender={onRender}>
+      {itemElement(environment)}
+    </Profiler>,
+  );
+  expect(onRender).toHaveBeenCalledTimes(1);
+  act(() => {
+    useAgentActivityStore.setState({
+      containerStates: { "other-environment": "working" },
+      containerStateUpdatedAt: {
+        "other-environment": "2026-07-28T10:00:00.000Z",
+      },
+    });
+  });
+  expect(onRender).toHaveBeenCalledTimes(1);
+
+  act(() => {
+    useAgentActivityStore.setState({
+      containerStates: { [environment.id]: "working" },
+      containerStateUpdatedAt: {
+        [environment.id]: "2026-07-28T10:00:01.000Z",
+      },
+    });
+  });
+  expect(onRender.mock.calls.length).toBeGreaterThan(1);
 });
 
 // The mobile actions button is gated on a real media query rather than a

@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   buildOpenCodeMessageFromPart,
+  carryOverOpenCodeSubagentHydration,
   abortSession,
   compactOpenCodeSession,
   checkClientHealth,
+  collectOpenCodeSubagentIds,
   createClient,
   createSession,
   deleteSession,
@@ -22,6 +24,7 @@ import {
   hasOpenCodeSubagentSession,
   listSessions,
   lookupSessionStatus,
+  mergeOpenCodeMessageInfo,
   mergeOpenCodeSubagentTranscript,
   normalizeOpenCodeMessage,
   normalizeOpenCodePart,
@@ -1984,6 +1987,40 @@ describe("opencode-client normalizeOpenCodeMessage", () => {
 });
 
 describe("OpenCode subagent transcript hydration", () => {
+  test("collects nested ids once, deduplicates them, and caches by transcript identity", () => {
+    const messages = [{
+      id: "message-1",
+      role: "assistant",
+      content: "",
+      parts: [{
+        type: "subagent",
+        subagentId: "child",
+        content: "child",
+        subagentActions: [
+          {
+            type: "subagent",
+            subagentId: "grandchild",
+            content: "grandchild",
+            subagentActions: [],
+          },
+          {
+            type: "subagent",
+            subagentId: "child",
+            content: "duplicate",
+            subagentActions: [],
+          },
+        ],
+      }],
+      createdAt: "2026-07-28T00:00:00.000Z",
+    }] as OpenCodeMessage[];
+
+    const first = collectOpenCodeSubagentIds(messages);
+    const second = collectOpenCodeSubagentIds(messages);
+
+    expect([...first].sort()).toEqual(["child", "grandchild"]);
+    expect(second).toBe(first);
+  });
+
   test("loads child messages and exposes their tool calls as agent actions", async () => {
     const client = {
       session: {
@@ -2588,6 +2625,99 @@ describe("opencode-client buildOpenCodeMessageFromPart", () => {
     expect(updated.hasError).toBe(true);
     expect(updated.turnId).toBe("turn-1");
     expect(updated.providerUsage).toEqual(existing.providerUsage);
+  });
+});
+
+describe("opencode-client incremental message helpers", () => {
+  test("merges message info without discarding existing parts", () => {
+    const existing: OpenCodeMessage = {
+      id: "message-1",
+      role: "assistant",
+      content: "streamed",
+      parts: [{ type: "text", content: "streamed" }],
+      createdAt: "2026-04-15T00:00:00.000Z",
+    };
+
+    expect(mergeOpenCodeMessageInfo(existing, {
+      id: "message-1",
+      role: "assistant",
+      providerID: "openai",
+      modelID: "gpt-5.6-sol",
+      error: { name: "ProviderError" },
+      tokens: { input: 4, output: 6 },
+    })).toMatchObject({
+      content: "streamed",
+      parts: existing.parts,
+      modelId: "openai/gpt-5.6-sol",
+      hasError: true,
+    });
+    expect(mergeOpenCodeMessageInfo(
+      { ...existing, hasError: true },
+      { id: "message-1", role: "assistant" },
+    )?.hasError).toBeUndefined();
+    expect(mergeOpenCodeMessageInfo(existing, null)).toBeNull();
+    expect(mergeOpenCodeMessageInfo(existing, {})).toBeNull();
+  });
+
+  test("preserves hydrated child actions and terminal state during a cheap refresh", () => {
+    const previous: OpenCodeMessage[] = [{
+      id: "parent",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-04-15T00:00:00.000Z",
+      parts: [{
+        type: "subagent",
+        content: "Worker",
+        subagentId: "child",
+        toolState: "success",
+        subagentActionCount: 1,
+        subagentActions: [{ type: "text", content: "done" }],
+      }],
+    }];
+    const next: OpenCodeMessage[] = [{
+      ...previous[0]!,
+      parts: [{
+        type: "subagent",
+        content: "Worker",
+        subagentId: "child",
+        toolState: "pending",
+      }],
+    }];
+
+    expect(carryOverOpenCodeSubagentHydration(previous, next)[0]?.parts[0])
+      .toMatchObject({
+        toolState: "success",
+        subagentActionCount: 1,
+        subagentActions: [{ type: "text", content: "done" }],
+      });
+  });
+
+  test("keeps an authoritative newly hydrated child instead of carrying stale actions", () => {
+    const previous: OpenCodeMessage[] = [{
+      id: "parent",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-04-15T00:00:00.000Z",
+      parts: [{
+        type: "subagent",
+        content: "Worker",
+        subagentId: "child",
+        toolState: "success",
+        subagentActions: [{ type: "text", content: "old" }],
+      }],
+    }];
+    const next: OpenCodeMessage[] = [{
+      ...previous[0]!,
+      parts: [{
+        type: "subagent",
+        content: "Worker",
+        subagentId: "child",
+        toolState: "failure",
+        subagentActions: [{ type: "text", content: "new" }],
+      }],
+    }];
+
+    expect(carryOverOpenCodeSubagentHydration(previous, next)).toBe(next);
   });
 });
 

@@ -8,6 +8,68 @@ import {
 import { toast } from "sonner";
 import * as backend from "@/lib/backend";
 
+/**
+ * Wire shape of a `terminal-output-<sessionId>` event.
+ *
+ * `bytesBase64` is what the backend emits today. The legacy `number[]` forms
+ * remain accepted during rolling upgrades, and `desynced` is the gateway
+ * telling this client that frames were dropped for it under backpressure and
+ * the authoritative buffer must be replayed.
+ */
+export type TerminalOutputPayload =
+  | number[]
+  | string
+  | {
+      bytesBase64?: string;
+      bytes?: number[];
+      data?: number[];
+      desynced?: boolean;
+      revision?: number;
+      generation?: number;
+    };
+
+function decodeBase64Bytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+/** Returns the frame's bytes, or `null` when it is a desync notice. */
+export function decodeTerminalOutputPayload(payload: TerminalOutputPayload): Uint8Array | null {
+  if (typeof payload === "string") return decodeBase64Bytes(payload);
+  if (Array.isArray(payload)) return new Uint8Array(payload);
+  if (!payload || typeof payload !== "object") return new Uint8Array(0);
+  if (typeof payload.bytesBase64 === "string") return decodeBase64Bytes(payload.bytesBase64);
+  if (Array.isArray(payload.bytes)) return new Uint8Array(payload.bytes);
+  if (Array.isArray(payload.data)) return new Uint8Array(payload.data);
+  if (payload.desynced) return null;
+  return new Uint8Array(0);
+}
+
+function terminalOutputCursor(
+  payload: TerminalOutputPayload,
+): { revision: number | null; generation: number | null } {
+  if (
+    !payload
+    || typeof payload !== "object"
+    || Array.isArray(payload)
+  ) {
+    return { revision: null, generation: null };
+  }
+  const revision = Number.isSafeInteger(payload.revision)
+    && (payload.revision ?? -1) >= 0
+    ? payload.revision!
+    : null;
+  const generation = Number.isSafeInteger(payload.generation)
+    && (payload.generation ?? -1) >= 0
+    ? payload.generation!
+    : null;
+  return { revision, generation };
+}
+
 interface UseTerminalOptions {
   containerId: string | null;
   /** Environment ID - required for local environments */
@@ -84,6 +146,7 @@ export function useTerminal({
   const [error, setError] = useState<string | null>(null);
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
+  const listenAbortControllerRef = useRef<AbortController | null>(null);
   const onDataRef = useRef(onData);
   const onReplayRef = useRef(onReplay);
   const isConnectedRef = useRef(false);
@@ -112,6 +175,8 @@ export function useTerminal({
   }, []);
 
   const cleanupEventListener = useCallback(() => {
+    listenAbortControllerRef.current?.abort();
+    listenAbortControllerRef.current = null;
     const unlisten = unlistenRef.current;
     if (unlisten) {
       unlistenRef.current = null;
@@ -293,7 +358,6 @@ export function useTerminal({
       id: string,
       preserveExisting: boolean,
     ): Promise<OutputAttachment> => {
-      type TerminalOutputEventPayload = number[] | backend.TerminalOutputEvent;
       type PendingOutput = {
         data: Uint8Array;
         revision: number | null;
@@ -301,6 +365,8 @@ export function useTerminal({
       };
 
       const eventName = `terminal-output-${id}`;
+      const listenAbortController = new AbortController();
+      listenAbortControllerRef.current = listenAbortController;
       const pendingLiveOutput: PendingOutput[] = [];
       let disposed = false;
       // Buffer immediately; output can arrive after the output listener is
@@ -428,21 +494,21 @@ export function useTerminal({
         return reconciliationPromise;
       };
 
-      const outputUnlisten = await listen<TerminalOutputEventPayload>(
+      const outputUnlisten = await listen<TerminalOutputPayload>(
         eventName,
         (event) => {
           const payload = event.payload;
-          const pending: PendingOutput = Array.isArray(payload)
-            ? {
-                data: new Uint8Array(payload),
-                revision: null,
-                generation: null,
-              }
-            : {
-                data: new Uint8Array(payload.data),
-                revision: payload.revision,
-                generation: payload.generation,
-              };
+          const data = decodeTerminalOutputPayload(payload);
+          if (data === null) {
+            void reconcileSnapshot();
+            return;
+          }
+          const cursor = terminalOutputCursor(payload);
+          const pending: PendingOutput = {
+            data,
+            revision: cursor.revision,
+            generation: cursor.generation,
+          };
 
           if (snapshotPending) {
             pendingLiveOutput.push(pending);
@@ -470,6 +536,7 @@ export function useTerminal({
           onDataRef.current?.(pending.data);
           lastAppliedRevision = pending.revision;
         },
+        { signal: listenAbortController.signal },
       );
 
       if (!isCurrentConnect()) {
@@ -484,6 +551,10 @@ export function useTerminal({
       const dispose = () => {
         if (disposed) return;
         disposed = true;
+        listenAbortController.abort();
+        if (listenAbortControllerRef.current === listenAbortController) {
+          listenAbortControllerRef.current = null;
+        }
         safelyUnlisten(outputUnlisten);
         safelyUnlisten(reconnectUnlisten);
       };
@@ -499,6 +570,7 @@ export function useTerminal({
             () => {
               void reconcileSnapshot();
             },
+            { signal: listenAbortController.signal },
           );
           // Disconnect may have disposed the partial attachment while the
           // lifecycle listener registration was still awaiting its disposer.

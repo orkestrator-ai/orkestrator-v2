@@ -30,6 +30,17 @@ export class FakeReadable implements ReadableLike {
     this.emit("data", chunk);
   }
 
+  /**
+   * Pushes raw bytes, as a real pipe delivers them.
+   *
+   * `child.stdout` has no encoding set, so chunks arrive as `Buffer`s split on
+   * byte boundaries — which is the only way to exercise a multi-byte character
+   * straddling two chunks.
+   */
+  pushBytes(chunk: Buffer): void {
+    this.emit("data", chunk);
+  }
+
   /** Pushes one complete JSON message plus its newline terminator. */
   pushMessage(message: unknown): void {
     this.push(`${JSON.stringify(message)}\n`);

@@ -330,14 +330,33 @@ export function dropEmptyThinkingParts(
   );
 }
 
+/**
+ * Identity cache for normalized messages.
+ *
+ * `normalizeNativeMessage` is pure in its input object, but the transcript
+ * calls it for every message on every streaming frame. Returning a fresh
+ * object each time gave every mounted row a new `message` prop and defeated
+ * `memo(NativeMessage)` for the whole transcript. Stores already preserve the
+ * identity of unchanged source messages (`upsertMessage` only replaces the
+ * edited entry), so keying on the source object is sound: an unchanged source
+ * must yield the identical normalized object, and an updated source is a new
+ * object that misses the cache. WeakMap keeps this from pinning old messages.
+ */
+const normalizedNativeMessageCache = new WeakMap<NativeMessage, NativeMessage>();
+
 export function normalizeNativeMessage(message: NativeMessage): NativeMessage {
+  const cached = normalizedNativeMessageCache.get(message);
+  if (cached) return cached;
+
   const dedupedParts = dropEmptyThinkingParts(
     dedupeStreamedNativeParts(message.parts),
   );
-  return {
+  const normalized: NativeMessage = {
     ...message,
     parts: groupNativeAgentActivity(groupNativeToolActivity(dedupedParts)),
   };
+  normalizedNativeMessageCache.set(message, normalized);
+  return normalized;
 }
 
 export function normalizeOpenCodeNativeMessage(message: NativeMessage): NativeMessage {
@@ -348,7 +367,18 @@ export function normalizeCodexNativeMessage(message: NativeMessage): NativeMessa
   return normalizeNativeMessage(message);
 }
 
+/** Same identity-cache rationale as `normalizeNativeMessage`, for Claude. */
+const normalizedClaudeMessageCache = new WeakMap<ClaudeMessage, NativeMessage>();
+
 export function normalizeClaudeMessage(message: ClaudeMessage): NativeMessage {
+  const cached = normalizedClaudeMessageCache.get(message);
+  if (cached) return cached;
+  const normalized = normalizeClaudeMessageUncached(message);
+  normalizedClaudeMessageCache.set(message, normalized);
+  return normalized;
+}
+
+function normalizeClaudeMessageUncached(message: ClaudeMessage): NativeMessage {
   const { cleanContent, attachments } = message.role === "user"
     ? parseNativeAttachmentsFromContent(message.content)
     : { cleanContent: message.content, attachments: [] };
@@ -405,7 +435,24 @@ function parseTimestamp(value?: string): number | undefined {
  * tool/reasoning activity and only when it arrives more than two minutes after
  * the first text block in the current row.
  */
+/**
+ * Identity cache for split display rows. Without it a long assistant turn that
+ * splits into several rows would mint new row objects every render, undoing
+ * the normalization cache for exactly the transcripts big enough to care.
+ */
+const splitClaudeTextBlocksCache = new WeakMap<NativeMessage, NativeMessage[]>();
+
 export function splitClaudeAssistantTextBlocks(
+  message: NativeMessage,
+): NativeMessage[] {
+  const cached = splitClaudeTextBlocksCache.get(message);
+  if (cached) return cached;
+  const rows = splitClaudeAssistantTextBlocksUncached(message);
+  splitClaudeTextBlocksCache.set(message, rows);
+  return rows;
+}
+
+function splitClaudeAssistantTextBlocksUncached(
   message: NativeMessage,
 ): NativeMessage[] {
   if (message.role !== "assistant") return [message];

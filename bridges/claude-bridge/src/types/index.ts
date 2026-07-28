@@ -215,6 +215,25 @@ export interface SessionState {
   taskRegistry?: TaskRegistry;
   /** True once the persisted SDK transcript has been normalized on demand. */
   persistedMessagesLoaded?: boolean;
+  /**
+   * Epoch millis of the last read or hydration of this session's state.
+   *
+   * Drives idle transcript eviction. Deliberately separate from
+   * `lastActivity`: that field is user-facing and rewritten from on-disk
+   * metadata by every reconcile, so it says when the *session* last changed,
+   * not when anyone in this process last looked at it.
+   */
+  lastAccessedAt?: number;
+  /**
+   * Epoch millis at which the most recent turn in this process stopped
+   * streaming.
+   *
+   * Streamed assistant messages carry `revision` counters that a reconnecting
+   * SSE client resumes `message.patched` from, and hydration from disk cannot
+   * reproduce them. That only matters while a client could still be resuming,
+   * so this timestamp bounds how long the transcript stays pinned for it.
+   */
+  lastStreamedRevisionAt?: number;
   /** Latest provider-reported context, token, cost, and rate-limit snapshot. */
   usage?: SessionUsageSnapshot;
   /** Predicted next prompt emitted by the SDK after a completed turn. */
@@ -368,6 +387,7 @@ export interface PlanApprovalRequest {
 
 /** SSE event types */
 export type SSEEventType =
+  | "replay.required"
   | "session.updated"
   | "session.idle"
   | "session.error"

@@ -62,7 +62,9 @@ function deferred<T>() {
 }
 
 const getGitHubIssuesMock = mock(async () => snapshot);
-const getGitHubIssueMock = mock(async () => detail);
+const getGitHubIssueMock = mock<
+  (_projectId: string, _issueNumber: number) => Promise<GitHubIssueDetail>
+>(async () => detail);
 const updateGitHubIssueStatusMock = mock<
   (
     projectId: string,
@@ -104,7 +106,11 @@ mock.module("@/lib/backend", () => ({
   updateGitHubIssueComment: updateGitHubIssueCommentMock,
 }));
 
-const { githubIssueDetailKey, useGitHubIssuesStore } = await import(
+const {
+  githubIssueDetailKey,
+  MAX_CACHED_ISSUE_DETAILS,
+  useGitHubIssuesStore,
+} = await import(
   "./githubIssuesStore"
 );
 
@@ -166,6 +172,35 @@ describe("githubIssuesStore", () => {
         .getState()
         .details.get(githubIssueDetailKey("project-1", 42))?.number,
     ).toBe(42);
+  });
+
+  test("caps issue details and refreshes insertion recency before eviction", async () => {
+    getGitHubIssueMock.mockImplementation(
+      async (_projectId: string, issueNumber: number) => ({
+        ...detail,
+        id: 1000 + issueNumber,
+        number: issueNumber,
+      }),
+    );
+
+    for (let issueNumber = 1; issueNumber <= MAX_CACHED_ISSUE_DETAILS; issueNumber += 1) {
+      await useGitHubIssuesStore.getState().loadIssue("project-1", issueNumber);
+    }
+    // Refresh issue 1 so issue 2 becomes the least-recently-written entry.
+    await useGitHubIssuesStore.getState().loadIssue("project-1", 1);
+    await useGitHubIssuesStore
+      .getState()
+      .loadIssue("project-1", MAX_CACHED_ISSUE_DETAILS + 1);
+
+    const details = useGitHubIssuesStore.getState().details;
+    expect(details.size).toBe(MAX_CACHED_ISSUE_DETAILS);
+    expect(details.has(githubIssueDetailKey("project-1", 1))).toBe(true);
+    expect(details.has(githubIssueDetailKey("project-1", 2))).toBe(false);
+    expect(
+      details.has(
+        githubIssueDetailKey("project-1", MAX_CACHED_ISSUE_DETAILS + 1),
+      ),
+    ).toBe(true);
   });
 
   test("updates status from the authoritative response and reloads after failure", async () => {

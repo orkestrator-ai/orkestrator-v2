@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { useEffect } from "react";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { useEffect, useSyncExternalStore } from "react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import * as realPersistentTerminal from "./PersistentTerminal";
 import * as realTerminalPortalStore from "@/stores/terminalPortalStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -15,6 +15,9 @@ const disposeTerminalMock = mock(() => {});
 const clearTerminalsForEnvironmentMock = mock(() => {});
 const paneHost = document.createElement("div");
 let terminalStoreHasTerminal = true;
+let terminalStorePaneHosts = new Map<string, HTMLDivElement>();
+let terminalStoreVersion = 0;
+const terminalStoreListeners = new Set<() => void>();
 let terminalStoreTerminals: Map<string, {
   environmentId: string;
   tabId: string;
@@ -63,15 +66,18 @@ mock.module("./PersistentTerminal", () => ({
 }));
 
 const terminalPortalStoreState = () => ({
+  paneHosts: terminalStorePaneHosts,
   terminals: terminalStoreTerminals,
   createTerminal: createTerminalMock,
   disposeTerminal: disposeTerminalMock,
   clearTerminalsForEnvironment: clearTerminalsForEnvironmentMock,
   hasTerminal: () => terminalStoreHasTerminal,
-  getPaneHost: () => paneHost,
+  getPaneHost: (environmentId: string, paneId: string) =>
+    terminalStorePaneHosts.get(`${environmentId}::${paneId}`),
 });
 
 const useTerminalPortalStoreMock = (<T,>(selector?: (state: {
+    paneHosts: Map<string, HTMLDivElement>;
     terminals: Map<string, {
       environmentId: string;
       tabId: string;
@@ -85,6 +91,13 @@ const useTerminalPortalStoreMock = (<T,>(selector?: (state: {
     hasTerminal: (environmentId: string, tabId: string) => boolean;
     getPaneHost: (environmentId: string, paneId: string) => HTMLDivElement | undefined;
   }) => T) => {
+    useSyncExternalStore(
+      (listener) => {
+        terminalStoreListeners.add(listener);
+        return () => terminalStoreListeners.delete(listener);
+      },
+      () => terminalStoreVersion,
+    );
     const state = terminalPortalStoreState();
 
     return selector ? selector(state) : state;
@@ -93,6 +106,8 @@ const useTerminalPortalStoreMock = (<T,>(selector?: (state: {
 useTerminalPortalStoreMock.getState = terminalPortalStoreState;
 
 mock.module("@/stores/terminalPortalStore", () => ({
+  createPortalTargetKey: (environmentId: string, paneId: string) =>
+    `${environmentId}::${paneId}`,
   useTerminalPortalStore: useTerminalPortalStoreMock,
 }));
 
@@ -112,6 +127,8 @@ describe("TerminalPortalHost", () => {
     disposeTerminalMock.mockClear();
     clearTerminalsForEnvironmentMock.mockClear();
     terminalStoreHasTerminal = true;
+    terminalStorePaneHosts = new Map([["env-1::default", paneHost]]);
+    terminalStoreVersion += 1;
     terminalStoreTerminals = new Map([
       [
         "env-1::default",
@@ -237,6 +254,25 @@ describe("TerminalPortalHost", () => {
           containerId: "container-1",
         }),
       );
+    });
+  });
+
+  test("mounts an existing terminal when its pane host registers later", async () => {
+    terminalStorePaneHosts = new Map();
+
+    render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
+    expect(lastPersistentTerminalProps).toBeUndefined();
+    expect(paneHost.childElementCount).toBe(0);
+
+    terminalStorePaneHosts = new Map([["env-1::default", paneHost]]);
+    terminalStoreVersion += 1;
+    act(() => {
+      for (const listener of terminalStoreListeners) listener();
+    });
+
+    await waitFor(() => {
+      expect(lastPersistentTerminalProps).toBeDefined();
+      expect(paneHost.childElementCount).toBe(1);
     });
   });
 

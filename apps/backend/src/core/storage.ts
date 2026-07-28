@@ -243,6 +243,28 @@ function frontendAgentActivityObserverKey(observerId: string): string {
   return createHash("sha256").update(observerId).digest("hex");
 }
 
+/**
+ * A stable digest of the parts of an environment's activity snapshot that
+ * clients render: the aggregate state plus each source's and observer's state.
+ * Timestamps and lease expiries are deliberately excluded — a write that only
+ * refreshes them (a lease renewal) changes nothing any client displays, so it
+ * does not need to be announced. Keys are sorted so map iteration order cannot
+ * fake a difference.
+ */
+function agentActivityStructureFingerprint(environment: Environment): string {
+  const states = (
+    record: Partial<Record<string, { state?: unknown } | undefined>> | undefined,
+  ): Array<[string, unknown]> =>
+    Object.entries(record ?? {})
+      .map(([key, snapshot]): [string, unknown] => [key, snapshot?.state])
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return JSON.stringify({
+    state: environment.agentActivityState ?? null,
+    sources: states(environment.agentActivitySources),
+    observers: states(environment.frontendAgentActivityObservers),
+  });
+}
+
 function readFrontendAgentActivityObservers(
   environment: Environment,
   referenceTime: number,
@@ -716,6 +738,19 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * True only for "the path is not there" (ENOENT, or ENOTDIR for a parent that
+ * is not a directory). Every other errno — EACCES, EIO, EMFILE — means the
+ * file may well exist and hold data we simply could not look at, which is a
+ * very different thing from an empty store.
+ */
+function isMissingFileError(error: unknown): boolean {
+  const code = error && typeof error === "object" && "code" in error
+    ? (error as { code?: unknown }).code
+    : undefined;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
 function normalizeOpenCodeModelCatalogEntries(
   models: OpenCodeModelCatalogEntry[],
 ): OpenCodeModelCatalogEntry[] {
@@ -876,6 +911,18 @@ export class StorageService {
   private agentHandoffMutation: Promise<unknown> = Promise.resolve();
   private changeListener: ResourceChangeListener | null = null;
   private changeRevision = 0;
+  /**
+   * Parsed-JSON read cache for the hot stores, keyed by file path and
+   * validated against an (inode, size, mtime) fingerprint on every read.
+   *
+   * Other backend processes may share this data directory — that is what the
+   * cross-process mutation lock files exist for — so the cache can never
+   * simply trust itself. A cheap `fs.stat` per read replaces the full
+   * read-and-parse in the steady state while still observing every foreign
+   * write: our own atomic writes rename a fresh temp file into place (new
+   * inode), and an in-place foreign write moves size/mtime.
+   */
+  private readonly jsonReadCache = new Map<string, { fingerprint: string; value: unknown }>();
 
   constructor(dataDir: string) {
     this.dataDir = dataDir;
@@ -1009,12 +1056,35 @@ export class StorageService {
     await fs.mkdir(this.dataDir, { recursive: true });
   }
 
-  private async writeAtomic(filePath: string, contents: string, makeBackup = true, mode?: number): Promise<void> {
+  private async writeAtomic(
+    filePath: string,
+    contents: string,
+    makeBackup = true,
+    mode?: number,
+    refreshRecoveryBackup = false,
+  ): Promise<void> {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`);
+    const recoveryTempPath = refreshRecoveryBackup
+      ? path.join(
+        path.dirname(filePath),
+        `.${path.basename(filePath)}.recovery.${randomUUID()}.tmp`,
+      )
+      : null;
 
     await this.enqueueWrite(async () => {
       await fs.writeFile(tempPath, contents, mode === undefined ? undefined : { mode });
+      if (recoveryTempPath) {
+        // Volatile environment updates deliberately do not rotate five
+        // historical backups, but they still need one current, valid recovery
+        // point. Write the same validated snapshot to .bak.1 before publishing
+        // the primary so corruption cannot roll structural fields back.
+        await fs.writeFile(
+          recoveryTempPath,
+          contents,
+          mode === undefined ? undefined : { mode },
+        );
+      }
       if (mode !== undefined) {
         await fs.chmod(tempPath, mode);
       }
@@ -1025,13 +1095,19 @@ export class StorageService {
       if (makeBackup && await exists(filePath)) {
         await this.rotateBackups(filePath);
       }
+      if (recoveryTempPath) {
+        await fs.rename(recoveryTempPath, this.backupPath(filePath, 1));
+      }
       await fs.rename(tempPath, filePath);
+      // The next read must re-validate against the file we just renamed in.
+      this.jsonReadCache.delete(filePath);
       if (mode !== undefined) {
         await fs.chmod(filePath, mode);
       }
     }).catch(async (error) => {
-      if (await exists(tempPath)) {
-        await fs.rm(tempPath, { force: true });
+      await fs.rm(tempPath, { force: true }).catch(() => undefined);
+      if (recoveryTempPath) {
+        await fs.rm(recoveryTempPath, { force: true }).catch(() => undefined);
       }
       throw error;
     });
@@ -1235,6 +1311,24 @@ export class StorageService {
     await fs.copyFile(filePath, first);
   }
 
+  /**
+   * Newest-first walk of the retained backups. Returns a box rather than the
+   * value itself so callers can tell "recovered `null`/`[]` from a backup"
+   * apart from "no backup was readable".
+   */
+  private async recoverJsonFromBackups<T>(filePath: string): Promise<{ value: T } | null> {
+    for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
+      const backup = this.backupPath(filePath, index);
+      if (!await exists(backup)) continue;
+      try {
+        return { value: JSON.parse(await fs.readFile(backup, "utf8")) as T };
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
   private async loadJson<T>(filePath: string, fallback: () => T): Promise<T> {
     if (!await exists(filePath)) return fallback();
 
@@ -1243,21 +1337,71 @@ export class StorageService {
       if (!raw.trim()) return fallback();
       return JSON.parse(raw) as T;
     } catch {
-      for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
-        const backup = this.backupPath(filePath, index);
-        if (!await exists(backup)) continue;
-        try {
-          return JSON.parse(await fs.readFile(backup, "utf8")) as T;
-        } catch {
-          continue;
-        }
-      }
-      return fallback();
+      const recovered = await this.recoverJsonFromBackups<T>(filePath);
+      return recovered ? recovered.value : fallback();
     }
   }
 
-  private async saveJson(filePath: string, value: unknown): Promise<void> {
-    await this.writeAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
+  /**
+   * Stat-validated cached variant of {@link loadJson} for the stores that are
+   * read on nearly every command. Returns a clone so callers can mutate the
+   * result (every mutation path does) without corrupting the cached value.
+   *
+   * The stat happens *before* the read: if a foreign write lands in between,
+   * the fresh content is cached under the stale fingerprint, which merely
+   * costs one extra re-read on the next access — never a stale result.
+   *
+   * Only a genuinely absent file yields the fallback; see the stat catch.
+   */
+  private async loadJsonCached<T>(filePath: string, fallback: () => T): Promise<T> {
+    let stat;
+    try {
+      stat = await fs.stat(filePath);
+    } catch (error) {
+      this.jsonReadCache.delete(filePath);
+      if (!isMissingFileError(error)) {
+        // A stat that fails for a reason other than "not there" is no evidence
+        // that the store is empty. Handing back the fallback would show the
+        // user zero environments while their data sits intact on disk, and the
+        // next mutation would load that empty list, append to it and persist it
+        // over the real file. Take the same backup ladder a corrupt primary
+        // takes, and surface the failure when nothing is readable.
+        const recovered = await this.recoverJsonFromBackups<T>(filePath);
+        if (recovered) return recovered.value;
+        throw error;
+      }
+      return fallback();
+    }
+    const fingerprint = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+    const cached = this.jsonReadCache.get(filePath);
+    if (cached && cached.fingerprint === fingerprint) {
+      return structuredClone(cached.value) as T;
+    }
+    const value = await this.loadJson(filePath, fallback);
+    this.jsonReadCache.set(filePath, { fingerprint, value: structuredClone(value) });
+    return value;
+  }
+
+  /**
+   * `backup: false` skips the five-file backup rotation. Reserved for
+   * high-churn writes that only refresh volatile activity fields (lease
+   * renewals, activity timestamps): rotating backups on every one of those
+   * costs ~13 extra fs operations per write and makes every retained backup a
+   * copy of a snapshot that differs only in timestamps. Structural mutations
+   * must keep the default so the backups stay useful for corruption recovery.
+   */
+  private async saveJson(
+    filePath: string,
+    value: unknown,
+    options: { backup?: boolean } = {},
+  ): Promise<void> {
+    await this.writeAtomic(
+      filePath,
+      `${JSON.stringify(value, null, 2)}\n`,
+      options.backup ?? true,
+      undefined,
+      options.backup === false,
+    );
   }
 
   private async saveSensitiveJson(filePath: string, value: unknown): Promise<void> {
@@ -1307,7 +1451,7 @@ export class StorageService {
   }
 
   async loadProjects(): Promise<Project[]> {
-    const projects = await this.loadJson<Project[]>(this.projectsFile(), () => []);
+    const projects = await this.loadJsonCached<Project[]>(this.projectsFile(), () => []);
     return projects.sort((a, b) => a.order - b.order);
   }
 
@@ -1366,7 +1510,7 @@ export class StorageService {
   }
 
   async loadEnvironments(): Promise<Environment[]> {
-    const environments = await this.loadJson<Environment[]>(this.environmentsFile(), () => []);
+    const environments = await this.loadJsonCached<Environment[]>(this.environmentsFile(), () => []);
     return environments.sort((a, b) => a.order - b.order);
   }
 
@@ -1405,18 +1549,30 @@ export class StorageService {
       const environments = await this.loadEnvironments();
       const environment = environments.find((candidate) => candidate.id === environmentId);
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const beforeJson = JSON.stringify(environment);
 
       if (isNonBlankString(updates.name)) environment.name = updates.name;
       if (isNonBlankString(updates.branch)) environment.branch = updates.branch;
       if ("status" in updates && isOneOf(updates.status, ["running", "stopped", "error", "creating", "stopping"])) {
         environment.status = updates.status;
         if (updates.status === "stopped" || updates.status === "error") {
-          environment.agentActivityState = "idle";
-          environment.agentActivitySources = {};
-          environment.frontendAgentActivityObservers = {};
-          environment.agentActivityUpdatedAt = nextAgentActivityTimestamp(
-            environment.agentActivityUpdatedAt,
-          );
+          // Idempotent: re-stopping an environment whose activity is already
+          // fully cleared must not bump the activity token, or the repeated
+          // update could never take the equality bail-out below.
+          const alreadyCleared =
+            environment.agentActivityState === "idle"
+            && isRecord(environment.agentActivitySources)
+            && Object.keys(environment.agentActivitySources).length === 0
+            && isRecord(environment.frontendAgentActivityObservers)
+            && Object.keys(environment.frontendAgentActivityObservers).length === 0;
+          if (!alreadyCleared) {
+            environment.agentActivityState = "idle";
+            environment.agentActivitySources = {};
+            environment.frontendAgentActivityObservers = {};
+            environment.agentActivityUpdatedAt = nextAgentActivityTimestamp(
+              environment.agentActivityUpdatedAt,
+            );
+          }
         }
       }
       if ("environmentType" in updates && isOneOf(updates.environmentType, ["containerized", "local"])) {
@@ -1526,6 +1682,11 @@ export class StorageService {
         else if (isOneOf(updates.codexMode, ["terminal", "native"])) environment.codexMode = updates.codexMode;
       }
 
+      // A merge that changed nothing persists nothing. Rewriting the whole
+      // store — and announcing a change that makes every client refetch every
+      // project — for a field-equal record is pure churn.
+      if (JSON.stringify(environment) === beforeJson) return environment;
+
       await this.saveJson(this.environmentsFile(), environments);
       this.announce("environment", environmentId);
       return environment;
@@ -1552,7 +1713,9 @@ export class StorageService {
       }
 
       environment.lastActivityAt = normalizedActivityAt;
-      await this.saveJson(this.environmentsFile(), environments);
+      // Activity timestamps churn constantly and are reconstructed from live
+      // observation anyway; rotating five backups for each refresh is waste.
+      await this.saveJson(this.environmentsFile(), environments, { backup: false });
       this.announce("environment", environmentId);
       return environment;
     });
@@ -1600,6 +1763,7 @@ export class StorageService {
       const environments = await this.loadEnvironments();
       const environment = environments.find((candidate) => candidate.id === environmentId);
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const structureBefore = agentActivityStructureFingerprint(environment);
 
       const referenceTime = Date.now();
       const sources = readAgentActivitySources(environment, referenceTime);
@@ -1673,8 +1837,18 @@ export class StorageService {
           ? aggregateTime
           : Number.NEGATIVE_INFINITY,
       )).toISOString();
-      await this.saveJson(this.environmentsFile(), environments);
-      this.announce("environment", environmentId);
+      // The lease itself must persist (its expiry is enforced from disk), but
+      // the backup rotation is skipped: only volatile activity fields changed.
+      await this.saveJson(this.environmentsFile(), environments, { backup: false });
+      // A pure lease renewal — same aggregate, same per-source and observer
+      // states, only timestamps refreshed — is not announced. Announcing it
+      // made every connected client refetch every project on each renewal
+      // (every ~10s per environment). The renewing renderer already applies
+      // the returned record from this call's response, so it does not need
+      // the broadcast; genuine state transitions still announce below.
+      if (agentActivityStructureFingerprint(environment) !== structureBefore) {
+        this.announce("environment", environmentId);
+      }
       return environment;
     });
   }
@@ -1683,6 +1857,18 @@ export class StorageService {
   async expireFrontendAgentActivityLeases(
     referenceTime = Date.now(),
   ): Promise<string[]> {
+    // Cheap pre-check outside the cross-process lock: with no observer leases
+    // on record there is nothing that could expire, and this sweep runs every
+    // 15 seconds forever. The read is stat-validated, so a lease written by
+    // another process is still seen; one added between this check and the
+    // next sweep is simply handled by the next sweep.
+    const snapshot = await this.loadEnvironments();
+    const hasObserverLeases = snapshot.some((environment) => {
+      const observers = environment.frontendAgentActivityObservers;
+      return isRecord(observers) && Object.keys(observers).length > 0;
+    });
+    if (!hasObserverLeases) return [];
+
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
       const changed: string[] = [];
@@ -1712,7 +1898,7 @@ export class StorageService {
         changed.push(environment.id);
       }
       if (changed.length === 0) return changed;
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveJson(this.environmentsFile(), environments, { backup: false });
       for (const environmentId of changed) {
         this.announce("environment", environmentId);
       }
@@ -1752,7 +1938,7 @@ export class StorageService {
         changed.push(environment.id);
       }
       if (changed.length === 0) return changed;
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveJson(this.environmentsFile(), environments, { backup: false });
       for (const environmentId of changed) {
         this.announce("environment", environmentId);
       }
@@ -1847,7 +2033,7 @@ export class StorageService {
   }
 
   async loadConfig(): Promise<AppConfig> {
-    const config = await this.loadJson<AppConfig>(this.configFile(), defaultConfig);
+    const config = await this.loadJsonCached<AppConfig>(this.configFile(), defaultConfig);
     return normalizePersistedConfig(config);
   }
 

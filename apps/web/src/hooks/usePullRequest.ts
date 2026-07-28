@@ -38,17 +38,23 @@ export function usePullRequest({
 }: UsePullRequestOptions): UsePullRequestReturn {
   const [error, setError] = useState<string | null>(null);
 
-  const { getEnvironmentById, setEnvironmentPR } = useEnvironmentStore();
-  const { setMonitoringMode, getMonitoringState } = usePrMonitorStore();
+  const environment = useEnvironmentStore((state) =>
+    environmentId
+      ? state.environments.find((candidate) => candidate.id === environmentId) ?? null
+      : null
+  );
+  const setEnvironmentPR = useEnvironmentStore((state) => state.setEnvironmentPR);
+  const setMonitoringMode = usePrMonitorStore((state) => state.setMonitoringMode);
+  const monitorState = usePrMonitorStore((state) =>
+    environmentId ? state.monitoredEnvironments[environmentId] ?? null : null
+  );
 
   // Get PR state from environment store
-  const environment = environmentId ? getEnvironmentById(environmentId) : null;
   const prUrl = environment?.prUrl ?? null;
   const prState = environment?.prState ?? null;
   const hasMergeConflicts = environment?.hasMergeConflicts ?? null;
 
   // Get detection status from PR monitor store
-  const monitorState = environmentId ? getMonitoringState(environmentId) : null;
   const isDetecting = monitorState?.checkInProgress ?? false;
 
   // View the PR in the default browser

@@ -2552,6 +2552,21 @@ function isSetupTerminalSessionId(sessionId: string): boolean {
   return sessionId.endsWith(":setup");
 }
 
+/**
+ * A setup session is attachable as soon as preparation starts, before its PTY
+ * exists. The renderer can replay the preparation intro and subscribe to live
+ * output once; treating this window as "not running" makes it reconnect and
+ * replay the same buffer until preparation finishes.
+ */
+function isTerminalSessionAttachable(sessionId: string): boolean {
+  if (terminalProcesses.has(sessionId)) return true;
+  if (!isSetupTerminalSessionId(sessionId)) return false;
+
+  const environmentId = sessionId.slice(0, -":setup".length);
+  const setupSession = environmentSetupSessions.get(environmentId);
+  return setupSession?.sessionId === sessionId && setupSession.running;
+}
+
 // Setup-session buffers are intentionally retained after the PTY exits so the
 // renderer can replay them on reattach. Free them (and the tracked session /
 // task state) when the owning environment is removed.
@@ -6236,11 +6251,12 @@ export function createCommandRegistry(
   register("list_terminal_sessions", () => Array.from(terminalProcesses.keys()));
   register("get_terminal_session", ({ sessionId }) => {
     const id = asString(sessionId, "sessionId");
-    const running = terminalProcesses.has(id);
+    const running = isTerminalSessionAttachable(id);
     if (isSetupTerminalSessionId(id)) {
       logSetupTerminal("renderer checked terminal session", {
         sessionId: id,
         running,
+        terminalRunning: terminalProcesses.has(id),
         bufferChars: terminalOutputBuffers.get(id)?.length ?? 0,
       });
     }

@@ -5091,6 +5091,87 @@ exit 0
     });
   }, ASYNC_TEST_BUDGET_MS);
 
+  test("keeps the preparation session attachable before its setup PTY exists", async () => {
+    const environment = createEnvironment({
+      id: "env-container-prepare-attach",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const setupSessionId = `${environment.id}:setup`;
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      touch "$FAKE_DOCKER_LOG.preparing"
+      while [ ! -f "$FAKE_DOCKER_LOG.release" ]; do
+        sleep 0.01
+      done
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
+    *rev-parse*)
+      printf '6767676767676767676767676767676767676767\\n'
+      ;;
+  esac
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      const setupPromise = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      let verificationError: unknown;
+      try {
+        await waitForCondition(
+          () => existsSync(`${logs.all}.preparing`),
+          "workspace preparation to start",
+        );
+
+        // Preparation owns a logical setup session before the PTY is spawned.
+        // It must be attachable so the renderer subscribes once instead of
+        // replaying the intro in a reconnect loop.
+        expect(ptySpawn).not.toHaveBeenCalled();
+        expect(
+          commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
+        ).toEqual({ id: setupSessionId, running: true });
+        expect(
+          await commands.get("get_environment_setup_session")?.(
+            { environmentId: environment.id },
+            context,
+          ),
+        ).toEqual(expect.objectContaining({
+          sessionId: setupSessionId,
+          running: true,
+          terminalRunning: false,
+        }));
+      } catch (error) {
+        verificationError = error;
+      } finally {
+        await fs.writeFile(`${logs.all}.release`, "");
+      }
+
+      await waitForPtyProcessCount(1);
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      await setupPromise;
+      if (verificationError) throw verificationError;
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
   test("closes the setup session when preparation fails", async () => {
     const environment = createEnvironment({
       id: "env-container-prepare-fails",

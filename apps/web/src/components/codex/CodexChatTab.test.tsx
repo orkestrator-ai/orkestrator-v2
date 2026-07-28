@@ -1,6 +1,7 @@
 import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import {useCodexStore} from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -72,7 +73,6 @@ const MOCK_MODELS = [
 ];
 
 type TestCodexMessage = NativeMessage & {
-  role: "assistant";
   planReview?: boolean;
 };
 
@@ -699,6 +699,8 @@ function seedCodexStore(messages: ReturnType<typeof createMessage>[] = []) {
     pendingApprovals: new Map(),
     pendingInteractions: new Map(),
     contextUsage: new Map(),
+    unconfirmedDispatches: new Map(),
+    promptDispatchClaims: new Map(),
   });
 }
 
@@ -2694,17 +2696,22 @@ describe("CodexChatTab", () => {
     });
   });
 
-  test("keeps the durable initial prompt until dispatch is accepted and retries it with the same id after remount", async () => {
-    const initialPrompt = "Recover this launch after a renderer crash";
+  test("keeps the durable initial prompt until dispatch is accepted and shares its in-flight claim across a remount", async () => {
+    const initialPrompt = "Recover this launch after a view remount";
     seedPaneLayout(initialPrompt);
+    mockGetSessionMessages.mockResolvedValue([{
+      id: "server-initial-prompt",
+      role: "user",
+      content: initialPrompt,
+      parts: [{ type: "text", content: initialPrompt }],
+      createdAt: "2026-07-28T12:00:00.000Z",
+    }]);
     let resolveFirstDispatch: ((value: { status: "processing" }) => void) | undefined;
-    mockSendPrompt
-      .mockImplementationOnce(
-        async () => new Promise<{ status: "processing" }>((resolve) => {
-          resolveFirstDispatch = resolve;
-        }),
-      )
-      .mockResolvedValueOnce({ status: "processing" });
+    mockSendPrompt.mockImplementationOnce(
+      async () => new Promise<{ status: "processing" }>((resolve) => {
+        resolveFirstDispatch = resolve;
+      }),
+    );
 
     const first = render(
       <CodexChatTab
@@ -2729,18 +2736,65 @@ describe("CodexChatTab", () => {
       />,
     );
 
-    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
-    const firstRequestId = (mockSendPrompt.mock.calls[0]?.[3] as { requestId?: string }).requestId;
-    const secondRequestId = (mockSendPrompt.mock.calls[1]?.[3] as { requestId?: string }).requestId;
-    expect(firstRequestId).toBe(`initial-prompt:${ENVIRONMENT_ID}:${TAB_ID}`);
-    expect(secondRequestId).toBe(firstRequestId);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    expect((mockSendPrompt.mock.calls[0]?.[3] as { requestId?: string }).requestId)
+      .toBe(`initial-prompt:${ENVIRONMENT_ID}:${TAB_ID}`);
 
+    resolveFirstDispatch?.({ status: "processing" });
     await waitFor(() => {
       pane = usePaneLayoutStore.getState().findPaneWithTab(TAB_ID, ENVIRONMENT_ID);
       expect(pane?.tabs.find((tab) => tab.id === TAB_ID)?.initialPrompt).toBeUndefined();
     });
+    await waitFor(() => {
+      const matching = useCodexStore.getState().sessions.get(SESSION_KEY)?.messages
+        .filter((message) => message.content === initialPrompt) ?? [];
+      expect(matching.map((message) => message.id)).toEqual(["server-initial-prompt"]);
+    });
+  });
 
-    resolveFirstDispatch?.({ status: "processing" });
+  test("dispatches and displays an initial prompt once under StrictMode", async () => {
+    const initialPrompt = "Run the strict launch audit";
+    seedPaneLayout(initialPrompt);
+    mockGetSessionMessages.mockResolvedValue([{
+      id: "server-strict-prompt",
+      role: "user",
+      content: initialPrompt,
+      parts: [{ type: "text", content: initialPrompt }],
+      createdAt: "2026-07-28T12:00:00.000Z",
+    }]);
+    let resolveDispatch: ((value: { status: "processing" }) => void) | undefined;
+    mockSendPrompt.mockImplementationOnce(
+      async () => new Promise<{ status: "processing" }>((resolve) => {
+        resolveDispatch = resolve;
+      }),
+    );
+
+    render(
+      <StrictMode>
+        <CodexChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={false}
+          initialPrompt={initialPrompt}
+        />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+
+    resolveDispatch?.({ status: "processing" });
+    await waitFor(() => {
+      const matching = useCodexStore.getState().sessions.get(SESSION_KEY)?.messages
+        .filter((message) => message.content === initialPrompt) ?? [];
+      expect(matching.map((message) => message.id)).toEqual(["server-strict-prompt"]);
+    });
   });
 
   test("retains a rejected initial prompt and caps its automatic retry", async () => {
@@ -3067,6 +3121,42 @@ describe("CodexChatTab", () => {
       const messages = useCodexStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
       expect(messages.some((message) => message.role === "user" && message.content === composeText)).toBe(true);
     });
+  });
+
+  test("replaces a duplicate-running retry bubble with the authoritative prompt", async () => {
+    composeText = "Resume the already-running request";
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    mockSendPrompt.mockResolvedValue({
+      status: "processing",
+      duplicate: true,
+      requestId: "request-1",
+      turnId: "turn-1",
+    });
+    mockGetSessionMessages.mockResolvedValue([{
+      id: "server-running-prompt",
+      role: "user",
+      content: composeText,
+      parts: [{ type: "text", content: composeText }],
+      createdAt: "2026-07-28T12:00:00.000Z",
+      turnId: "turn-1",
+    }]);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const matching = useCodexStore.getState().sessions.get(SESSION_KEY)?.messages
+        .filter((message) => message.content === composeText) ?? [];
+      expect(matching.map((message) => message.id)).toEqual(["server-running-prompt"]);
+    });
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
   });
 
   test("removes the optimistic prompt when Codex fails to send it", async () => {

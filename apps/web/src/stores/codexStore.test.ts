@@ -40,6 +40,8 @@ function resetCodexStore() {
     // writes for that action order-dependent.
     pendingInteractions: new Map(),
     contextUsage: new Map(),
+    unconfirmedDispatches: new Map(),
+    promptDispatchClaims: new Map(),
   });
 }
 
@@ -265,6 +267,38 @@ describe("codexStore message helpers", () => {
     } finally {
       Date.now = originalNow;
     }
+  });
+});
+
+describe("codexStore prompt dispatch claims", () => {
+  beforeEach(resetCodexStore);
+
+  test("atomically allows one claimant and releases it for a later retry", () => {
+    const store = useCodexStore.getState();
+
+    expect(store.claimPromptDispatch(SESSION_KEY, "request-1")).toBe(true);
+    expect(store.claimPromptDispatch(SESSION_KEY, "request-1")).toBe(false);
+    expect(useCodexStore.getState().promptDispatchClaims.get(SESSION_KEY))
+      .toEqual(new Set(["request-1"]));
+
+    store.releasePromptDispatch(SESSION_KEY, "request-1");
+
+    expect(useCodexStore.getState().promptDispatchClaims.has(SESSION_KEY)).toBe(false);
+    expect(store.claimPromptDispatch(SESSION_KEY, "request-1")).toBe(true);
+  });
+
+  test("session and environment cleanup release their claims", () => {
+    const store = useCodexStore.getState();
+    const otherSession = createSessionKey("env-2", "tab-1");
+    store.claimPromptDispatch(SESSION_KEY, "request-1");
+    store.claimPromptDispatch(otherSession, "request-2");
+
+    store.clearSession(SESSION_KEY);
+    expect(useCodexStore.getState().promptDispatchClaims.has(SESSION_KEY)).toBe(false);
+    expect(useCodexStore.getState().promptDispatchClaims.has(otherSession)).toBe(true);
+
+    store.clearEnvironment("env-2");
+    expect(useCodexStore.getState().promptDispatchClaims.size).toBe(0);
   });
 });
 

@@ -266,6 +266,7 @@ export function CodexChatTab({
     () => createSessionKey(environmentId, tabId),
     [environmentId, tabId],
   );
+  const initialPromptRequestId = `initial-prompt:${environmentId}:${tabId}`;
   useNativeComposeDraftPersistence("codex", environmentId, sessionKey, useCodexStore);
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
@@ -347,6 +348,8 @@ export function CodexChatTab({
   const setSelectedReasoningEffort = useCodexStore((state) => state.setSelectedReasoningEffort);
   const setFastMode = useCodexStore((state) => state.setFastMode);
   const addToQueue = useCodexStore((state) => state.addToQueue);
+  const claimPromptDispatch = useCodexStore((state) => state.claimPromptDispatch);
+  const releasePromptDispatch = useCodexStore((state) => state.releasePromptDispatch);
   const client = useCodexStore(
     useCallback((state) => state.clients.get(environmentId), [environmentId]),
   );
@@ -355,6 +358,14 @@ export function CodexChatTab({
   );
   const sessionPhase = useCodexStore(
     useCallback((state) => state.sessionPhase.get(sessionKey), [sessionKey]),
+  );
+  const initialPromptDispatchClaimed = useCodexStore(
+    useCallback(
+      (state) =>
+        state.promptDispatchClaims.get(sessionKey)?.has(initialPromptRequestId)
+        ?? false,
+      [initialPromptRequestId, sessionKey],
+    ),
   );
   const storedPendingApprovals = useCodexStore(
     useCallback((state) => state.pendingApprovals.get(sessionKey), [sessionKey]),
@@ -474,7 +485,6 @@ export function CodexChatTab({
   );
   const displayMessages = handoff.displayMessages;
   const launchPrompt = initialPrompt ?? handoff.initialPrompt;
-  const initialPromptRequestId = `initial-prompt:${environmentId}:${tabId}`;
   /*
    * Read through a ref inside the initialization effect. `launchPrompt` resolves
    * a few milliseconds after mount for a handoff tab, so listing it as a
@@ -842,6 +852,20 @@ export function CodexChatTab({
        */
       retryablePromptRef.current = null;
       clearMatchingUnconfirmedDispatch();
+
+      if (sent.status === "processing" && sent.duplicate) {
+        /**
+         * This logical request is already running.
+         *
+         * A StrictMode effect or a remount may have created a second local
+         * optimistic bubble before the bridge attached this retry to the first
+         * turn. Only one user message will exist in the authoritative
+         * transcript, so discard this request's extra bubble before refreshing.
+         */
+        removeMessage(sessionKey, userMessage.id);
+        await refreshMessages(client, session.sessionId);
+        return "accepted";
+      }
 
       if (sent.status === "already-processed" && sent.duplicate) {
         /**
@@ -2297,11 +2321,16 @@ export function CodexChatTab({
       || !handoff.ready
       || !launchPrompt
       || initialPromptSent
+      || initialPromptDispatchClaimed
       || setupPending
     ) {
       return;
     }
 
+    if (!claimPromptDispatch(sessionKey, initialPromptRequestId)) {
+      return;
+    }
+    let accepted = false;
     setInitialPromptSent(true);
     // Keep the durable launch intent until the bridge accepts the turn (or
     // authoritative reconciliation proves that it did). If the renderer
@@ -2313,6 +2342,7 @@ export function CodexChatTab({
       initialPromptRequestId,
     ).then((result) => {
       if (result === "accepted") {
+        accepted = true;
         initialPromptRetryCountRef.current = 0;
         clearTabInitialPrompt(tabId, environmentId);
       } else if (
@@ -2338,15 +2368,28 @@ export function CodexChatTab({
           setInitialPromptSent(false);
         }, 1_000);
       }
+    }).finally(() => {
+      /**
+       * An accepted initial request is one-shot for the lifetime of this tab.
+       * Keep its claim until session cleanup so another live mount cannot race
+       * the pane-store update and recreate the optimistic bubble. A renderer
+       * restart recreates the store, so durable crash recovery remains intact.
+       */
+      if (!accepted) {
+        releasePromptDispatch(sessionKey, initialPromptRequestId);
+      }
     });
   }, [
+    claimPromptDispatch,
     clearTabInitialPrompt,
     connectionState,
     environmentId,
     handleSend,
     handoff.ready,
+    initialPromptDispatchClaimed,
     initialPromptRequestId,
     launchPrompt,
+    releasePromptDispatch,
     sessionKey,
     setSessionError,
     initialPromptSent,

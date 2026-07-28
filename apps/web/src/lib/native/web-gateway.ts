@@ -62,6 +62,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   type TerminalEventStream = {
     event: string;
+    /**
+     * Direct/bearer clients use one fetch stream per terminal. Same-origin
+     * browser clients leave this null and share `browserTerminalEventSource`.
+     */
     source: EventSource | null;
     controller: AbortController | null;
     reconnectTimer: ReturnType<typeof setTimeout> | null;
@@ -78,6 +82,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     closed: boolean;
   };
   const terminalEventStreams = new Map<string, TerminalEventStream>();
+  let browserTerminalEventSource: EventSource | null = null;
+  let browserTerminalRefreshQueued = false;
   let bearerToken = options.token?.trim() || undefined;
   const baseUrl = normalizedBaseUrl(options.baseUrl);
   const apiUrl = (pathname: string): string =>
@@ -97,11 +103,16 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
    * so a remote tab looking at one environment no longer downloads output from
    * every terminal in every other environment.
    */
-  const eventStreamPath = (terminalEvent?: string) => {
+  const eventStreamPath = (terminalEvents?: string | readonly string[]) => {
     const params = new URLSearchParams({
       excludeEvents: TERMINAL_OUTPUT_EVENT_PREFIX,
     });
-    if (terminalEvent) params.set("includeEvents", terminalEvent);
+    if (terminalEvents) {
+      const included = typeof terminalEvents === "string"
+        ? terminalEvents
+        : terminalEvents.join(",");
+      if (included) params.set("includeEvents", included);
+    }
     return `${GATEWAY_PREFIX}/events?${params.toString()}`;
   };
 
@@ -245,6 +256,56 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     );
   };
 
+  /**
+   * WKWebView enforces a small per-origin allowance for long-lived HTTP
+   * requests. One EventSource per mounted terminal can therefore leave later
+   * terminals with only their initial snapshot and no live output. Mobile keeps
+   * every pane mounted intentionally, so this is easy to hit.
+   *
+   * Share one filtered EventSource for every terminal the same-origin browser
+   * currently consumes. Changing the filter reconnects this one stream; opening
+   * the replacement emits a scoped desync notice for terminals that were
+   * already connected, causing their authoritative snapshot reconciliation to
+   * cover the brief subscription gap.
+   */
+  const refreshBrowserTerminalEventSource = () => {
+    if (browserTerminalRefreshQueued) return;
+    browserTerminalRefreshQueued = true;
+    queueMicrotask(() => {
+      browserTerminalRefreshQueued = false;
+
+      browserTerminalEventSource?.close();
+      browserTerminalEventSource = null;
+
+      const events = [...terminalEventStreams.values()]
+        .filter((stream) => !stream.closed)
+        .map((stream) => stream.event)
+        .sort();
+      if (events.length === 0) return;
+
+      const source = new EventSource(apiUrl(eventStreamPath(events)), {
+        withCredentials: true,
+      });
+      browserTerminalEventSource = source;
+      const subscribedEvents = new Set(events);
+      source.onopen = () => {
+        if (browserTerminalEventSource !== source) return;
+        for (const event of subscribedEvents) {
+          const stream = terminalEventStreams.get(event);
+          if (stream && !stream.closed) announceTerminalStreamOpen(stream);
+        }
+      };
+      source.onmessage = (message) => {
+        if (browserTerminalEventSource === source) dispatchMessage(message.data);
+      };
+      source.onerror = () => {
+        if (browserTerminalEventSource === source) {
+          console.warn("[RemoteGateway] Terminal event stream disconnected");
+        }
+      };
+    });
+  };
+
   const startTerminalEventStream = (stream: TerminalEventStream) => {
     if (stream.closed || stream.source || stream.controller) return;
     if (bearerToken || baseUrl) {
@@ -283,16 +344,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       })();
       return;
     }
-
-    const source = new EventSource(apiUrl(eventStreamPath(stream.event)), {
-      withCredentials: true,
-    });
-    stream.source = source;
-    source.onopen = () => announceTerminalStreamOpen(stream);
-    source.onmessage = (message) => dispatchMessage(message.data);
-    source.onerror = () => {
-      console.warn("[RemoteGateway] Terminal event stream disconnected");
-    };
+    refreshBrowserTerminalEventSource();
   };
 
   const ensureTerminalEventStream = (event: string): TerminalEventStream => {
@@ -330,6 +382,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     stream.reconnectTimer = null;
     resolveTerminalStreamReady(stream);
     terminalEventStreams.delete(event);
+    if (!bearerToken && !baseUrl) refreshBrowserTerminalEventSource();
   };
 
   const readGatewayResponse = async <T>(response: Response, fallback: string): Promise<T> => {

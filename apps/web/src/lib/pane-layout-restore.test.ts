@@ -74,14 +74,14 @@ describe("reconcilePersistedLayout", () => {
             isLocal: false,
           },
         },
-        { id: "setup", type: "plain" },
+        { id: "setup", type: "plain", isSetupTab: true },
       ],
     });
     const json = JSON.stringify(restored);
     expect(json).not.toContain("initialPrompt");
     expect(json).not.toContain("initialCommands");
     expect(json).not.toContain("hostPort");
-    expect(json).not.toContain("isSetupTab");
+    expect(json).toContain('"isSetupTab":true');
   });
 
   test("restores unconsumed one-shot agent launch options for every agent tab type", () => {

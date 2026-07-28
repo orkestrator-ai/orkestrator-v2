@@ -579,6 +579,7 @@ export function TerminalContainer({
   const setupPlanFetchInFlightRef = useRef(false);
   const inactiveBackendSetupInFlightRef = useRef(false);
   const setupSessionBindInFlightRef = useRef(false);
+  const setupSessionBindSettledTabsRef = useRef(new Set<string>());
   const durableLaunchClearInFlightRef = useRef(false);
   const [setupSessionBindNonce, setSetupSessionBindNonce] = useState(0);
 
@@ -604,6 +605,8 @@ export function TerminalContainer({
         return alreadyBound;
       }
       setupSessionBindInFlightRef.current = true;
+      setupSessionBindSettledTabsRef.current.delete(tabId);
+      let lookupSettled = false;
       try {
         console.info("[setup-terminal] requesting backend setup session", {
           environmentId,
@@ -611,6 +614,7 @@ export function TerminalContainer({
           key: setupSessionKeyForTab(tabId),
         });
         const setupSession = await backend.getEnvironmentSetupSession(environmentId);
+        lookupSettled = true;
         if (!setupSession?.sessionId) {
           console.info("[setup-terminal] no backend setup session available", {
             environmentId,
@@ -635,13 +639,19 @@ export function TerminalContainer({
           ...existing,
           sessionId: setupSession.sessionId,
         });
-        setSetupSessionBindNonce((value) => value + 1);
         return true;
       } catch (error) {
         console.error("[TerminalContainer] Failed to bind backend setup session:", error);
         return false;
       } finally {
         setupSessionBindInFlightRef.current = false;
+        if (lookupSettled) {
+          setupSessionBindSettledTabsRef.current.add(tabId);
+          // The terminal store update itself rerenders PersistentTerminal. This
+          // local nonce lets stale-tab cleanup distinguish a completed lookup
+          // (including "no session") from the initial empty renderer store.
+          setSetupSessionBindNonce((value) => value + 1);
+        }
       }
     },
     [environmentId, hasBoundSetupSession, setupSessionKeyForTab],
@@ -672,13 +682,22 @@ export function TerminalContainer({
     environmentId,
     hasBoundSetupSession,
     setupScriptsRunning,
-    setupSessionBindNonce,
   ]);
 
   useEffect(() => {
-    if (!currentEnvState || !environment?.setupScriptsComplete || setupScriptsRunning) {
+    if (
+      !currentEnvState
+      || !environment?.setupScriptsComplete
+      || environment.pendingAgentLaunch
+      || setupScriptsRunning
+    ) {
       return;
     }
+    // The rebind effect above starts its backend lookup synchronously, but the
+    // result is asynchronous. On a fresh renderer the terminal store is empty,
+    // so treating that temporary absence as stale would remove the restored
+    // setup tab and seed an ordinary PTY before iOS/web can adopt `:setup`.
+    if (setupSessionBindInFlightRef.current) return;
 
     const leaves = getAllLeaves(currentEnvState.root);
     for (const leaf of leaves) {
@@ -686,6 +705,7 @@ export function TerminalContainer({
         if (!tab.isSetupTab || (tab.initialCommands && tab.initialCommands.length > 0)) {
           return false;
         }
+        if (!setupSessionBindSettledTabsRef.current.has(tab.id)) return false;
         const session = useTerminalSessionStore.getState().sessions.get(setupSessionKeyForTab(tab.id));
         return session?.sessionId !== `${environmentId}:setup`;
       });
@@ -698,9 +718,11 @@ export function TerminalContainer({
     }
   }, [
     currentEnvState,
+    environment?.pendingAgentLaunch,
     environment?.setupScriptsComplete,
     environmentId,
     removeTab,
+    setupSessionBindNonce,
     setupScriptsRunning,
     setupSessionKeyForTab,
   ]);

@@ -552,7 +552,7 @@ describe("web gateway browser API", () => {
     expect(source.closed).toBe(true);
   });
 
-  test("keeps the authoritative stream stable and gives each active terminal its own stream", async () => {
+  test("keeps the authoritative stream stable and uses one filtered browser terminal stream", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi();
 
@@ -564,6 +564,7 @@ describe("web gateway browser API", () => {
       "terminal-output-session:one",
       () => undefined,
     );
+    await Promise.resolve();
 
     expect(firstSource.closed).toBe(false);
     expect(MockEventSource.instances).toHaveLength(2);
@@ -580,6 +581,7 @@ describe("web gateway browser API", () => {
     expect(ready).toBe(true);
 
     unsubscribeTerminal();
+    await Promise.resolve();
     expect(MockEventSource.instances).toHaveLength(2);
     expect(MockEventSource.instances[1]?.closed).toBe(true);
     expect(firstSource.closed).toBe(false);
@@ -610,32 +612,77 @@ describe("web gateway browser API", () => {
     await expect(ready).resolves.toBeUndefined();
   });
 
-  test("adding a second terminal never interrupts output for the first", async () => {
+  test("multiplexes added terminals and resynchronizes existing listeners after the filter changes", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi();
     const firstOutput = mock(() => undefined);
     const secondOutput = mock(() => undefined);
 
     const stopFirst = api.listen("terminal-output-one", firstOutput);
+    await Promise.resolve();
     const firstSource = MockEventSource.instances[0]!;
     firstSource.onopen?.();
     await api.eventStreamReady("terminal-output-one");
 
     const stopSecond = api.listen("terminal-output-two", secondOutput);
+    await Promise.resolve();
     const secondSource = MockEventSource.instances[1]!;
-    expect(firstSource.closed).toBe(false);
-    firstSource.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({ event: "terminal-output-one", payload: "YQ==" }),
-    }));
-    expect(firstOutput).toHaveBeenCalledWith("YQ==");
-    expect(secondOutput).not.toHaveBeenCalled();
-
+    expect(firstSource.closed).toBe(true);
+    expect(secondSource.url).toBe(
+      "/__orkestrator/events?excludeEvents=terminal-output-&includeEvents=terminal-output-one%2Cterminal-output-two",
+    );
     secondSource.onopen?.();
     await api.eventStreamReady("terminal-output-two");
+    expect(firstOutput).toHaveBeenCalledWith({ desynced: true });
+    expect(secondOutput).not.toHaveBeenCalled();
+
+    secondSource.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({ event: "terminal-output-one", payload: "YQ==" }),
+    }));
+    expect(firstOutput).toHaveBeenLastCalledWith("YQ==");
+    expect(secondOutput).not.toHaveBeenCalled();
+
     stopSecond();
+    await Promise.resolve();
+    const thirdSource = MockEventSource.instances[2]!;
     expect(secondSource.closed).toBe(true);
-    expect(firstSource.closed).toBe(false);
+    expect(thirdSource.url).toBe(
+      "/__orkestrator/events?excludeEvents=terminal-output-&includeEvents=terminal-output-one",
+    );
+    thirdSource.onopen?.();
+    expect(firstOutput).toHaveBeenLastCalledWith({ desynced: true });
     stopFirst();
+    await Promise.resolve();
+    expect(thirdSource.closed).toBe(true);
+  });
+
+  test("coalesces many same-origin terminal listeners into one WebKit-safe stream", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+
+    const stops = Array.from({ length: 12 }, (_, index) =>
+      api.listen(`terminal-output-session-${index}`, () => undefined)
+    );
+    await Promise.resolve();
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    const source = MockEventSource.instances[0]!;
+    const url = new URL(source.url, "https://workstation.tailnet.ts.net");
+    expect(url.searchParams.get("includeEvents")?.split(",")).toEqual(
+      Array.from({ length: 12 }, (_, index) => `terminal-output-session-${index}`)
+        .sort(),
+    );
+
+    source.onopen?.();
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        api.eventStreamReady(`terminal-output-session-${index}`)
+      ),
+    );
+
+    for (const stop of stops) stop();
+    await Promise.resolve();
+    expect(source.closed).toBe(true);
   });
 
   test("tells a reconnected direct terminal stream to resynchronize", async () => {
@@ -702,6 +749,7 @@ describe("web gateway browser API", () => {
     const stop = api.listen("terminal-output-session-1", (payload) => {
       payloads.push(payload);
     });
+    await Promise.resolve();
     const source = MockEventSource.instances[0];
     if (!source) throw new Error("EventSource was not created");
 
@@ -784,6 +832,7 @@ describe("web gateway browser API", () => {
 
     try {
       const stop = api.listen("terminal-output-session-1", () => undefined);
+      await Promise.resolve();
       let ready = false;
       const readyPromise = api
         .eventStreamReady("terminal-output-session-1")

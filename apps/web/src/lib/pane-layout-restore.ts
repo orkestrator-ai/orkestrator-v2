@@ -76,7 +76,11 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
   };
 
   if (value.isSetupTab === true) {
-    return { ...common, type: "plain" };
+    // Setup commands are deliberately removed by pane-layout persistence, but
+    // the marker is durable identity rather than a command replay request.
+    // Keeping it lets a fresh renderer rebind this tab to the backend-owned
+    // `<environmentId>:setup` PTY instead of creating a second ordinary shell.
+    return { ...common, type: "plain", isSetupTab: true };
   }
 
   if (type === "plain" || type === "claude" || type === "opencode" || type === "codex" || type === "root") {

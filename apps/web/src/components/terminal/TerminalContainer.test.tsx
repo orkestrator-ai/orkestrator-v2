@@ -402,6 +402,91 @@ describe("TerminalContainer", () => {
     expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
   });
 
+  test("rebinds a restored completed setup tab before stale cleanup can replace its PTY", async () => {
+    let resolveSetupSession:
+      | ((session: EnvironmentSetupSession | null) => void)
+      | undefined;
+    getEnvironmentSetupSessionMock.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveSetupSession = resolve;
+      }),
+    );
+    getPaneLayoutMock.mockResolvedValue({
+      version: 1,
+      environmentId: "env-hidden",
+      containerId: null,
+      activePaneId: "restored-pane",
+      root: {
+        kind: "leaf",
+        id: "restored-pane",
+        tabs: [{
+          id: "default",
+          type: "plain",
+          isSetupTab: true,
+        }],
+        activeTabId: "default",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    });
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((environment) =>
+        environment.id === "env-hidden"
+          ? {
+              ...environment,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+              setupScriptsComplete: true,
+            }
+          : environment
+      ),
+      setupCommandsResolved: new Set(["env-hidden"]),
+      setupScriptsRunning: new Set(),
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
+    });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+      { id: "default", type: "plain", isSetupTab: true },
+    ]);
+
+    await act(async () => {
+      resolveSetupSession?.({
+        environmentId: "env-hidden",
+        sessionId: "env-hidden:setup",
+        running: false,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:01:00.000Z",
+        success: true,
+        terminalRunning: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useTerminalSessionStore.getState().sessions.get(
+          createSessionKey(null, "default", "env-hidden"),
+        )?.sessionId,
+      ).toBe("env-hidden:setup");
+    });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+      { id: "default", type: "plain", isSetupTab: true },
+    ]);
+  });
+
   test("reconstructs a looped-review tab only after its authoritative workflow hydrates", async () => {
     const workflowId = useLoopedReviewStore.getState().createWorkflow({
       environmentId: "env-hidden",

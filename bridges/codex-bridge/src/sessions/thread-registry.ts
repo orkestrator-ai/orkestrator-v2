@@ -80,6 +80,8 @@ export interface BridgeSession {
   structuredOutput?: StructuredOutputResult;
   /** Request id for the structured turn currently running or last completed. */
   structuredOutputRequestId?: string;
+  /** Bridge-observed turn reroutes that Codex does not write to its rollout. */
+  confirmedModelsByTurn?: Record<string, string>;
   lastAccessed: number;
   createdAt: number;
   /** Attachments staged by the current prompt request. */
@@ -146,6 +148,10 @@ export interface ThreadContext {
    * and the thread is unrecoverable. Verified against codex 0.145.0.
    */
   materialized: boolean;
+  /** Last model app-server confirmed for this thread. */
+  modelId?: string;
+  /** Turn-scoped confirmations take precedence over thread settings. */
+  confirmedModelsByTurn: Map<string, string>;
 }
 
 /**
@@ -306,7 +312,13 @@ export class ThreadRegistry {
   attach(
     sessionId: string,
     threadId: string,
-    options: { engineHandle: string; engineGeneration?: EngineGeneration; cwd?: string; name?: string | null },
+    options: {
+      engineHandle: string;
+      engineGeneration?: EngineGeneration;
+      cwd?: string;
+      name?: string | null;
+      modelId?: string;
+    },
   ): ThreadContext {
     const session = this.sessions.get(sessionId);
     if (session) session.threadId = threadId;
@@ -325,6 +337,10 @@ export class ThreadRegistry {
         compacting: false,
         unsubscribed: false,
         materialized: false,
+        modelId: options.modelId,
+        confirmedModelsByTurn: new Map(
+          Object.entries(session?.confirmedModelsByTurn ?? {}),
+        ),
         cwd: options.cwd,
         name: options.name ?? null,
       };
@@ -336,8 +352,26 @@ export class ThreadRegistry {
         context.engineGeneration = options.engineGeneration;
       }
       context.unsubscribed = false;
+      if (options.modelId) context.modelId = options.modelId;
+      for (const [turnId, modelId] of Object.entries(
+        session?.confirmedModelsByTurn ?? {},
+      )) {
+        // The loaded context is canonical. A restored tab can carry an older
+        // copy of the same turn overlay, so joining it must never overwrite a
+        // confirmation already observed by the live thread. Non-conflicting
+        // entries are still imported because the joining record may be the only
+        // durable copy after a restart.
+        if (!context.confirmedModelsByTurn.has(turnId)) {
+          context.confirmedModelsByTurn.set(turnId, modelId);
+        }
+      }
     }
 
+    if (session && context.confirmedModelsByTurn.size > 0) {
+      session.confirmedModelsByTurn = Object.fromEntries(
+        context.confirmedModelsByTurn,
+      );
+    }
     context.bridgeSessionIds.add(sessionId);
     return context;
   }
@@ -473,6 +507,19 @@ export class ThreadRegistry {
     return [...context.bridgeSessionIds]
       .map((id) => this.sessions.get(id))
       .filter((session): session is BridgeSession => session !== undefined);
+  }
+
+  /**
+   * Every durable bridge session bound to a thread, including restored sessions
+   * that have not subscribed in this process yet.
+   *
+   * Live fan-out deliberately uses `sessionsForThread`; persistence fan-out
+   * must use this broader set so an inactive tab cannot retain a stale reroute.
+   */
+  boundSessionsForThread(threadId: string): BridgeSession[] {
+    return [...this.sessions.values()].filter(
+      (session) => session.threadId === threadId,
+    );
   }
 
   /**

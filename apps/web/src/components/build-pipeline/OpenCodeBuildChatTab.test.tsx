@@ -631,6 +631,35 @@ describe("OpenCodeBuildChatTab", () => {
     );
   });
 
+  test("renders a friendly catalog label for the build assistant's confirmed model", async () => {
+    const assistantMessage: NativeMessage = {
+      id: "assistant-with-model",
+      role: "assistant",
+      content: "Catalog-attributed build response",
+      parts: [{ type: "text", content: "Catalog-attributed build response" }],
+      createdAt: "2026-07-28T12:00:00.000Z",
+      modelId: "openai/gpt-5-review",
+    };
+    seedPipeline("paused", "idle");
+    seedOpenCodeStore(false);
+    setOpenCodeBuildMessages([assistantMessage]);
+    useOpenCodeStore.setState((state) => ({
+      models: new Map(state.models).set(ENV_ID, [
+        {
+          id: "openai/gpt-5-review",
+          name: "GPT-5 Review",
+          provider: "openai",
+        },
+      ]),
+    }));
+    mockGetSessionMessages.mockResolvedValue([assistantMessage]);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    expect(await screen.findByTitle("GPT-5 Review")).toBeTruthy();
+    expect(screen.queryByText("openai/gpt-5-review")).toBeNull();
+  });
+
   test("stopping a running pipeline pauses it instead of failing it", async () => {
     let resolveAbort: ((value: boolean) => void) | undefined;
     mockAbortSession.mockImplementationOnce(

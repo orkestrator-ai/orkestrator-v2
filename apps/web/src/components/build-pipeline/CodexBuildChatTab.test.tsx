@@ -782,6 +782,42 @@ describe("CodexBuildChatTab", () => {
     window.setInterval = originalWindowSetInterval;
   });
 
+  test("renders a friendly catalog label for the build assistant's confirmed model", async () => {
+    const assistantMessage: NativeMessage = {
+      ...createTestMessage(
+        "assistant-with-model",
+        "assistant",
+        "Catalog-attributed build response",
+      ),
+      modelId: "gpt-5.4-codex-review",
+    };
+    seedPipeline("paused", "idle");
+    seedCodexStore(false);
+    useCodexStore.setState((state) => ({
+      models: [
+        ...state.models,
+        {
+          id: "gpt-5.4-codex-review",
+          name: "Codex Review",
+          reasoningEfforts: ["high"],
+          defaultReasoningEffort: "high",
+        },
+      ],
+      sessions: new Map(state.sessions).set(SESSION_KEY, {
+        sessionId: SESSION_ID,
+        messages: [assistantMessage],
+        isLoading: false,
+        title: "Build Session",
+      }),
+    }));
+    mockGetSessionMessages.mockResolvedValue([assistantMessage]);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    expect(await screen.findByTitle("Codex Review")).toBeTruthy();
+    expect(screen.queryByText("gpt-5.4-codex-review")).toBeNull();
+  });
+
   test("stopping a running pipeline pauses it instead of failing it", async () => {
     let resolveAbort: ((value: boolean) => void) | undefined;
     mockAbortSession.mockImplementationOnce(

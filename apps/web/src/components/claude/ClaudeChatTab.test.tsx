@@ -577,6 +577,39 @@ describe("ClaudeChatTab", () => {
     lastVirtualizedFind = null;
   });
 
+  test("renders a friendly catalog label for the backend-confirmed assistant model", async () => {
+    const catalogModel: ClaudeModel = {
+      id: "sonnet",
+      resolvedModel: "claude-sonnet-5",
+      name: "Claude Sonnet",
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "medium", "high"],
+    };
+    const assistantMessage: ClaudeMessageType = {
+      id: "assistant-with-model",
+      role: "assistant",
+      content: "Catalog-attributed response",
+      parts: [{ type: "text", content: "Catalog-attributed response" }],
+      timestamp: "2026-07-28T12:00:00.000Z",
+      modelId: "claude-sonnet-5",
+    };
+    mockGetModels.mockResolvedValue([catalogModel]);
+    mockGetSessionMessages.mockResolvedValue([assistantMessage]);
+    useClaudeStore.setState((state) => ({
+      sessions: new Map(state.sessions).set(SESSION_KEY, {
+        sessionId: "session-1",
+        messages: [assistantMessage],
+        isLoading: false,
+      }),
+      models: [catalogModel],
+    }));
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByTitle("Claude Sonnet")).toBeTruthy();
+    expect(screen.queryByText("claude-sonnet-5")).toBeNull();
+  });
+
   test("blocks sending until a restored agent handoff finishes loading", async () => {
     const handoffId = "claude-delayed-handoff";
     const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;

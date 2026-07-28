@@ -4,6 +4,7 @@ import { useScrollLock } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {useClaudeStore} from "@/stores/claudeStore";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { useConfigStore, useEnvironmentStore } from "@/stores";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import type { BuildPhase, PipelineSession } from "@/stores/buildPipelineStore";
@@ -262,9 +263,16 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     hasActiveEventSubscription,
     clients: clientsMap,
     sessions: sessionsMap,
+    modelCatalogs,
+    models: fallbackModels,
   } = useClaudeStore();
 
   const client = useMemo(() => clientsMap.get(environmentId), [clientsMap, environmentId]);
+  const models = modelCatalogs.get(environmentId)?.models ?? fallbackModels;
+  const resolveModelLabel = useCallback(
+    (modelId: string) => resolveCatalogModelLabel(modelId, models),
+    [models],
+  );
 
   // Subscribe to setup script state from environment store
   // Used to gate build start until setup scripts have completed
@@ -1733,6 +1741,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
                           : null
                       }
                       assistantLabel="Claude"
+                      resolveModelLabel={resolveModelLabel}
                     />
                   ))}
                 {sessionData.isLoading && (

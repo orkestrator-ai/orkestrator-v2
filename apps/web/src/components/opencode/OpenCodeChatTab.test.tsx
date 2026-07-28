@@ -709,6 +709,36 @@ describe("OpenCodeChatTab", () => {
     mock.restore();
   });
 
+  test("renders a friendly catalog label for the backend-confirmed assistant model", async () => {
+    const catalogModel: OpenCodeModel = {
+      id: "openai/gpt-5-review",
+      name: "GPT-5 Review",
+      provider: "openai",
+    };
+    const assistantMessage: NativeMessage = {
+      ...nativeMessage("assistant-with-model", "Catalog-attributed response"),
+      modelId: catalogModel.id,
+    };
+    mockGetModelsWithDefaults.mockResolvedValue({
+      models: [catalogModel],
+      defaults: { modelId: catalogModel.id },
+    });
+    mockGetSessionMessages.mockResolvedValue([assistantMessage]);
+    useOpenCodeStore.setState((state) => ({
+      sessions: new Map(state.sessions).set(SESSION_KEY, {
+        sessionId: "session-1",
+        messages: [assistantMessage],
+        isLoading: false,
+      }),
+      models: new Map(state.models).set(ENVIRONMENT_ID, [catalogModel]),
+    }));
+
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByTitle("GPT-5 Review")).toBeTruthy();
+    expect(screen.queryByText("openai/gpt-5-review")).toBeNull();
+  });
+
   test("blocks sending until a restored agent handoff finishes loading", async () => {
     const handoffId = "opencode-delayed-handoff";
     const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;

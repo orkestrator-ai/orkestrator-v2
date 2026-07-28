@@ -382,6 +382,8 @@ export interface ClaudeMessage {
   content: string;
   parts: ClaudeMessagePart[];
   timestamp: string;
+  /** Model reported by the Claude backend response, never the UI selection. */
+  modelId?: string;
   /**
    * Frames the bridge has published for this message, starting at 1. Present
    * only on assistant messages from a streaming turn — both over SSE and in

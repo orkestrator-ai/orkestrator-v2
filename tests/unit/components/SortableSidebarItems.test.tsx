@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Environment, Project } from "../../../apps/web/src/types";
 import * as realSortable from "@dnd-kit/sortable";
 import * as realEnvironmentItem from "@/components/environments/EnvironmentItem";
@@ -366,16 +366,17 @@ describe("sortable sidebar items", () => {
     expect(dialog.textContent).toContain("Project One");
     expect(dialog.textContent).toContain("1 environment");
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    });
 
     expect(onDeleteProject).toHaveBeenCalledTimes(1);
     expect(onDeleteProject).toHaveBeenCalledWith("project-1");
-    // Radix keeps closed dialog content mounted until its exit-presence
-    // fallback settles. In happy-dom that fallback takes ~2.5 seconds and can
-    // cross Bun's per-test timeout when the full suite is under load. The
-    // controlled state transition is the behavior owned by this component;
-    // Radix's eventual portal unmount is library behavior.
-    await waitFor(() => expect(dialog.getAttribute("data-state")).toBe("closed"));
+    // confirmDelete awaits the deletion callback, so flush that continuation
+    // with act. The controlled close state is owned by this component; Radix
+    // may keep the hidden portal mounted while exit-presence settles.
+    expect(dialog.getAttribute("data-state")).toBe("closed");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   test("SortableProjectGroup keeps the delete confirmation open after deletion fails", async () => {

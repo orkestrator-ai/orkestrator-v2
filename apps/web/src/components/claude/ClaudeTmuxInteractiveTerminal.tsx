@@ -26,7 +26,6 @@ import {
 } from "@/constants/terminal";
 import {
   MobileTerminalKeyBar,
-  resolveTerminalKeyData,
 } from "@/components/terminal/MobileTerminalKeyBar";
 
 interface ClaudeTmuxInteractiveTerminalProps {
@@ -177,7 +176,14 @@ export function ClaudeTmuxInteractiveTerminal({
       }
       const sessionId = sessionIdRef.current;
       if (sessionId) {
-        void resizeInteractiveTerminal(sessionId, terminal.cols, terminal.rows);
+        void resizeInteractiveTerminal(sessionId, terminal.cols, terminal.rows).catch(
+          (resizeError) => {
+            console.error(
+              "[ClaudeTmuxInteractiveTerminal] Failed to resize terminal:",
+              resizeError,
+            );
+          },
+        );
       }
     };
 
@@ -331,10 +337,11 @@ export function ClaudeTmuxInteractiveTerminal({
         <MobileTerminalKeyBar
           contained
           onInput={(data) => {
-            void writeToTerminal(resolveTerminalKeyData(
-              data,
-              terminalRef.current?.modes.applicationCursorKeysMode ?? false,
-            ));
+            // This path is interpreted by the backend and forwarded with
+            // `tmux send-keys`, rather than written to a raw PTY. Keep the
+            // canonical CSI form so the backend can map arrows to named tmux
+            // keys and let tmux encode them for the pane's current mode.
+            void writeToTerminal(data);
           }}
           disabled={!connected}
         />

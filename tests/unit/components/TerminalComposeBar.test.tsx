@@ -186,6 +186,18 @@ describe("Terminal ComposeBar", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  test("merges caller positioning classes onto the compose container", () => {
+    renderComposeBar({ className: "bottom-[calc(3.5rem+env(safe-area-inset-bottom))]" });
+
+    const composeBar = document.querySelector("[data-compose-bar]");
+    expect(composeBar?.className).toContain(
+      "bottom-[calc(3.5rem+env(safe-area-inset-bottom))]",
+    );
+    expect(composeBar?.className).toContain("absolute");
+    expect(composeBar?.className).toContain("left-2");
+    expect(composeBar?.className).not.toContain("bottom-2");
+  });
+
   test("focuses the textarea when opened and persists typed drafts", () => {
     const { unmount } = renderComposeBar();
     const textarea = getTextarea();
@@ -287,6 +299,186 @@ describe("Terminal ComposeBar", () => {
     await waitFor(() => expect(mockGetComposeDraft).toHaveBeenCalled());
     expect(getTextarea().value).toBe("");
     expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
+  });
+
+  test("restores valid images while filtering malformed backend entries", async () => {
+    const validImage = image("valid");
+    mockGetComposeDraft.mockResolvedValueOnce({
+      draftKey: `terminal:env-mixed:${encodeURIComponent(SESSION_KEY)}`,
+      ownerType: "environment",
+      ownerId: "env-mixed",
+      value: {
+        text: "restored",
+        images: [
+          validImage,
+          null,
+          { ...validImage, id: 42 },
+          { ...validImage, width: "1" },
+          { id: "partial" },
+        ],
+      },
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 4,
+    });
+
+    renderComposeBar({ environmentId: "env-mixed" });
+
+    await waitFor(() => expect(screen.getAllByAltText("Attachment preview")).toHaveLength(1));
+    expect(getTextarea().value).toBe("restored");
+    expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([
+      validImage,
+    ]);
+  });
+
+  test("does not overwrite a pre-existing image-only local draft during hydration", async () => {
+    const localImage = image("local");
+    const storedImage = image("stored");
+    const snapshot = deferred<{
+      draftKey: string;
+      ownerType: "environment";
+      ownerId: string;
+      value: unknown;
+      updatedAt: string;
+      revision: number;
+    } | null>();
+    seedDraft("", [localImage]);
+    mockGetComposeDraft.mockImplementationOnce(() => snapshot.promise);
+
+    renderComposeBar({ environmentId: "env-image-local" });
+    snapshot.resolve({
+      draftKey: `terminal:env-image-local:${encodeURIComponent(SESSION_KEY)}`,
+      ownerType: "environment",
+      ownerId: "env-image-local",
+      value: { text: "stored", images: [storedImage] },
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 1,
+    });
+
+    await waitFor(() => expect(mockGetComposeDraft).toHaveBeenCalled());
+    expect(getTextarea().value).toBe("");
+    expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([
+      localImage,
+    ]);
+  });
+
+  test("contains backend draft load failures without persisting an unhydrated draft", async () => {
+    const warning = mock((_message?: unknown, _error?: unknown) => {});
+    const originalWarn = console.warn;
+    console.warn = warning as typeof console.warn;
+    mockGetComposeDraft.mockRejectedValueOnce(new Error("draft storage unavailable"));
+
+    try {
+      const { unmount } = renderComposeBar({ environmentId: "env-load-error" });
+      await waitFor(() =>
+        expect(warning).toHaveBeenCalledWith(
+          "[ComposeBar] Failed to restore compose draft:",
+          expect.objectContaining({ message: "draft storage unavailable" }),
+        )
+      );
+
+      unmount();
+      expect(mockSaveComposeDraft).not.toHaveBeenCalled();
+      expect(mockDeleteComposeDraft).not.toHaveBeenCalled();
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("deletes an empty hydrated draft during cleanup", async () => {
+    const { unmount } = renderComposeBar({ environmentId: "env-empty-cleanup" });
+    await waitFor(() => expect(mockGetComposeDraft).toHaveBeenCalled());
+    await act(async () => {});
+
+    unmount();
+
+    await waitFor(() =>
+      expect(mockDeleteComposeDraft).toHaveBeenCalledWith(
+        `terminal:env-empty-cleanup:${encodeURIComponent(SESSION_KEY)}`,
+        0,
+      )
+    );
+  });
+
+  test("contains cleanup persistence failures", async () => {
+    const warning = mock((_message?: unknown, _error?: unknown) => {});
+    const originalWarn = console.warn;
+    console.warn = warning as typeof console.warn;
+    seedDraft("persist me");
+    mockSaveComposeDraft.mockRejectedValueOnce(new Error("save unavailable"));
+
+    try {
+      const { unmount } = renderComposeBar({ environmentId: "env-cleanup-error" });
+      await waitFor(() => expect(mockGetComposeDraft).toHaveBeenCalled());
+      await act(async () => {});
+      unmount();
+
+      await waitFor(() =>
+        expect(warning).toHaveBeenCalledWith(
+          "[ComposeBar] Failed to persist compose draft during cleanup:",
+          expect.objectContaining({ message: "save unavailable" }),
+        )
+      );
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("debounces draft saves and deletes after hydration", async () => {
+    renderComposeBar({ environmentId: "env-debounce" });
+    await waitFor(() => expect(mockGetComposeDraft).toHaveBeenCalled());
+    await act(async () => {});
+    mockSaveComposeDraft.mockClear();
+    mockDeleteComposeDraft.mockClear();
+
+    fireEvent.change(getTextarea(), { target: { value: "debounced" } });
+    await waitFor(
+      () =>
+        expect(mockSaveComposeDraft).toHaveBeenCalledWith(
+          `terminal:env-debounce:${encodeURIComponent(SESSION_KEY)}`,
+          "environment",
+          "env-debounce",
+          { text: "debounced", images: [] },
+          0,
+        ),
+      { timeout: 1_500 },
+    );
+
+    mockDeleteComposeDraft.mockClear();
+    fireEvent.change(getTextarea(), { target: { value: "" } });
+    await waitFor(
+      () =>
+        expect(mockDeleteComposeDraft).toHaveBeenCalledWith(
+          `terminal:env-debounce:${encodeURIComponent(SESSION_KEY)}`,
+          0,
+        ),
+      { timeout: 1_500 },
+    );
+  });
+
+  test("contains debounced persistence failures", async () => {
+    const warning = mock((_message?: unknown, _error?: unknown) => {});
+    const originalWarn = console.warn;
+    console.warn = warning as typeof console.warn;
+
+    try {
+      renderComposeBar({ environmentId: "env-debounce-error" });
+      await waitFor(() => expect(mockGetComposeDraft).toHaveBeenCalled());
+      await act(async () => {});
+      mockSaveComposeDraft.mockRejectedValueOnce(new Error("debounced save unavailable"));
+
+      fireEvent.change(getTextarea(), { target: { value: "debounced" } });
+
+      await waitFor(
+        () =>
+          expect(warning).toHaveBeenCalledWith(
+            "[ComposeBar] Failed to persist compose draft:",
+            expect.objectContaining({ message: "debounced save unavailable" }),
+          ),
+        { timeout: 1_500 },
+      );
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   test("hides Address all by default", () => {

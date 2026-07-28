@@ -8,6 +8,7 @@
         "@dnd-kit/core": "^6.3.1",
         "@dnd-kit/sortable": "^10.0.0",
         "@happy-dom/global-registrator": "^20.1.0",
+        "@orkestrator/protocol": "workspace:*",
         "@playwright/test": "^1.61.0",
         "@testing-library/react": "^16.3.1",
         "@types/bun": "latest",

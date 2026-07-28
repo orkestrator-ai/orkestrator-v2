@@ -1,4 +1,4 @@
-import { existsSync, promises as fs } from "node:fs";
+import { constants as fsConstants, existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -24,6 +24,12 @@ import {
   type SessionStatus,
   type SessionType,
 } from "./models.js";
+import {
+  resolveComparisonRef,
+  type EnvironmentDiffStatsSnapshot,
+} from "@orkestrator/protocol/diff-stats";
+import { DiffStatsService } from "./diff-stats-service.js";
+import { GitFetchScheduler } from "./git-fetch-scheduler.js";
 import { spawnPty, type PtyProcess } from "./pty.js";
 import {
   APP_SLUG,
@@ -274,6 +280,8 @@ export const CONTAINER_SAFE_BASE64_READER = buildContainerSafeBase64Reader();
 export const CONTAINER_UNTRACKED_STATS_SCANNER = String.raw`
 const fs = require("node:fs");
 const limit = Number(process.argv[1]);
+const maxFiles = Number(process.argv[2]);
+let scanned = 0;
 const chunks = [];
 process.stdin.on("data", (chunk) => chunks.push(chunk));
 process.stdin.on("end", () => {
@@ -286,10 +294,25 @@ process.stdin.on("end", () => {
     offset = end + 1;
     if (record.length < 4 || record[0] !== 63 || record[1] !== 63 || record[2] !== 32) continue;
     const filePath = record.subarray(3);
+    // Past the cap the path is still reported - the user must be able to see the
+    // file - but it is not opened. The host marks the result truncated by
+    // comparing the record count against the same cap.
+    if (scanned >= maxFiles) {
+      process.stdout.write(Buffer.from("0\t"));
+      process.stdout.write(filePath);
+      process.stdout.write(Buffer.from([0]));
+      continue;
+    }
+    scanned += 1;
     let count = 0;
     let fd;
     try {
-      fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      fd = fs.openSync(
+        filePath,
+        fs.constants.O_RDONLY
+          | (fs.constants.O_NOFOLLOW || 0)
+          | (fs.constants.O_NONBLOCK || 0),
+      );
       const initial = fs.fstatSync(fd);
       if (!initial.isFile() || initial.size === 0 || initial.size > limit) throw new Error("skip");
       const buffer = Buffer.allocUnsafe(64 * 1024);
@@ -355,6 +378,132 @@ const environmentSetupTasks = new Map<string, Promise<Environment>>();
 const environmentSetupStartTasks = new Map<string, Promise<EnvironmentSetupStartResult>>();
 const environmentBaselineTasks = new Map<string, Promise<Environment>>();
 const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [".orkestrator", ".claude/settings.local.json"] as const;
+
+/**
+ * Shared by every worktree of every repository, so N environments of one project
+ * make one fetch rather than N against the same origin.
+ */
+const gitFetchScheduler = new GitFetchScheduler({
+  run: (args, timeoutMs) => runCommand("git", args, { timeoutMs }),
+});
+
+/**
+ * How stale a cached file list may be before the Files panel reads for itself.
+ *
+ * Comfortably under the panel's own refresh cadence, so the common case - the
+ * panel and the sidebar looking at the same environment - shares one scan
+ * without the panel ever showing something older than it would have fetched.
+ */
+const DIFF_CACHE_MAX_AGE_MS = 3_000;
+
+/**
+ * Emitting is a property of the running backend, not of any one command, but the
+ * context that carries `emit` only arrives with the first invocation. Reading it
+ * through a mutable binding is the same trick `main.ts` uses for a gateway that
+ * does not exist yet.
+ */
+let diffStatsEmit: BackendEmit | undefined;
+let diffStatsSyncGeneration = 0;
+let diffStatsSyncQueue: Promise<void> = Promise.resolve();
+
+const diffStatsService = new DiffStatsService({
+  emit: (event, payload) => diffStatsEmit?.(event, payload),
+  scan: async (target) => {
+    const detailed = target.kind === "local"
+      ? await getLocalGitStatusDetailed(target.worktreePath!, target.comparisonRef, true)
+      : await getContainerGitStatusDetailed(target.containerId!, target.comparisonRef, true);
+    return {
+      stats: {
+        additions: detailed.changes.reduce((sum, change) => sum + change.additions, 0),
+        deletions: detailed.changes.reduce((sum, change) => sum + change.deletions, 0),
+        filesChanged: detailed.changes.length,
+        truncated: detailed.truncated,
+      },
+      changes: detailed.changes,
+    };
+  },
+  onWarning: (message, error) => {
+    console.warn(`[diff-stats] ${message}:`, error instanceof Error ? error.message : error);
+  },
+});
+
+/**
+ * Reconciles which environments are tracked against what storage says exists.
+ *
+ * Reconciling the whole set rather than patching it means every caller - start,
+ * stop, delete, a client connecting - converges on the same answer, and a missed
+ * lifecycle event self-corrects on the next call instead of leaving an
+ * environment permanently unwatched or a deleted one permanently watched.
+ */
+function invalidatePendingDiffStatsSync(): void {
+  diffStatsSyncGeneration += 1;
+}
+
+async function syncDiffStatsTracking(context: CommandContext): Promise<void> {
+  diffStatsEmit = context.emit;
+  const generation = diffStatsSyncGeneration;
+  const operation = diffStatsSyncQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const [environments, config] = await Promise.all([
+        context.storage.loadEnvironments(),
+        context.storage.loadConfig(),
+      ]);
+
+      // A stop, delete, shutdown, or newer reconciliation may have happened
+      // while storage was loading. Applying this older snapshot would recreate
+      // a watcher or poller that the later lifecycle action deliberately
+      // removed.
+      if (generation !== diffStatsSyncGeneration) return;
+
+      const live = new Set<string>();
+      for (const environment of environments) {
+        live.add(environment.id);
+        const comparisonRef = resolveComparisonRef(
+          environment.createdFromCommit,
+          config.repositories?.[environment.projectId],
+        );
+        const target = environment.environmentType === "local"
+          ? (environment.worktreePath
+            ? { environmentId: environment.id, kind: "local" as const, worktreePath: environment.worktreePath, comparisonRef }
+            : undefined)
+          : (environment.status === "running" && environment.containerId
+            ? { environmentId: environment.id, kind: "container" as const, containerId: environment.containerId, comparisonRef }
+            : undefined);
+
+        // Readable now: scan it. Not readable but still an environment: hold the
+        // last counts and stop scanning, rather than discarding a reading that
+        // described work which is still on disk.
+        if (target) diffStatsService.track(target);
+        else diffStatsService.pause(environment.id);
+      }
+
+      for (const environmentId of diffStatsService.trackedIds()) {
+        if (!live.has(environmentId)) diffStatsService.untrack(environmentId);
+      }
+    });
+  diffStatsSyncQueue = operation;
+  await operation;
+}
+
+/** Releases every diff watcher and timer; called on backend shutdown. */
+export function shutdownDiffStatsTracking(): void {
+  invalidatePendingDiffStatsSync();
+  diffStatsService.shutdown();
+}
+
+/** Untracked files whose lines are counted at once during a local git status. */
+const UNTRACKED_SCAN_CONCURRENCY = 8;
+/**
+ * Untracked files line-counted per scan before the result is marked truncated.
+ *
+ * Generous enough that an ordinary worktree never reaches it, low enough that a
+ * directory of build output cannot turn one change signal into tens of
+ * thousands of file reads.
+ */
+const UNTRACKED_SCAN_MAX_FILES = 2_000;
+/** Read window for line counting; matches the container scanner's buffer. */
+const FILE_LINE_COUNT_CHUNK_BYTES = 64 * 1024;
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string") throw new Error(`Expected ${name} to be a string`);
@@ -2873,6 +3022,7 @@ async function createLocalWorktree(
 
     await fs.mkdir(path.join(worktreePath, ".orkestrator"), { recursive: true });
     await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
+    await enableGitScanCaches(worktreePath);
 
     for (const envFile of [".env", ".env.local"]) {
       const source = path.join(projectPath, envFile);
@@ -3481,6 +3631,11 @@ async function deleteEnvironment(
       await storage.removeEnvironment(environmentId);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);
       cleanupEnvironmentSetupState(environmentId);
+      // Releases the watcher and discards the counts. This is the one case where
+      // discarding is right: the worktree they described is gone.
+      invalidatePendingDiffStatsSync();
+      diffStatsService.untrack(environmentId);
+      if (environment?.worktreePath) gitFetchScheduler.forget(environment.worktreePath);
     });
   } finally {
     deletingLocalServerEnvironments.delete(environmentId);
@@ -3739,7 +3894,7 @@ const GIT_STATUS_MISSING_REF_MARKER = gitStatusMarker("ORKESTRATOR_TARGET_REF_NO
  */
 function buildContainerGitStatusScript(ref: string, includeWorkingTree: boolean): string {
   const branch = quoteShell(ref);
-  const untrackedScanner = `node -e ${quoteShell(CONTAINER_UNTRACKED_STATS_SCANNER)} -- ${MAX_BINARY_FILE_BYTES}`;
+  const untrackedScanner = `node -e ${quoteShell(CONTAINER_UNTRACKED_STATS_SCANNER)} -- ${MAX_BINARY_FILE_BYTES} ${UNTRACKED_SCAN_MAX_FILES}`;
   return `
       set -e -o pipefail
       # A bare 'exit 0' here would come back as exit 1: this runs under 'bash -l',
@@ -3802,8 +3957,15 @@ function isMissingTargetRefResponse(output: string): boolean {
 }
 
 function parseContainerGitStatusResponse(output: string, includeWorkingTree: boolean): GitFileChange[] {
+  return parseContainerGitStatusResponseDetailed(output, includeWorkingTree).changes;
+}
+
+function parseContainerGitStatusResponseDetailed(
+  output: string,
+  includeWorkingTree: boolean,
+): { changes: GitFileChange[]; truncated: boolean } {
   // A workspace that is not a git repository exits before emitting any frame.
-  if (output.length === 0) return [];
+  if (output.length === 0) return { changes: [], truncated: false };
   const nameStatusStart = output.indexOf(GIT_STATUS_NAME_STATUS_MARKER);
   const numstatStart = output.indexOf(GIT_STATUS_NUMSTAT_MARKER);
   const untrackedStart = output.indexOf(GIT_STATUS_UNTRACKED_MARKER);
@@ -3827,17 +3989,20 @@ function parseContainerGitStatusResponse(output: string, includeWorkingTree: boo
     "container git numstat section",
   );
   const changes = parseGitFileChanges(nameStatusOutput, numstatOutput);
-  if (!includeWorkingTree) return changes;
+  if (!includeWorkingTree) return { changes, truncated: false };
 
   const existingPaths = new Set(changes.map((change) => change.path));
   const untrackedOutput = decodeGitStatusSection(
     output.slice(untrackedStart + GIT_STATUS_UNTRACKED_MARKER.length, endStart),
     "container untracked section",
   );
-  for (const change of parseContainerUntrackedStats(untrackedOutput)) {
+  const untracked = parseContainerUntrackedStats(untrackedOutput);
+  for (const change of untracked) {
     if (!existingPaths.has(change.path)) changes.push(change);
   }
-  return changes;
+  // The scanner stops opening files past the same cap the host applies locally,
+  // so the record count is what says whether any went uncounted.
+  return { changes, truncated: untracked.length > UNTRACKED_SCAN_MAX_FILES };
 }
 
 async function getLocalGitStatus(
@@ -3845,55 +4010,187 @@ async function getLocalGitStatus(
   targetBranch: string,
   includeUncommitted: boolean,
 ): Promise<GitFileChange[]> {
+  return (await getLocalGitStatusDetailed(worktreePath, targetBranch, includeUncommitted)).changes;
+}
+
+/** Reads a container workspace's changes, reporting whether the scan was capped. */
+async function getContainerGitStatusDetailed(
+  containerId: string,
+  targetBranch: string,
+  includeWorkingTree: boolean,
+): Promise<{ changes: GitFileChange[]; truncated: boolean }> {
+  const ref = validateGitRefName(targetBranch, "target branch");
+  const output = await dockerExec(containerId, buildContainerGitStatusScript(ref, includeWorkingTree));
+  // Distinguishes "the requested baseline is not in this container" - which
+  // happens when a container is recreated from a different clone - from a
+  // corrupt response, so callers do not see both as one opaque exec failure.
+  if (isMissingTargetRefResponse(output)) {
+    throw new Error(`Target ref is not present in the container: ${ref}`);
+  }
+  return parseContainerGitStatusResponseDetailed(output, includeWorkingTree);
+}
+
+/**
+ * Reads a worktree's changes, reporting whether the untracked scan was capped.
+ *
+ * The three git reads are independent of each other, so they run together: the
+ * status read used to wait for both diffs to finish before starting, which cost
+ * a whole round of process spawn and git startup for nothing.
+ */
+async function getLocalGitStatusDetailed(
+  worktreePath: string,
+  targetBranch: string,
+  includeUncommitted: boolean,
+): Promise<{ changes: GitFileChange[]; truncated: boolean }> {
   validateGitRefName(targetBranch, "target branch");
   await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
 
   const base = await resolveLocalGitBase(worktreePath, targetBranch);
   const endRef = includeUncommitted ? [] : ["HEAD"];
-  const [nameStatus, numstat] = await Promise.all([
+  const [nameStatus, numstat, porcelain] = await Promise.all([
     runCommand("git", ["-C", worktreePath, "diff", "--name-status", "-z", "-M", base, ...endRef], { timeoutMs: 60_000 }),
     runCommand("git", ["-C", worktreePath, "diff", "--numstat", "-z", "-M", base, ...endRef], { timeoutMs: 60_000 }),
+    includeUncommitted
+      ? runCommand(
+        "git",
+        ["-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        { timeoutMs: 60_000 },
+      )
+      : Promise.resolve({ stdout: "" }),
   ]);
 
   const changes = parseGitFileChanges(nameStatus.stdout, numstat.stdout);
-  if (!includeUncommitted) return changes;
+  if (!includeUncommitted) return { changes, truncated: false };
 
-  const porcelain = await runCommand(
-    "git",
-    ["-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-    { timeoutMs: 60_000 },
-  );
   const existingPaths = new Set(changes.map((change) => change.path));
+  const untrackedPaths: string[] = [];
   for (const line of porcelain.stdout.split("\0").filter(Boolean)) {
     if (!line.startsWith("?? ")) continue;
     const filePath = line.slice(3);
     if (existingPaths.has(filePath)) continue;
-    const additions = await countLocalFileLines(worktreePath, filePath).catch(() => 0);
+    untrackedPaths.push(filePath);
+  }
+
+  // A worktree can hold more untracked files than are worth opening on every
+  // change signal. The cap is reported rather than applied silently, so a
+  // truncated count never reads as an exact one.
+  const truncated = untrackedPaths.length > UNTRACKED_SCAN_MAX_FILES;
+  const scanned = truncated ? untrackedPaths.slice(0, UNTRACKED_SCAN_MAX_FILES) : untrackedPaths;
+
+  // Counting lines is one open + a streamed read per file, so a worktree with a
+  // few thousand untracked files spends nearly all of its time waiting on the
+  // disk. Running a bounded window concurrently keeps that wait overlapped
+  // without letting a large worktree exhaust the process file descriptors.
+  const additionsPerPath = await mapWithConcurrency(
+    scanned,
+    UNTRACKED_SCAN_CONCURRENCY,
+    (filePath) => countLocalFileLines(worktreePath, filePath).catch(() => 0),
+  );
+
+  untrackedPaths.forEach((filePath, index) => {
     changes.push({
       path: filePath,
       originalPath: undefined,
       filename: path.basename(filePath),
       directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
-      additions,
+      // Files past the cap are still listed - the user must be able to see them
+      // in the Files panel - they just carry no line count.
+      additions: additionsPerPath[index] ?? 0,
       deletions: 0,
       status: "?",
     });
-  }
+  });
 
-  return changes;
+  return { changes, truncated };
 }
 
+/**
+ * Runs `worker` over `items` with at most `limit` in flight, preserving order.
+ *
+ * Workers pull from a shared cursor rather than being sliced into fixed batches,
+ * so one slow file cannot idle the rest of the window behind it.
+ */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index]!, index);
+    }
+  });
+
+  await Promise.all(runners);
+  return results;
+}
+
+/**
+ * Counts the lines in an untracked file without materialising it.
+ *
+ * Reading the whole file and splitting it allocated three copies of every
+ * untracked file on each poll - the buffer, the decoded string, and an array
+ * holding every line - for a number that only needs a running separator count.
+ * The chunked walk below is the same algorithm the container scanner uses
+ * (CONTAINER_UNTRACKED_STATS_SCANNER), so both environment types report
+ * identical counts for identical content.
+ */
 async function countLocalFileLines(rootPath: string, relativePath: string): Promise<number> {
   const target = validateRelativeFilePath(relativePath, "git status path");
   const fullPath = path.join(rootPath, target);
-  const stat = await fs.stat(fullPath);
-  if (stat.size === 0 || stat.size > MAX_BINARY_FILE_BYTES) return 0;
-  const buffer = await fs.readFile(fullPath);
-  if (buffer.includes(0)) return 0;
-  const text = buffer.toString("utf8");
-  if (!text) return 0;
-  const trailingNewline = text.endsWith("\n") || text.endsWith("\r");
-  return text.split(/\r\n|\r|\n/).length - (trailingNewline ? 1 : 0);
+
+  // O_NOFOLLOW, and a stat of the descriptor rather than the path, so an
+  // untracked symlink cannot be followed out of the worktree and the file that
+  // gets measured is provably the one that passed the size check.
+  const handle = await fs.open(
+    fullPath,
+    fsConstants.O_RDONLY
+      | (fsConstants.O_NOFOLLOW || 0)
+      | (fsConstants.O_NONBLOCK || 0),
+  );
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size === 0 || stat.size > MAX_BINARY_FILE_BYTES) return 0;
+
+    const buffer = Buffer.allocUnsafe(FILE_LINE_COUNT_CHUNK_BYTES);
+    let total = 0;
+    let separators = 0;
+    let previousWasCarriageReturn = false;
+    let lastByte = -1;
+
+    while (true) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      // The file can grow between the stat and the read; stop rather than let an
+      // actively-written log turn one poll into an unbounded scan.
+      if (total > MAX_BINARY_FILE_BYTES) return 0;
+      for (let index = 0; index < bytesRead; index += 1) {
+        const byte = buffer[index]!;
+        if (byte === 0) return 0;
+        if (byte === 0x0d) {
+          separators += 1;
+          previousWasCarriageReturn = true;
+        } else if (byte === 0x0a) {
+          if (!previousWasCarriageReturn) separators += 1;
+          previousWasCarriageReturn = false;
+        } else {
+          previousWasCarriageReturn = false;
+        }
+        lastByte = byte;
+      }
+    }
+
+    return separators + (lastByte !== 0x0d && lastByte !== 0x0a ? 1 : 0);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 async function gitRefExists(worktreePath: string, refName: string): Promise<boolean> {
@@ -3912,14 +4209,67 @@ async function resolveRemoteWorktreeStartPoint(projectPath: string, baseBranch: 
   return remoteRef;
 }
 
+/**
+ * True for a full commit SHA, which names the same commit forever.
+ *
+ * Environments created from a recorded commit pass that SHA as their baseline.
+ * Fetching before resolving it cannot change the answer - the commit is already
+ * in the worktree it was created from - so the network round trip on every diff
+ * poll is pure cost.
+ */
+export function isImmutableCommitRef(ref: string): boolean {
+  return /^[0-9a-f]{40}$/i.test(ref.trim());
+}
+
 async function resolveLocalGitBase(worktreePath: string, targetBranch: string): Promise<string> {
   const branch = validateGitRefName(targetBranch, "target branch");
-  await runCommand("git", ["-C", worktreePath, "fetch", "origin", branch], { timeoutMs: 60_000 }).catch(() => undefined);
+
+  if (isImmutableCommitRef(branch) && await gitRefExists(worktreePath, branch)) {
+    return branch;
+  }
+
+  // Rate limited and shared across every worktree of this repository, rather
+  // than a network round trip per read per environment.
+  await gitFetchScheduler.ensureFetched(worktreePath, branch);
 
   const remoteRef = `origin/${branch}`;
   if (await gitRefExists(worktreePath, remoteRef)) return remoteRef;
   if (await gitRefExists(worktreePath, branch)) return branch;
   return remoteRef;
+}
+
+/**
+ * Turns on git's own caches for a worktree.
+ *
+ * `git status` is dominated by walking and stat'ing the tree. The untracked
+ * cache remembers which directories had no untracked files and skips re-reading
+ * them, and fsmonitor lets git ask the OS what changed instead of asking the
+ * filesystem about everything. Both are one-time settings that speed up every
+ * git call the application makes against this worktree, not only diff stats.
+ *
+ * Best effort by design: an old git rejects the fsmonitor value, and a
+ * repository on a filesystem that cannot support the daemon must still work.
+ */
+async function enableGitScanCaches(worktreePath: string): Promise<void> {
+  // Scoped to this worktree with `--worktree`, never to the shared config. These
+  // worktrees hang off a clone the user also drives by hand, and turning on a
+  // background fsmonitor daemon for their own repository is not this
+  // application's decision to make. `extensions.worktreeConfig` is the one
+  // shared write, and it only enables per-worktree config - it changes no
+  // behaviour on its own.
+  const enabled = await runCommand(
+    "git",
+    ["-C", worktreePath, "config", "extensions.worktreeConfig", "true"],
+    { timeoutMs: 10_000 },
+  ).then(() => true, () => false);
+  // Without per-worktree scoping the only way to set these would be to write the
+  // shared config, so stop rather than reach outside the worktree.
+  if (!enabled) return;
+
+  for (const [key, value] of [["core.untrackedCache", "true"], ["core.fsmonitor", "true"]] as const) {
+    await runCommand("git", ["-C", worktreePath, "config", "--worktree", key, value], { timeoutMs: 10_000 })
+      .catch(() => undefined);
+  }
 }
 
 function validateWorkspaceMutationPath(relativePath: string, label = "filePath"): string {
@@ -4531,7 +4881,8 @@ export function createCommandRegistry(
   });
 
   register("get_config", async (_args, { storage }) => redactAppConfig(await storage.loadConfig()));
-  register("save_config", async ({ config }, { storage }) => {
+  register("save_config", async ({ config }, context) => {
+    const { storage } = context;
     const candidate = asRecord(config, "config") as unknown as AppConfig;
     const stored = await storage.loadConfig();
     await storage.saveConfig({
@@ -4541,6 +4892,9 @@ export function createCommandRegistry(
         stored.global.githubToken,
       ),
     });
+    // A whole-config write can move any repository's baseline; see
+    // `update_repository_config`.
+    void syncDiffStatsTracking(context).catch(() => undefined);
   });
   register("get_desktop_connections", (_args, { storage }) => storage.getDesktopConnections());
   register("save_desktop_connections", ({ desktopConnections }, { storage }) => {
@@ -4577,14 +4931,18 @@ export function createCommandRegistry(
     return redactAppConfig(await storage.setGitHubToken(nextToken));
   });
   register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));
-  register("update_repository_config", async ({ projectId, repoConfig }, { storage }) =>
-    redactAppConfig(
-      await storage.updateRepositoryConfig(
-        asString(projectId, "projectId"),
-        repoConfig as never,
-      ),
-    )
-  );
+  register("update_repository_config", async ({ projectId, repoConfig }, context) => {
+    const updated = await context.storage.updateRepositoryConfig(
+      asString(projectId, "projectId"),
+      repoConfig as never,
+    );
+    // The PR base branch is the baseline the counts are measured against, so an
+    // edit here retargets every environment in the project. Reconciling now
+    // rather than waiting for the next environment poll means the badge follows
+    // the setting the user just changed.
+    void syncDiffStatsTracking(context).catch(() => undefined);
+    return redactAppConfig(updated);
+  });
   register("get_linear_connection", async (_args, context) => {
     const auth = await context.storage.getLinearAuth();
     if (!auth?.apiKey) return { connected: false, hasToken: false };
@@ -4885,6 +5243,9 @@ export function createCommandRegistry(
         schedulePendingEnvironmentRename(environment.id, context);
       }
     }
+    // Same recovery argument for diff watchers: reconciling here re-arms them
+    // after a backend restart without waiting for a lifecycle command.
+    void syncDiffStatsTracking(context).catch(() => undefined);
     return synced;
   });
   register("get_environment_snapshots", ({ projectId }, { storage }) =>
@@ -4973,6 +5334,7 @@ export function createCommandRegistry(
           const running = await storage.updateEnvironment(environment.id, { status: "running" });
           const result = await startEnvironmentSetup(running, context);
           schedulePendingEnvironmentRename(environment.id, context);
+          await syncDiffStatsTracking(context);
           return result;
         }
         const project = await storage.getProject(environment.projectId);
@@ -4993,6 +5355,7 @@ export function createCommandRegistry(
         });
         const result = await startEnvironmentSetup(updated, context);
         schedulePendingEnvironmentRename(environment.id, context);
+        await syncDiffStatsTracking(context);
         return result;
       }
 
@@ -5010,6 +5373,7 @@ export function createCommandRegistry(
       });
       const result = await startEnvironmentSetup(updated, context);
       schedulePendingEnvironmentRename(environment.id, context);
+      await syncDiffStatsTracking(context);
       return result;
     } catch (error) {
       await storage.updateEnvironment(environment.id, { status: "error" }).catch(() => undefined);
@@ -5040,6 +5404,10 @@ export function createCommandRegistry(
       // they believe is live. `poll()` would reach the same conclusion on its
       // next tick; this just skips the last pointless exec.
       shutdownClaudeStatePolling(environment.containerId);
+      // Keeps the last counts on screen; a stopped container's work is still on
+      // disk, it just cannot be read until the container is back.
+      invalidatePendingDiffStatsSync();
+      diffStatsService.pause(environment.id);
       return;
     }
 
@@ -5897,13 +6265,39 @@ export function createCommandRegistry(
     cleanupTerminalSession(asString(sessionId, "sessionId"));
   });
 
-  register("get_local_git_status", ({ worktreePath, targetBranch, includeUncommitted }) =>
-    getLocalGitStatus(
-      asString(worktreePath, "worktreePath"),
-      asString(targetBranch, "targetBranch"),
-      includeUncommitted !== false,
-    )
-  );
+  register("get_local_git_status", async ({ worktreePath, targetBranch, includeUncommitted }) => {
+    const resolvedWorktreePath = asString(worktreePath, "worktreePath");
+    const ref = asString(targetBranch, "targetBranch");
+    const includeWorkingTree = includeUncommitted !== false;
+    if (!includeWorkingTree) {
+      return getLocalGitStatus(resolvedWorktreePath, ref, false);
+    }
+
+    // The sidebar badge and the Files panel look at the same environment and used
+    // to ask for it separately. Whichever arrives first pays for the scan.
+    const cached = diffStatsService.cachedChanges({ worktreePath: resolvedWorktreePath }, ref, DIFF_CACHE_MAX_AGE_MS);
+    if (cached) return cached as GitFileChange[];
+    const changes = await getLocalGitStatus(resolvedWorktreePath, ref, true);
+    diffStatsService.adoptScan({ worktreePath: resolvedWorktreePath }, ref, changes);
+    return changes;
+  });
+  /**
+   * Authoritative diff-stat snapshot.
+   *
+   * A client that mounts, remounts, or reconnects reads this rather than trying
+   * to reconstruct state from the events it happened to be listening for. It
+   * also arms tracking, so the first client to ask starts the work even if no
+   * lifecycle command has run since the backend started.
+   */
+  register("get_environment_diff_stats", async (_args, context) => {
+    await syncDiffStatsTracking(context);
+    return { entries: diffStatsService.snapshot() } satisfies EnvironmentDiffStatsSnapshot;
+  });
+  register("refresh_environment_diff_stats", async ({ environmentId }, context) => {
+    await syncDiffStatsTracking(context);
+    diffStatsService.refresh(asString(environmentId, "environmentId"));
+  });
+
   register("get_local_file_tree", ({ worktreePath }) => buildFileTree(asString(worktreePath, "worktreePath")));
   register("read_local_file", ({ worktreePath, filePath }) => readTextFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath")));
   register("read_local_file_at_branch", ({ worktreePath, filePath, branch }) =>
@@ -5911,20 +6305,42 @@ export function createCommandRegistry(
   );
   register("read_file_base64", ({ filePath }) => readFileBase64(asString(filePath, "filePath")));
   register("write_local_file", ({ worktreePath, filePath, base64Data }) => writeFileBase64(asString(worktreePath, "worktreePath"), asString(filePath, "filePath"), asString(base64Data, "base64Data")));
-  register("revert_local_file", async ({ environmentId, filePath, targetBranch }, { storage }) => {
-    const environment = await requireLocalMutationEnvironment(storage, asString(environmentId, "environmentId"));
-    return revertLocalFile(environment.worktreePath!, asString(filePath, "filePath"), asString(targetBranch, "targetBranch"));
+  register("revert_local_file", async ({ environmentId, filePath, targetBranch }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await requireLocalMutationEnvironment(context.storage, id);
+    const result = await revertLocalFile(
+      environment.worktreePath!,
+      asString(filePath, "filePath"),
+      asString(targetBranch, "targetBranch"),
+    );
+    diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
+    diffStatsService.refresh(id);
+    return result;
   });
-  register("delete_local_file", async ({ environmentId, filePath }, { storage }) => {
-    const environment = await requireLocalMutationEnvironment(storage, asString(environmentId, "environmentId"));
-    return deleteLocalFile(environment.worktreePath!, asString(filePath, "filePath"));
+  register("delete_local_file", async ({ environmentId, filePath }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await requireLocalMutationEnvironment(context.storage, id);
+    const result = await deleteLocalFile(environment.worktreePath!, asString(filePath, "filePath"));
+    diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
+    diffStatsService.refresh(id);
+    return result;
   });
 
   register("get_git_status", async ({ containerId, targetBranch, includeUncommitted }) => {
     const ref = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
     const includeWorkingTree = includeUncommitted !== false;
+    const resolvedContainerId = asString(containerId, "containerId");
+
+    if (includeWorkingTree) {
+      const cached = diffStatsService.cachedChanges({ containerId: resolvedContainerId }, ref, DIFF_CACHE_MAX_AGE_MS);
+      if (cached) return cached as GitFileChange[];
+      const changes = (await getContainerGitStatusDetailed(resolvedContainerId, ref, true)).changes;
+      diffStatsService.adoptScan({ containerId: resolvedContainerId }, ref, changes);
+      return changes;
+    }
+
     const output = await dockerExec(
-      asString(containerId, "containerId"),
+      resolvedContainerId,
       buildContainerGitStatusScript(ref, includeWorkingTree),
     );
     // Distinguishes "the requested baseline is not in this container" - which
@@ -5973,19 +6389,25 @@ export function createCommandRegistry(
     });
     return fullPath;
   });
-  register("revert_container_file", async ({ environmentId, filePath, targetBranch }, { storage }) => {
-    const environment = await requireContainerMutationEnvironment(storage, asString(environmentId, "environmentId"));
+  register("revert_container_file", async ({ environmentId, filePath, targetBranch }, context) => {
+    const environmentIdString = asString(environmentId, "environmentId");
+    const environment = await requireContainerMutationEnvironment(context.storage, environmentIdString);
     const id = environment.containerId!;
     const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
     const branch = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
     await dockerExec(id, containerRevertFileCommand(target, branch));
+    diffStatsService.invalidateChanges({ containerId: id });
+    diffStatsService.refresh(environmentIdString);
     return target;
   });
-  register("delete_container_file", async ({ environmentId, filePath }, { storage }) => {
-    const environment = await requireContainerMutationEnvironment(storage, asString(environmentId, "environmentId"));
+  register("delete_container_file", async ({ environmentId, filePath }, context) => {
+    const environmentIdString = asString(environmentId, "environmentId");
+    const environment = await requireContainerMutationEnvironment(context.storage, environmentIdString);
     const id = environment.containerId!;
     const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
     await dockerExec(id, containerDeleteFileCommand(target));
+    diffStatsService.invalidateChanges({ containerId: id });
+    diffStatsService.refresh(environmentIdString);
     return target;
   });
 
@@ -6147,8 +6569,16 @@ export const __testing = {
   isMissingTargetRefResponse,
   buildContainerGitStatusScript,
   parseHeadCommit,
+  countLocalFileLines,
   establishCreatedFromCommit,
   completeEnvironmentSetup,
+  enableGitScanCaches,
+  trackDiffStats(target: Parameters<DiffStatsService["track"]>[0]): void {
+    diffStatsService.track(target);
+  },
+  trackedDiffStatsIds(): string[] {
+    return diffStatsService.trackedIds();
+  },
   CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER,
   CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL,
   CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL,

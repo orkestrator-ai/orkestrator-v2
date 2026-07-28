@@ -1,5 +1,6 @@
 import { invoke } from "@/lib/native/backend";
 import { getGatewayBaseUrl } from "@/lib/gateway-url";
+import type { EnvironmentDiffStatsSnapshot } from "@orkestrator/protocol/diff-stats";
 import type {
   Project,
   Environment,
@@ -1230,6 +1231,22 @@ export async function getLocalGitStatus(
     targetBranch,
     includeUncommitted,
   });
+}
+
+/**
+ * Authoritative diff-stat snapshot for every environment the backend tracks.
+ *
+ * The counts are computed in the backend, once, and announced over
+ * `DIFF_STATS_CHANGED_EVENT`. This is the rehydration path a client uses when it
+ * mounts or reconnects, because the event stream has no replay buffer.
+ */
+export async function getEnvironmentDiffStats(): Promise<EnvironmentDiffStatsSnapshot> {
+  return invoke<EnvironmentDiffStatsSnapshot>("get_environment_diff_stats");
+}
+
+/** Forces an immediate rescan, e.g. after an operation that changed the tree. */
+export async function refreshEnvironmentDiffStats(environmentId: string): Promise<void> {
+  return invoke<void>("refresh_environment_diff_stats", { environmentId });
 }
 
 /** Get file tree from a local environment (worktree path) */

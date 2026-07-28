@@ -238,6 +238,23 @@ add_workspace_artifacts_to_git_exclude() {
     fi
 }
 
+# Turn on git's own scan caches for the container workspace.
+#
+# Diff and status reads walk and stat the whole tree; the untracked cache lets
+# git skip directories it has already seen to be clean. Unlike the host side
+# this is a throwaway clone inside a container, so it is written to the ordinary
+# repository config with no need for per-worktree scoping.
+#
+# fsmonitor is deliberately not enabled here: it would start a background daemon
+# in a container whose lifetime is not this script's to manage, and container
+# reads go through a single docker exec where the walk is not the bottleneck.
+enable_git_scan_caches() {
+    local workspace="${WORKSPACE_DIR:-/workspace}"
+    if git -C "$workspace" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git -C "$workspace" config core.untrackedCache true 2>/dev/null || true
+    fi
+}
+
 # Initial prompt attachments may be uploaded before this setup script runs.
 # Preserve Orkestrator's private workspace state while clearing /workspace for clone.
 ORKESTRATOR_WORKSPACE_STATE_BACKUP=""
@@ -496,6 +513,7 @@ fi
 
 restore_orkestrator_workspace_state
 add_workspace_artifacts_to_git_exclude
+enable_git_scan_caches
 
 # The backend invokes this phase separately and durably stores HEAD before it
 # allows copied files or repository-controlled setup commands to run.

@@ -303,7 +303,7 @@ describe("useFilesPanel", () => {
     expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
   });
 
-  test("falls back to main when repository config has no PR base branch", async () => {
+  test("falls back to a non-main repository default when there is no PR base branch", async () => {
     const environment = createMockEnvironment({
       id: "env-local",
       projectId: "project-1",
@@ -311,15 +311,58 @@ describe("useFilesPanel", () => {
       worktreePath: "/tmp/worktree",
       status: "stopped",
     });
-    resetStores(environment, { defaultBranch: "main" });
+    resetStores(environment, { defaultBranch: "trunk" });
     useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
     mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([change]));
 
     renderHook(() => useFilesPanel());
 
     await waitFor(() => {
-      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "main", true);
-      expect(useFilesPanelStore.getState().targetBranch).toBe("main");
+      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "trunk", true);
+      expect(useFilesPanelStore.getState().targetBranch).toBe("trunk");
+    });
+  });
+
+  test("clears stale data and reloads when the configured comparison branch changes", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    const releaseChange = { ...change, additions: 11 };
+    resetStores(environment, { defaultBranch: "trunk", prBaseBranch: "develop" });
+    useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+    mockGetLocalGitStatus.mockImplementation((_path, comparisonRef) => (
+      Promise.resolve(comparisonRef === "release" ? [releaseChange] : [change])
+    ));
+
+    renderHook(() => useFilesPanel());
+    await waitFor(() => {
+      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
+      expect(useFilesPanelStore.getState().changes).toEqual([change]);
+    });
+
+    act(() => {
+      const config = useConfigStore.getState().config;
+      useConfigStore.setState({
+        config: config
+          ? {
+              ...config,
+              repositories: {
+                ...config.repositories,
+                "project-1": { defaultBranch: "trunk", prBaseBranch: "release" },
+              },
+            }
+          : config,
+      });
+    });
+
+    await waitFor(() => {
+      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "release", true);
+      expect(useFilesPanelStore.getState().targetBranch).toBe("release");
+      expect(useFilesPanelStore.getState().changes).toEqual([releaseChange]);
     });
   });
 

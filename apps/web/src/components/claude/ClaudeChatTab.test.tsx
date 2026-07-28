@@ -213,6 +213,7 @@ mock.module("./ResumeSessionDialog", () => ({
 // global module cache into that component's own tests.
 
 import { ClaudeChatTab } from "./ClaudeChatTab";
+import { createAgentHandoffSnapshot } from "@/lib/agent-handoff";
 import type { ClaudeNativeData } from "@/types/paneLayout";
 
 const ENVIRONMENT_ID = "env-1";
@@ -266,6 +267,7 @@ function agentHandoffRecord(id: string, bootstrapPrompt: string) {
         includedMessageCount: 1,
         omittedMessageCount: 0,
         promptCharacters: bootstrapPrompt.length,
+        droppedMessageCount: 0,
       },
     },
   };
@@ -567,9 +569,27 @@ describe("ClaudeChatTab", () => {
     );
   });
 
-  test("unblocks with a visible error when a restored handoff cannot load", async () => {
-    const handoffId = "claude-failed-handoff";
-    mockGetAgentHandoff.mockRejectedValueOnce(new Error("handoff storage unavailable"));
+  test("stores the handoff bootstrap before the SSE subscription can overwrite it", async () => {
+    /*
+     * Initialization adds the first prompt to the store and only then subscribes,
+     * so an inbound event cannot wipe the locally added message before it syncs.
+     * Reading the prompt from a stale closure made that branch unreachable for
+     * handoff tabs and pushed every bootstrap onto the post-SSE path instead.
+     */
+    const handoffId = "claude-ordered-handoff";
+    useClaudeStore.setState({ clients: new Map(), sessions: new Map() });
+
+    let messagesWhenSubscribed: string[] | null = null;
+    mockSubscribeToEvents.mockImplementation(
+      (_client: unknown, signal?: AbortSignal) => {
+        messagesWhenSubscribed = (
+          useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages ?? []
+        ).map((message) => message.content);
+        return abortableEmptyEventStream(signal);
+      },
+    );
+    const pending = deferred<any>();
+    mockGetAgentHandoff.mockImplementation(async () => pending.promise);
 
     render(
       <ClaudeChatTab
@@ -580,17 +600,115 @@ describe("ClaudeChatTab", () => {
       />,
     );
 
+    // Nothing may start while the transferred conversation is still loading.
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockSubscribeToEvents).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pending.resolve(agentHandoffRecord(
+        handoffId,
+        `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`,
+      ));
+      await pending.promise;
+    });
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalled());
+    expect(messagesWhenSubscribed).not.toBeNull();
+    expect(messagesWhenSubscribed!.some((content) => content.includes(handoffId)))
+      .toBe(true);
+    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  test("initializes once when the handoff resolves mid-mount", async () => {
+    const handoffId = "claude-single-init";
+    useClaudeStore.setState({ clients: new Map(), sessions: new Map() });
+    const pending = deferred<any>();
+    mockGetAgentHandoff.mockImplementation(async () => pending.promise);
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+    expect(mockCreateSession).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pending.resolve(agentHandoffRecord(
+        handoffId,
+        `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`,
+      ));
+      await pending.promise;
+    });
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+
+    // Gating on readiness rather than depending on the prompt value keeps the
+    // effect from tearing down and restarting the moment the load resolves.
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps a resumed session's bootstrap prompt hidden after the snapshot is deleted", async () => {
+    const handoffId = "claude-consumed-handoff";
+    const snapshot = createAgentHandoffSnapshot({
+      id: handoffId,
+      environmentId: ENVIRONMENT_ID,
+      sourceProvider: "codex",
+      destinationProvider: "claude",
+      sourceSessionId: "codex-session",
+      messages: [{
+        id: "source-1",
+        role: "user",
+        content: "original request",
+        parts: [{ type: "text", content: "original request" }],
+        createdAt: "2026-07-27T09:00:00.000Z",
+      }],
+    });
+    useClaudeStore.getState().setSession(SESSION_KEY, {
+      sessionId: "session-1",
+      isLoading: false,
+      messages: [
+        {
+          id: "bootstrap",
+          role: "user",
+          content: snapshot.bootstrapPrompt,
+          parts: [{ type: "text", content: snapshot.bootstrapPrompt }],
+          timestamp: "2026-07-27T10:00:00.000Z",
+        },
+        {
+          id: "answer",
+          role: "assistant",
+          content: "Continuing the work.",
+          parts: [{ type: "text", content: "Continuing the work." }],
+          timestamp: "2026-07-27T10:01:00.000Z",
+        },
+      ],
+    } as never);
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        consumedAgentHandoffId={handoffId}
+      />,
+    );
+
     await waitFor(() =>
       expect(lastVirtualizedMessages.some(
-        (message) => message.content === "handoff storage unavailable",
+        (message) => message.content === "Continuing the work.",
       )).toBe(true),
     );
-    expect(
-      document
-        .querySelector('[data-placeholder="Ask Claude anything..."]')
-        ?.getAttribute("contenteditable"),
-    ).toBe("true");
-    expect(mockSendPrompt).not.toHaveBeenCalled();
+    /*
+     * The snapshot is gone — resume deleted it — but the prompt it produced is
+     * still the session's first message. Rendering it raw would dump the whole
+     * JSON frame into the transcript.
+     */
+    expect(lastVirtualizedMessages.some(
+      (message) => message.content.includes("orkestrator-handoff"),
+    )).toBe(false);
+    expect(mockGetAgentHandoff).not.toHaveBeenCalled();
   });
 
   test("retains one-shot launch options while the model catalog is empty", async () => {

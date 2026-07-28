@@ -13,6 +13,9 @@ const deleteAgentHandoff = mock(
   async (_handoffId: string, _environmentId: string) => true,
 );
 const getAgentHandoff = mock(async (_handoffId: string) => null);
+const pruneAgentHandoffs = mock(
+  async (_environmentId: string, _referencedHandoffIds: string[]) => [] as string[],
+);
 let consoleDebugSpy: ReturnType<typeof spyOn> | undefined;
 let consoleErrorSpy: ReturnType<typeof spyOn> | undefined;
 const originalOrkestrator = window.orkestrator;
@@ -43,6 +46,7 @@ mock.module("@/lib/backend", () => ({
   loadSessionBuffer: mock(async () => null),
   deleteAgentHandoff,
   getAgentHandoff,
+  pruneAgentHandoffs,
   syncSessionsWithContainer: mock(async () => []),
   renameSession: mock(async () => ({})),
   reorderSessions: mock(async () => []),
@@ -137,6 +141,7 @@ function resetStores() {
   deleteOpenCodeSession.mockClear();
   deleteAgentHandoff.mockClear();
   getAgentHandoff.mockClear();
+  pruneAgentHandoffs.mockClear();
   deleteAgentHandoff.mockImplementation(async () => true);
   getAgentHandoff.mockImplementation(async () => null);
 }
@@ -1462,12 +1467,83 @@ describe("paneLayoutStore pane and tab actions", () => {
     expect(usePaneLayoutStore.getState().getAllTabs("env-handoff")[0]).toMatchObject({
       id: "handoff-tab",
       agentHandoffId: undefined,
+      // Retained so the bootstrap prompt keeps being hidden. The imported
+      // transcript is gone, but that prompt is still the destination session's
+      // first message and would otherwise render as a raw JSON frame.
+      consumedAgentHandoffId: "handoff-1",
       displayTitle: "Codex · from Claude",
       codexNativeData: { environmentId: "env-handoff" },
     });
     expect(deleteAgentHandoff).toHaveBeenCalledWith("handoff-1", "env-handoff");
     await expect(loadAgentHandoff("handoff-1")).resolves.toBeNull();
     expect(getAgentHandoff).toHaveBeenCalledWith("handoff-1");
+  });
+
+  test("clearing an already-consumed handoff is a no-op", () => {
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [{
+        id: "handoff-tab",
+        type: "codex-native",
+        consumedAgentHandoffId: "handoff-1",
+      }],
+      activeTabId: "handoff-tab",
+    }, "default", "env-handoff");
+
+    usePaneLayoutStore.getState().clearTabAgentHandoff("handoff-tab", "env-handoff");
+
+    expect(deleteAgentHandoff).not.toHaveBeenCalled();
+    expect(usePaneLayoutStore.getState().getAllTabs("env-handoff")[0])
+      .toMatchObject({ consumedAgentHandoffId: "handoff-1" });
+  });
+
+  test("hydration reconciles stored handoffs against the restored layout", () => {
+    /*
+     * The per-tab delete is fire-and-forget. If it is dropped — backend restart,
+     * lock timeout, app kill — the reference is already gone from the layout, so
+     * nothing ever retries and the transcript is stranded on disk. Hydration is
+     * the one moment the environment's full reference set is authoritative.
+     */
+    usePaneLayoutStore.getState().finishHydration("env-restored", {
+      containerId: null,
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "live", type: "codex-native", agentHandoffId: "handoff-live" },
+          { id: "consumed", type: "claude-native", consumedAgentHandoffId: "handoff-old" },
+          { id: "plain", type: "plain" },
+        ],
+        activeTabId: "live",
+      },
+    });
+
+    // Only ids a tab still renders from are referenced. A consumed id names a
+    // record that was already deleted, so it must not keep one alive.
+    expect(pruneAgentHandoffs).toHaveBeenCalledWith("env-restored", ["handoff-live"]);
+  });
+
+  test("hydration with nothing to restore prunes every stored handoff", () => {
+    usePaneLayoutStore.getState().finishHydration("env-empty");
+
+    expect(pruneAgentHandoffs).toHaveBeenCalledWith("env-empty", []);
+  });
+
+  test("a failed hydration prune is logged without breaking hydration", async () => {
+    consoleDebugSpy = spyOn(console, "debug").mockImplementation(() => {});
+    pruneAgentHandoffs.mockRejectedValueOnce(new Error("prune failed"));
+
+    usePaneLayoutStore.getState().finishHydration("env-prune-fail");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(usePaneLayoutStore.getState().hydration.get("env-prune-fail")).toBe("done");
+    expect(consoleDebugSpy).toHaveBeenCalledWith(
+      "[PaneLayout] Error pruning agent handoffs:",
+      expect.objectContaining({ message: "prune failed" }),
+    );
   });
 
   test("clearing one of multiple handoff references preserves backend storage", () => {

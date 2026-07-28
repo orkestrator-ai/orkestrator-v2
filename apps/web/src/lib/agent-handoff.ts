@@ -7,6 +7,19 @@ import * as backend from "@/lib/backend";
 export const AGENT_HANDOFF_VERSION = 1;
 export const AGENT_HANDOFF_PROMPT_BUDGET = 180_000;
 
+/**
+ * Character budget for the retained visual transcript.
+ *
+ * Unlike `bootstrapPrompt`, `snapshot.messages` is what the destination tab
+ * renders, so it is not covered by the prompt budget. It still needs a bound:
+ * every chained transfer prepends the prior snapshot's messages, so without one
+ * the persisted record — and the invoke body carrying it — grows forever.
+ */
+export const AGENT_HANDOFF_SNAPSHOT_BUDGET = 4_000_000;
+
+/** `"[\n"` plus `"\n]"` around the emitted transcript array. */
+const HANDOFF_ARRAY_FRAME_OVERHEAD = 4;
+
 const HANDOFF_JSON_FORMAT = "json-v2";
 const HANDOFF_CLOSE = "</orkestrator-handoff>";
 const HANDOFF_METADATA_OPEN = "<orkestrator-handoff-metadata-json>";
@@ -32,6 +45,8 @@ export interface AgentHandoffStats {
   includedMessageCount: number;
   omittedMessageCount: number;
   promptCharacters: number;
+  /** Oldest messages dropped to keep the retained transcript within budget. */
+  droppedMessageCount: number;
 }
 
 export interface AgentHandoffSnapshot {
@@ -94,6 +109,35 @@ function isValidTimestamp(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
+/**
+ * Part fields the renderer feeds to `truncate` or interpolates into the prompt.
+ * A persisted record whose type drifted must be rejected at the boundary rather
+ * than blowing up mid-render, so every one is checked even though the compiler
+ * already types them as optional strings.
+ */
+const OPTIONAL_PART_STRING_FIELDS = [
+  "fileUrl",
+  "toolName",
+  "toolTitle",
+  "toolOutput",
+  "toolError",
+  "subagentName",
+  "subagentRole",
+] as const;
+
+function hasValidOptionalPartStrings(value: Record<string, unknown>): boolean {
+  return OPTIONAL_PART_STRING_FIELDS.every(
+    (field) => value[field] === undefined || typeof value[field] === "string",
+  );
+}
+
+function hasValidToolDiff(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  return (value.filePath === undefined || typeof value.filePath === "string")
+    && (value.diff === undefined || typeof value.diff === "string");
+}
+
 function isNativeMessagePart(value: unknown): value is NativeMessagePart {
   if (
     !isRecord(value)
@@ -109,6 +153,8 @@ function isNativeMessagePart(value: unknown): value is NativeMessagePart {
       "tool-group",
       "task-group",
     ].includes(String(value.type))
+    || !hasValidOptionalPartStrings(value)
+    || !hasValidToolDiff(value.toolDiff)
   ) {
     return false;
   }
@@ -177,29 +223,53 @@ export function parseAgentHandoffSnapshot(value: unknown): AgentHandoffSnapshot 
     || (stats.includedMessageCount as number) < 0
     || (stats.omittedMessageCount as number) < 0
     || (stats.promptCharacters as number) < 0
+    || (
+      stats.droppedMessageCount !== undefined
+      && (
+        !Number.isInteger(stats.droppedMessageCount)
+        || (stats.droppedMessageCount as number) < 0
+      )
+    )
   ) {
     return null;
   }
   // Never trust a persisted bootstrap carrier, including version-1 records
   // written before JSON framing. Rebuild it exclusively from validated snapshot
   // fields so a legacy raw tool/message delimiter cannot survive load.
-  return createAgentHandoffSnapshot({
-    id: value.id as string,
-    environmentId: value.environmentId as string,
-    sourceProvider: value.sourceProvider as AgentProvider,
-    destinationProvider: value.destinationProvider as AgentProvider,
-    sourceSessionId: value.sourceSessionId as string,
-    sourceTitle: value.sourceTitle as string | undefined,
-    sourceModel: value.sourceModel as string | undefined,
-    sourceAgent: value.sourceAgent as string | undefined,
-    messages: value.messages as NativeMessage[],
-    now: value.createdAt as string,
-  });
+  try {
+    return createAgentHandoffSnapshot({
+      id: value.id as string,
+      environmentId: value.environmentId as string,
+      sourceProvider: value.sourceProvider as AgentProvider,
+      destinationProvider: value.destinationProvider as AgentProvider,
+      sourceSessionId: value.sourceSessionId as string,
+      sourceTitle: value.sourceTitle as string | undefined,
+      sourceModel: value.sourceModel as string | undefined,
+      sourceAgent: value.sourceAgent as string | undefined,
+      messages: value.messages as NativeMessage[],
+      now: value.createdAt as string,
+    });
+  } catch {
+    // Rebuilding is the last validation step. A record that survives the field
+    // checks but cannot be rendered is unusable, and this function's contract is
+    // to report that as `null` rather than to reject the caller's promise.
+    return null;
+  }
 }
 
+const TRUNCATION_NOTICE_ALLOWANCE = 38;
+
 function truncate(value: string, limit: number): string {
+  // Persisted parts reach here after validation, but rendering is also the last
+  // step before a snapshot is handed to a model: a non-string that slipped
+  // through must not throw out of an otherwise recoverable parse.
+  if (typeof value !== "string") return "";
   if (value.length <= limit) return value;
-  return `${value.slice(0, Math.max(0, limit - 38))}\n… [${value.length - limit} characters omitted]`;
+  const kept = Math.max(0, limit - TRUNCATION_NOTICE_ALLOWANCE);
+  // Report what was actually dropped. Reporting `length - limit` understates it
+  // by the notice allowance, and the destination model reads this as ground
+  // truth about how much evidence it is missing.
+  return `${value.slice(0, kept)}\n… [${value.length - kept} characters omitted]`;
 }
 
 function json(value: unknown, limit = 4_000): string {
@@ -278,10 +348,11 @@ function parseTranscriptRecord(
 
 function parseJsonHandoffCarrier(
   content: string,
+  from: number,
   fallbackCreatedAt: string,
 ): ParsedHandoffCarrier | null {
   const opening = `<orkestrator-handoff format="${HANDOFF_JSON_FORMAT}">`;
-  const start = content.indexOf(opening);
+  const start = content.indexOf(opening, from);
   if (start < 0) return null;
   const closeStart = findStructuralCarrierClose(content, start + opening.length);
   if (closeStart < 0) return null;
@@ -332,13 +403,16 @@ function parseJsonHandoffCarrier(
   };
 }
 
+const LEGACY_OPENING_PATTERN =
+  /<orkestrator-handoff id="([^"]+)" source="(claude|codex|opencode)" destination="(claude|codex|opencode)">/g;
+
 function parseLegacyHandoffCarrier(
   content: string,
+  from: number,
   fallbackCreatedAt: string,
 ): ParsedHandoffCarrier | null {
-  const openingPattern =
-    /<orkestrator-handoff id="([^"]+)" source="(claude|codex|opencode)" destination="(claude|codex|opencode)">/;
-  const opening = openingPattern.exec(content);
+  LEGACY_OPENING_PATTERN.lastIndex = from;
+  const opening = LEGACY_OPENING_PATTERN.exec(content);
   if (
     !opening
     || opening.index === undefined
@@ -379,62 +453,144 @@ function parseLegacyHandoffCarrier(
 
 function parseHandoffCarrier(
   content: string,
+  from: number,
   fallbackCreatedAt: string,
 ): ParsedHandoffCarrier | null {
-  return parseJsonHandoffCarrier(content, fallbackCreatedAt)
-    ?? parseLegacyHandoffCarrier(content, fallbackCreatedAt);
+  const json = parseJsonHandoffCarrier(content, from, fallbackCreatedAt);
+  const legacy = parseLegacyHandoffCarrier(content, from, fallbackCreatedAt);
+  if (!json) return legacy;
+  if (!legacy) return json;
+  // Whichever frame opens first wins; a v2 carrier cannot occur inside a legacy
+  // body, so a tie can only mean the same offset matched both shapes.
+  return legacy.start < json.start ? legacy : json;
+}
+
+/**
+ * Every carrier in one string, in order.
+ *
+ * Scanning past the first match matters: taking only `indexOf`'s first hit lets
+ * a carrier-shaped decoy with a foreign id shield the real carrier behind it,
+ * which would leave the whole raw bootstrap prompt rendered as a chat bubble.
+ */
+function collectHandoffCarriers(
+  content: string,
+  fallbackCreatedAt: string,
+): ParsedHandoffCarrier[] {
+  const carriers: ParsedHandoffCarrier[] = [];
+  let from = 0;
+  while (from < content.length) {
+    const carrier = parseHandoffCarrier(content, from, fallbackCreatedAt);
+    if (!carrier) break;
+    carriers.push(carrier);
+    // `end` is always past `start`, but clamp anyway so a degenerate frame can
+    // never spin this loop.
+    from = Math.max(carrier.end, carrier.start + 1);
+  }
+  return carriers;
+}
+
+interface StrippedCarrierText {
+  matched: boolean;
+  residual: string;
+  extracted: NativeMessage[];
+}
+
+function stripCarriersFromText(
+  text: string,
+  handoffIds: ReadonlySet<string>,
+  fallbackCreatedAt: string,
+): StrippedCarrierText {
+  const carriers = collectHandoffCarriers(text, fallbackCreatedAt)
+    .filter((carrier) => handoffIds.has(carrier.id));
+  if (carriers.length === 0) {
+    return { matched: false, residual: text, extracted: [] };
+  }
+  let residual = "";
+  let cursor = 0;
+  const extracted: NativeMessage[] = [];
+  for (const carrier of carriers) {
+    residual += text.slice(cursor, carrier.start);
+    extracted.push(...carrier.messages);
+    cursor = carrier.end;
+  }
+  residual += text.slice(cursor);
+  return { matched: true, residual: residual.trim(), extracted };
 }
 
 function stripCarrierFromMessage(
   message: NativeMessage,
-  expectedHandoffId?: string,
+  handoffIds: ReadonlySet<string>,
 ): {
   matched: boolean;
   extracted: NativeMessage[];
   residual: NativeMessage[];
 } {
-  const contentCarrier = parseHandoffCarrier(message.content, message.createdAt);
-  const carrierPartIndex = contentCarrier
-    ? -1
-    : message.parts.findIndex((part) => (
-      part.type === "text"
-      && parseHandoffCarrier(part.content, message.createdAt) !== null
-    ));
-  const carrierPart = carrierPartIndex >= 0 ? message.parts[carrierPartIndex] : undefined;
-  const carrierText = contentCarrier
-    ? message.content
-    : carrierPart?.type === "text"
-      ? carrierPart.content
-      : "";
-  const parsed = contentCarrier
-    ?? (carrierText ? parseHandoffCarrier(carrierText, message.createdAt) : null);
-  if (!parsed || (expectedHandoffId !== undefined && parsed.id !== expectedHandoffId)) {
-    return { matched: false, extracted: [], residual: [message] };
+  const fromContent = stripCarriersFromText(
+    message.content,
+    handoffIds,
+    message.createdAt,
+  );
+  if (fromContent.matched) {
+    const residualParts = [
+      ...(fromContent.residual
+        ? [{ type: "text" as const, content: fromContent.residual }]
+        : []),
+      ...message.parts.filter((part) => part.type !== "text"),
+    ];
+    if (!fromContent.residual && residualParts.length === 0) {
+      return { matched: true, extracted: fromContent.extracted, residual: [] };
+    }
+    return {
+      matched: true,
+      extracted: fromContent.extracted,
+      residual: [{ ...message, content: fromContent.residual, parts: residualParts }],
+    };
   }
 
-  const residualText =
-    `${carrierText.slice(0, parsed.start)}${carrierText.slice(parsed.end)}`.trim();
-  const residualParts = contentCarrier
-    ? [
-        ...(residualText ? [{ type: "text" as const, content: residualText }] : []),
-        ...message.parts.filter((part) => part.type !== "text"),
-      ]
-    : message.parts.flatMap((part, index) => {
-        if (index !== carrierPartIndex) return [part];
-        return residualText ? [{ ...part, content: residualText }] : [];
-      });
-  if (!residualText && residualParts.length === 0) {
-    return { matched: true, extracted: parsed.messages, residual: [] };
+  let matched = false;
+  const extracted: NativeMessage[] = [];
+  const residualParts = message.parts.flatMap((part): NativeMessagePart[] => {
+    if (part.type !== "text") return [part];
+    const stripped = stripCarriersFromText(
+      part.content,
+      handoffIds,
+      message.createdAt,
+    );
+    if (!stripped.matched) return [part];
+    matched = true;
+    extracted.push(...stripped.extracted);
+    return stripped.residual ? [{ ...part, content: stripped.residual }] : [];
+  });
+  if (!matched) return { matched: false, extracted: [], residual: [message] };
+  if (residualParts.length === 0 && !message.content.trim()) {
+    return { matched: true, extracted, residual: [] };
   }
   return {
     matched: true,
-    extracted: parsed.messages,
-    residual: [{
-      ...message,
-      content: contentCarrier ? residualText : message.content,
-      parts: residualParts,
-    }],
+    extracted,
+    residual: [{ ...message, parts: residualParts }],
   };
+}
+
+/**
+ * Removes the bootstrap carrier from the destination transcript.
+ *
+ * Stripping is bound to the *first* provider message, not to the handoff id
+ * alone. The id is serialized into the prompt the destination model reads, so
+ * an id-only rule lets a prompt-injected model wrap its own output in a forged
+ * carrier and have that span deleted from both the visible transcript and the
+ * next transfer. Only message 0 can legitimately hold the carrier: the bootstrap
+ * prompt is dispatched exactly once, and only into an empty transcript.
+ */
+function stripAgentHandoffBootstrap(
+  handoffIds: ReadonlySet<string>,
+  providerMessages: NativeMessage[],
+): NativeMessage[] {
+  const first = providerMessages[0];
+  if (!first || handoffIds.size === 0) return providerMessages;
+  const stripped = stripCarrierFromMessage(first, handoffIds);
+  if (!stripped.matched) return providerMessages;
+  return [...stripped.residual, ...providerMessages.slice(1)];
 }
 
 function childParts(part: NativeMessagePart): NativeMessagePart[] {
@@ -543,6 +699,24 @@ function renderMessage(
   };
 }
 
+/**
+ * Cost of one record *inside* the emitted array frame.
+ *
+ * The frame is `carrierJson(records)`, not the concatenation of
+ * `carrierJson(record)`: nesting adds one indent level to every line of the
+ * record plus a `",\n"` separator. Budgeting the standalone serialization
+ * instead understates each record by ~15 characters, which silently overruns
+ * the prompt budget by several percent on transcripts of many short messages.
+ */
+function nestedRecordCost(record: HandoffTranscriptRecord): number {
+  const serialized = carrierJson(record);
+  let lines = 1;
+  for (let index = 0; index < serialized.length; index += 1) {
+    if (serialized.charCodeAt(index) === 10) lines += 1;
+  }
+  return serialized.length + lines * 2 + 2;
+}
+
 function selectTranscriptRecords(
   messages: NativeMessage[],
   availableCharacters: number,
@@ -553,20 +727,21 @@ function selectTranscriptRecords(
   }
 
   const selected: Array<{ index: number; record: HandoffTranscriptRecord }> = [];
-  let used = 0;
+  let used = HANDOFF_ARRAY_FRAME_OVERHEAD;
   // Preserve the initiating context when possible, then spend the remaining
   // budget from the newest message backwards because it best represents the
   // source agent's current state.
   const first = rendered[0];
-  const firstLength = first ? carrierJson(first).length + 1 : 0;
-  if (first && firstLength <= availableCharacters / 3) {
+  const firstLength = first ? nestedRecordCost(first) : 0;
+  const firstSelected = Boolean(first) && used + firstLength <= availableCharacters / 3;
+  if (first && firstSelected) {
     selected.push({ index: 0, record: first });
     used += firstLength;
   }
   for (let index = rendered.length - 1; index >= 0; index -= 1) {
-    if (index === 0 && selected.length > 0) continue;
+    if (index === 0 && firstSelected) continue;
     const record = rendered[index]!;
-    const recordLength = carrierJson(record).length + 1;
+    const recordLength = nestedRecordCost(record);
     if (used + recordLength > availableCharacters) continue;
     selected.push({ index, record });
     used += recordLength;
@@ -578,10 +753,52 @@ function selectTranscriptRecords(
   };
 }
 
+function formatOmissionNotice(omitted: number): string {
+  if (omitted <= 0) return "";
+  return `\n[${omitted} earlier messages were omitted from this JSON frame because`
+    + " of the transfer budget. They remain visible in Orkestrator's imported"
+    + " transcript.]\n";
+}
+
+/**
+ * Trims the retained visual transcript to `AGENT_HANDOFF_SNAPSHOT_BUDGET`.
+ *
+ * Oldest-first, because the newest messages best represent the state being
+ * handed off. The newest message is always kept even when it alone exceeds the
+ * budget, so a single huge message degrades to a large snapshot rather than to
+ * an empty one that would fail as "no history to transfer".
+ */
+function boundSnapshotMessages(
+  messages: NativeMessage[],
+): { messages: NativeMessage[]; dropped: number } {
+  if (messages.length === 0) return { messages, dropped: 0 };
+  let used = 0;
+  let start = messages.length - 1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    let cost: number;
+    try {
+      cost = JSON.stringify(messages[index]).length;
+    } catch {
+      // An unserializable message cannot be persisted at all; treat it as the
+      // oldest retainable boundary rather than letting the save fail later.
+      break;
+    }
+    if (index < messages.length - 1 && used + cost > AGENT_HANDOFF_SNAPSHOT_BUDGET) {
+      break;
+    }
+    used += cost;
+    start = index;
+  }
+  if (start === 0) return { messages, dropped: 0 };
+  return { messages: messages.slice(start), dropped: start };
+}
+
 export function createAgentHandoffSnapshot(
   options: CreateAgentHandoffOptions,
 ): AgentHandoffSnapshot {
   const createdAt = options.now ?? new Date().toISOString();
+  const bounded = boundSnapshotMessages(options.messages);
+  const retainedMessages = bounded.messages;
   const sourceLabel = AGENT_PROVIDER_LABELS[options.sourceProvider];
   const destinationLabel = AGENT_PROVIDER_LABELS[options.destinationProvider];
   const marker = `<orkestrator-handoff format="${HANDOFF_JSON_FORMAT}">`;
@@ -616,18 +833,20 @@ ${HANDOFF_TRANSCRIPT_CLOSE}`;
 ${HANDOFF_CLOSE}
 
 ${HANDOFF_FOLLOW_UP}`;
+  // The notice is emitted *after* the transcript frame, so its worst-case length
+  // has to come out of the budget before selection runs. Leaving it uncounted
+  // spends budget the frame does not have.
+  const omissionNoticeReserve = formatOmissionNotice(retainedMessages.length).length;
   const available = Math.max(
     1_000,
     AGENT_HANDOFF_PROMPT_BUDGET
       - header.length
       - transcriptFooter.length
       - carrierFooter.length
-      - 300,
+      - omissionNoticeReserve,
   );
-  const selection = selectTranscriptRecords(options.messages, available);
-  const omissionNotice = selection.omitted > 0
-    ? `\n[${selection.omitted} earlier messages were omitted from this JSON frame because of the transfer budget. They remain visible in Orkestrator's imported transcript.]\n`
-    : "";
+  const selection = selectTranscriptRecords(retainedMessages, available);
+  const omissionNotice = formatOmissionNotice(selection.omitted);
   const bootstrapPrompt =
     `${header}${carrierJson(selection.records)}${transcriptFooter}`
     + `${omissionNotice}${carrierFooter}`;
@@ -642,14 +861,15 @@ ${HANDOFF_FOLLOW_UP}`;
     sourceModel: options.sourceModel,
     sourceAgent: options.sourceAgent,
     createdAt,
-    messages: options.messages,
+    messages: retainedMessages,
     bootstrapPrompt,
     stats: {
-      messageCount: options.messages.length,
-      toolCallCount: countAgentHandoffToolCalls(options.messages),
-      includedMessageCount: options.messages.length - selection.omitted,
+      messageCount: retainedMessages.length,
+      toolCallCount: countAgentHandoffToolCalls(retainedMessages),
+      includedMessageCount: retainedMessages.length - selection.omitted,
       omittedMessageCount: selection.omitted,
       promptCharacters: bootstrapPrompt.length,
+      droppedMessageCount: bounded.dropped,
     },
   };
 }
@@ -659,12 +879,36 @@ export function isAgentHandoffBootstrapMessage(
   handoffId: string,
 ): boolean {
   const createdAt = new Date(0).toISOString();
-  const contentCarrier = parseHandoffCarrier(message.content, createdAt);
-  if (contentCarrier?.id === handoffId) return true;
-  return message.parts.some((part) => (
-    part.type === "text"
-    && parseHandoffCarrier(part.content, createdAt)?.id === handoffId
-  ));
+  const carries = (text: string) =>
+    collectHandoffCarriers(text, createdAt).some((carrier) => carrier.id === handoffId);
+  if (carries(message.content)) return true;
+  return message.parts.some((part) => part.type === "text" && carries(part.content));
+}
+
+/**
+ * Cheap change signature for a normalized transcript.
+ *
+ * Used to bracket an authoritative read when a provider exposes no revision
+ * counter. It compares the same things a deep equality check would notice —
+ * message identity, ordering, and the size of every part — without the two full
+ * `JSON.stringify` passes over a transcript that can be tens of megabytes.
+ */
+export function agentHandoffTranscriptDigest(messages: NativeMessage[]): string {
+  const parts: string[] = [`${messages.length}`];
+  for (const message of messages) {
+    parts.push(
+      `${message.id}${message.role}${message.content.length}`
+      + `${message.parts.length}`,
+    );
+    for (const part of message.parts) {
+      parts.push(
+        `${part.type}${part.content.length}${part.toolState ?? ""}`
+        + `${part.toolOutput?.length ?? 0}${part.toolError?.length ?? 0}`
+        + `${part.toolDiff?.diff?.length ?? 0}`,
+      );
+    }
+  }
+  return parts.join(" ");
 }
 
 function prefixImportedMessage(
@@ -692,11 +936,53 @@ export function composeAgentHandoffTransferMessages(
   providerMessages: NativeMessage[],
 ): NativeMessage[] {
   if (!priorHandoff) return providerMessages;
-  const currentMessages = providerMessages.flatMap((message) => {
-    const stripped = stripCarrierFromMessage(message, priorHandoff.id);
-    return stripped.matched ? stripped.residual : [message];
-  });
-  return [...priorHandoff.messages, ...currentMessages];
+  return [
+    ...priorHandoff.messages,
+    ...stripAgentHandoffBootstrap(new Set([priorHandoff.id]), providerMessages),
+  ];
+}
+
+/**
+ * Removes every bootstrap carrier this tab is known to have dispatched.
+ *
+ * `consumedHandoffIds` carries ids whose snapshot has already been deleted —
+ * after a resume, the imported transcript is gone but the prompt that carried it
+ * is still the destination session's first message, and rendering that raw would
+ * dump the whole JSON frame into the transcript.
+ */
+export function stripAgentHandoffCarriers(
+  handoffIds: readonly string[],
+  providerMessages: NativeMessage[],
+): NativeMessage[] {
+  return stripAgentHandoffBootstrap(new Set(handoffIds), providerMessages);
+}
+
+/**
+ * The imported transcript and its boundary, derived from the snapshot alone.
+ *
+ * Separated from the merge so callers can memoize on `handoff` identity: these
+ * objects are re-created for every imported message, and recomputing them on
+ * each streaming tick re-renders the entire imported history.
+ */
+export function buildAgentHandoffImportedMessages(
+  handoff: AgentHandoffSnapshot,
+): NativeMessage[] {
+  const sourceLabel = AGENT_PROVIDER_LABELS[handoff.sourceProvider];
+  const destinationLabel = AGENT_PROVIDER_LABELS[handoff.destinationProvider];
+  const boundaryText =
+    `Continued in ${destinationLabel} from ${sourceLabel}`
+    + ` · ${handoff.stats.messageCount} messages`
+    + ` · ${handoff.stats.toolCallCount} tool calls`;
+  return [
+    ...handoff.messages.map((message) => prefixImportedMessage(handoff.id, message)),
+    {
+      id: `handoff:${handoff.id}:boundary`,
+      role: "system",
+      content: boundaryText,
+      parts: [{ type: "text", content: boundaryText }],
+      createdAt: handoff.createdAt,
+    },
+  ];
 }
 
 export function mergeAgentHandoffDisplayMessages(
@@ -704,27 +990,9 @@ export function mergeAgentHandoffDisplayMessages(
   providerMessages: NativeMessage[],
 ): NativeMessage[] {
   if (!handoff) return providerMessages;
-  const sourceLabel = AGENT_PROVIDER_LABELS[handoff.sourceProvider];
-  const destinationLabel = AGENT_PROVIDER_LABELS[handoff.destinationProvider];
-  const boundaryText =
-    `Continued in ${destinationLabel} from ${sourceLabel}`
-    + ` · ${handoff.stats.messageCount} messages`
-    + ` · ${handoff.stats.toolCallCount} tool calls`;
-  const boundary: NativeMessage = {
-    id: `handoff:${handoff.id}:boundary`,
-    role: "system",
-    content: boundaryText,
-    parts: [{ type: "text", content: boundaryText }],
-    createdAt: handoff.createdAt,
-  };
-  const currentMessages = providerMessages.flatMap((message) => {
-    const stripped = stripCarrierFromMessage(message, handoff.id);
-    return stripped.matched ? stripped.residual : [message];
-  });
   return [
-    ...handoff.messages.map((message) => prefixImportedMessage(handoff.id, message)),
-    boundary,
-    ...currentMessages,
+    ...buildAgentHandoffImportedMessages(handoff),
+    ...stripAgentHandoffCarriers([handoff.id], providerMessages),
   ];
 }
 
@@ -799,11 +1067,24 @@ export async function loadAgentHandoff(
 export async function persistAgentHandoff(
   handoff: AgentHandoffSnapshot,
 ): Promise<void> {
-  await backend.saveAgentHandoff(
+  const saved = await backend.saveAgentHandoff(
     handoff.id,
     handoff.environmentId,
     AGENT_HANDOFF_VERSION,
     handoff as unknown as Record<string, unknown>,
   );
+  // Handoffs are immutable server-side: a save against an existing id returns
+  // the committed record instead of replacing it. Caching the local snapshot
+  // without checking would leave memory and disk silently disagreeing.
+  if (
+    saved
+    && (
+      saved.id !== handoff.id
+      || saved.environmentId !== handoff.environmentId
+      || saved.version !== AGENT_HANDOFF_VERSION
+    )
+  ) {
+    throw new Error("The conversation transfer was not stored as written");
+  }
   rememberAgentHandoff(handoff);
 }

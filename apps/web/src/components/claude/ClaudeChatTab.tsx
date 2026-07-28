@@ -112,6 +112,7 @@ interface ClaudeChatTabProps {
   initialAgentModel?: string;
   initialReasoningEffort?: string;
   agentHandoffId?: string;
+  consumedAgentHandoffId?: string;
   refreshRequestId?: number;
 }
 type ConnectionState = "connecting" | "connected" | "error";
@@ -135,6 +136,7 @@ export function ClaudeChatTab({
   initialAgentModel,
   initialReasoningEffort,
   agentHandoffId,
+  consumedAgentHandoffId,
   refreshRequestId = 0,
 }: ClaudeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
@@ -579,9 +581,20 @@ export function ClaudeChatTab({
     "claude",
     environmentId,
     providerDisplayMessages,
+    consumedAgentHandoffId,
   );
   const displayMessages = handoff.displayMessages;
   const launchPrompt = initialPrompt ?? handoff.initialPrompt;
+  /*
+   * Initialization is blocked while a handoff loads, so by the time the effect
+   * below runs this ref holds the resolved prompt. Reading it through a ref
+   * rather than a dependency keeps the prompt out of the effect's identity: it
+   * resolves a few milliseconds after mount, and re-running initialization then
+   * would tear down an in-flight connect.
+   */
+  const handoffPending = !handoff.ready;
+  const launchPromptRef = useRef<string | undefined>(undefined);
+  launchPromptRef.current = launchPrompt;
   const forkPlan = useMemo(
     () => buildMessageForkPlan(providerDisplayMessages, {
       responseInProgress: session?.isLoading ?? false,
@@ -670,6 +683,16 @@ export function ClaudeChatTab({
   useEffect(() => {
     // Block initialization until setup scripts finish (local environments with orkestrator-ai.json)
     if (setupPending) {
+      return;
+    }
+
+    /*
+     * Block until a restored handoff has loaded. Without this the first run
+     * captures `launchPrompt === undefined` and the in-init send below can never
+     * fire, pushing every handoff bootstrap onto the post-SSE path this function
+     * deliberately avoids.
+     */
+    if (handoffPending) {
       return;
     }
 
@@ -1052,10 +1075,9 @@ export function ClaudeChatTab({
           // Check if we have an initial prompt to send
           // We send it BEFORE starting SSE to avoid race conditions where
           // SSE events could wipe locally-added messages before they're synced
+          const pendingLaunchPrompt = launchPromptRef.current;
           const shouldSendInitialPrompt =
-            handoff.ready
-            && launchPrompt
-            && !initialPromptSentRef.current;
+            pendingLaunchPrompt && !initialPromptSentRef.current;
 
           if (shouldSendInitialPrompt) {
             // Mark as sent immediately to prevent double-sending
@@ -1067,15 +1089,15 @@ export function ClaudeChatTab({
             const userMessage = {
               id: createUuid(),
               role: "user" as const,
-              content: launchPrompt,
-              parts: [{ type: "text" as const, content: launchPrompt }],
+              content: pendingLaunchPrompt,
+              parts: [{ type: "text" as const, content: pendingLaunchPrompt }],
               timestamp: new Date().toISOString(),
             };
 
             console.debug("[ClaudeChatTab] Sending initial prompt during initialization", {
               tabId,
               sessionId: newSession.sessionId,
-              promptLength: launchPrompt.length,
+              promptLength: pendingLaunchPrompt.length,
             });
 
             // Set session with the user message already included and loading state
@@ -1102,7 +1124,7 @@ export function ClaudeChatTab({
             startSharedEventSubscription(bridgeClient);
 
             // Now send the prompt
-            const success = await sendPrompt(bridgeClient, newSession.sessionId, launchPrompt, {
+            const success = await sendPrompt(bridgeClient, newSession.sessionId, pendingLaunchPrompt, {
               model: selectedModel,
               effort: effortLevel,
               permissionMode,
@@ -1173,7 +1195,7 @@ export function ClaudeChatTab({
       slashCmdCleanupRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerId, environmentId, tabId, isLocal, setupPending, initAttempt]);
+  }, [containerId, environmentId, tabId, isLocal, setupPending, handoffPending, initAttempt]);
 
   const startSharedEventSubscription = useCallback(
     async (bridgeClient: ReturnType<typeof createClient>) => {

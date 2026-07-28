@@ -1614,6 +1614,21 @@ export async function deleteAgentHandoff(
   return invoke<boolean>("delete_agent_handoff", { handoffId, environmentId });
 }
 
+/**
+ * Deletes every stored handoff for an environment that the restored pane layout
+ * no longer references. Self-healing counterpart to the best-effort delete that
+ * runs when a tab closes.
+ */
+export async function pruneAgentHandoffs(
+  environmentId: string,
+  referencedHandoffIds: string[],
+): Promise<string[]> {
+  return invoke<string[]>("prune_agent_handoffs", {
+    environmentId,
+    referencedHandoffIds,
+  });
+}
+
 // --- Local Server Commands (for local/worktree environments) ---
 
 export interface LocalServerStartResult {

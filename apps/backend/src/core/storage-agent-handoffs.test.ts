@@ -255,4 +255,85 @@ describe("StorageService agent handoffs", () => {
       }
     });
   });
+
+  test("deleting a stale reference leaves no file when the feature was never used", async () => {
+    await withStorage(async (storage) => {
+      const primary = path.join(storage.getDataDir(), "agent-handoffs.json");
+      expect(await fs.stat(primary).catch(() => null)).toBeNull();
+
+      await expect(storage.deleteAgentHandoff("never-existed", "e1")).resolves.toBe(false);
+
+      // The "always rewrite" recovery path only makes sense for a primary that
+      // exists and may be corrupt. Creating one here would leave a trace on an
+      // installation that never transferred a conversation.
+      expect(await fs.stat(primary).catch(() => null)).toBeNull();
+    });
+  });
+
+  test("prunes handoffs the layout no longer references, per environment", async () => {
+    await withStorage(async (storage) => {
+      await storage.saveAgentHandoff("kept", "e1", 1, {
+        messages: [{ text: "still-referenced" }],
+      });
+      await storage.saveAgentHandoff("orphan", "e1", 1, {
+        messages: [{ text: "orphan-secret" }],
+      });
+      await storage.saveAgentHandoff("other-env", "e2", 1, {
+        messages: [{ text: "other-env-secret" }],
+      });
+
+      // A record whose delete was dropped is indistinguishable from a live one
+      // by id alone; only the layout's reference set can tell them apart.
+      expect(await storage.pruneAgentHandoffs("e1", ["kept"])).toEqual(["orphan"]);
+      expect(await storage.getAgentHandoff("kept")).not.toBeNull();
+      expect(await storage.getAgentHandoff("orphan")).toBeNull();
+      expect(await storage.getAgentHandoff("other-env")).not.toBeNull();
+
+      const primary = path.join(storage.getDataDir(), "agent-handoffs.json");
+      for (const candidate of [
+        primary,
+        ...Array.from({ length: 5 }, (_, index) => `${primary}.bak.${index + 1}`),
+      ]) {
+        if (!await fs.stat(candidate).catch(() => null)) continue;
+        const serialized = JSON.stringify(await readStoredHandoffs(candidate));
+        expect(serialized).not.toContain("orphan-secret");
+        expect(serialized).toContain("still-referenced");
+      }
+
+      // Idempotent, and a no-op prune must not rewrite or rotate anything.
+      expect(await storage.pruneAgentHandoffs("e1", ["kept"])).toEqual([]);
+      expect(await storage.getAgentHandoff("kept")).not.toBeNull();
+    });
+  });
+
+  test("pruning an environment with no referenced ids removes all of its handoffs", async () => {
+    await withStorage(async (storage) => {
+      await storage.saveAgentHandoff("h1", "e1", 1, { messages: [{ text: "gone" }] });
+      await storage.saveAgentHandoff("h2", "e2", 1, { messages: [{ text: "kept" }] });
+
+      expect(await storage.pruneAgentHandoffs("e1", [])).toEqual(["h1"]);
+      expect(await storage.getAgentHandoff("h1")).toBeNull();
+      expect(await storage.getAgentHandoff("h2")).not.toBeNull();
+
+      await expect(storage.pruneAgentHandoffs("", ["h1"]))
+        .rejects.toThrow("environment ID must not be blank");
+    });
+  });
+
+  test("prunes a malformed entry that cannot be proven still referenced", async () => {
+    await withStorage(async (storage) => {
+      await storage.saveAgentHandoff("h1", "e1", 1, { messages: [{ text: "malformed" }] });
+      const primary = path.join(storage.getDataDir(), "agent-handoffs.json");
+      const stored = await readStoredHandoffs(primary);
+      stored.h1 = {
+        environmentId: "e1",
+        snapshot: { messages: [{ text: "malformed" }] },
+        createdAt: "not-a-date",
+      };
+      await fs.writeFile(primary, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
+
+      expect(await storage.pruneAgentHandoffs("e1", [])).toEqual(["h1"]);
+      expect(JSON.stringify(await readStoredHandoffs(primary))).not.toContain("malformed");
+    });
+  });
 });

@@ -338,6 +338,10 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
   }
 }
 
+function tabHandoffIds(tab: TabInfo): string[] {
+  return tab.agentHandoffId ? [tab.agentHandoffId] : [];
+}
+
 function deleteUnreferencedAgentHandoffs(
   envId: string,
   removedTabs: TabInfo[],
@@ -346,11 +350,9 @@ function deleteUnreferencedAgentHandoffs(
   const remainingHandoffIds = new Set(
     getAllLeaves(remainingRoot)
       .flatMap((leaf) => leaf.tabs)
-      .flatMap((tab) => tab.agentHandoffId ? [tab.agentHandoffId] : []),
+      .flatMap(tabHandoffIds),
   );
-  const removedHandoffIds = new Set(
-    removedTabs.flatMap((tab) => tab.agentHandoffId ? [tab.agentHandoffId] : []),
-  );
+  const removedHandoffIds = new Set(removedTabs.flatMap(tabHandoffIds));
   for (const handoffId of removedHandoffIds) {
     if (remainingHandoffIds.has(handoffId)) continue;
     forgetAgentHandoff(handoffId);
@@ -358,6 +360,23 @@ function deleteUnreferencedAgentHandoffs(
       console.debug("[PaneLayout] Error deleting agent handoff:", error);
     });
   }
+}
+
+/**
+ * Reclaims handoffs the restored layout no longer references.
+ *
+ * The per-tab delete is fire-and-forget; if it is dropped (backend restart, lock
+ * timeout, app kill) the reference is already gone from the layout, so nothing
+ * retries and a sensitive transcript is stranded on disk forever. Hydration is
+ * the one moment the full reference set for an environment is authoritative.
+ */
+function pruneUnreferencedAgentHandoffs(envId: string, root: PaneNode): void {
+  const referenced = getAllLeaves(root)
+    .flatMap((leaf) => leaf.tabs)
+    .flatMap(tabHandoffIds);
+  backend.pruneAgentHandoffs(envId, referenced).catch((error) => {
+    console.debug("[PaneLayout] Error pruning agent handoffs:", error);
+  });
 }
 
 export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
@@ -453,12 +472,19 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     if (!restored) {
       set({ hydration });
+      // Nothing was restored, so no tab in this environment references a
+      // handoff. Any stored record is orphaned.
+      pruneUnreferencedAgentHandoffs(
+        environmentId,
+        state.environments.get(environmentId)?.root ?? createInitialLayout(),
+      );
       return;
     }
 
     const environments = new Map(state.environments);
     environments.set(environmentId, restored);
     set({ environments, hydration });
+    pruneUnreferencedAgentHandoffs(environmentId, restored.root);
   },
 
   addTab: (paneId, tab, environmentId) => {
@@ -783,10 +809,16 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const tabWithHandoff = paneWithTab.tabs.find((tab) => tab.id === tabId);
     if (!tabWithHandoff?.agentHandoffId) return;
 
+    // Retain the id as consumed. The snapshot is deleted below, but the
+    // bootstrap prompt it produced is still the destination session's first
+    // message; forgetting the id entirely would render that raw JSON frame.
+    const consumedAgentHandoffId = tabWithHandoff.agentHandoffId;
     const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
       ...leaf,
       tabs: leaf.tabs.map((tab) =>
-        tab.id === tabId ? { ...tab, agentHandoffId: undefined } : tab
+        tab.id === tabId
+          ? { ...tab, agentHandoffId: undefined, consumedAgentHandoffId }
+          : tab
       ),
     }));
     const newEnvs = new Map(state.environments);

@@ -103,6 +103,7 @@ interface OpenCodeChatTabProps {
   initialAgentModel?: string;
   initialReasoningEffort?: string;
   agentHandoffId?: string;
+  consumedAgentHandoffId?: string;
   refreshRequestId?: number;
 }
 
@@ -185,6 +186,7 @@ export function OpenCodeChatTab({
   initialAgentModel,
   initialReasoningEffort,
   agentHandoffId,
+  consumedAgentHandoffId,
   refreshRequestId = 0,
 }: OpenCodeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
@@ -319,9 +321,19 @@ export function OpenCodeChatTab({
     "opencode",
     environmentId,
     providerDisplayMessages,
+    consumedAgentHandoffId,
   );
   const displayMessages = handoff.displayMessages;
   const launchPrompt = initialPrompt ?? handoff.initialPrompt;
+  /*
+   * Read through a ref inside the initialization effect. `launchPrompt` resolves
+   * a few milliseconds after mount for a handoff tab, so listing it as a
+   * dependency would tear down and restart an in-flight connect; `handoffPending`
+   * flips once and is the correct gate.
+   */
+  const handoffPending = !handoff.ready;
+  const launchPromptRef = useRef<string | undefined>(undefined);
+  launchPromptRef.current = launchPrompt;
   const forkPlan = useMemo(
     () => buildMessageForkPlan(providerDisplayMessages, {
       responseInProgress: session?.isLoading ?? false,
@@ -712,11 +724,12 @@ export function OpenCodeChatTab({
   });
 
   // Initialize connection on mount.
-  // Active tabs always initialize; inactive tabs initialize too when an
-  // A launch/handoff prompt is pending so background mounts can dispatch it
-  // before becoming visible.
+  // Active tabs always initialize; inactive tabs initialize too when a launch
+  // or handoff prompt is pending, so background mounts can dispatch it before
+  // becoming visible.
   useEffect(() => {
-    if (!isActive && !launchPrompt?.trim() && queueLength === 0) {
+    if (handoffPending) return;
+    if (!isActive && !launchPromptRef.current?.trim() && queueLength === 0) {
       return;
     }
 
@@ -1137,7 +1150,7 @@ export function OpenCodeChatTab({
     environmentId,
     tabId,
     isActive,
-    launchPrompt,
+    handoffPending,
     isLocal,
     queueLength,
     syncPendingRequests,

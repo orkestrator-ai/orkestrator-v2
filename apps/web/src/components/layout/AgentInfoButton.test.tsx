@@ -1482,6 +1482,90 @@ describe("AgentInfoButton session actions", () => {
     expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
   });
 
+  test("rejects a Codex transfer that changed while no revision was reported", async () => {
+    /*
+     * `messageRevision` is optional: an older bridge or a malformed status
+     * payload drops it. Requiring both sides to be defined before comparing
+     * fails open — the snapshot is taken on trust and a torn transcript is
+     * transferred silently. Re-read and compare instead.
+     */
+    seedCodexSession();
+    mockGetCodexSessionStatus.mockResolvedValue({ status: "idle" });
+    mockGetCodexSessionMessages
+      .mockResolvedValueOnce([{
+        id: "m1",
+        role: "user",
+        content: "before",
+        parts: [{ type: "text", content: "before" }],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      }])
+      .mockResolvedValueOnce([{
+        id: "m1",
+        role: "user",
+        content: "after the turn",
+        parts: [{ type: "text", content: "after the turn" }],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      }]);
+
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+    fireEvent.click(screen.getByRole("button", { name: "OpenCode" }));
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Codex conversation changed while it was being transferred",
+      ),
+    );
+    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+    expect(mockGetCodexSessionMessages).toHaveBeenCalledTimes(2);
+  });
+
+  test("transfers a Codex conversation with no revision when both reads agree", async () => {
+    seedCodexSession();
+    mockGetCodexSessionStatus.mockResolvedValue({ status: "idle" });
+
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
+
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+    );
+    // The fallback re-reads rather than trusting the missing revision, so an
+    // older bridge stays usable instead of being permanently rejected.
+    expect(mockGetCodexSessionMessages).toHaveBeenCalledTimes(2);
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test("skips the second read when Codex reports a matching revision", async () => {
+    seedCodexSession();
+    mockGetCodexSessionStatus.mockResolvedValue({ status: "idle", messageRevision: 4 });
+
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
+
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
+    );
+    expect(mockGetCodexSessionMessages).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not open a destination tab when the source tab carries no native data", async () => {
+    seedCodexSession();
+
+    render(<AgentInfoButton activeTab={{ id: TAB_ID, type: "codex-native" } as TabInfo} />);
+    open();
+
+    // Without native data there is no container or locality to copy onto the
+    // destination tab, so the panel offers no session controls at all.
+    expect(screen.queryByRole("button", { name: /Continue in/ })).toBeNull();
+    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
+  });
+
   test("preserves the prior imported transcript when a transferred tab is handed off again", async () => {
     const prior = createAgentHandoffSnapshot({
       id: "prior-handoff",

@@ -102,6 +102,7 @@ interface CodexChatTabProps {
   initialAgentModel?: string;
   initialReasoningEffort?: string;
   agentHandoffId?: string;
+  consumedAgentHandoffId?: string;
   refreshRequestId?: number;
 }
 type ConnectionState = "connecting" | "connected" | "error";
@@ -175,6 +176,7 @@ export function CodexChatTab({
   initialAgentModel,
   initialReasoningEffort,
   agentHandoffId,
+  consumedAgentHandoffId,
   refreshRequestId = 0,
 }: CodexChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
@@ -439,9 +441,19 @@ export function CodexChatTab({
     "codex",
     environmentId,
     providerDisplayMessages,
+    consumedAgentHandoffId,
   );
   const displayMessages = handoff.displayMessages;
   const launchPrompt = initialPrompt ?? handoff.initialPrompt;
+  /*
+   * Read through a ref inside the initialization effect. `launchPrompt` resolves
+   * a few milliseconds after mount for a handoff tab, so listing it as a
+   * dependency would tear down and restart an in-flight connect; `handoffPending`
+   * flips once and is the correct gate.
+   */
+  const handoffPending = !handoff.ready;
+  const launchPromptRef = useRef<string | undefined>(undefined);
+  launchPromptRef.current = launchPrompt;
   const forkPlan = useMemo(
     () => buildMessageForkPlan(providerDisplayMessages, {
       responseInProgress: session?.isLoading ?? false,
@@ -1175,7 +1187,8 @@ export function CodexChatTab({
   }, [config]);
 
   useEffect(() => {
-    if (!isActive && !launchPrompt?.trim() && queueLength === 0) return;
+    if (handoffPending) return;
+    if (!isActive && !launchPromptRef.current?.trim() && queueLength === 0) return;
 
     // Block initialization until setup scripts finish (local environments with orkestrator-ai.json)
     if (setupPending) {
@@ -1469,7 +1482,7 @@ export function CodexChatTab({
     acknowledgeInitialLaunchOptions,
     containerId,
     environmentId,
-    launchPrompt,
+    handoffPending,
     isActive,
     isLocal,
     initAttempt,

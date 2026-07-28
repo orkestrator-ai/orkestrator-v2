@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  buildAgentHandoffImportedMessages,
   isAgentHandoffBootstrapMessage,
   loadAgentHandoff,
-  mergeAgentHandoffDisplayMessages,
+  stripAgentHandoffCarriers,
   type AgentHandoffSnapshot,
   type AgentProvider,
 } from "@/lib/agent-handoff";
@@ -17,6 +18,12 @@ interface AgentHandoffState {
 
 interface StoredAgentHandoffState extends AgentHandoffState {
   requestKey: string | null;
+  /**
+   * Captured when `error` is set. Deriving it during render would mint a new
+   * timestamp on every streaming tick, so the error row's displayed time — and
+   * the response duration measured against it — would drift.
+   */
+  errorAt: string | null;
 }
 
 const EMPTY_STATE: StoredAgentHandoffState = {
@@ -25,6 +32,7 @@ const EMPTY_STATE: StoredAgentHandoffState = {
   handoff: null,
   loading: false,
   error: null,
+  errorAt: null,
 };
 
 export function useAgentHandoff(
@@ -32,6 +40,13 @@ export function useAgentHandoff(
   destinationProvider: AgentProvider,
   environmentId: string,
   providerMessages: NativeMessage[],
+  /**
+   * A handoff this tab dispatched whose snapshot has since been deleted (the tab
+   * resumed another session). The imported transcript is gone, but the bootstrap
+   * prompt is still the provider transcript's first message and must stay hidden
+   * rather than dumping its whole JSON frame into the chat.
+   */
+  consumedHandoffId?: string,
 ): AgentHandoffState & {
   ready: boolean;
   initialPrompt?: string;
@@ -54,38 +69,31 @@ export function useAgentHandoff(
       handoff: null,
       loading: true,
       error: null,
+      errorAt: null,
     });
+    const fail = (message: string) => {
+      setState({
+        requestKey,
+        handoffId,
+        handoff: null,
+        loading: false,
+        error: message,
+        errorAt: new Date().toISOString(),
+      });
+    };
     void loadAgentHandoff(handoffId)
       .then((handoff) => {
         if (cancelled) return;
         if (!handoff) {
-          setState({
-            requestKey,
-            handoffId,
-            handoff: null,
-            loading: false,
-            error: "The transferred conversation could not be loaded.",
-          });
+          fail("The transferred conversation could not be loaded.");
           return;
         }
         if (handoff.destinationProvider !== destinationProvider) {
-          setState({
-            requestKey,
-            handoffId,
-            handoff: null,
-            loading: false,
-            error: "This transfer belongs to another agent.",
-          });
+          fail("This transfer belongs to another agent.");
           return;
         }
         if (handoff.environmentId !== environmentId) {
-          setState({
-            requestKey,
-            handoffId,
-            handoff: null,
-            loading: false,
-            error: "This transfer belongs to another environment.",
-          });
+          fail("This transfer belongs to another environment.");
           return;
         }
         setState({
@@ -94,19 +102,16 @@ export function useAgentHandoff(
           handoff,
           loading: false,
           error: null,
+          errorAt: null,
         });
       })
       .catch((error) => {
         if (cancelled) return;
-        setState({
-          requestKey,
-          handoffId,
-          handoff: null,
-          loading: false,
-          error: error instanceof Error
+        fail(
+          error instanceof Error
             ? error.message
             : "The transferred conversation could not be loaded.",
-        });
+        );
       });
     return () => {
       cancelled = true;
@@ -131,28 +136,56 @@ export function useAgentHandoff(
           handoff: null,
           loading: true,
           error: null,
+          errorAt: null,
         }
         : state;
   const ready = !handoffId || !currentState.loading;
 
+  /*
+   * Keyed on the snapshot alone. `providerMessages` is a fresh array on every
+   * streaming tick, and rebuilding the imported rows there would hand React new
+   * objects each time, re-rendering the entire imported transcript per token.
+   */
+  const importedMessages = useMemo(
+    () => (currentState.handoff
+      ? buildAgentHandoffImportedMessages(currentState.handoff)
+      : null),
+    [currentState.handoff],
+  );
+  const carrierIds = useMemo(
+    () => [currentState.handoff?.id, consumedHandoffId].filter(
+      (id): id is string => Boolean(id),
+    ),
+    [currentState.handoff, consumedHandoffId],
+  );
+
   const displayMessages = useMemo(
     () => {
+      const visible = carrierIds.length > 0
+        ? stripAgentHandoffCarriers(carrierIds, providerMessages)
+        : providerMessages;
       if (currentState.error && handoffId) {
-        const createdAt = new Date().toISOString();
         return [
           {
             id: `handoff:${handoffId}:error`,
             role: "system" as const,
             content: currentState.error,
             parts: [{ type: "text" as const, content: currentState.error }],
-            createdAt,
+            createdAt: currentState.errorAt ?? new Date(0).toISOString(),
           },
-          ...providerMessages,
+          ...visible,
         ];
       }
-      return mergeAgentHandoffDisplayMessages(currentState.handoff, providerMessages);
+      return importedMessages ? [...importedMessages, ...visible] : visible;
     },
-    [currentState.error, currentState.handoff, handoffId, providerMessages],
+    [
+      carrierIds,
+      currentState.error,
+      currentState.errorAt,
+      handoffId,
+      importedMessages,
+      providerMessages,
+    ],
   );
   const bootstrapAlreadyPresent = currentState.handoff
     ? providerMessages.some((message) =>

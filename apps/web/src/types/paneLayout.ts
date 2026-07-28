@@ -155,6 +155,13 @@ export interface TabInfo {
    * the sensitive transcript lives in backend handoff storage.
    */
   agentHandoffId?: string;
+  /**
+   * A handoff this tab dispatched whose snapshot has been deleted, retained so
+   * the bootstrap prompt stays hidden. Resuming another session detaches (and
+   * deletes) the imported transcript, but that prompt remains the destination
+   * session's first message; without the id it would render as a raw JSON blob.
+   */
+  consumedAgentHandoffId?: string;
   /** Whether this tab runs setup scripts (used to track completion) */
   isSetupTab?: boolean;
 }

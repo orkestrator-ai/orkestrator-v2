@@ -862,6 +862,44 @@ describe("CodexChatTab", () => {
     );
   });
 
+  test("initializes once when a handoff resolves during a cold start", async () => {
+    /*
+     * `launchPrompt` flips undefined → string a few milliseconds after mount.
+     * Listing it as an initialization dependency tore the effect down and
+     * re-ran it mid-connect, re-issuing server status/start and risking an
+     * orphaned session. Gate on readiness and read the prompt from a ref.
+     */
+    const handoffId = "codex-single-init";
+    // Force the cold path: with a cached client and session the effect short
+    // circuits and never reaches the work a restart would duplicate.
+    useCodexStore.setState({ clients: new Map(), sessions: new Map() });
+    const pending = deferred<any>();
+    mockGetAgentHandoff.mockImplementation(async () => pending.promise);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+    expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
+    expect(mockCreateSession).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pending.resolve(agentHandoffRecord(
+        handoffId,
+        `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`,
+      ));
+      await pending.promise;
+    });
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(1);
+  });
+
   test("does not append a handoff bootstrap to a restored destination transcript", async () => {
     const handoffId = "codex-restored-handoff";
     const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;

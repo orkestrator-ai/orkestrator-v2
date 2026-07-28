@@ -2255,14 +2255,59 @@ export class StorageService {
       await this.assertAgentHandoffBackupOwnership(handoffId, environmentId);
       const existed = Object.prototype.hasOwnProperty.call(handoffs, handoffId);
       delete handoffs[handoffId];
-      // Always rewrite: a corrupt primary may have fallen back to a backup, and
-      // an idempotent retry still needs to replace that unreadable primary.
-      await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      // Always rewrite an existing file: a corrupt primary may have fallen back
+      // to a backup, and an idempotent retry still needs to replace that
+      // unreadable primary. Do not *create* one — a client deleting a stale
+      // reference on an installation that never used the feature should leave no
+      // trace, and there is nothing to recover when no file exists.
+      if (await exists(this.agentHandoffsFile())) {
+        await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      }
       await this.scrubSensitiveJsonBackups(
         this.agentHandoffsFile(),
         (storedId) => storedId !== handoffId,
       );
       return existed;
+    });
+  }
+
+  /**
+   * Reconciles stored handoffs against the ids a pane layout still references.
+   *
+   * Deletion at tab close is a best-effort renderer call: a backend restart, a
+   * lock timeout or a kill between the layout update and the request drops it
+   * silently, and the id is gone from the layout by then, so nothing would ever
+   * retry. Without this sweep those transcripts stay on disk permanently,
+   * unreachable and unremovable short of deleting the environment. Called after
+   * pane-layout hydration, when `referencedHandoffIds` is authoritative.
+   */
+  async pruneAgentHandoffs(
+    environmentId: string,
+    referencedHandoffIds: string[],
+  ): Promise<string[]> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Agent handoff environment ID must not be blank");
+    }
+    const referenced = new Set(referencedHandoffIds.filter(isNonBlankString));
+    return this.enqueueAgentHandoffMutation(async () => {
+      const stored = await this.loadAgentHandoffEntries();
+      const isOrphan = (storedId: string, handoff: unknown): boolean =>
+        isRecord(handoff)
+        && handoff.environmentId === environmentId
+        && !referenced.has(storedId);
+      const removedIds = Object.entries(stored)
+        .filter(([storedId, handoff]) => isOrphan(storedId, handoff))
+        .map(([storedId]) => storedId);
+      if (removedIds.length === 0) return [];
+      const retained = Object.fromEntries(
+        Object.entries(stored).filter(([storedId, handoff]) => !isOrphan(storedId, handoff)),
+      );
+      await this.saveSensitiveJson(this.agentHandoffsFile(), retained);
+      await this.scrubSensitiveJsonBackups(
+        this.agentHandoffsFile(),
+        (storedId, handoff) => !isOrphan(storedId, handoff),
+      );
+      return removedIds;
     });
   }
 

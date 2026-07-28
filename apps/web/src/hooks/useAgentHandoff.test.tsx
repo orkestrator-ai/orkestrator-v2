@@ -300,4 +300,108 @@ describe("useAgentHandoff", () => {
       )
     );
   });
+
+  test("the error row keeps the timestamp it was created with", async () => {
+    mockGetAgentHandoff.mockResolvedValue(null);
+    const { result, rerender } = renderHook(
+      ({ providerMessages }: { providerMessages: NativeMessage[] }) =>
+        useAgentHandoff("handoff-missing", "codex", "env-1", providerMessages),
+      { initialProps: { providerMessages: [] as NativeMessage[] } },
+    );
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+
+    const errorRow = result.current.displayMessages[0]!;
+    expect(errorRow.id).toBe("handoff:handoff-missing:error");
+    const createdAt = errorRow.createdAt;
+
+    /*
+     * A fresh array identity on every streaming tick is normal. Deriving the
+     * timestamp during render would move it each time, so the row's displayed
+     * time — and the response duration measured from it — would drift.
+     */
+    for (let tick = 0; tick < 3; tick += 1) {
+      rerender({
+        providerMessages: [message(`streamed-${tick}`, "assistant", `chunk ${tick}`)],
+      });
+      expect(result.current.displayMessages[0]!.createdAt).toBe(createdAt);
+    }
+    // Still usable: an unloadable transfer must not strand the composer.
+    expect(result.current.ready).toBe(true);
+  });
+
+  test("imported rows keep their identity while the provider transcript streams", async () => {
+    const snapshot = handoff("handoff-stable", {
+      messages: [
+        message("source-1", "user", "Start here"),
+        message("source-2", "assistant", "Working on it"),
+      ],
+    });
+    mockGetAgentHandoff.mockResolvedValue(record(snapshot));
+
+    const { result, rerender } = renderHook(
+      ({ providerMessages }: { providerMessages: NativeMessage[] }) =>
+        useAgentHandoff("handoff-stable", "codex", "env-1", providerMessages),
+      { initialProps: { providerMessages: [] as NativeMessage[] } },
+    );
+    await waitFor(() => expect(result.current.handoff?.id).toBe("handoff-stable"));
+
+    const importedBefore = result.current.displayMessages.slice(0, 3);
+    expect(importedBefore.map((row) => row.id)).toEqual([
+      "handoff:handoff-stable:source:source-1",
+      "handoff:handoff-stable:source:source-2",
+      "handoff:handoff-stable:boundary",
+    ]);
+
+    /*
+     * Rebuilding the imported rows inside the transcript memo would hand React
+     * new objects on every token, re-rendering the whole imported history.
+     */
+    for (let tick = 0; tick < 3; tick += 1) {
+      rerender({
+        providerMessages: [message("live", "assistant", "x".repeat(tick + 1))],
+      });
+      const importedAfter = result.current.displayMessages.slice(0, 3);
+      importedAfter.forEach((row, index) => {
+        expect(row).toBe(importedBefore[index]!);
+      });
+    }
+  });
+
+  test("hides a consumed carrier whose snapshot has already been deleted", async () => {
+    const snapshot = handoff("handoff-consumed");
+    const bootstrap: NativeMessage = {
+      id: "bootstrap",
+      role: "user",
+      content: `${snapshot.bootstrapPrompt}\n\ncarry on`,
+      parts: [{ type: "text", content: `${snapshot.bootstrapPrompt}\n\ncarry on` }],
+      createdAt: "2026-07-27T12:01:00.000Z",
+    };
+    const reply = message("reply", "assistant", "Understood.");
+
+    /*
+     * This is the post-resume state: `agentHandoffId` is gone (the snapshot was
+     * deleted), but the prompt it produced is still the session's first message.
+     * No backend read should happen, and the raw frame must stay hidden.
+     */
+    const { result } = renderHook(() =>
+      useAgentHandoff(
+        undefined,
+        "codex",
+        "env-1",
+        [bootstrap, reply],
+        "handoff-consumed",
+      )
+    );
+
+    expect(mockGetAgentHandoff).not.toHaveBeenCalled();
+    expect(result.current.ready).toBe(true);
+    expect(result.current.handoff).toBeNull();
+    expect(result.current.displayMessages.map((row) => row.content)).toEqual([
+      "carry on",
+      "Understood.",
+    ]);
+    expect(
+      result.current.displayMessages.some((row) => row.content.includes("orkestrator-handoff")),
+    ).toBe(false);
+  });
 });

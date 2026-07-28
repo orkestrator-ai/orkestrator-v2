@@ -200,6 +200,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   initialAgentModel={tab.initialAgentModel}
                   initialReasoningEffort={tab.initialReasoningEffort}
                   agentHandoffId={tab.agentHandoffId}
+                  consumedAgentHandoffId={tab.consumedAgentHandoffId}
                   refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                 />
               </div>
@@ -225,6 +226,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   initialAgentModel={tab.initialAgentModel}
                   initialReasoningEffort={tab.initialReasoningEffort}
                   agentHandoffId={tab.agentHandoffId}
+                  consumedAgentHandoffId={tab.consumedAgentHandoffId}
                   refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                 />
               </div>
@@ -274,6 +276,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   initialAgentModel={tab.initialAgentModel}
                   initialReasoningEffort={tab.initialReasoningEffort}
                   agentHandoffId={tab.agentHandoffId}
+                  consumedAgentHandoffId={tab.consumedAgentHandoffId}
                   refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                 />
               </div>

@@ -59,6 +59,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUuid } from "@/lib/uuid";
 import {
   AGENT_PROVIDER_LABELS,
+  agentHandoffTranscriptDigest,
   composeAgentHandoffTransferMessages,
   createAgentHandoffSnapshot,
   forgetAgentHandoff,
@@ -836,7 +837,14 @@ export function AgentInfoButton({
       if (finalStatus === "busy" || finalStatus === "retry") {
         throw new Error("OpenCode started working while its conversation was being transferred");
       }
-      if (JSON.stringify(messagesAfterRead) !== JSON.stringify(messages)) {
+      // OpenCode exposes no revision counter, so a second read is the only way
+      // to detect a turn that started and finished inside the read window.
+      // Compare digests rather than serializing both transcripts twice: these
+      // can be tens of megabytes and this runs on the main thread.
+      if (
+        agentHandoffTranscriptDigest(messagesAfterRead)
+        !== agentHandoffTranscriptDigest(messages)
+      ) {
         throw new Error("OpenCode conversation changed while it was being transferred");
       }
       return messagesAfterRead;
@@ -870,11 +878,31 @@ export function AgentInfoButton({
       if (
         status.messageRevision !== undefined
         && statusAfterRead.messageRevision !== undefined
-        && statusAfterRead.messageRevision !== status.messageRevision
+      ) {
+        if (statusAfterRead.messageRevision !== status.messageRevision) {
+          throw new Error("Codex conversation changed while it was being transferred");
+        }
+        return messages;
+      }
+      /*
+       * `messageRevision` is optional: an older bridge or a malformed status
+       * payload drops it. Treating that as "unchanged" would fail open and
+       * transfer a torn snapshot silently, so re-read and compare instead.
+       */
+      const messagesAfterRead = (
+        await getCodexSessionMessages(
+          codexClient,
+          currentSessionId,
+          { throwOnError: true },
+        )
+      ).map(normalizeCodexNativeMessage);
+      if (
+        agentHandoffTranscriptDigest(messagesAfterRead)
+        !== agentHandoffTranscriptDigest(messages)
       ) {
         throw new Error("Codex conversation changed while it was being transferred");
       }
-      return messages;
+      return messagesAfterRead;
     }
     throw new Error(`${activeSession.providerLabel} is not connected`);
   };

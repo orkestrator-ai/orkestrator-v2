@@ -704,6 +704,45 @@ describe("OpenCodeChatTab", () => {
     );
   });
 
+  test("initializes once when a handoff resolves during a cold start", async () => {
+    /*
+     * `launchPrompt` flips undefined → string a few milliseconds after mount.
+     * Listing it as an initialization dependency tore the effect down and re-ran
+     * it mid-connect. Gate on readiness and read the prompt from a ref instead.
+     */
+    const handoffId = "opencode-single-init";
+    // Force the cold path: with a cached client and session the effect short
+    // circuits and never reaches the work a restart would duplicate.
+    useOpenCodeStore.setState({ clients: new Map(), sessions: new Map() });
+    const pending = deferred<any>();
+    mockGetAgentHandoff.mockImplementation(async () => pending.promise);
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+    expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
+    expect(mockCreateSession).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pending.resolve(agentHandoffRecord(
+        handoffId,
+        `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`,
+      ));
+      await pending.promise;
+    });
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    // A restarted effect re-issues the server probe even when the session it
+    // already created keeps the second pass off the create path.
+    expect(mockGetOpenCodeServerStatus).toHaveBeenCalledTimes(1);
+  });
+
   test("centers the compose bar with the ready title until message history exists", async () => {
     render(
       <OpenCodeChatTab

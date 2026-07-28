@@ -5646,6 +5646,24 @@ export function createCommandRegistry(
         asString(environmentId, "environmentId"),
       ),
   );
+  register(
+    "prune_agent_handoffs",
+    ({ environmentId, referencedHandoffIds }, { storage }) => {
+      // Deliberately strict rather than `asStringArray`, which coerces a
+      // non-array to `[]`. Here that would mean "nothing is referenced" and
+      // delete every transcript in the environment.
+      if (!Array.isArray(referencedHandoffIds)) {
+        throw new Error("Expected referencedHandoffIds to be an array");
+      }
+      if (referencedHandoffIds.some((id) => typeof id !== "string")) {
+        throw new Error("Expected referencedHandoffIds to contain only strings");
+      }
+      return storage.pruneAgentHandoffs(
+        asString(environmentId, "environmentId"),
+        referencedHandoffIds as string[],
+      );
+    },
+  );
 
   register("create_terminal_session", async ({ containerId, cols, rows, user, trackEnvironmentActivity }, { storage }) => {
     const resolvedContainerId = asString(containerId, "containerId");

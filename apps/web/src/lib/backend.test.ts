@@ -1072,6 +1072,28 @@ describe("backend command wrapper coverage", () => {
     );
   });
 
+  test("forwards backend-owned merge and cleanup intent as one command", async () => {
+    const result = {
+      outcome: "pending" as const,
+      cleanupOutcome: "pending" as const,
+    };
+    invokeMock.mockResolvedValueOnce(result);
+
+    await expect(backendWrappers.mergeEnvironmentPr(
+      "env-1",
+      "rebase",
+      true,
+      true,
+    )).resolves.toEqual(result);
+
+    expect(invokeMock).toHaveBeenLastCalledWith("merge_environment_pr", {
+      environmentId: "env-1",
+      method: "rebase",
+      deleteBranch: true,
+      cleanupAfterMerge: true,
+    });
+  });
+
   test("forwards explicit committed-only Git status requests", async () => {
     await backendWrappers.getGitStatus("container-1", "base-sha", false);
     expect(invokeMock).toHaveBeenLastCalledWith("get_git_status", {

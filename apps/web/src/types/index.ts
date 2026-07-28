@@ -75,6 +75,10 @@ export interface Environment {
   lifecycleOperationStartedAt?: string;
   /** Durable deletion tombstone; deletion resumes or remains visible after reload. */
   deletionRequestedAt?: string;
+  /** Durable backend intent to delete this environment after a confirmed merge. */
+  cleanupAfterMergeRequestedAt?: string;
+  /** Last backend cleanup failure, retained so recovery UI can rehydrate. */
+  cleanupAfterMergeError?: string;
   name: string;
   /** Git branch name (defaults to "main" for legacy environments via serde default) */
   branch: string;

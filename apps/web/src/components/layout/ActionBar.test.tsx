@@ -31,19 +31,32 @@ const realContextsSnapshot = { ...realContexts };
 const realBackendSnapshot = { ...realBackend };
 const realKanbanStoreSnapshot = { ...realKanbanStore };
 
-type MergeOutcome = { outcome: "merged" | "pending" | "unknown" };
+type MergeOutcome = {
+  outcome: "merged" | "pending" | "unknown";
+  cleanupOutcome: "not-requested" | "pending" | "completed" | "failed";
+  cleanupError?: string;
+};
 
 const deleteEnvironmentMock = mock(async (_environmentId: string) => {});
+const mergeEnvironmentPrMock = mock(async (
+  _environmentId: string,
+  _method: string,
+  _deleteBranch: boolean,
+  _cleanupAfterMerge: boolean,
+): Promise<MergeOutcome> => ({
+  outcome: "merged",
+  cleanupOutcome: "not-requested",
+}));
 const mergePrMock = mock(async (
   _containerId: string,
   _method: string,
   _deleteBranch: boolean,
-): Promise<MergeOutcome> => ({ outcome: "merged" }));
+): Promise<{ outcome: "merged" | "pending" | "unknown" }> => ({ outcome: "merged" }));
 const mergePrLocalMock = mock(async (
   _environmentId: string,
   _method: string,
   _deleteBranch: boolean,
-): Promise<MergeOutcome> => ({ outcome: "merged" }));
+): Promise<{ outcome: "merged" | "pending" | "unknown" }> => ({ outcome: "merged" }));
 const openInEditorMock = mock(async (_containerId: string, _editor: string) => {});
 const openLocalInEditorMock = mock(async (_worktreePath: string, _editor: string) => {});
 const readContainerFileMock = mock(async (_containerId: string, _path: string) => ({ content: "{}" }));
@@ -172,16 +185,27 @@ mock.module("@/components/ui/alert-dialog", () => ({
         <div data-testid="alert-dialog-root">{children}</div>
       </MockAlertDialogState.Provider>
     ) : null,
-  AlertDialogAction: ({
+  AlertDialogAction: function MockAlertDialogAction({
     children,
     className,
     disabled,
     onClick,
-  }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button className={className} disabled={disabled} onClick={onClick} type="button">
-      {children}
-    </button>
-  ),
+  }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+    const state = useContext(MockAlertDialogState);
+    return (
+      <button
+        className={className}
+        disabled={disabled}
+        onClick={(event) => {
+          onClick?.(event);
+          state?.onOpenChange?.(false);
+        }}
+        type="button"
+      >
+        {children}
+      </button>
+    );
+  },
   AlertDialogCancel: ({
     children,
     disabled,
@@ -465,6 +489,7 @@ mock.module("@/contexts", () => ({
 }));
 
 mock.module("@/lib/backend", () => ({
+  mergeEnvironmentPr: mergeEnvironmentPrMock,
   mergePr: mergePrMock,
   mergePrLocal: mergePrLocalMock,
   openInEditor: openInEditorMock,
@@ -509,6 +534,7 @@ beforeEach(() => {
   console.log = mock(() => {}) as typeof console.log;
   console.warn = mock(() => {}) as typeof console.warn;
   deleteEnvironmentMock.mockReset();
+  mergeEnvironmentPrMock.mockReset();
   mergePrMock.mockReset();
   mergePrLocalMock.mockReset();
   openInEditorMock.mockReset();
@@ -537,6 +563,15 @@ beforeEach(() => {
   updateProjectMock.mockReset();
   updateEnvironmentMock.mockReset();
   recreateEnvironmentMock.mockReset();
+  mergeEnvironmentPrMock.mockImplementation(async (
+    _environmentId,
+    _method,
+    _deleteBranch,
+    cleanupAfterMerge,
+  ) => ({
+    outcome: "merged",
+    cleanupOutcome: cleanupAfterMerge ? "completed" : "not-requested",
+  }));
   mergePrMock.mockImplementation(async () => ({ outcome: "merged" }));
   mergePrLocalMock.mockImplementation(async () => ({ outcome: "merged" }));
   openInEditorMock.mockImplementation(async () => {});
@@ -1899,7 +1934,7 @@ describe("ActionBar pull request actions", () => {
     expect(mergeButton.querySelector(".animate-spin")).toBeTruthy();
   });
 
-  test("rehydrates an in-progress deletion from the environment lifecycle marker", () => {
+  test("rehydrates an in-progress deletion by disabling cleanup", () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "merged",
@@ -1908,11 +1943,10 @@ describe("ActionBar pull request actions", () => {
     };
     render(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
-
-    const deleteButton = screen.getByRole("button", { name: "Deleting..." });
-    expect((deleteButton as HTMLButtonElement).disabled).toBe(true);
-    expect(deleteButton.querySelector(".animate-spin")).toBeTruthy();
+    const cleanupButton = screen.getByRole("button", { name: "Clean Up" }) as HTMLButtonElement;
+    expect(cleanupButton.disabled).toBe(true);
+    fireEvent.click(cleanupButton);
+    expect(screen.queryByRole("button", { name: "Delete Environment" })).toBeNull();
   });
 
   test("opens an active pull request in the browser", () => {
@@ -2135,38 +2169,57 @@ describe("ActionBar successful cleanup and merge actions", () => {
     );
   });
 
-  test("cleans up only after a merge is confirmed successful", async () => {
+  test("submits merge and cleanup as one backend-owned workflow", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     let resolveMerge!: (outcome: MergeOutcome) => void;
-    mergePrMock.mockImplementationOnce(() => new Promise((resolve) => {
+    mergeEnvironmentPrMock.mockImplementationOnce(() => new Promise((resolve) => {
       resolveMerge = resolve;
     }));
     render(<ActionBar />);
 
     confirmMergeAndCleanup();
 
-    await waitFor(() => expect(mergePrMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+      "env-1",
+      "squash",
+      true,
+      true,
+    ));
     expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(mergePrLocalMock).not.toHaveBeenCalled();
 
-    resolveMerge({ outcome: "merged" });
+    resolveMerge({ outcome: "merged", cleanupOutcome: "completed" });
 
-    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
+    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith(
+      "Branch merged",
+      expect.objectContaining({ id: "branch-merged-env-1" }),
+    ));
+    expect(deleteEnvironmentMock).not.toHaveBeenCalled();
   });
 
-  test("does not clean up when the merge remains pending", async () => {
+  test("leaves pending cleanup orchestration with the backend", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
-    mergePrMock.mockResolvedValueOnce({ outcome: "pending" });
+    mergeEnvironmentPrMock.mockResolvedValueOnce({
+      outcome: "pending",
+      cleanupOutcome: "pending",
+    });
     render(<ActionBar />);
 
     confirmMergeAndCleanup();
 
-    await waitFor(() => expect(setModeMergePendingMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+      "env-1",
+      "squash",
+      true,
+      true,
+    ));
     expect(deleteEnvironmentMock).not.toHaveBeenCalled();
   });
 
   test("does not clean up when the merge fails", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
-    mergePrMock.mockRejectedValueOnce(new Error("merge failed"));
+    mergeEnvironmentPrMock.mockRejectedValueOnce(new Error("merge failed"));
     render(<ActionBar />);
 
     confirmMergeAndCleanup();
@@ -2178,27 +2231,30 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
   test("offers the regular cleanup retry when post-merge cleanup fails", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
-    deleteEnvironmentMock.mockRejectedValueOnce(new Error("delete failed"));
+    mergeEnvironmentPrMock.mockResolvedValueOnce({
+      outcome: "merged",
+      cleanupOutcome: "failed",
+      cleanupError: "delete failed",
+    });
     render(<ActionBar />);
 
     confirmMergeAndCleanup();
 
-    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
     const errorAlert = await waitFor(() => findErrorAlert("Failed to delete environment:"));
     expect(errorAlert.textContent).toContain("delete failed");
     expect(screen.getByRole("button", { name: "Delete Environment" })).toBeTruthy();
+    expect(deleteEnvironmentMock).not.toHaveBeenCalled();
   });
 
   test("keeps a cleanup retry tied to the environment that initiated the merge", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     let resolveMerge!: (outcome: MergeOutcome) => void;
-    mergePrMock.mockImplementationOnce(() => new Promise((resolve) => {
+    mergeEnvironmentPrMock.mockImplementationOnce(() => new Promise((resolve) => {
       resolveMerge = resolve;
     }));
-    deleteEnvironmentMock.mockRejectedValueOnce(new Error("delete failed"));
     const { rerender } = render(<ActionBar />);
     confirmMergeAndCleanup();
-    await waitFor(() => expect(mergePrMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledTimes(1));
 
     currentEnvironment = {
       ...selectedEnvironment,
@@ -2211,7 +2267,11 @@ describe("ActionBar successful cleanup and merge actions", () => {
     };
     currentSelectedEnvironmentId = "env-2";
     rerender(<ActionBar />);
-    resolveMerge({ outcome: "merged" });
+    resolveMerge({
+      outcome: "merged",
+      cleanupOutcome: "failed",
+      cleanupError: "delete failed",
+    });
 
     await waitFor(() => expect(findErrorAlert("Failed to delete environment:")).toBeTruthy());
     expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
@@ -2220,41 +2280,25 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
 
-    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledTimes(2));
-    expect(deleteEnvironmentMock.mock.calls).toEqual([["env-1"], ["env-1"]]);
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1));
+    expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1");
   });
 
-  test("merges a container PR and persists its merged state", async () => {
+  test("uses one environment-scoped command for container and local environments", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
-    render(<ActionBar />);
+    const { rerender } = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
     fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
 
-    await waitFor(() => expect(mergePrMock).toHaveBeenCalledWith(
-      "container-1",
+    await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+      "env-1",
       "squash",
       true,
+      false,
     ));
-    expect(setEnvironmentPrBackendMock).toHaveBeenCalledWith(
-      "env-1",
-      "https://github.com/org/repo/pull/1",
-      "merged",
-      false,
-    );
-    expect(setEnvironmentPRStoreMock).toHaveBeenCalledWith(
-      "env-1",
-      "https://github.com/org/repo/pull/1",
-      "merged",
-      false,
-    );
-    expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
-      description: "feature/very-long-error",
-      id: "branch-merged-env-1",
-    });
-  });
 
-  test("uses the local merge path for a ready worktree", async () => {
+    mergeEnvironmentPrMock.mockClear();
     currentEnvironment = {
       ...selectedEnvironment,
       environmentType: "local",
@@ -2263,21 +2307,94 @@ describe("ActionBar successful cleanup and merge actions", () => {
       worktreePath: "/tmp/repo-worktree",
       prState: "open",
     };
-    render(<ActionBar />);
+    rerender(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
     fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
 
-    await waitFor(() => expect(mergePrLocalMock).toHaveBeenCalledWith(
+    await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
       "env-1",
       "squash",
       true,
+      false,
     ));
+    expect(mergePrLocalMock).not.toHaveBeenCalled();
     expect(mergePrMock).not.toHaveBeenCalled();
-    expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
-      description: "feature/very-long-error",
-      id: "branch-merged-env-1",
-    });
+  });
+
+  test("pins ordinary cleanup to the environment whose dialog was opened", async () => {
+    const { rerender } = render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
+
+    currentEnvironment = {
+      ...selectedEnvironment,
+      id: "env-2",
+      name: "second-env",
+      prState: "merged",
+    };
+    currentSelectedEnvironmentId = "env-2";
+    rerender(<ActionBar />);
+
+    expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
+      'environment "feature-env"',
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
+  });
+
+  test("keeps the cleanup dialog open with the latest error after repeated failures", async () => {
+    deleteEnvironmentMock
+      .mockRejectedValueOnce(new Error("first failure"))
+      .mockRejectedValueOnce(new Error("second failure"));
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+    await waitFor(() => expect(findErrorAlert("Failed to delete environment:").textContent)
+      .toContain("first failure"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+    await waitFor(() => expect(findErrorAlert("Failed to delete environment:").textContent)
+      .toContain("second failure"));
+    expect(screen.getByRole("button", { name: "Delete Environment" })).toBeTruthy();
+    expect(deleteEnvironmentMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("disables cleanup controls and suppresses duplicates while deletion is pending", async () => {
+    let resolveDelete!: () => void;
+    deleteEnvironmentMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    }));
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+
+    const deletingButton = await screen.findByRole("button", { name: "Deleting..." });
+    expect((deletingButton as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(deletingButton);
+    expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1);
+
+    resolveDelete();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Deleting..." })).toBeNull());
+  });
+
+  test("rehydrates a persisted backend cleanup failure", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      cleanupAfterMergeRequestedAt: "2026-01-02T00:00:00.000Z",
+      cleanupAfterMergeError: "persisted cleanup failure",
+      deletionRequestedAt: "2026-01-02T00:00:01.000Z",
+      lifecycleOperation: "deleting",
+    };
+    render(<ActionBar />);
+
+    const errorAlert = await waitFor(() => findErrorAlert("Failed to delete environment:"));
+    expect(errorAlert.textContent).toContain("persisted cleanup failure");
+    expect((screen.getByRole("button", { name: "Delete Environment" }) as HTMLButtonElement).disabled)
+      .toBe(false);
   });
 });
 
@@ -2347,7 +2464,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 });
 
 describe("ActionBar merge completion", () => {
-  test("merges a container PR and leaves task reconciliation to the backend monitor", async () => {
+  test("leaves merge persistence and task reconciliation to the backend", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
@@ -2362,49 +2479,21 @@ describe("ActionBar merge completion", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
 
     await waitFor(() => {
-      expect(mergePrMock).toHaveBeenCalledWith("container-1", "squash", true);
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+        "env-1",
+        "squash",
+        true,
+        false,
+      );
       expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
         description: "feature/very-long-error",
         id: "branch-merged-env-1",
       });
-      expect(setEnvironmentPrBackendMock).toHaveBeenCalledWith(
-        "env-1",
-        "https://github.com/org/repo/pull/1",
-        "merged",
-        false,
-      );
-      expect(setEnvironmentPRStoreMock).toHaveBeenCalledWith(
-        "env-1",
-        "https://github.com/org/repo/pull/1",
-        "merged",
-        false,
-      );
     });
+    expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
+    expect(setEnvironmentPRStoreMock).not.toHaveBeenCalled();
     expect(addCommentMock).not.toHaveBeenCalled();
     expect(updateTaskMock).not.toHaveBeenCalled();
-  });
-
-  test("merges a local PR through the environment-scoped backend", async () => {
-    currentEnvironment = {
-      ...selectedEnvironment,
-      environmentType: "local",
-      containerId: null,
-      worktreePath: "/tmp/feature-env",
-      prState: "open",
-    };
-    render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
-    fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
-
-    await waitFor(() => {
-      expect(mergePrLocalMock).toHaveBeenCalledWith("env-1", "squash", true);
-    });
-    expect(mergePrMock).not.toHaveBeenCalled();
-    expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
-      description: "feature/very-long-error",
-      id: "branch-merged-env-1",
-    });
   });
 
   test("keeps pending merges open without recording merge completion", async () => {
@@ -2413,7 +2502,10 @@ describe("ActionBar merge completion", () => {
       task: { prMergeCommented: false },
       taskId: "task-1",
     };
-    mergePrMock.mockResolvedValueOnce({ outcome: "pending" });
+    mergeEnvironmentPrMock.mockResolvedValueOnce({
+      outcome: "pending",
+      cleanupOutcome: "not-requested",
+    });
     render(<ActionBar />);
 
     confirmMerge();
@@ -2422,7 +2514,6 @@ describe("ActionBar merge completion", () => {
       description: "feature/very-long-error",
       id: "branch-merge-submitted-env-1",
     }));
-    expect(setModeMergePendingMock).toHaveBeenCalledTimes(1);
     expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
     expect(setEnvironmentPRStoreMock).not.toHaveBeenCalled();
     expect(addCommentMock).not.toHaveBeenCalled();
@@ -2435,7 +2526,10 @@ describe("ActionBar merge completion", () => {
       task: { prMergeCommented: false },
       taskId: "task-1",
     };
-    mergePrMock.mockResolvedValueOnce({ outcome: "unknown" });
+    mergeEnvironmentPrMock.mockResolvedValueOnce({
+      outcome: "unknown",
+      cleanupOutcome: "not-requested",
+    });
     render(<ActionBar />);
 
     confirmMerge();
@@ -2444,34 +2538,21 @@ describe("ActionBar merge completion", () => {
       description: "feature/very-long-error",
       id: "branch-merge-submitted-env-1",
     }));
-    expect(setModeMergePendingMock).toHaveBeenCalledTimes(1);
     expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
     expect(setEnvironmentPRStoreMock).not.toHaveBeenCalled();
     expect(addCommentMock).not.toHaveBeenCalled();
     expect(updateTaskMock).not.toHaveBeenCalled();
   });
 
-  test("completes a merge when no task is associated", async () => {
-    currentEnvironment = { ...selectedEnvironment, prState: "open" };
-    currentTaskAssociation = { task: undefined, taskId: undefined };
-    render(<ActionBar />);
-
-    confirmMerge();
-
-    await waitFor(() => expect(setEnvironmentPrBackendMock).toHaveBeenCalledTimes(1));
-    expect(addCommentMock).not.toHaveBeenCalled();
-    expect(updateTaskMock).not.toHaveBeenCalled();
-  });
-
-  test("finishes an in-flight merge for the environment that initiated it after selection changes", async () => {
+  test("keeps completion presentation tied to the initiating environment after selection changes", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     let resolveMerge!: (outcome: MergeOutcome) => void;
-    mergePrMock.mockImplementationOnce(() => new Promise((resolve) => {
+    mergeEnvironmentPrMock.mockImplementationOnce(() => new Promise((resolve) => {
       resolveMerge = resolve;
     }));
     const { rerender } = render(<ActionBar />);
     confirmMerge();
-    await waitFor(() => expect(mergePrMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledTimes(1));
 
     currentEnvironment = {
       ...selectedEnvironment,
@@ -2483,75 +2564,48 @@ describe("ActionBar merge completion", () => {
     };
     currentSelectedEnvironmentId = "env-2";
     rerender(<ActionBar />);
-    resolveMerge({ outcome: "merged" });
+    resolveMerge({ outcome: "merged", cleanupOutcome: "not-requested" });
 
-    await waitFor(() => expect(setEnvironmentPrBackendMock).toHaveBeenCalledWith(
-      "env-1",
-      "https://github.com/org/repo/pull/1",
-      "merged",
-      false,
-    ));
-    expect(setEnvironmentPRStoreMock).toHaveBeenCalledWith(
-      "env-1",
-      "https://github.com/org/repo/pull/1",
-      "merged",
-      false,
-    );
-    expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
+    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
       description: "feature/very-long-error",
       id: "branch-merged-env-1",
-    });
+    }));
   });
 
-  test("finishes merge side effects after the initiating action bar unmounts", async () => {
+  test("dispatches durable cleanup intent before the initiating action bar unmounts", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     let resolveMerge!: (outcome: MergeOutcome) => void;
-    mergePrMock.mockImplementationOnce(() => new Promise((resolve) => {
+    mergeEnvironmentPrMock.mockImplementationOnce(() => new Promise((resolve) => {
       resolveMerge = resolve;
     }));
     const { unmount } = render(<ActionBar />);
-    confirmMerge();
-    await waitFor(() => expect(mergePrMock).toHaveBeenCalledTimes(1));
+    confirmMergeAndCleanup();
+    await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+      "env-1",
+      "squash",
+      true,
+      true,
+    ));
 
     unmount();
-    resolveMerge({ outcome: "merged" });
-
-    await waitFor(() => expect(setEnvironmentPrBackendMock).toHaveBeenCalledWith(
-      "env-1",
-      "https://github.com/org/repo/pull/1",
-      "merged",
-      false,
-    ));
-    expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
-      description: "feature/very-long-error",
-      id: "branch-merged-env-1",
-    });
+    resolveMerge({ outcome: "merged", cleanupOutcome: "completed" });
+    await Promise.resolve();
+    expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+    expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
   });
 
-  test("keeps a successful merge complete when state persistence fails", async () => {
+  test("disables a newly visible cleanup action while backend merge cleanup is active", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      prState: "open",
+      prState: "merged",
+      lifecycleOperation: "merging",
     };
-    currentTaskAssociation = {
-      task: { prMergeCommented: false },
-      taskId: "task-1",
-    };
-    setEnvironmentPrBackendMock.mockRejectedValueOnce(new Error("save failed"));
     render(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
-    fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
-
-    await waitFor(() => {
-      expect(console.warn).toHaveBeenCalledWith(
-        "[ActionBar] Failed to save merged state:",
-        expect.any(Error),
-      );
-    });
-    expect(mergePrMock).toHaveBeenCalledTimes(1);
-    expect(addCommentMock).not.toHaveBeenCalled();
-    expect(updateTaskMock).not.toHaveBeenCalled();
+    const cleanupButton = screen.getByRole("button", { name: "Clean Up" }) as HTMLButtonElement;
+    expect(cleanupButton.disabled).toBe(true);
+    fireEvent.click(cleanupButton);
+    expect(screen.queryByRole("button", { name: "Delete Environment" })).toBeNull();
   });
 });
 
@@ -2602,7 +2656,7 @@ describe("ActionBar error dialogs", () => {
       ...selectedEnvironment,
       prState: "open",
     };
-    mergePrMock.mockRejectedValueOnce(longError("merge failed"));
+    mergeEnvironmentPrMock.mockRejectedValueOnce(longError("merge failed"));
 
     render(<ActionBar />);
 
@@ -2612,7 +2666,12 @@ describe("ActionBar error dialogs", () => {
     const errorAlert = await waitFor(() => findErrorAlert("Failed to merge PR:"));
     const dialogContent = screen.getByTestId("alert-dialog-content");
 
-    expect(mergePrMock).toHaveBeenCalledWith("container-1", "squash", true);
+    expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+      "env-1",
+      "squash",
+      true,
+      false,
+    );
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(dialogContent.className).toContain("max-h-[calc(100vh-2rem)]");
     expect(dialogContent.className).toContain("overflow-hidden");
@@ -2639,14 +2698,20 @@ describe("ActionBar error dialogs", () => {
       worktreePath: "/tmp/feature-env",
       prState: "open",
     };
-    mergePrLocalMock.mockRejectedValueOnce(new Error("local merge failed"));
+    mergeEnvironmentPrMock.mockRejectedValueOnce(new Error("local merge failed"));
     render(<ActionBar />);
 
     confirmMerge();
 
     const errorAlert = await waitFor(() => findErrorAlert("Failed to merge PR:"));
     expect(errorAlert.textContent).toContain("local merge failed");
-    expect(mergePrLocalMock).toHaveBeenCalledWith("env-1", "squash", true);
+    expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
+      "env-1",
+      "squash",
+      true,
+      false,
+    );
+    expect(mergePrLocalMock).not.toHaveBeenCalled();
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
@@ -2654,7 +2719,7 @@ describe("ActionBar error dialogs", () => {
 
   test("uses generic merge guidance for unknown rejection values", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
-    mergePrMock.mockRejectedValueOnce({ reason: "unknown backend failure" });
+    mergeEnvironmentPrMock.mockRejectedValueOnce({ reason: "unknown backend failure" });
     render(<ActionBar />);
 
     confirmMerge();

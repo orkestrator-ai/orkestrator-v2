@@ -130,6 +130,7 @@ interface PrMonitorEntry {
 
 export class PrMonitorService {
   private readonly entries = new Map<string, PrMonitorEntry>();
+  private readonly reconciliationOperations = new Map<string, Promise<void>>();
   private readonly options: Required<
     Pick<PrMonitorServiceOptions, "effects" | "emit" | "now" | "monotonicNow" | "schedule" | "cancel">
   > & { onWarning?: PrMonitorServiceOptions["onWarning"] };
@@ -218,6 +219,57 @@ export class PrMonitorService {
     const entry = this.entries.get(environmentId);
     if (!entry || !entry.active) return;
     this.scheduleNext(entry, 0);
+  }
+
+  /**
+   * Applies a terminal result that another backend operation already confirmed.
+   *
+   * Merge commands use this before deleting an environment, so linked-task
+   * reconciliation is awaited and cannot be lost when deletion immediately
+   * untracks the environment. Detection and PR persistence remain the caller's
+   * responsibility.
+   */
+  async reconcileTerminal(
+    target: PrMonitorTarget,
+    detection: PrDetection,
+  ): Promise<void> {
+    if (detection.state !== "merged" && detection.state !== "closed") {
+      throw new Error(`Expected terminal PR state, received: ${detection.state}`);
+    }
+
+    const reconciledTarget: PrMonitorTarget = {
+      ...target,
+      prUrl: detection.url,
+      prState: detection.state,
+      hasMergeConflicts: detection.hasMergeConflicts,
+    };
+    let entry = this.entries.get(target.environmentId);
+    let restorePaused = false;
+    if (entry) {
+      this.replaceTarget(entry, reconciledTarget);
+      if (!entry.active) {
+        entry.active = true;
+        restorePaused = true;
+      }
+    } else {
+      entry = this.track(reconciledTarget, "normal", {
+        immediate: false,
+        announce: false,
+      });
+    }
+
+    const generation = entry.generation;
+    try {
+      await this.reconcileTask(entry, detection, generation);
+    } finally {
+      if (
+        restorePaused
+        && this.entries.get(target.environmentId) === entry
+        && entry.active
+      ) {
+        this.pause(target.environmentId);
+      }
+    }
   }
 
   /**
@@ -574,6 +626,28 @@ export class PrMonitorService {
    * in-memory progress — from posting the comment twice.
    */
   private async reconcileTask(
+    entry: PrMonitorEntry,
+    detection: PrDetection,
+    generation: number,
+  ): Promise<void> {
+    const environmentId = entry.target.environmentId;
+    const previous = this.reconciliationOperations.get(environmentId);
+    const operation = previous
+      ? previous
+        .catch(() => undefined)
+        .then(() => this.reconcileTaskUnlocked(entry, detection, generation))
+      : this.reconcileTaskUnlocked(entry, detection, generation);
+    this.reconciliationOperations.set(environmentId, operation);
+    try {
+      await operation;
+    } finally {
+      if (this.reconciliationOperations.get(environmentId) === operation) {
+        this.reconciliationOperations.delete(environmentId);
+      }
+    }
+  }
+
+  private async reconcileTaskUnlocked(
     entry: PrMonitorEntry,
     detection: PrDetection,
     generation: number,

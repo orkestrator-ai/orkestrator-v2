@@ -113,6 +113,14 @@ export interface Environment {
    * continue deletion, but background work must not resume in the meantime.
    */
   deletionRequestedAt?: string;
+  /**
+   * Persisted before dispatching a merge whose confirmed success must be
+   * followed by environment deletion. The backend owns reconciliation so the
+   * follow-up survives renderer reloads and inactive environments.
+   */
+  cleanupAfterMergeRequestedAt?: string;
+  /** Last backend cleanup failure retained for rehydration and manual retry. */
+  cleanupAfterMergeError?: string;
   /** Backend-owned long-running operation currently affecting this environment. */
   lifecycleOperation?: EnvironmentLifecycleOperation;
   lifecycleOperationStartedAt?: string;

@@ -423,6 +423,10 @@ function createContext(
       deleteFileDraftsByEnvironment: mock(async () => undefined),
       deleteAgentHandoffsByEnvironment: mock(async () => [] as string[]),
       deletePaneLayout: mock(async () => undefined),
+      getKanbanTasks: mock(async () => []),
+      listBuildPipelines: mock(async () => []),
+      updateKanbanTask: mock(async () => undefined),
+      addKanbanComment: mock(async () => undefined),
       getProject: mock(async (projectId: string) => {
         if (options.project) return options.project.id === projectId ? options.project : null;
         return {
@@ -7544,6 +7548,364 @@ exit 1
         { environmentId: environment.id, method: "merge", deleteBranch: true },
         context,
       )).rejects.toThrow("HTTP 403: Resource protected");
+    });
+  });
+
+  test("persists merge cleanup intent before dispatch and completes local cleanup in the backend", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-cleanup-local-");
+    const environment = createEnvironment({
+      id: "env-merge-cleanup-local",
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "open",
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+    const task = {
+      id: "task-merge-cleanup",
+      environmentId: environment.id,
+      status: "in-progress",
+      prUrl: environment.prUrl,
+      prState: "open",
+      prMergeCommented: false,
+      comments: [] as Array<{ text: string }>,
+    };
+    context.storage.getKanbanTasks = mock(async () => [task]) as typeof context.storage.getKanbanTasks;
+    context.storage.updateKanbanTask = mock(async (
+      _taskId: string,
+      taskUpdates: Record<string, unknown>,
+    ) => ({ ...task, ...taskUpdates })) as typeof context.storage.updateKanbanTask;
+    context.storage.addKanbanComment = mock(async (
+      _taskId: string,
+      text: string,
+    ) => ({ ...task, comments: [{ text }] })) as typeof context.storage.addKanbanComment;
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ]; then
+  printf '%s\\n' '{"head":{"ref":"feature/backend-cleanup","repo":{"full_name":"acme/repo"}}}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/backend-cleanup" ]; then
+  exit 0
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("merge_environment_pr")?.({
+        environmentId: environment.id,
+        method: "squash",
+        deleteBranch: true,
+        cleanupAfterMerge: true,
+      }, context)).resolves.toEqual({
+        outcome: "merged",
+        cleanupOutcome: "completed",
+      });
+
+      const intentIndex = updates.findIndex((update) =>
+        typeof update.cleanupAfterMergeRequestedAt === "string"
+      );
+      const mergingIndex = updates.findIndex((update) =>
+        update.lifecycleOperation === "merging"
+      );
+      expect(intentIndex).toBeGreaterThanOrEqual(0);
+      expect(mergingIndex).toBeGreaterThan(intentIndex);
+      expect(updates).toContainEqual(expect.objectContaining({
+        prState: "merged",
+        hasMergeConflicts: false,
+      }));
+      expect(context.storage.updateKanbanTask).toHaveBeenCalledWith(
+        task.id,
+        { status: "review" },
+      );
+      expect(context.storage.addKanbanComment).toHaveBeenCalledWith(
+        task.id,
+        `🎉 PR merged: ${environment.prUrl}`,
+      );
+      expect(context.storage.updateKanbanTask).toHaveBeenLastCalledWith(
+        task.id,
+        {
+          prUrl: environment.prUrl,
+          prState: "merged",
+          prMergeCommented: true,
+        },
+      );
+      await expect(context.storage.getEnvironment(environment.id)).resolves.toBeNull();
+
+      const ghLog = await fs.readFile(logPath, "utf8");
+      expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash");
+      expect(ghLog).toContain("api repos/acme/repo/git/refs/heads/feature/backend-cleanup --method DELETE");
+    });
+  });
+
+  test("keeps an unconfirmed container merge cleanup pending without deleting the environment", async () => {
+    const environment = createEnvironment({
+      id: "env-merge-cleanup-container-pending",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: "container-pending",
+      status: "stopped",
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "open",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+command=""
+for arg in "$@"; do command="$arg"; done
+command="$(printf '%s\\n' "$command" | tail -n 1)"
+if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
+  printf '%s\\n' 'https://github.com/acme/repo/pull/42'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'isDraft' '--jq' '.isDraft'" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--rebase'" ]; then
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'state' '--jq' '.state'" ]; then
+  printf '%s\\n' 'OPEN'
+  exit 0
+fi
+printf 'unexpected docker command: %s\\n' "$command" >&2
+exit 1
+`, async (logs) => {
+      const result = await commands.get("merge_environment_pr")?.({
+        environmentId: environment.id,
+        method: "rebase",
+        deleteBranch: true,
+        cleanupAfterMerge: true,
+      }, context);
+      expect(result).toEqual({
+        outcome: "pending",
+        cleanupOutcome: "pending",
+      });
+
+      await expect(context.storage.getEnvironment(environment.id)).resolves.toMatchObject({
+        cleanupAfterMergeRequestedAt: expect.any(String),
+        cleanupAfterMergeError: null,
+        prState: "open",
+      });
+      const execLog = await fs.readFile(logs.exec, "utf8");
+      expect(execLog).toContain("'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--rebase'");
+      expect(execLog).not.toContain("--delete-branch");
+      expect(existsSync(logs.rm)).toBe(false);
+    });
+  });
+
+  test("persists safe cleanup failure details and permits a backend deletion retry", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-cleanup-retry-");
+    const environment = createEnvironment({
+      id: "env-merge-cleanup-retry",
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "open",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const removeEnvironment = context.storage.removeEnvironment.bind(context.storage);
+    context.storage.removeEnvironment = mock(async () => {
+      throw { reason: "untrusted backend rejection" };
+    });
+
+    await withFakeGh(`#!/bin/sh
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ]; then
+  printf '%s\\n' '{"head":{"ref":"feature/retry","repo":{"full_name":"acme/repo"}}}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/retry" ]; then
+  exit 0
+fi
+exit 1
+`, async () => {
+      await expect(commands.get("merge_environment_pr")?.({
+        environmentId: environment.id,
+        method: "squash",
+        deleteBranch: true,
+        cleanupAfterMerge: true,
+      }, context)).resolves.toEqual({
+        outcome: "merged",
+        cleanupOutcome: "failed",
+        cleanupError: "An unexpected error occurred",
+      });
+      await expect(context.storage.getEnvironment(environment.id)).resolves.toMatchObject({
+        deletionRequestedAt: expect.any(String),
+        cleanupAfterMergeRequestedAt: expect.any(String),
+        cleanupAfterMergeError: "An unexpected error occurred",
+      });
+
+      context.storage.removeEnvironment = removeEnvironment;
+      await expect(commands.get("delete_environment")?.({
+        environmentId: environment.id,
+      }, context)).resolves.toBeUndefined();
+      await expect(context.storage.getEnvironment(environment.id)).resolves.toBeNull();
+    });
+  });
+
+  test("continues confirmed cleanup when persisting merged PR state fails once", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-cleanup-persist-fail-");
+    const environment = createEnvironment({
+      id: "env-merge-cleanup-persist-fail",
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "open",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const updateEnvironment = context.storage.updateEnvironment.bind(context.storage);
+    let rejectedMergedState = false;
+    context.storage.updateEnvironment = mock(async (
+      environmentId: string,
+      updates: Partial<Environment>,
+    ) => {
+      if (updates.prState === "merged" && !rejectedMergedState) {
+        rejectedMergedState = true;
+        throw new Error("storage temporarily unavailable");
+      }
+      return updateEnvironment(environmentId, updates);
+    });
+
+    await withFakeGh(`#!/bin/sh
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ]; then
+  printf '%s\\n' '{"head":{"ref":"feature/persist-fail","repo":{"full_name":"acme/repo"}}}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/persist-fail" ]; then
+  exit 0
+fi
+exit 1
+`, async () => {
+      await expect(commands.get("merge_environment_pr")?.({
+        environmentId: environment.id,
+        method: "merge",
+        deleteBranch: true,
+        cleanupAfterMerge: true,
+      }, context)).resolves.toEqual({
+        outcome: "merged",
+        cleanupOutcome: "completed",
+      });
+      expect(rejectedMergedState).toBe(true);
+      await expect(context.storage.getEnvironment(environment.id)).resolves.toBeNull();
+    });
+  });
+
+  test("rehydration resumes only persisted cleanup after a merge was already confirmed", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-cleanup-recovery-");
+    const environment = createEnvironment({
+      id: "env-merge-cleanup-recovery",
+      worktreePath,
+      prUrl: null,
+      prState: "merged",
+      cleanupAfterMergeRequestedAt: "2026-07-28T12:00:00.000Z",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("get_environments")?.({
+      projectId: environment.projectId,
+    }, context)).resolves.toContainEqual(expect.objectContaining({
+      id: environment.id,
+      cleanupAfterMergeRequestedAt: "2026-07-28T12:00:00.000Z",
+    }));
+
+    await waitForCondition(
+      () => !environment.cleanupAfterMergeRequestedAt
+        || environment.deletionRequestedAt !== undefined,
+      "persisted cleanup recovery to begin",
+    );
+    let recoveredEnvironment: Environment | null = environment;
+    for (let attempt = 0; attempt < 100 && recoveredEnvironment; attempt += 1) {
+      recoveredEnvironment = await context.storage.getEnvironment(environment.id);
+      if (recoveredEnvironment) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    }
+    expect(recoveredEnvironment).toBeNull();
+  });
+
+  test("rejects a direct deletion while the backend merge guard is active", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-delete-race-");
+    const environment = createEnvironment({
+      id: "env-merge-delete-race",
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "open",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const updateEnvironment = context.storage.updateEnvironment.bind(context.storage);
+    let releaseLifecycleWrite!: () => void;
+    const lifecycleWriteReached = new Promise<void>((resolve) => {
+      context.storage.updateEnvironment = mock(async (
+        environmentId: string,
+        updates: Partial<Environment>,
+      ) => {
+        if (updates.lifecycleOperation === "merging") {
+          resolve();
+          await new Promise<void>((release) => {
+            releaseLifecycleWrite = release;
+          });
+        }
+        return updateEnvironment(environmentId, updates);
+      });
+    });
+
+    await withFakeGh(`#!/bin/sh
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+exit 1
+`, async () => {
+      const merge = commands.get("merge_environment_pr")?.({
+        environmentId: environment.id,
+        method: "squash",
+        deleteBranch: false,
+        cleanupAfterMerge: false,
+      }, context);
+      await lifecycleWriteReached;
+
+      await expect(commands.get("delete_environment")?.({
+        environmentId: environment.id,
+      }, context)).rejects.toThrow(`Environment is currently being merged: ${environment.id}`);
+
+      releaseLifecycleWrite();
+      await expect(merge).resolves.toEqual({
+        outcome: "merged",
+        cleanupOutcome: "not-requested",
+      });
     });
   });
 

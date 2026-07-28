@@ -32,6 +32,34 @@ interface CommandDescriptionCacheEntry {
 const commandDescriptions = new Map<string, CommandDescriptionCacheEntry>();
 
 /**
+ * Hard cap on retained entries.
+ *
+ * Pruning only covers directories discovery re-scanned, so a path that stops
+ * being scanned at all — a plugin that was uninstalled, a repo the bridge no
+ * longer serves — would otherwise sit in this process-lifetime Map forever.
+ * The cap is far above any realistic command count (a project plus its plugins
+ * exposes tens), and evicting an entry costs one re-read on the next
+ * discovery, never a wrong answer.
+ *
+ * Exported so tests can size their churn from it rather than a magic number.
+ */
+export const MAX_COMMAND_DESCRIPTION_CACHE_ENTRIES = 512;
+
+function rememberCommandDescription(
+  filePath: string,
+  entry: CommandDescriptionCacheEntry,
+): void {
+  // Re-insert so eviction below drops the least recently *parsed* path.
+  commandDescriptions.delete(filePath);
+  commandDescriptions.set(filePath, entry);
+  while (commandDescriptions.size > MAX_COMMAND_DESCRIPTION_CACHE_ENTRIES) {
+    const oldest = commandDescriptions.keys().next();
+    if (oldest.done) break;
+    commandDescriptions.delete(oldest.value);
+  }
+}
+
+/**
  * Frontmatter is normally tiny, so reads stay chunked. A larger valid block is
  * read until its closing delimiter, subject to a safety cap so a malformed
  * command cannot make discovery read an unbounded file.
@@ -54,11 +82,7 @@ function hasCompleteFrontmatter(content: string): boolean {
   return /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.test(content);
 }
 
-async function readFileFrontmatter(
-  filePath: string,
-  testHooks?: { onFrontmatterRead?: (filePath: string) => void },
-): Promise<string> {
-  testHooks?.onFrontmatterRead?.(filePath);
+async function readFileFrontmatter(filePath: string): Promise<string> {
   const handle = await open(filePath, "r");
   try {
     const decoder = new StringDecoder("utf8");
@@ -101,17 +125,14 @@ async function readFileFrontmatter(
  */
 async function readCommandDescription(
   filePath: string,
-  testHooks?: { onFrontmatterRead?: (filePath: string) => void },
 ): Promise<string | undefined> {
   const fingerprint = fingerprintOf(await stat(filePath));
   const cached = commandDescriptions.get(filePath);
   if (cached && cached.fingerprint === fingerprint) {
     return cached.description;
   }
-  const description = parseDescription(
-    await readFileFrontmatter(filePath, testHooks),
-  );
-  commandDescriptions.set(filePath, { fingerprint, description });
+  const description = parseDescription(await readFileFrontmatter(filePath));
+  rememberCommandDescription(filePath, { fingerprint, description });
   return description;
 }
 
@@ -171,7 +192,6 @@ function parseDescription(content: string): string | undefined {
 async function scanCommandsDir(
   commandsDir: string,
   prefix: string,
-  testHooks?: { onFrontmatterRead?: (filePath: string) => void },
 ): Promise<string[]> {
   let entries: string[];
   try {
@@ -194,7 +214,7 @@ async function scanCommandsDir(
 
     let description: string | undefined;
     try {
-      description = await readCommandDescription(commandPath, testHooks);
+      description = await readCommandDescription(commandPath);
     } catch {
       // File unreadable, include command without description
     }
@@ -212,10 +232,7 @@ async function scanCommandsDir(
  * @param cwd - The working directory (project root)
  * @returns Array of command strings in "/name - description" format
  */
-export async function discoverSlashCommands(
-  cwd: string,
-  testHooks?: { onFrontmatterRead?: (filePath: string) => void },
-): Promise<string[]> {
+export async function discoverSlashCommands(cwd: string): Promise<string[]> {
   const seen = new Set<string>();
   const result: string[] = [];
 
@@ -229,11 +246,7 @@ export async function discoverSlashCommands(
   };
 
   // 1. Scan repo-scoped commands (highest priority)
-  const repoCommands = await scanCommandsDir(
-    join(cwd, ".claude", "commands"),
-    "",
-    testHooks,
-  );
+  const repoCommands = await scanCommandsDir(join(cwd, ".claude", "commands"), "");
   for (const cmd of repoCommands) addCommand(cmd);
 
   // 2. Scan plugin commands
@@ -244,11 +257,7 @@ export async function discoverSlashCommands(
       const manifest = await readPluginManifest(plugin.path);
       const pluginName = manifest?.name || plugin.path.split("/").pop() || "unknown";
       const commandsDir = join(plugin.path, "commands");
-      const pluginCommands = await scanCommandsDir(
-        commandsDir,
-        `${pluginName}:`,
-        testHooks,
-      );
+      const pluginCommands = await scanCommandsDir(commandsDir, `${pluginName}:`);
       for (const cmd of pluginCommands) addCommand(cmd);
     }
   } catch (error) {

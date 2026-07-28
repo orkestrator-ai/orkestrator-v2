@@ -1069,13 +1069,17 @@ export class OrkestratorGateway {
         this.dropBufferedClient(client, projectedBytes);
         return false;
       }
-      client.write(recoveryFrame);
+      // Retire the session before writing it. A write can emit "drain"
+      // synchronously, and the drain handler re-enters here: leaving the session
+      // pending across the write recurses on the same frame until the stack dies,
+      // taking the recovery path down with it.
       if (retainedTmuxFrame) {
         const retained = this.droppedTmuxFrames.get(client);
         retained?.delete(sessionId);
         if (retained?.size === 0) this.droppedTmuxFrames.delete(client);
       }
       state.desyncedSessions.delete(sessionId);
+      client.write(recoveryFrame);
     }
     return true;
   }
@@ -1456,8 +1460,17 @@ export class OrkestratorGateway {
       this.flushDesyncNotices(response, state);
     });
 
+    // A keepalive is a write like any other, so it has to respect the same hard
+    // limit. Otherwise a stream with no event traffic keeps a client that is
+    // already hopelessly behind — and its buffer — alive indefinitely.
     this.keepalive ??= setInterval(() => {
-      for (const client of this.clients.keys()) client.write(": keepalive\n\n");
+      for (const client of this.clients.keys()) {
+        if (client.writableLength > SSE_CLIENT_HARD_BUFFER_BYTES) {
+          this.dropBufferedClient(client, client.writableLength);
+          continue;
+        }
+        client.write(": keepalive\n\n");
+      }
     }, this.keepaliveMs);
     this.keepalive.unref?.();
 

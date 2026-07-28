@@ -521,16 +521,22 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
             // final reconcile, instead of running at ~5Hz for every turn.
             if (isFinalEvent) {
               partStreamHealthyBySession.delete(sessionKey);
-              try {
-                const reconciled = await fetchMessagesDebounced(
-                  eventSessionId,
-                  sessionKey,
-                  true,
-                );
-                if (reconciled) {
-                  setSessionLoading(sessionKey, false);
-                }
-              } catch (error) {
+              // The turn is over whether or not the transcript refetch succeeds,
+              // and no second idle frame will arrive for a finished turn. Gating
+              // the flag on the refetch wedges the pipeline (which bails on
+              // `isLoading`) the moment the server dies right after emitting
+              // idle, so clear it first — a failed reconcile then degrades to a
+              // stale transcript, matching the three sibling tabs.
+              setSessionLoading(sessionKey, false);
+              // Never await here: this is the environment-wide shared
+              // subscription, so awaiting one transcript request blocks every
+              // subsequent frame for every other session in the environment.
+              // The reload generation guard already orders the writes.
+              void fetchMessagesDebounced(
+                eventSessionId,
+                sessionKey,
+                true,
+              )?.catch((error) => {
                 setPipelineError(
                   pipelineId,
                   error instanceof Error
@@ -538,7 +544,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
                     : "Failed to reconcile OpenCode transcript",
                   null,
                 );
-              }
+              });
             } else if (eventType === "message.part.updated") {
               if (
                 !applyPartUpdate(

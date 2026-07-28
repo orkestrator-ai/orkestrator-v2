@@ -81,6 +81,13 @@ export function spawnPty(command: string, args: string[], options: SpawnPtyOptio
 
   const deliver = (data: string) => {
     if (dataListeners.size === 0) {
+      // Held, not dropped: this covers the gap between spawning and the caller
+      // subscribing, and any tail the kernel hands over after exit. It is
+      // deliberately uncapped, unlike the coalescing buffer above — the caller
+      // subscribes synchronously and keeps its listener for the life of the
+      // session (session retention is bounded there instead), so nothing
+      // accumulates here, and trimming it would silently truncate the opening
+      // of a terminal the user has not read yet.
       pendingData.push(data);
       return;
     }

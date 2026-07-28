@@ -211,6 +211,8 @@ const SETUP_FAILED_PRINTF_CMD = "printf '\\033]9999;setup_failed\\007'";
 const MAX_TERMINAL_OUTPUT_BUFFER_CHARS = 500 * 1024;
 /** Keep exited PTY snapshots long enough for a lagging SSE client to recover. */
 const TERMINAL_OUTPUT_RETENTION_MS = 5 * 60_000;
+/** Overridable so tests can observe the real expiry path without a five-minute wait. */
+let terminalOutputRetentionMs = TERMINAL_OUTPUT_RETENTION_MS;
 /** Bound worst-case retained output to 32 × 500 KB. */
 const MAX_RETAINED_TERMINAL_OUTPUT_BUFFERS = 32;
 const TERMINAL_ACTIVITY_SETTLE_MS = 750;
@@ -2227,6 +2229,37 @@ function createTerminalOutputBuffer(): TerminalOutputBuffer {
   return { chunks: [], headIndex: 0, headOffset: 0, length: 0 };
 }
 
+function isHighSurrogate(codeUnit: number): boolean {
+  return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
+}
+
+function isLowSurrogate(codeUnit: number): boolean {
+  return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
+}
+
+/**
+ * Drop a low surrogate whose high half the trim just discarded.
+ *
+ * A surrogate pair can straddle two PTY chunks, and then the trim boundary is a
+ * chunk edge rather than an offset inside one chunk, so the in-chunk guard never
+ * sees the pair. The orphan that leaves is not representable in UTF-8: every
+ * consumer downstream of the buffer turns it into U+FFFD.
+ */
+function trimOrphanedLowSurrogate(buffer: TerminalOutputBuffer): void {
+  // Nothing was trimmed, so a leading low surrogate is the PTY's own output.
+  if (buffer.headIndex === 0 && buffer.headOffset === 0) return;
+  const head = buffer.chunks[buffer.headIndex];
+  if (head === undefined || buffer.length === 0) return;
+  if (!isLowSurrogate(head.charCodeAt(buffer.headOffset))) return;
+  const previousChunk = buffer.chunks[buffer.headIndex - 1] ?? "";
+  const precedingCodeUnit = buffer.headOffset > 0
+    ? head.charCodeAt(buffer.headOffset - 1)
+    : previousChunk.charCodeAt(previousChunk.length - 1);
+  if (!isHighSurrogate(precedingCodeUnit)) return;
+  buffer.headOffset += 1;
+  buffer.length -= 1;
+}
+
 function compactTerminalOutputBuffer(buffer: TerminalOutputBuffer): string {
   if (buffer.length === 0) {
     buffer.chunks = [];
@@ -2271,6 +2304,7 @@ function deleteRetainedTerminalOutputBuffer(sessionId: string): void {
 }
 
 function resetTerminalOutputBuffers(): void {
+  terminalOutputRetentionMs = TERMINAL_OUTPUT_RETENTION_MS;
   for (const timer of terminalOutputRetentionTimers.values()) clearTimeout(timer);
   terminalOutputRetentionTimers.clear();
   terminalOutputBuffers.clear();
@@ -2284,7 +2318,7 @@ function retainTerminalOutputBuffer(sessionId: string): void {
   if (previous) clearTimeout(previous);
   const timer = setTimeout(
     () => deleteRetainedTerminalOutputBuffer(sessionId),
-    TERMINAL_OUTPUT_RETENTION_MS,
+    terminalOutputRetentionMs,
   );
   timer.unref?.();
   terminalOutputRetentionTimers.delete(sessionId);
@@ -2334,13 +2368,9 @@ function appendTerminalOutputBuffer(sessionId: string, data: string | Buffer): n
     if (available > excess) {
       let trim = excess;
       const boundary = buffer.headOffset + trim;
-      const firstCodeUnit = head.charCodeAt(boundary);
-      const precedingCodeUnit = head.charCodeAt(boundary - 1);
       if (
-        firstCodeUnit >= 0xdc00
-        && firstCodeUnit <= 0xdfff
-        && precedingCodeUnit >= 0xd800
-        && precedingCodeUnit <= 0xdbff
+        isLowSurrogate(head.charCodeAt(boundary))
+        && isHighSurrogate(head.charCodeAt(boundary - 1))
       ) {
         trim += 1;
       }
@@ -2353,6 +2383,7 @@ function appendTerminalOutputBuffer(sessionId: string, data: string | Buffer): n
     buffer.length -= available;
     excess -= available;
   }
+  trimOrphanedLowSurrogate(buffer);
   if (buffer.headIndex >= MAX_TERMINAL_OUTPUT_BUFFER_CHUNKS) {
     compactTerminalOutputBuffer(buffer);
   }
@@ -7197,6 +7228,11 @@ export const __testing = {
   deleteRetainedTerminalOutputBuffer,
   retainedTerminalOutputBufferCount(): number {
     return terminalOutputRetentionTimers.size;
+  },
+  // `resetTerminalOutputBuffers` restores the production window, so an override
+  // cannot outlive the test that set it.
+  setTerminalOutputRetentionMs(retentionMs: number): void {
+    terminalOutputRetentionMs = retentionMs;
   },
   resetTerminalOutputBuffers,
   CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER,

@@ -330,6 +330,34 @@ describe("/event/subscribe", () => {
     expect(__testing.eventRingForTesting().since(cursor).complete).toBe(false);
   });
 
+  test("an idle ring advances its cursor without retaining background payloads", () => {
+    const restoreRing = __testing.withIsolatedEventRingForTesting();
+    const restoreRetention = __testing.suspendReplayRetentionForTesting();
+    try {
+      const cursor = __testing.eventRingForTesting().latestRevision;
+      __testing.emitForTesting({
+        type: "message.updated",
+        sessionId: "idle-background",
+        data: {
+          message: {
+            id: "message-idle",
+            content: "x".repeat(1024 * 1024),
+          },
+        },
+      });
+
+      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
+        retained: 0,
+        retainedBytes: 0,
+        latestRevision: cursor + 1,
+      });
+      expect(__testing.eventRingForTesting().since(cursor).complete).toBe(false);
+    } finally {
+      restoreRetention();
+      restoreRing();
+    }
+  });
+
   test("a caught-up cursor replays nothing", async () => {
     const cursor = __testing.eventRingForTesting().latestRevision;
     const frames = await collect(`?since=${cursor}`, () => undefined);

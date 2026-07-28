@@ -437,6 +437,303 @@ describe("rollout public helpers (continued)", () => {
     }
   });
 
+  test("a cached catalog that cannot answer for a specific thread is rescanned", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-catalog-miss-"));
+    temporaryDirectories.push(root);
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+
+    let builds = 0;
+    const catalogs: Array<Awaited<ReturnType<typeof buildTranscriptCatalog>>> = [
+      { metas: [], metaByPath: new Map(), transcriptPathByThreadId: new Map() },
+      {
+        metas: [],
+        metaByPath: new Map(),
+        transcriptPathByThreadId: new Map([["late-thread", "/tmp/late-thread.jsonl"]]),
+      },
+    ];
+    setTranscriptCatalogTtlForTesting(60_000);
+    setTranscriptCatalogBuilderForTesting(() => {
+      const catalog = catalogs[Math.min(builds, catalogs.length - 1)]!;
+      builds += 1;
+      return Promise.resolve(catalog);
+    });
+
+    try {
+      await buildTranscriptCatalogCachedForTesting();
+      expect(builds).toBe(1);
+
+      // A caller with no specific thread in mind is still served the cache.
+      await buildTranscriptCatalogCachedForTesting();
+      expect(builds).toBe(1);
+
+      // A caller asking about a thread the cached scan already knows is too.
+      await buildTranscriptCatalogCachedForTesting("late-thread");
+      expect(builds).toBe(2);
+      await buildTranscriptCatalogCachedForTesting("late-thread");
+      expect(builds).toBe(2);
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test("hydration finds a rollout written after the catalog was scanned", async () => {
+    // The regression this pins: the app-server child writes a thread's rollout
+    // asynchronously *after* this process asks for the thread, so a catalog
+    // scanned moments earlier — and a negative path-cache entry from the same
+    // moment — both say "no such rollout". Serving either of those stale misses
+    // hands back an empty transcript, which `attachThread` then latches onto the
+    // context for the life of the attachment.
+    const root = await mkdtemp(join(tmpdir(), "rollout-late-write-"));
+    temporaryDirectories.push(root);
+    const sessionsDir = join(root, "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+
+    const previousHome = process.env.CODEX_HOME;
+    const previousCwd = process.env.CWD;
+    process.env.CODEX_HOME = root;
+    process.env.CWD = "/workspace";
+    // Long enough that neither cache can expire on its own during the test.
+    setTranscriptCatalogTtlForTesting(60_000);
+    setTranscriptPathCacheLimitsForTesting({ negativeTtlMs: 60_000 });
+
+    try {
+      // Warm both caches while the rollout genuinely does not exist yet.
+      expect(await listPersistedSessionsForCwd("/workspace")).toEqual([]);
+      expect(await hydrateMessagesFromPersistedSession("late-thread")).toMatchObject({
+        messages: [],
+      });
+
+      await writeFile(
+        join(sessionsDir, "late-thread.jsonl"),
+        `${[
+          sessionMeta("late-thread"),
+          {
+            type: "response_item",
+            payload: {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "written late" }],
+            },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n")}\n`,
+        "utf8",
+      );
+
+      const hydrated = await hydrateMessagesFromPersistedSession("late-thread");
+      expect(hydrated.messages).toHaveLength(1);
+      expect(hydrated.messages[0]).toMatchObject({
+        role: "assistant",
+        content: "written late",
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+    }
+  });
+
+  test("a per-thread lookup opts out of the negative path cache", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-negative-cache-"));
+    temporaryDirectories.push(root);
+    const sessionsDir = join(root, "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+    setTranscriptPathCacheLimitsForTesting({ negativeTtlMs: 60_000 });
+
+    try {
+      expect(await findTranscriptPath("pending-thread")).toBeNull();
+
+      await writeFile(
+        join(sessionsDir, "pending-thread.jsonl"),
+        `${JSON.stringify(sessionMeta("pending-thread"))}\n`,
+        "utf8",
+      );
+
+      // The default path still trusts the cached miss for its TTL…
+      expect(await findTranscriptPath("pending-thread")).toBeNull();
+      // …but a caller resolving this one thread must re-check the disk.
+      expect(
+        await findTranscriptPath("pending-thread", undefined, { allowNegativeCache: false }),
+      ).toContain("pending-thread.jsonl");
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test("a rejected catalog scan is evicted rather than pinned for the TTL", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-catalog-reject-"));
+    temporaryDirectories.push(root);
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+
+    let builds = 0;
+    setTranscriptCatalogTtlForTesting(60_000);
+    setTranscriptCatalogBuilderForTesting(() => {
+      builds += 1;
+      if (builds === 1) return Promise.reject(new Error("scan failed"));
+      return Promise.resolve({
+        metas: [],
+        metaByPath: new Map(),
+        transcriptPathByThreadId: new Map(),
+      });
+    });
+
+    try {
+      await expect(buildTranscriptCatalogCachedForTesting()).rejects.toThrow("scan failed");
+      // A failed scan cached for the TTL would blank `/session/list` for anyone
+      // who asked during the window, so the next caller must rescan.
+      await buildTranscriptCatalogCachedForTesting();
+      expect(builds).toBe(2);
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test("the catalog cache is keyed by Codex home", async () => {
+    const rootA = await mkdtemp(join(tmpdir(), "rollout-catalog-home-a-"));
+    const rootB = await mkdtemp(join(tmpdir(), "rollout-catalog-home-b-"));
+    temporaryDirectories.push(rootA, rootB);
+    const previousHome = process.env.CODEX_HOME;
+
+    let builds = 0;
+    setTranscriptCatalogTtlForTesting(60_000);
+    setTranscriptCatalogBuilderForTesting(() => {
+      builds += 1;
+      return Promise.resolve({
+        metas: [],
+        metaByPath: new Map(),
+        transcriptPathByThreadId: new Map(),
+      });
+    });
+
+    try {
+      process.env.CODEX_HOME = rootA;
+      await buildTranscriptCatalogCachedForTesting();
+      await buildTranscriptCatalogCachedForTesting();
+      expect(builds).toBe(1);
+
+      // Another store's catalog must never answer for this one.
+      process.env.CODEX_HOME = rootB;
+      await buildTranscriptCatalogCachedForTesting();
+      expect(builds).toBe(2);
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test("a thread id that is a prefix of another does not resolve to its rollout", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-id-collision-"));
+    temporaryDirectories.push(root);
+    const sessionsDir = join(root, "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    // Written first so a plain `includes` scan would reach it first.
+    await writeFile(
+      join(sessionsDir, "thread-10.jsonl"),
+      `${JSON.stringify(sessionMeta("thread-10"))}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(sessionsDir, "thread-1.jsonl"),
+      `${JSON.stringify(sessionMeta("thread-1"))}\n`,
+      "utf8",
+    );
+
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+    try {
+      expect(await findTranscriptPath("thread-1")).toContain("thread-1.jsonl");
+      expect(await findTranscriptPath("thread-10")).toContain("thread-10.jsonl");
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test("resolves a real Codex rollout filename, which prefixes the thread id", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-real-name-"));
+    temporaryDirectories.push(root);
+    const sessionsDir = join(root, "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    const threadId = "0199c0de-dead-beef-cafe-0123456789ab";
+    await writeFile(
+      join(sessionsDir, `rollout-2026-07-25T12-00-00-${threadId}.jsonl`),
+      `${JSON.stringify(sessionMeta(threadId))}\n`,
+      "utf8",
+    );
+
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+    try {
+      expect(await findTranscriptPath(threadId)).toContain(threadId);
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test("hydration resolves a thread whose rollout cwd differs from the current one", async () => {
+    // The cwd-scoped listing filters by cwd because it answers "what sessions
+    // belong to this workspace". Hydration answers "what is in THIS thread",
+    // and the caller already holds the thread id from its own registry — so the
+    // direct lookup deliberately does not re-apply that filter. Pinned because
+    // the filter used to apply incidentally, via the listing.
+    const root = await mkdtemp(join(tmpdir(), "rollout-foreign-cwd-"));
+    temporaryDirectories.push(root);
+    const sessionsDir = join(root, "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(
+      join(sessionsDir, "foreign-cwd-thread.jsonl"),
+      `${[
+        {
+          type: "session_meta",
+          payload: {
+            id: "foreign-cwd-thread",
+            cwd: "/somewhere/else",
+            timestamp: "2026-07-25T12:00:00.000Z",
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "still mine" }],
+          },
+        },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n")}\n`,
+      "utf8",
+    );
+
+    const previousHome = process.env.CODEX_HOME;
+    const previousCwd = process.env.CWD;
+    process.env.CODEX_HOME = root;
+    process.env.CWD = "/workspace";
+    try {
+      const hydrated = await hydrateMessagesFromPersistedSession("foreign-cwd-thread");
+      expect(hydrated.messages).toHaveLength(1);
+      expect(hydrated.messages[0]).toMatchObject({ content: "still mine" });
+      // The cwd-scoped listing still excludes it.
+      expect(await listPersistedSessionsForCwd("/workspace")).toEqual([]);
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+    }
+  });
+
   test("the listing exposes the generated-title index it already parsed", async () => {
     const root = await mkdtemp(join(tmpdir(), "rollout-listing-titles-"));
     temporaryDirectories.push(root);

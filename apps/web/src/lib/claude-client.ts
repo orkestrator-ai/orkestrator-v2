@@ -1350,9 +1350,63 @@ export async function getSlashCommands(
  */
 const claudeEventCursorByBaseUrl = new Map<string, string>();
 
+/**
+ * One cursor per bridge, and a renderer only ever talks to a handful at once.
+ * The map is module-level and nothing removes an entry when an environment is
+ * deleted, so without a bound it grows for the lifetime of the renderer.
+ */
+const MAX_TRACKED_EVENT_CURSORS = 32;
+
 // Cursors are opaque bridge-issued identifiers. Keep the accepted character
 // set deliberately narrow before reflecting one into a query parameter.
 const VALID_CLAUDE_EVENT_CURSOR = /^[A-Za-z0-9._~-]+(?::[A-Za-z0-9._~-]+)*$/;
+
+/** Split `"<generation>:<revision>"`; null for any other shape. */
+function parseClaudeEventCursor(
+  cursor: string,
+): { generation: string; revision: number } | null {
+  const separator = cursor.lastIndexOf(":");
+  if (separator <= 0) return null;
+  const revisionText = cursor.slice(separator + 1);
+  if (!/^\d+$/.test(revisionText)) return null;
+  const revision = Number(revisionText);
+  if (!Number.isSafeInteger(revision)) return null;
+  return { generation: cursor.slice(0, separator), revision };
+}
+
+/**
+ * Store a cursor only when it actually moves the client forward.
+ *
+ * `EventSource` adopts the id of every frame it sees, including one that
+ * arrived out of order. Storing that verbatim would *regress* the cursor and
+ * make the next reconnect ask for frames it has already applied. Within one
+ * bridge generation the revision may therefore only increase; a generation
+ * change is always accepted, because that is a restarted bridge whose
+ * revisions are unrelated to the previous process's.
+ */
+function rememberClaudeEventCursor(baseUrl: string, cursor: string): void {
+  const previous = claudeEventCursorByBaseUrl.get(baseUrl);
+  if (previous !== undefined) {
+    const next = parseClaudeEventCursor(cursor);
+    const current = parseClaudeEventCursor(previous);
+    if (
+      next
+      && current
+      && next.generation === current.generation
+      && next.revision <= current.revision
+    ) {
+      return;
+    }
+  }
+  // Re-insert so the eviction below drops the least recently updated bridge.
+  claudeEventCursorByBaseUrl.delete(baseUrl);
+  claudeEventCursorByBaseUrl.set(baseUrl, cursor);
+  while (claudeEventCursorByBaseUrl.size > MAX_TRACKED_EVENT_CURSORS) {
+    const oldest = claudeEventCursorByBaseUrl.keys().next();
+    if (oldest.done) break;
+    claudeEventCursorByBaseUrl.delete(oldest.value);
+  }
+}
 
 export function subscribeToEvents(
   client: ClaudeClient,
@@ -1371,7 +1425,7 @@ export function subscribeToEvents(
           const data = JSON.parse(event.data);
           const cursor = event.lastEventId;
           if (cursor && VALID_CLAUDE_EVENT_CURSOR.test(cursor)) {
-            claudeEventCursorByBaseUrl.set(client.baseUrl, cursor);
+            rememberClaudeEventCursor(client.baseUrl, cursor);
           }
           // Guarded rather than passed through `rendererDebugLog`: this runs on
           // every frame of every running turn, so the object literal would be

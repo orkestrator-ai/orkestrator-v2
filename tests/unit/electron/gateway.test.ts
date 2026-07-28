@@ -1,5 +1,11 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingHttpHeaders,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -118,6 +124,79 @@ async function startGateway(options: Partial<ConstructorParameters<typeof Orkest
   const info = await gateway.start();
   if (!info) throw new Error("Gateway did not start");
   return { gateway, info, dataDir, rendererRoot };
+}
+
+async function waitUntil(predicate: () => boolean, message: string, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(message);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function eventClients(gateway: OrkestratorGateway): Map<ServerResponse, unknown> {
+  return (gateway as unknown as { clients: Map<ServerResponse, unknown> }).clients;
+}
+
+type GatewayEventStream = {
+  /** Everything this browser-side client has received so far. */
+  received: () => string;
+  /** The gateway-side response the real request path registered. */
+  response: ServerResponse;
+  /** True once the gateway hung up on this client. */
+  aborted: () => boolean;
+  close: () => void;
+};
+
+/** Opens a real `/__orkestrator/events` stream and pairs it with its server response. */
+async function openEventStream(
+  gateway: OrkestratorGateway,
+  info: { url: string; token: string },
+  search = "",
+): Promise<GatewayEventStream> {
+  const parsed = new URL(`${info.url}__orkestrator/events${search}`);
+  const known = new Set(eventClients(gateway).keys());
+  let received = "";
+  let aborted = false;
+  const request = httpRequest({
+    hostname: parsed.hostname,
+    port: parsed.port,
+    path: `${parsed.pathname}${parsed.search}`,
+    headers: { authorization: `Bearer ${info.token}` },
+  }, (response) => {
+    response.on("data", (chunk) => {
+      received += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    });
+    response.on("aborted", () => { aborted = true; });
+  });
+  request.on("error", () => { aborted = true; });
+  request.end();
+  await waitUntil(() => received.includes(": connected"), "Event stream never connected");
+
+  const response = [...eventClients(gateway).keys()].find((client) => !known.has(client));
+  if (!response) throw new Error("Gateway did not register the event-stream client");
+  return {
+    received: () => received,
+    response,
+    aborted: () => aborted,
+    close: () => request.destroy(),
+  };
+}
+
+/**
+ * Pins the buffered byte count the gateway sees for a live response.
+ *
+ * Every backpressure limit is expressed in terms of `writableLength`, and a
+ * loopback socket drains far faster than a test can observe, so a genuinely
+ * parked client is not reproducible here. Pinning the value puts a real
+ * response into the state the limits exist for.
+ */
+function pinBufferedBytes(response: ServerResponse, bytes: number): void {
+  Object.defineProperty(response, "writableLength", { value: bytes, configurable: true });
+}
+
+function releaseBufferedBytes(response: ServerResponse): void {
+  Reflect.deleteProperty(response, "writableLength");
 }
 
 afterEach(async () => {
@@ -360,6 +439,146 @@ describe("remote gateway", () => {
     expect(client.write).not.toHaveBeenCalled();
     expect(client.destroy).toHaveBeenCalledTimes(1);
     expect(clients.has(client)).toBe(false);
+  });
+
+  test("keeps a scoped subscription restricted to its own prefixes", () => {
+    expect(eventMatchesSubscription("menu-zoom", ["menu-", "environment-"])).toBe(true);
+    expect(eventMatchesSubscription("terminal-output-one", ["menu-"])).toBe(false);
+    // An explicit include still wins over a base scope that omits the event, and
+    // an exclude still removes one the base scope would otherwise carry.
+    expect(eventMatchesSubscription(
+      "terminal-output-one",
+      ["menu-"],
+      ["terminal-output-one"],
+    )).toBe(true);
+    expect(eventMatchesSubscription("menu-zoom", ["menu-"], null, ["menu-"])).toBe(false);
+  });
+
+  test("rejects non-GET event-stream requests", async () => {
+    const { info } = await startGateway();
+
+    const response = await requestUrl(`${info.url}__orkestrator/events`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+
+    expect(response.status).toBe(405);
+    expect(response.headers.allow).toBe("GET");
+  });
+
+  test("subscribes a connecting stream from its own query string", async () => {
+    const { gateway, info } = await startGateway();
+    const scoped = await openEventStream(gateway, info, "?events=menu-");
+    const terminal = await openEventStream(
+      gateway,
+      info,
+      "?excludeEvents=terminal-output-&includeEvents=terminal-output-one",
+    );
+
+    gateway.emit("terminal-output-two", { bytesBase64: "dHdv" });
+    gateway.emit("environment-changed", { id: "env" });
+    gateway.emit("terminal-output-one", { bytesBase64: "b25l" });
+    gateway.emit("menu-zoom", "in");
+
+    // Each stream is ordered, so waiting for the last permitted event proves the
+    // earlier ones were filtered rather than merely still in flight.
+    await waitUntil(
+      () => scoped.received().includes("menu-zoom"),
+      "Scoped stream never received its subscribed event",
+    );
+    await waitUntil(
+      () => terminal.received().includes("terminal-output-one"),
+      "Terminal stream never received its restored session",
+    );
+
+    expect(scoped.received()).not.toContain("environment-changed");
+    expect(scoped.received()).not.toContain("terminal-output-");
+    expect(terminal.received()).not.toContain("terminal-output-two");
+    expect(terminal.received()).not.toContain("menu-zoom");
+
+    scoped.close();
+    terminal.close();
+  });
+
+  test("flushes a desync notice to a quiet stream once its socket drains", async () => {
+    const { gateway, info } = await startGateway();
+    const stream = await openEventStream(gateway, info);
+
+    pinBufferedBytes(stream.response, 2 * 1024 * 1024);
+    gateway.emit("terminal-output-session-a", { bytesBase64: "eA==" });
+    // Nothing was written, so nothing can be in flight: no further event is
+    // coming to carry the notice, which is exactly what "drain" has to cover.
+    expect(stream.received()).not.toContain("terminal-output-session-a");
+
+    releaseBufferedBytes(stream.response);
+    // "drain" only follows a refused write, so refuse one for real rather than
+    // synthesizing the event the gateway listens for.
+    const refused = stream.response.write(`: ${"filler".repeat(700_000)}\n\n`);
+    expect(refused).toBe(false);
+
+    await waitUntil(
+      () => stream.received().includes("\"desynced\":true"),
+      "Drained stream never learned it was desynced",
+    );
+    expect(stream.received()).toContain("terminal-output-session-a");
+
+    stream.close();
+  });
+
+  test("sends a plain desync notice when a tmux session drops on a broad stream", async () => {
+    const { gateway, info } = await startGateway();
+    const stream = await openEventStream(gateway, info);
+    const pane = Buffer.from("latest pane").toString("base64");
+
+    pinBufferedBytes(stream.response, 2 * 1024 * 1024);
+    gateway.emit("terminal-output-tmux:env:tab:one", { bytesBase64: pane });
+    releaseBufferedBytes(stream.response);
+    gateway.emit("environment-changed", { id: "env" });
+
+    await waitUntil(
+      () => stream.received().includes("environment-changed"),
+      "Recovered stream never resumed authoritative events",
+    );
+    // A broad stream is not the one terminal subscribed to this pane, so it must
+    // not accumulate repaints it never asked for.
+    expect(stream.received()).toContain("\"desynced\":true");
+    expect(stream.received()).not.toContain(pane);
+
+    stream.close();
+  });
+
+  test("disconnects a parked stream when even its desync notice would overflow", async () => {
+    const { gateway, info } = await startGateway();
+    const stream = await openEventStream(gateway, info);
+
+    pinBufferedBytes(stream.response, 2 * 1024 * 1024);
+    gateway.emit("terminal-output-session-a", { bytesBase64: "eA==" });
+    // Still at the hard limit when the socket drains: the notice itself no
+    // longer fits, and a client that cannot even be told it desynced is beyond
+    // recovering in place.
+    pinBufferedBytes(stream.response, 8 * 1024 * 1024);
+    stream.response.write(": nudge\n\n");
+
+    await waitUntil(() => stream.aborted(), "Hopeless stream was never disconnected");
+    expect(eventClients(gateway).size).toBe(0);
+    expect(stream.received()).not.toContain("\"desynced\":true");
+  });
+
+  test("drops a parked stream instead of writing keepalives past the hard limit", async () => {
+    const { gateway, info } = await startGateway({ keepaliveMs: 5 });
+    const stream = await openEventStream(gateway, info);
+    await waitUntil(
+      () => stream.received().includes(": keepalive"),
+      "Stream never received a keepalive",
+    );
+
+    pinBufferedBytes(stream.response, 8 * 1024 * 1024 + 1);
+
+    await waitUntil(
+      () => stream.aborted(),
+      "Keepalives kept writing to a stream already past the hard limit",
+    );
+    expect(eventClients(gateway).size).toBe(0);
   });
 
   test("rewrites browser-preview asset paths into their isolated proxy namespace", () => {

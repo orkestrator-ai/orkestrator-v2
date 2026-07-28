@@ -1196,6 +1196,21 @@ describe("useEnvironments", () => {
     expect(project1Envs[0]?.id).toBe("env-1");
   });
 
+  test("useEnvironments alone registers no setup lifecycle or reconnect listeners", async () => {
+    const eventNames: string[] = [];
+    mockListen.mockImplementation((eventName: string) => {
+      eventNames.push(eventName);
+      return Promise.resolve(() => {});
+    });
+
+    renderHook(() => useEnvironments(null));
+
+    await waitFor(() => expect(eventNames).toContain("environment-renamed"));
+    expect(eventNames).not.toContain("environment-setup-started");
+    expect(eventNames).not.toContain("environment-setup-complete");
+    expect(eventNames).not.toContain("native-event-stream-connected");
+  });
+
   test("handles load error gracefully", async () => {
     mockGetEnvironments.mockImplementation(() => Promise.reject(new Error("Network error")));
 

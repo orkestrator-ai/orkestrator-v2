@@ -533,8 +533,15 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
           const serverError = serverSession.status === "error"
             ? serverSession.error?.trim() || "Claude session failed"
             : undefined;
+          // Error bubbles are client-only, so they live in the store transcript
+          // and never in the server response we just fetched. De-duping against
+          // `messages` therefore always passes, and `setMessages` re-splices
+          // client-only messages without de-duping by id — so a second
+          // `replay.required` would append a second message carrying the same
+          // `error-replay-<sessionId>` React key.
           const reconciledMessages = serverError
-            && !messages.some((message) => message.id.startsWith(ERROR_MESSAGE_PREFIX))
+            && !currentSession.messages.some((message) =>
+              message.id.startsWith(ERROR_MESSAGE_PREFIX))
             ? [
                 ...messages,
                 {
@@ -669,16 +676,22 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
                 fetchMessagesDebounced(eventSessionId, sessionTabId);
               }
             } else if (isFinalEvent) {
-              try {
-                const reconciled = await fetchMessagesDebounced(
-                  eventSessionId,
-                  sessionTabId,
-                  true,
-                );
-                if (reconciled) {
-                  setSessionLoading(sessionTabId, false);
-                }
-              } catch (error) {
+              // The turn is over whether or not the transcript refetch succeeds,
+              // and no second `session.idle` will arrive for a finished turn.
+              // Gating the flag on the refetch therefore wedges the pipeline
+              // (which bails on `isLoading`) the moment the bridge dies right
+              // after emitting idle. Clear it first so a failed reconcile
+              // degrades to a stale transcript, matching the three sibling tabs.
+              setSessionLoading(sessionTabId, false);
+              // Never await here: this is the environment-wide shared
+              // subscription, so awaiting one transcript request blocks every
+              // subsequent frame for every other session in the environment.
+              // The reload generation guard already orders the writes.
+              void fetchMessagesDebounced(
+                eventSessionId,
+                sessionTabId,
+                true,
+              )?.catch((error) => {
                 setPipelineError(
                   pipelineId,
                   error instanceof Error
@@ -686,7 +699,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
                     : "Failed to reconcile Claude transcript",
                   null,
                 );
-              }
+              });
             }
 
             if (usageFromEvent) {

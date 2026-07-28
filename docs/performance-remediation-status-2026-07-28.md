@@ -53,6 +53,9 @@ after missed events.
 
 - SSE event JSON is serialized once per event and reused for subscribers and
   replay.
+- The replay ring is capped at 4 MB and releases retained payloads after 60
+  seconds without a subscriber; its cursor continues advancing so a later
+  client receives `replay.required` instead of stale or incomplete frames.
 - Completed app-server items cache their normalized parts, so only mutable
   streaming items are rebuilt.
 - The redundant pre-probe `collectTurnItems` pass was removed.
@@ -68,9 +71,10 @@ after missed events.
 - CLI discovery/version probes are asynchronous rather than event-loop-blocking.
 - Slash-command discovery is fingerprint-cached.
 - SSE serialization is shared and byte-accounted.
-- SSE now has a 512-frame/32 MB replay ring, monotonic cursors, subscribe-before-
+- SSE now has a 512-frame/4 MB replay ring, monotonic cursors, subscribe-before-
   replay ordering, bounded handshake buffering, `Last-Event-ID`/`since`
   resumption, and an authoritative transcript fallback when a cursor is too old.
+  Retained payloads are released after 60 seconds without a subscriber.
 
 ### Components
 
@@ -110,13 +114,11 @@ correctness-sensitive behavior:
 - `bun run --cwd apps/backend typecheck` — pass
 - `bun run --cwd apps/web typecheck` — pass
 - `bun run --cwd apps/desktop typecheck` — pass
-- `bun test --cwd apps/backend --parallel` — 286 pass
-- `bun test bridges --parallel` — 1,574 pass, 11 live-runtime tests skipped
-- `bun test --cwd apps/web --parallel ./src` — 3,665 pass, 1 live OpenCode test skipped
-- `bun test tests --parallel` — 3,184 pass, 1 live-container test skipped, with
-  two known timing-sensitive tests failing only in the aggregate run; both pass
-  in isolation:
-  - `SortableProjectGroup confirms project deletion and closes the dialog`
-  - `startWorktreeWatcher observes a real file write`
+- `bun run test` — pass across workspace, root, bridge, protocol, and iOS
+  groups; the environment-gated live-runtime tests remain skipped.
+- `bun test bridges/codex-bridge/src/app-server-runtime.test.ts -t
+  "persists reroutes for inactive sessions across a stale-first restart"` —
+  pass, covering the transcript-catalog staleness regression found during
+  review.
 
 `git diff --check` is clean.

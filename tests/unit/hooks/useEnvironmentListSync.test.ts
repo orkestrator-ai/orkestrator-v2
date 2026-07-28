@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
-import {
-  ENVIRONMENT_LIST_RESYNC_INTERVAL_MS,
-  useEnvironmentListSync,
-} from "../../../apps/web/src/hooks/useEnvironmentListSync";
+import { useEnvironmentListSync } from "../../../apps/web/src/hooks/useEnvironmentListSync";
 import {
   dispatchResourceChange,
   requestResourceResync,
@@ -39,10 +36,9 @@ describe("useEnvironmentListSync", () => {
     const { unmount } = renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
     unmount();
 
-    const resyncIntervals = setIntervalMock.mock.calls.filter(
-      ([, timeout]) => timeout === ENVIRONMENT_LIST_RESYNC_INTERVAL_MS,
-    );
-    expect(resyncIntervals).toHaveLength(0);
+    // Assert the behavioral invariant, not one historical delay literal:
+    // reintroducing an interval at 30s or 120s would be the same duplicate poll.
+    expect(setIntervalMock).not.toHaveBeenCalled();
   });
 
   test("refreshes every current project with the latest callback on resync", async () => {

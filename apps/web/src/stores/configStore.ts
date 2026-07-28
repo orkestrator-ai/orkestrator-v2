@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { deepEqualJson } from "@/lib/chat/message-identity";
 import type { AppConfig, EnvironmentType, GlobalConfig, RepositoryConfig } from "@/types";
 import { DEFAULT_TERMINAL_SCROLLBACK, TERMINAL_BACKGROUND_COLOR } from "@/constants/terminal";
 
@@ -110,11 +111,12 @@ export const useConfigStore = create<ConfigState>()((set, get) => ({
   error: null,
 
   // Actions
+  // Structural, not serialized: JSON.stringify is key-order sensitive (a
+  // reordered but identical config would republish and rerender every
+  // subscriber) and erases undefined-valued fields, which this store treats as
+  // distinct from absent ones (see updateGlobalConfig's reviewInstruction).
   setConfig: (config) =>
-    set((state) =>
-      JSON.stringify(state.config) === JSON.stringify(config)
-        ? state
-        : { config }),
+    set((state) => (deepEqualJson(state.config, config) ? state : { config })),
 
   updateGlobalConfig: (updates) =>
     set((state) => {

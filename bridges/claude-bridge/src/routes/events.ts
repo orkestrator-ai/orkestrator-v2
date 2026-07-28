@@ -59,7 +59,30 @@ interface ReplayCursor {
 }
 
 export const MAX_REPLAY_SSE_FRAMES = 512;
-export const MAX_REPLAY_SSE_BYTES = 32 * 1024 * 1024;
+/**
+ * Sized for an EventSource reconnect gap, not for a whole session.
+ *
+ * 512 frames is roughly 30s of dense streaming — the same reasoning the codex
+ * bridge's ring uses — and every frame here is a serialized message snapshot
+ * that grows with the transcript. A 32MB ceiling therefore let one large
+ * session pin, indefinitely and in the background, more memory than idle
+ * transcript eviction reclaims. A browser reconnects within seconds; a client
+ * further behind than this window is better served by `replay.required` and a
+ * REST rehydrate, which it already knows how to do.
+ */
+export const MAX_REPLAY_SSE_BYTES = 4 * 1024 * 1024;
+
+/**
+ * How long the ring keeps retaining frames after its last live subscriber goes
+ * away.
+ *
+ * Retention exists to cover a reconnect, so once no connection has existed for
+ * substantially longer than one, there is no cursor left to serve. Past this
+ * point the subscriber stops serializing entirely and drops what it holds:
+ * before the ring existed, an emit with zero subscribers did essentially
+ * nothing, and an idle bridge should cost the same again.
+ */
+export const REPLAY_IDLE_RETENTION_MS = 60_000;
 
 export function createReplayBuffer(
   limits: { maxFrames?: number; maxBytes?: number } = {},
@@ -110,10 +133,82 @@ export function createReplayBuffer(
         resetRequired,
       };
     },
+    clear(): void {
+      frames.length = 0;
+      bytes = 0;
+    },
+    /** Retained weight, so the idle drop is observable. Exported for tests. */
+    stats(): { frames: number; bytes: number } {
+      return { frames: frames.length, bytes };
+    },
+  };
+}
+
+/**
+ * Gates ring retention on there being someone plausibly able to replay from it.
+ *
+ * The ring subscriber runs on every emit, and serializing a frame costs a full
+ * `JSON.stringify` of a message snapshot. Doing that for a bridge nobody is
+ * connected to — and holding the result — is background cost with no consumer,
+ * so retention is armed by the first live subscriber and dropped again once the
+ * last one has been gone for `idleRetentionMs`. A client that reconnects after
+ * the drop gets `replay.required`, which the frontend already handles.
+ *
+ * Exported for tests: the production window is a minute.
+ */
+export function createReplayRetention(
+  ring: { clear(): void },
+  idleRetentionMs: number = REPLAY_IDLE_RETENTION_MS,
+) {
+  let liveSubscribers = 0;
+  let retaining = true;
+  let dropTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const scheduleDrop = () => {
+    if (dropTimer) return;
+    dropTimer = setTimeout(() => {
+      dropTimer = undefined;
+      if (liveSubscribers > 0) return;
+      retaining = false;
+      ring.clear();
+    }, idleRetentionMs);
+    // Never let a cache drop hold an exiting bridge open.
+    dropTimer.unref?.();
+  };
+
+  // A bridge that has just started has no subscriber either, so it begins on
+  // the same countdown a drained one does.
+  scheduleDrop();
+
+  return {
+    /** False means "do not even serialize this event". */
+    shouldRetain(): boolean {
+      return retaining;
+    },
+    /** Claim retention for one live subscriber; the result releases it once. */
+    acquire(): () => void {
+      liveSubscribers += 1;
+      retaining = true;
+      if (dropTimer) {
+        clearTimeout(dropTimer);
+        dropTimer = undefined;
+      }
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        liveSubscribers -= 1;
+        if (liveSubscribers === 0) scheduleDrop();
+      };
+    },
+    get liveSubscribers(): number {
+      return liveSubscribers;
+    },
   };
 }
 
 const replayBuffer = createReplayBuffer();
+const replayRetention = createReplayRetention(replayBuffer);
 
 function formatReplayCursor(revision: number): string {
   return `${eventEmitter.generation}:${revision}`;
@@ -125,6 +220,9 @@ function formatReplayCursor(revision: number): string {
  * mutable SDK message objects.
  */
 eventEmitter.subscribe((event, revision) => {
+  // Bail before `serializeEventData`: with retention dropped there is nothing
+  // to replay to, and the stringify is the expensive half.
+  if (!replayRetention.shouldRetain()) return;
   replayBuffer.append(event, revision, eventEmitter.generation);
 });
 
@@ -196,14 +294,23 @@ export function createBoundedSseWriter(
   };
 }
 
+/** Frequency of the idle-connection keepalive comment frame. */
+export const KEEPALIVE_INTERVAL_MS = 30_000;
+
 export function createEventsRouter(
-  limits: { maxPendingFrames?: number; maxPendingBytes?: number } = {},
+  limits: {
+    maxPendingFrames?: number;
+    maxPendingBytes?: number;
+    keepaliveIntervalMs?: number;
+  } = {},
 ): Hono {
   const events = new Hono();
   const maxPendingFrames =
     limits.maxPendingFrames ?? MAX_PENDING_SSE_FRAMES;
   const maxPendingBytes =
     limits.maxPendingBytes ?? MAX_PENDING_SSE_BYTES;
+  const keepaliveIntervalMs =
+    limits.keepaliveIntervalMs ?? KEEPALIVE_INTERVAL_MS;
 
 events.get("/subscribe", (c) => {
   const origin = c.req.header("origin");
@@ -269,6 +376,9 @@ events.get("/subscribe", (c) => {
     let replaying = true;
     let keepaliveInterval: ReturnType<typeof setInterval> | undefined;
     let unsubscribe = () => {};
+    // Arm ring retention for as long as this connection exists, and for one
+    // reconnect window after it goes away.
+    const releaseReplayRetention = replayRetention.acquire();
 
     try {
       // Subscribe before choosing the replay ceiling. Anything emitted during
@@ -333,15 +443,30 @@ events.get("/subscribe", (c) => {
       } else {
         for (const frame of replay.frames) await writeFrame(frame);
       }
-      replaying = false;
-      for (const frame of pendingLiveFrames) {
-        if (frame.revision <= replayCeiling) continue;
-        await writeFrame(frame);
-      }
-      pendingLiveFrames.length = 0;
+      // Queue the whole drain in one synchronous turn. The bounded writer
+      // chains strictly FIFO, so enqueue order *is* wire order: awaiting each
+      // buffered frame in turn would let a live frame emitted during one of
+      // those awaits take the `void writeFrame(...)` path and land *between*
+      // two buffered frames. A browser adopts every `id:` it sees, so that
+      // reorders revisions and regresses the client's stored cursor — and an
+      // out-of-order `message.patched` fails the revision guard, forcing the
+      // full transcript refetch the replay ring exists to avoid.
+      //
+      // Every buffered frame is past `replayCeiling` by construction: the
+      // subscription above and the ceiling read below are separated by no
+      // await, so nothing can be emitted in between.
+      const drained = pendingLiveFrames.splice(0);
       pendingLiveBytes = 0;
+      replaying = false;
+      const drainWrites = drained.map((frame) => writeFrame(frame));
+      // `allSettled` leaves no unhandled rejection behind, but a failed drain
+      // must still reach the handler's catch and close the connection rather
+      // than being swallowed — same semantics as awaiting each write.
+      for (const settled of await Promise.allSettled(drainWrites)) {
+        if (settled.status === "rejected") throw settled.reason;
+      }
 
-      // Send keepalive every 30 seconds to prevent connection timeout
+      // Send a keepalive on an interval to prevent connection timeout
       keepaliveInterval = setInterval(() => {
         if (!isOpen) {
           if (keepaliveInterval) clearInterval(keepaliveInterval);
@@ -356,7 +481,7 @@ events.get("/subscribe", (c) => {
             closeConnection("keepalive failed");
           }
         });
-      }, 30000);
+      }, keepaliveIntervalMs);
 
       // Wait until the client disconnects or the writer declares the consumer
       // dead; returning ends the response and the client reconnects.
@@ -374,6 +499,7 @@ events.get("/subscribe", (c) => {
       c.req.raw.signal.removeEventListener("abort", onRequestAbort);
       if (keepaliveInterval) clearInterval(keepaliveInterval);
       unsubscribe();
+      releaseReplayRetention();
     }
   });
 });

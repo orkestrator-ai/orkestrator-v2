@@ -14,6 +14,7 @@
  * All three are O(1) and synchronous. Notification *processing* happens on
  * separate per-thread drains so one slow thread cannot reorder or delay another.
  */
+import { StringDecoder } from "node:string_decoder";
 import {
   AppServerProcessExitError,
   AppServerProtocolError,
@@ -127,7 +128,29 @@ export class JsonlRpcClient {
   private readonly methodTimeoutsMs: Readonly<Record<string, number>>;
   private readonly now: () => number;
 
+  /**
+   * Stateful UTF-8 decoder for the raw stdout pipe.
+   *
+   * Chunks are split on byte boundaries, not character boundaries, so a
+   * multi-byte sequence routinely straddles two chunks. Decoding each chunk
+   * independently with `Buffer#toString` turns that sequence into U+FFFD, and
+   * because U+FFFD is a legal JSON string character `JSON.parse` still succeeds —
+   * the corruption lands silently in the user's transcript, tool arguments and
+   * diffs. `StringDecoder` holds an incomplete trailing sequence back until the
+   * bytes that complete it arrive.
+   */
+  private readonly decoder = new StringDecoder("utf8");
   private buffer = "";
+  /**
+   * Encoded size of `buffer`, tracked incrementally.
+   *
+   * The overflow budget is a *byte* budget, and `String#length` counts UTF-16
+   * code units, so a buffer of multi-byte text is up to three times larger than
+   * its length suggests. Recomputing `Buffer.byteLength` over the whole buffer on
+   * every chunk would reintroduce the O(n²) scan `bufferScannedTo` exists to
+   * avoid, so it is only recomputed on the (rare, bounded) slice.
+   */
+  private bufferBytes = 0;
   /**
    * Where the next newline scan starts. The buffered tail has already been
    * scanned and contains no newline, so only bytes appended after this offset
@@ -135,6 +158,16 @@ export class JsonlRpcClient {
    * response) re-scans the whole accumulated buffer on every chunk — O(n²).
    */
   private bufferScannedTo = 0;
+  /**
+   * True while the scan loop below is running.
+   *
+   * A dispatch handler can synchronously feed more input back in (the scripted
+   * transports the bridge suite drives the engine with do exactly that). A
+   * re-entrant scan would restart `lineStart` at 0 over a buffer that still holds
+   * already-dispatched lines, emit a "line" spanning two records, and then let the
+   * outer `finally` slice with a stale offset — losing frames outright.
+   */
+  private draining = false;
   private nextId = 0;
   private closed = false;
   private closeError: Error | null = null;
@@ -191,7 +224,15 @@ export class JsonlRpcClient {
    */
   private handleChunk(chunk: Buffer | string): void {
     if (this.closed) return;
-    this.buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    const decoded = typeof chunk === "string" ? chunk : this.decoder.write(chunk);
+    this.buffer += decoded;
+    this.bufferBytes += Buffer.byteLength(decoded, "utf8");
+
+    // A scan already in flight will pick the bytes just appended up on its next
+    // iteration, because the loop re-reads `this.buffer` each time. Returning
+    // here is therefore not a deferral — the data is consumed by the outer call.
+    if (this.draining) return;
+    this.draining = true;
 
     // Consume every complete line before slicing the buffer once, rather than
     // re-copying the remainder per line.
@@ -214,11 +255,16 @@ export class JsonlRpcClient {
       // re-dispatched on the next chunk. Only a completed scan proved the
       // remainder holds no newline; after a mid-loop throw the remainder must
       // be rescanned from the start or a line boundary would be lost for good.
-      if (lineStart > 0) this.buffer = this.buffer.slice(lineStart);
+      if (lineStart > 0) {
+        this.buffer = this.buffer.slice(lineStart);
+        this.bufferBytes = Buffer.byteLength(this.buffer, "utf8");
+      }
       this.bufferScannedTo = scanExhausted ? this.buffer.length : 0;
+      // Released in `finally` so a throwing handler cannot wedge the reader shut.
+      this.draining = false;
     }
 
-    if (this.buffer.length > this.maxInboundLineBytes) {
+    if (this.bufferBytes > this.maxInboundLineBytes) {
       // Dropping the partial line keeps the reader alive; resyncing at the next
       // newline is better than growing without bound or killing every thread.
       this.metrics.oversizedInboundLines += 1;
@@ -227,6 +273,7 @@ export class JsonlRpcClient {
         "",
       );
       this.buffer = "";
+      this.bufferBytes = 0;
       this.bufferScannedTo = 0;
     }
   }

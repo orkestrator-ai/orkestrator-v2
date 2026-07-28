@@ -152,6 +152,23 @@ describe("EventRing", () => {
     ring.clear();
     expect(ring.getStats()).toMatchObject({ retained: 0, retainedBytes: 0 });
   });
+
+  test("advance records an unreplayable gap without retaining a payload", () => {
+    const ring = new EventRing<string>();
+    ring.append("before");
+    const cursor = ring.latestRevision;
+    ring.clear();
+    expect(ring.advance()).toBe(cursor + 1);
+    expect(ring.getStats()).toMatchObject({
+      retained: 0,
+      latestRevision: cursor + 1,
+    });
+    expect(ring.since(cursor)).toMatchObject({
+      events: [],
+      complete: false,
+      latestRevision: cursor + 1,
+    });
+  });
 });
 
 describe("parseEventCursor", () => {

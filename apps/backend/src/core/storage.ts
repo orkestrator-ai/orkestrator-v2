@@ -738,6 +738,19 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * True only for "the path is not there" (ENOENT, or ENOTDIR for a parent that
+ * is not a directory). Every other errno — EACCES, EIO, EMFILE — means the
+ * file may well exist and hold data we simply could not look at, which is a
+ * very different thing from an empty store.
+ */
+function isMissingFileError(error: unknown): boolean {
+  const code = error && typeof error === "object" && "code" in error
+    ? (error as { code?: unknown }).code
+    : undefined;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
 function normalizeOpenCodeModelCatalogEntries(
   models: OpenCodeModelCatalogEntry[],
 ): OpenCodeModelCatalogEntry[] {
@@ -1298,6 +1311,24 @@ export class StorageService {
     await fs.copyFile(filePath, first);
   }
 
+  /**
+   * Newest-first walk of the retained backups. Returns a box rather than the
+   * value itself so callers can tell "recovered `null`/`[]` from a backup"
+   * apart from "no backup was readable".
+   */
+  private async recoverJsonFromBackups<T>(filePath: string): Promise<{ value: T } | null> {
+    for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
+      const backup = this.backupPath(filePath, index);
+      if (!await exists(backup)) continue;
+      try {
+        return { value: JSON.parse(await fs.readFile(backup, "utf8")) as T };
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
   private async loadJson<T>(filePath: string, fallback: () => T): Promise<T> {
     if (!await exists(filePath)) return fallback();
 
@@ -1306,16 +1337,8 @@ export class StorageService {
       if (!raw.trim()) return fallback();
       return JSON.parse(raw) as T;
     } catch {
-      for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
-        const backup = this.backupPath(filePath, index);
-        if (!await exists(backup)) continue;
-        try {
-          return JSON.parse(await fs.readFile(backup, "utf8")) as T;
-        } catch {
-          continue;
-        }
-      }
-      return fallback();
+      const recovered = await this.recoverJsonFromBackups<T>(filePath);
+      return recovered ? recovered.value : fallback();
     }
   }
 
@@ -1327,11 +1350,26 @@ export class StorageService {
    * The stat happens *before* the read: if a foreign write lands in between,
    * the fresh content is cached under the stale fingerprint, which merely
    * costs one extra re-read on the next access — never a stale result.
+   *
+   * Only a genuinely absent file yields the fallback; see the stat catch.
    */
   private async loadJsonCached<T>(filePath: string, fallback: () => T): Promise<T> {
-    const stat = await fs.stat(filePath).catch(() => null);
-    if (!stat) {
+    let stat;
+    try {
+      stat = await fs.stat(filePath);
+    } catch (error) {
       this.jsonReadCache.delete(filePath);
+      if (!isMissingFileError(error)) {
+        // A stat that fails for a reason other than "not there" is no evidence
+        // that the store is empty. Handing back the fallback would show the
+        // user zero environments while their data sits intact on disk, and the
+        // next mutation would load that empty list, append to it and persist it
+        // over the real file. Take the same backup ladder a corrupt primary
+        // takes, and surface the failure when nothing is readable.
+        const recovered = await this.recoverJsonFromBackups<T>(filePath);
+        if (recovered) return recovered.value;
+        throw error;
+      }
       return fallback();
     }
     const fingerprint = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;

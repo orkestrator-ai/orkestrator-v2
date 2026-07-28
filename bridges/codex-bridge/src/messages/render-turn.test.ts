@@ -820,6 +820,7 @@ describe("renderTurn", () => {
           deletions: 0,
         },
       });
+      firstState.fileChange.baselines.set("unused.txt", "cold\n");
 
       await writeFile(path, "one\ntwo\n", "utf8");
       const firstAgain = await renderTurn(firstTurn, {
@@ -833,6 +834,10 @@ describe("renderTurn", () => {
       // the file's newer contents and silently rewrite history.
       expect(firstAgain.parts[0]).toBe(added.parts[0]);
       expect(firstAgain.parts[0]?.toolDiff?.after).toBe("one\n");
+      expect([...firstState.fileChange.baselines.keys()]).toEqual([
+        "unused.txt",
+        "example.txt",
+      ]);
 
       const secondTurn = turn();
       secondTurn.onItemCompleted({

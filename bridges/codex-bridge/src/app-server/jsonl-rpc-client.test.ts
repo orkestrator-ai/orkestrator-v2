@@ -149,6 +149,149 @@ describe("JSONL framing", () => {
     h.stdout.push(`\n${JSON.stringify({ jsonrpc: "2.0", id: 1, result: "alive" })}\n`);
     expect(await promise).toBe("alive");
   });
+
+  test("discards an oversized partial line that follows a consumed one", async () => {
+    // The overflow path after partial consumption: `lineStart > 0`, so the buffer
+    // has already been sliced and the scan offset reset before the size check
+    // runs. Getting that wrong drops the wrong prefix and desynchronises framing.
+    const h = harness({ maxInboundLineBytes: 128 });
+    const first = h.client.request("a");
+
+    h.stdout.push(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 1, result: "consumed" })}\n${"x".repeat(200)}`,
+    );
+
+    expect(await first).toBe("consumed");
+    expect(h.client.getMetrics().oversizedInboundLines).toBe(1);
+    expect(h.violations[0]?.detail).toContain("exceeded 128 bytes");
+
+    const second = h.client.request("b");
+    h.stdout.push(`\n${JSON.stringify({ jsonrpc: "2.0", id: 2, result: "alive" })}\n`);
+    expect(await second).toBe("alive");
+  });
+
+  test("measures the inbound budget in bytes, not UTF-16 code units", async () => {
+    // "→" is one code unit but three UTF-8 bytes. A budget compared against
+    // `String#length` lets a peer buffer three times the memory it was allowed.
+    const h = harness({ maxInboundLineBytes: 128 });
+    const promise = h.client.request("a");
+
+    // 60 code units, 180 bytes: over the byte budget, under the length budget.
+    h.stdout.pushBytes(Buffer.from("→".repeat(60), "utf8"));
+
+    expect(h.client.getMetrics().oversizedInboundLines).toBe(1);
+    h.stdout.push(`\n${JSON.stringify({ jsonrpc: "2.0", id: 1, result: "alive" })}\n`);
+    expect(await promise).toBe("alive");
+  });
+
+  test("reassembles a multi-byte character split across a chunk boundary", async () => {
+    // A real pipe splits on bytes. Decoding each chunk independently turns the
+    // straddling sequence into U+FFFD — and because U+FFFD is a legal JSON string
+    // character, `JSON.parse` still succeeds and the corruption reaches the user's
+    // transcript silently.
+    const h = harness();
+    const promise = h.client.request("thread/read");
+    const line = Buffer.from(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 1, result: { text: "→ 日本語 🙂 ✓" } })}\n`,
+      "utf8",
+    );
+
+    // Split at every byte offset so at least one cut lands mid-sequence.
+    for (const byte of line) h.stdout.pushBytes(Buffer.from([byte]));
+
+    expect(await promise).toEqual({ text: "→ 日本語 🙂 ✓" });
+    expect(h.violations).toHaveLength(0);
+  });
+
+  test("a dispatch handler that feeds the reader back does not lose frames", async () => {
+    // Re-entrancy: `pushMessage → emit → handleChunk` is synchronous for every
+    // scripted transport in this suite, so a handler that pushes a follow-up
+    // notification re-enters the scan. Without a guard the inner call restarts at
+    // offset 0 over a buffer that still holds dispatched lines, emits a "line"
+    // spanning two records, and the outer slice then discards the rest.
+    const stdout = new FakeReadable();
+    const notifications: string[] = [];
+    const violations: Array<{ detail: string; preview: string }> = [];
+    const note = (method: string) =>
+      `${JSON.stringify({ jsonrpc: "2.0", method, params: {} })}\n`;
+
+    new JsonlRpcClient({
+      generation: 1,
+      stdin: new FakeWritable(),
+      stdout,
+      onNotification: (notification) => {
+        notifications.push(notification.method);
+        if (notification.method === "a") stdout.push(note("d"));
+      },
+      onServerRequest: () => undefined,
+      onProtocolViolation: (detail, preview) => violations.push({ detail, preview }),
+    });
+
+    stdout.push(`${note("a")}${note("b")}${note("c")}`);
+
+    expect(notifications).toEqual(["a", "b", "c", "d"]);
+    expect(violations).toEqual([]);
+  });
+
+  test("a throwing protocol-violation handler does not re-dispatch consumed lines", async () => {
+    // The only path that throws out of the scan loop. The `finally` has to leave
+    // the buffer past the lines already dispatched — otherwise the next chunk
+    // replays them — while resetting the scan offset, because an interrupted scan
+    // never proved the remainder holds no newline.
+    const stdout = new FakeReadable();
+    const notifications: string[] = [];
+    let thrown = 0;
+
+    const client = new JsonlRpcClient({
+      generation: 1,
+      stdin: new FakeWritable(),
+      stdout,
+      onNotification: (notification) => notifications.push(notification.method),
+      onServerRequest: () => undefined,
+      onProtocolViolation: () => {
+        thrown += 1;
+        throw new Error("violation handler exploded");
+      },
+    });
+
+    const note = (method: string) =>
+      `${JSON.stringify({ jsonrpc: "2.0", method, params: {} })}\n`;
+
+    expect(() => stdout.push(`${note("first")}not json\n${note("never-reached")}`)).toThrow(
+      "violation handler exploded",
+    );
+    expect(thrown).toBe(1);
+    expect(notifications).toEqual(["first"]);
+
+    // The next chunk resumes from the surviving remainder: "first" is not
+    // dispatched twice, and the line the throw interrupted still lands.
+    stdout.push(note("after"));
+    expect(notifications).toEqual(["first", "never-reached", "after"]);
+    expect(client.getMetrics().notificationsReceived).toBe(3);
+  });
+
+  test("a multi-megabyte line spread over many chunks is assembled once", async () => {
+    // The exact `thread/read` shape the scan offset exists for: no newline until
+    // the very end, so a scan that restarted at offset 0 per chunk would be
+    // O(n²) over ~2MB delivered in 64KB pipe-sized pieces.
+    const h = harness({ maxInboundLineBytes: 16 * 1024 * 1024 });
+    const promise = h.client.request("thread/read");
+    const payload = "abcdefgh".repeat(256 * 1024); // 2MB
+    const line = Buffer.from(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 1, result: { text: payload } })}\n`,
+      "utf8",
+    );
+
+    const chunkSize = 64 * 1024;
+    expect(line.length / chunkSize).toBeGreaterThan(30);
+    for (let offset = 0; offset < line.length; offset += chunkSize) {
+      h.stdout.pushBytes(line.subarray(offset, offset + chunkSize));
+    }
+
+    expect(await promise).toEqual({ text: payload });
+    expect(h.violations).toHaveLength(0);
+    expect(h.client.getMetrics().oversizedInboundLines).toBe(0);
+  });
 });
 
 describe("request correlation", () => {

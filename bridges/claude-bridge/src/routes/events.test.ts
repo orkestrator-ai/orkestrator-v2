@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { Hono } from "hono";
 import { TransformStream } from "node:stream/web";
 
@@ -18,6 +18,7 @@ import events, {
   createBoundedSseWriter,
   createEventsRouter,
   createReplayBuffer,
+  createReplayRetention,
   getReplayFrames,
   parseReplayCursor,
   serializeEventData,
@@ -232,6 +233,26 @@ describe("createBoundedSseWriter", () => {
       await write({ event: "a", data: `f${index}` }).catch(() => undefined);
     }
     expect(overflowed).toBe(0);
+  });
+});
+
+describe("replay retention", () => {
+  test("drops an idle ring and re-arms it for the next subscriber", async () => {
+    const clear = mock(() => undefined);
+    const retention = createReplayRetention({ clear }, 5);
+    const release = retention.acquire();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(clear).not.toHaveBeenCalled();
+    expect(retention.shouldRetain()).toBe(true);
+
+    release();
+    await waitFor(() => clear.mock.calls.length === 1);
+    expect(retention.shouldRetain()).toBe(false);
+
+    const releaseAgain = retention.acquire();
+    expect(retention.shouldRetain()).toBe(true);
+    expect(retention.liveSubscribers).toBe(1);
+    releaseAgain();
   });
 });
 
@@ -575,7 +596,7 @@ describe("GET /subscribe (SSE)", () => {
     }
   });
 
-  test("delivers events emitted while retained replay is flushing", async () => {
+  test("delivers events emitted while retained replay is flushing in revision order", async () => {
     const subscribersBefore = eventEmitter.subscriberCount;
     const before = eventEmitter.currentRevision;
     for (let index = 0; index < 100; index += 1) {
@@ -596,15 +617,28 @@ describe("GET /subscribe (SSE)", () => {
 
     try {
       await waitFor(() => eventEmitter.subscriberCount === subscribersBefore + 1);
-      eventEmitter.emit({
-        type: "session.idle",
-        sessionId: "emitted-during-replay",
-      });
+      for (let index = 1; index <= 3; index += 1) {
+        eventEmitter.emit({
+          type: "session.idle",
+          sessionId: `emitted-during-replay-${index}`,
+        });
+      }
       const frames = await readUntil(
         reader!,
-        (buffer) => buffer.includes('"sessionId":"emitted-during-replay"'),
+        (buffer) => buffer.includes('"sessionId":"emitted-during-replay-3"'),
       );
-      expect(frames.match(/"sessionId":"emitted-during-replay"/g)).toHaveLength(1);
+      for (let index = 1; index <= 3; index += 1) {
+        expect(frames.match(
+          new RegExp(`"sessionId":"emitted-during-replay-${index}"`, "g"),
+        )).toHaveLength(1);
+      }
+      const revisions = [...frames.matchAll(
+        new RegExp(`^id: ${eventEmitter.generation}:(\\d+)$`, "gm"),
+      )].map((match) => Number(match[1]));
+      expect(revisions.length).toBeGreaterThan(100);
+      expect(revisions.every(
+        (revision, index) => index === 0 || revision > revisions[index - 1]!,
+      )).toBe(true);
     } finally {
       controller.abort();
       await reader?.cancel().catch(() => {});
@@ -687,5 +721,50 @@ describe("GET /subscribe (SSE)", () => {
 
     await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
     await response.body?.cancel().catch(() => {});
+  });
+
+  test("route-level handshake byte overflow closes and removes the subscriber", async () => {
+    const boundedApp = new Hono();
+    boundedApp.route("/", createEventsRouter({
+      maxPendingFrames: 100,
+      maxPendingBytes: 32,
+    }));
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const response = await boundedApp.request("/subscribe");
+
+    await waitFor(() => eventEmitter.subscriberCount === subscribersBefore + 1);
+    eventEmitter.emit({
+      type: "message.updated",
+      sessionId: "handshake-byte-overflow",
+      data: { message: { content: "x".repeat(256) } },
+    });
+
+    await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    await response.body?.cancel().catch(() => {});
+  });
+
+  test("emits keepalives on the configured interval and cleans up on abort", async () => {
+    const keepaliveApp = new Hono();
+    keepaliveApp.route("/", createEventsRouter({ keepaliveIntervalMs: 5 }));
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const controller = new AbortController();
+    const response = await keepaliveApp.request("/subscribe", {
+      signal: controller.signal,
+    });
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+
+    try {
+      const frames = await readUntil(
+        reader!,
+        (buffer) => buffer.includes("event: keepalive"),
+      );
+      expect(frames).toContain("event: connected");
+      expect(frames).toContain("event: keepalive");
+    } finally {
+      controller.abort();
+      await reader?.cancel().catch(() => {});
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    }
   });
 });

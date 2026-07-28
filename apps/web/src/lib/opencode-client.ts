@@ -678,14 +678,24 @@ export function mergeOpenCodeMessageInfo(
   const normalized = normalizeOpenCodeMessage({ info: rawInfo, parts: [] });
   if (!normalized) return null;
   if (!existing) return normalized;
-  return {
+  const merged: OpenCodeMessage = {
     ...existing,
     role: normalized.role,
+    // `info` is the whole message record, not a patch, so its error field is
+    // authoritative in both directions: a message the server no longer reports
+    // as errored (a retried turn) must lose the badge, not keep it forever.
     ...(normalized.hasError ? { hasError: true } : {}),
+    // Model and usage are only present once the backend has resolved them.
+    // An early streaming `info` legitimately omits them, so absence means
+    // "not known yet" rather than "cleared" — blanking would drop the
+    // backend-confirmed model badge for the whole streaming turn.
+    ...(normalized.modelId ? { modelId: normalized.modelId } : {}),
     ...(normalized.providerUsage
       ? { providerUsage: normalized.providerUsage }
       : {}),
   };
+  if (!normalized.hasError) delete merged.hasError;
+  return merged;
 }
 
 /**

@@ -611,6 +611,8 @@ describe("sendPrompt", () => {
       expect(stored.messages[1]?.role).toBe("assistant");
       expect(stored.messages[1]?.content).toBe("Hi there!");
       expect(stored.messages[1]?.modelId).toBe("claude-sonnet-4-6");
+      expect(stored.lastStreamedRevisionAt).toBeGreaterThan(0);
+      expect(stored.lastStreamedRevisionAt).toBeLessThanOrEqual(Date.now());
 
       const initData = getSessionInitData(session.id);
       expect(initData?.slashCommands).toEqual(["help"]);
@@ -4825,7 +4827,7 @@ describe("evictIdleHydratedTranscripts", () => {
     }
   });
 
-  test("never evicts a transcript that was streamed in this process", async () => {
+  test("keeps a streamed transcript when its replay-safety clock is unknown", async () => {
     // A turn that ran here leaves `revision` counters on its messages, which a
     // reconnecting SSE client resumes patches from; hydration from disk cannot
     // reproduce them.
@@ -4833,6 +4835,29 @@ describe("evictIdleHydratedTranscripts", () => {
     markStale(state);
     state.messages[state.messages.length - 1]!.revision = 3;
     expect(evictIdleHydratedTranscripts()).toEqual([]);
+  });
+
+  test("evicts a streamed transcript after its replay-safety window expires", async () => {
+    const state = await hydratedIdleSession();
+    const now = Date.now();
+    state.lastAccessedAt = now - IDLE_TRANSCRIPT_EVICTION_MS - 1;
+    state.messages[state.messages.length - 1]!.revision = 3;
+    state.lastStreamedRevisionAt = now - IDLE_TRANSCRIPT_EVICTION_MS - 1;
+
+    expect(evictIdleHydratedTranscripts(now)).toEqual([state.id]);
+    expect(state.messages).toEqual([]);
+    expect(state.persistedMessagesLoaded).toBe(false);
+  });
+
+  test("keeps a recently streamed transcript even when its last read is stale", async () => {
+    const state = await hydratedIdleSession();
+    const now = Date.now();
+    state.lastAccessedAt = now - IDLE_TRANSCRIPT_EVICTION_MS - 1;
+    state.messages[state.messages.length - 1]!.revision = 3;
+    state.lastStreamedRevisionAt = now - IDLE_TRANSCRIPT_EVICTION_MS + 1;
+
+    expect(evictIdleHydratedTranscripts(now)).toEqual([]);
+    expect(state.messages.length).toBeGreaterThan(0);
   });
 
   test("never evicts a session that was not hydrated from disk", async () => {

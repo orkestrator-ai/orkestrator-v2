@@ -1138,15 +1138,12 @@ export async function newestJsonlInDir(
 
 export function transcriptContainsSessionId(content: string, sessionId: string): boolean {
   if (!content || !sessionId) return false;
-  // Claude writes the owning session id at the top level of every record, so
-  // the shallow pass answers effectively every real transcript after one line.
-  // The deep scan is kept as a fallback for shapes that nest it, but it walks
-  // every value of every line and must not be the common path.
-  return scanTranscriptForSessionId(content, sessionId, false)
-    || scanTranscriptForSessionId(content, sessionId, true);
-}
-
-function scanTranscriptForSessionId(content: string, sessionId: string, deep: boolean): boolean {
+  // One parse per line, not two. Claude writes the owning session id at the top
+  // level of every record and the deep walk tests exactly that key before it
+  // recurses, so a separate shallow pass can only ever win on a match — on a
+  // miss it re-parsed the whole file for nothing. Discovery re-reads every
+  // candidate in this environment's project dir on each 250ms poll tick until a
+  // transcript binds, so the miss is the common case.
   for (const raw of content.split("\n")) {
     const trimmed = raw.trim();
     if (!trimmed) continue;
@@ -1156,17 +1153,9 @@ function scanTranscriptForSessionId(content: string, sessionId: string, deep: bo
     } catch {
       continue;
     }
-    if (deep ? jsonContainsSessionId(value, sessionId) : topLevelSessionIdMatches(value, sessionId)) {
-      return true;
-    }
+    if (jsonContainsSessionId(value, sessionId)) return true;
   }
   return false;
-}
-
-function topLevelSessionIdMatches(value: unknown, sessionId: string): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return record.sessionId === sessionId || record.session_id === sessionId;
 }
 
 function jsonContainsSessionId(value: unknown, sessionId: string): boolean {
@@ -2238,6 +2227,8 @@ type InteractiveTerminalSession = {
   rows: number;
   /** Current gap between captures; doubles while the pane is static. */
   intervalMs: number;
+  /** When the armed timer is due, so a reschedule can tell sooner from later. */
+  nextCaptureAt?: number;
   context?: CommandContext;
 };
 
@@ -2303,10 +2294,22 @@ export class InteractiveTmuxTerminalManager {
    * Self-rescheduling rather than a fixed interval, so a pane nobody is looking
    * at costs one `tmux capture-pane` per second instead of four — and so a
    * capture that runs long cannot stack up behind itself.
+   *
+   * Only ever pulls the next capture *forward*. `write` reschedules on every
+   * keystroke, so an unconditional re-arm let anything faster than one
+   * character per {@link INTERACTIVE_SNAPSHOT_MIN_MS} — ordinary typing, or key
+   * auto-repeat — push the deadline out for as long as the user kept typing,
+   * and the pane appeared frozen exactly while they were using it.
    */
   private schedule(terminal: InteractiveTerminalSession): void {
-    if (terminal.timer !== undefined) this.cancelTimeout(terminal.timer);
+    const dueAt = Date.now() + terminal.intervalMs;
+    if (terminal.timer !== undefined) {
+      if (terminal.nextCaptureAt !== undefined && terminal.nextCaptureAt <= dueAt) return;
+      this.cancelTimeout(terminal.timer);
+    }
+    terminal.nextCaptureAt = dueAt;
     terminal.timer = this.scheduleTimeout(() => {
+      terminal.nextCaptureAt = undefined;
       const context = terminal.context;
       if (!context || this.terminals.get(terminal.id) !== terminal) return;
       void this.emitSnapshot(terminal, context, false)

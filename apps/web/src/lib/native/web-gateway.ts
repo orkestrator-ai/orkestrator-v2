@@ -68,6 +68,13 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     ready: Promise<void>;
     resolveReady: () => void;
     readyResolved: boolean;
+    /**
+     * Whether this stream has ever been open. A reconnect is not the same as a
+     * first connect: the gateway has no replay buffer, so everything the PTY
+     * emitted during the gap is gone from this socket and the consumer has to
+     * be told to re-read the authoritative snapshot.
+     */
+    connectedBefore: boolean;
     closed: boolean;
   };
   const terminalEventStreams = new Map<string, TerminalEventStream>();
@@ -217,6 +224,27 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     stream.resolveReady();
   };
 
+  /**
+   * Announce that a per-terminal stream is open.
+   *
+   * `resolveTerminalStreamReady` is a one-shot latch, so on its own a stream
+   * that drops and reconnects tells the consumer nothing — none of `useTerminal`'s
+   * reconcile triggers fire and the terminal stays permanently truncated. Every
+   * open after the first therefore synthesizes a desync frame for exactly this
+   * event's listeners, which `decodeTerminalOutputPayload` maps to `null` and
+   * `useTerminal` turns into a snapshot reconcile. Scoping it to the one event
+   * avoids the app-wide resync `announceEventStreamConnected` would trigger.
+   */
+  const announceTerminalStreamOpen = (stream: TerminalEventStream) => {
+    const isReconnect = stream.connectedBefore;
+    stream.connectedBefore = true;
+    resolveTerminalStreamReady(stream);
+    if (!isReconnect) return;
+    dispatchMessage(
+      JSON.stringify({ event: stream.event, payload: { desynced: true } }),
+    );
+  };
+
   const startTerminalEventStream = (stream: TerminalEventStream) => {
     if (stream.closed || stream.source || stream.controller) return;
     if (bearerToken || baseUrl) {
@@ -232,7 +260,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           if (!response.ok || !response.body) {
             throw new Error(`Gateway terminal event stream failed with HTTP ${response.status}`);
           }
-          resolveTerminalStreamReady(stream);
+          announceTerminalStreamOpen(stream);
           await consumeFetchEventStream(response, controller);
         } catch (error) {
           if (!controller.signal.aborted) {
@@ -260,7 +288,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       withCredentials: true,
     });
     stream.source = source;
-    source.onopen = () => resolveTerminalStreamReady(stream);
+    source.onopen = () => announceTerminalStreamOpen(stream);
     source.onmessage = (message) => dispatchMessage(message.data);
     source.onerror = () => {
       console.warn("[RemoteGateway] Terminal event stream disconnected");
@@ -282,6 +310,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       ready,
       resolveReady,
       readyResolved: false,
+      connectedBefore: false,
       closed: false,
     };
     terminalEventStreams.set(event, stream);

@@ -19,10 +19,11 @@ import {
   getCodexSpawnedAgentIdsInOrder,
   reconcileCodexSubagentTimeline,
 } from "../codex-collaboration.js";
+import { relative } from "node:path";
 import { deriveTranscriptSubagentPartsForTurn } from "../subagent-transcript-parts.js";
 import { readCachedTranscript } from "../transcript-cache.js";
 import { createSharedTranscriptMetaLoader } from "../history/rollout.js";
-import { BaselineMap, beginTurn } from "./diff-budget.js";
+import { BaselineMap, beginTurn, touchBaseline } from "./diff-budget.js";
 import { hasVisibleText, itemToParts } from "./normalization.js";
 import type { FileChangeDiffContext, NormalizedPart } from "./types.js";
 import type { EngineItem } from "../engine/types.js";
@@ -98,6 +99,18 @@ export function releaseTurnRenderState(state: TurnRenderState): void {
   state.subagentProbedAt = 0;
   state.fileChange.baselines.clear();
   state.fileChange.cache.clear();
+}
+
+function touchCachedPartBaselines(
+  parts: readonly NormalizedPart[],
+  cwd: string,
+  baselines: BaselineMap,
+): void {
+  for (const part of parts) {
+    const filePath = part.toolDiff?.filePath;
+    if (!filePath) continue;
+    touchBaseline(baselines, relative(cwd, filePath));
+  }
 }
 
 function joinReasoning(summary: string[], content: string[]): string {
@@ -336,6 +349,15 @@ export async function renderTurn(
           accumulator?.completed
           && cached?.source === accumulator.item
         ) {
+          // `itemToParts` touches a file's baseline while rendering its diff.
+          // A completed-item cache hit skips that function, so without the
+          // equivalent touch here an actively re-rendered file looks cold to
+          // the LRU and can be evicted ahead of truly unused baselines.
+          touchCachedPartBaselines(
+            cached.parts,
+            options.cwd,
+            options.state.fileChange.baselines,
+          );
           parts.push(...cached.parts);
         } else {
           const itemParts = await itemToParts(

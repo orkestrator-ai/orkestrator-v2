@@ -1380,6 +1380,79 @@ describe("ClaudeChatTab", () => {
       channel.close();
     });
 
+    test("still reconciles the replay gap when an optional interaction endpoint fails", async () => {
+      // The two interaction lists are optional. Letting a transient 500 on
+      // `/questions` reject the whole reconcile leaves transcript, status,
+      // title *and* the approvals list stale, with no retry and no watchdog —
+      // `useStalledTurnWatchdog` is gated on `isLoading`, which a skipped
+      // reconcile leaves false.
+      const channel = eventChannel();
+      const originalWarn = console.warn;
+      const consoleWarn = mock(() => {});
+      console.warn = consoleWarn as unknown as typeof console.warn;
+      mockSubscribeToEvents.mockImplementation(() => channel.stream);
+
+      try {
+        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+        const replayedMessage: ClaudeMessageType = {
+          id: "replayed-message",
+          role: "assistant",
+          content: "Recovered from snapshot",
+          parts: [{ type: "text", content: "Recovered from snapshot" }],
+          timestamp: "2026-07-20T12:00:00.000Z",
+        };
+        mockGetSession.mockReset();
+        mockGetSession.mockResolvedValue({
+          sessionId: "session-1",
+          status: "running",
+          title: "Recovered session",
+        });
+        mockGetSessionMessages.mockReset();
+        mockGetSessionMessages.mockResolvedValue([replayedMessage]);
+        mockGetPendingQuestions.mockReset();
+        mockGetPendingQuestions.mockRejectedValue(new Error("questions unavailable"));
+        mockGetPendingPlanApprovals.mockReset();
+        mockGetPendingPlanApprovals.mockResolvedValue([{
+          id: "fresh-approval",
+          sessionId: "session-1",
+        }]);
+        act(() => {
+          useClaudeStore.getState().addPendingQuestion({
+            id: "preserved-question",
+            sessionId: "session-1",
+            questions: [],
+          });
+          useClaudeStore.getState().addPendingPlanApproval({
+            id: "stale-approval",
+            sessionId: "session-1",
+          });
+        });
+
+        channel.push({ type: "replay.required", data: {} });
+
+        await waitFor(() => {
+          const state = useClaudeStore.getState();
+          expect(state.sessions.get(SESSION_KEY)).toMatchObject({
+            messages: [replayedMessage],
+            isLoading: true,
+            title: "Recovered session",
+          });
+          // The approvals list that *did* answer is still applied, and the
+          // questions list that failed is left untouched rather than cleared.
+          expect(state.pendingPlanApprovals.has("fresh-approval")).toBe(true);
+          expect(state.pendingPlanApprovals.has("stale-approval")).toBe(false);
+          expect(state.pendingQuestions.has("preserved-question")).toBe(true);
+        });
+
+        useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+        channel.close();
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
+
     test("applies assistant updates, titles, usage, idle refreshes, and error payloads", async () => {
       const channel = eventChannel();
       const originalError = console.error;

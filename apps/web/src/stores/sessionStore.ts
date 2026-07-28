@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { deepEqualJson } from "@/lib/chat/message-identity";
 import type { Session, SessionStatus, SessionType } from "@/types";
 import {
   getSessionsByEnvironment,
@@ -110,12 +111,14 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
           (session) => session.environmentId === environmentId,
         );
         const existingById = new Map(existing.map((session) => [session.id, session]));
+        // Structural, not serialized: JSON.stringify is key-order sensitive (a
+        // reordered but identical record would publish a spurious update) and
+        // erases undefined-valued fields (a cleared field would be dropped).
         const unchanged =
           existing.length === sessions.length
           && sessions.every((session) => {
             const current = existingById.get(session.id);
-            return current !== undefined
-              && JSON.stringify(current) === JSON.stringify(session);
+            return current !== undefined && deepEqualJson(current, session);
           });
         const newLoading = new Set(state.loadingEnvironments);
         newLoading.delete(environmentId);
@@ -138,9 +141,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
           const current = existingById.get(session.id);
           newSessions.set(
             session.id,
-            current && JSON.stringify(current) === JSON.stringify(session)
-              ? current
-              : session,
+            current && deepEqualJson(current, session) ? current : session,
           );
         }
         return {

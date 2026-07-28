@@ -2778,6 +2778,65 @@ exit 0
     expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
   }, ASYNC_TEST_BUDGET_MS);
 
+  test("expires an exited terminal snapshot through the production timer path", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-buffer-expiry-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-buffer-expiry",
+      environmentType: "local",
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    commandTesting.setTerminalOutputRetentionMs(5);
+
+    const sessionId = terminalSessionResult(
+      await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ),
+    ).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    ptyProcesses.at(-1)?.emitData("short-lived tail");
+    ptyProcesses.at(-1)?.emitExit({ exitCode: 0 });
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(1);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+    expect(commands.get("get_terminal_output_snapshot")?.({ sessionId }, context))
+      .toEqual({ output: "", revision: 0, generation: 0, truncated: false });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("an explicitly closed terminal does not retain its output snapshot", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-explicit-close-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-explicit-close",
+      environmentType: "local",
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const sessionId = terminalSessionResult(
+      await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ),
+    ).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    ptyProcesses.at(-1)?.emitData("user closed this terminal");
+
+    await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+    expect(commands.get("get_terminal_output_snapshot")?.({ sessionId }, context))
+      .toEqual({ output: "", revision: 0, generation: 0, truncated: false });
+  }, ASYNC_TEST_BUDGET_MS);
+
   test("bounds retained exited terminal snapshots and evicts the oldest", async () => {
     const worktreePath = await createTempDir("ork-electron-terminal-retention-cap-");
     const environment = createEnvironment({
@@ -2899,6 +2958,39 @@ exit 0
     expect(snapshot.truncated).toBe(true);
     expect(snapshot.output).toBe("A".repeat(maxChars - 1));
     expect(snapshot.output).not.toContain("\ufffd");
+    expect(Buffer.from(snapshot.output, "utf8").toString("utf8")).toBe(snapshot.output);
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("does not leave a low surrogate when the trimmed pair spans PTY chunks", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-unicode-chunks-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-unicode-chunks",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const maxChars = 500 * 1024;
+    const sessionId = terminalSessionResult(
+      await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ),
+    ).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+
+    // The high and low halves arrive in distinct PTY callbacks. Trimming the
+    // oldest code unit therefore drops an entire chunk and must also advance
+    // into the next one to remove the orphaned low half.
+    ptyProcesses.at(-1)?.emitData("\ud83d");
+    ptyProcesses.at(-1)?.emitData(`\ude00${"A".repeat(maxChars - 1)}`);
+
+    const snapshot = commands.get("get_terminal_output_snapshot")?.(
+      { sessionId },
+      context,
+    ) as { output: string; truncated: boolean };
+    expect(snapshot.truncated).toBe(true);
+    expect(snapshot.output).toBe("A".repeat(maxChars - 1));
+    expect(snapshot.output.charCodeAt(0)).not.toBe(0xde00);
     expect(Buffer.from(snapshot.output, "utf8").toString("utf8")).toBe(snapshot.output);
   }, ASYNC_TEST_BUDGET_MS);
 

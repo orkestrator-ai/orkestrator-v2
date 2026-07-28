@@ -44,12 +44,26 @@ export interface EventRingOptions<T> {
   maxBytes?: number;
   /** Returns the retained byte cost for one event. Required with `maxBytes`. */
   measureBytes?: (event: T) => number;
+  /**
+   * Collapses a retained event that `incoming` makes redundant.
+   *
+   * Returns the replacement payload for the retained entry, or null when the two
+   * are unrelated. Match on the entry's *identity* (its session and message, say)
+   * rather than on whether it has already been collapsed: the scan runs
+   * newest-first and stops at the first match, which is only sound if an already
+   * collapsed entry still counts as a match.
+   *
+   * The entry keeps its revision, so the sequence stays dense and `since()`'s
+   * completeness check is unaffected.
+   */
+  supersede?: (incoming: T, retained: T) => T | null;
 }
 
 export class EventRing<T> {
   private readonly capacity: number;
   private readonly maxBytes: number;
   private readonly measureBytes: (event: T) => number;
+  private readonly supersede: ((incoming: T, retained: T) => T | null) | null;
   private readonly buffer: RingEvent<T>[] = [];
   private revision = 0;
   private droppedEvents = 0;
@@ -62,8 +76,15 @@ export class EventRing<T> {
     // A zero-capacity ring would report every reconnect as needing reconciliation,
     // which is correct but pointless; guard against a misconfigured 0.
     this.capacity = Math.max(1, capacity);
+    if (options.maxBytes !== undefined && !options.measureBytes) {
+      // Defaulting the measure to `() => 0` here would silently disable the byte
+      // cap the caller just asked for — the ring would look bounded and grow
+      // without limit. A misconfiguration this quiet is worth a hard failure.
+      throw new TypeError("EventRing: maxBytes requires measureBytes");
+    }
     this.maxBytes = Math.max(0, options.maxBytes ?? Number.POSITIVE_INFINITY);
     this.measureBytes = options.measureBytes ?? (() => 0);
+    this.supersede = options.supersede ?? null;
   }
 
   get latestRevision(): number {
@@ -96,6 +117,7 @@ export class EventRing<T> {
   /** Assigns the next revision and retains the event. */
   append(event: T): number {
     this.revision += 1;
+    if (this.supersede) this.collapseSuperseded(event);
     this.retainedBytes += Math.max(0, this.measureBytes(event));
     this.buffer.push({ revision: this.revision, event });
     while (
@@ -108,6 +130,39 @@ export class EventRing<T> {
       this.droppedEvents += 1;
     }
     return this.revision;
+  }
+
+  /**
+   * Assigns the next revision without retaining a payload.
+   *
+   * An idle replay ring can stop holding background snapshots, but the cursor
+   * sequence must still advance while events are omitted. Otherwise a returning
+   * client could present its old cursor and be told it is caught up even though
+   * events occurred during the retention gap.
+   */
+  advance(): number {
+    this.revision += 1;
+    return this.revision;
+  }
+
+  /**
+   * Replaces the payload of the newest retained entry `incoming` supersedes.
+   *
+   * Newest-first with an early exit: every older entry for the same identity was
+   * already collapsed when *its* successor was appended, so one match is enough.
+   */
+  private collapseSuperseded(incoming: T): void {
+    const supersede = this.supersede;
+    if (!supersede) return;
+    for (let index = this.buffer.length - 1; index >= 0; index -= 1) {
+      const entry = this.buffer[index]!;
+      const replacement = supersede(incoming, entry.event);
+      if (replacement === null) continue;
+      this.retainedBytes -= Math.max(0, this.measureBytes(entry.event));
+      entry.event = replacement;
+      this.retainedBytes += Math.max(0, this.measureBytes(replacement));
+      return;
+    }
   }
 
   /**

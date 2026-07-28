@@ -1683,6 +1683,126 @@ describe("BuildChatTab", () => {
       });
     });
 
+    test("clears the spinner when the final transcript reconcile fails", async () => {
+      // `getSessionMessages` rejects on any network-layer failure, so "the
+      // bridge died right after emitting session.idle" lands here. The turn is
+      // still over and no second `session.idle` will ever arrive, so gating the
+      // loading flag on the refetch wedges the pipeline (it bails on isLoading)
+      // until the user hits Stop.
+      mockGetSessionMessages.mockRejectedValueOnce(new Error("bridge gone"));
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield {
+            type: "session.idle",
+            sessionId: SESSION_ID,
+            data: {},
+          } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockGetSessionMessages).toHaveBeenCalled();
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+      });
+    });
+
+    test("keeps dispatching frames for other sessions while a final reconcile is in flight", async () => {
+      // The subscription is environment-wide: awaiting one session's transcript
+      // inside the frame loop stalls every other session in the environment.
+      const OTHER_SESSION_ID = "session-2";
+      const OTHER_SESSION_KEY = createSessionKey(ENV_ID, "other-tab");
+      let releaseTranscript!: (messages: ClaudeMessage[]) => void;
+      const stalledTranscript = new Promise<ClaudeMessage[]>((resolve) => {
+        releaseTranscript = resolve;
+      });
+      mockGetSessionMessages.mockImplementation(() => stalledTranscript);
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield {
+            type: "session.idle",
+            sessionId: SESSION_ID,
+            data: {},
+          } as any;
+          yield {
+            type: "session.error",
+            sessionId: OTHER_SESSION_ID,
+            data: { error: "second session failed" },
+          } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+      useClaudeStore.setState((state) => ({
+        sessions: new Map(state.sessions).set(OTHER_SESSION_KEY, {
+          sessionId: OTHER_SESSION_ID,
+          messages: [],
+          isLoading: true,
+        }),
+      }));
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const other = useClaudeStore.getState().sessions.get(OTHER_SESSION_KEY);
+        expect(other?.isLoading).toBe(false);
+        expect(other?.messages.at(-1)?.content).toBe("second session failed");
+      });
+
+      releaseTranscript([]);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    });
+
+    test("appends the replay error bubble once across repeated replay gaps", async () => {
+      // Error bubbles are client-only: they are never in the server transcript,
+      // so de-duping against the fetched response always passes and every
+      // replay appends another message carrying the same React key.
+      mockGetSession.mockImplementation(() => Promise.resolve({
+        id: SESSION_ID,
+        title: "Build Session",
+        status: "error",
+        error: "bridge exploded",
+        createdAt: "2026-06-22T00:00:00.000Z",
+        lastActivity: "2026-06-22T00:00:02.000Z",
+      } as never));
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield { type: "replay.required", data: {} } as any;
+          yield { type: "replay.required", data: {} } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockGetSession).toHaveBeenCalledTimes(2);
+        expect(mockGetSessionMessages).toHaveBeenCalledTimes(2);
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const messages = useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
+      const errorMessages = messages.filter((message) => message.id.startsWith("[ERROR]"));
+      expect(errorMessages).toHaveLength(1);
+      expect(errorMessages[0]?.content).toBe("bridge exploded");
+      // Duplicate ids are duplicate React keys in the rendered transcript.
+      expect(new Set(messages.map((message) => message.id)).size).toBe(messages.length);
+    });
+
     test("event subscription failure surfaces the error screen with reconnect controls", async () => {
       // Init succeeds (cached client + healthy), then the SSE subscription
       // throws, simulating the bridge dropping the stream mid-run.

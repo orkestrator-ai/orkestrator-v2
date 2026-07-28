@@ -309,6 +309,63 @@ describe("hot store read caching", () => {
     });
   });
 
+  test("recovers from backup when the store cannot be stat'd", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      // The second write is what puts a full record into the rotated backup:
+      // the first found no primary file to copy.
+      await storage.updateEnvironment(environment.id, { name: "renamed" });
+
+      const environmentsPath = path.join(dataDir, "environments.json");
+      const realStat = fs.stat.bind(fs);
+      const statSpy = spyOn(fs, "stat").mockImplementation((async (
+        target: Parameters<typeof fs.stat>[0],
+      ) => {
+        if (String(target) === environmentsPath) {
+          throw Object.assign(new Error("EACCES: permission denied, stat"), { code: "EACCES" });
+        }
+        return realStat(target);
+      }) as typeof fs.stat);
+      try {
+        expect((await storage.loadEnvironments()).map((item) => item.id))
+          .toEqual([environment.id]);
+      } finally {
+        statSpy.mockRestore();
+      }
+    });
+  });
+
+  test("surfaces an unreadable store instead of presenting it as empty", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environmentsPath = path.join(dataDir, "environments.json");
+      const stored = createEnvironment("project-1");
+      // Written directly so no backup exists to recover from.
+      await fs.writeFile(environmentsPath, `${JSON.stringify([stored])}\n`, "utf8");
+
+      const realStat = fs.stat.bind(fs);
+      const statSpy = spyOn(fs, "stat").mockImplementation((async (
+        target: Parameters<typeof fs.stat>[0],
+      ) => {
+        if (String(target) === environmentsPath) {
+          throw Object.assign(new Error("EIO: i/o error, stat"), { code: "EIO" });
+        }
+        return realStat(target);
+      }) as typeof fs.stat);
+      try {
+        await expect(storage.loadEnvironments()).rejects.toThrow("EIO");
+        // The empty view was never the real damage: the next mutation would
+        // have appended to that empty list and written it back over the
+        // user's intact data.
+        await expect(storage.addEnvironment(createEnvironment("project-1")))
+          .rejects.toThrow("EIO");
+      } finally {
+        statSpy.mockRestore();
+      }
+
+      expect((await storage.loadEnvironments()).map((item) => item.id)).toEqual([stored.id]);
+    });
+  });
+
   test("skips the lease sweep without the cross-process lock when no leases exist", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       await storage.addEnvironment(createEnvironment("project-1"));

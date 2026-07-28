@@ -1647,6 +1647,83 @@ describe("useTerminal reconnect behavior", () => {
     expect(received).toEqual(["three"]);
   });
 
+  it("decodes the backend's bytesBase64 wire payload during a live attachment", async () => {
+    let outputHandler:
+      | ((event: {
+          payload: { bytesBase64: string; revision: number; generation: number };
+        }) => void)
+      | undefined;
+    listenMock.mockImplementation(async (event, handler) => {
+      if (event === "terminal-output-session-old") outputHandler = handler;
+      return unlistenMock;
+    });
+    const received: string[] = [];
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        existingSessionId: "session-old",
+        persistSession: true,
+        onData: (data) => received.push(new TextDecoder().decode(data)),
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    act(() => {
+      outputHandler?.({
+        payload: {
+          bytesBase64: btoa("native base64 output"),
+          revision: 1,
+          generation: 1,
+        },
+      });
+    });
+
+    expect(received).toEqual(["native base64 output"]);
+  });
+
+  it("rehydrates the authoritative snapshot after a gateway desync notice", async () => {
+    let outputHandler:
+      | ((event: { payload: { desynced: true } }) => void)
+      | undefined;
+    listenMock.mockImplementation(async (event, handler) => {
+      if (event === "terminal-output-session-old") outputHandler = handler;
+      return unlistenMock;
+    });
+    getTerminalOutputSnapshotMock
+      .mockResolvedValueOnce({
+        output: "before gap",
+        revision: 1,
+        generation: 1,
+      })
+      .mockResolvedValueOnce({
+        output: "after gap",
+        revision: 4,
+        generation: 1,
+      });
+    const replayed: string[] = [];
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        existingSessionId: "session-old",
+        persistSession: true,
+        replayOutputBuffer: true,
+        onReplay: (data) => replayed.push(new TextDecoder().decode(data)),
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    act(() => {
+      outputHandler?.({ payload: { desynced: true } });
+    });
+
+    await waitFor(() => expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(2));
+    expect(replayed).toEqual(["before gap", "after gap"]);
+  });
+
   it("marks a truncated snapshot as degraded replay", async () => {
     getTerminalOutputSnapshotMock.mockResolvedValue({
       output: "bounded tail",
@@ -1727,6 +1804,9 @@ describe("useTerminal reconnect behavior", () => {
 describe("decodeTerminalOutputPayload", () => {
   it("supports base64, legacy byte arrays, and desync notices", () => {
     expect(new TextDecoder().decode(decodeTerminalOutputPayload(btoa("base64"))!)).toBe("base64");
+    expect(new TextDecoder().decode(
+      decodeTerminalOutputPayload({ bytesBase64: btoa("object base64") })!,
+    )).toBe("object base64");
     expect([...decodeTerminalOutputPayload([0, 127, 255])!]).toEqual([0, 127, 255]);
     expect([...decodeTerminalOutputPayload({ bytes: [1, 2, 3] })!]).toEqual([1, 2, 3]);
     expect(decodeTerminalOutputPayload({ desynced: true })).toBeNull();

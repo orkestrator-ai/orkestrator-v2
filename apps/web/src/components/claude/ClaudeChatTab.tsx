@@ -1304,24 +1304,26 @@ export function ClaudeChatTab({
             pendingReloads.delete(reloadKey);
           }
 
-          const [serverSession, messages, questions, approvals] = await Promise.all([
+          // Transcript and status are mandatory — without them there is nothing
+          // to reconcile. The two interaction lists are optional: letting a
+          // transient 500 on `/questions` reject the whole reconcile leaves the
+          // transcript, status, title *and* the other list stale, with no retry
+          // and no watchdog (`useStalledTurnWatchdog` is gated on `isLoading`,
+          // which a skipped reconcile leaves false).
+          const coreReconcile = Promise.all([
             getSession(bridgeClient, sessionId),
             getSessionMessages(bridgeClient, sessionId, { throwOnError: true }),
+          ]);
+          const interactionsReconcile = Promise.allSettled([
             getPendingQuestions(bridgeClient, sessionId, { throwOnError: true }),
             getPendingPlanApprovals(bridgeClient, sessionId, { throwOnError: true }),
           ]);
+          const [serverSession, messages] = await coreReconcile;
           if (reloadGenerations.get(reloadKey) !== generation || !serverSession) return;
 
           const state = useClaudeStore.getState();
           const currentSession = state.sessions.get(sessionTabId);
           if (currentSession?.sessionId !== sessionId) return;
-
-          const existingQuestionIds = Array.from(state.pendingQuestions.values())
-            .filter((question) => question.sessionId === sessionId)
-            .map((question) => question.id);
-          const existingApprovalIds = Array.from(state.pendingPlanApprovals.values())
-            .filter((approval) => approval.sessionId === sessionId)
-            .map((approval) => approval.id);
 
           setMessages(sessionTabId, messages);
           applyServerSessionMetadata(sessionTabId, serverSession);
@@ -1336,15 +1338,45 @@ export function ClaudeChatTab({
             setSessionTitle(sessionTabId, serverSession.title);
           }
 
-          const nextQuestionIds = new Set(questions.map((question) => question.id));
-          for (const question of questions) addPendingQuestion(question);
-          for (const questionId of existingQuestionIds) {
-            if (!nextQuestionIds.has(questionId)) removePendingQuestion(questionId);
+          const [questionsResult, approvalsResult] = await interactionsReconcile;
+          if (reloadGenerations.get(reloadKey) !== generation) return;
+          const reconciledState = useClaudeStore.getState();
+          if (reconciledState.sessions.get(sessionTabId)?.sessionId !== sessionId) return;
+
+          if (questionsResult.status === "fulfilled") {
+            const existingQuestionIds = Array.from(reconciledState.pendingQuestions.values())
+              .filter((question) => question.sessionId === sessionId)
+              .map((question) => question.id);
+            const nextQuestionIds = new Set(
+              questionsResult.value.map((question) => question.id),
+            );
+            for (const question of questionsResult.value) addPendingQuestion(question);
+            for (const questionId of existingQuestionIds) {
+              if (!nextQuestionIds.has(questionId)) removePendingQuestion(questionId);
+            }
+          } else {
+            console.warn(
+              "[ClaudeChatTab] Failed to reconcile pending questions:",
+              questionsResult.reason,
+            );
           }
-          const nextApprovalIds = new Set(approvals.map((approval) => approval.id));
-          for (const approval of approvals) addPendingPlanApproval(approval);
-          for (const approvalId of existingApprovalIds) {
-            if (!nextApprovalIds.has(approvalId)) removePendingPlanApproval(approvalId);
+
+          if (approvalsResult.status === "fulfilled") {
+            const existingApprovalIds = Array.from(reconciledState.pendingPlanApprovals.values())
+              .filter((approval) => approval.sessionId === sessionId)
+              .map((approval) => approval.id);
+            const nextApprovalIds = new Set(
+              approvalsResult.value.map((approval) => approval.id),
+            );
+            for (const approval of approvalsResult.value) addPendingPlanApproval(approval);
+            for (const approvalId of existingApprovalIds) {
+              if (!nextApprovalIds.has(approvalId)) removePendingPlanApproval(approvalId);
+            }
+          } else {
+            console.warn(
+              "[ClaudeChatTab] Failed to reconcile pending plan approvals:",
+              approvalsResult.reason,
+            );
           }
         };
 

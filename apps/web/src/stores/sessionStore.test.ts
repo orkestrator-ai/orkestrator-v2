@@ -68,6 +68,44 @@ describe("sessionStore.loadSessionsForEnvironment", () => {
     expect(state.loadingEnvironments.has("env-1")).toBe(false);
   });
 
+  test("preserves identity when the same session arrives with reordered keys", async () => {
+    // A serialized compare is key-order sensitive, so a backend response that
+    // emitted its fields in another order would republish identical sessions
+    // and rerender every terminal bound to them.
+    const session = makeSession();
+    const sessions = new Map([[session.id, session]]);
+    useSessionStore.setState({ sessions });
+    const reordered = Object.fromEntries(
+      Object.entries(session).reverse(),
+    ) as Session;
+    expect(Object.keys(reordered)).not.toEqual(Object.keys(session));
+    getSessionsByEnvironmentMock.mockResolvedValue([reordered]);
+
+    await useSessionStore.getState().loadSessionsForEnvironment("env-1");
+
+    const state = useSessionStore.getState();
+    expect(state.sessions).toBe(sessions);
+    expect(state.sessions.get(session.id)).toBe(session);
+  });
+
+  test("adopts a session that only differs by an explicitly undefined field", async () => {
+    // A serialized compare erases undefined-valued fields, so a record whose
+    // optional field was cleared reads as identical and the stale object is
+    // kept instead of the authoritative one.
+    const session = makeSession();
+    useSessionStore.setState({ sessions: new Map([[session.id, session]]) });
+    expect(Object.hasOwn(session, "name")).toBe(false);
+    getSessionsByEnvironmentMock.mockResolvedValue([
+      { ...session, name: undefined },
+    ]);
+
+    await useSessionStore.getState().loadSessionsForEnvironment("env-1");
+
+    const stored = useSessionStore.getState().sessions.get(session.id);
+    expect(stored).not.toBe(session);
+    expect(Object.hasOwn(stored!, "name")).toBe(true);
+  });
+
   test("reuses unchanged entries while replacing changed entries", async () => {
     const unchanged = makeSession({ id: "session-1", order: 0 });
     const changed = makeSession({ id: "session-2", order: 1, name: "old" });

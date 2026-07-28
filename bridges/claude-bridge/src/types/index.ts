@@ -224,6 +224,16 @@ export interface SessionState {
    * not when anyone in this process last looked at it.
    */
   lastAccessedAt?: number;
+  /**
+   * Epoch millis at which the most recent turn in this process stopped
+   * streaming.
+   *
+   * Streamed assistant messages carry `revision` counters that a reconnecting
+   * SSE client resumes `message.patched` from, and hydration from disk cannot
+   * reproduce them. That only matters while a client could still be resuming,
+   * so this timestamp bounds how long the transcript stays pinned for it.
+   */
+  lastStreamedRevisionAt?: number;
   /** Latest provider-reported context, token, cost, and rate-limit snapshot. */
   usage?: SessionUsageSnapshot;
   /** Predicted next prompt emitted by the SDK after a completed turn. */

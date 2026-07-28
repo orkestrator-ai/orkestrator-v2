@@ -2599,13 +2599,20 @@ describe("opencode-client incremental message helpers", () => {
     expect(mergeOpenCodeMessageInfo(existing, {
       id: "message-1",
       role: "assistant",
+      providerID: "openai",
+      modelID: "gpt-5.6-sol",
       error: { name: "ProviderError" },
       tokens: { input: 4, output: 6 },
     })).toMatchObject({
       content: "streamed",
       parts: existing.parts,
+      modelId: "openai/gpt-5.6-sol",
       hasError: true,
     });
+    expect(mergeOpenCodeMessageInfo(
+      { ...existing, hasError: true },
+      { id: "message-1", role: "assistant" },
+    )?.hasError).toBeUndefined();
     expect(mergeOpenCodeMessageInfo(existing, null)).toBeNull();
     expect(mergeOpenCodeMessageInfo(existing, {})).toBeNull();
   });

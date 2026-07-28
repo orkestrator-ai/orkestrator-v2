@@ -167,23 +167,109 @@ type SseSubscriber = (
   serializedData: string,
 ) => Promise<void> | void;
 const subscribers = new Set<SseSubscriber>();
-export const MAX_REPLAY_SSE_BYTES = 32 * 1024 * 1024;
+export const MAX_REPLAY_SSE_BYTES = 4 * 1024 * 1024;
+export const REPLAY_IDLE_RETENTION_MS = 60_000;
+/** Flat cost charged to a collapsed frame, which carries no payload. */
+const SUPERSEDED_FRAME_BYTES = 64;
 interface RetainedSseEvent {
   type: SseEvent["type"];
   sessionId?: string;
-  serializedData: string;
+  /** Present for `message.updated`, so a newer snapshot can collapse this one. */
+  messageId?: string;
+  /** Set once a newer full snapshot for the same message replaced this payload. */
+  superseded?: boolean;
+  /**
+   * Produces the wire payload on demand.
+   *
+   * Lazy for a frame nobody was listening for: with no tab attached, a background
+   * turn's ~10 coalesced snapshots a second would otherwise each be encoded in
+   * full — megabytes at a time — purely to be retained and then evicted.
+   */
+  serialize: () => string;
   bytes: number;
 }
+
+/**
+ * Collapses an older `message.updated` frame once a newer one is retained.
+ *
+ * `message.updated` carries a **full** snapshot, so the older frame holds nothing
+ * the newer one does not. The entry is kept — with its revision — and only its
+ * payload is dropped, which preserves revision continuity and therefore
+ * `since()`'s completeness check while collapsing the dominant event type to a
+ * few hundred bytes. A retained tombstone is always followed by the newer full
+ * frame, because eviction is oldest-first: the successor cannot be dropped while
+ * its predecessor survives.
+ */
+function supersedeRetainedSseEvent(
+  incoming: RetainedSseEvent,
+  retained: RetainedSseEvent,
+): RetainedSseEvent | null {
+  if (incoming.type !== "message.updated" || retained.type !== "message.updated") return null;
+  if (!incoming.messageId || incoming.messageId !== retained.messageId) return null;
+  if (incoming.sessionId !== retained.sessionId) return null;
+  // Already collapsed: returned rather than skipped so the ring's newest-first
+  // scan stops here instead of walking back over frames it has already handled.
+  if (retained.superseded) return retained;
+  return {
+    type: retained.type,
+    sessionId: retained.sessionId,
+    messageId: retained.messageId,
+    superseded: true,
+    serialize: () => "{}",
+    bytes: SUPERSEDED_FRAME_BYTES,
+  };
+}
+
 /**
  * Retains immutable wire payloads rather than mutable message objects.
  *
  * The byte limit matters more than the frame count for growing message snapshots:
  * 512 cumulative multi-megabyte strings would otherwise consume gigabytes.
  */
-const eventRing = new EventRing<RetainedSseEvent>(undefined, {
-  maxBytes: MAX_REPLAY_SSE_BYTES,
-  measureBytes: (event) => event.bytes,
-});
+function createReplayEventRing(): EventRing<RetainedSseEvent> {
+  return new EventRing<RetainedSseEvent>(undefined, {
+    maxBytes: MAX_REPLAY_SSE_BYTES,
+    measureBytes: (event) => event.bytes,
+    supersede: supersedeRetainedSseEvent,
+  });
+}
+// `let` only so a test can swap in an isolated ring; nothing in the bridge
+// replaces it at runtime.
+let eventRing = createReplayEventRing();
+let replayRetentionEnabled = true;
+let replayRetentionSubscribers = 0;
+let replayRetentionTimer: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleReplayRetentionDrop(): void {
+  if (replayRetentionTimer) return;
+  replayRetentionTimer = setTimeout(() => {
+    replayRetentionTimer = undefined;
+    if (replayRetentionSubscribers > 0) return;
+    replayRetentionEnabled = false;
+    eventRing.clear();
+  }, REPLAY_IDLE_RETENTION_MS);
+  replayRetentionTimer.unref?.();
+}
+
+function acquireReplayRetention(): () => void {
+  replayRetentionSubscribers += 1;
+  replayRetentionEnabled = true;
+  if (replayRetentionTimer) {
+    clearTimeout(replayRetentionTimer);
+    replayRetentionTimer = undefined;
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    replayRetentionSubscribers -= 1;
+    if (replayRetentionSubscribers === 0) scheduleReplayRetentionDrop();
+  };
+}
+
+// A bridge that never receives a browser connection should eventually have the
+// same zero-retention background cost as the pre-replay implementation.
+scheduleReplayRetentionDrop();
 /** Interval for the idle-thread sweep. */
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const codexRawLogDir = normalizeOptionalEnvPath("ORKESTRATOR_CODEX_RAW_LOG_DIR");
@@ -458,26 +544,126 @@ const FALLBACK_MODELS: BridgeModel[] = [
  * tell what it has already seen. Fan-out stays fire-and-forget: a slow browser
  * must never back-pressure the reducer that called this.
  */
-function serializeSseEventData(event: SseEvent): string {
-  return JSON.stringify({
-    sessionId: event.sessionId,
-    ...(event.data ?? {}),
-  });
+function serializeSseEventData(
+  event: Pick<SseEvent, "sessionId"> & { data?: Record<string, unknown> },
+): string {
+  try {
+    return JSON.stringify({
+      sessionId: event.sessionId,
+      ...(event.data ?? {}),
+    });
+  } catch (error) {
+    // A payload that cannot be encoded (a cycle, a throwing getter, a BigInt)
+    // must not propagate back into the reducer — and through it the app-server
+    // read loop — that emitted it, and must not break the revision sequence every
+    // client's cursor depends on. Emit a placeholder and keep going.
+    console.error("[codex-bridge] Failed to serialize an SSE payload:", error);
+    return JSON.stringify({
+      sessionId: event.sessionId,
+      error: "payload could not be serialized",
+    });
+  }
+}
+
+/**
+ * Cheap immutable snapshot of an event's payload, taken synchronously.
+ *
+ * The retained frame must not change when the canonical message object is
+ * mutated afterwards — that is why the previous implementation encoded eagerly.
+ * Copying is enough to keep that property here: `publishAssistantMessage` mutates
+ * a message purely by **assignment** (`message.parts = …`, `message.content = …`),
+ * and every `NormalizedPart` is built fresh per render and replaced rather than
+ * edited in place (`reconcileCodexSubagentTimeline` re-`set`s each part; the
+ * completed-item cache stores arrays it never revisits). So copying the data
+ * object, the message object and its parts array pins everything reachable that
+ * can change.
+ *
+ * The copy is O(parts) pointer writes. The encoding it defers is O(payload
+ * bytes) — megabytes, ~10 times a second, for a tab that may not be attached.
+ */
+function snapshotSseEventPayload(event: SseEvent): Record<string, unknown> {
+  if (!event.data) return {};
+  const snapshot: Record<string, unknown> = { ...event.data };
+  const message = snapshot.message;
+  if (message && typeof message === "object") {
+    const copy = { ...(message as Record<string, unknown>) };
+    if (Array.isArray(copy.parts)) copy.parts = [...copy.parts];
+    snapshot.message = copy;
+  }
+  return snapshot;
+}
+
+/** Depth beyond which a payload is charged a flat cost rather than walked. */
+const SSE_ESTIMATE_MAX_DEPTH = 8;
+const SSE_ESTIMATE_NODE_BYTES = 16;
+
+/**
+ * Approximates a payload's encoded size without encoding it.
+ *
+ * Reading `String#length` is free; `JSON.stringify` allocates the whole payload
+ * a second time. The result is deliberately approximate — it counts UTF-16 units
+ * rather than UTF-8 bytes and ignores escaping — which is the right trade for a
+ * memory *budget*: the ring's frame-count cap is the hard bound, and the byte cap
+ * only has to be in the right order of magnitude.
+ */
+function estimateSsePayloadBytes(value: unknown, depth = 0): number {
+  if (typeof value === "string") return value.length + 2;
+  if (value === null || typeof value !== "object") return SSE_ESTIMATE_NODE_BYTES;
+  if (depth >= SSE_ESTIMATE_MAX_DEPTH) return SSE_ESTIMATE_NODE_BYTES;
+  let total = SSE_ESTIMATE_NODE_BYTES;
+  if (Array.isArray(value)) {
+    for (const entry of value) total += estimateSsePayloadBytes(entry, depth + 1);
+    return total;
+  }
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    total += key.length + 3 + estimateSsePayloadBytes(entry, depth + 1);
+  }
+  return total;
+}
+
+/** The message a `message.updated` frame carries, if it is identifiable. */
+function retainedMessageId(
+  type: SseEvent["type"],
+  payload: Record<string, unknown>,
+): string | undefined {
+  if (type !== "message.updated") return undefined;
+  const message = payload.message;
+  if (!message || typeof message !== "object") return undefined;
+  const id = (message as { id?: unknown }).id;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
 function emit(event: SseEvent): void {
-  // Serialize once, synchronously, before a canonical message object can mutate.
-  // Both live subscribers and replay use this exact immutable snapshot.
-  const serializedData = serializeSseEventData(event);
+  if (!replayRetentionEnabled) {
+    // Preserve the cursor gap without snapshotting, estimating, stringifying or
+    // retaining a payload nobody can replay. A returning client sees the
+    // advanced revision and is sent through authoritative reconciliation.
+    eventRing.advance();
+    return;
+  }
+  const sessionId = event.sessionId;
+  const payload = snapshotSseEventPayload(event);
+  // Encoded up front only when a live subscriber needs the string anyway; that
+  // string is then reused by replay, so an attached client pays nothing extra.
+  // With nobody attached the encoding is deferred to a replay that will usually
+  // never happen, because the next snapshot for this message collapses this one.
+  const eager =
+    subscribers.size > 0 ? serializeSseEventData({ sessionId, data: payload }) : null;
   const revision = eventRing.append({
     type: event.type,
-    sessionId: event.sessionId,
-    serializedData,
-    bytes: Buffer.byteLength(serializedData, "utf8"),
+    sessionId,
+    messageId: retainedMessageId(event.type, payload),
+    // Deliberately not memoized on the lazy path: caching the string here would
+    // retain bytes the ring's budget never accounted for.
+    serialize: () => eager ?? serializeSseEventData({ sessionId, data: payload }),
+    bytes:
+      eager === null
+        ? estimateSsePayloadBytes(payload)
+        : Buffer.byteLength(eager, "utf8"),
   });
   for (const subscriber of subscribers) {
     try {
-      void Promise.resolve(subscriber(event, revision, serializedData)).catch((error) => {
+      void Promise.resolve(subscriber(event, revision, eager ?? "{}")).catch((error) => {
         console.error("[codex-bridge] Failed to notify SSE subscriber:", error);
       });
     } catch (error) {
@@ -689,6 +875,28 @@ export const __testing = {
   createShutdownHandlerForTesting: createShutdownHandler,
   emitForTesting: emit,
   eventRingForTesting: () => eventRing,
+  /**
+   * Swaps in a fresh ring and returns a restore function.
+   *
+   * A test that fills the byte budget would otherwise permanently evict every
+   * revision emitted by the tests before it, so the shared ring's contents
+   * become order-dependent for the rest of the file.
+   */
+  withIsolatedEventRingForTesting: (): (() => void) => {
+    const previous = eventRing;
+    eventRing = createReplayEventRing();
+    return () => {
+      eventRing = previous;
+    };
+  },
+  suspendReplayRetentionForTesting: (): (() => void) => {
+    const previous = replayRetentionEnabled;
+    replayRetentionEnabled = false;
+    eventRing.clear();
+    return () => {
+      replayRetentionEnabled = previous;
+    };
+  },
   extractPersistedMessageTextForTesting: extractPersistedMessageText,
   FALLBACK_MODELS,
   fetchLiveModelsFromCliForTesting: fetchLiveModelsFromCli,
@@ -724,8 +932,12 @@ export const __testing = {
   startSseKeepaliveForTesting: startSseKeepalive,
   sweepIdleThreadsForTesting: sweepIdleThreads,
   subscribeForTesting: (subscriber: SseSubscriber) => {
+    const releaseReplayRetention = acquireReplayRetention();
     subscribers.add(subscriber);
-    return () => subscribers.delete(subscriber);
+    return () => {
+      subscribers.delete(subscriber);
+      releaseReplayRetention();
+    };
   },
   writeCodexRawLogForTesting: writeCodexRawLog,
   writePersistedBridgeCache,
@@ -1307,7 +1519,9 @@ app.get("/event/subscribe", (c) => {
     const frameFor = (
       event: Pick<SseEvent, "type" | "sessionId">,
       revision: number,
-      serializedData: string,
+      // Deferred, not a string: a replayed frame for another session must not be
+      // encoded at all, which is the whole point of the filter below.
+      serializeData: () => string,
     ) => {
       // A tab only renders its own session. Preserve the bridge-wide cursor for
       // unrelated events, but do not serialize and transmit their potentially
@@ -1324,7 +1538,7 @@ app.get("/event/subscribe", (c) => {
         // The `id:` is what makes replay possible at all — it is the cursor the
         // client echoes back on its next connection.
         id: String(revision),
-        data: serializedData,
+        data: serializeData(),
       };
     };
 
@@ -1338,6 +1552,7 @@ app.get("/event/subscribe", (c) => {
      */
     // Snapshot the fresh-client anchor before subscribing. These statements are
     // synchronous, so no event can land between the snapshot and registration.
+    const releaseReplayRetention = acquireReplayRetention();
     const anchorRevision = cursor ?? eventRing.latestRevision;
     let buffered: Array<{
       event: Pick<SseEvent, "type" | "sessionId">;
@@ -1364,7 +1579,7 @@ app.get("/event/subscribe", (c) => {
       }
       if (revision <= highestSent) return;
       highestSent = revision;
-      await writeWhileOpen(frameFor(event, revision, serializedData));
+      await writeWhileOpen(frameFor(event, revision, () => serializedData));
     };
     subscribers.add(listener);
 
@@ -1416,8 +1631,18 @@ app.get("/event/subscribe", (c) => {
       } else if (replay) {
         for (const entry of replay.events) {
           highestSent = Math.max(highestSent, entry.revision);
+          if (entry.event.superseded) {
+            // A newer full snapshot for this message appears later in the same
+            // replay, so this revision only has to keep the client's cursor dense.
+            await writeWhileOpen({
+              event: "bridge.cursor",
+              id: String(entry.revision),
+              data: "{}",
+            });
+            continue;
+          }
           await writeWhileOpen(
-            frameFor(entry.event, entry.revision, entry.event.serializedData),
+            frameFor(entry.event, entry.revision, () => entry.event.serialize()),
           );
         }
       }
@@ -1439,7 +1664,7 @@ app.get("/event/subscribe", (c) => {
           await sseRouteTestHooks.beforeBufferedWrite(entry.revision);
         }
         await writeWhileOpen(
-          frameFor(entry.event, entry.revision, entry.serializedData),
+          frameFor(entry.event, entry.revision, () => entry.serializedData),
         );
       }
       buffered = null;
@@ -1454,6 +1679,7 @@ app.get("/event/subscribe", (c) => {
       open = false;
       clearInterval(keepalive);
       subscribers.delete(listener);
+      releaseReplayRetention();
     }
   });
 });

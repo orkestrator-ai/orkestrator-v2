@@ -857,17 +857,20 @@ export class AppServerRuntime {
     // Settle it before flushing render coalescers because recovery may create or
     // finalize turns and schedule a final snapshot.
     await Promise.allSettled([this.generationRecovery, this.dispatchRecovery]);
-    for (const state of this.threadState.values()) {
-      await state.coalescer.flushNow();
-    }
-    while (
-      this.pendingFinalizations.size > 0
-      || this.pendingSessionWrites.size > 0
-    ) {
-      await Promise.allSettled([
+    while (true) {
+      // A finalization can schedule a coalesced render after an earlier flush,
+      // so flush at the start of every pass rather than only once before
+      // waiting. Otherwise shutdown (and the test harness) can observe all
+      // tracked promises settled while one last snapshot is still timer-bound.
+      for (const state of this.threadState.values()) {
+        await state.coalescer.flushNow();
+      }
+      const pending = [
         ...this.pendingFinalizations,
         ...this.pendingSessionWrites,
-      ]);
+      ];
+      if (pending.length === 0) return;
+      await Promise.allSettled(pending);
     }
   }
 

@@ -922,7 +922,17 @@ exit 0
       expect(tmuxLog).toContain("-- Up");
       expect(tmuxLog).toContain("-- BSpace");
       expect(emitted.some((item) => item.event === "claude-tmux:event")).toBe(true);
-      expect(emitted.some((item) => item.event === `terminal-output-${terminalSessionId}`)).toBe(true);
+      const terminalOutput = emitted.find((item) => item.event === `terminal-output-${terminalSessionId}`);
+      expect(terminalOutput).toBeDefined();
+      // Pins the wire shape, not just the event name. The renderer decodes
+      // base64; handed the older `{ bytes: number[] }` payload it writes nothing
+      // and the terminal simply stays blank, so an assertion on the event alone
+      // lets a revert break every tmux terminal with a green suite.
+      const terminalPayload = terminalOutput!.payload as Record<string, unknown>;
+      expect(Object.keys(terminalPayload)).toEqual(["bytesBase64"]);
+      expect(typeof terminalPayload.bytesBase64).toBe("string");
+      expect(Buffer.from(terminalPayload.bytesBase64 as string, "base64").toString("utf8"))
+        .toBe("\u001b[H\u001b[2Jbypass permissions on");
     });
   });
 
@@ -2338,6 +2348,33 @@ describe("transcriptContainsSessionId", () => {
     expect(transcriptContainsSessionId("", "abc-123")).toBe(false);
     expect(transcriptContainsSessionId(`${JSON.stringify({ sessionId: "abc-123" })}\n`, "")).toBe(false);
   });
+
+  test("parses each line of a non-matching transcript exactly once", () => {
+    // The miss is the hot case: discovery re-reads every candidate transcript
+    // in the project directory on each 250ms poll tick until one binds. A
+    // shallow pre-pass over the whole file can only ever win on a *match*,
+    // because the deep walk tests the same top-level keys before it recurses —
+    // so running both doubled the JSON.parse cost of every file that does not
+    // own the session.
+    const content = Array.from(
+      { length: 20 },
+      (_, index) => JSON.stringify({ sessionId: `other-${index}`, message: { role: "user" } }),
+    ).join("\n");
+
+    const realParse = JSON.parse;
+    let parses = 0;
+    JSON.parse = ((text: string) => {
+      parses += 1;
+      return realParse(text);
+    }) as typeof JSON.parse;
+    try {
+      expect(transcriptContainsSessionId(content, "wanted-session")).toBe(false);
+    } finally {
+      JSON.parse = realParse;
+    }
+
+    expect(parses).toBe(20);
+  });
 });
 
 describe("newestJsonlInDir container backend", () => {
@@ -2757,6 +2794,58 @@ describe("interactive tmux terminal snapshots", () => {
     expect(harness.scheduled.at(-1)?.delayMs).toBe(INTERACTIVE_SNAPSHOT_MIN_MS);
   });
 
+  test("sustained typing cannot push the pending capture out", async () => {
+    // The renderer sends one write per keystroke. Anything faster than one
+    // character per INTERACTIVE_SNAPSHOT_MIN_MS — ordinary typing, or OS key
+    // auto-repeat — used to cancel and re-arm the capture on every keystroke,
+    // so the pane emitted nothing at all until the user stopped typing.
+    const harness = createInteractiveHarness(["initial", "typed"]);
+    await harness.manager.start(harness.id, harness.context);
+    const armed = harness.scheduled[0]!;
+
+    for (const char of "hello world") await harness.manager.write(harness.id, char);
+
+    expect(harness.writeCount()).toBe(11);
+    expect(harness.cancelled).not.toContain(armed.timer);
+    expect(harness.scheduled).toHaveLength(1);
+
+    armed.callback();
+    await waitFor(() => harness.emitted.length === 2);
+  });
+
+  test("input pulls a backed-off capture forward", async () => {
+    const harness = createInteractiveHarness(["same", "same", "same"]);
+    await harness.manager.start(harness.id, harness.context);
+
+    harness.scheduled[0]!.callback();
+    await waitFor(() => harness.scheduled.length === 2);
+    harness.scheduled[1]!.callback();
+    await waitFor(() => harness.scheduled.length === 3);
+    const backedOff = harness.scheduled[2]!;
+    expect(backedOff.delayMs).toBeGreaterThan(INTERACTIVE_SNAPSHOT_MIN_MS);
+
+    await harness.manager.write(harness.id, "x");
+
+    expect(harness.cancelled).toContain(backedOff.timer);
+    expect(harness.scheduled.at(-1)?.delayMs).toBe(INTERACTIVE_SNAPSHOT_MIN_MS);
+  });
+
+  test("a failed capture does not stop the interactive pane polling", async () => {
+    // One transient `tmux capture-pane` failure — a resize race, a momentarily
+    // busy server — must not leave the terminal permanently frozen.
+    const failing = deferred<string>();
+    const harness = createInteractiveHarness(["initial", failing.promise, "recovered"]);
+    await harness.manager.start(harness.id, harness.context);
+
+    harness.scheduled[0]!.callback();
+    await waitFor(() => harness.captureCount() === 2);
+    failing.reject(new Error("tmux capture-pane failed"));
+
+    await waitFor(() => harness.scheduled.length === 2);
+    harness.scheduled[1]!.callback();
+    await waitFor(() => harness.emitted.length === 2);
+  });
+
   test("detach suppresses an in-flight capture and prevents rescheduling", async () => {
     const pending = deferred<string>();
     const harness = createInteractiveHarness(["initial", pending.promise]);
@@ -2915,6 +3004,116 @@ describe("live session read paths", () => {
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
   }, 15_000);
+
+  test("a failed pane capture does not wedge every later request", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, alive }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const tabId = "tab-capture-failure";
+      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      const marker = path.join(alive, `${tmuxSessionName(environment.id, tabId)}.fail-capture`);
+
+      // Concurrent callers join one in-flight capture. A rejected capture left
+      // in that slot — or written into the cache — would be handed to every
+      // later request, so one bad spawn would blank the pane permanently.
+      await fs.writeFile(marker, "");
+      await expect(invoke(
+        handlers,
+        "claude_tmux_capture_pane",
+        { tabId, environmentId: environment.id },
+      )).rejects.toThrow("capture failed");
+
+      await fs.rm(marker, { force: true });
+      await expect(invoke(
+        handlers,
+        "claude_tmux_capture_pane",
+        { tabId, environmentId: environment.id },
+      )).resolves.toContain("bypass permissions on");
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  }, 15_000);
+
+  test("a failed poll snapshot skips the tick without ending the loop", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const tabId = "tab-poll-failure";
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      ) as { session_id: string };
+      const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+      await fs.mkdir(pendingDir, { recursive: true });
+
+      // An unreadable hook directory is what a transient snapshot failure looks
+      // like from the loop's side. A throw that escapes the tick ends the poll
+      // for the whole session, and the tab silently stops receiving hooks and
+      // transcript lines with nothing reporting an error.
+      await fs.chmod(pendingDir, 0o000);
+      try {
+        await delay(750);
+      } finally {
+        await fs.chmod(pendingDir, 0o755);
+      }
+
+      await fs.writeFile(path.join(pendingDir, "Stop-after-failure.json"), JSON.stringify({ ok: true }));
+      await waitFor(() => emitted.some((item) => item.event === "claude-tmux:event"
+        && (item.payload as { kind?: string }).kind === "hook"
+        && (item.payload as { event_id?: string }).event_id === "after-failure"), 5_000);
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  }, 20_000);
+
+  test("spawns far fewer liveness checks than poll ticks for a live session", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const tabId = "tab-liveness-cadence";
+      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      const session = tmuxSessionName(environment.id, tabId);
+
+      const livenessChecks = async () => (await fs.readFile(log, "utf8"))
+        .split("\n")
+        .filter((line) => line.startsWith(`has-session -t ${session}`))
+        .length;
+      const before = await livenessChecks();
+
+      // The loop ticks every POLL_INTERVAL_MS (250ms), so this window covers
+      // roughly a dozen ticks. Each liveness check is its own process spawn — a
+      // `docker exec` in container mode — and can only report a session that
+      // has already ended, which is why it must not run per tick.
+      await delay(3_000);
+      const spawned = await livenessChecks() - before;
+
+      expect(spawned).toBeGreaterThanOrEqual(1);
+      expect(spawned).toBeLessThanOrEqual(3);
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  }, 20_000);
 
   test("still reports a tmux session that ended, on the slower liveness cadence", async () => {
     const handlers = createHandlers();

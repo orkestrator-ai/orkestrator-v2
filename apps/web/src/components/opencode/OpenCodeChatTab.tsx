@@ -103,6 +103,11 @@ import type {
   OpenCodeAttachment,
   OpenCodeQueuedMessage,
 } from "@/stores/openCodeStore";
+import {
+  classifyNewEnvironmentConnectionStartupError,
+  getNewEnvironmentConnectionRetryDecision,
+  isRetryableNewEnvironmentConnectionError,
+} from "@/lib/new-environment-connection-retry";
 
 interface OpenCodeChatTabProps {
   tabId: string;
@@ -242,6 +247,9 @@ export function OpenCodeChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
+  const automaticInitRetryCountRef = useRef(0);
+  const automaticInitRetryWindowStartedAtRef = useRef<number | null>(null);
+  const setupPendingObservedForInitRetryRef = useRef(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [modelPreferences, setModelPreferences] =
     useState<OpenCodeModelPreferences>(EMPTY_MODEL_PREFERENCES);
@@ -871,7 +879,24 @@ export function OpenCodeChatTab({
 
     // Block initialization until setup scripts finish (local environments with orkestrator-ai.json)
     if (setupPending) {
+      setupPendingObservedForInitRetryRef.current = true;
       return;
+    }
+
+    if (automaticInitRetryWindowStartedAtRef.current === null) {
+      const environment = useEnvironmentStore
+        .getState()
+        .getEnvironmentById(environmentId);
+      const initialDecision = getNewEnvironmentConnectionRetryDecision({
+        createdAt: environment?.createdAt,
+        attempt: 0,
+        retryWindowStartedAt: null,
+        setupPendingObserved: setupPendingObservedForInitRetryRef.current,
+      });
+      if (initialDecision) {
+        automaticInitRetryWindowStartedAtRef.current =
+          initialDecision.retryWindowStartedAt;
+      }
     }
 
     // Debounce rapid re-initialization
@@ -1120,7 +1145,12 @@ export function OpenCodeChatTab({
 
         if (isLocal) {
           // Local environment - use local server commands
-          let localStatus = await getLocalOpencodeServerStatus(environmentId);
+          let localStatus;
+          try {
+            localStatus = await getLocalOpencodeServerStatus(environmentId);
+          } catch (error) {
+            throw classifyNewEnvironmentConnectionStartupError(error);
+          }
 
           if (!localStatus.running) {
             const result = await startLocalOpencodeServer(environmentId);
@@ -1148,7 +1178,12 @@ export function OpenCodeChatTab({
             );
           }
 
-          let status = await getOpenCodeServerStatus(containerId);
+          let status;
+          try {
+            status = await getOpenCodeServerStatus(containerId);
+          } catch (error) {
+            throw classifyNewEnvironmentConnectionStartupError(error);
+          }
 
           if (!status.running) {
             const result = await startOpenCodeServer(containerId);
@@ -1340,16 +1375,46 @@ export function OpenCodeChatTab({
           await syncPendingRequests(sdkClient, newSession.id);
         }
       } catch (error) {
-        console.error("[OpenCodeChatTab] Initialization failed:", error);
         if (!mounted) return;
-        setConnectionState("error");
         // Extract error message with structured details when available.
-        let message = formatOpenCodeError(error);
+        let message = isRetryableNewEnvironmentConnectionError(error)
+          ? error.message
+          : formatOpenCodeError(error);
         // Add hint for port mapping issues
         if (message.includes("port") && message.includes("not mapped")) {
           message +=
             ". Try recreating the environment to enable native mode support.";
         }
+        const environment = useEnvironmentStore
+          .getState()
+          .getEnvironmentById(environmentId);
+        const retryDecision = isRetryableNewEnvironmentConnectionError(error)
+          ? getNewEnvironmentConnectionRetryDecision({
+              createdAt: environment?.createdAt,
+              attempt: automaticInitRetryCountRef.current,
+              retryWindowStartedAt: automaticInitRetryWindowStartedAtRef.current,
+              setupPendingObserved: setupPendingObservedForInitRetryRef.current,
+            })
+          : null;
+        if (retryDecision !== null) {
+          const { delayMs, retryWindowStartedAt } = retryDecision;
+          automaticInitRetryWindowStartedAtRef.current = retryWindowStartedAt;
+          automaticInitRetryCountRef.current += 1;
+          console.warn(
+            `[OpenCodeChatTab] Retrying new environment connection in ${delayMs}ms:`,
+            message,
+          );
+          setClient(environmentId, null);
+          setConnectionState("connecting");
+          setErrorMessage(null);
+          window.setTimeout(() => {
+            if (mounted) setInitAttempt((value) => value + 1);
+          }, delayMs);
+          return;
+        }
+
+        console.error("[OpenCodeChatTab] Initialization failed:", error);
+        setConnectionState("error");
         setErrorMessage(message);
 
         // Try to fetch server log for debugging if timeout error (only for containerized environments)
@@ -2269,6 +2334,9 @@ export function OpenCodeChatTab({
 
   // Handle retry connection
   const handleRetry = useCallback(() => {
+    automaticInitRetryCountRef.current = 0;
+    automaticInitRetryWindowStartedAtRef.current = Date.now();
+    setupPendingObservedForInitRetryRef.current = false;
     setConnectionState("connecting");
     setErrorMessage(null);
     // Reset initialization state to force new session creation

@@ -100,6 +100,12 @@ import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { CodexNativeData } from "@/types/paneLayout";
 import type { CodexAttachment, CodexQueuedMessage } from "@/stores/codexStore";
+import {
+  RetryableNewEnvironmentConnectionError,
+  classifyNewEnvironmentConnectionStartupError,
+  getNewEnvironmentConnectionRetryDecision,
+  isRetryableNewEnvironmentConnectionError,
+} from "@/lib/new-environment-connection-retry";
 
 interface CodexChatTabProps {
   tabId: string;
@@ -202,6 +208,9 @@ export function CodexChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [serverLog, setServerLog] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
+  const automaticInitRetryCountRef = useRef(0);
+  const automaticInitRetryWindowStartedAtRef = useRef<number | null>(null);
+  const setupPendingObservedForInitRetryRef = useRef(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [initialPromptSent, setInitialPromptSent] = useState(false);
   const initialPromptRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1089,6 +1098,9 @@ export function CodexChatTab({
    * existing thread, falling back to a new session only if that fails.
    */
   const handleRetry = useCallback(() => {
+    automaticInitRetryCountRef.current = 0;
+    automaticInitRetryWindowStartedAtRef.current = Date.now();
+    setupPendingObservedForInitRetryRef.current = false;
     const preserveSession = transientDisconnectRef.current;
     transientDisconnectRef.current = false;
     isInitializedRef.current = false;
@@ -1302,7 +1314,24 @@ export function CodexChatTab({
 
     // Block initialization until setup scripts finish (local environments with orkestrator-ai.json)
     if (setupPending) {
+      setupPendingObservedForInitRetryRef.current = true;
       return;
+    }
+
+    if (automaticInitRetryWindowStartedAtRef.current === null) {
+      const environment = useEnvironmentStore
+        .getState()
+        .getEnvironmentById(environmentId);
+      const initialDecision = getNewEnvironmentConnectionRetryDecision({
+        createdAt: environment?.createdAt,
+        attempt: 0,
+        retryWindowStartedAt: null,
+        setupPendingObserved: setupPendingObservedForInitRetryRef.current,
+      });
+      if (initialDecision) {
+        automaticInitRetryWindowStartedAtRef.current =
+          initialDecision.retryWindowStartedAt;
+      }
     }
 
     const now = Date.now();
@@ -1431,7 +1460,12 @@ export function CodexChatTab({
         let port: number | null = null;
         let authToken: string | undefined;
         if (isLocal) {
-          let status = await getLocalCodexServerStatus(environmentId);
+          let status;
+          try {
+            status = await getLocalCodexServerStatus(environmentId);
+          } catch (error) {
+            throw classifyNewEnvironmentConnectionStartupError(error);
+          }
           if (!status.running || !status.authToken) {
             const result = await startLocalCodexServer(environmentId);
             status = {
@@ -1448,7 +1482,12 @@ export function CodexChatTab({
           if (!containerId) {
             throw new Error("Container ID is required for containerized Codex");
           }
-          let status = await getCodexServerStatus(containerId);
+          let status;
+          try {
+            status = await getCodexServerStatus(containerId);
+          } catch (error) {
+            throw classifyNewEnvironmentConnectionStartupError(error);
+          }
           if (!status.running || !status.authToken) {
             const result = await startCodexServer(containerId);
             status = {
@@ -1473,8 +1512,16 @@ export function CodexChatTab({
         const nextClient = createClient(`http://127.0.0.1:${port}`, authToken);
         setClient(environmentId, nextClient);
 
-        if (!(await checkHealth(nextClient))) {
-          throw new Error("Codex bridge health check failed");
+        let healthy: boolean;
+        try {
+          healthy = await checkHealth(nextClient);
+        } catch (error) {
+          throw classifyNewEnvironmentConnectionStartupError(error);
+        }
+        if (!healthy) {
+          throw new RetryableNewEnvironmentConnectionError(
+            "Codex bridge health check failed",
+          );
         }
 
         const { models: availableModels, source: modelsSource } = await getModels(nextClient);
@@ -1568,6 +1615,34 @@ export function CodexChatTab({
             : typeof error === "string"
               ? error
               : "Failed to initialize Codex";
+        const environment = useEnvironmentStore
+          .getState()
+          .getEnvironmentById(environmentId);
+        const retryDecision = isRetryableNewEnvironmentConnectionError(error)
+          ? getNewEnvironmentConnectionRetryDecision({
+              createdAt: environment?.createdAt,
+              attempt: automaticInitRetryCountRef.current,
+              retryWindowStartedAt: automaticInitRetryWindowStartedAtRef.current,
+              setupPendingObserved: setupPendingObservedForInitRetryRef.current,
+            })
+          : null;
+        if (retryDecision !== null) {
+          const { delayMs, retryWindowStartedAt } = retryDecision;
+          automaticInitRetryWindowStartedAtRef.current = retryWindowStartedAt;
+          automaticInitRetryCountRef.current += 1;
+          console.warn(
+            `[CodexChatTab] Retrying new environment connection in ${delayMs}ms:`,
+            message,
+          );
+          setClient(environmentId, null);
+          setConnectionState("connecting");
+          setErrorMessage(null);
+          window.setTimeout(() => {
+            if (mounted) setInitAttempt((value) => value + 1);
+          }, delayMs);
+          return;
+        }
+
         setConnectionState("error");
         setErrorMessage(message);
         try {

@@ -40,11 +40,47 @@ const PERMISSION_MODE_POLL_MS = 100;
 const BACKUP_SENTINEL_NO_ORIGINAL = "__orkestrator_no_original__";
 const CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN = ".claude/settings.local.json";
 /**
- * Root for per-environment tmux runtime state. Exported so tests can derive the
- * same path instead of duplicating the literal: stopping a session removes this
- * whole directory, so a test that guesses the path wrong cleans up nothing.
+ * Machine-level base for namespaced, per-environment tmux runtime state.
+ * Production paths add a data-directory hash before the environment id.
+ * Exported so tests can derive the fallback path used by lightweight contexts:
+ * stopping a session removes the whole environment directory, so a test that
+ * guesses the path wrong cleans up nothing.
  */
 export const RUNTIME_ROOT_PREFIX = "/tmp/orkestrator-v2-claude-tmux";
+
+/**
+ * Scope runtime state to one backend data directory.
+ *
+ * Multiple workspaces can run independent backends on the same machine. Their
+ * environment registries are intentionally isolated, so a startup sweep must
+ * never enumerate another instance's roots and classify them against the wrong
+ * registry.
+ */
+export function claudeTmuxRuntimeRootPrefix(dataDir: string): string {
+  const namespace = createHash("sha256")
+    .update(path.resolve(dataDir))
+    .digest("hex")
+    .slice(0, 16);
+  return path.join(RUNTIME_ROOT_PREFIX, namespace);
+}
+
+function runtimeRootPrefixForContext(context: CommandContext): string {
+  const getDataDir = (context.storage as { getDataDir?: () => string }).getDataDir;
+  return typeof getDataDir === "function"
+    ? claudeTmuxRuntimeRootPrefix(getDataDir.call(context.storage))
+    : RUNTIME_ROOT_PREFIX;
+}
+
+/** True when tmux confirms that a target disappeared before cleanup reached it. */
+export function isMissingTmuxSessionError(value: unknown): boolean {
+  const message = String(value);
+  return (
+    /can't find session/i.test(message)
+    || /no server running/i.test(message)
+    || /failed to connect to server/i.test(message)
+    || /no sessions/i.test(message)
+  );
+}
 /**
  * The thinking flags the launcher asks for. The probe below is built from these
  * same constants so the pair it validates can never drift from the pair the
@@ -1497,6 +1533,7 @@ class TmuxSession {
     readonly environmentId: string,
     readonly tabId: string,
     readonly backend: TmuxBackend,
+    runtimeRootPrefix: string,
     resumeSessionId?: string,
     claudeCommand?: string,
   ) {
@@ -1505,7 +1542,10 @@ class TmuxSession {
     this.tmuxSession = tmuxSessionName(environmentId, tabId);
     this.workspace = backend.kind === "local" ? backend.cwd ?? process.cwd() : "/workspace";
     this.claudeHome = backend.kind === "local" ? localClaudeHome() : "/home/node/.claude";
-    this.workspaceHookPaths = workspaceHookPaths(`${RUNTIME_ROOT_PREFIX}/${environmentId}`, this.workspace);
+    this.workspaceHookPaths = workspaceHookPaths(
+      path.join(runtimeRootPrefix, environmentId),
+      this.workspace,
+    );
     this.sessionHookPaths = sessionHookPaths(this.workspaceHookPaths, this.sessionId);
     this.claudeCommand = claudeCommand ?? "claude";
     this.startedAtUnix = Math.max(0, Math.floor(Date.now() / 1000) - 5);
@@ -2116,11 +2156,7 @@ class TmuxSession {
     await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
     if (!result) return false;
     if (result.status === 0) return true;
-    return (
-      /no server running/i.test(result.stderr)
-      || /failed to connect to server/i.test(result.stderr)
-      || /can't find session/i.test(result.stderr)
-    );
+    return isMissingTmuxSessionError(result.stderr);
   }
 }
 
@@ -2264,6 +2300,7 @@ async function getOrCreateSession(
     environmentId,
     tabId,
     backend,
+    runtimeRootPrefixForContext(context),
     resumeSessionId,
     resolvePinnedClaudeCommand(context, backend),
   );
@@ -2314,9 +2351,18 @@ async function killEnvironmentTmuxSessions(
   for (const name of targets) {
     const result = await backend
       .exec(["tmux", "kill-session", "-t", name])
-      .catch(() => null);
+      .catch((error) =>
+        isMissingTmuxSessionError(error)
+          ? { status: 1, stdout: "", stderr: String(error) }
+          : null
+      );
     if (result?.status === 0) {
       killed.push(name);
+    } else if (result && isMissingTmuxSessionError(result.stderr)) {
+      // The one-time session listing raced a normal exit. The desired state is
+      // already reached, so retaining the runtime root would create a
+      // permanent retry loop.
+      continue;
     } else {
       complete = false;
     }
@@ -2405,7 +2451,7 @@ export async function cleanupEnvironmentTmux(
 
     const { workspace } = workspaceAndClaudeHome(backend);
     const hookPaths = workspaceHookPaths(
-      `${RUNTIME_ROOT_PREFIX}/${environmentId}`,
+      path.join(runtimeRootPrefixForContext(context), environmentId),
       workspace,
     );
     // Restore the user's settings even when tmux cleanup is incomplete, but

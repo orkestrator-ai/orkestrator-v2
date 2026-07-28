@@ -49,6 +49,11 @@ export function debugLog(...args: unknown[]): void {
   console.debug(...args);
 }
 
+/** Remove EventSource credentials before a request line reaches any log sink. */
+export function redactRequestLogMessage(message: string): string {
+  return message.replace(/([?&]token=)[^&\s]+/gi, "$1<redacted>");
+}
+
 /**
  * Hono's per-request logging middleware, or null when debug logging is off.
  *
@@ -61,6 +66,14 @@ export function debugLog(...args: unknown[]): void {
  */
 export function createRequestLogger(
   enabled: boolean = isDebugLoggingEnabled,
+  write: (message: string, ...rest: string[]) => void = console.log,
 ): MiddlewareHandler | null {
-  return enabled ? honoLogger() : null;
+  return enabled
+    ? honoLogger((message, ...rest) => {
+        write(
+          redactRequestLogMessage(message),
+          ...rest.map(redactRequestLogMessage),
+        );
+      })
+    : null;
 }

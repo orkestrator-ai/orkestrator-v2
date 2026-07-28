@@ -3207,6 +3207,35 @@ describe("sendPrompt", () => {
     }
   });
 
+  test("garbage-collects an abandoned processing claim after the retention window", async () => {
+    const originalNow = Date.now;
+    let now = Date.parse("2026-07-28T00:00:00.000Z");
+    Date.now = () => now;
+    const session = createSession("stale processing dispatch");
+    track(session.id);
+    const prompt = sendPrompt(session.id, "long turn", {
+      requestId: "stale-processing-request",
+    });
+    const call = await nextQueryCall();
+
+    try {
+      expect(getPromptDispatchState(session.id, "stale-processing-request"))
+        .toBe("processing");
+
+      now += 25 * 60 * 60 * 1000;
+      seedSettledPromptDispatchForTesting(session.id, "gc-trigger");
+
+      expect(getPromptDispatchState(session.id, "stale-processing-request"))
+        .toBe("new");
+    } finally {
+      deleteSession(session.id);
+      call.push({ type: "result", subtype: "success", result: "done" });
+      call.finish();
+      await prompt;
+      Date.now = originalNow;
+    }
+  });
+
   test("does not evict a live tombstone after more than 500 later requests", () => {
     const session = createSession("dispatch volume retention");
     track(session.id);
@@ -3236,6 +3265,27 @@ describe("sendPrompt", () => {
     expect(deleteSession(session.id)).toBe(true);
     expect(getPromptDispatchRecordCountForTesting()).toBe(baseline);
     expect(getPromptDispatchState(session.id, "delete-cleanup-request")).toBe("not-found");
+  });
+
+  test("an in-flight turn cannot restore its dispatch record after session deletion", async () => {
+    const baseline = getPromptDispatchRecordCountForTesting();
+    const session = createSession("dispatch cleanup race");
+    track(session.id);
+    const prompt = sendPrompt(session.id, "run once", {
+      requestId: "delete-in-flight-request",
+    });
+    const call = await nextQueryCall();
+
+    expect(getPromptDispatchRecordCountForTesting()).toBe(baseline + 1);
+    expect(deleteSession(session.id)).toBe(true);
+    expect(getPromptDispatchRecordCountForTesting()).toBe(baseline);
+
+    call.push({ type: "result", subtype: "success", result: "done" });
+    call.finish();
+    await prompt;
+
+    expect(getPromptDispatchRecordCountForTesting()).toBe(baseline);
+    expect(getPromptDispatchState(session.id, "delete-in-flight-request")).toBe("not-found");
   });
 
   test("forwards query configuration and captures init, compact, generic system, and context events", async () => {
@@ -4050,10 +4100,9 @@ describe("session titles", () => {
   test("goes straight to text extraction when no Claude CLI is found", async () => {
     await withTitleCliPathEnv(undefined, async () => {
       mockExistsSync.mockImplementation(() => false);
-      mockExecFileSync.mockImplementation(((file: string, args?: string[]) => {
-        if (file === "which") throw new Error("not found");
-        return originalExecFileSync(file as never, args as never) as never;
-      }) as never);
+      mockExecFile.mockImplementation(() => {
+        throw new Error("not found");
+      });
 
       const session = await runTitlePrompt("harden the title pipeline");
       await waitFor(() => session.titleGenerationPending === false);

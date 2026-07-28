@@ -7,6 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { QuestionCard, type QuestionCardQuestion } from "./QuestionCard";
 
 /**
@@ -85,7 +86,7 @@ describe("QuestionCard multi-question submit", () => {
 });
 
 describe("QuestionCard deadlines", () => {
-  test("shows a countdown for a live request and removes actions after expiry", () => {
+  test("shows a countdown without trusting browser clock drift to remove actions", () => {
     const question = [{
       question: "Proceed?",
       options: [{ label: "Yes" }, { label: "No" }],
@@ -97,16 +98,16 @@ describe("QuestionCard deadlines", () => {
     cleanup();
 
     renderCard(question, { expiresAt: Date.now() - 1 });
-    expect(screen.getByText("This request expired and was declined.")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
+    expect(screen.queryByText("This request expired and was declined.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
     expect(
       (screen.getByRole("button", { name: "Yes" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    ).toBe(false);
     expect(
       (screen.getByPlaceholderText(
         "Type your own answer (press Enter to add)",
       ) as HTMLInputElement).disabled,
-    ).toBe(true);
+    ).toBe(false);
     expect(live.onSubmit).not.toHaveBeenCalled();
   });
 });
@@ -359,11 +360,11 @@ describe("QuestionCard submit contract", () => {
     { question: "Continue?", options: [{ label: "Yes" }] },
   ];
 
-  test("ignores the handler's return value and stays open for a retry", async () => {
+  test("shows a failure toast and stays open for a retry when submit returns false", async () => {
     /**
      * The card never removes itself: each wrapper owns that (removePendingQuestion)
-     * because the agent has to accept the reply first. `false` therefore means
-     * nothing here beyond the caller's own bookkeeping.
+     * because the agent has to accept the reply first. `false` keeps it open
+     * and now also reports that the response did not land.
      */
     const onSubmit = mock(async () => false);
     renderCard(QUESTION, { onSubmit });
@@ -371,6 +372,12 @@ describe("QuestionCard submit contract", () => {
     fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to send your answer",
+      {
+        description: "Test is still waiting for a response. Please try again.",
+      },
+    );
 
     const submit = await screen.findByRole("button", { name: "Submit" });
     expect(submit.hasAttribute("disabled")).toBe(false);
@@ -379,6 +386,23 @@ describe("QuestionCard submit contract", () => {
     fireEvent.click(submit);
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
     expect(onSubmit).toHaveBeenLastCalledWith([["Yes"]]);
+  });
+
+  test("shows a failure toast and leaves dismiss retryable when dismiss returns false", async () => {
+    const onDismiss = mock(async () => false);
+    renderCard(QUESTION, { onDismiss });
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to dismiss this question",
+      {
+        description: "Test is still waiting for a response. Please try again.",
+      },
+    );
+    expect(screen.getByRole("button", { name: "Dismiss" }).hasAttribute("disabled"))
+      .toBe(false);
   });
 
   test("releases the card after a rejected submit", async () => {

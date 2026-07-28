@@ -17,6 +17,7 @@ import {
   getPendingQuestions,
   getPendingPlanApprovals,
   getStructuredOutput,
+  shouldReconcileClaudePrompt,
   sendPrompt,
   abortSession,
   subscribeToEvents,
@@ -986,7 +987,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         permissionMode: "bypassPermissions",
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (isPipelinePaused()) return;
         setPipelineError(pipelineId, "Failed to send address issues prompt");
         return;
@@ -1125,7 +1126,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         attachments,
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send build prompt");
       }
     },
@@ -1185,7 +1186,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         requestId,
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send review prompt");
       }
     },
@@ -1236,7 +1237,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         attachments: taskImagesToAttachments(task.images),
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send verification prompt");
       }
     },
@@ -1284,7 +1285,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         attachments: taskImagesToAttachments(task.images),
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send fix prompt");
       }
     },
@@ -1330,7 +1331,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         permissionMode: "bypassPermissions",
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send PR creation prompt");
       }
     },
@@ -1404,7 +1405,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         permissionMode: "bypassPermissions",
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send conflict resolution prompt");
       }
     },
@@ -1460,7 +1461,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       permissionMode: "bypassPermissions",
     });
 
-    if (!success) {
+    if (!shouldReconcileClaudePrompt(success)) {
       setSessionLoading(currentSession.sessionKey, false);
       markSessionIdle(pipelineId, currentSession.sdkSessionId);
       const errMessage: ClaudeMessageType = {
@@ -1553,7 +1554,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       permissionMode: "bypassPermissions",
     });
 
-    if (!success) {
+    if (!shouldReconcileClaudePrompt(success)) {
       setSessionLoading(currentSession.sessionKey, false);
       markSessionIdle(pipelineId, currentSession.sdkSessionId);
       const errMessage: ClaudeMessageType = {

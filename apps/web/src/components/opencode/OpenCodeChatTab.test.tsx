@@ -1703,6 +1703,46 @@ describe("OpenCodeChatTab", () => {
     ).toBeNull();
   });
 
+  test("keeps live pending cards when authoritative rehydration fails", async () => {
+    const permission: PermissionRequest = {
+      id: "permission-survives-blip",
+      sessionId: "session-1",
+      permission: "edit",
+      patterns: ["src/**"],
+      metadata: {},
+      always: [],
+    };
+    const question: QuestionRequest = {
+      id: "question-survives-blip",
+      sessionId: "session-1",
+      questions: [{ question: "Continue?", header: "Confirm", options: [] }],
+    };
+    useOpenCodeStore.setState((state) => ({
+      ...state,
+      pendingPermissions: new Map([[permission.id, permission]]),
+      pendingQuestions: new Map([[question.id, question]]),
+    }));
+    mockGetPendingPermissions.mockRejectedValueOnce(
+      new Error("permission endpoint unavailable"),
+    );
+    const originalError = console.error;
+    console.error = mock(() => {});
+
+    try {
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => expect(mockGetPendingPermissions).toHaveBeenCalled());
+      expect(
+        useOpenCodeStore.getState().pendingPermissions.get(permission.id),
+      ).toEqual(permission);
+      expect(
+        useOpenCodeStore.getState().pendingQuestions.get(question.id),
+      ).toEqual(question);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
   test("shows the scroll down accessory and scrolls to the bottom when clicked", () => {
     mockIsAtBottom = false;
     useOpenCodeStore.setState((state) => {

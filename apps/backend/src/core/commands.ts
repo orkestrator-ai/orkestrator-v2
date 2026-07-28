@@ -6542,7 +6542,7 @@ export function createCommandRegistry(
       // carries it, which would kill the shell before `rm -f` runs.
       dockerExec(
         id,
-        "pkill -f '[c]laude-bridge' || true; rm -f /tmp/claude-bridge-token",
+        "pkill -f '[c]laude-bridge/dist/index.js' || true; rm -f /tmp/claude-bridge-token",
       ).then(() => undefined)
     );
   });
@@ -6688,7 +6688,7 @@ export function createCommandRegistry(
       // carries it, which would kill the shell before `rm -f` runs.
       dockerExec(
         id,
-        "pkill -f '[c]odex-bridge' || true; rm -f /tmp/codex-bridge-token",
+        "pkill -f '[c]odex-bridge/dist/index.js' || true; rm -f /tmp/codex-bridge-token",
       ).then(() => undefined)
     );
   });

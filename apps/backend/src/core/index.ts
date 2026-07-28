@@ -9,6 +9,7 @@ import {
   reapOrphanedClaudeTmuxRuntimes,
   reapOrphanedLocalServers,
 } from "./local-server-reaper.js";
+import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
@@ -81,7 +82,12 @@ export class OrkestratorBackend {
     );
     // claude-tmux leaves no PID behind — its sessions belong to a tmux server
     // we do not own — so its orphans are found by their runtime roots instead.
-    await this.reapTmuxRuntimes({ storage: this.context.storage }).catch(
+    await this.reapTmuxRuntimes({
+      storage: this.context.storage,
+      runtimeRootPrefix: claudeTmuxRuntimeRootPrefix(
+        this.context.storage.getDataDir(),
+      ),
+    }).catch(
       (error) => {
         console.warn("[backend] Failed to reap orphaned claude-tmux runtimes:", error);
       },

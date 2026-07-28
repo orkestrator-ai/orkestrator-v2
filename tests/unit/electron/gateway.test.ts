@@ -1555,6 +1555,7 @@ describe("remote gateway", () => {
   test("proxies authenticated loopback POSTs without leaking gateway credentials or browser origin", async () => {
     const targetRequests: Array<{
       authorization?: string;
+      proxyAuthorization?: string;
       codexToken?: string;
       openCodeToken?: string;
       cookie?: string;
@@ -1568,6 +1569,7 @@ describe("remote gateway", () => {
       request.on("end", () => {
         targetRequests.push({
           authorization: request.headers.authorization,
+          proxyAuthorization: request.headers["proxy-authorization"],
           codexToken: request.headers["x-orkestrator-codex-token"] as string | undefined,
           openCodeToken: request.headers["x-orkestrator-opencode-token"] as string | undefined,
           cookie: request.headers.cookie,
@@ -1606,6 +1608,7 @@ describe("remote gateway", () => {
         method: "POST",
         headers: {
           authorization: `Bearer ${info!.token}`,
+          "proxy-authorization": "Basic must-not-reach-upstream",
           cookie: "orkestrator_gateway_auth=test-token-123456; app_session=abc123",
           origin: new URL(info!.url).origin,
           "content-type": "application/json",
@@ -1618,6 +1621,7 @@ describe("remote gateway", () => {
       expect(response.json()).toEqual({ ok: true, url: "/hello?x=1" });
       expect(targetRequests).toEqual([{
         authorization: `Basic ${Buffer.from("opencode:opencode-password").toString("base64")}`,
+        proxyAuthorization: undefined,
         codexToken: "codex-bridge-token",
         openCodeToken: undefined,
         cookie: "app_session=abc123",

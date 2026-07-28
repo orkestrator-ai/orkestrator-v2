@@ -10,7 +10,10 @@ import {
   reapOrphanedLocalServers,
   type ProcessIdentity,
 } from "./local-server-reaper.js";
-import { tmuxSessionName } from "./tmux.js";
+import {
+  claudeTmuxRuntimeRootPrefix,
+  tmuxSessionName,
+} from "./tmux.js";
 import type { Environment } from "./models.js";
 
 /** A command line that satisfies every marker for the given kind. */
@@ -146,6 +149,28 @@ describe("reapOrphanedLocalServers", () => {
     ]);
   });
 
+  test("preserves a live PID record when process identity cannot be read", async () => {
+    const { options, updates, terminated } = makeOptions([
+      environment({ codexBridgePid: 4242, localCodexPort: 5111 }),
+    ]);
+    options.readIdentity = async () => {
+      throw new Error("ps timed out");
+    };
+
+    const reaped = await reapOrphanedLocalServers(options);
+
+    expect(terminated).toEqual([]);
+    expect(updates).toEqual([]);
+    expect(reaped).toEqual([
+      {
+        environmentId: "env-1",
+        kind: "codex",
+        pid: 4242,
+        outcome: "skipped-unreadable",
+      },
+    ]);
+  });
+
   test("clears obviously invalid PIDs without probing", async () => {
     const { options, updates, terminated } = makeOptions([
       environment({ codexBridgePid: 1, claudeBridgePid: process.pid }),
@@ -276,6 +301,15 @@ describe("reapOrphanedLocalServers", () => {
 });
 
 describe("reapOrphanedClaudeTmuxRuntimes", () => {
+  test("uses disjoint roots for backends with different data directories", () => {
+    const first = claudeTmuxRuntimeRootPrefix("/tmp/orkestrator-data-a");
+    const second = claudeTmuxRuntimeRootPrefix("/tmp/orkestrator-data-b");
+
+    expect(first).not.toBe(second);
+    expect(path.dirname(first)).toBe(path.dirname(second));
+    expect(claudeTmuxRuntimeRootPrefix("/tmp/orkestrator-data-a")).toBe(first);
+  });
+
   /**
    * A real prefix directory, so the default `listRuntimeRoots`/`removeRuntimeRoot`
    * are exercised rather than stubbed. It is never the shared
@@ -412,6 +446,27 @@ describe("reapOrphanedClaudeTmuxRuntimes", () => {
         { environmentId: dead, outcome: "reaped", killedSessions: [session] },
       ]);
       expect(second.killed).toEqual([session]);
+      expect(await fs.readdir(prefix)).toEqual([]);
+    });
+  });
+
+  test("removes the root when a listed tmux session disappears before kill", async () => {
+    const dead = "env-raced-exit-000000";
+    const session = tmuxSessionName(dead, "tab-1");
+    const { options } = harness({ sessions: [session] });
+
+    await withRuntimePrefix([dead], async (prefix) => {
+      const reaped = await reapOrphanedClaudeTmuxRuntimes({
+        ...options,
+        runtimeRootPrefix: prefix,
+        killTmuxSession: async () => {
+          throw new Error(`can't find session: ${session}`);
+        },
+      });
+
+      expect(reaped).toEqual([
+        { environmentId: dead, outcome: "reaped", killedSessions: [session] },
+      ]);
       expect(await fs.readdir(prefix)).toEqual([]);
     });
   });

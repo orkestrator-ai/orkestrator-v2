@@ -657,6 +657,7 @@ export interface ClaudeClient {
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const PROMPT_TIMEOUT_MS = 120_000;
 
 async function fetchWithTimeout(
   url: string,
@@ -666,7 +667,10 @@ async function fetchWithTimeout(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, controller.signal])
+      : controller.signal;
+    return await fetch(url, { ...options, signal });
   } finally {
     clearTimeout(timer);
   }
@@ -930,6 +934,45 @@ export async function getSessionMessages(
 /** Permission mode for Claude Agent SDK */
 export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
 
+export type ClaudePromptSendOutcome =
+  | {
+      ok: true;
+      outcome: "accepted";
+      status: "processing" | "already-processed";
+      requestId: string;
+      duplicate: boolean;
+    }
+  | {
+      ok: false;
+      outcome: "rejected";
+      requestId: string;
+      httpStatus: number;
+    }
+  | {
+      ok: false;
+      outcome: "unknown";
+      requestId: string;
+    };
+
+/**
+ * Whether a caller must reconcile against authoritative session state.
+ *
+ * Transport ambiguity stays pending just like definite acceptance: unlocking
+ * the composer would invite a fresh request id and could duplicate a turn the
+ * bridge already started. Legacy boolean test doubles remain supported.
+ */
+export function shouldReconcileClaudePrompt(result: unknown): boolean {
+  return result === true
+    || (
+      typeof result === "object"
+      && result !== null
+      && (
+        (result as { ok?: unknown }).ok === true
+        || (result as { outcome?: unknown }).outcome === "unknown"
+      )
+    );
+}
+
 /**
  * Send a prompt to a session (async - returns immediately, results via SSE)
  *
@@ -955,7 +998,7 @@ export async function sendPrompt(
     outputSchema?: JsonSchema;
     requestId?: string;
   }
-): Promise<boolean> {
+): Promise<ClaudePromptSendOutcome> {
   const requestId = options?.requestId ?? createUuid();
   try {
     console.debug("[claude-client] Sending prompt", {
@@ -968,23 +1011,28 @@ export async function sendPrompt(
       fastMode: options?.fastMode,
       structured: options?.outputSchema !== undefined,
     });
-    const response = await fetchClaude(client, `/session/${sessionId}/prompt`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt,
-        model: options?.model,
-        attachments: options?.attachments,
-        effort: options?.effort,
-        permissionMode: options?.permissionMode,
-        fastMode: options?.fastMode,
-        agent: options?.agent,
-        includeLocalSettings: options?.includeLocalSettings,
-        promptSuggestions: options?.promptSuggestions,
-        outputSchema: options?.outputSchema,
-        requestId,
-      }),
-    });
+    const response = await fetchClaude(
+      client,
+      `/session/${sessionId}/prompt`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt,
+          model: options?.model,
+          attachments: options?.attachments,
+          effort: options?.effort,
+          permissionMode: options?.permissionMode,
+          fastMode: options?.fastMode,
+          agent: options?.agent,
+          includeLocalSettings: options?.includeLocalSettings,
+          promptSuggestions: options?.promptSuggestions,
+          outputSchema: options?.outputSchema,
+          requestId,
+        }),
+      },
+      PROMPT_TIMEOUT_MS,
+    );
     console.debug("[claude-client] Prompt response", {
       sessionId,
       status: response.status,
@@ -993,11 +1041,30 @@ export async function sendPrompt(
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       console.error("[claude-client] Prompt failed", { sessionId, status: response.status, text });
+      return {
+        ok: false,
+        outcome: "rejected",
+        requestId,
+        httpStatus: response.status,
+      };
     }
-    return response.ok;
+    const body = (await response.json().catch(() => ({}))) as {
+      requestId?: unknown;
+      status?: unknown;
+      duplicate?: unknown;
+    };
+    return {
+      ok: true,
+      outcome: "accepted",
+      status: body.status === "already-processed"
+        ? "already-processed"
+        : "processing",
+      requestId: typeof body.requestId === "string" ? body.requestId : requestId,
+      duplicate: body.duplicate === true,
+    };
   } catch (error) {
     console.error("[claude-client] Failed to send prompt:", error);
-    return false;
+    return { ok: false, outcome: "unknown", requestId };
   }
 }
 

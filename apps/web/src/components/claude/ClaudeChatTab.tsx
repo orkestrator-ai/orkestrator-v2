@@ -26,6 +26,7 @@ import {
   getSessionMessages,
   getPendingQuestions,
   getPendingPlanApprovals,
+  shouldReconcileClaudePrompt,
   forkClaudeSession,
   sendPrompt,
   abortSession,
@@ -1347,7 +1348,7 @@ export function ClaudeChatTab({
               fastMode: fastModeEnabled && modelSupportsFastMode,
             });
 
-            if (!success) {
+            if (!shouldReconcileClaudePrompt(success)) {
               console.error("[ClaudeChatTab] Failed to send initial prompt");
               setSessionLoading(sessionKey, false);
               // Show error message to user
@@ -2005,7 +2006,7 @@ export function ClaudeChatTab({
           useClaudeStore.getState().promptSuggestionOptIn.get(sessionKey) === true,
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         console.error("[ClaudeChatTab] Failed to send prompt");
         setSessionLoading(sessionKey, false);
       }

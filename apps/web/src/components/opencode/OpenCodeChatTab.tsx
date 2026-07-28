@@ -687,10 +687,23 @@ export function OpenCodeChatTab({
     ): Promise<boolean> => {
       const pendingBeforeSync = readSessionPendingRequests(sessionId);
 
-      const [questions, permissions] = await Promise.all([
-        getPendingQuestions(sdkClient, { throwOnError: options.throwOnError }),
-        getPendingPermissions(sdkClient, { throwOnError: options.throwOnError }),
-      ]);
+      let questions: QuestionRequest[];
+      let permissions: PermissionRequest[];
+      try {
+        [questions, permissions] = await Promise.all([
+          // An empty authoritative snapshot means "remove every old card"; a
+          // transport fallback must never be allowed to masquerade as one.
+          getPendingQuestions(sdkClient, { throwOnError: true }),
+          getPendingPermissions(sdkClient, { throwOnError: true }),
+        ]);
+      } catch (error) {
+        console.error(
+          "[OpenCodeChatTab] Failed to synchronize pending requests:",
+          error,
+        );
+        if (options.throwOnError) throw error;
+        return false;
+      }
       if (options.shouldApply && !options.shouldApply()) return false;
 
       const stateAfterSync = useOpenCodeStore.getState();

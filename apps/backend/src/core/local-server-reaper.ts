@@ -23,14 +23,16 @@
  * Each check independently prefers a false negative (a leaked process survives
  * until the next startup) over a false positive (killing someone else's work).
  *
- * Stale records are cleared in every case except a kill that failed, so a
- * later startup can retry it.
+ * Confirmed stale records are cleared. Records whose identity cannot be read,
+ * whose process group is unsafe, or whose kill failed are retained so a later
+ * startup can retry without losing attribution.
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { runCommand } from "./shell.js";
 import { terminateProcessTree } from "./process-tree.js";
 import {
+  isMissingTmuxSessionError,
   parseTmuxSessionNames,
   RUNTIME_ROOT_PREFIX,
   selectReapableTmuxSessions,
@@ -51,9 +53,9 @@ export type LocalServerReapKind = "opencode" | "claude" | "codex";
  * be exactly the false positive the pid-based checks exist to prevent.
  *
  * The equivalent evidence for tmux mode is the runtime root: tmux mode creates
- * `${RUNTIME_ROOT_PREFIX}/<environmentId>` on the host for every *local*
- * environment it starts (a container environment's root lives inside the
- * container and dies with it) and removes it on a clean stop. A root left
+ * `${RUNTIME_ROOT_PREFIX}/<dataDirHash>/<environmentId>` on the host for every
+ * *local* environment it starts (a container environment's root lives inside
+ * the container and dies with it) and removes it on a clean stop. A root left
  * behind for an environment that no longer exists is therefore the same signal
  * a stale PID record is, and the corresponding sessions are addressed by tmux
  * session *name* rather than by PID.
@@ -136,7 +138,11 @@ export async function reapOrphanedClaudeTmuxRuntimes(
   const listTmuxSessions = options.listTmuxSessions ?? readHostTmuxSessions;
   const killTmuxSession = options.killTmuxSession ??
     (async (sessionName: string) => {
-      await runCommand("tmux", ["kill-session", "-t", sessionName], { timeoutMs: 5_000 });
+      try {
+        await runCommand("tmux", ["kill-session", "-t", sessionName], { timeoutMs: 5_000 });
+      } catch (error) {
+        if (!isMissingTmuxSessionError(error)) throw error;
+      }
     });
   const removeRuntimeRoot = options.removeRuntimeRoot ??
     ((rootPath: string) => fs.rm(rootPath, { recursive: true, force: true }));
@@ -190,6 +196,12 @@ export async function reapOrphanedClaudeTmuxRuntimes(
         await killTmuxSession(sessionName);
         killedSessions.push(sessionName);
       } catch (error) {
+        if (isMissingTmuxSessionError(error)) {
+          // The session exited after the shared listing. The desired state is
+          // already reached, so allow the durable attribution root to go.
+          killedSessions.push(sessionName);
+          continue;
+        }
         killFailed = true;
         log(`[backend] Failed to kill orphaned tmux session ${sessionName}: ${String(error)}`);
       }
@@ -303,9 +315,12 @@ async function readProcessIdentity(pid: number): Promise<ProcessIdentity | null>
       { timeoutMs: 5_000 },
     );
     return parseProcessIdentity(stdout);
-  } catch {
-    // `ps -p` exits non-zero when the PID no longer exists.
-    return null;
+  } catch (error) {
+    // `ps -p` exits non-zero when the PID no longer exists. A timeout, missing
+    // executable, or transient spawn failure is different: if the PID is still
+    // alive, preserve its record so a later startup can identify it safely.
+    if (!isPidAlive(pid)) return null;
+    throw error;
   }
 }
 
@@ -359,7 +374,8 @@ export interface ReapedLocalServer {
     | "cleared"
     | "kill-failed"
     | "skipped-live-owner"
-    | "skipped-not-group-leader";
+    | "skipped-not-group-leader"
+    | "skipped-unreadable";
 }
 
 export interface ReapOrphanedLocalServersOptions {
@@ -408,10 +424,20 @@ export async function reapOrphanedLocalServers(
         continue;
       }
 
-      const identity = await readIdentity(pid);
-      const matchesKind = identity !== null
-        && server.markers.every((marker) => identity.commandLine.includes(marker));
-      if (!matchesKind) {
+      let identity: ProcessIdentity | null;
+      try {
+        identity = await readIdentity(pid);
+      } catch (error) {
+        log(
+          `[backend] Unable to identify ${server.kind} pid ${pid}; preserving its record: ${String(error)}`,
+        );
+        record("skipped-unreadable");
+        continue;
+      }
+      if (
+        identity === null
+        || !server.markers.every((marker) => identity.commandLine.includes(marker))
+      ) {
         // Dead, or a recycled PID now owned by a stranger. Either way the
         // record is stale and must not be trusted again.
         await clearRecord();

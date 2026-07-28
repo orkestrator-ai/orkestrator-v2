@@ -84,14 +84,14 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("ClaudePlanApprovalCard", () => {
-  test("shows the bridge deadline and disables decisions after expiry", () => {
+  test("shows the bridge deadline without trusting browser clock drift to disable decisions", () => {
     renderCard([], { ...approval, expiresAt: Date.now() + 65_000 });
     expect(screen.getByText("Expires in 1:05")).toBeTruthy();
     cleanup();
 
     renderCard([], { ...approval, expiresAt: Date.now() - 1 });
-    expect(screen.getByText("This request expired and was declined.")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Approve Plan" })).toBeNull();
+    expect(screen.queryByText("This request expired and was declined.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve Plan" })).toBeTruthy();
     expect(respondToPlanApprovalMock).not.toHaveBeenCalled();
   });
 

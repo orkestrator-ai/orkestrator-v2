@@ -14,7 +14,7 @@ interface ClaudeQuestionCardBaseProps {
   allowCustomAnswer?: boolean;
   allowOptionDeselect?: boolean;
   submitOnOptionSelect?: boolean;
-  onDismiss?: () => Promise<void> | void;
+  onDismiss?: () => Promise<boolean | void> | boolean | void;
   hideDismiss?: boolean;
 }
 
@@ -87,14 +87,15 @@ export function ClaudeQuestionCard({
 
   const handleDismiss = useCallback(async () => {
     if (onDismiss) {
-      await onDismiss();
-      return;
+      return await onDismiss();
     }
-    if (!client || !sessionId) return;
+    if (!client || !sessionId) return false;
     const result = await dismissQuestion(client, sessionId, question.id);
     if (result === "applied" || result === "stale") {
       removePendingQuestion(question.id);
+      return true;
     }
+    return false;
   }, [client, onDismiss, question.id, removePendingQuestion, sessionId]);
 
   return (

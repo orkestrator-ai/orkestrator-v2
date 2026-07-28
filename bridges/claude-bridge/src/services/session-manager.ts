@@ -890,7 +890,7 @@ function promptDispatchKey(sessionId: string, requestId: string): string {
 function collectPromptDispatchGarbage(): void {
   const cutoff = Date.now() - PROMPT_DISPATCH_RETENTION_MS;
   for (const [requestId, record] of promptDispatchRecords) {
-    if (record.state === "already-processed" && record.updatedAt < cutoff) {
+    if (record.updatedAt < cutoff) {
       promptDispatchRecords.delete(requestId);
     }
   }
@@ -4598,7 +4598,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // retry of this request id must replay that outcome rather than re-run it.
     // Settling the record (instead of dropping it) is what makes the second
     // request answer `already-processed`.
-    if (dispatchRequestId) {
+    if (dispatchRequestId && sessions.get(sessionId) === session) {
       recordPromptDispatch(sessionId, dispatchRequestId, "already-processed");
     }
     // The loop above is the only consumer of this iterator, and it ends either

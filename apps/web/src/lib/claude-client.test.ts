@@ -9,6 +9,7 @@ import {
   lookupSession,
   getSessionMessages,
   getStructuredOutput,
+  shouldReconcileClaudePrompt,
   sendPrompt,
   sendStructuredPrompt,
   abortSession,
@@ -472,10 +473,31 @@ describe("claude-client", () => {
   });
 
   describe("sendPrompt", () => {
-    test("returns true on 202 accepted", async () => {
+    test("keeps ambiguous dispatches locked for authoritative reconciliation", () => {
+      expect(shouldReconcileClaudePrompt({
+        ok: false,
+        outcome: "unknown",
+        requestId: "request-1",
+      })).toBe(true);
+      expect(shouldReconcileClaudePrompt({
+        ok: false,
+        outcome: "rejected",
+        requestId: "request-1",
+        httpStatus: 409,
+      })).toBe(false);
+      expect(shouldReconcileClaudePrompt(true)).toBe(true);
+      expect(shouldReconcileClaudePrompt(false)).toBe(false);
+    });
+
+    test("returns the accepted request identity on 202", async () => {
       mockFetchJson({ status: "processing" }, 202);
       const result = await sendPrompt(client, "s-1", "Hello");
-      expect(result).toBe(true);
+      expect(result).toMatchObject({
+        ok: true,
+        outcome: "accepted",
+        status: "processing",
+        requestId: expect.any(String),
+      });
     });
 
     /**
@@ -569,14 +591,51 @@ describe("claude-client", () => {
       ]);
     });
 
-    test("returns false on server error", async () => {
+    test("distinguishes a definite HTTP rejection from an ambiguous transport failure", async () => {
       mockFetchStatus(500);
-      expect(await sendPrompt(client, "s-1", "Hello")).toBe(false);
+      expect(await sendPrompt(client, "s-1", "Hello", {
+        requestId: "rejected-request",
+      })).toEqual({
+        ok: false,
+        outcome: "rejected",
+        requestId: "rejected-request",
+        httpStatus: 500,
+      });
+
+      mockFetchError();
+      expect(await sendPrompt(client, "s-1", "Hello", {
+        requestId: "ambiguous-request",
+      })).toEqual({
+        ok: false,
+        outcome: "unknown",
+        requestId: "ambiguous-request",
+      });
     });
 
-    test("returns false on network error", async () => {
-      mockFetchError();
-      expect(await sendPrompt(client, "s-1", "Hello")).toBe(false);
+    test("surfaces a generated id that a transport-failure retry can reuse", async () => {
+      const bodies: string[] = [];
+      globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+        bodies.push(init?.body as string);
+        if (bodies.length === 1) throw new TypeError("response lost");
+        return Response.json({ status: "already-processed", duplicate: true });
+      }) as unknown as typeof fetch;
+
+      const first = await sendPrompt(client, "s-1", "Hello");
+      expect(first.outcome).toBe("unknown");
+      const retry = await sendPrompt(client, "s-1", "Hello", {
+        requestId: first.requestId,
+      });
+
+      expect(retry).toMatchObject({
+        ok: true,
+        status: "already-processed",
+        requestId: first.requestId,
+        duplicate: true,
+      });
+      expect(bodies.map((body) => JSON.parse(body).requestId)).toEqual([
+        first.requestId,
+        first.requestId,
+      ]);
     });
   });
 
@@ -1248,6 +1307,28 @@ describe("claude-client", () => {
     test("returns empty array on network error", async () => {
       mockFetchError();
       expect(await getSlashCommands(client)).toEqual([]);
+    });
+
+    test("combines the caller signal with the internal timeout signal", async () => {
+      const controller = new AbortController();
+      let observedSignal: AbortSignal | undefined;
+      globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+        observedSignal = init?.signal as AbortSignal;
+        return await new Promise<Response>((_resolve, reject) => {
+          observedSignal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      }) as unknown as typeof fetch;
+
+      const commands = getSlashCommands(client, controller.signal);
+      await Promise.resolve();
+      controller.abort();
+
+      expect(await commands).toEqual([]);
+      expect(observedSignal?.aborted).toBe(true);
     });
   });
 

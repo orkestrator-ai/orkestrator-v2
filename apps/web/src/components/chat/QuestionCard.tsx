@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { AlertTriangle, Check, Circle, HelpCircle, X } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -26,11 +27,10 @@ export interface QuestionCardQuestion {
 /**
  * Receives the answers the user submitted.
  *
- * The return value is the caller's own bookkeeping — the card ignores it. The
- * card never removes itself either way: every wrapper owns its lifecycle (via
+ * The card never removes itself: every wrapper owns its lifecycle (via
  * `removePendingQuestion` and friends) because the reply has to be accepted by
- * the agent before the prompt stops blocking the turn. A rejected submit simply
- * leaves the card as it was, ready to be retried.
+ * the agent before the prompt stops blocking the turn. Returning `false` leaves
+ * the card retryable and produces a user-visible delivery failure.
  */
 export type SubmitAnswersHandler = (
   answers: string[][],
@@ -42,7 +42,7 @@ interface QuestionCardProps {
   title: string;
   questions: QuestionCardQuestion[];
   onSubmit: SubmitAnswersHandler;
-  onDismiss?: () => Promise<void> | void;
+  onDismiss?: () => Promise<boolean | void> | boolean | void;
   initialAnswers?: string[][];
   allowCustomAnswer?: boolean;
   allowOptionDeselect?: boolean;
@@ -415,9 +415,17 @@ export function QuestionCard({
       if (expired) return;
       setIsSubmitting(true);
       try {
-        await onSubmit(effectiveAnswers);
+        const submitted = await onSubmit(effectiveAnswers);
+        if (submitted === false) {
+          toast.error("Failed to send your answer", {
+            description: `${agentLabel} is still waiting for a response. Please try again.`,
+          });
+        }
       } catch (error) {
         console.error(`[${agentLabel}QuestionCard] Failed to submit answer:`, error);
+        toast.error("Failed to send your answer", {
+          description: `${agentLabel} is still waiting for a response. Please try again.`,
+        });
       } finally {
         setIsSubmitting(false);
       }
@@ -466,9 +474,17 @@ export function QuestionCard({
     if (isSubmitting || expired || !onDismiss) return;
     setIsSubmitting(true);
     try {
-      await onDismiss();
+      const dismissed = await onDismiss();
+      if (dismissed === false) {
+        toast.error("Failed to dismiss this question", {
+          description: `${agentLabel} is still waiting for a response. Please try again.`,
+        });
+      }
     } catch (error) {
       console.error(`[${agentLabel}QuestionCard] Failed to dismiss question:`, error);
+      toast.error("Failed to dismiss this question", {
+        description: `${agentLabel} is still waiting for a response. Please try again.`,
+      });
     } finally {
       setIsSubmitting(false);
     }

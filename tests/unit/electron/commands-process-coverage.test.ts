@@ -603,7 +603,7 @@ describe("process and platform command behavior", () => {
     await expect(invoke("stop_codex_server", { containerId: "container-a" })).resolves.toBeUndefined();
 
     const log = await readCommandLog();
-    expect(log).toContain("pkill -f '[c]odex-bridge' || true; rm -f /tmp/codex-bridge-token");
+    expect(log).toContain("pkill -f '[c]odex-bridge/dist/index.js' || true; rm -f /tmp/codex-bridge-token");
     expect(log).not.toContain("pkill -f 'codex-bridge'");
   });
 
@@ -611,7 +611,7 @@ describe("process and platform command behavior", () => {
     await expect(invoke("stop_claude_server", { containerId: "container-a" })).resolves.toBeUndefined();
 
     const log = await readCommandLog();
-    expect(log).toContain("pkill -f '[c]laude-bridge' || true; rm -f /tmp/claude-bridge-token");
+    expect(log).toContain("pkill -f '[c]laude-bridge/dist/index.js' || true; rm -f /tmp/claude-bridge-token");
     expect(log).not.toContain("pkill -f 'claude-bridge'");
   });
 

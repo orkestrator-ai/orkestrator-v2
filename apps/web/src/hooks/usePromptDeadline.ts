@@ -20,26 +20,26 @@ export function usePromptDeadline(expiresAt?: number): {
   remaining: string | null;
   expired: boolean;
 } {
-  const [remaining, setRemaining] = useState<string | null>(() =>
-    expiresAt === undefined
+  const [, setTick] = useState(0);
+  const invalid = expiresAt !== undefined && !Number.isFinite(expiresAt);
+  const remaining =
+    expiresAt === undefined || invalid
       ? null
-      : formatPromptDeadline(expiresAt - Date.now()),
-  );
+      : formatPromptDeadline(expiresAt - Date.now());
 
   useEffect(() => {
-    if (expiresAt === undefined) {
-      setRemaining(null);
-      return;
-    }
-    const update = () =>
-      setRemaining(formatPromptDeadline(expiresAt - Date.now()));
-    update();
-    const timer = setInterval(update, 1000);
+    if (expiresAt === undefined || invalid || remaining === null) return;
+    const timer = setInterval(() => setTick((tick) => tick + 1), 1000);
     return () => clearInterval(timer);
-  }, [expiresAt]);
+  }, [expiresAt, invalid, remaining]);
 
   return {
     remaining,
-    expired: expiresAt !== undefined && remaining === null,
+    // Absolute deadlines come from a different process (often inside a Docker
+    // VM) and are only a display hint in the browser. Clock drift must not
+    // suppress controls; the authoritative response endpoint returns `stale`
+    // once the server-side window has actually closed. Invalid wire data still
+    // fails closed.
+    expired: invalid,
   };
 }

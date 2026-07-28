@@ -17,7 +17,10 @@ import {
   type ClaudeModelCatalogSnapshot,
   type ClaudeBackgroundTask,
 } from "@/lib/claude-client";
-import type { ContextUsageSnapshot } from "@/lib/context-usage";
+import type {
+  AgentRateLimitWindow,
+  ContextUsageSnapshot,
+} from "@/lib/context-usage";
 import {
   claudePlanApprovalDraftKey,
   claudeQuestionDraftKey,
@@ -121,6 +124,14 @@ interface ClaudeState
   selectedModel: Map<ClaudeSessionKey, string>;
   sessionInitData: Map<string, SessionInitData>;
   contextUsage: Map<ClaudeSessionKey, ContextUsageSnapshot>;
+  /**
+   * Authoritative provider quota windows are independent of context usage.
+   * Claude can report them before the first token snapshot exists.
+   *
+   * An empty array is retained deliberately: it is an authoritative clear and
+   * must override stale limits nested in an older context snapshot.
+   */
+  rateLimits: Map<ClaudeSessionKey, AgentRateLimitWindow[]>;
   selectedAgent: Map<ClaudeSessionKey, string>;
   includeLocalSettings: Map<ClaudeSessionKey, boolean>;
   promptSuggestionOptIn: Map<ClaudeSessionKey, boolean>;
@@ -168,6 +179,10 @@ interface ClaudeState
     sessionKey: ClaudeSessionKey,
     usage: ContextUsageSnapshot | null,
   ) => void;
+  setRateLimits: (
+    sessionKey: ClaudeSessionKey,
+    rateLimits: AgentRateLimitWindow[] | null,
+  ) => void;
   setSelectedAgent: (sessionKey: ClaudeSessionKey, agent: string | undefined) => void;
   setIncludeLocalSettings: (sessionKey: ClaudeSessionKey, enabled: boolean) => void;
   setPromptSuggestionOptIn: (sessionKey: ClaudeSessionKey, enabled: boolean) => void;
@@ -182,6 +197,14 @@ interface ClaudeState
   setBackgroundTasks: (
     sessionKey: ClaudeSessionKey,
     tasks: Record<string, ClaudeBackgroundTask>,
+  ) => void;
+  /**
+   * Bind a tab to a different provider session and discard metadata that belongs
+   * to the old provider identity in the same store transaction.
+   */
+  replaceSessionIdentity: (
+    sessionKey: ClaudeSessionKey,
+    session: ClaudeSessionState,
   ) => void;
   clearEnvironment: (environmentId: string) => void;
   /** Drop every session-keyed entry for one closed tab. */
@@ -206,6 +229,9 @@ interface ClaudeState
   getContextUsage: (
     sessionKey: ClaudeSessionKey,
   ) => ContextUsageSnapshot | undefined;
+  getRateLimits: (
+    sessionKey: ClaudeSessionKey,
+  ) => AgentRateLimitWindow[] | undefined;
   getDismissedPromptSuggestion: (
     sessionKey: ClaudeSessionKey,
   ) => string | undefined;
@@ -248,6 +274,7 @@ const CLAUDE_SESSION_KEYED_MAPS = [
   "planMode",
   "fastMode",
   "contextUsage",
+  "rateLimits",
   "selectedAgent",
   "includeLocalSettings",
   "promptSuggestionOptIn",
@@ -276,6 +303,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   selectedModel: new Map(),
   sessionInitData: new Map(),
   contextUsage: new Map(),
+  rateLimits: new Map(),
   selectedAgent: new Map(),
   includeLocalSettings: new Map(),
   promptSuggestionOptIn: new Map(),
@@ -394,7 +422,27 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       } else {
         next.delete(sessionKey);
       }
-      return { contextUsage: next };
+      if (usage?.rateLimits === undefined) {
+        return { contextUsage: next };
+      }
+
+      // Exact usage frames can carry quota windows too. Synchronize them when
+      // present, while a usage reading with no quota field leaves the latest
+      // independent authoritative snapshot alone.
+      const rateLimits = new Map(state.rateLimits);
+      rateLimits.set(sessionKey, usage.rateLimits);
+      return { contextUsage: next, rateLimits };
+    }),
+
+  setRateLimits: (sessionKey, rateLimits) =>
+    set((state) => {
+      const next = new Map(state.rateLimits);
+      if (rateLimits) {
+        next.set(sessionKey, rateLimits);
+      } else {
+        next.delete(sessionKey);
+      }
+      return { rateLimits: next };
     }),
 
   setSelectedAgent: (sessionKey, agent) =>
@@ -441,6 +489,47 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       if (Object.keys(tasks).length > 0) next.set(sessionKey, tasks);
       else next.delete(sessionKey);
       return { backgroundTasks: next };
+    }),
+
+  replaceSessionIdentity: (sessionKey, session) =>
+    set((state) => {
+      const previousSessionId = state.sessions.get(sessionKey)?.sessionId;
+      const sessions = new Map(state.sessions);
+      sessions.set(sessionKey, session);
+
+      const withoutSessionKey = <T>(values: Map<string, T>) => {
+        const next = new Map(values);
+        next.delete(sessionKey);
+        return next;
+      };
+
+      const pendingQuestions = new Map(state.pendingQuestions);
+      const pendingPlanApprovals = new Map(state.pendingPlanApprovals);
+      if (previousSessionId) {
+        for (const [requestId, question] of pendingQuestions) {
+          if (question.sessionId === previousSessionId) {
+            pendingQuestions.delete(requestId);
+          }
+        }
+        for (const [requestId, approval] of pendingPlanApprovals) {
+          if (approval.sessionId === previousSessionId) {
+            pendingPlanApprovals.delete(requestId);
+          }
+        }
+      }
+
+      return {
+        sessions,
+        contextUsage: withoutSessionKey(state.contextUsage),
+        rateLimits: withoutSessionKey(state.rateLimits),
+        promptSuggestions: withoutSessionKey(state.promptSuggestions),
+        dismissedPromptSuggestions: withoutSessionKey(
+          state.dismissedPromptSuggestions,
+        ),
+        backgroundTasks: withoutSessionKey(state.backgroundTasks),
+        pendingQuestions,
+        pendingPlanApprovals,
+      };
     }),
 
   clearEnvironment: (environmentId) => {
@@ -590,6 +679,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   getSessionInitData: (environmentId) =>
     get().sessionInitData.get(environmentId),
   getContextUsage: (sessionKey) => get().contextUsage.get(sessionKey),
+  getRateLimits: (sessionKey) => get().rateLimits.get(sessionKey),
   getDismissedPromptSuggestion: (sessionKey) =>
     get().dismissedPromptSuggestions.get(sessionKey),
   getSelectedAgent: (sessionKey) => get().selectedAgent.get(sessionKey),

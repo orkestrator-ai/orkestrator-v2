@@ -348,7 +348,10 @@ const {
   ensurePersistedSession,
   hydratePersistedSessionMessages,
   evictIdleHydratedTranscripts,
+  getLastIdleTranscriptSweep,
+  startIdleTranscriptSweep,
   IDLE_TRANSCRIPT_EVICTION_MS,
+  STRUCTURED_USAGE_REQUEST_TIMEOUT_MS,
   deleteSessionDurably,
   renameSessionDurably,
   forkPersistedSession,
@@ -3325,6 +3328,84 @@ describe("sendPrompt", () => {
     }
   });
 
+  test("maps an unreadable workspace canonical path to an actionable read failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-missing-workspace-"));
+    const missingWorkspace = join(directory, "removed-workspace");
+    const session = createSession("missing-workspace");
+    track(session.id);
+    try {
+      await expect(withWorkspaceCwd(missingWorkspace, () =>
+        sendPrompt(session.id, "describe", {
+          attachments: [{ type: "image", path: join(missingWorkspace, "image.png") }],
+        }))).rejects.toMatchObject({
+        name: "ClaudeAttachmentError",
+        code: "attachment_read_failed",
+        message: "Image attachment could not be read safely from the workspace.",
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("maps lstat or realpath failure after opening an image to an actionable read failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-removed-image-"));
+    const imagePath = join(directory, "removed.png");
+    await writeFile(imagePath, "image-data");
+    const session = createSession("removed-image");
+    track(session.id);
+    try {
+      await withWorkspaceCwd(directory, async () => {
+        await expect(sendPrompt(
+          session.id,
+          "describe",
+          { attachments: [{ type: "image", path: imagePath }] },
+          {
+            afterAttachmentInitialValidation: async () => {
+              await rm(imagePath);
+            },
+          },
+        )).rejects.toMatchObject({
+          name: "ClaudeAttachmentError",
+          code: "attachment_read_failed",
+          message: "Image attachment could not be read safely from the workspace.",
+        });
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("maps target realpath failure after symlink validation to an actionable read failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-realpath-race-"));
+    const imagePath = join(directory, "removed.png");
+    await writeFile(imagePath, "image-data");
+    const session = createSession("realpath-race");
+    track(session.id);
+    try {
+      await withWorkspaceCwd(directory, async () => {
+        await expect(sendPrompt(
+          session.id,
+          "describe",
+          { attachments: [{ type: "image", path: imagePath }] },
+          {
+            afterAttachmentSymlinkValidation: async () => {
+              await rm(imagePath);
+            },
+          },
+        )).rejects.toMatchObject({
+          name: "ClaudeAttachmentError",
+          code: "attachment_read_failed",
+          message: "Image attachment could not be read safely from the workspace.",
+        });
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("reports attachment_changed when a disk image mutates during the bounded read", async () => {
     const directory = await mkdtemp(join(tmpdir(), "claude-bridge-changed-image-"));
     const imagePath = join(directory, "changed.png");
@@ -5985,6 +6066,36 @@ describe("evictIdleHydratedTranscripts", () => {
     expect(evictIdleHydratedTranscripts()).toEqual([]);
     expect(state.messages).toHaveLength(1);
   });
+
+  test("reports the complete result of the most recent sweep", async () => {
+    const stale = await hydratedIdleSession();
+    markStale(stale);
+    const recent = await hydratedIdleSession();
+
+    expect(evictIdleHydratedTranscripts()).toContain(stale.id);
+    expect(recent.messages.length).toBeGreaterThan(0);
+    expect(getLastIdleTranscriptSweep()).toEqual(expect.objectContaining({
+      scanned: expect.any(Number),
+      evicted: 1,
+      skipped: expect.objectContaining({
+        "recently-read": expect.any(Number),
+      }),
+    }));
+  });
+
+  test("periodic sweep timer evicts stale hydrated transcripts", async () => {
+    const state = await hydratedIdleSession();
+    markStale(state);
+    const timer = startIdleTranscriptSweep(5);
+    try {
+      expect(timer.hasRef()).toBe(false);
+      await waitFor(() => state.persistedMessagesLoaded === false);
+      expect(state.messages).toEqual([]);
+      expect(getLastIdleTranscriptSweep()?.evicted).toBeGreaterThanOrEqual(1);
+    } finally {
+      clearInterval(timer);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -6949,6 +7060,20 @@ describe("stopBackgroundTask", () => {
 // ---------------------------------------------------------------------------
 
 describe("rate_limit_event", () => {
+  const sparseFiveHourEvent = {
+    type: "rate_limit_event",
+    rate_limit_info: {
+      rateLimitType: "five_hour",
+      utilization: 42,
+      resetsAt: Date.parse("2026-07-28T22:30:00.000Z") / 1000,
+    },
+  };
+  const successfulUsageResult = {
+    type: "result",
+    subtype: "success",
+    usage: { input_tokens: 10, output_tokens: 5, context_window_tokens: 1000 },
+  };
+
   test("replaces sparse threshold data with all structured /usage windows", async () => {
     queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
       mock(async () => ({
@@ -7008,6 +7133,208 @@ describe("rate_limit_event", () => {
       },
     ]);
     expect(session.usage?.rateLimits).toEqual(session.rateLimits);
+  });
+
+  test("clears retained windows when structured usage says limits are unavailable", async () => {
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      mock(async () => ({
+        rate_limits_available: false,
+        rate_limits: null,
+      }));
+
+    const { events, stop } = captureEvents();
+    let session;
+    try {
+      ({ session } = await runPromptWithMessages([
+        sparseFiveHourEvent,
+        successfulUsageResult,
+      ]));
+    } finally {
+      stop();
+    }
+
+    expect(session.rateLimits).toEqual([]);
+    expect(session.usage?.rateLimits).toEqual([]);
+    expect(events).toContainEqual({
+      type: "session.updated",
+      sessionId: session.id,
+      data: {
+        contextUsage: session.usage,
+        rateLimits: [],
+      },
+    });
+  });
+
+  test("treats an empty structured limits object as an authoritative empty snapshot", async () => {
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      mock(async () => ({
+        rate_limits_available: true,
+        rate_limits: {},
+      }));
+
+    const { session } = await runPromptWithMessages([
+      sparseFiveHourEvent,
+      successfulUsageResult,
+    ]);
+
+    expect(session.rateLimits).toEqual([]);
+    expect(session.usage?.rateLimits).toEqual([]);
+  });
+
+  test("preserves sparse windows when the structured request rejects", async () => {
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      mock(async () => {
+        throw new Error("experimental request failed");
+      });
+
+    const { session } = await runPromptWithMessages([
+      sparseFiveHourEvent,
+      successfulUsageResult,
+    ]);
+
+    expect(session.status).toBe("idle");
+    expect(session.rateLimits).toEqual([
+      {
+        label: "Five Hour",
+        usedPercent: 42,
+        resetsAt: "2026-07-28T22:30:00.000Z",
+      },
+    ]);
+    expect(session.usage?.rateLimits).toEqual(session.rateLimits);
+  });
+
+  test("times out a non-settling structured request without blocking turn completion", async () => {
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      mock(() => new Promise<unknown>(() => {}));
+
+    const startedAt = Date.now();
+    const { session } = await runPromptWithMessages([
+      sparseFiveHourEvent,
+      successfulUsageResult,
+    ]);
+
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(
+      STRUCTURED_USAGE_REQUEST_TIMEOUT_MS - 50,
+    );
+    expect(Date.now() - startedAt).toBeLessThan(
+      STRUCTURED_USAGE_REQUEST_TIMEOUT_MS + 1_000,
+    );
+    expect(session.status).toBe("idle");
+    expect(session.rateLimits?.[0]).toMatchObject({
+      label: "Five Hour",
+      usedPercent: 42,
+    });
+  });
+
+  test("preserves sparse windows for malformed structured responses", async () => {
+    const malformedResponses = [
+      null,
+      [],
+      {},
+      { rate_limits_available: true, rate_limits: null },
+      { rate_limits_available: false, rate_limits: {} },
+      { rate_limits_available: true, rate_limits: [] },
+      { rate_limits: {} },
+      { rate_limits_available: "yes", rate_limits: {} },
+      {
+        rate_limits_available: true,
+        rate_limits: {
+          five_hour: { utilization: 101, resets_at: "not-a-date" },
+        },
+      },
+      {
+        rate_limits_available: true,
+        rate_limits: { model_scoped: ["not-a-window"] },
+      },
+    ];
+    const responses = [...malformedResponses];
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      mock(async () => responses.shift());
+
+    for (const _response of malformedResponses) {
+      const { session } = await runPromptWithMessages([
+        sparseFiveHourEvent,
+        successfulUsageResult,
+      ]);
+      expect(session.rateLimits).toEqual([
+        {
+          label: "Five Hour",
+          usedPercent: 42,
+          resetsAt: "2026-07-28T22:30:00.000Z",
+        },
+      ]);
+    }
+  });
+
+  test("validates utilization and reset fields independently", async () => {
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      mock(async () => ({
+        rate_limits_available: true,
+        rate_limits: {
+          five_hour: {
+            utilization: 25,
+            resets_at: "not-a-date",
+          },
+          seven_day: {
+            utilization: Number.NaN,
+            resets_at: "2026-08-04T10:00:00Z",
+          },
+          seven_day_oauth_apps: {
+            utilization: -1,
+            resets_at: "also-not-a-date",
+          },
+          seven_day_opus: {
+            utilization: 101,
+          },
+          seven_day_sonnet: {
+            utilization: Number.POSITIVE_INFINITY,
+          },
+        },
+      }));
+
+    const { session } = await runPromptWithMessages([successfulUsageResult]);
+
+    expect(session.rateLimits).toEqual([
+      {
+        label: "Five Hour",
+        usedPercent: 25,
+      },
+      {
+        label: "Weekly",
+        resetsAt: "2026-08-04T10:00:00.000Z",
+      },
+    ]);
+  });
+
+  test("parses every fixed key and removes fixed/model-scoped label collisions", async () => {
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      mock(async () => ({
+        rate_limits_available: true,
+        rate_limits: {
+          five_hour: { utilization: 1 },
+          seven_day: { utilization: 2 },
+          seven_day_oauth_apps: { utilization: 3 },
+          seven_day_opus: { utilization: 4 },
+          seven_day_sonnet: { utilization: 5 },
+          model_scoped: [
+            { display_name: "Opus", utilization: 44 },
+            { display_name: "opus", utilization: 45 },
+            { display_name: "Fable", utilization: 6 },
+            { display_name: "Fable", utilization: 7 },
+          ],
+        },
+      }));
+
+    const { session } = await runPromptWithMessages([successfulUsageResult]);
+
+    expect(session.rateLimits).toEqual([
+      { label: "Five Hour", usedPercent: 1 },
+      { label: "Weekly", usedPercent: 2 },
+      { label: "Weekly (OAuth Apps)", usedPercent: 3 },
+      { label: "Weekly (Opus)", usedPercent: 4 },
+      { label: "Weekly (Sonnet)", usedPercent: 5 },
+      { label: "Weekly (Fable)", usedPercent: 6 },
+    ]);
   });
 
   test("retains a window that arrives before any turn has completed", async () => {

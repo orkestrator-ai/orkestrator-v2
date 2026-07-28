@@ -40,6 +40,7 @@ import {
   USAGE_SCAN_EXEMPT_EVENT_TYPES,
   parseClaudeBackgroundTasks,
   parseClaudeContextUsage,
+  parseClaudeRateLimits,
   type ClaudeMessage as ClaudeMessageType,
   type ClaudeMessagePatch,
   type ClaudeQuestionRequest,
@@ -244,6 +245,9 @@ export function ClaudeChatTab({
   const setModels = useClaudeStore((state) => state.setModels);
   const setModelCatalog = useClaudeStore((state) => state.setModelCatalog);
   const setSession = useClaudeStore((state) => state.setSession);
+  const replaceSessionIdentity = useClaudeStore(
+    (state) => state.replaceSessionIdentity,
+  );
   const addMessage = useClaudeStore((state) => state.addMessage);
   const removeMessage = useClaudeStore((state) => state.removeMessage);
   const setMessages = useClaudeStore((state) => state.setMessages);
@@ -260,6 +264,7 @@ export function ClaudeChatTab({
   );
   const setSessionTitle = useClaudeStore((state) => state.setSessionTitle);
   const setContextUsage = useClaudeStore((state) => state.setContextUsage);
+  const setRateLimits = useClaudeStore((state) => state.setRateLimits);
   const setPromptSuggestion = useClaudeStore((state) => state.setPromptSuggestion);
   const setBackgroundTasks = useClaudeStore((state) => state.setBackgroundTasks);
   const addPendingPlanApproval = useClaudeStore(
@@ -429,6 +434,14 @@ export function ClaudeChatTab({
       } else {
         setContextUsage(key, null);
       }
+      if (serverSession.rateLimits !== undefined) {
+        // This snapshot is independent of context occupancy. In particular,
+        // an empty array is an authoritative clear and a non-empty array can
+        // arrive before Claude reports its first token reading. `lookupSession`
+        // has already sanitized partial arrays, so valid windows remain usable
+        // even when invalidMetadataFields reports entries it dropped.
+        setRateLimits(key, serverSession.rateLimits);
+      }
       if (
         !invalidFields.has("promptSuggestion")
         && (
@@ -459,7 +472,13 @@ export function ClaudeChatTab({
         }
       }
     },
-    [applyPromptSuggestion, setBackgroundTasks, setContextUsage, setPlanMode],
+    [
+      applyPromptSuggestion,
+      setBackgroundTasks,
+      setContextUsage,
+      setPlanMode,
+      setRateLimits,
+    ],
   );
   const showAddressAll = Boolean(
     isReviewTab &&
@@ -672,8 +691,6 @@ export function ClaudeChatTab({
     if (!serverSession) {
       throw new Error("The Claude session is no longer available on the server");
     }
-    applyServerSessionMetadata(sessionKey, serverSession);
-
     const stateAfterAttempt = useClaudeStore.getState();
     const sessionAfterAttempt = stateAfterAttempt.sessions.get(sessionKey);
     if (
@@ -695,6 +712,7 @@ export function ClaudeChatTab({
       return;
     }
 
+    applyServerSessionMetadata(sessionKey, serverSession);
     setMessages(sessionKey, messages);
     setSessionLoading(sessionKey, serverSession.status === "running");
     setSessionError(
@@ -928,6 +946,15 @@ export function ClaudeChatTab({
         const existingClient = useClaudeStore.getState().clients.get(environmentId);
         const existingSession = useClaudeStore.getState().sessions.get(sessionKey);
         if (existingClient && existingSession?.sessionId) {
+          const existingSessionId = existingSession.sessionId;
+          const isCurrentFastReconnect = () => {
+            if (!mounted) return false;
+            const currentState = useClaudeStore.getState();
+            return (
+              currentState.clients.get(environmentId) === existingClient
+              && currentState.sessions.get(sessionKey)?.sessionId === existingSessionId
+            );
+          };
           acknowledgeInitialLaunchOptions();
           console.debug("[ClaudeChatTab] Fast reconnect - reusing existing client and session", {
             tabId,
@@ -950,7 +977,7 @@ export function ClaudeChatTab({
           // on another env, fall through to full init. If healthy, re-sync session
           // state to pick up any messages missed while the tab was inactive.
           checkHealth(existingClient).then(async (healthy) => {
-            if (!mounted) return;
+            if (!isCurrentFastReconnect()) return;
             if (!healthy) {
               console.warn("[ClaudeChatTab] Background health check failed, re-initializing");
               setClient(environmentId, null);
@@ -972,21 +999,21 @@ export function ClaudeChatTab({
              */
             const pendingPromptsSync = syncPendingPrompts(
               existingClient,
-              existingSession.sessionId,
+              existingSessionId,
             );
 
             // Re-sync session state from the server.
             // If SSE events were missed while this tab was inactive (e.g. due to
             // an EventSource error killing the subscription), messages and loading
             // state can be stale.
-            const serverSession = await getSession(existingClient, existingSession.sessionId);
-            if (!mounted || !serverSession) return;
-            applyServerSessionMetadata(sessionKey, serverSession);
-            const messages = await getSessionMessages(existingClient, existingSession.sessionId);
-            if (!mounted) return;
+            const serverSession = await getSession(existingClient, existingSessionId);
+            if (!isCurrentFastReconnect() || !serverSession) return;
+            const messages = await getSessionMessages(existingClient, existingSessionId);
+            if (!isCurrentFastReconnect()) return;
 
             // Only apply fetched messages if they are more complete than what
             // the store currently has (SSE may have already delivered newer data).
+            applyServerSessionMetadata(sessionKey, serverSession);
             const currentMessages = useClaudeStore.getState().sessions.get(sessionKey)?.messages ?? [];
             if (messages.length >= currentMessages.length) {
               setMessages(sessionKey, messages);
@@ -1001,7 +1028,7 @@ export function ClaudeChatTab({
 
             await pendingPromptsSync;
           }).catch((err) => {
-            if (!mounted) return;
+            if (!isCurrentFastReconnect()) return;
             console.debug("[ClaudeChatTab] Background health check / re-sync failed:", err);
             setClient(environmentId, null);
             setConnectionState("error");
@@ -1050,7 +1077,7 @@ export function ClaudeChatTab({
               tabSessionIdRef.current = data.sessionId;
               updateTabNativeSessionId(tabId, data.sessionId, environmentId);
               isInitializedRef.current = true;
-              setSession(sessionKey, {
+              replaceSessionIdentity(sessionKey, {
                 sessionId: data.sessionId,
                 messages: restoredMessages,
                 isLoading: restoredServerSession?.status === "running",
@@ -1082,7 +1109,7 @@ export function ClaudeChatTab({
           isInitializedRef.current = true;
           seedInitialFastMode();
 
-          setSession(sessionKey, {
+          replaceSessionIdentity(sessionKey, {
             sessionId: newSession.sessionId,
             messages: [],
             isLoading: false,
@@ -1292,7 +1319,7 @@ export function ClaudeChatTab({
             } else {
               const serverSession = await getSession(bridgeClient, existingSessionId);
               if (!mounted) return;
-              setSession(sessionKey, {
+              replaceSessionIdentity(sessionKey, {
                 sessionId: existingSessionId,
                 messages,
                 isLoading: serverSession?.status === "running",
@@ -1309,7 +1336,7 @@ export function ClaudeChatTab({
                 seedInitialFastMode();
                 tabSessionIdRef.current = newSession.sessionId;
                 updateTabNativeSessionId(tabId, newSession.sessionId, environmentId);
-                setSession(sessionKey, {
+                replaceSessionIdentity(sessionKey, {
                   sessionId: newSession.sessionId,
                   messages: [],
                   isLoading: false,
@@ -1380,7 +1407,7 @@ export function ClaudeChatTab({
             });
 
             // Set session with the user message already included and loading state
-            setSession(sessionKey, {
+            replaceSessionIdentity(sessionKey, {
               sessionId: newSession.sessionId,
               messages: [userMessage],
               isLoading: true,
@@ -1426,7 +1453,7 @@ export function ClaudeChatTab({
             }
           } else {
             // No initial prompt - just set up the session normally
-            setSession(sessionKey, {
+            replaceSessionIdentity(sessionKey, {
               sessionId: newSession.sessionId,
               messages: [],
               isLoading: false,
@@ -1763,6 +1790,14 @@ export function ClaudeChatTab({
               const exactUsage = parseClaudeContextUsage(sessionUpdate?.contextUsage);
               if (exactUsage) {
                 setContextUsage(sessionTabId, exactUsage);
+              }
+              if (sessionUpdate && "rateLimits" in sessionUpdate) {
+                const exactRateLimits = parseClaudeRateLimits(
+                  sessionUpdate.rateLimits,
+                );
+                if (exactRateLimits) {
+                  setRateLimits(sessionTabId, exactRateLimits);
+                }
               }
               if (
                 sessionUpdate
@@ -2312,9 +2347,10 @@ export function ClaudeChatTab({
     setClient(environmentId, null);
     setSession(sessionKey, null);
     setContextUsage(sessionKey, null);
+    setRateLimits(sessionKey, null);
     setServerStatus(environmentId, { running: false, hostPort: null });
     setInitAttempt((value) => value + 1);
-  }, [sessionKey, environmentId, tabId, setClient, setSession, setContextUsage, setServerStatus, updateTabNativeSessionId]);
+  }, [sessionKey, environmentId, tabId, setClient, setSession, setContextUsage, setRateLimits, setServerStatus, updateTabNativeSessionId]);
 
   const handleResumeSession = useCallback(
     async (sessionId: string) => {
@@ -2368,6 +2404,15 @@ export function ClaudeChatTab({
           if (contextUsage) contextUsageBySession.set(sessionKey, contextUsage);
           else contextUsageBySession.delete(sessionKey);
 
+          const rateLimits = new Map(state.rateLimits);
+          if (serverSession.rateLimits !== undefined) {
+            rateLimits.set(sessionKey, serverSession.rateLimits);
+          } else {
+            // Resume replaces the provider session underneath the same tab;
+            // limits owned by the previous session must never cross over.
+            rateLimits.delete(sessionKey);
+          }
+
           const promptSuggestions = new Map(state.promptSuggestions);
           if (typeof serverSession.promptSuggestion === "string") {
             promptSuggestions.set(sessionKey, serverSession.promptSuggestion);
@@ -2399,6 +2444,7 @@ export function ClaudeChatTab({
           return {
             sessions,
             contextUsage: contextUsageBySession,
+            rateLimits,
             promptSuggestions,
             dismissedPromptSuggestions,
             backgroundTasks: tasksBySession,

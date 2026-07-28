@@ -32,6 +32,7 @@ import {
   contentFromParts,
   parseClaudeBackgroundTasks,
   parseClaudeContextUsage,
+  parseClaudeRateLimits,
   type ClaudeClient,
   type ClaudeMessage,
   type ClaudeMessagePart,
@@ -335,6 +336,14 @@ describe("claude-client", () => {
       expect(result).toMatchObject({
         kind: "found",
         session: {
+          rateLimits: [
+            { label: "Five Hour", usedPercent: 11 },
+            {
+              label: "Weekly",
+              usedPercent: 13,
+              resetsAt: "2026-08-04T10:00:00.000Z",
+            },
+          ],
           contextUsage: {
             rateLimits: [
               { label: "Five Hour", usedPercent: 11 },
@@ -345,6 +354,131 @@ describe("claude-client", () => {
               },
             ],
           },
+        },
+      });
+    });
+
+    test("preserves top-level rate limits before context usage exists", async () => {
+      mockFetchJson({
+        id: "s-1",
+        status: "running",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+        rateLimits: [{
+          label: "Five Hour",
+          usedPercent: 17,
+          resetsAt: "2026-08-04T10:00:00.000Z",
+          windowMinutes: 300,
+        }],
+      });
+
+      const result = await lookupSession(client, "s-1");
+      expect(result).toMatchObject({
+        kind: "found",
+        session: {
+          contextUsage: undefined,
+          rateLimits: [{
+            label: "Five Hour",
+            usedPercent: 17,
+            resetsAt: "2026-08-04T10:00:00.000Z",
+            windowMinutes: 300,
+          }],
+        },
+      });
+    });
+
+    test("treats an empty top-level rate-limit snapshot as authoritative", async () => {
+      mockFetchJson({
+        id: "s-1",
+        status: "idle",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+        contextUsage: {
+          usedTokens: 1,
+          totalTokens: 10,
+          percentUsed: 10,
+          rateLimits: [{ label: "Stale" }],
+        },
+        rateLimits: [],
+      });
+
+      const result = await lookupSession(client, "s-1");
+      expect(result).toMatchObject({
+        kind: "found",
+        session: {
+          rateLimits: [],
+          contextUsage: {
+            usedTokens: 1,
+            totalTokens: 10,
+            percentUsed: 10,
+          },
+        },
+      });
+      if (result.kind === "found") {
+        expect(result.session.contextUsage).not.toHaveProperty("rateLimits");
+        expect(result.session.invalidMetadataFields).toBeUndefined();
+      }
+    });
+
+    test("keeps valid top-level windows from a partial snapshot and reports the drop", async () => {
+      mockFetchJson({
+        id: "s-1",
+        status: "running",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+        contextUsage: {
+          usedTokens: 1,
+          totalTokens: 10,
+          percentUsed: 10,
+          rateLimits: [{ label: "Stale" }],
+        },
+        rateLimits: [
+          { label: "Five Hour", usedPercent: 18, windowMinutes: 300 },
+          { label: "Broken", usedPercent: 101 },
+        ],
+      });
+
+      const result = await lookupSession(client, "s-1");
+      expect(result).toMatchObject({
+        kind: "found",
+        session: {
+          rateLimits: [
+            { label: "Five Hour", usedPercent: 18, windowMinutes: 300 },
+          ],
+          contextUsage: {
+            rateLimits: [
+              { label: "Five Hour", usedPercent: 18, windowMinutes: 300 },
+            ],
+          },
+          invalidMetadataFields: ["rateLimits"],
+        },
+      });
+    });
+
+    test("reports a malformed top-level snapshot without replacing nested limits", async () => {
+      mockFetchJson({
+        id: "s-1",
+        status: "idle",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+        contextUsage: {
+          usedTokens: 1,
+          totalTokens: 10,
+          percentUsed: 10,
+          rateLimits: [{ label: "Nested", usedPercent: 7 }],
+        },
+        rateLimits: "not-an-array",
+      });
+
+      const result = await lookupSession(client, "s-1");
+      expect(result).toMatchObject({
+        kind: "found",
+        session: {
+          rateLimits: undefined,
+          contextUsage: {
+            rateLimits: [{ label: "Nested", usedPercent: 7 }],
+          },
+          invalidMetadataFields: ["rateLimits"],
         },
       });
     });
@@ -448,6 +582,69 @@ describe("claude-client", () => {
       expect(parseClaudeContextUsage(usage)).toEqual(usage);
     });
 
+    test("accepts every optional usage metadata branch", () => {
+      const complete = {
+        usedTokens: 25,
+        totalTokens: 100,
+        percentUsed: 25,
+        modelId: "claude-opus-4-1",
+        inputTokens: 20,
+        outputTokens: 5,
+        cacheReadTokens: 4,
+        cacheWriteTokens: 3,
+        reasoningTokens: 2,
+        lastTurnTokens: 34,
+        sessionTokens: 89,
+        costUsd: 1.25,
+        durationMs: 10_000,
+        apiDurationMs: 9_000,
+        permissionDenials: 1,
+        linesAdded: 12,
+        linesRemoved: 3,
+        estimated: false,
+        source: "provider" as const,
+        updatedAt: "2026-07-28T12:00:00.000Z",
+        rateLimits: [{
+          label: "Five Hour",
+          usedPercent: 21,
+          resetsAt: "2026-07-28T17:00:00.000Z",
+          windowMinutes: 300,
+        }],
+        credits: {
+          hasCredits: true,
+          unlimited: false,
+          balance: "10.00",
+        },
+        contextCategories: [{
+          name: "system",
+          tokens: 10,
+          color: "#abcdef",
+        }],
+      };
+
+      expect(parseClaudeContextUsage(complete)).toEqual(complete);
+    });
+
+    test("drops malformed string, boolean, and category metadata independently", () => {
+      const dropped: string[] = [];
+      expect(parseClaudeContextUsage({
+        ...usage,
+        modelId: 42,
+        updatedAt: false,
+        estimated: "no",
+        contextCategories: "system",
+      }, dropped)).toEqual({
+        ...usage,
+        contextCategories: undefined,
+      });
+      expect(dropped.sort()).toEqual([
+        "contextCategories",
+        "estimated",
+        "modelId",
+        "updatedAt",
+      ]);
+    });
+
     test("rejects only the required numeric triple", () => {
       expect(parseClaudeContextUsage({ ...usage, percentUsed: Number.POSITIVE_INFINITY }))
         .toBeUndefined();
@@ -490,6 +687,34 @@ describe("claude-client", () => {
         rateLimits: [{ label: "weekly", usedPercent: 20 }],
       });
       expect(dropped).toEqual(["rateLimits"]);
+    });
+
+    test("validates standalone rate-limit snapshots with drop-not-reject semantics", () => {
+      expect(parseClaudeRateLimits(undefined)).toBeUndefined();
+      expect(parseClaudeRateLimits([])).toEqual([]);
+
+      const malformedSnapshot: string[] = [];
+      expect(parseClaudeRateLimits("not-an-array", malformedSnapshot))
+        .toBeUndefined();
+      expect(malformedSnapshot).toEqual(["rateLimits"]);
+
+      const partialSnapshot: string[] = [];
+      expect(parseClaudeRateLimits([
+        {
+          label: "Weekly",
+          usedPercent: 15,
+          resetsAt: "2026-08-04T10:00:00.000Z",
+          windowMinutes: 10_080,
+        },
+        null,
+        { label: "Broken", windowMinutes: -1 },
+      ], partialSnapshot)).toEqual([{
+        label: "Weekly",
+        usedPercent: 15,
+        resetsAt: "2026-08-04T10:00:00.000Z",
+        windowMinutes: 10_080,
+      }]);
+      expect(partialSnapshot).toEqual(["rateLimits"]);
     });
 
     test("drops other malformed optional decorations individually", () => {
@@ -537,6 +762,44 @@ describe("claude-client", () => {
       // Only a value that is not a record at all rejects the snapshot.
       expect(parseClaudeBackgroundTasks("none")).toBeUndefined();
       expect(parseClaudeBackgroundTasks(null)).toBeUndefined();
+    });
+
+    test("preserves optional background-task fields and drops primitive entries", () => {
+      const complete = {
+        id: "build",
+        description: "Run build",
+        status: "failed" as const,
+        isBackgrounded: true,
+        startedAt: 100,
+        endedAt: 200,
+        error: "command failed",
+      };
+      const dropped: string[] = [];
+      expect(parseClaudeBackgroundTasks({
+        build: complete,
+        primitive: 17,
+      }, dropped)).toEqual({ build: complete });
+      expect(dropped).toEqual(["primitive"]);
+    });
+
+    test("rejects each malformed optional background-task field", () => {
+      const dropped: string[] = [];
+      expect(parseClaudeBackgroundTasks({
+        description: { id: "description", status: "running", description: 1 },
+        backgrounded: { id: "backgrounded", status: "running", isBackgrounded: "yes" },
+        ended: { id: "ended", status: "completed", endedAt: Number.POSITIVE_INFINITY },
+        error: { id: "error", status: "failed", error: false },
+        emptyId: { id: "", status: "pending" },
+        status: { id: "status", status: "unknown" },
+      }, dropped)).toEqual({});
+      expect(dropped.sort()).toEqual([
+        "backgrounded",
+        "description",
+        "emptyId",
+        "ended",
+        "error",
+        "status",
+      ]);
     });
   });
 
@@ -1156,6 +1419,26 @@ describe("claude-client", () => {
       expect(source.close).toHaveBeenCalledTimes(1);
     });
 
+    test("delivers an event directly to a pending read", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+      const pending = iterator.next();
+
+      MockEventSource.latest!.emit("keepalive", {
+        sessionId: "s-1",
+        timestamp: "now",
+      });
+
+      await expect(pending).resolves.toMatchObject({
+        done: false,
+        value: {
+          type: "keepalive",
+          sessionId: "s-1",
+        },
+      });
+      await iterator.return?.();
+    });
+
     test("adds the bridge credential to the EventSource query", async () => {
       globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
       const authenticated = createClient(
@@ -1274,6 +1557,26 @@ describe("claude-client", () => {
       await second.return?.();
     });
 
+    test("accepts a lower revision after the bridge generation changes", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const cursorClient = {
+        ...client,
+        baseUrl: "http://127.0.0.1:9880",
+      };
+      const first = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
+      MockEventSource.latest!.emit("keepalive", {}, "generation-A:44");
+      MockEventSource.latest!.emit("keepalive", {}, "generation-B:1");
+      await first.next();
+      await first.next();
+      await first.return?.();
+
+      const second = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
+      expect(MockEventSource.latest?.url).toBe(
+        "http://127.0.0.1:9880/event/subscribe?since=generation-B%3A1",
+      );
+      await second.return?.();
+    });
+
     test("ignores invalid cursors instead of reflecting them into the URL", async () => {
       globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
       const cursorClient = {
@@ -1292,6 +1595,37 @@ describe("claude-client", () => {
       await second.return?.();
     });
 
+    test("evicts the least-recently-updated cursor when the cache is full", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const clients = Array.from({ length: 33 }, (_, index) => ({
+        ...client,
+        baseUrl: `http://127.0.0.1:${10_000 + index}`,
+      }));
+
+      for (const [index, cursorClient] of clients.entries()) {
+        const iterator = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
+        MockEventSource.latest!.emit(
+          "keepalive",
+          { timestamp: `${index}` },
+          `generation-${index}:1`,
+        );
+        await iterator.next();
+        await iterator.return?.();
+      }
+
+      const evicted = subscribeToEvents(clients[0]!)[Symbol.asyncIterator]();
+      expect(MockEventSource.latest!.url).toBe(
+        "http://127.0.0.1:10000/event/subscribe",
+      );
+      await evicted.return?.();
+
+      const retained = subscribeToEvents(clients.at(-1)!)[Symbol.asyncIterator]();
+      expect(MockEventSource.latest!.url).toBe(
+        "http://127.0.0.1:10032/event/subscribe?since=generation-32%3A1",
+      );
+      await retained.return?.();
+    });
+
     test("an already-aborted signal does not open EventSource", async () => {
       globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
       MockEventSource.latest = null;
@@ -1300,7 +1634,53 @@ describe("claude-client", () => {
 
       const iterator = subscribeToEvents(client, controller.signal)[Symbol.asyncIterator]();
       await expect(iterator.next()).resolves.toMatchObject({ done: true });
+      await expect(iterator.return?.()).resolves.toMatchObject({ done: true });
+      await expect(iterator.throw?.(new Error("consumer failed")))
+        .rejects.toThrow("consumer failed");
       expect(MockEventSource.latest).toBeNull();
+    });
+
+    test("aborting resolves a pending read and cleans up the subscription", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const controller = new AbortController();
+      const iterator = subscribeToEvents(
+        client,
+        controller.signal,
+      )[Symbol.asyncIterator]();
+      const source = MockEventSource.latest!;
+      const pending = iterator.next();
+
+      controller.abort();
+
+      await expect(pending).resolves.toMatchObject({ done: true });
+      expect(source.close).toHaveBeenCalledTimes(1);
+      await expect(iterator.next()).resolves.toMatchObject({ done: true });
+      controller.abort();
+      expect(source.close).toHaveBeenCalledTimes(1);
+    });
+
+    test("next stays complete after iterator return", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+      const source = MockEventSource.latest!;
+
+      await iterator.return?.();
+      source.emit("keepalive", { timestamp: "too late" });
+
+      await expect(iterator.next()).resolves.toMatchObject({ done: true });
+      expect(source.close).toHaveBeenCalledTimes(1);
+    });
+
+    test("iterator throw rejects and cleans up the subscription", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+      const source = MockEventSource.latest!;
+      const failure = new Error("consumer failed");
+
+      await expect(iterator.throw!(failure)).rejects.toBe(failure);
+
+      expect(source.close).toHaveBeenCalledTimes(1);
+      await expect(iterator.next()).resolves.toMatchObject({ done: true });
     });
 
     test("drops malformed event JSON and keeps the subscription usable", async () => {

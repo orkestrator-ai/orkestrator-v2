@@ -82,6 +82,65 @@ describe("container runtime environment wiring", () => {
     expect(setup).toContain("export GIT_TERMINAL_PROMPT=0");
   });
 
+  test("container startup copies only bounded Codex configuration state", () => {
+    const entrypoint = read("docker/entrypoint.sh");
+
+    expect(entrypoint).toContain("copy_codex_file /codex-home");
+    expect(entrypoint).toContain("copy_codex_directory /codex-home");
+    expect(entrypoint).toContain("plugins/cache");
+    expect(entrypoint).not.toContain("cp -r /codex-home/.");
+    expect(entrypoint).not.toContain("cp -R /codex-home/.");
+
+    for (const runtimeDirectory of [
+      "sessions",
+      "archived_sessions",
+      "logs",
+      "worktrees",
+      "shell_snapshots",
+      "generated_images",
+      "computer-use",
+      ".tmp",
+      "plugins/.plugin-appserver",
+    ]) {
+      expect(entrypoint).not.toMatch(
+        new RegExp(`^[ \\t]*${runtimeDirectory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
+      );
+    }
+  });
+
+  test("Codex configuration copy helpers merge repeatably without copying runtime state", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      mkdirSync(join(source, "skills", "review"), { recursive: true });
+      mkdirSync(join(source, "sessions"), { recursive: true });
+      writeFileSync(join(source, "auth.json"), "{\"token\":\"test\"}\n");
+      writeFileSync(join(source, "skills", "review", "SKILL.md"), "first\n");
+      writeFileSync(join(source, "sessions", "rollout.jsonl"), "large runtime state\n");
+
+      const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
+      const harness = `
+set -e
+eval "$(sed -n '/^copy_codex_file() {/,/^}$/p; /^copy_codex_directory() {/,/^}$/p' "$1")"
+copy_codex_file "$2" "$3" auth.json
+copy_codex_directory "$2" "$3" skills
+copy_codex_file "$2" "$3" auth.json
+copy_codex_directory "$2" "$3" skills
+`;
+      const result = Bun.spawnSync({
+        cmd: ["bash", "-c", harness, "--", entrypoint, source, destination],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(readFileSync(join(destination, "auth.json"), "utf8")).toBe("{\"token\":\"test\"}\n");
+      expect(readFileSync(join(destination, "skills", "review", "SKILL.md"), "utf8")).toBe("first\n");
+      expect(() => statSync(join(destination, "skills", "skills"))).toThrow();
+      expect(() => statSync(join(destination, "sessions"))).toThrow();
+    });
+  });
+
   test("workspace setup exits early when a prior setup already completed", () => {
     const setup = read("docker/workspace-setup.sh");
     const completionGuard = setup.indexOf("if [ -f /tmp/.workspace-setup-complete ]; then");

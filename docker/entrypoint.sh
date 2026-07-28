@@ -14,6 +14,36 @@ log_progress() {
     echo "$1" >> "$PROGRESS_FILE"
 }
 
+copy_codex_file() {
+    local source_root="$1"
+    local destination_root="$2"
+    local relative_path="$3"
+
+    if [ ! -f "$source_root/$relative_path" ]; then
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$destination_root/$relative_path")"
+    if ! cp "$source_root/$relative_path" "$destination_root/$relative_path" 2>/dev/null; then
+        echo "Warning: Failed to copy Codex file: $relative_path"
+    fi
+}
+
+copy_codex_directory() {
+    local source_root="$1"
+    local destination_root="$2"
+    local relative_path="$3"
+
+    if [ ! -d "$source_root/$relative_path" ]; then
+        return 0
+    fi
+
+    mkdir -p "$destination_root/$relative_path"
+    if ! cp -R "$source_root/$relative_path/." "$destination_root/$relative_path/" 2>/dev/null; then
+        echo "Warning: Failed to copy Codex directory: $relative_path"
+    fi
+}
+
 log_progress "=== Claude Code Environment Initializing ==="
 
 # Initialize firewall if running with NET_ADMIN capability
@@ -284,9 +314,38 @@ log_progress "Setting up Codex configuration..."
 mkdir -p "$HOME/.codex"
 
 if [ -d /codex-home ]; then
-    if ! cp -r /codex-home/. "$HOME/.codex/" 2>&1; then
-        echo "Warning: Some Codex files could not be copied from /codex-home"
-    fi
+    # A Codex home contains far more than configuration. Session rollouts, logs,
+    # worktrees, generated images and caches routinely grow to multiple GB. A
+    # recursive copy made every container startup wait on all of that state and
+    # could outlive workspace-setup.sh's initialization timeout. Copy only the
+    # portable inputs a fresh Codex environment needs.
+    for file in \
+        auth.json \
+        config.toml \
+        AGENTS.md \
+        hooks.json \
+        models_cache.json \
+        .codex-global-state.json \
+        cloud-config-bundle-cache.json \
+        cloud-requirements-cache.json
+    do
+        copy_codex_file /codex-home "$HOME/.codex" "$file"
+    done
+
+    # Preserve user-authored extensions and the platform-neutral plugin cache.
+    # Do not copy plugins/.plugin-appserver: it contains host-platform binaries
+    # (Mach-O on macOS) that cannot run inside the Linux container.
+    for dir in \
+        rules \
+        skills \
+        prompts \
+        vendor_imports \
+        plugins/cache
+    do
+        copy_codex_directory /codex-home "$HOME/.codex" "$dir"
+    done
+
+    chmod 600 "$HOME/.codex/auth.json" 2>/dev/null || true
     if [ -n "$DEBUG" ]; then
         echo "Copied Codex files:"
         ls -la "$HOME/.codex/" | head -40

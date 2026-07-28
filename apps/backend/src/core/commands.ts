@@ -428,6 +428,7 @@ type EnvironmentSetupStartResult = {
 const environmentSetupSessions = new Map<string, EnvironmentSetupSession>();
 const environmentSetupTasks = new Map<string, Promise<Environment>>();
 const environmentSetupStartTasks = new Map<string, Promise<EnvironmentSetupStartResult>>();
+const environmentStartTasks = new Map<string, Promise<EnvironmentSetupStartResult>>();
 const environmentBaselineTasks = new Map<string, Promise<Environment>>();
 const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [".orkestrator", ".claude/settings.local.json"] as const;
 
@@ -3804,6 +3805,91 @@ function startEnvironmentSetup(
   return task;
 }
 
+async function startEnvironmentOnce(
+  environmentId: string,
+  context: CommandContext,
+): Promise<EnvironmentSetupStartResult> {
+  const { storage } = context;
+  const environment = await storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  await storage.updateEnvironment(environment.id, { status: "creating" });
+
+  try {
+    if (environment.environmentType === "local") {
+      if (environment.worktreePath && await pathExists(environment.worktreePath)) {
+        const running = await storage.updateEnvironment(environment.id, { status: "running" });
+        const result = await startEnvironmentSetup(running, context);
+        schedulePendingEnvironmentRename(environment.id, context);
+        await syncDiffStatsTracking(context);
+        await syncPrMonitorTracking(context);
+        return result;
+      }
+      const project = await storage.getProject(environment.projectId);
+      if (!project?.localPath) throw new Error("Project has no local path - cannot create a local worktree");
+      const repoConfig = await storage.getRepositoryConfig(project.id);
+      const worktree = await createLocalWorktree(
+        project.localPath,
+        project.name,
+        environment.branch,
+        repoConfig.defaultBranch,
+        repoConfig.filesToCopy,
+      );
+      const updated = await storage.updateEnvironment(environment.id, {
+        worktreePath: worktree.path,
+        branch: worktree.branch,
+        createdFromCommit: worktree.createdFromCommit,
+        status: "running",
+      });
+      const result = await startEnvironmentSetup(updated, context);
+      schedulePendingEnvironmentRename(environment.id, context);
+      await syncDiffStatsTracking(context);
+      await syncPrMonitorTracking(context);
+      return result;
+    }
+
+    let containerId = environment.containerId;
+    if (!containerId) {
+      containerId = await createDockerContainer(environment, context);
+      await storage.updateEnvironment(environment.id, { containerId });
+    }
+    await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
+    const config = await storage.loadConfig();
+    const githubToken = await resolveContainerGitHubToken(config.global);
+    await syncContainerGitHubCredential(containerId, githubToken);
+    const hostEntryPort = environment.entryPort ? await getHostPort(containerId, environment.entryPort) : null;
+    const updated = await storage.updateEnvironment(environment.id, {
+      status: "running",
+      entryPort: environment.entryPort ?? null,
+      hostEntryPort,
+    });
+    const result = await startEnvironmentSetup(updated, context);
+    schedulePendingEnvironmentRename(environment.id, context);
+    await syncDiffStatsTracking(context);
+    await syncPrMonitorTracking(context);
+    return result;
+  } catch (error) {
+    await storage.updateEnvironment(environment.id, { status: "error" }).catch(() => undefined);
+    throw error;
+  }
+}
+
+function startEnvironmentTask(
+  environmentId: string,
+  context: CommandContext,
+): Promise<EnvironmentSetupStartResult> {
+  const existing = environmentStartTasks.get(environmentId);
+  if (existing) return existing;
+
+  const task = startEnvironmentOnce(environmentId, context)
+    .finally(() => {
+      if (environmentStartTasks.get(environmentId) === task) {
+        environmentStartTasks.delete(environmentId);
+      }
+    });
+  environmentStartTasks.set(environmentId, task);
+  return task;
+}
+
 async function runEnvironmentSetupNow(environmentId: string, context: CommandContext): Promise<Environment> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -6609,69 +6695,24 @@ export function createCommandRegistry(
     }
     return cleared;
   });
-  register("start_environment", async ({ environmentId }, context) => {
-    const { storage } = context;
-    const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
-    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    await storage.updateEnvironment(environment.id, { status: "creating" });
-
-    try {
-      if (environment.environmentType === "local") {
-        if (environment.worktreePath && await pathExists(environment.worktreePath)) {
-          const running = await storage.updateEnvironment(environment.id, { status: "running" });
-          const result = await startEnvironmentSetup(running, context);
-          schedulePendingEnvironmentRename(environment.id, context);
-          await syncDiffStatsTracking(context);
-          await syncPrMonitorTracking(context);
-          return result;
-        }
-        const project = await storage.getProject(environment.projectId);
-        if (!project?.localPath) throw new Error("Project has no local path - cannot create a local worktree");
-        const repoConfig = await storage.getRepositoryConfig(project.id);
-        const worktree = await createLocalWorktree(
-          project.localPath,
-          project.name,
-          environment.branch,
-          repoConfig.defaultBranch,
-          repoConfig.filesToCopy,
-        );
-        const updated = await storage.updateEnvironment(environment.id, {
-          worktreePath: worktree.path,
-          branch: worktree.branch,
-          createdFromCommit: worktree.createdFromCommit,
-          status: "running",
-        });
-        const result = await startEnvironmentSetup(updated, context);
-        schedulePendingEnvironmentRename(environment.id, context);
-        await syncDiffStatsTracking(context);
-        await syncPrMonitorTracking(context);
-        return result;
-      }
-
-      let containerId = environment.containerId;
-      if (!containerId) {
-        containerId = await createDockerContainer(environment, { storage, emit: () => undefined, appRoot: "", resourceRoot: "" });
-        await storage.updateEnvironment(environment.id, { containerId });
-      }
-      await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
-      const config = await storage.loadConfig();
-      const githubToken = await resolveContainerGitHubToken(config.global);
-      await syncContainerGitHubCredential(containerId, githubToken);
-      const hostEntryPort = environment.entryPort ? await getHostPort(containerId, environment.entryPort) : null;
-      const updated = await storage.updateEnvironment(environment.id, {
-        status: "running",
-        entryPort: environment.entryPort ?? null,
-        hostEntryPort,
-      });
-      const result = await startEnvironmentSetup(updated, context);
-      schedulePendingEnvironmentRename(environment.id, context);
-      await syncDiffStatsTracking(context);
-      await syncPrMonitorTracking(context);
-      return result;
-    } catch (error) {
-      await storage.updateEnvironment(environment.id, { status: "error" }).catch(() => undefined);
-      throw error;
+  register("start_environment", ({ environmentId }, context) =>
+    startEnvironmentTask(asString(environmentId, "environmentId"), context)
+  );
+  register("start_environment_background", async ({ environmentId }, context) => {
+    const id = asString(environmentId, "environmentId");
+    // Validate before acknowledging the request. Once accepted, the task is
+    // backend-owned: a renderer, browser, or reverse proxy can disconnect
+    // without cancelling Docker provisioning or losing the durable launch.
+    if (!await context.storage.getEnvironment(id)) {
+      throw new Error(`Environment not found: ${id}`);
     }
+    const task = startEnvironmentTask(id, context);
+    void task.catch((error) => {
+      console.error(
+        `[environment-start] Background start failed for ${id}:`,
+        error instanceof Error ? error.message : error,
+      );
+    });
   });
   register("stop_environment", async ({ environmentId }, context) => {
     const { storage } = context;

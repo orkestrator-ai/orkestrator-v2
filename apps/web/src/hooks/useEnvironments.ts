@@ -68,6 +68,16 @@ interface LoadEnvironmentsOptions {
   cleanupOrphanedPipelines?: boolean;
 }
 
+export interface StartEnvironmentOptions {
+  /** Suppress the success toast for callers that own the surrounding workflow. */
+  silent?: boolean;
+  /**
+   * Return after the backend accepts the start. Docker provisioning and setup
+   * continue in a backend-owned task and publish authoritative state changes.
+   */
+  background?: boolean;
+}
+
 interface EnvironmentCreationState {
   generation: number;
   activeCreations: number;
@@ -549,7 +559,7 @@ export function useEnvironments(
   );
 
   const startEnvironment = useCallback(
-    async (environmentId: string, initialPrompt?: string, options?: { silent?: boolean }) => {
+    async (environmentId: string, initialPrompt?: string, options?: StartEnvironmentOptions) => {
       console.log("[useEnvironments] startEnvironment called:", environmentId);
       // Read from store directly to avoid stale closure over `environments`.
       // When called from handleCreateEnvironment, the useCallback closure may
@@ -583,6 +593,12 @@ export function useEnvironments(
       try {
         console.log("[useEnvironments] Setting status to creating...");
         updateStatusInStore(environmentId, "creating");
+        if (options?.background) {
+          console.log("[useEnvironments] Handing environment start to backend...");
+          await backend.startEnvironmentInBackground(environmentId);
+          return [];
+        }
+
         console.log("[useEnvironments] Calling backend.startEnvironment...");
         const result = await backend.startEnvironment(environmentId);
         console.log("[useEnvironments] backend.startEnvironment completed, refreshing environment...", {

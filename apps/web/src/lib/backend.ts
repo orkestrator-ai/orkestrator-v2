@@ -174,6 +174,15 @@ export async function startEnvironment(environmentId: string): Promise<StartEnvi
   return invoke<StartEnvironmentResult>("start_environment", { environmentId });
 }
 
+/**
+ * Accept an environment start without keeping the renderer transport open for
+ * Docker provisioning. Progress and completion are observed through the
+ * authoritative environment snapshot and setup lifecycle events.
+ */
+export async function startEnvironmentInBackground(environmentId: string): Promise<void> {
+  return invoke<void>("start_environment_background", { environmentId });
+}
+
 export async function stopEnvironment(environmentId: string): Promise<void> {
   return invoke("stop_environment", { environmentId });
 }

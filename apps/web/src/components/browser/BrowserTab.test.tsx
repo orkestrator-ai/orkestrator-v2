@@ -1011,6 +1011,17 @@ describe("BrowserTab", () => {
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
     );
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalledWith(expect.objectContaining({ visible: false })));
+
+    dialog.setAttribute("aria-hidden", "true");
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: true }),
+    ));
+
+    dialog.setAttribute("aria-hidden", "false");
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: false }),
+    ));
+
     view.unmount();
     dialog.remove();
 

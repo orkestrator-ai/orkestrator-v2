@@ -28,8 +28,8 @@ interface BrowserTabProps {
 const OPAQUE_PREVIEW_SANDBOX = "allow-forms allow-pointer-lock allow-presentation allow-scripts";
 const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
 const BLOCKING_OVERLAY_SELECTOR = [
-  '[role="dialog"]',
-  '[role="alertdialog"]',
+  '[role="dialog"]:not([aria-hidden="true"]):not([data-state="closed"])',
+  '[role="alertdialog"]:not([aria-hidden="true"]):not([data-state="closed"])',
   '[role="menu"][data-state="open"]',
   '[role="listbox"][data-state="open"]',
 ].join(",");
@@ -186,7 +186,7 @@ export function BrowserTab({
     const observer = new MutationObserver(update);
     observer.observe(document.body, {
       attributes: true,
-      attributeFilter: ["data-state", "role"],
+      attributeFilter: ["aria-hidden", "data-state", "role"],
       childList: true,
       subtree: true,
     });

@@ -44,6 +44,10 @@ import { ComposeBar, type ImageAttachment } from "@/components/terminal/ComposeB
 import { CheckCircle2 } from "lucide-react";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { buildAgentLaunchCommand } from "@/lib/agent-launch-command";
+import {
+  MobileTerminalKeyBar,
+  resolveTerminalKeyData,
+} from "./MobileTerminalKeyBar";
 
 // Threshold for detecting intermediate/cleared buffer state during React mount cycles.
 // If new buffer is less than 50% of stored buffer size, it likely represents a cleared
@@ -1406,6 +1410,13 @@ export function PersistentTerminal({
     }
   }, [environmentId, isActive, terminal, paneId, setActivePane]);
 
+  const handleMobileKeyInput = useCallback((data: string) => {
+    void writeRef.current(
+      resolveTerminalKeyData(data, terminal.modes.applicationCursorKeysMode),
+    );
+    updateActivityThrottledRef.current();
+  }, [terminal]);
+
   const [manuallyCompleted, setManuallyCompleted] = useState(false);
   const handleMarkSetupComplete = useCallback(() => {
     if (!setupCompleteRef.current) {
@@ -1444,7 +1455,10 @@ export function PersistentTerminal({
             ref={terminalRef}
             onClick={handleTerminalClick}
             className={cn(
-              "absolute inset-0",
+              "absolute inset-x-0 top-0",
+              isMobile
+                ? "bottom-[calc(3rem+env(safe-area-inset-bottom))]"
+                : "bottom-0",
               !isActive && "opacity-0 pointer-events-none"
             )}
             style={{ backgroundColor: terminalBackgroundColor }}
@@ -1463,6 +1477,12 @@ export function PersistentTerminal({
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
+      {isMobile && isActive && (
+        <MobileTerminalKeyBar
+          onInput={handleMobileKeyInput}
+          disabled={!isConnected}
+        />
+      )}
       {isActive && (
         <ComposeBar
           sessionKey={sessionKey}
@@ -1477,6 +1497,9 @@ export function PersistentTerminal({
           worktreePath={worktreePath}
           showAddressAll={isReviewTab && hasLaunchedCommand && agentActivityState !== "working"}
           onAddressAll={handleAddressAll}
+          className={isMobile
+            ? "bottom-[calc(3.5rem+env(safe-area-inset-bottom))]"
+            : undefined}
         />
       )}
     </>

@@ -24,6 +24,10 @@ import {
   DEFAULT_TERMINAL_SCROLLBACK,
   resolveTerminalBackgroundColor,
 } from "@/constants/terminal";
+import {
+  MobileTerminalKeyBar,
+  resolveTerminalKeyData,
+} from "@/components/terminal/MobileTerminalKeyBar";
 
 interface ClaudeTmuxInteractiveTerminalProps {
   tabId: string;
@@ -312,10 +316,29 @@ export function ClaudeTmuxInteractiveTerminal({
 
   return (
     <div
-      className={cn("relative h-full min-h-0 bg-black", className)}
+      className={cn(
+        "relative h-full min-h-0 bg-black",
+        isMobile && "flex flex-col",
+        className,
+      )}
       style={{ backgroundColor: terminalBackgroundColor }}
     >
-      <div ref={terminalHostRef} className="h-full w-full p-2" />
+      <div
+        ref={terminalHostRef}
+        className={cn("w-full p-2", isMobile ? "min-h-0 flex-1" : "h-full")}
+      />
+      {isMobile && isActive && (
+        <MobileTerminalKeyBar
+          contained
+          onInput={(data) => {
+            void writeToTerminal(resolveTerminalKeyData(
+              data,
+              terminalRef.current?.modes.applicationCursorKeysMode ?? false,
+            ));
+          }}
+          disabled={!connected}
+        />
+      )}
       {(!connected || error) && (
         <div className="pointer-events-none absolute right-3 top-3 rounded border border-border/70 bg-background/90 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
           {error ?? "Attaching tmux..."}

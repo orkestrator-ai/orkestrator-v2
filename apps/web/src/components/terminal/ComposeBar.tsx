@@ -39,6 +39,7 @@ interface ComposeBarProps {
   worktreePath?: string | null;
   showAddressAll?: boolean;
   onAddressAll?: () => void;
+  className?: string;
 }
 
 const MAX_LINES = 10;
@@ -70,6 +71,7 @@ export function ComposeBar({
   worktreePath,
   showAddressAll = false,
   onAddressAll,
+  className,
 }: ComposeBarProps) {
   const text = useTerminalSessionStore((state) => state.composeDraftText.get(sessionKey) ?? "");
   const images = useTerminalSessionStore((state) => state.composeDraftImages.get(sessionKey) ?? EMPTY_IMAGES);
@@ -461,7 +463,10 @@ export function ComposeBar({
   if (!isOpen) return null;
 
   return (
-    <div className="absolute bottom-2 left-2 right-2 z-50" data-compose-bar>
+    <div
+      className={cn("absolute bottom-2 left-2 right-2 z-50", className)}
+      data-compose-bar
+    >
       {/* Image previews - floating above the input */}
       {images.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2 pl-1">

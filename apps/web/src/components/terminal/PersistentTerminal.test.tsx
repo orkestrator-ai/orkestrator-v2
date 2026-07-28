@@ -20,7 +20,7 @@ import {
 
 const resizeMock = mock(async () => {});
 const connectMock = mock(async () => {});
-const writeMock = mock(async () => {});
+const writeMock = mock(async (_data: string) => {});
 let terminalOnData: ((data: Uint8Array) => void) | undefined;
 let terminalInputHandler: ((data: string) => void) | undefined;
 let terminalOscHandler: ((data: string) => boolean) | undefined;
@@ -238,6 +238,9 @@ const { PersistentTerminal } = await import("./PersistentTerminal");
 type MockTerminal = {
   cols: number;
   rows: number;
+  modes: {
+    applicationCursorKeysMode: boolean;
+  };
   options: Record<string, unknown>;
   refresh: ReturnType<typeof mock>;
   focus: ReturnType<typeof mock>;
@@ -260,6 +263,9 @@ function createMockTerminal(): MockTerminal {
   return {
     cols: 80,
     rows: 24,
+    modes: {
+      applicationCursorKeysMode: false,
+    },
     options: {
       fontSize: 14,
       theme: {},
@@ -515,6 +521,96 @@ describe("PersistentTerminal", () => {
       expect(terminalData.fitAddon.fit).toHaveBeenCalled();
     });
     expect(terminalData.terminal.focus).not.toHaveBeenCalled();
+  });
+
+  it("shows mobile terminal keys and sends their control sequences to the PTY", async () => {
+    setMobileViewport(true);
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    const expectedKeys = [
+      ["Escape", "\u001b"],
+      ["Tab", "\t"],
+      ["Control C", "\u0003"],
+      ["Up arrow", "\u001b[A"],
+      ["Down arrow", "\u001b[B"],
+      ["Left arrow", "\u001b[D"],
+      ["Right arrow", "\u001b[C"],
+    ] as const;
+
+    for (const [name] of expectedKeys) {
+      fireEvent.click(screen.getByRole("button", { name }));
+    }
+
+    expect(writeMock.mock.calls.map(([data]) => data)).toEqual(
+      expectedKeys.map(([, data]) => data),
+    );
+  });
+
+  it("does not render the terminal key bar on desktop", () => {
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    expect(screen.queryByRole("toolbar", { name: "Terminal keys" })).toBeNull();
+  });
+
+  it("uses application cursor sequences for mobile arrow keys when the terminal requests them", () => {
+    setMobileViewport(true);
+    const terminalData = createTerminalData();
+    Object.defineProperty(terminalData.terminal.modes, "applicationCursorKeysMode", {
+      value: true,
+    });
+
+    render(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    for (const name of ["Up arrow", "Down arrow", "Left arrow", "Right arrow"]) {
+      fireEvent.click(screen.getByRole("button", { name }));
+    }
+
+    expect(writeMock.mock.calls.map(([data]) => data)).toEqual([
+      "\u001bOA",
+      "\u001bOB",
+      "\u001bOD",
+      "\u001bOC",
+    ]);
   });
 
   it("focuses the terminal when activated on desktop", async () => {

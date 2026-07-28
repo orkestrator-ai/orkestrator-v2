@@ -1423,6 +1423,29 @@ describe("OpenCodeChatTab", () => {
       seedPaneLayout();
     });
 
+    test("automatically retries a transient bridge startup failure for a new environment", async () => {
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date().toISOString(),
+      });
+      mockGetOpenCodeServerStatus
+        .mockRejectedValueOnce(new Error("bridge is still starting"))
+        .mockResolvedValueOnce({
+          running: true,
+          hostPort: 9999,
+          authToken: "opencode-secret",
+        });
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      expect(await screen.findByText("Connecting to OpenCode...")).toBeTruthy();
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+      await waitFor(
+        () => expect(mockCreateSession).toHaveBeenCalledTimes(1),
+        { timeout: 1_500 },
+      );
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+    });
+
     test("starts a stopped container server and connects to its mapped port", async () => {
       mockGetOpenCodeServerStatus.mockResolvedValue({ running: false, hostPort: null } as any);
       mockStartOpenCodeServer.mockResolvedValue({ hostPort: 4321, authToken: "opencode-secret" });

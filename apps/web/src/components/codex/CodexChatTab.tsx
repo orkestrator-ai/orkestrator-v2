@@ -100,6 +100,7 @@ import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { CodexNativeData } from "@/types/paneLayout";
 import type { CodexAttachment, CodexQueuedMessage } from "@/stores/codexStore";
+import { getNewEnvironmentConnectionRetryDelay } from "@/lib/new-environment-connection-retry";
 
 interface CodexChatTabProps {
   tabId: string;
@@ -202,6 +203,7 @@ export function CodexChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [serverLog, setServerLog] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
+  const automaticInitRetryCountRef = useRef(0);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [initialPromptSent, setInitialPromptSent] = useState(false);
   const initialPromptRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1089,6 +1091,7 @@ export function CodexChatTab({
    * existing thread, falling back to a new session only if that fails.
    */
   const handleRetry = useCallback(() => {
+    automaticInitRetryCountRef.current = 0;
     const preserveSession = transientDisconnectRef.current;
     transientDisconnectRef.current = false;
     isInitializedRef.current = false;
@@ -1568,6 +1571,27 @@ export function CodexChatTab({
             : typeof error === "string"
               ? error
               : "Failed to initialize Codex";
+        const environment = useEnvironmentStore
+          .getState()
+          .getEnvironmentById(environmentId);
+        const retryDelay = getNewEnvironmentConnectionRetryDelay(
+          environment?.createdAt,
+          automaticInitRetryCountRef.current,
+        );
+        if (retryDelay !== null) {
+          automaticInitRetryCountRef.current += 1;
+          console.warn(
+            `[CodexChatTab] Retrying new environment connection in ${retryDelay}ms:`,
+            message,
+          );
+          setConnectionState("connecting");
+          setErrorMessage(null);
+          window.setTimeout(() => {
+            if (mounted) setInitAttempt((value) => value + 1);
+          }, retryDelay);
+          return;
+        }
+
         setConnectionState("error");
         setErrorMessage(message);
         try {

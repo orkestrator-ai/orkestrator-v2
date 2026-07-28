@@ -1542,6 +1542,34 @@ describe("CodexChatTab", () => {
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(SESSION_ID);
   });
 
+  test("automatically retries a transient bridge startup failure for a new environment", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      createdAt: new Date().toISOString(),
+    });
+    mockGetCodexServerStatus
+      .mockRejectedValueOnce(new Error("bridge is still starting"))
+      .mockResolvedValueOnce({
+        running: true,
+        hostPort: 9999,
+        authToken: "container-test-token",
+      });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByText("Connecting to Codex...")).toBeTruthy();
+    expect(screen.queryByText("Connection Failed")).toBeNull();
+    await waitFor(
+      () => expect(mockCreateSession).toHaveBeenCalledTimes(1),
+      { timeout: 1_500 },
+    );
+    expect(screen.queryByText("Connection Failed")).toBeNull();
+  });
+
   test("reports local initialization errors without requesting a container log", async () => {
     useCodexStore.setState((state) => ({
       ...state,

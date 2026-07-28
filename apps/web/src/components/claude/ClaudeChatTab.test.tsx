@@ -3709,6 +3709,29 @@ describe("ClaudeChatTab", () => {
       seedPaneLayout();
     });
 
+    test("automatically retries a transient bridge startup failure for a new environment", async () => {
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date().toISOString(),
+      });
+      mockGetClaudeServerStatus
+        .mockRejectedValueOnce(new Error("bridge is still starting"))
+        .mockResolvedValueOnce({
+          running: true,
+          hostPort: 9999,
+          authToken: BRIDGE_AUTH_TOKEN,
+        });
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      expect(await screen.findByText("Connecting to Claude...")).toBeTruthy();
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+      await waitFor(
+        () => expect(mockCreateSession).toHaveBeenCalledTimes(1),
+        { timeout: 1_500 },
+      );
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+    });
+
     test("starts a stopped local server and connects to its port", async () => {
       useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
       mockGetLocalClaudeServerStatus.mockResolvedValue({

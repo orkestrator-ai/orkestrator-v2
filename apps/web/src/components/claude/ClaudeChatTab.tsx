@@ -85,6 +85,7 @@ import {
   normalizeClaudeMessagesForDisplay,
 } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
+import { getNewEnvironmentConnectionRetryDelay } from "@/lib/new-environment-connection-retry";
 
 /**
  * Event types that legitimately arrive without matching a stored session —
@@ -203,6 +204,7 @@ export function ClaudeChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
+  const automaticInitRetryCountRef = useRef(0);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [forkInFlight, setForkInFlight] = useState(false);
 
@@ -1391,9 +1393,7 @@ export function ClaudeChatTab({
           }
         }
       } catch (error) {
-        console.error("[ClaudeChatTab] Initialization failed:", error);
         if (!mounted) return;
-        setConnectionState("error");
         let message = "Connection failed";
         if (error instanceof Error) {
           message = error.message;
@@ -1405,6 +1405,29 @@ export function ClaudeChatTab({
         if (message.includes("port") && message.includes("not mapped")) {
           message += ". Try recreating the environment to enable Claude native mode support.";
         }
+        const environment = useEnvironmentStore
+          .getState()
+          .getEnvironmentById(environmentId);
+        const retryDelay = getNewEnvironmentConnectionRetryDelay(
+          environment?.createdAt,
+          automaticInitRetryCountRef.current,
+        );
+        if (retryDelay !== null) {
+          automaticInitRetryCountRef.current += 1;
+          console.warn(
+            `[ClaudeChatTab] Retrying new environment connection in ${retryDelay}ms:`,
+            message,
+          );
+          setConnectionState("connecting");
+          setErrorMessage(null);
+          window.setTimeout(() => {
+            if (mounted) setInitAttempt((value) => value + 1);
+          }, retryDelay);
+          return;
+        }
+
+        console.error("[ClaudeChatTab] Initialization failed:", error);
+        setConnectionState("error");
         setErrorMessage(message);
 
         // Try to fetch server log for debugging if timeout error (only for containerized environments)
@@ -2226,6 +2249,7 @@ export function ClaudeChatTab({
   });
 
   const handleRetry = useCallback(() => {
+    automaticInitRetryCountRef.current = 0;
     setConnectionState("connecting");
     setErrorMessage(null);
     tabSessionIdRef.current = null;

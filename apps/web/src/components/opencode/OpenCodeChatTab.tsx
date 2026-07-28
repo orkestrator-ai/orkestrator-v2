@@ -103,6 +103,7 @@ import type {
   OpenCodeAttachment,
   OpenCodeQueuedMessage,
 } from "@/stores/openCodeStore";
+import { getNewEnvironmentConnectionRetryDelay } from "@/lib/new-environment-connection-retry";
 
 interface OpenCodeChatTabProps {
   tabId: string;
@@ -242,6 +243,7 @@ export function OpenCodeChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
+  const automaticInitRetryCountRef = useRef(0);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [modelPreferences, setModelPreferences] =
     useState<OpenCodeModelPreferences>(EMPTY_MODEL_PREFERENCES);
@@ -1340,9 +1342,7 @@ export function OpenCodeChatTab({
           await syncPendingRequests(sdkClient, newSession.id);
         }
       } catch (error) {
-        console.error("[OpenCodeChatTab] Initialization failed:", error);
         if (!mounted) return;
-        setConnectionState("error");
         // Extract error message with structured details when available.
         let message = formatOpenCodeError(error);
         // Add hint for port mapping issues
@@ -1350,6 +1350,29 @@ export function OpenCodeChatTab({
           message +=
             ". Try recreating the environment to enable native mode support.";
         }
+        const environment = useEnvironmentStore
+          .getState()
+          .getEnvironmentById(environmentId);
+        const retryDelay = getNewEnvironmentConnectionRetryDelay(
+          environment?.createdAt,
+          automaticInitRetryCountRef.current,
+        );
+        if (retryDelay !== null) {
+          automaticInitRetryCountRef.current += 1;
+          console.warn(
+            `[OpenCodeChatTab] Retrying new environment connection in ${retryDelay}ms:`,
+            message,
+          );
+          setConnectionState("connecting");
+          setErrorMessage(null);
+          window.setTimeout(() => {
+            if (mounted) setInitAttempt((value) => value + 1);
+          }, retryDelay);
+          return;
+        }
+
+        console.error("[OpenCodeChatTab] Initialization failed:", error);
+        setConnectionState("error");
         setErrorMessage(message);
 
         // Try to fetch server log for debugging if timeout error (only for containerized environments)
@@ -2269,6 +2292,7 @@ export function OpenCodeChatTab({
 
   // Handle retry connection
   const handleRetry = useCallback(() => {
+    automaticInitRetryCountRef.current = 0;
     setConnectionState("connecting");
     setErrorMessage(null);
     // Reset initialization state to force new session creation

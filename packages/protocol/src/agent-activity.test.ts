@@ -115,4 +115,11 @@ describe("aggregateAgentActivityState", () => {
       "claude-terminal": { state: "waiting", updatedAt: at },
     })).toBe("waiting");
   });
+
+  test("aggregates independently keyed renderer observations", () => {
+    expect(aggregateAgentActivityState({
+      "renderer-a": { state: "idle", updatedAt: at },
+      "renderer-b": { state: "working", updatedAt: at },
+    })).toBe("working");
+  });
 });

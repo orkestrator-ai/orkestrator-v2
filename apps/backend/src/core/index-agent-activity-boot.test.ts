@@ -49,6 +49,7 @@ async function withBackend<T>(
   try {
     return await run(backend, dataDir);
   } finally {
+    await backend.shutdown().catch(() => undefined);
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }
@@ -65,6 +66,13 @@ describe("OrkestratorBackend agent activity boot reset", () => {
         agentActivitySources: {
           frontend: { state: "working", updatedAt: stuckAt },
         },
+        frontendAgentActivityObservers: {
+          "hashed-observer": {
+            state: "working",
+            updatedAt: stuckAt,
+            leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          },
+        },
       },
     ], async (backend) => {
       await backend.init();
@@ -77,6 +85,7 @@ describe("OrkestratorBackend agent activity boot reset", () => {
         id: "e1",
         agentActivityState: "idle",
         agentActivitySources: {},
+        frontendAgentActivityObservers: {},
       });
       // The token moves forward so a client hydrating from this snapshot
       // prefers it over any observation it held before the restart.

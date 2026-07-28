@@ -4980,7 +4980,12 @@ export function createCommandRegistry(
     const activityAt = asString(occurredAt, "occurredAt");
     return storage.recordEnvironmentActivity(id, activityAt);
   });
-  register("set_environment_agent_activity", async ({ environmentId, state, occurredAt }, { storage }) => {
+  register("set_environment_agent_activity", async ({
+    environmentId,
+    state,
+    occurredAt,
+    observerId,
+  }, { storage }) => {
     const activityState = asString(state, "state");
     if (
       activityState !== "idle"
@@ -4993,6 +4998,10 @@ export function createCommandRegistry(
       asString(environmentId, "environmentId"),
       activityState,
       asString(occurredAt, "occurredAt"),
+      "frontend",
+      observerId === undefined
+        ? undefined
+        : asString(observerId, "observerId"),
     );
   });
   register("record_environment_completion", async ({ environmentId, occurredAt }, { storage }) => {

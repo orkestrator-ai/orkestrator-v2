@@ -19,6 +19,18 @@ export interface AgentActivitySourceSnapshot {
   updatedAt: string;
 }
 
+/**
+ * One renderer's independently leased observation. The backend stores only a
+ * hash of the renderer's opaque token, so another renderer cannot overwrite it.
+ */
+export interface FrontendAgentActivityObserverSnapshot
+  extends AgentActivitySourceSnapshot {
+  leaseExpiresAt: string;
+}
+
+/** Renderers renew at one third of this interval while their monitor is alive. */
+export const FRONTEND_AGENT_ACTIVITY_LEASE_MS = 30_000;
+
 export const AGENT_ACTIVITY_STATES: readonly AgentActivityState[] = [
   "idle",
   "working",
@@ -76,7 +88,7 @@ export function parseUsableAgentActivityTime(
  * outranks both.
  */
 export function aggregateAgentActivityState(
-  sources: Partial<Record<AgentActivitySource, AgentActivitySourceSnapshot>>,
+  sources: Partial<Record<string, AgentActivitySourceSnapshot>>,
 ): AgentActivityState {
   let aggregate: AgentActivityState = "idle";
   for (const snapshot of Object.values(sources)) {

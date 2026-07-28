@@ -6,6 +6,7 @@ import {
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
   AGENT_ACTIVITY_SOURCES,
   AGENT_ACTIVITY_STATES,
+  FRONTEND_AGENT_ACTIVITY_LEASE_MS,
   isAgentActivityTimestamp,
   parseUsableAgentActivityTime,
 } from "@orkestrator/protocol/agent-activity";
@@ -46,6 +47,8 @@ import type {
 } from "./models.js";
 
 export type JsonRecord = Record<string, unknown>;
+
+const MAX_FRONTEND_AGENT_ACTIVITY_OBSERVERS = 32;
 
 type KanbanComment = {
   id: string;
@@ -230,6 +233,51 @@ function readAgentActivitySources(
     };
   }
   return sources;
+}
+
+function frontendAgentActivityObserverKey(observerId: string): string {
+  return createHash("sha256").update(observerId).digest("hex");
+}
+
+function readFrontendAgentActivityObservers(
+  environment: Environment,
+  referenceTime: number,
+): NonNullable<Environment["frontendAgentActivityObservers"]> {
+  const observers: NonNullable<
+    Environment["frontendAgentActivityObservers"]
+  > = {};
+  const stored = environment.frontendAgentActivityObservers;
+  if (!isRecord(stored)) return observers;
+
+  for (const [observerKey, candidate] of Object.entries(stored)) {
+    if (!isRecord(candidate)) continue;
+    if (!isOneOf(candidate.state, AGENT_ACTIVITY_STATES)) continue;
+    const updatedTime = parseUsableAgentActivityTime(
+      candidate.updatedAt,
+      referenceTime,
+    );
+    const leaseExpiresAt = candidate.leaseExpiresAt;
+    if (
+      !Number.isFinite(updatedTime)
+      || !isAgentActivityTimestamp(leaseExpiresAt)
+      || Date.parse(leaseExpiresAt) <= referenceTime
+    ) {
+      continue;
+    }
+    observers[observerKey] = {
+      state: candidate.state,
+      updatedAt: new Date(updatedTime).toISOString(),
+      leaseExpiresAt: new Date(Date.parse(leaseExpiresAt)).toISOString(),
+    };
+  }
+  return observers;
+}
+
+function aggregateEnvironmentAgentActivity(
+  sources: NonNullable<Environment["agentActivitySources"]>,
+  observers: NonNullable<Environment["frontendAgentActivityObservers"]>,
+): AgentActivityState {
+  return aggregateAgentActivityState({ ...sources, ...observers });
 }
 
 function nextAgentActivityTimestamp(
@@ -1194,6 +1242,7 @@ export class StorageService {
         if (updates.status === "stopped" || updates.status === "error") {
           environment.agentActivityState = "idle";
           environment.agentActivitySources = {};
+          environment.frontendAgentActivityObservers = {};
           environment.agentActivityUpdatedAt = nextAgentActivityTimestamp(
             environment.agentActivityUpdatedAt,
           );
@@ -1348,6 +1397,7 @@ export class StorageService {
     state: AgentActivityState,
     occurredAt: string,
     source: AgentActivitySource = "frontend",
+    observerId?: string,
   ): Promise<Environment> {
     if (!isOneOf(state, AGENT_ACTIVITY_STATES)) {
       throw new Error("state must be idle, working, or waiting");
@@ -1362,6 +1412,18 @@ export class StorageService {
     if (!isOneOf(source, AGENT_ACTIVITY_SOURCES)) {
       throw new Error("source must be frontend or claude-terminal");
     }
+    if (
+      observerId !== undefined
+      && (
+        source !== "frontend"
+        || !isNonBlankString(observerId)
+        || observerId.length > 256
+      )
+    ) {
+      throw new Error(
+        "observerId must be a non-blank string of at most 256 characters for frontend activity",
+      );
+    }
 
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
@@ -1370,19 +1432,32 @@ export class StorageService {
 
       const referenceTime = Date.now();
       const sources = readAgentActivitySources(environment, referenceTime);
+      const observers = readFrontendAgentActivityObservers(
+        environment,
+        referenceTime,
+      );
 
-      // A source with no snapshot of its own is still ordered against the
-      // aggregate token. Falling back to -Infinity there would exempt the very
-      // first report from *every* source but one from the staleness check, so a
-      // delayed or retried report could resurrect a state the environment has
-      // already left — the exact thing this ordering exists to prevent.
-      const previousSource = sources[source];
+      const observerKey = observerId
+        ? frontendAgentActivityObserverKey(observerId)
+        : undefined;
+      if (
+        observerKey
+        && !observers[observerKey]
+        && Object.keys(observers).length >= MAX_FRONTEND_AGENT_ACTIVITY_OBSERVERS
+      ) {
+        throw new Error("too many frontend agent activity observers");
+      }
+      const previousSource = observerKey
+        ? observers[observerKey]
+        : sources[source];
       const previousTime = previousSource
         ? Date.parse(previousSource.updatedAt)
-        : parseUsableAgentActivityTime(
-          environment.agentActivityUpdatedAt,
-          referenceTime,
-        );
+        : observerKey
+          ? Number.NEGATIVE_INFINITY
+          : parseUsableAgentActivityTime(
+            environment.agentActivityUpdatedAt,
+            referenceTime,
+          );
       let acceptedOccurredTime = occurredTime;
       if (Number.isFinite(previousTime) && previousTime >= occurredTime) {
         if (source === "frontend" || previousTime > occurredTime) {
@@ -1396,13 +1471,27 @@ export class StorageService {
       }
       const normalizedOccurredAt = new Date(acceptedOccurredTime).toISOString();
 
-      sources[source] = {
-        state,
-        updatedAt: normalizedOccurredAt,
-      };
+      if (observerKey) {
+        observers[observerKey] = {
+          state,
+          updatedAt: normalizedOccurredAt,
+          leaseExpiresAt: new Date(
+            referenceTime + FRONTEND_AGENT_ACTIVITY_LEASE_MS,
+          ).toISOString(),
+        };
+      } else {
+        sources[source] = {
+          state,
+          updatedAt: normalizedOccurredAt,
+        };
+      }
 
       environment.agentActivitySources = sources;
-      environment.agentActivityState = aggregateAgentActivityState(sources);
+      environment.frontendAgentActivityObservers = observers;
+      environment.agentActivityState = aggregateEnvironmentAgentActivity(
+        sources,
+        observers,
+      );
       const aggregateTime = parseUsableAgentActivityTime(
         environment.agentActivityUpdatedAt,
         referenceTime,
@@ -1419,16 +1508,50 @@ export class StorageService {
     });
   }
 
+  /** Remove expired renderer leases and publish each changed aggregate. */
+  async expireFrontendAgentActivityLeases(
+    referenceTime = Date.now(),
+  ): Promise<string[]> {
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const changed: string[] = [];
+      for (const environment of environments) {
+        const storedObservers = environment.frontendAgentActivityObservers;
+        if (!isRecord(storedObservers) || Object.keys(storedObservers).length === 0) {
+          continue;
+        }
+        const observers = readFrontendAgentActivityObservers(
+          environment,
+          referenceTime,
+        );
+        if (Object.keys(observers).length === Object.keys(storedObservers).length) {
+          continue;
+        }
+        const sources = readAgentActivitySources(environment, referenceTime);
+        environment.agentActivitySources = sources;
+        environment.frontendAgentActivityObservers = observers;
+        environment.agentActivityState = aggregateEnvironmentAgentActivity(
+          sources,
+          observers,
+        );
+        environment.agentActivityUpdatedAt = nextAgentActivityTimestamp(
+          environment.agentActivityUpdatedAt,
+          referenceTime,
+        );
+        changed.push(environment.id);
+      }
+      if (changed.length === 0) return changed;
+      await this.saveJson(this.environmentsFile(), environments);
+      for (const environmentId of changed) {
+        this.announce("environment", environmentId);
+      }
+      return changed;
+    });
+  }
+
   /**
-   * Drop every renderer-reported activity source. Returns the ids that changed.
-   *
-   * A `frontend` snapshot is only meaningful while the renderer that wrote it
-   * is still alive to retract it. The aggregate is a max, so nothing can lower
-   * a stale `working` — not a later `idle` from the backend terminal poller,
-   * not a restart — and a renderer that quit mid-turn would otherwise pin its
-   * environment to `working` in every future client, permanently. Backend
-   * startup is the one moment where every renderer is provably gone, so that is
-   * where the reset belongs.
+   * Drop every renderer-reported activity source. Backend startup is the one
+   * moment where every pre-existing renderer lease is provably stale.
    */
   async clearFrontendAgentActivity(): Promise<string[]> {
     return this.enqueueEnvironmentMutation(async () => {
@@ -1436,11 +1559,21 @@ export class StorageService {
       const referenceTime = Date.now();
       const changed: string[] = [];
       for (const environment of environments) {
-        if (!environment.agentActivitySources?.frontend) continue;
+        const hasLegacyFrontend = Boolean(
+          environment.agentActivitySources?.frontend,
+        );
+        const hasObservers = isRecord(
+          environment.frontendAgentActivityObservers,
+        ) && Object.keys(environment.frontendAgentActivityObservers).length > 0;
+        if (!hasLegacyFrontend && !hasObservers) continue;
         const sources = readAgentActivitySources(environment, referenceTime);
         delete sources.frontend;
         environment.agentActivitySources = sources;
-        environment.agentActivityState = aggregateAgentActivityState(sources);
+        environment.frontendAgentActivityObservers = {};
+        environment.agentActivityState = aggregateEnvironmentAgentActivity(
+          sources,
+          {},
+        );
         environment.agentActivityUpdatedAt = nextAgentActivityTimestamp(
           environment.agentActivityUpdatedAt,
           referenceTime,

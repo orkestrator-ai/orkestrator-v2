@@ -706,6 +706,98 @@ describe("Electron StorageService", () => {
     )).rejects.toThrow("source must be frontend or claude-terminal");
   });
 
+  test("aggregates independently leased renderer observations", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-observers-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const baseTime = Date.now();
+    const at = (offset: number) => new Date(baseTime + offset).toISOString();
+    const observerA = "opaque-renderer-token-a";
+    const observerB = "opaque-renderer-token-b";
+
+    await storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      at(1),
+      "frontend",
+      observerA,
+    );
+    await storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      at(2),
+      "frontend",
+      observerB,
+    );
+    const afterACompletes = await storage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      at(3),
+      "frontend",
+      observerA,
+    );
+
+    expect(afterACompletes.agentActivityState).toBe("working");
+    expect(afterACompletes.frontendAgentActivityObservers).toMatchObject({
+      [createHash("sha256").update(observerA).digest("hex")]: {
+        state: "idle",
+        updatedAt: at(3),
+        leaseExpiresAt: expect.any(String),
+      },
+      [createHash("sha256").update(observerB).digest("hex")]: {
+        state: "working",
+        updatedAt: at(2),
+        leaseExpiresAt: expect.any(String),
+      },
+    });
+    expect(JSON.stringify(afterACompletes.frontendAgentActivityObservers))
+      .not.toContain(observerA);
+    expect(JSON.stringify(afterACompletes.frontendAgentActivityObservers))
+      .not.toContain(observerB);
+
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      at(4),
+      "frontend",
+      observerB,
+    )).resolves.toMatchObject({ agentActivityState: "idle" });
+  });
+
+  test("expires abandoned renderer observations and republishes the aggregate", async () => {
+    const dataDir = await createTempDir("ork-storage-agent-observer-expiry-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const updated = await storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      new Date().toISOString(),
+      "frontend",
+      "abandoned-renderer-token",
+    );
+    const observer = Object.values(
+      updated.frontendAgentActivityObservers ?? {},
+    )[0]!;
+    const announced: string[] = [];
+    storage.setResourceChangeListener((change) => announced.push(change.id));
+
+    await expect(storage.expireFrontendAgentActivityLeases(
+      Date.parse(observer.leaseExpiresAt) + 1,
+    )).resolves.toEqual([environment.id]);
+
+    await expect(storage.getEnvironment(environment.id)).resolves.toMatchObject({
+      agentActivityState: "idle",
+      frontendAgentActivityObservers: {},
+    });
+    expect(announced).toEqual([environment.id]);
+  });
+
   test("preserves waiting precedence and rejects an equal source timestamp", async () => {
     const dataDir = await createTempDir("ork-storage-agent-waiting-");
     const storage = new StorageService(dataDir);
@@ -1044,6 +1136,7 @@ describe("Electron StorageService", () => {
     const createdTime = Date.parse(stuck.agentActivityUpdatedAt!);
     const terminalWaitingAt = new Date(createdTime + 1_000).toISOString();
     const frontendWorkingAt = new Date(createdTime + 2_000).toISOString();
+    const observerWorkingAt = new Date(createdTime + 3_000).toISOString();
 
     await storage.setEnvironmentAgentActivity(
       stuck.id,
@@ -1059,8 +1152,15 @@ describe("Electron StorageService", () => {
     await storage.setEnvironmentAgentActivity(
       untouched.id,
       "working",
-      new Date(createdTime + 3_000).toISOString(),
+      new Date(createdTime + 4_000).toISOString(),
       "claude-terminal",
+    );
+    await storage.setEnvironmentAgentActivity(
+      stuck.id,
+      "working",
+      observerWorkingAt,
+      "frontend",
+      "renderer-to-clear",
     );
 
     const announced: string[] = [];
@@ -1076,10 +1176,11 @@ describe("Electron StorageService", () => {
     expect(cleared.agentActivitySources).toEqual({
       "claude-terminal": { state: "waiting", updatedAt: terminalWaitingAt },
     });
+    expect(cleared.frontendAgentActivityObservers).toEqual({});
     // The token moves forward so a frontend hydrating from this snapshot
     // prefers it over any observation it made before the restart.
     expect(Date.parse(cleared.agentActivityUpdatedAt!))
-      .toBeGreaterThan(Date.parse(frontendWorkingAt));
+      .toBeGreaterThan(Date.parse(observerWorkingAt));
 
     await expect(storage.getEnvironment(untouched.id)).resolves.toMatchObject({
       agentActivityState: "working",

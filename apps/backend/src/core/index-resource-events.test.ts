@@ -66,6 +66,7 @@ describe("OrkestratorBackend resource event wiring", () => {
         }),
       });
     } finally {
+      await backend.shutdown().catch(() => undefined);
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });

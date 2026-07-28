@@ -7,12 +7,14 @@ import {
 import { reapOrphanedLocalServers } from "./local-server-reaper.js";
 import { StorageService } from "./storage.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
+import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
 
 export class OrkestratorBackend {
   private readonly commands = createCommandRegistry();
   private readonly context: CommandContext;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
+  private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: {
     dataDir: string;
@@ -46,6 +48,14 @@ export class OrkestratorBackend {
     await this.context.storage.clearFrontendAgentActivity().catch((error) => {
       console.warn("[backend] Failed to clear stale agent activity:", error);
     });
+    this.activityLeaseSweep ??= setInterval(() => {
+      void this.context.storage.expireFrontendAgentActivityLeases().catch(
+        (error) => {
+          console.warn("[backend] Failed to expire agent activity leases:", error);
+        },
+      );
+    }, FRONTEND_AGENT_ACTIVITY_LEASE_MS / 2);
+    this.activityLeaseSweep.unref?.();
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
     // pidfile they still hold blocks this instance's app-server ownership.
@@ -66,6 +76,10 @@ export class OrkestratorBackend {
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    if (this.activityLeaseSweep) {
+      clearInterval(this.activityLeaseSweep);
+      this.activityLeaseSweep = null;
+    }
     const attempt = shutdownLocalServers();
     this.shutdownPromise = attempt;
     try {

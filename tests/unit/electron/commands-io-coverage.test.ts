@@ -143,7 +143,20 @@ describe("backend command I/O coverage", () => {
     expect(sessionId).toStartWith("container-1:");
     expect(spawnPty).toHaveBeenCalledWith(
       "docker",
-      ["exec", "-it", "--user", "node", "container-1", "zsh", "-l"],
+      [
+        "exec",
+        "-it",
+        "--user",
+        "node",
+        "container-1",
+        "bash",
+        "-lc",
+        [
+          "source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true",
+          "orkestrator_source_runtime_env 2>/dev/null || true",
+          "exec zsh -l",
+        ].join("\n"),
+      ],
       expect.objectContaining({ cols: 80, rows: 24 }),
     );
     expect(commands.get("list_terminal_sessions")?.({}, context)).toEqual([...sessionsBeforeAttach, sessionId]);

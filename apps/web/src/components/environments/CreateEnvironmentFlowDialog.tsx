@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -58,8 +58,16 @@ interface PendingGitHubCredentialWarning {
   options: ClaudeOptions;
   status: GitHubCredentialStatus | null;
   resolve: (created: boolean) => void;
-  reject: (error: unknown) => void;
+  settled: boolean;
+  creating: boolean;
 }
+
+interface PendingGitHubCredentialPreflight {
+  projectId: string;
+  cancel: () => void;
+}
+
+const PREFLIGHT_CANCELLED = Symbol("preflight-cancelled");
 
 export function resolveEnvironmentCreateRequest(options: ClaudeOptions) {
   const initialPromptForNaming = options.initialPrompt.trim();
@@ -112,6 +120,10 @@ export function CreateEnvironmentFlowDialog({
   const [isCreating, setIsCreating] = useState(false);
   const [pendingCredentialWarning, setPendingCredentialWarning] =
     useState<PendingGitHubCredentialWarning | null>(null);
+  const mountedRef = useRef(true);
+  const activePreflightRef = useRef<PendingGitHubCredentialPreflight | null>(null);
+  const pendingCredentialWarningRef =
+    useRef<PendingGitHubCredentialWarning | null>(null);
   const setOptions = useClaudeOptionsStore((state) => state.setOptions);
   const config = useConfigStore((state) => state.config);
   const storedProjectName = useProjectStore((state) =>
@@ -124,6 +136,59 @@ export function CreateEnvironmentFlowDialog({
   const selectProjectAndEnvironment = useUIStore(
     (state) => state.selectProjectAndEnvironment,
   );
+
+  const settleCredentialWarning = useCallback(
+    (
+      pending: PendingGitHubCredentialWarning,
+      result: { created: boolean },
+    ) => {
+      if (pending.settled) return;
+      pending.settled = true;
+      if (pendingCredentialWarningRef.current === pending) {
+        pendingCredentialWarningRef.current = null;
+        if (mountedRef.current) setPendingCredentialWarning(null);
+      }
+      pending.resolve(result.created);
+    },
+    [],
+  );
+
+  const cancelPendingCredentialFlow = useCallback(() => {
+    const preflight = activePreflightRef.current;
+    activePreflightRef.current = null;
+    preflight?.cancel();
+
+    const warning = pendingCredentialWarningRef.current;
+    const cancellableWarning = warning && !warning.creating ? warning : null;
+    if (cancellableWarning) {
+      settleCredentialWarning(cancellableWarning, { created: false });
+    }
+
+    if (mountedRef.current && (preflight || cancellableWarning)) {
+      setIsCreating(false);
+    }
+  }, [settleCredentialWarning]);
+
+  useEffect(() => {
+    if (!open) cancelPendingCredentialFlow();
+  }, [cancelPendingCredentialFlow, open]);
+
+  useEffect(() => {
+    const preflight = activePreflightRef.current;
+    if (preflight && preflight.projectId !== projectId) {
+      cancelPendingCredentialFlow();
+    }
+    const warning = pendingCredentialWarningRef.current;
+    if (warning) cancelPendingCredentialFlow();
+  }, [cancelPendingCredentialFlow, projectId]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      cancelPendingCredentialFlow();
+    };
+  }, [cancelPendingCredentialFlow]);
 
   const performCreate = async (options: ClaudeOptions) => {
     if (!projectId) return;
@@ -191,14 +256,37 @@ export function CreateEnvironmentFlowDialog({
       return true;
     }
 
+    cancelPendingCredentialFlow();
+    let cancelPreflight!: () => void;
+    const cancelled = new Promise<typeof PREFLIGHT_CANCELLED>((resolve) => {
+      cancelPreflight = () => resolve(PREFLIGHT_CANCELLED);
+    });
+    const preflight: PendingGitHubCredentialPreflight = {
+      projectId,
+      cancel: cancelPreflight,
+    };
+    activePreflightRef.current = preflight;
     setIsCreating(true);
-    let status: GitHubCredentialStatus | null = null;
-    try {
-      status = await getContainerGitHubCredentialStatus();
-    } catch (error) {
-      console.error("Failed to check GitHub credential status:", error);
-    } finally {
-      setIsCreating(false);
+    const result = await Promise.race([
+      getContainerGitHubCredentialStatus().then(
+        (status) => ({ status }),
+        (error: unknown) => ({ error }),
+      ),
+      cancelled,
+    ]);
+
+    if (activePreflightRef.current === preflight) {
+      activePreflightRef.current = null;
+    }
+    if (result === PREFLIGHT_CANCELLED) return false;
+    if (!mountedRef.current || !open || preflight.projectId !== projectId) {
+      return false;
+    }
+    setIsCreating(false);
+
+    const status = "status" in result ? result.status : null;
+    if ("error" in result) {
+      console.error("Failed to check GitHub credential status:", result.error);
     }
 
     if (status?.available) {
@@ -206,29 +294,36 @@ export function CreateEnvironmentFlowDialog({
       return true;
     }
 
-    return new Promise<boolean>((resolve, reject) => {
-      setPendingCredentialWarning({ options, status, resolve, reject });
+    return new Promise<boolean>((resolve) => {
+      const pending = {
+        options,
+        status,
+        resolve,
+        settled: false,
+        creating: false,
+      };
+      pendingCredentialWarningRef.current = pending;
+      setPendingCredentialWarning(pending);
     });
   };
 
   const dismissCredentialWarning = () => {
     if (isCreating) return;
-    const pending = pendingCredentialWarning;
-    setPendingCredentialWarning(null);
-    pending?.resolve(false);
+    const pending = pendingCredentialWarningRef.current;
+    if (pending) settleCredentialWarning(pending, { created: false });
   };
 
   const createWithoutGitHubCredential = async () => {
-    const pending = pendingCredentialWarning;
-    if (!pending) return;
+    const pending = pendingCredentialWarningRef.current;
+    if (!pending || pending.creating) return;
+    pending.creating = true;
 
     try {
       await performCreate(pending.options);
-      setPendingCredentialWarning(null);
-      pending.resolve(true);
+      settleCredentialWarning(pending, { created: true });
     } catch (error) {
-      setPendingCredentialWarning(null);
-      pending.reject(error);
+      console.error("Failed to create environment:", error);
+      settleCredentialWarning(pending, { created: false });
     }
   };
 

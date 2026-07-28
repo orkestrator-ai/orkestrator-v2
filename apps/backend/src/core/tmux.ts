@@ -1665,7 +1665,12 @@ class TmuxSession {
         effort,
         thinkingDisplay,
       );
-      const wrapped = `${claudeCmd}; echo '[claude exited]'; exec bash`;
+      const runtimePrefix = this.backend.kind === "container"
+        ? ". /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true; "
+          + "orkestrator_source_runtime_env 2>/dev/null || true; "
+        : "";
+      const wrapped =
+        `${runtimePrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
       const out = await this.backend.exec([
         this.tmuxCommand,
         "new-session",

@@ -3224,7 +3224,7 @@ exit 0
     expect(updated.createdFromCommit).toBe("3333333333333333333333333333333333333333");
   });
 
-  test("passes the host gh auth token into newly created containers by default", async () => {
+  test("syncs the host gh auth token after starting a newly created container", async () => {
     const environment = createEnvironment({
       id: "env-container-create",
       environmentType: "containerized",
@@ -3254,6 +3254,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *github-token*)
+        cat > "$FAKE_DOCKER_EXEC_LOG.stdin"
+        exit 0
+        ;;
       *ORKESTRATOR_SETUP_CAPABILITIES*)
         printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
         exit 0
@@ -3291,10 +3295,10 @@ exit 0
         expect(ghCalls).toContain("auth token --hostname github.com");
 
         const dockerCalls = await fs.readFile(logs.all, "utf8");
-        expect(dockerCalls).toContain("-e GITHUB_TOKEN -e GH_TOKEN");
-        expect(dockerCalls).not.toContain("GITHUB_TOKEN=host-gh-token");
-        expect(dockerCalls).not.toContain("GH_TOKEN=host-gh-token");
+        expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
+        expect(dockerCalls).not.toContain("-e GH_TOKEN");
         expect(dockerCalls).not.toContain("host-gh-token");
+        expect(await fs.readFile(`${logs.exec}.stdin`, "utf8")).toBe("host-gh-token");
         expect(environment.containerId).toBe("container-created");
       });
     });
@@ -3364,7 +3368,7 @@ exit 0
     });
   });
 
-  test("uses the configured PAT without reading host gh auth when host credentials are disabled", async () => {
+  test("does not persist the configured PAT in new container metadata", async () => {
     const environment = createEnvironment({
       id: "env-container-pat",
       environmentType: "containerized",
@@ -3400,7 +3404,8 @@ exit 0
 
         expect(await fs.readFile(ghLog, "utf8").catch(() => "")).toBe("");
         const dockerCalls = await fs.readFile(logs.all, "utf8");
-        expect(dockerCalls).toContain("-e GITHUB_TOKEN -e GH_TOKEN");
+        expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
+        expect(dockerCalls).not.toContain("-e GH_TOKEN");
         expect(dockerCalls).not.toContain("configured-pat");
       });
     });
@@ -3451,7 +3456,8 @@ exit 0
       expect((failure as Error).message).not.toContain(anthropicApiKey);
 
       const dockerCalls = await fs.readFile(logs.all, "utf8");
-      expect(dockerCalls).toContain("-e GITHUB_TOKEN -e GH_TOKEN");
+      expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
+      expect(dockerCalls).not.toContain("-e GH_TOKEN");
       expect(dockerCalls).toContain("-e ANTHROPIC_API_KEY");
       expect(dockerCalls).not.toContain(githubToken);
       expect(dockerCalls).not.toContain(anthropicApiKey);
@@ -4168,6 +4174,7 @@ exit 0
       expect(execLog).toContain("git config --global --list");
       expect(execLog).toContain("--remove-section");
       expect(execLog).toContain("token_url=\"https://x-access-token:$token@github.com/\"");
+      expect(execLog).toContain("git config --global --replace-all");
       expect(execLog).toContain("https://github.com/");
       expect(execLog).toContain("git@github.com:");
       expect(execLog).not.toContain("token-value");
@@ -4209,6 +4216,114 @@ exit 0
       expect(execLog).toContain("grep '^url\\.https://x-access-token:'");
       expect(execLog).toContain("--remove-section");
       expect(await fs.readFile(`${logs.exec}.stdin`, "utf8")).toBe("");
+    });
+  });
+
+  test("keeps credential sync compatible with repeated workspace Git configuration", async () => {
+    const home = await createTempDir("ork-github-config-home-");
+    const credentialFile = path.join(home, "runtime", "github-token");
+    const env = { ...process.env, HOME: home, GITHUB_TOKEN: "token-value", GH_TOKEN: "" };
+    const sync = spawnSync(
+      "bash",
+      ["-c", commandTesting.buildSyncContainerGitHubCredentialCommand(credentialFile)],
+      { env, input: "token-value", encoding: "utf8" },
+    );
+    expect(sync.status).toBe(0);
+
+    const workspaceSetup = await fs.readFile(
+      path.join(process.cwd(), "docker", "workspace-setup.sh"),
+      "utf8",
+    );
+    const start = workspaceSetup.indexOf('TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"');
+    const end = workspaceSetup.indexOf("\nprint_workspace_disk_status()", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const credentialSetup = workspaceSetup.slice(start, end);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const configured = spawnSync("bash", ["-c", credentialSetup], {
+        env,
+        encoding: "utf8",
+      });
+      expect(configured.status).toBe(0);
+    }
+
+    const values = spawnSync("git", [
+      "config",
+      "--global",
+      "--get-all",
+      "url.https://x-access-token:token-value@github.com/.insteadOf",
+    ], { env, encoding: "utf8" });
+    expect(values.status).toBe(0);
+    expect(values.stdout.trim().split("\n")).toEqual([
+      "https://github.com/",
+      "https://github.com",
+      "git@github.com:",
+    ]);
+  });
+
+  test("refreshes and clears the managed credential after direct container starts", async () => {
+    const environment = createEnvironment({
+      id: "env-direct-start",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "stopped",
+    });
+    const config = {
+      version: "1.0.0",
+      global: {
+        useHostGitHubCredentials: false,
+        githubToken: "rotated-token",
+      },
+      repositories: {},
+    };
+    const { context } = createContext(environment);
+    context.storage.loadConfig = mock(async () => config);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "start" ]; then exit 0; fi
+if [ "$1" = "exec" ]; then
+  cat >> "$FAKE_DOCKER_EXEC_LOG.stdin"
+  printf '\\n--sync--\\n' >> "$FAKE_DOCKER_EXEC_LOG.stdin"
+  exit 0
+fi
+exit 1
+`, async (logs) => {
+      await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
+      config.global.githubToken = "";
+      await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
+
+      const input = await fs.readFile(`${logs.exec}.stdin`, "utf8");
+      expect(input).toBe("rotated-token\n--sync--\n\n--sync--\n");
+      const calls = await fs.readFile(logs.all, "utf8");
+      expect(calls.match(/start container-1/g)).toHaveLength(2);
+    });
+  });
+
+  test("reports a credential sync failure after a direct container start", async () => {
+    const { context } = createContext(createEnvironment(), {
+      globalConfig: {
+        useHostGitHubCredentials: false,
+        githubToken: "secret-token",
+      },
+    });
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "start" ]; then exit 0; fi
+if [ "$1" = "exec" ]; then
+  token="$(cat)"
+  printf 'sync rejected %s\\n' "$token" >&2
+  exit 7
+fi
+exit 1
+`, async () => {
+      await expect(commands.get("docker_start_container")?.(
+        { containerId: "container-1" },
+        context,
+      )).rejects.toThrow("sync rejected [REDACTED]");
     });
   });
 
@@ -6800,6 +6915,8 @@ exit 0
 
       const execLog = await fs.readFile(logs.exec, "utf8");
       expect(execLog).toContain("gh pr list --head 'feature/container-pr' --state all --limit 30 --json url,state,mergeable,updatedAt");
+      expect(execLog).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
+      expect(execLog).toContain("orkestrator_source_runtime_env");
       expect(execLog).not.toContain("gh pr view");
     });
   });
@@ -10930,8 +11047,13 @@ exit 0
       "exec",
       "-it",
       "container-legacy",
-      "zsh",
-      "-l",
+      "bash",
+      "-lc",
+      [
+        "source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true",
+        "orkestrator_source_runtime_env 2>/dev/null || true",
+        "exec zsh -l",
+      ].join("\n"),
     ]);
   });
 
@@ -11468,7 +11590,16 @@ exit 0
     expect(reattachedSessionId).toBe(sessionId);
     expect(ptySpawn).toHaveBeenCalledTimes(1);
     expect(spawnCall?.[0]).toBe("docker");
-    expect(spawnCall?.[1]).toEqual(["exec", "-it", "--user", "node", "container-1", "zsh", "-l"]);
+    expect(spawnCall?.[1]).toEqual([
+      "exec",
+      "-it",
+      "--user",
+      "node",
+      "container-1",
+      "bash",
+      "-lc",
+      expect.stringContaining("orkestrator_source_runtime_env"),
+    ]);
     expect(spawnCall?.[2]).toMatchObject({
       cols: 100,
       rows: 32,
@@ -11515,8 +11646,9 @@ exit 0
       "--user",
       "node",
       "container-new",
-      "zsh",
-      "-l",
+      "bash",
+      "-lc",
+      expect.stringContaining("orkestrator_source_runtime_env"),
     ]);
 
     const changedUser = terminalSessionResult(await commands.get("create_terminal_session")?.(

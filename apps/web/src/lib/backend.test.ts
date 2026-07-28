@@ -35,6 +35,7 @@ const {
   getLinearIssues,
   getGitHubIssues,
   getGitHubIssue,
+  getContainerGitHubCredentialStatus,
   getTerminalOutputSnapshot,
   updateGitHubIssue,
   updateGitHubIssueStatus,
@@ -826,6 +827,16 @@ describe("backend setup wrappers", () => {
     await expect(propagateGithubCredentialsToContainers()).resolves.toBe(result);
     expect(invokeMock.mock.calls).toEqual([
       ["propagate_github_token_to_containers"],
+    ]);
+  });
+
+  test("reports the backend-selected GitHub credential source and availability", async () => {
+    const status = { source: "host-cli" as const, available: true };
+    invokeMock.mockResolvedValueOnce(status);
+
+    await expect(getContainerGitHubCredentialStatus()).resolves.toBe(status);
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_container_github_credential_status"],
     ]);
   });
 

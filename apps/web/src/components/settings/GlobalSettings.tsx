@@ -163,6 +163,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
+  const [githubCredentialPropagationPending, setGithubCredentialPropagationPending] =
+    useState(false);
   const [domainErrors, setDomainErrors] = useState<string[]>([]);
   const [colorError, setColorError] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState(false);
@@ -275,6 +277,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true) ||
       githubToken.trim().length > 0 ||
       clearGithubToken ||
+      githubCredentialPropagationPending ||
       allowedDomains !== (global.allowedDomains || []).join("\n") ||
       preferredEditor !== (global.preferredEditor || "vscode") ||
       defaultAgent !== (global.defaultAgent || "claude") ||
@@ -301,7 +304,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, useHostGitHubCredentials, githubToken, clearGithubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, useHostGitHubCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -437,11 +440,11 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
       let newConfig = await backend.updateGlobalConfig(newGlobal);
       const nextGitHubToken = githubToken.trim();
-      const githubCredentialChanged =
-        useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true)
-        || clearGithubToken
-        || nextGitHubToken.length > 0;
-      if (githubCredentialChanged) {
+      const githubCredentialSourceChanged =
+        useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true);
+      const githubTokenChanged = clearGithubToken || nextGitHubToken.length > 0;
+      const githubCredentialChanged = githubCredentialSourceChanged || githubTokenChanged;
+      if (githubTokenChanged) {
         newConfig = await backend.setGitHubToken(
           clearGithubToken ? null : nextGitHubToken,
         );
@@ -474,24 +477,54 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         setSavedGatewayToken(nextGatewayTokenSettings.token);
       }
 
-      // Apply the selected credential source to running containers if it changed.
-      if (githubCredentialChanged) {
+      // Apply the selected credential source to running containers if it changed,
+      // or retry a previous partial propagation failure.
+      let githubCredentialPropagationFailed = false;
+      if (githubCredentialChanged || githubCredentialPropagationPending) {
         try {
           const propagateResult = await backend.propagateGithubCredentialsToContainers();
-          if (propagateResult.updated.length > 0) {
+          if (propagateResult.failed.length > 0) {
+            githubCredentialPropagationFailed = true;
+            setGithubCredentialPropagationPending(true);
+            const failureDetails = propagateResult.failed
+              .slice(0, 3)
+              .map(([environmentId, message]) => `${environmentId}: ${message}`)
+              .join("; ");
+            const remainingFailureCount = Math.max(0, propagateResult.failed.length - 3);
+            toast.error("Settings saved, but some containers were not updated", {
+              description: [
+                propagateResult.updated.length > 0
+                  ? `Updated ${propagateResult.updated.length} container(s).`
+                  : null,
+                `Failed: ${failureDetails}${remainingFailureCount > 0 ? `; and ${remainingFailureCount} more` : ""}.`,
+                "Save Changes to retry.",
+              ].filter(Boolean).join(" "),
+            });
+          } else {
+            setGithubCredentialPropagationPending(false);
+          }
+          if (propagateResult.updated.length > 0 && propagateResult.failed.length === 0) {
             toast.success(`Updated GitHub credentials in ${propagateResult.updated.length} container(s)`);
           }
         } catch (err) {
           console.error("[settings] Failed to propagate GitHub credentials:", err);
+          githubCredentialPropagationFailed = true;
+          setGithubCredentialPropagationPending(true);
+          const message = err instanceof Error ? err.message : String(err);
+          toast.error("Settings saved, but containers were not updated", {
+            description: `${message}. Save Changes to retry.`,
+          });
         }
       }
 
       setGithubToken("");
       setClearGithubToken(false);
-      setHasChanges(false);
-      setSaveSuccess(true);
-      toast.success("Settings saved");
-      setTimeout(() => { onSaveSuccess?.(); }, 500);
+      setHasChanges(githubCredentialPropagationFailed);
+      setSaveSuccess(!githubCredentialPropagationFailed);
+      if (!githubCredentialPropagationFailed) {
+        toast.success("Settings saved");
+        setTimeout(() => { onSaveSuccess?.(); }, 500);
+      }
     } catch (err) {
       console.error("[settings] Failed to save config:", err);
       const message = err instanceof Error ? err.message : "Failed to save settings";

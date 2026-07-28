@@ -606,7 +606,16 @@ function normalizePersistedConfig(config: AppConfig): AppConfig {
   const codexMaxConcurrentThreads = resolveCodexMaxConcurrentThreads(
     global.codexMaxConcurrentThreads,
   );
-  const useHostGitHubCredentials = global.useHostGitHubCredentials !== false;
+  const hasExplicitGitHubCredentialSource =
+    typeof global.useHostGitHubCredentials === "boolean";
+  const hasLegacyGitHubToken =
+    typeof global.githubToken === "string" && global.githubToken.trim().length > 0;
+  // Before the source selector existed, a stored PAT was the user's explicit
+  // GitHub credential. Preserve that choice during migration instead of
+  // silently replacing it with the host's potentially broader `gh` token.
+  const useHostGitHubCredentials = hasExplicitGitHubCredentialSource
+    ? global.useHostGitHubCredentials
+    : !hasLegacyGitHubToken;
   if (
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
     && global.useHostGitHubCredentials === useHostGitHubCredentials

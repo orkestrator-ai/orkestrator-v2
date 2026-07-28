@@ -53,6 +53,10 @@ const createdEnvironment: Environment = {
 
 const createEnvironmentMock = mock(async () => createdEnvironment);
 const updateEnvironmentAgentSettingsMock = mock(async () => createdEnvironment);
+const getContainerGitHubCredentialStatusMock = mock(async () => ({
+  source: "host-cli" as const,
+  available: true,
+}));
 const renameEnvironmentFromPromptMock = mock(async () => {});
 const updateEnvironmentMock = mock(() => {});
 const startEnvironmentMock = mock(async () => undefined);
@@ -111,6 +115,7 @@ mock.module("@/hooks/useEnvironmentDiffStats", () => ({
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
+  getContainerGitHubCredentialStatus: getContainerGitHubCredentialStatusMock,
   renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
 }));
@@ -209,6 +214,11 @@ describe("HierarchicalSidebar", () => {
     cleanup();
     createEnvironmentMock.mockClear();
     updateEnvironmentAgentSettingsMock.mockClear();
+    getContainerGitHubCredentialStatusMock.mockClear();
+    getContainerGitHubCredentialStatusMock.mockResolvedValue({
+      source: "host-cli",
+      available: true,
+    });
     renameEnvironmentFromPromptMock.mockClear();
     updateEnvironmentMock.mockClear();
     startEnvironmentMock.mockClear();
@@ -1037,6 +1047,25 @@ describe("HierarchicalSidebar", () => {
         }),
       );
     });
+  });
+
+  test("requires confirmation before creating without container GitHub credentials", async () => {
+    getContainerGitHubCredentialStatusMock.mockResolvedValueOnce({
+      source: "host-cli",
+      available: false,
+    });
+    render(<HierarchicalSidebar />);
+
+    fireEvent.click(screen.getByTitle("Create environment"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Create Environment" }),
+    );
+
+    expect(await screen.findByText("No GitHub CLI credentials found")).toBeTruthy();
+    expect(createEnvironmentMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create anyway" }));
+    await waitFor(() => expect(createEnvironmentMock).toHaveBeenCalledTimes(1));
   });
 
   test("closes the create dialog before auto-start finishes", async () => {

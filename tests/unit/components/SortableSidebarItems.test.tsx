@@ -370,7 +370,12 @@ describe("sortable sidebar items", () => {
 
     expect(onDeleteProject).toHaveBeenCalledTimes(1);
     expect(onDeleteProject).toHaveBeenCalledWith("project-1");
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    // Radix keeps closed dialog content mounted until its exit-presence
+    // fallback settles. In happy-dom that fallback takes ~2.5 seconds and can
+    // cross Bun's per-test timeout when the full suite is under load. The
+    // controlled state transition is the behavior owned by this component;
+    // Radix's eventual portal unmount is library behavior.
+    await waitFor(() => expect(dialog.getAttribute("data-state")).toBe("closed"));
   });
 
   test("SortableProjectGroup keeps the delete confirmation open after deletion fails", async () => {

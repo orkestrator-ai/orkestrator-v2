@@ -1760,6 +1760,8 @@ describe("ClaudeChatTab", () => {
 
     test("reconciles questions, plan state, approvals, initialization, and system notices", async () => {
       const channel = eventChannel();
+      const questionExpiresAt = Date.now() + 120_000;
+      const approvalExpiresAt = Date.now() + 180_000;
       mockSubscribeToEvents.mockImplementation(() => channel.stream);
       useClaudeStore.getState().setSessionInitData(ENVIRONMENT_ID, {
         mcpServers: [],
@@ -1782,6 +1784,7 @@ describe("ClaudeChatTab", () => {
               options: [],
             }],
             toolUseId: "question-tool",
+            expiresAt: questionExpiresAt,
           },
         });
         channel.push({
@@ -1794,17 +1797,20 @@ describe("ClaudeChatTab", () => {
           data: {
             id: "approval-sse",
             toolUseId: "approval-tool",
+            expiresAt: approvalExpiresAt,
           },
         });
         await waitFor(() => {
           expect(useClaudeStore.getState().pendingQuestions.get("question-sse")).toMatchObject({
             sessionId: "session-1",
             toolUseId: "question-tool",
+            expiresAt: questionExpiresAt,
           });
           expect(useClaudeStore.getState().isPlanMode(SESSION_KEY)).toBe(true);
           expect(useClaudeStore.getState().pendingPlanApprovals.get("approval-sse")).toMatchObject({
             sessionId: "session-1",
             toolUseId: "approval-tool",
+            expiresAt: approvalExpiresAt,
           });
         });
 

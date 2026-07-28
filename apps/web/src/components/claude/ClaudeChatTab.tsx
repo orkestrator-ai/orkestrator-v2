@@ -1640,6 +1640,14 @@ export function ClaudeChatTab({
                 sessionId: questionData.sessionId || eventSessionId || "",
                 questions: questionData.questions,
                 toolUseId: questionData.toolUseId,
+                ...(questionData.expiresAt === undefined
+                  ? {}
+                  : {
+                      expiresAt:
+                        typeof questionData.expiresAt === "number"
+                          ? questionData.expiresAt
+                          : Number.NaN,
+                    }),
               };
               addPendingQuestion(questionRequest);
             }
@@ -1675,6 +1683,14 @@ export function ClaudeChatTab({
                 id: approvalData.id,
                 sessionId: approvalData.sessionId || eventSessionId || "",
                 toolUseId: approvalData.toolUseId,
+                ...(approvalData.expiresAt === undefined
+                  ? {}
+                  : {
+                      expiresAt:
+                        typeof approvalData.expiresAt === "number"
+                          ? approvalData.expiresAt
+                          : Number.NaN,
+                    }),
               };
               console.log("[ClaudeChatTab] Plan approval requested:", approvalRequest);
               addPendingPlanApproval(approvalRequest);

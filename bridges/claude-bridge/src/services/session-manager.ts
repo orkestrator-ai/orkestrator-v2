@@ -655,6 +655,19 @@ async function generateTitleViaCli(userMessage: string): Promise<string | null> 
 
   const args = [
     "--print",
+    // Title generation is a pure model call. Prompt framing is useful defense
+    // in depth, but capability isolation must be enforced by the CLI: do not
+    // load CLAUDE.md/settings/hooks/plugins/skills, expose built-in or MCP
+    // tools, or leave a resumable title transcript behind. `--bare` would also
+    // disable OAuth/keychain authentication, so safe mode is used instead.
+    "--safe-mode",
+    "--tools",
+    "",
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+    "--no-session-persistence",
+    "--setting-sources",
+    "",
     "--model",
     "haiku",
     "--system-prompt",
@@ -808,8 +821,14 @@ interface PromptDispatchRecord {
   updatedAt: number;
 }
 
-/** Bounded so a long-lived bridge cannot grow the registry without limit. */
-const MAX_PROMPT_DISPATCH_RECORDS = 500;
+/**
+ * A settled tombstone remains authoritative for the entire retry window.
+ *
+ * This is time-bounded instead of count-bounded: evicting a still-live
+ * tombstone merely because the process handled 500 later prompts lets the
+ * original destructive request run twice. Request ids are capped at the HTTP
+ * boundary, and expired records are collected on every state transition.
+ */
 const PROMPT_DISPATCH_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 const promptDispatchRecords = new Map<string, PromptDispatchRecord>();
@@ -827,18 +846,6 @@ function collectPromptDispatchGarbage(): void {
     if (record.state === "already-processed" && record.updatedAt < cutoff) {
       promptDispatchRecords.delete(requestId);
     }
-  }
-  if (promptDispatchRecords.size <= MAX_PROMPT_DISPATCH_RECORDS) return;
-
-  // Over the cap: shed the oldest settled records. A `processing` record is
-  // never dropped — it is the only entry an in-flight retry can be racing, and
-  // losing it is exactly the double-dispatch this registry exists to prevent.
-  const settled = [...promptDispatchRecords.entries()]
-    .filter(([, record]) => record.state === "already-processed")
-    .sort((a, b) => a[1].updatedAt - b[1].updatedAt);
-  for (const [requestId] of settled) {
-    if (promptDispatchRecords.size <= MAX_PROMPT_DISPATCH_RECORDS) break;
-    promptDispatchRecords.delete(requestId);
   }
 }
 
@@ -865,6 +872,24 @@ function forgetPromptDispatchesForSession(sessionId: string): void {
   for (const [requestId, record] of promptDispatchRecords) {
     if (record.sessionId === sessionId) promptDispatchRecords.delete(requestId);
   }
+}
+
+/** Test-only visibility for retention and lifecycle cleanup assertions. */
+export function getPromptDispatchRecordCountForTesting(): number {
+  return promptDispatchRecords.size;
+}
+
+/** Test-only seeding for retention-volume regression coverage. */
+export function seedSettledPromptDispatchForTesting(
+  sessionId: string,
+  requestId: string,
+  updatedAt = Date.now(),
+): void {
+  promptDispatchRecords.set(
+    promptDispatchKey(sessionId, requestId),
+    { sessionId, state: "already-processed", updatedAt },
+  );
+  collectPromptDispatchGarbage();
 }
 
 /**

@@ -607,14 +607,18 @@ async function installWorkspaceHooks(backend: TmuxBackend, paths: WorkspaceHookP
 }
 
 async function uninstallWorkspaceHooks(backend: TmuxBackend, paths: WorkspaceHookPaths): Promise<void> {
+  await restoreWorkspaceHooks(backend, paths);
+  await backend.removeFile(paths.claudeSettingsBackup).catch(() => undefined);
+  await backend.removeDir(paths.root).catch(() => undefined);
+}
+
+async function restoreWorkspaceHooks(backend: TmuxBackend, paths: WorkspaceHookPaths): Promise<void> {
   const backup = await backend.readFile(paths.claudeSettingsBackup);
   if (backup === BACKUP_SENTINEL_NO_ORIGINAL) {
     await backend.removeFile(paths.claudeSettings);
   } else if (backup !== undefined) {
     await backend.writeFile(paths.claudeSettings, backup);
   }
-  await backend.removeFile(paths.claudeSettingsBackup).catch(() => undefined);
-  await backend.removeDir(paths.root).catch(() => undefined);
 }
 
 async function ensureSessionDirs(backend: TmuxBackend, paths: SessionHookPaths): Promise<void> {
@@ -1624,10 +1628,19 @@ class TmuxSession {
     await this.replyHook("PreToolUse", id, preToolUseResponse(decision, reason));
   }
 
-  async stop(): Promise<void> {
+  async stop(): Promise<boolean> {
     this.stopRequested = true;
-    await this.backend.exec([this.tmuxCommand, "kill-session", "-t", this.tmuxSession]).catch(() => undefined);
+    const result = await this.backend
+      .exec([this.tmuxCommand, "kill-session", "-t", this.tmuxSession])
+      .catch(() => null);
     await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
+    if (!result) return false;
+    if (result.status === 0) return true;
+    return (
+      /no server running/i.test(result.stderr)
+      || /failed to connect to server/i.test(result.stderr)
+      || /can't find session/i.test(result.stderr)
+    );
   }
 }
 
@@ -1799,24 +1812,36 @@ async function killEnvironmentTmuxSessions(
   backend: TmuxBackend,
   environmentId: string,
   survivingEnvironmentIds: readonly string[],
-): Promise<string[]> {
+): Promise<{ killed: string[]; complete: boolean }> {
   const listed = await backend
     .exec(["tmux", "list-sessions", "-F", "#{session_name}"])
     .catch(() => null);
-  if (!listed || listed.status !== 0) return [];
+  if (!listed) return { killed: [], complete: false };
+  if (listed.status !== 0) {
+    const noServer =
+      /no server running/i.test(listed.stderr)
+      || /failed to connect to server/i.test(listed.stderr)
+      || /no sessions/i.test(listed.stderr);
+    return { killed: [], complete: noServer };
+  }
   const targets = selectReapableTmuxSessions({
     names: parseTmuxSessionNames(listed.stdout),
     environmentId,
     survivingEnvironmentIds,
   });
   const killed: string[] = [];
+  let complete = true;
   for (const name of targets) {
     const result = await backend
       .exec(["tmux", "kill-session", "-t", name])
       .catch(() => null);
-    if (result?.status === 0) killed.push(name);
+    if (result?.status === 0) {
+      killed.push(name);
+    } else {
+      complete = false;
+    }
   }
-  return killed;
+  return { killed, complete };
 }
 
 /**
@@ -1843,10 +1868,25 @@ export async function cleanupEnvironmentTmux(
   context: CommandContext,
 ): Promise<void> {
   await tmuxManager.installLock(environmentId).runExclusive(async () => {
+    detachInteractiveTerminalsForEnvironment(environmentId);
+    const environment = await context.storage.getEnvironment(environmentId);
+    if (
+      environment?.environmentType === "containerized"
+      && environment.status === "stopped"
+    ) {
+      // Nothing can be restored from inside a stopped container without
+      // starting it again. Drop process-local ownership; docker rm below is
+      // the authoritative cleanup for the container filesystem and sessions.
+      tmuxManager.removeEnvironment(environmentId);
+      return;
+    }
+    let cleanupComplete = true;
     for (const session of tmuxManager.removeEnvironment(environmentId)) {
-      await session.stop().catch((error) => {
+      const stopped = await session.stop().catch((error) => {
         console.warn("[tmux] session stop failed during environment cleanup", error);
+        return false;
       });
+      if (!stopped) cleanupComplete = false;
     }
 
     let backend: TmuxBackend;
@@ -1860,25 +1900,46 @@ export async function cleanupEnvironmentTmux(
       return;
     }
 
-    const survivingEnvironmentIds = await context.storage
-      .loadEnvironments()
-      .then((environments) => environments.map((environment) => environment.id))
-      .catch(() => [] as string[]);
+    let survivingEnvironmentIds: string[];
+    try {
+      survivingEnvironmentIds = (await context.storage.loadEnvironments())
+        .map((environment) => environment.id);
+    } catch (error) {
+      cleanupComplete = false;
+      survivingEnvironmentIds = [];
+      console.warn("[tmux] failed to load environments during tmux cleanup", error);
+    }
 
-    await killEnvironmentTmuxSessions(backend, environmentId, survivingEnvironmentIds)
-      .catch((error) => {
+    if (cleanupComplete) {
+      const result = await killEnvironmentTmuxSessions(
+        backend,
+        environmentId,
+        survivingEnvironmentIds,
+      ).catch((error) => {
+        cleanupComplete = false;
         console.warn("[tmux] failed to kill environment tmux sessions", error);
+        return { killed: [], complete: false };
       });
+      cleanupComplete = cleanupComplete && result.complete;
+    }
 
     const { workspace } = workspaceAndClaudeHome(backend);
-    // Restores `.claude/settings.local.json` from the backup and removes
-    // `${RUNTIME_ROOT_PREFIX}/<environmentId>`.
-    await uninstallWorkspaceHooks(
-      backend,
-      workspaceHookPaths(`${RUNTIME_ROOT_PREFIX}/${environmentId}`, workspace),
-    ).catch((error) => {
+    const hookPaths = workspaceHookPaths(
+      `${RUNTIME_ROOT_PREFIX}/${environmentId}`,
+      workspace,
+    );
+    // Restore the user's settings even when tmux cleanup is incomplete, but
+    // retain the runtime root and its backup as durable retry attribution.
+    await restoreWorkspaceHooks(backend, hookPaths).catch((error) => {
+      cleanupComplete = false;
       console.warn("[tmux] uninstallWorkspaceHooks failed during environment cleanup", error);
     });
+    if (cleanupComplete) {
+      await backend.removeFile(hookPaths.claudeSettingsBackup).catch(() => undefined);
+      await backend.removeDir(hookPaths.root).catch(() => undefined);
+    } else {
+      throw new Error(`claude-tmux cleanup incomplete for environment ${environmentId}`);
+    }
   });
 }
 
@@ -1930,6 +1991,14 @@ class InteractiveTmuxTerminalManager {
     this.terminals.delete(id);
   }
 
+  detachEnvironment(environmentId: string): void {
+    for (const [id, terminal] of this.terminals) {
+      if (terminal.tmux.environmentId !== environmentId) continue;
+      if (terminal.interval) clearInterval(terminal.interval);
+      this.terminals.delete(id);
+    }
+  }
+
   private require(id: string): InteractiveTerminalSession {
     const terminal = this.terminals.get(id);
     if (!terminal) throw new Error("tmux interactive terminal session not found");
@@ -1945,6 +2014,10 @@ class InteractiveTmuxTerminalManager {
 }
 
 const interactiveTerminals = new InteractiveTmuxTerminalManager();
+
+function detachInteractiveTerminalsForEnvironment(environmentId: string): void {
+  interactiveTerminals.detachEnvironment(environmentId);
+}
 
 const INTERACTIVE_KEY_SEQUENCES = new Map<string, string[]>([
   ["\x1b[A", ["Up"]],
@@ -2252,6 +2325,10 @@ export function registerTmuxBackendCommands(
     const tab = asString(tabId, "tabId");
     const resumeId = asOptionalString(resumeSessionId);
     return tmuxManager.installLock(envId).runExclusive(async () => {
+      const environment = await context.storage.getEnvironment(envId);
+      if (!environment || environment.deletionRequestedAt) {
+        throw new Error(`environment ${envId} is being deleted`);
+      }
       if (resumeId === undefined) {
         const existing = tmuxManager.remove(envId, tab);
         if (existing) await existing.stop();

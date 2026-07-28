@@ -65,7 +65,7 @@ export type LocalServerReapKind = "opencode" | "claude" | "codex";
  */
 export interface ReapedClaudeTmuxRuntime {
   environmentId: string;
-  outcome: "reaped" | "kept-live-environment";
+  outcome: "reaped" | "kept-live-environment" | "retry-pending";
   killedSessions: string[];
 }
 
@@ -104,10 +104,19 @@ async function readHostTmuxSessions(): Promise<string[]> {
       { timeoutMs: 5_000 },
     );
     return parseTmuxSessionNames(stdout);
-  } catch {
-    // No tmux server running, or tmux is not installed. Either way there are no
-    // sessions to reap; the runtime roots below are still swept.
-    return [];
+  } catch (error) {
+    const message = String(error);
+    if (
+      /no server running/i.test(message)
+      || /failed to connect to server/i.test(message)
+      || /no sessions/i.test(message)
+    ) {
+      return [];
+    }
+    // A timeout, missing executable, or other unexpected failure says nothing
+    // about whether a detached tmux server still owns sessions. Preserve the
+    // runtime roots so a later startup can retry with the same attribution.
+    throw error;
   }
 }
 
@@ -152,7 +161,20 @@ export async function reapOrphanedClaudeTmuxRuntimes(
 
   // One listing for the whole sweep: the tmux server is shared, so re-listing
   // per orphan would only add round trips.
-  const sessionNames = await listTmuxSessions();
+  let sessionNames: string[];
+  try {
+    sessionNames = await listTmuxSessions();
+  } catch (error) {
+    log(`[backend] Failed to list orphaned claude-tmux sessions: ${String(error)}`);
+    return [
+      ...orphans.map((environmentId) => ({
+        environmentId,
+        outcome: "retry-pending" as const,
+        killedSessions: [],
+      })),
+      ...kept,
+    ];
+  }
 
   const reaped: ReapedClaudeTmuxRuntime[] = [];
   for (const environmentId of orphans) {
@@ -162,11 +184,13 @@ export async function reapOrphanedClaudeTmuxRuntimes(
       survivingEnvironmentIds: environmentIds,
     });
     const killedSessions: string[] = [];
+    let killFailed = false;
     for (const sessionName of targets) {
       try {
         await killTmuxSession(sessionName);
         killedSessions.push(sessionName);
       } catch (error) {
+        killFailed = true;
         log(`[backend] Failed to kill orphaned tmux session ${sessionName}: ${String(error)}`);
       }
     }
@@ -175,12 +199,20 @@ export async function reapOrphanedClaudeTmuxRuntimes(
         `[backend] Reaped ${killedSessions.length} orphaned claude-tmux session(s) for deleted environment ${environmentId}`,
       );
     }
-    // Removing the root is independent of the kills: it holds the hook script
-    // and the settings backup, and the environment it described is gone.
-    await removeRuntimeRoot(path.join(prefix, environmentId)).catch((error) => {
+    if (killFailed) {
+      // The root is the only durable evidence connecting the remaining session
+      // name to this deleted environment. Removing it would make the leak
+      // impossible to find on the next startup.
+      reaped.push({ environmentId, outcome: "retry-pending", killedSessions });
+      continue;
+    }
+    try {
+      await removeRuntimeRoot(path.join(prefix, environmentId));
+      reaped.push({ environmentId, outcome: "reaped", killedSessions });
+    } catch (error) {
       log(`[backend] Failed to remove claude-tmux runtime root for ${environmentId}: ${String(error)}`);
-    });
-    reaped.push({ environmentId, outcome: "reaped", killedSessions });
+      reaped.push({ environmentId, outcome: "retry-pending", killedSessions });
+    }
   }
 
   return [...reaped, ...kept];

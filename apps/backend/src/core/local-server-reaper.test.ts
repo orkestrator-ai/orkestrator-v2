@@ -301,13 +301,17 @@ describe("reapOrphanedClaudeTmuxRuntimes", () => {
     environments?: Environment[];
     sessions?: string[];
     killFails?: boolean;
+    listFails?: boolean;
   } = {}) {
     const killed: string[] = [];
     return {
       killed,
       options: {
         storage: { loadEnvironments: async () => overrides.environments ?? [] },
-        listTmuxSessions: async () => overrides.sessions ?? [],
+        listTmuxSessions: async () => {
+          if (overrides.listFails) throw new Error("tmux list timed out");
+          return overrides.sessions ?? [];
+        },
         killTmuxSession: async (sessionName: string) => {
           if (overrides.killFails) throw new Error("tmux server went away");
           killed.push(sessionName);
@@ -378,20 +382,76 @@ describe("reapOrphanedClaudeTmuxRuntimes", () => {
     });
   });
 
-  test("still removes the runtime root when killing a session fails", async () => {
+  test("preserves the runtime root when killing fails so a later startup can retry", async () => {
     const dead = "env-kill-fails-000000";
-    const { options } = harness({
-      sessions: [tmuxSessionName(dead, "tab-1")],
+    const session = tmuxSessionName(dead, "tab-1");
+    const first = harness({
+      sessions: [session],
       killFails: true,
+    });
+    const second = harness({
+      sessions: [tmuxSessionName(dead, "tab-1")],
     });
 
     await withRuntimePrefix([dead], async (prefix) => {
-      const reaped = await reapOrphanedClaudeTmuxRuntimes({ ...options, runtimeRootPrefix: prefix });
+      const pending = await reapOrphanedClaudeTmuxRuntimes({
+        ...first.options,
+        runtimeRootPrefix: prefix,
+      });
+
+      expect(pending).toEqual([
+        { environmentId: dead, outcome: "retry-pending", killedSessions: [] },
+      ]);
+      expect(await fs.readdir(prefix)).toEqual([dead]);
+
+      const reaped = await reapOrphanedClaudeTmuxRuntimes({
+        ...second.options,
+        runtimeRootPrefix: prefix,
+      });
+      expect(reaped).toEqual([
+        { environmentId: dead, outcome: "reaped", killedSessions: [session] },
+      ]);
+      expect(second.killed).toEqual([session]);
+      expect(await fs.readdir(prefix)).toEqual([]);
+    });
+  });
+
+  test("preserves every orphan root when session listing fails", async () => {
+    const dead = "env-list-fails-000000";
+    const { options } = harness({ listFails: true });
+
+    await withRuntimePrefix([dead], async (prefix) => {
+      const reaped = await reapOrphanedClaudeTmuxRuntimes({
+        ...options,
+        runtimeRootPrefix: prefix,
+      });
 
       expect(reaped).toEqual([
-        { environmentId: dead, outcome: "reaped", killedSessions: [] },
+        { environmentId: dead, outcome: "retry-pending", killedSessions: [] },
       ]);
-      expect(await fs.readdir(prefix)).toEqual([]);
+      expect(await fs.readdir(prefix)).toEqual([dead]);
+    });
+  });
+
+  test("reports retry pending when removing a successfully reaped root fails", async () => {
+    const dead = "env-remove-fails-0000";
+    const session = tmuxSessionName(dead, "tab-1");
+    const { options, killed } = harness({ sessions: [session] });
+
+    await withRuntimePrefix([dead], async (prefix) => {
+      const reaped = await reapOrphanedClaudeTmuxRuntimes({
+        ...options,
+        runtimeRootPrefix: prefix,
+        removeRuntimeRoot: async () => {
+          throw new Error("filesystem busy");
+        },
+      });
+
+      expect(killed).toEqual([session]);
+      expect(reaped).toEqual([
+        { environmentId: dead, outcome: "retry-pending", killedSessions: [session] },
+      ]);
+      expect(await fs.readdir(prefix)).toEqual([dead]);
     });
   });
 

@@ -112,6 +112,10 @@ case "$command" in
     exit 0
     ;;
   kill-session)
+    if [ "\${FAKE_TMUX_FAIL_KILL:-}" = "1" ]; then
+      printf '%s\n' 'kill failed' >&2
+      exit 2
+    fi
     [ -n "$session_name" ] && rm -f "$FAKE_TMUX_ALIVE/$session_name" "$FAKE_TMUX_ALIVE/$session_name.mode"
     exit 0
     ;;
@@ -547,6 +551,230 @@ describe("Electron tmux backend command registration", () => {
       await expect(
         cleanupEnvironmentTmux(unreachable.id, context as unknown as CommandContext),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  test("a start queued behind environment teardown rejects the deletion tombstone", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      let storedEnvironment: Environment = environment;
+      const loadGate = deferred<Environment[]>();
+      let loadStarted = false;
+      const context = {
+        storage: {
+          getEnvironment: async () => storedEnvironment,
+          loadEnvironments: async () => {
+            loadStarted = true;
+            return loadGate.promise;
+          },
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-delete-race", environmentId: environment.id },
+        context,
+      );
+
+      const cleanup = cleanupEnvironmentTmux(
+        environment.id,
+        context as unknown as CommandContext,
+      );
+      await waitFor(() => loadStarted);
+
+      storedEnvironment = {
+        ...environment,
+        deletionRequestedAt: new Date().toISOString(),
+      };
+      const queuedStart = invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-after-delete", environmentId: environment.id },
+        context,
+      );
+      const queuedStartOutcome = queuedStart.then(
+        () => ({ error: null as Error | null }),
+        (error: unknown) => ({
+          error: error instanceof Error ? error : new Error(String(error)),
+        }),
+      );
+      loadGate.resolve([storedEnvironment]);
+
+      await expect(cleanup).resolves.toBeUndefined();
+      expect((await queuedStartOutcome).error?.message).toContain(
+        "is being deleted",
+      );
+      expect(await fs.readFile(log, "utf8")).not.toContain(
+        tmuxSessionName(environment.id, "tab-after-delete"),
+      );
+    });
+  });
+
+  test("environment teardown detaches active interactive terminal polling", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+          loadEnvironments: async () => [environment],
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-interactive-cleanup", environmentId: environment.id },
+        context,
+      );
+      const terminalSessionId = await invoke(
+        handlers,
+        "claude_tmux_create_interactive_terminal",
+        {
+          tabId: "tab-interactive-cleanup",
+          environmentId: environment.id,
+          cols: 120,
+          rows: 40,
+        },
+        context,
+      ) as string;
+      await invoke(
+        handlers,
+        "claude_tmux_start_interactive_terminal",
+        { terminalSessionId },
+        context,
+      );
+
+      await cleanupEnvironmentTmux(
+        environment.id,
+        context as unknown as CommandContext,
+      );
+
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_write_interactive_terminal",
+          { terminalSessionId, data: "after-delete" },
+          context,
+        ),
+      ).rejects.toThrow("interactive terminal session not found");
+    });
+  });
+
+  test("environment teardown preserves its runtime root when tmux killing fails", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+          loadEnvironments: async () => [environment],
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-kill-retry", environmentId: environment.id },
+        context,
+      );
+
+      const originalFailKill = process.env.FAKE_TMUX_FAIL_KILL;
+      process.env.FAKE_TMUX_FAIL_KILL = "1";
+      try {
+        await expect(
+          cleanupEnvironmentTmux(
+            environment.id,
+            context as unknown as CommandContext,
+          ),
+        ).rejects.toThrow("cleanup incomplete");
+        expect((await fs.stat(runtimeRoot)).isDirectory()).toBe(true);
+      } finally {
+        if (originalFailKill === undefined) delete process.env.FAKE_TMUX_FAIL_KILL;
+        else process.env.FAKE_TMUX_FAIL_KILL = originalFailKill;
+      }
+    });
+  });
+
+  test("environment teardown preserves retry state when environment loading fails", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+          loadEnvironments: async () => {
+            throw new Error("environment store unavailable");
+          },
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-load-failure", environmentId: environment.id },
+        context,
+      );
+
+      await expect(
+        cleanupEnvironmentTmux(
+          environment.id,
+          context as unknown as CommandContext,
+        ),
+      ).rejects.toThrow("cleanup incomplete");
+      expect((await fs.stat(runtimeRoot)).isDirectory()).toBe(true);
+    });
+  });
+
+  test("environment teardown retains the backup when restoring Claude settings fails", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot, worktree }) => {
+      const settingsPath = path.join(worktree, ".claude", "settings.local.json");
+      await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+      await fs.writeFile(settingsPath, JSON.stringify({ original: true }));
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+          loadEnvironments: async () => [environment],
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-settings-failure", environmentId: environment.id },
+        context,
+      );
+
+      await fs.rm(settingsPath);
+      await fs.mkdir(settingsPath);
+
+      await expect(
+        cleanupEnvironmentTmux(
+          environment.id,
+          context as unknown as CommandContext,
+        ),
+      ).rejects.toThrow("cleanup incomplete");
+      expect(
+        await fs.readFile(
+          path.join(runtimeRoot, "settings.local.json.orkestrator-v2-backup"),
+          "utf8",
+        ),
+      ).toContain("original");
     });
   });
 

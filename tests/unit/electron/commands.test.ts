@@ -1,7 +1,7 @@
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { execFile, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, promises as fs } from "node:fs";
+import { existsSync, promises as fs, readFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -529,6 +529,62 @@ async function startControllableHealthServer(
       ));
     }),
   };
+}
+
+async function startAuthenticatedContainerServer(
+  port: number,
+  options: {
+    isHealthy: () => boolean;
+    isAuthorized: (request: http.IncomingMessage) => boolean;
+  },
+): Promise<{ close: () => Promise<void> }> {
+  const server = http.createServer((request, response) => {
+    if (!options.isHealthy()) {
+      // A stopped container process refuses the connection. This lets the
+      // production reachability check distinguish it from a live 401.
+      request.socket.destroy();
+      return;
+    }
+    if (request.url === "/global/health") {
+      const suppliedCredential =
+        request.headers.authorization
+        || request.headers["x-orkestrator-claude-token"];
+      response.writeHead(
+        suppliedCredential && !options.isAuthorized(request) ? 401 : 200,
+      );
+      response.end();
+      return;
+    }
+    if (request.url === "/global/auth-check") {
+      response.writeHead(options.isAuthorized(request) ? 200 : 401);
+      response.end();
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+  return {
+    close: () => new Promise<void>((resolve, reject) => {
+      server.closeAllConnections();
+      server.close((error) => (
+        !error || (error as NodeJS.ErrnoException).code === "ERR_SERVER_NOT_RUNNING"
+          ? resolve()
+          : reject(error)
+      ));
+    }),
+  };
+}
+
+function readTestCredential(file: string): string {
+  try {
+    return readFileSync(file, "utf8").trim();
+  } catch {
+    return "";
+  }
 }
 
 async function requestOk(
@@ -4210,9 +4266,16 @@ exit 1
       const loadEntered = new Promise<void>((resolve) => {
         loadStarted = resolve;
       });
+      let loadCount = 0;
       context.storage.loadEnvironments = mock(async () => {
-        loadStarted();
-        await loadBlocked;
+        loadCount += 1;
+        // Only the reconciliation snapshot is stale and blocked. Environment
+        // deletion also loads the current environment set while cleaning tmux;
+        // blocking that independent lifecycle read deadlocks the test itself.
+        if (loadCount === 1) {
+          loadStarted();
+          await loadBlocked;
+        }
         return staleSnapshot;
       });
 
@@ -8341,7 +8404,7 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
-    bun -e 'const m=process.env.FAKE_CLAUDE_MODELS_JSON;require("node:http").createServer((q,s)=>{if(q.url==="/global/health"){s.writeHead(200,{"content-type":"application/json"});return s.end("{}")}if(q.url==="/config/models"){s.writeHead(200,{"content-type":"application/json","access-control-allow-origin":"*"});return s.end(m)}s.writeHead(404);s.end()}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    bun -e 'const m=process.env.FAKE_CLAUDE_MODELS_JSON;require("node:http").createServer((q,s)=>{if(q.url==="/global/health"||q.url==="/global/auth-check"){s.writeHead(200,{"content-type":"application/json"});return s.end("{}")}if(q.url==="/config/models"){s.writeHead(200,{"content-type":"application/json","access-control-allow-origin":"*"});return s.end(m)}s.writeHead(404);s.end()}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
     exit 0 ;;
 esac
@@ -8531,7 +8594,7 @@ case "$1" in
     esac
     token=$(printf '%s' "$*" | sed -n "s/.*CODEX_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
-    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"||q.url==="/global/auth-check"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
     exit 0 ;;
 esac
@@ -8606,7 +8669,7 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
-    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"||q.url==="/global/auth-check"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
     exit 0 ;;
 esac
@@ -8643,6 +8706,349 @@ exit 0
       else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
     }
   });
+
+  test("starts, replaces, and reuses an authenticated container OpenCode server", async () => {
+    const hostPort = await reserveFreePort();
+    const stateDir = await createTempDir("ork-opencode-container-auth-");
+    const tokenFile = path.join(stateDir, "persisted-password");
+    const liveTokenFile = path.join(stateDir, "live-password");
+    const healthyFile = path.join(stateDir, "healthy");
+    const environment = createEnvironment({
+      id: "env-container-opencode-auth",
+      environmentType: "containerized",
+      containerId: "container-opencode-auth",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const previous = {
+      hostPort: process.env.FAKE_BRIDGE_HOST_PORT,
+      tokenFile: process.env.FAKE_BRIDGE_TOKEN_FILE,
+      liveTokenFile: process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE,
+      healthyFile: process.env.FAKE_BRIDGE_HEALTHY_FILE,
+    };
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+    process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE = liveTokenFile;
+    process.env.FAKE_BRIDGE_HEALTHY_FILE = healthyFile;
+
+    const bridge = await startAuthenticatedContainerServer(hostPort, {
+      isHealthy: () => existsSync(healthyFile),
+      isAuthorized: (request) =>
+        request.headers.authorization === `Basic ${
+          Buffer.from(`opencode:${readTestCredential(liveTokenFile)}`).toString("base64")
+        }`,
+    });
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/opencode-server-password"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *"pkill -f '[o]pencode serve'"*)
+        rm -f "$FAKE_BRIDGE_HEALTHY_FILE" "$FAKE_BRIDGE_TOKEN_FILE"
+        exit 0 ;;
+    esac
+    token=$(printf '%s' "$*" | sed -n "s/.*OPENCODE_SERVER_PASSWORD='\\([^']*\\)'.*/\\1/p")
+    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
+    printf '%s' "$token" > "$FAKE_BRIDGE_LIVE_TOKEN_FILE"
+    : > "$FAKE_BRIDGE_HEALTHY_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        const first = await commands.get("start_opencode_server")?.(
+          { containerId: "container-opencode-auth" },
+          context,
+        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        expect(first).toMatchObject({ hostPort, wasRunning: false });
+        expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+        // A reachable legacy process without a readable password is replaced,
+        // rather than being handed to the renderer unauthenticated.
+        await fs.rm(tokenFile);
+        const legacyReplacement = await commands.get("start_opencode_server")?.(
+          { containerId: "container-opencode-auth" },
+          context,
+        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        expect(legacyReplacement).toMatchObject({ hostPort, wasRunning: false });
+        expect(legacyReplacement.authToken).not.toBe(first.authToken);
+
+        const stalePassword = "S".repeat(43);
+        await fs.writeFile(tokenFile, stalePassword);
+        await fs.writeFile(liveTokenFile, "L".repeat(43));
+        const replacement = await commands.get("start_opencode_server")?.(
+          { containerId: "container-opencode-auth" },
+          context,
+        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        expect(replacement).toMatchObject({ hostPort, wasRunning: false });
+        expect(replacement.authToken).not.toBe(stalePassword);
+
+        await expect(
+          commands.get("start_opencode_server")?.(
+            { containerId: "container-opencode-auth" },
+            context,
+          ),
+        ).resolves.toEqual({
+          hostPort,
+          wasRunning: true,
+          authToken: replacement.authToken,
+        });
+
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(
+          execLog.split("\n").filter((line) => line.startsWith("exec -d ")),
+        ).toHaveLength(3);
+        expect(execLog).toContain("pkill -f '[o]pencode serve'");
+      });
+    } finally {
+      await bridge.close();
+      for (const [key, value] of Object.entries(previous)) {
+        const envName = {
+          hostPort: "FAKE_BRIDGE_HOST_PORT",
+          tokenFile: "FAKE_BRIDGE_TOKEN_FILE",
+          liveTokenFile: "FAKE_BRIDGE_LIVE_TOKEN_FILE",
+          healthyFile: "FAKE_BRIDGE_HEALTHY_FILE",
+        }[key]!;
+        if (value === undefined) delete process.env[envName];
+        else process.env[envName] = value;
+      }
+    }
+  });
+
+  test("replaces a healthy Claude bridge when its persisted token does not authenticate", async () => {
+    const hostPort = await reserveFreePort();
+    const stateDir = await createTempDir("ork-claude-stale-identity-");
+    const tokenFile = path.join(stateDir, "persisted-token");
+    const liveTokenFile = path.join(stateDir, "live-token");
+    const healthyFile = path.join(stateDir, "healthy");
+    const staleToken = "S".repeat(43);
+    await fs.writeFile(tokenFile, staleToken);
+    await fs.writeFile(liveTokenFile, "L".repeat(43));
+    await fs.writeFile(healthyFile, "");
+
+    const environment = createEnvironment({
+      id: "env-container-claude-stale",
+      environmentType: "containerized",
+      containerId: "container-claude-stale",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const previous = {
+      hostPort: process.env.FAKE_BRIDGE_HOST_PORT,
+      tokenFile: process.env.FAKE_BRIDGE_TOKEN_FILE,
+      liveTokenFile: process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE,
+      healthyFile: process.env.FAKE_BRIDGE_HEALTHY_FILE,
+    };
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+    process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE = liveTokenFile;
+    process.env.FAKE_BRIDGE_HEALTHY_FILE = healthyFile;
+
+    const bridge = await startAuthenticatedContainerServer(hostPort, {
+      isHealthy: () => existsSync(healthyFile),
+      isAuthorized: (request) =>
+        request.headers["x-orkestrator-claude-token"]
+          === readTestCredential(liveTokenFile),
+    });
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/claude-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *"pkill -f '[c]laude-bridge/dist/index.js'"*)
+        rm -f "$FAKE_BRIDGE_HEALTHY_FILE"
+        exit 0 ;;
+    esac
+    token=$(printf '%s' "$*" | sed -n "s/.*CLAUDE_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
+    printf '%s' "$token" > "$FAKE_BRIDGE_LIVE_TOKEN_FILE"
+    : > "$FAKE_BRIDGE_HEALTHY_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        await expect(
+          commands.get("get_claude_server_status")?.(
+            { containerId: "container-claude-stale" },
+            context,
+          ),
+        ).resolves.toEqual({ running: true, hostPort });
+
+        const result = await commands.get("start_claude_server")?.(
+          { containerId: "container-claude-stale" },
+          context,
+        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+
+        expect(result).toMatchObject({ hostPort, wasRunning: false });
+        expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(result.authToken).not.toBe(staleToken);
+        expect(readTestCredential(liveTokenFile)).toBe(result.authToken);
+        expect(await fs.readFile(logs.exec, "utf8")).toContain(
+          "pkill -f '[c]laude-bridge/dist/index.js'",
+        );
+      });
+    } finally {
+      await bridge.close();
+      for (const [key, value] of Object.entries(previous)) {
+        const envName = {
+          hostPort: "FAKE_BRIDGE_HOST_PORT",
+          tokenFile: "FAKE_BRIDGE_TOKEN_FILE",
+          liveTokenFile: "FAKE_BRIDGE_LIVE_TOKEN_FILE",
+          healthyFile: "FAKE_BRIDGE_HEALTHY_FILE",
+        }[key]!;
+        if (value === undefined) delete process.env[envName];
+        else process.env[envName] = value;
+      }
+    }
+  });
+
+  test("authenticates the persisted Claude token when a bridge arrives between health checks", async () => {
+    const hostPort = await reserveFreePort();
+    const tokenFile = path.join(
+      await createTempDir("ork-claude-late-identity-"),
+      "token",
+    );
+    const persistedToken = "P".repeat(43);
+    await fs.writeFile(tokenFile, persistedToken);
+    const environment = createEnvironment({
+      id: "env-container-claude-late",
+      environmentType: "containerized",
+      containerId: "container-claude-late",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+    const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+
+    let healthChecks = 0;
+    const bridge = await startAuthenticatedContainerServer(hostPort, {
+      isHealthy: () => (healthChecks += 1) > 1,
+      isAuthorized: (request) =>
+        request.headers["x-orkestrator-claude-token"] === persistedToken,
+    });
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/claude-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE"
+        exit 0 ;;
+    esac
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        await expect(
+          commands.get("start_claude_server")?.(
+            { containerId: "container-claude-late" },
+            context,
+          ),
+        ).resolves.toEqual({
+          hostPort,
+          wasRunning: true,
+          authToken: persistedToken,
+        });
+        expect(await fs.readFile(logs.exec, "utf8")).not.toContain("exec -d ");
+      });
+    } finally {
+      await bridge.close();
+      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+      if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
+      else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
+    }
+  });
+
+  test.each([
+    [
+      "Claude",
+      "start_claude_server",
+      "container-claude-redaction",
+      "CLAUDE_BRIDGE_TOKEN",
+    ],
+    [
+      "OpenCode",
+      "start_opencode_server",
+      "container-opencode-redaction",
+      "OPENCODE_SERVER_PASSWORD",
+    ],
+  ] as const)(
+    "redacts a generated %s container credential when detached startup fails",
+    async (_label, commandName, containerId, credentialName) => {
+      const hostPort = await reserveFreePort();
+      const environment = createEnvironment({
+        id: `env-${containerId}`,
+        environmentType: "containerized",
+        containerId,
+        status: "running",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+      process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+      const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/claude-bridge-token"*|*"cat /tmp/opencode-server-password"*)
+        exit 0 ;;
+    esac
+    exit 9 ;;
+esac
+exit 0
+`;
+
+      try {
+        await withFakeDocker(dockerScript, async (logs) => {
+          const failure = await commands.get(commandName)?.(
+            { containerId },
+            context,
+          ).then(() => null, (error: unknown) => error as Error);
+
+          expect(failure).toBeInstanceOf(Error);
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          const token = execLog.match(
+            new RegExp(`${credentialName}='([^']+)'`),
+          )?.[1];
+          expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+          expect(failure!.message).not.toContain(token!);
+          expect(failure!.message).toContain("[REDACTED]");
+        });
+      } finally {
+        if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+        else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+      }
+    },
+  );
 
   test("defaults a malformed in-container Codex thread limit before shell interpolation", async () => {
     const hostPort = await reserveFreePort();
@@ -8901,6 +9307,9 @@ exit 0
     const bridge = await startControllableHealthServer(hostPort, () => true);
     try {
       await expect(commandTesting.waitForUnhealthy(hostPort, 2)).rejects.toThrow(
+        `Server on port ${hostPort} did not stop`,
+      );
+      await expect(commandTesting.waitForHttpServerExit(hostPort, 2)).rejects.toThrow(
         `Server on port ${hostPort} did not stop`,
       );
     } finally {

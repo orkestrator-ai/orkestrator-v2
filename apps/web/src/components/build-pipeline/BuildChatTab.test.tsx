@@ -13,17 +13,18 @@ import {
 // ---------------------------------------------------------------------------
 
 // backend commands
+const CLAUDE_AUTH_TOKEN = "claude-build-secret";
 const mockStartClaudeServer = mock(() =>
-  Promise.resolve({ hostPort: 9999 })
+  Promise.resolve({ hostPort: 9999, authToken: CLAUDE_AUTH_TOKEN })
 );
 const mockGetClaudeServerStatus = mock(() =>
-  Promise.resolve({ running: false, hostPort: null })
+  Promise.resolve({ running: false, hostPort: null, authToken: undefined })
 );
 const mockStartLocalClaudeServer = mock(() =>
-  Promise.resolve({ port: 8888, pid: 1234 })
+  Promise.resolve({ port: 8888, pid: 1234, authToken: CLAUDE_AUTH_TOKEN })
 );
 const mockGetLocalClaudeServerStatus = mock(() =>
-  Promise.resolve({ running: false, port: null, pid: null })
+  Promise.resolve({ running: false, port: null, pid: null, authToken: undefined })
 );
 const mockGetProjectNotes = mock(() =>
   Promise.resolve({ projectId: "project-1", notes: "" })
@@ -50,7 +51,10 @@ mock.module("@/lib/backend", () => ({
 }));
 
 // Claude client
-const mockCreateClient = mock(() => ({ baseUrl: "http://127.0.0.1:9999" }));
+const mockCreateClient = mock((baseUrl: string, authToken?: string) => ({
+  baseUrl,
+  authToken,
+}));
 const mockCheckHealth = mock(() => Promise.resolve(true));
 const mockGetModels = mock(() => Promise.resolve([]));
 const mockSubscribeToEvents = mock(() => (async function* () {})());
@@ -505,16 +509,16 @@ describe("BuildChatTab", () => {
 
     // Reset default implementations
     mockGetClaudeServerStatus.mockImplementation(() =>
-      Promise.resolve({ running: false, hostPort: null })
+      Promise.resolve({ running: false, hostPort: null, authToken: undefined })
     );
     mockStartClaudeServer.mockImplementation(() =>
-      Promise.resolve({ hostPort: 9999 })
+      Promise.resolve({ hostPort: 9999, authToken: CLAUDE_AUTH_TOKEN })
     );
     mockGetLocalClaudeServerStatus.mockImplementation(() =>
-      Promise.resolve({ running: false, port: null, pid: null })
+      Promise.resolve({ running: false, port: null, pid: null, authToken: undefined })
     );
     mockStartLocalClaudeServer.mockImplementation(() =>
-      Promise.resolve({ port: 8888, pid: 1234 })
+      Promise.resolve({ port: 8888, pid: 1234, authToken: CLAUDE_AUTH_TOKEN })
     );
     mockCheckHealth.mockImplementation(() => Promise.resolve(true));
     mockGetModels.mockImplementation(() => Promise.resolve([]));
@@ -742,11 +746,19 @@ describe("BuildChatTab", () => {
       await waitFor(() => {
         expect(mockStartClaudeServer).toHaveBeenCalledWith(CONTAINER_ID);
       });
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        CLAUDE_AUTH_TOKEN,
+      );
     });
 
     test("reuses existing server if already running", async () => {
       mockGetClaudeServerStatus.mockImplementation(() =>
-        Promise.resolve({ running: true, hostPort: 7777 } as any)
+        Promise.resolve({
+          running: true,
+          hostPort: 7777,
+          authToken: CLAUDE_AUTH_TOKEN,
+        } as any)
       );
       seedPipeline("waiting-for-setup");
       seedEnvironment({ isLocal: false, workspaceReady: true });
@@ -759,6 +771,44 @@ describe("BuildChatTab", () => {
 
       // Should NOT try to start a new server
       expect(mockStartClaudeServer).not.toHaveBeenCalled();
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:7777",
+        CLAUDE_AUTH_TOKEN,
+      );
+    });
+
+    test("restarts a reachable tokenless server instead of reusing it", async () => {
+      mockGetClaudeServerStatus.mockResolvedValue({
+        running: true,
+        hostPort: 7777,
+        authToken: undefined,
+      } as any);
+      seedPipeline("waiting-for-setup");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockStartClaudeServer).toHaveBeenCalledWith(CONTAINER_ID);
+      });
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        CLAUDE_AUTH_TOKEN,
+      );
+    });
+
+    test("fails closed when startup cannot provide a bridge token", async () => {
+      mockStartClaudeServer.mockResolvedValue({
+        hostPort: 9999,
+        authToken: undefined,
+      } as any);
+      seedPipeline("waiting-for-setup");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      expect(await screen.findByText("Connection Failed")).toBeTruthy();
+      expect(mockCreateClient).not.toHaveBeenCalled();
     });
 
     test("throws when containerId is missing", async () => {
@@ -841,6 +891,10 @@ describe("BuildChatTab", () => {
       await waitFor(() => {
         expect(mockStartLocalClaudeServer).toHaveBeenCalledWith(ENV_ID);
       });
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:8888",
+        CLAUDE_AUTH_TOKEN,
+      );
     });
 
     test("does not start local server while setup scripts are running", async () => {
@@ -925,7 +979,11 @@ describe("BuildChatTab", () => {
         }),
       );
       mockGetClaudeServerStatus.mockImplementation(() =>
-        Promise.resolve({ running: true, hostPort: 9999 } as any)
+        Promise.resolve({
+          running: true,
+          hostPort: 9999,
+          authToken: CLAUDE_AUTH_TOKEN,
+        } as any)
       );
       seedPipeline("waiting-for-setup");
       seedEnvironment({ isLocal: false, workspaceReady: true });
@@ -948,7 +1006,10 @@ describe("BuildChatTab", () => {
       });
 
       await waitFor(() => {
-        expect(mockAbortSession).toHaveBeenCalledWith({ baseUrl: "http://127.0.0.1:9999" }, "late-session");
+        expect(mockAbortSession).toHaveBeenCalledWith(
+          expect.objectContaining({ baseUrl: "http://127.0.0.1:9999" }),
+          "late-session",
+        );
       });
       expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions).toHaveLength(0);
 
@@ -957,7 +1018,7 @@ describe("BuildChatTab", () => {
       await waitFor(() => {
         expect(mockCreateSession).toHaveBeenCalledTimes(2);
         expect(mockSendPrompt).toHaveBeenCalledWith(
-          { baseUrl: "http://127.0.0.1:9999" },
+          expect.objectContaining({ baseUrl: "http://127.0.0.1:9999" }),
           SESSION_ID,
           expect.stringContaining("Test task"),
           {

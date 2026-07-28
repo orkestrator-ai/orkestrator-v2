@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { TransformStream } from "node:stream/web";
+import type { AddressInfo } from "node:net";
+import { request as httpRequest } from "node:http";
 
 // hono's `streamSSE` constructs a `TransformStream` whose `writable` lacks
 // `getWriter` in Bun's test runtime, so the subscribe route would 500 — same
@@ -9,11 +11,77 @@ globalThis.TransformStream = TransformStream as typeof globalThis.TransformStrea
 // Import the composition root without binding a real port; auth stays enabled
 // unless a test overrides it explicitly through `setBridgeAuthForTesting`.
 process.env.CLAUDE_BRIDGE_NO_SERVER = "1";
+const AUTH_TOKEN = "test-claude-bridge-token";
+process.env.CLAUDE_BRIDGE_TOKEN = AUTH_TOKEN;
 
 const { app, __testing } = await import("./index.js");
-const AUTH_TOKEN = "test-claude-bridge-token";
+
+async function requestBridge(
+  url: string,
+  options: { method?: string; headers?: Record<string, string> } = {},
+): Promise<{ status: number; headers: Headers; json: () => unknown }> {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(url, options, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.once("error", reject);
+      response.once("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        const headers = new Headers();
+        for (const [name, value] of Object.entries(response.headers)) {
+          if (Array.isArray(value)) {
+            for (const entry of value) headers.append(name, entry);
+          } else if (value !== undefined) {
+            headers.set(name, value);
+          }
+        }
+        resolve({
+          status: response.statusCode ?? 0,
+          headers,
+          json: () => JSON.parse(body),
+        });
+      });
+    });
+    request.once("error", reject);
+    request.end();
+  });
+}
+
+async function withLiveBridge<T>(
+  run: (baseUrl: string) => Promise<T>,
+): Promise<T> {
+  const server = __testing.startBridgeServerForTesting({
+    PORT: "0",
+    HOSTNAME: "127.0.0.1",
+  }) as {
+    address: () => AddressInfo | string | null;
+    once: (event: "listening", listener: () => void) => void;
+    close: (callback: (error?: Error) => void) => void;
+  };
+  if (!server.address()) {
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+  }
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Claude bridge test server did not bind a TCP address");
+  }
+  try {
+    return await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+  }
+}
 
 describe("bridge authentication and origin policy", () => {
+  test("captures the token once and removes it from the environment inherited by children", async () => {
+    expect(process.env.CLAUDE_BRIDGE_TOKEN).toBeUndefined();
+    expect((await app.request("/global/auth-check", {
+      headers: { "X-Orkestrator-Claude-Token": AUTH_TOKEN },
+    })).status).toBe(200);
+  });
+
   test("protects data routes while leaving only the minimal process health public", async () => {
     __testing.setBridgeAuthForTesting(AUTH_TOKEN);
     try {
@@ -57,10 +125,50 @@ describe("bridge authentication and origin policy", () => {
     }
   });
 
-  // The middleware's 403 branch is not driven through `app.request` here: the
-  // test runtime's Request implementation treats `Origin` as a forbidden header
-  // and silently drops it, so the origin policy is asserted on the function the
-  // middleware calls — same as codex-bridge's index-routes tests.
+  test("rejects an untrusted Origin in the actual middleware before authentication", async () => {
+    __testing.setBridgeAuthForTesting(AUTH_TOKEN);
+    try {
+      await withLiveBridge(async (baseUrl) => {
+        const response = await requestBridge(`${baseUrl}/global/auth-check`, {
+          headers: {
+            Origin: "https://attacker.example",
+            "X-Orkestrator-Claude-Token": AUTH_TOKEN,
+          },
+        });
+        expect(response.status).toBe(403);
+        expect(await response.json()).toEqual({ error: "Origin is not allowed" });
+
+        const preflight = await requestBridge(`${baseUrl}/session/list`, {
+          method: "OPTIONS",
+          headers: { Origin: "https://attacker.example" },
+        });
+        expect(preflight.status).toBe(403);
+      });
+    } finally {
+      __testing.setBridgeAuthForTesting();
+    }
+  });
+
+  test("echoes an allowed local Origin through the actual middleware", async () => {
+    __testing.setBridgeAuthForTesting(AUTH_TOKEN);
+    try {
+      const origin = "http://127.0.0.1:5173";
+      await withLiveBridge(async (baseUrl) => {
+        const response = await requestBridge(`${baseUrl}/global/auth-check`, {
+          headers: {
+            Origin: origin,
+            "X-Orkestrator-Claude-Token": AUTH_TOKEN,
+          },
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("Access-Control-Allow-Origin")).toBe(origin);
+        expect(response.headers.get("Vary")).toBe("Origin");
+      });
+    } finally {
+      __testing.setBridgeAuthForTesting();
+    }
+  });
+
   test("answers preflight without a token", async () => {
     __testing.setBridgeAuthForTesting(AUTH_TOKEN);
     try {

@@ -593,6 +593,44 @@ describe("OpenCodeBuildChatTab", () => {
     delete window.orkestratorGateway;
   });
 
+  test("evicts a stale cached client and recreates its event subscription", async () => {
+    seedPipeline("building", "running");
+    seedOpenCodeStore(false);
+    const cachedClient = useOpenCodeStore.getState().clients.get(ENV_ID);
+    const staleSubscription = new AbortController();
+    useOpenCodeStore.setState({
+      eventSubscriptions: new Map([
+        [
+          ENV_ID,
+          {
+            abortController: staleSubscription,
+            stream: null,
+            isActive: true,
+          },
+        ],
+      ]),
+    });
+    mockCreateClient.mockClear();
+    mockCheckClientHealth.mockResolvedValueOnce(false);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(mockCheckClientHealth).toHaveBeenCalledWith(cachedClient);
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        undefined,
+        "opencode-secret",
+      );
+    });
+    expect(staleSubscription.signal.aborted).toBe(true);
+    expect(useOpenCodeStore.getState().clients.get(ENV_ID)).not.toBe(cachedClient);
+    expect(mockCheckHealth).toHaveBeenCalledWith(
+      "http://127.0.0.1:9999",
+      "opencode-secret",
+    );
+  });
+
   test("stopping a running pipeline pauses it instead of failing it", async () => {
     let resolveAbort: ((value: boolean) => void) | undefined;
     mockAbortSession.mockImplementationOnce(

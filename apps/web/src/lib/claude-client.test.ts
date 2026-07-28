@@ -84,6 +84,30 @@ describe("claude-client", () => {
 
       expect(c.baseUrl).toBe(`${window.location.origin}/__orkestrator/proxy/loopback/5000`);
     });
+
+    test("adds the Claude bridge credential to REST requests", async () => {
+      const requests: Array<{ url: string; headers: Headers }> = [];
+      globalThis.fetch = mock(async (input, init) => {
+        requests.push({
+          url: String(input),
+          headers: new Headers(init?.headers),
+        });
+        return new Response(JSON.stringify({ models: [] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch;
+
+      const authenticated = createClient(
+        "http://127.0.0.1:5000",
+        "claude-secret",
+      );
+      await getModels(authenticated);
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.url).toBe("http://127.0.0.1:5000/config/models");
+      expect(requests[0]?.headers.get("x-orkestrator-claude-token"))
+        .toBe("claude-secret");
+    });
   });
 
   describe("checkHealth", () => {
@@ -945,6 +969,23 @@ describe("claude-client", () => {
       });
       await iterator.return?.();
       expect(source.close).toHaveBeenCalledTimes(1);
+    });
+
+    test("adds the bridge credential to the EventSource query", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const authenticated = createClient(
+        "http://127.0.0.1:4001",
+        "claude secret/with symbols",
+      );
+      const iterator = subscribeToEvents(authenticated)[Symbol.asyncIterator]();
+
+      const sourceUrl = new URL(MockEventSource.latest!.url);
+      expect(sourceUrl.pathname).toBe("/event/subscribe");
+      expect(sourceUrl.searchParams.get("token")).toBe(
+        "claude secret/with symbols",
+      );
+
+      await iterator.return?.();
     });
 
     test("rejects a pending read on connection failure", async () => {

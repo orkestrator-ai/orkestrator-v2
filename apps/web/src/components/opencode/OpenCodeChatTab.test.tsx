@@ -1023,6 +1023,49 @@ describe("OpenCodeChatTab", () => {
     );
   });
 
+  test("applies pending requests when only another session changes during hydration", async () => {
+    const questions = deferred<QuestionRequest[]>();
+    mockGetPendingQuestions.mockImplementation(() => questions.promise);
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(mockGetPendingQuestions).toHaveBeenCalled());
+
+    const unrelatedQuestion: QuestionRequest = {
+      id: "other-session-question",
+      sessionId: "session-2",
+      questions: [],
+    };
+    act(() => {
+      useOpenCodeStore.getState().addPendingQuestion(unrelatedQuestion);
+    });
+
+    const targetQuestion: QuestionRequest = {
+      id: "rehydrated-question",
+      sessionId: "session-1",
+      questions: [],
+    };
+    await act(async () => {
+      questions.resolve([targetQuestion]);
+      await questions.promise;
+    });
+
+    await waitFor(() => {
+      expect(
+        useOpenCodeStore.getState().pendingQuestions.get(targetQuestion.id),
+      ).toEqual(targetQuestion);
+    });
+    expect(
+      useOpenCodeStore.getState().pendingQuestions.get(unrelatedQuestion.id),
+    ).toEqual(unrelatedQuestion);
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
   test("does not overwrite a live event with an older refresh snapshot", async () => {
     let resolveMessages!: (messages: NativeMessage[]) => void;
     const messagesPromise = new Promise<NativeMessage[]>((resolve) => {

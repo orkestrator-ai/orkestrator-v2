@@ -118,6 +118,45 @@ interface OpenCodeChatTabProps {
 
 type ConnectionState = "connecting" | "connected" | "error";
 
+type SessionPendingRequests = {
+  questions: Map<string, QuestionRequest>;
+  permissions: Map<string, PermissionRequest>;
+};
+
+function readSessionPendingRequests(sessionId: string): SessionPendingRequests {
+  const state = useOpenCodeStore.getState();
+  const questions = new Map<string, QuestionRequest>();
+  for (const question of state.pendingQuestions.values()) {
+    if (question.sessionId === sessionId) questions.set(question.id, question);
+  }
+  const permissions = new Map<string, PermissionRequest>();
+  for (const permission of state.pendingPermissions.values()) {
+    if (permission.sessionId === sessionId) permissions.set(permission.id, permission);
+  }
+  return { questions, permissions };
+}
+
+function pendingRequestMapChanged<T>(
+  before: Map<string, T>,
+  after: Map<string, T>,
+): boolean {
+  if (before.size !== after.size) return true;
+  for (const [id, value] of before) {
+    if (after.get(id) !== value) return true;
+  }
+  return false;
+}
+
+function sessionPendingRequestsChanged(
+  before: SessionPendingRequests,
+  after: SessionPendingRequests,
+): boolean {
+  return (
+    pendingRequestMapChanged(before.questions, after.questions)
+    || pendingRequestMapChanged(before.permissions, after.permissions)
+  );
+}
+
 const EMPTY_MODEL_PREFERENCES = EMPTY_OPENCODE_MODEL_PREFERENCES;
 
 const EMPTY_SLASH_COMMANDS: OpenCodeSlashCommand[] = [];
@@ -600,23 +639,7 @@ export function OpenCodeChatTab({
         shouldApply?: () => boolean;
       } = {},
     ): Promise<boolean> => {
-      const stateBeforeSync = useOpenCodeStore.getState();
-      const questionsBeforeSync = stateBeforeSync.pendingQuestions;
-      const permissionsBeforeSync = stateBeforeSync.pendingPermissions;
-      const existingQuestionIds = new Set<string>();
-      const existingPermissionIds = new Set<string>();
-
-      for (const existingQuestion of questionsBeforeSync.values()) {
-        if (existingQuestion.sessionId === sessionId) {
-          existingQuestionIds.add(existingQuestion.id);
-        }
-      }
-
-      for (const existingPermission of permissionsBeforeSync.values()) {
-        if (existingPermission.sessionId === sessionId) {
-          existingPermissionIds.add(existingPermission.id);
-        }
-      }
+      const pendingBeforeSync = readSessionPendingRequests(sessionId);
 
       const [questions, permissions] = await Promise.all([
         getPendingQuestions(sdkClient, { throwOnError: options.throwOnError }),
@@ -625,10 +648,15 @@ export function OpenCodeChatTab({
       if (options.shouldApply && !options.shouldApply()) return false;
 
       const stateAfterSync = useOpenCodeStore.getState();
-      const pendingStateChanged =
-        stateAfterSync.pendingQuestions !== questionsBeforeSync ||
-        stateAfterSync.pendingPermissions !== permissionsBeforeSync;
-      if (pendingStateChanged) {
+      if (
+        stateAfterSync.clients.get(environmentId) !== sdkClient
+        || stateAfterSync.sessions.get(sessionKey)?.sessionId !== sessionId
+      ) {
+        return false;
+      }
+
+      const pendingAfterSync = readSessionPendingRequests(sessionId);
+      if (sessionPendingRequestsChanged(pendingBeforeSync, pendingAfterSync)) {
         if (options.throwOnStale ?? options.throwOnError) {
           throw new Error(
             "OpenCode pending requests changed while refreshing; try again",
@@ -651,13 +679,13 @@ export function OpenCodeChatTab({
         addPendingPermission(permission);
       }
 
-      for (const existingQuestionId of existingQuestionIds) {
+      for (const existingQuestionId of pendingBeforeSync.questions.keys()) {
         if (!questionIds.has(existingQuestionId)) {
           removePendingQuestion(existingQuestionId);
         }
       }
 
-      for (const existingPermissionId of existingPermissionIds) {
+      for (const existingPermissionId of pendingBeforeSync.permissions.keys()) {
         if (!permissionIds.has(existingPermissionId)) {
           removePendingPermission(existingPermissionId);
         }
@@ -668,8 +696,10 @@ export function OpenCodeChatTab({
     [
       addPendingPermission,
       addPendingQuestion,
+      environmentId,
       removePendingPermission,
       removePendingQuestion,
+      sessionKey,
     ],
   );
 

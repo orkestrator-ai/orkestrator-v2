@@ -3455,6 +3455,10 @@ function openCodeHealthHeaders(password: string): Record<string, string> {
   };
 }
 
+function claudeBridgeAuthHeaders(token: string): Record<string, string> {
+  return { "X-Orkestrator-Claude-Token": token };
+}
+
 function releaseLocalServerOwnership(
   key: string,
   child: ChildProcessWithoutNullStreams,
@@ -4935,17 +4939,32 @@ async function startContainerClaudeServer(
       export CLAUDE_BRIDGE_TOKEN=${quoteShell(authToken)}
       setsid bun /opt/claude-bridge/dist/index.js > /tmp/claude-bridge.log 2>&1 &
     `, [authToken]);
+    if (!started.wasRunning) {
+      await waitForHealth(
+        started.hostPort,
+        "/global/auth-check",
+        75,
+        claudeBridgeAuthHeaders(authToken),
+      );
+    }
     return { ...started, authToken };
   };
 
   const hostPort = await getHostPort(containerId, CLAUDE_BRIDGE_PORT);
   if (hostPort && await checkHttpHealth(hostPort)) {
     const persistedToken = await readPersistedToken();
-    if (persistedToken) {
+    if (
+      persistedToken
+      && await checkHttpHealth(
+        hostPort,
+        "/global/auth-check",
+        claudeBridgeAuthHeaders(persistedToken),
+      )
+    ) {
       return { hostPort, wasRunning: true, authToken: persistedToken };
     }
-    // A bridge from before per-process authentication cannot safely serve the
-    // renderer. Replace it once, then persist the new token for later starts.
+    // A bridge from before per-process authentication, or one whose live token
+    // differs from the persisted file, cannot safely serve the renderer.
     await replaceRunningBridge(hostPort);
   }
 
@@ -4956,7 +4975,16 @@ async function startContainerClaudeServer(
   // bridge arrived late). The fresh token was never written, so return the
   // token that bridge actually holds — or replace the bridge if it has none.
   const persistedToken = await readPersistedToken();
-  if (persistedToken) return { ...started, authToken: persistedToken };
+  if (
+    persistedToken
+    && await checkHttpHealth(
+      started.hostPort,
+      "/global/auth-check",
+      claudeBridgeAuthHeaders(persistedToken),
+    )
+  ) {
+    return { ...started, authToken: persistedToken };
+  }
   await replaceRunningBridge(started.hostPort);
   return startWithFreshToken();
 }
@@ -6060,13 +6088,23 @@ export function createCommandRegistry(
     const id = asString(containerId, "containerId");
     const hostPort = await getHostPort(id, CLAUDE_BRIDGE_PORT);
     const running = hostPort ? await checkHttpHealth(hostPort) : false;
-    const authToken = running
+    const persistedToken = running
       ? (await dockerExec(id, "cat /tmp/claude-bridge-token 2>/dev/null || true")).trim()
       : "";
+    const authToken =
+      running
+      && BRIDGE_TOKEN_PATTERN.test(persistedToken)
+      && await checkHttpHealth(
+        hostPort!,
+        "/global/auth-check",
+        claudeBridgeAuthHeaders(persistedToken),
+      )
+        ? persistedToken
+        : "";
     return {
       running,
       hostPort,
-      ...(BRIDGE_TOKEN_PATTERN.test(authToken) ? { authToken } : {}),
+      ...(authToken ? { authToken } : {}),
     };
   });
   register("get_claude_server_log", ({ containerId }) =>
@@ -6914,6 +6952,7 @@ export const __testing = {
     return localServerProcesses.get(key);
   },
   releaseLocalServerOwnership,
+  waitForHttpServerExit,
   waitForUnhealthy,
   setTerminateProcessTree(
     implementation: typeof terminateProcessTree,

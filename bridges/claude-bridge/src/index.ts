@@ -23,8 +23,13 @@ const BRIDGE_TOKEN_ENV = "CLAUDE_BRIDGE_TOKEN";
 const BRIDGE_ALLOWED_ORIGINS_ENV = "CLAUDE_BRIDGE_ALLOWED_ORIGINS";
 // A missing or blank token env var falls back to a random token nobody holds:
 // the bridge stays fail-closed instead of fail-open. Same policy as codex-bridge.
+const configuredBridgeAuthToken = process.env[BRIDGE_TOKEN_ENV]?.trim();
 let bridgeAuthToken =
-  process.env[BRIDGE_TOKEN_ENV]?.trim() || randomBytes(32).toString("base64url");
+  configuredBridgeAuthToken || randomBytes(32).toString("base64url");
+// The token is bridge-local authentication material, not configuration for
+// SDK/CLI children. Capture it once and remove it before any later subprocess
+// can inherit the bridge credential through process.env.
+delete process.env[BRIDGE_TOKEN_ENV];
 let bridgeAuthEnabledOverrideForTesting: boolean | null = null;
 
 function isBridgeAuthEnabled(): boolean {

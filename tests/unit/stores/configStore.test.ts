@@ -65,6 +65,55 @@ describe("configStore", () => {
     expect(state.config).toEqual(newConfig);
   });
 
+  test("setConfig preserves state and config identity for equal data", () => {
+    const before = useConfigStore.getState();
+    const equalConfig = JSON.parse(JSON.stringify(before.config));
+
+    before.setConfig(equalConfig);
+
+    const after = useConfigStore.getState();
+    expect(after).toBe(before);
+    expect(after.config).toBe(before.config);
+  });
+
+  test("setConfig ignores a config whose keys arrive in a different order", () => {
+    // A serialized compare is key-order sensitive, so a backend snapshot that
+    // reordered its keys would republish identical data and rerender every
+    // subscriber.
+    const before = useConfigStore.getState();
+    const reorderKeys = <T extends object>(value: T): T =>
+      Object.fromEntries(Object.entries(value).reverse()) as T;
+    const reorderedConfig = reorderKeys({
+      ...before.config,
+      global: reorderKeys(before.config.global),
+    });
+    expect(Object.keys(reorderedConfig)).not.toEqual(Object.keys(before.config));
+
+    before.setConfig(reorderedConfig);
+
+    const after = useConfigStore.getState();
+    expect(after).toBe(before);
+    expect(after.config).toBe(before.config);
+  });
+
+  test("setConfig adopts a config that only differs by an explicitly undefined field", () => {
+    // This store distinguishes present-but-undefined from absent (see
+    // updateGlobalConfig, which deletes reviewInstruction rather than assigning
+    // undefined). A serialized compare erases the difference and would keep the
+    // stale object.
+    const before = useConfigStore.getState();
+    expect(Object.hasOwn(before.config.global, "reviewInstruction")).toBe(false);
+
+    before.setConfig({
+      ...before.config,
+      global: { ...before.config.global, reviewInstruction: undefined },
+    });
+
+    const after = useConfigStore.getState();
+    expect(after.config).not.toBe(before.config);
+    expect(Object.hasOwn(after.config.global, "reviewInstruction")).toBe(true);
+  });
+
   test("updateGlobalConfig partially updates global config", () => {
     useConfigStore.getState().updateGlobalConfig({
       containerResources: {

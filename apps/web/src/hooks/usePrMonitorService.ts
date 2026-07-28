@@ -131,19 +131,19 @@ export function usePrMonitorService(): void {
     new Map<string, Set<"status" | "comment" | "metadata">>()
   );
 
-  // Get store actions (these are stable references)
-  const {
-    startMonitoring,
-    setMonitoringMode,
-    setActiveEnvironment,
-    getMonitoringState,
-    _setCheckInProgress,
-    _updateLastCheckTime,
-    _resetErrors,
-    _incrementErrors,
-  } = usePrMonitorStore();
+  // Get store actions via narrow selectors (all stable references) — a
+  // selector-less subscription made this service rerender on every store write.
+  const startMonitoring = usePrMonitorStore((state) => state.startMonitoring);
+  const setMonitoringMode = usePrMonitorStore((state) => state.setMonitoringMode);
+  const setActiveEnvironment = usePrMonitorStore((state) => state.setActiveEnvironment);
+  const getMonitoringState = usePrMonitorStore((state) => state.getMonitoringState);
+  const _setCheckInProgress = usePrMonitorStore((state) => state._setCheckInProgress);
+  const _updateLastCheckTime = usePrMonitorStore((state) => state._updateLastCheckTime);
+  const _resetErrors = usePrMonitorStore((state) => state._resetErrors);
+  const _incrementErrors = usePrMonitorStore((state) => state._incrementErrors);
 
-  const { registerStateCallback, unregisterStateCallback } = useAgentActivityStore();
+  const registerStateCallback = useAgentActivityStore((state) => state.registerStateCallback);
+  const unregisterStateCallback = useAgentActivityStore((state) => state.unregisterStateCallback);
 
   /**
    * Perform a single PR check for an environment.

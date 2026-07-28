@@ -22,7 +22,9 @@ mock.module("@/lib/claude-client", () => ({
 const mockRemovePendingQuestion = mock(() => {});
 mock.module("@/stores/claudeStore", () => ({
   ...realClaudeStoreSnapshot,
-  useClaudeStore: () => ({ removePendingQuestion: mockRemovePendingQuestion }),
+  useClaudeStore: <T,>(
+    selector: (state: { removePendingQuestion: typeof mockRemovePendingQuestion }) => T,
+  ) => selector({ removePendingQuestion: mockRemovePendingQuestion }),
 }));
 
 afterAll(() => {

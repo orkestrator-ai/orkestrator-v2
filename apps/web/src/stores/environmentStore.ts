@@ -1,9 +1,18 @@
 import { create } from "zustand";
+import { deepEqualJson } from "@/lib/chat/message-identity";
 import type { Environment, EnvironmentStatus, PrState } from "@/types";
 
 /** Sort environments by their order field */
 const sortByOrder = (environments: Environment[]): Environment[] =>
   [...environments].sort((a, b) => a.order - b.order);
+
+const setsEqual = (a: Set<string>, b: Set<string>): boolean => {
+  if (a.size !== b.size) return false;
+  for (const value of a) {
+    if (!b.has(value)) return false;
+  }
+  return true;
+};
 
 /**
  * Seed the runtime readiness sets from each environment's persisted
@@ -147,6 +156,27 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
         state.setupCommandsResolved,
         state.workspaceReadyEnvironments
       );
+
+      // Periodic resyncs deliver byte-identical snapshots most of the time.
+      // Detect that case and keep the existing state (and every Environment
+      // object identity) instead of rebuilding a new sorted array per tick.
+      const currentProjectEnvs = state.environments.filter(
+        (e) => e.projectId === projectId
+      );
+      const sortedNewEnvs = sortByOrder(newEnvs);
+      const snapshotUnchanged =
+        currentProjectEnvs.length === sortedNewEnvs.length
+        && sortedNewEnvs.every((env, index) =>
+          deepEqualJson(env, currentProjectEnvs[index])
+        );
+      if (
+        snapshotUnchanged
+        && setsEqual(seeded.setupCommandsResolved, state.setupCommandsResolved)
+        && setsEqual(seeded.workspaceReadyEnvironments, state.workspaceReadyEnvironments)
+      ) {
+        return state;
+      }
+
       return {
         environments: sortByOrder([...otherEnvs, ...newEnvs]),
         setupCommandsResolved: seeded.setupCommandsResolved,
@@ -203,13 +233,29 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
 
   updateEnvironment: (environmentId, updates) =>
     set((state) => {
+      const prevEnv = state.environments.find((e) => e.id === environmentId);
+      if (!prevEnv) return state;
+
+      // Refresh paths routinely pass back full environment snapshots that are
+      // field-identical to what the store already holds. Writing them anyway
+      // would mint a new array + object identity and rerender every subscriber.
+      const hasChange = (Object.keys(updates) as Array<keyof Environment>).some(
+        (key) => !deepEqualJson(prevEnv[key], updates[key])
+      );
+      if (!hasChange) return state;
+
+      const mergedEnvironments = state.environments.map((e) =>
+        e.id === environmentId ? { ...e, ...updates } : e
+      );
+      // The store's list is kept sorted by `order`; nothing else affects sort
+      // position, so re-sorting is only needed when `order` itself changed.
+      const orderChanged =
+        updates.order !== undefined && updates.order !== prevEnv.order;
       const nextState: Pick<EnvironmentState, "environments"> &
         Partial<Pick<EnvironmentState, "setupCommandsResolved" | "workspaceReadyEnvironments">> = {
-        environments: sortByOrder(
-          state.environments.map((e) =>
-            e.id === environmentId ? { ...e, ...updates } : e
-          )
-        ),
+        environments: orderChanged
+          ? sortByOrder(mergedEnvironments)
+          : mergedEnvironments,
       };
 
       // Only mirror setupScriptsComplete onto the runtime readiness sets when
@@ -221,8 +267,7 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
       // clobbers workspaceReady that was just flipped true by in-memory
       // setup-complete detection.
       if (typeof updates.setupScriptsComplete === "boolean") {
-        const prevEnv = state.environments.find((e) => e.id === environmentId);
-        const prevComplete = prevEnv?.setupScriptsComplete ?? false;
+        const prevComplete = prevEnv.setupScriptsComplete ?? false;
         if (prevComplete !== updates.setupScriptsComplete) {
           const setupCommandsResolved = new Set(state.setupCommandsResolved);
           const workspaceReadyEnvironments = new Set(state.workspaceReadyEnvironments);

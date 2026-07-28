@@ -98,27 +98,20 @@ export function ClaudeComposeBar({
   // Create sessionKey for store lookups (format: "env-{environmentId}:{tabId}")
   const sessionKey = createSessionKey(environmentId, tabId);
 
-  const {
-    getAttachments,
-    addAttachment,
-    removeAttachment,
-    clearAttachments,
-    getDraftText,
-    setDraftText,
-    getDraftMentions,
-    setDraftMentions,
-    getSelectedModel,
-    setSelectedModel,
-    getEffort,
-    setEffort,
-    isPlanMode,
-    setPlanMode,
-    isFastMode,
-    setFastMode,
-    getQueuedMessages,
-    removeQueueItem,
-    moveQueueItem,
-  } = useClaudeStore();
+  // Narrow store subscriptions (mirrors CodexComposeBar): actions are stable
+  // references, and per-key value selectors keep unrelated store writes (other
+  // sessions' drafts, transcripts, event bookkeeping) from re-rendering the bar.
+  const addAttachment = useClaudeStore((state) => state.addAttachment);
+  const removeAttachment = useClaudeStore((state) => state.removeAttachment);
+  const clearAttachments = useClaudeStore((state) => state.clearAttachments);
+  const setDraftText = useClaudeStore((state) => state.setDraftText);
+  const setDraftMentions = useClaudeStore((state) => state.setDraftMentions);
+  const setSelectedModel = useClaudeStore((state) => state.setSelectedModel);
+  const setEffort = useClaudeStore((state) => state.setEffort);
+  const setPlanMode = useClaudeStore((state) => state.setPlanMode);
+  const setFastMode = useClaudeStore((state) => state.setFastMode);
+  const removeQueueItem = useClaudeStore((state) => state.removeQueueItem);
+  const moveQueueItem = useClaudeStore((state) => state.moveQueueItem);
 
   // Use a selector for sessionInitData to ensure reactivity when SSE session.init event arrives
   const sessionInitData = useClaudeStore(
@@ -129,14 +122,32 @@ export function ClaudeComposeBar({
     useCallback((state) => state.contextUsage.get(sessionKey), [sessionKey])
   );
 
-  const attachments = getAttachments(sessionKey);
-  const text = getDraftText(sessionKey);
-  const mentions = getDraftMentions(sessionKey);
-  const selectedModel = getSelectedModel(sessionKey);
-  const effort = getEffort(sessionKey);
-  const planModeEnabled = isPlanMode(sessionKey);
-  const fastModeEnabled = isFastMode(sessionKey);
-  const queuedMessages = getQueuedMessages(sessionKey);
+  // Store getters return stable defaults for absent keys, so their results are
+  // safe as selector outputs (no per-render churn for untouched sessions).
+  const attachments = useClaudeStore(
+    useCallback((state) => state.getAttachments(sessionKey), [sessionKey]),
+  );
+  const text = useClaudeStore(
+    useCallback((state) => state.getDraftText(sessionKey), [sessionKey]),
+  );
+  const mentions = useClaudeStore(
+    useCallback((state) => state.getDraftMentions(sessionKey), [sessionKey]),
+  );
+  const selectedModel = useClaudeStore(
+    useCallback((state) => state.getSelectedModel(sessionKey), [sessionKey]),
+  );
+  const effort = useClaudeStore(
+    useCallback((state) => state.getEffort(sessionKey), [sessionKey]),
+  );
+  const planModeEnabled = useClaudeStore(
+    useCallback((state) => state.isPlanMode(sessionKey), [sessionKey]),
+  );
+  const fastModeEnabled = useClaudeStore(
+    useCallback((state) => state.isFastMode(sessionKey), [sessionKey]),
+  );
+  const queuedMessages = useClaudeStore(
+    useCallback((state) => state.getQueuedMessages(sessionKey), [sessionKey]),
+  );
 
   // Get worktree path for local environments
   const worktreePath = useEnvironmentStore(
@@ -426,7 +437,7 @@ export function ClaudeComposeBar({
     setSelectedModel(sessionKey, modelId);
     void persistAgentModelDefault("claudeModel", modelId, "Claude");
     const nextModel = models.find((m) => m.id === modelId);
-    if (nextModel?.supportsFastMode === false && isFastMode(sessionKey)) {
+    if (nextModel?.supportsFastMode === false && useClaudeStore.getState().isFastMode(sessionKey)) {
       setFastMode(sessionKey, false);
     }
   };

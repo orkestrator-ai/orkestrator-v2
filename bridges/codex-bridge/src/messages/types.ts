@@ -7,6 +7,8 @@
  *   - subagent activity from two different sources can be merged in one place,
  *   - recovery and deduplication have somewhere to live.
  */
+import type { BaselineMap } from "./diff-budget.js";
+
 export type ToolState = "success" | "failure" | "pending";
 export type MessageRole = "user" | "assistant" | "system";
 
@@ -52,7 +54,8 @@ export interface NormalizedMessage {
 }
 
 export interface FileChangeDiffContext {
-  baselines: Map<string, string | undefined>;
+  /** Byte-counting map so budget checks stay O(1); see `diff-budget.ts`. */
+  baselines: BaselineMap;
   cache: Map<string, ToolDiffMetadata>;
 }
 

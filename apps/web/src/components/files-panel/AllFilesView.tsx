@@ -11,7 +11,10 @@ interface AllFilesViewProps {
 }
 
 export function AllFilesView({ onRevert, onDelete }: AllFilesViewProps = {}) {
-  const { fileTree, changes, isLoadingTree, closePanel } = useFilesPanelStore();
+  const fileTree = useFilesPanelStore((state) => state.fileTree);
+  const changes = useFilesPanelStore((state) => state.changes);
+  const isLoadingTree = useFilesPanelStore((state) => state.isLoadingTree);
+  const closePanel = useFilesPanelStore((state) => state.closePanel);
   const { createFileTab } = useTerminalContext();
   const isMobile = useMediaQuery("(max-width: 767px)");
   const changedPaths = useMemo(

@@ -1,8 +1,9 @@
-import { describe, expect, expectTypeOf, test } from "bun:test";
+import { describe, expect, expectTypeOf, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  createEnvironment,
   defaultConfig,
   defaultRepositoryConfig,
   StorageService,
@@ -183,6 +184,258 @@ describe("Codex max concurrent thread config storage", () => {
         expect(updated.global.codexMaxConcurrentThreads).toBe(value);
         expect((await storage.loadConfig()).global.codexMaxConcurrentThreads).toBe(value);
       }
+    });
+  });
+});
+
+describe("hot store read caching", () => {
+  test("serves repeated environment reads from the cache and re-validates by stat", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const environmentsPath = path.join(dataDir, "environments.json");
+
+      const readSpy = spyOn(fs, "readFile");
+      const environmentReads = () =>
+        readSpy.mock.calls.filter(([file]) => String(file).endsWith("environments.json")).length;
+      try {
+        await storage.loadEnvironments();
+        const readsAfterFirstLoad = environmentReads();
+
+        // Steady state: no further reads of the file, only stats.
+        await storage.loadEnvironments();
+        await storage.getEnvironment(environment.id);
+        await storage.getEnvironmentsByProject("project-1");
+        expect(environmentReads()).toBe(readsAfterFirstLoad);
+
+        // Mutating a returned value must not poison the cache: reads hand
+        // out clones precisely because every mutation path edits in place.
+        (await storage.loadEnvironments())[0]!.name = "mutated-by-caller";
+        expect((await storage.getEnvironment(environment.id))!.name)
+          .toBe(environment.name);
+
+        // A save through this process invalidates the cached parse.
+        await storage.updateEnvironment(environment.id, { name: "renamed" });
+        expect((await storage.getEnvironment(environment.id))!.name).toBe("renamed");
+
+        // A foreign in-place write (another backend process) is observed via
+        // the stat fingerprint even though this process never wrote.
+        const foreign = JSON.parse(
+          await fs.readFile(environmentsPath, "utf8"),
+        ) as Array<Record<string, unknown>>;
+        foreign[0]!.name = "foreign-writer";
+        await fs.writeFile(environmentsPath, JSON.stringify(foreign));
+        expect((await storage.getEnvironment(environment.id))!.name)
+          .toBe("foreign-writer");
+      } finally {
+        readSpy.mockRestore();
+      }
+    });
+  });
+
+  test("refreshes one recovery backup for volatile writes without rotating history", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const backupPath = path.join(dataDir, "environments.json.bak.1");
+
+      await storage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        new Date(Date.now() + 1_000).toISOString(),
+        "frontend",
+        "renderer-token",
+      );
+      await storage.recordEnvironmentActivity(
+        environment.id,
+        new Date(Date.now() + 2_000).toISOString(),
+      );
+      // Activity-only writes keep one current recovery point without shifting
+      // five timestamp-only copies through the historical backup chain.
+      await fs.access(backupPath);
+      await expect(fs.access(path.join(dataDir, "environments.json.bak.2")))
+        .rejects.toThrow();
+
+      // A structural mutation still pays for the rotation.
+      await storage.updateEnvironment(environment.id, { name: "renamed" });
+      await fs.access(path.join(dataDir, "environments.json.bak.2"));
+    });
+  });
+
+  test("recovers the latest structural state after later activity-only writes", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      await storage.updateEnvironment(environment.id, { name: "structurally-renamed" });
+      const occurredAt = new Date(Date.now() + 1_000).toISOString();
+      await storage.recordEnvironmentActivity(environment.id, occurredAt);
+
+      await fs.writeFile(path.join(dataDir, "environments.json"), "{corrupt", "utf8");
+      const recovered = await new StorageService(dataDir).getEnvironment(environment.id);
+      expect(recovered).toMatchObject({
+        id: environment.id,
+        name: "structurally-renamed",
+        lastActivityAt: occurredAt,
+      });
+    });
+  });
+
+  test("invalidates project and config caches after external writes", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await storage.addProject({
+        id: "project-cache",
+        name: "Before",
+        gitUrl: "https://example.invalid/cache.git",
+        localPath: null,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      });
+      const config = defaultConfig();
+      await storage.saveConfig(config);
+      await storage.loadProjects();
+      await storage.loadConfig();
+
+      const projectsPath = path.join(dataDir, "projects.json");
+      const projects = JSON.parse(await fs.readFile(projectsPath, "utf8")) as Array<{
+        name: string;
+      }>;
+      projects[0]!.name = "After!";
+      await fs.writeFile(projectsPath, `${JSON.stringify(projects)}\n`, "utf8");
+
+      const configPath = path.join(dataDir, "config.json");
+      const foreignConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as AppConfig;
+      foreignConfig.global.webClientEnabled = false;
+      await fs.writeFile(configPath, `${JSON.stringify(foreignConfig)}\n`, "utf8");
+
+      expect((await storage.loadProjects())[0]!.name).toBe("After!");
+      expect((await storage.loadConfig()).global.webClientEnabled).toBe(false);
+    });
+  });
+
+  test("recovers from backup when the store cannot be stat'd", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      // The second write is what puts a full record into the rotated backup:
+      // the first found no primary file to copy.
+      await storage.updateEnvironment(environment.id, { name: "renamed" });
+
+      const environmentsPath = path.join(dataDir, "environments.json");
+      const realStat = fs.stat.bind(fs);
+      const statSpy = spyOn(fs, "stat").mockImplementation((async (
+        target: Parameters<typeof fs.stat>[0],
+      ) => {
+        if (String(target) === environmentsPath) {
+          throw Object.assign(new Error("EACCES: permission denied, stat"), { code: "EACCES" });
+        }
+        return realStat(target);
+      }) as typeof fs.stat);
+      try {
+        expect((await storage.loadEnvironments()).map((item) => item.id))
+          .toEqual([environment.id]);
+      } finally {
+        statSpy.mockRestore();
+      }
+    });
+  });
+
+  test("surfaces an unreadable store instead of presenting it as empty", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environmentsPath = path.join(dataDir, "environments.json");
+      const stored = createEnvironment("project-1");
+      // Written directly so no backup exists to recover from.
+      await fs.writeFile(environmentsPath, `${JSON.stringify([stored])}\n`, "utf8");
+
+      const realStat = fs.stat.bind(fs);
+      const statSpy = spyOn(fs, "stat").mockImplementation((async (
+        target: Parameters<typeof fs.stat>[0],
+      ) => {
+        if (String(target) === environmentsPath) {
+          throw Object.assign(new Error("EIO: i/o error, stat"), { code: "EIO" });
+        }
+        return realStat(target);
+      }) as typeof fs.stat);
+      try {
+        await expect(storage.loadEnvironments()).rejects.toThrow("EIO");
+        // The empty view was never the real damage: the next mutation would
+        // have appended to that empty list and written it back over the
+        // user's intact data.
+        await expect(storage.addEnvironment(createEnvironment("project-1")))
+          .rejects.toThrow("EIO");
+      } finally {
+        statSpy.mockRestore();
+      }
+
+      expect((await storage.loadEnvironments()).map((item) => item.id)).toEqual([stored.id]);
+    });
+  });
+
+  test("skips the lease sweep without the cross-process lock when no leases exist", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await storage.addEnvironment(createEnvironment("project-1"));
+      const lockPath = path.join(dataDir, "environments.json.lock");
+      // A fresh foreign lock blocks the mutation path for its full 20s
+      // timeout; the sweep must not need it when nothing can expire.
+      await fs.writeFile(lockPath, "held-by-another-process");
+      try {
+        await expect(storage.expireFrontendAgentActivityLeases()).resolves.toEqual([]);
+      } finally {
+        await fs.rm(lockPath, { force: true });
+      }
+    });
+  });
+});
+
+describe("environment completion and unread state", () => {
+  test("records a newer completion and ignores stale completion timestamps", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const previousActivityAt = environment.lastActivityAt!;
+      const newer = new Date(
+        new Date(previousActivityAt).getTime() + 1,
+      ).toISOString();
+      const completed = await storage.recordEnvironmentCompletion(environment.id, newer);
+      expect(completed).toMatchObject({
+        lastActivityAt: newer,
+        hasUnreadWork: true,
+      });
+
+      await storage.setEnvironmentUnread(environment.id, false, newer);
+      const stale = await storage.recordEnvironmentCompletion(
+        environment.id,
+        previousActivityAt,
+      );
+      expect(stale).toMatchObject({
+        lastActivityAt: newer,
+        hasUnreadWork: false,
+      });
+      await expect(storage.recordEnvironmentCompletion(environment.id, "invalid"))
+        .rejects.toThrow("occurredAt must be a valid ISO timestamp");
+    });
+  });
+
+  test("clears unread only when the expected activity token still matches", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const previousActivityAt = environment.lastActivityAt!;
+      const activityAt = new Date(
+        new Date(previousActivityAt).getTime() + 1,
+      ).toISOString();
+      await storage.recordEnvironmentCompletion(environment.id, activityAt);
+
+      const staleClear = await storage.setEnvironmentUnread(
+        environment.id,
+        false,
+        previousActivityAt,
+      );
+      expect(staleClear.hasUnreadWork).toBe(true);
+
+      const cleared = await storage.setEnvironmentUnread(
+        environment.id,
+        false,
+        activityAt,
+      );
+      expect(cleared.hasUnreadWork).toBe(false);
+      expect((await storage.getEnvironment(environment.id))!.hasUnreadWork).toBe(false);
+      await expect(
+        storage.setEnvironmentUnread(environment.id, true, 123 as never),
+      ).rejects.toThrow("expectedLastActivityAt must be a string or null");
     });
   });
 });

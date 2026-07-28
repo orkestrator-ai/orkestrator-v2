@@ -373,11 +373,15 @@ export function CodexChatTab({
   );
   const slashCommands = storedSlashCommands ?? [];
 
-  const {
-    clearTabInitialPrompt,
-    clearTabAgentHandoff,
-    updateTabNativeSessionId,
-  } = usePaneLayoutStore();
+  const clearTabInitialPrompt = usePaneLayoutStore(
+    (state) => state.clearTabInitialPrompt,
+  );
+  const clearTabAgentHandoff = usePaneLayoutStore(
+    (state) => state.clearTabAgentHandoff,
+  );
+  const updateTabNativeSessionId = usePaneLayoutStore(
+    (state) => state.updateTabNativeSessionId,
+  );
 
   // Setup completion awareness - block initialization until setup scripts finish
   const setupScriptsRunning = useEnvironmentStore(

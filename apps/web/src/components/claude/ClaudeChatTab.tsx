@@ -174,46 +174,64 @@ export function ClaudeChatTab({
   const resumeSequenceRef = useRef(0);
   const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => Promise<void>) | null>(null);
 
-  const {
-    setClient,
-    models: fallbackModels,
-    modelCatalogs,
-    setModels,
-    setModelCatalog,
-    setSession,
-    addMessage,
-    removeMessage,
-    setMessages,
-    upsertMessage,
-    patchMessage,
-    setSessionLoading,
-    setSessionError,
-    setServerStatus,
-    getSelectedModel,
-    setSelectedModel,
-    addPendingQuestion,
-    removePendingQuestion,
-    setSessionTitle,
-    setContextUsage,
-    setPromptSuggestion,
-    setBackgroundTasks,
-    addPendingPlanApproval,
-    removePendingPlanApproval,
-    getOrCreateEventSubscription,
-    setEventStream,
-    hasActiveEventSubscription,
-    getEffort,
-    isPlanMode,
-    setPlanMode,
-    isFastMode,
-    getSessionKeyBySdkSessionId,
-    addToQueue,
-    clients: clientsMap,
-    sessions: sessionsMap,
-    pendingQuestions: pendingQuestionsMap,
-    pendingPlanApprovals: pendingPlanApprovalsMap,
-  } = useClaudeStore();
-  const models = modelCatalogs.get(environmentId)?.models ?? fallbackModels;
+  // Narrow, per-key subscriptions (mirrors CodexChatTab): store actions are
+  // referentially stable, and value reads are scoped so unrelated store writes
+  // (other environments, other sessions) no longer re-render this tab.
+  const setClient = useClaudeStore((state) => state.setClient);
+  const setModels = useClaudeStore((state) => state.setModels);
+  const setModelCatalog = useClaudeStore((state) => state.setModelCatalog);
+  const setSession = useClaudeStore((state) => state.setSession);
+  const addMessage = useClaudeStore((state) => state.addMessage);
+  const removeMessage = useClaudeStore((state) => state.removeMessage);
+  const setMessages = useClaudeStore((state) => state.setMessages);
+  const upsertMessage = useClaudeStore((state) => state.upsertMessage);
+  const patchMessage = useClaudeStore((state) => state.patchMessage);
+  const setSessionLoading = useClaudeStore((state) => state.setSessionLoading);
+  const setSessionError = useClaudeStore((state) => state.setSessionError);
+  const setServerStatus = useClaudeStore((state) => state.setServerStatus);
+  const getSelectedModel = useClaudeStore((state) => state.getSelectedModel);
+  const setSelectedModel = useClaudeStore((state) => state.setSelectedModel);
+  const addPendingQuestion = useClaudeStore((state) => state.addPendingQuestion);
+  const removePendingQuestion = useClaudeStore(
+    (state) => state.removePendingQuestion,
+  );
+  const setSessionTitle = useClaudeStore((state) => state.setSessionTitle);
+  const setContextUsage = useClaudeStore((state) => state.setContextUsage);
+  const setPromptSuggestion = useClaudeStore((state) => state.setPromptSuggestion);
+  const setBackgroundTasks = useClaudeStore((state) => state.setBackgroundTasks);
+  const addPendingPlanApproval = useClaudeStore(
+    (state) => state.addPendingPlanApproval,
+  );
+  const removePendingPlanApproval = useClaudeStore(
+    (state) => state.removePendingPlanApproval,
+  );
+  const getOrCreateEventSubscription = useClaudeStore(
+    (state) => state.getOrCreateEventSubscription,
+  );
+  const setEventStream = useClaudeStore((state) => state.setEventStream);
+  const hasActiveEventSubscription = useClaudeStore(
+    (state) => state.hasActiveEventSubscription,
+  );
+  const getEffort = useClaudeStore((state) => state.getEffort);
+  const isPlanMode = useClaudeStore((state) => state.isPlanMode);
+  const setPlanMode = useClaudeStore((state) => state.setPlanMode);
+  const isFastMode = useClaudeStore((state) => state.isFastMode);
+  const getSessionKeyBySdkSessionId = useClaudeStore(
+    (state) => state.getSessionKeyBySdkSessionId,
+  );
+  const addToQueue = useClaudeStore((state) => state.addToQueue);
+  // Pending-request maps stay map-level subscriptions: the filtered views below
+  // need to react to any entry for this session appearing or disappearing.
+  const pendingQuestionsMap = useClaudeStore((state) => state.pendingQuestions);
+  const pendingPlanApprovalsMap = useClaudeStore(
+    (state) => state.pendingPlanApprovals,
+  );
+  const models = useClaudeStore(
+    useCallback(
+      (state) => state.modelCatalogs.get(environmentId)?.models ?? state.models,
+      [environmentId],
+    ),
+  );
   const resolveModelLabel = useCallback(
     (modelId: string) => resolveCatalogModelLabel(modelId, models),
     [models],
@@ -245,11 +263,15 @@ export function ClaudeChatTab({
   );
 
   // Pane layout store - for clearing initialPrompt after it's been sent
-  const {
-    clearTabInitialPrompt,
-    clearTabAgentHandoff,
-    updateTabNativeSessionId,
-  } = usePaneLayoutStore();
+  const clearTabInitialPrompt = usePaneLayoutStore(
+    (state) => state.clearTabInitialPrompt,
+  );
+  const clearTabAgentHandoff = usePaneLayoutStore(
+    (state) => state.clearTabAgentHandoff,
+  );
+  const updateTabNativeSessionId = usePaneLayoutStore(
+    (state) => state.updateTabNativeSessionId,
+  );
 
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
@@ -293,8 +315,12 @@ export function ClaudeChatTab({
     return enabled;
   }, [sessionKey]);
 
-  const client = useMemo(() => clientsMap.get(environmentId), [clientsMap, environmentId]);
-  const session = useMemo(() => sessionsMap.get(sessionKey), [sessionsMap, sessionKey]);
+  const client = useClaudeStore(
+    useCallback((state) => state.clients.get(environmentId), [environmentId]),
+  );
+  const session = useClaudeStore(
+    useCallback((state) => state.sessions.get(sessionKey), [sessionKey]),
+  );
   const promptSuggestion = useClaudeStore(
     useCallback(
       (state) => state.promptSuggestions.get(sessionKey),
@@ -800,7 +826,7 @@ export function ClaudeChatTab({
 
           // Reuse models from store if available, otherwise fetch
           let resolvedModels = models;
-          if (!modelCatalogs.has(environmentId)) {
+          if (!useClaudeStore.getState().modelCatalogs.has(environmentId)) {
             resolvedModels = await loadAuthoritativeModels(bridgeClient);
             if (!mounted) return;
           }
@@ -1226,20 +1252,28 @@ export function ClaudeChatTab({
         const lastReloadTimeBySession = new Map<string, number>();
         const DEBOUNCE_MS = 200;
         const pendingReloads = new Map<string, NodeJS.Timeout>();
+        const reloadGenerations = new Map<string, number>();
 
         // Note: sessionKey is the session key from the sessions Map (e.g., "env-{envId}:{tabId}")
         const fetchMessagesDebounced = (sessionId: string, sessionKey: string, immediate = false) => {
-          const pendingTimeout = pendingReloads.get(sessionId);
+          const reloadKey = `${sessionId}:${sessionKey}`;
+          const generation = (reloadGenerations.get(reloadKey) ?? 0) + 1;
+          reloadGenerations.set(reloadKey, generation);
+          const pendingTimeout = pendingReloads.get(reloadKey);
           if (pendingTimeout) {
             clearTimeout(pendingTimeout);
-            pendingReloads.delete(sessionId);
+            pendingReloads.delete(reloadKey);
           }
 
           const doFetch = async () => {
+            pendingReloads.delete(reloadKey);
             const now = Date.now();
             lastReloadTimeBySession.set(sessionId, now);
             console.debug("[ClaudeChatTab] Fetching session messages", { sessionId, sessionKey });
             const messages = await getSessionMessages(bridgeClient, sessionId);
+            if (reloadGenerations.get(reloadKey) !== generation) return;
+            const currentSession = useClaudeStore.getState().sessions.get(sessionKey);
+            if (currentSession?.sessionId !== sessionId) return;
             setMessages(sessionKey, messages);
           };
 
@@ -1249,11 +1283,100 @@ export function ClaudeChatTab({
             const now = Date.now();
             const lastTime = lastReloadTimeBySession.get(sessionId) || 0;
             if (now - lastTime > DEBOUNCE_MS) {
-              doFetch();
+              void doFetch();
             } else {
-              const timeout = setTimeout(doFetch, DEBOUNCE_MS);
-              pendingReloads.set(sessionId, timeout);
+              const timeout = setTimeout(() => void doFetch(), DEBOUNCE_MS);
+              pendingReloads.set(reloadKey, timeout);
             }
+          }
+        };
+
+        const reconcileAuthoritativeSession = async (
+          sessionId: string,
+          sessionTabId: string,
+        ) => {
+          const reloadKey = `${sessionId}:${sessionTabId}`;
+          const generation = (reloadGenerations.get(reloadKey) ?? 0) + 1;
+          reloadGenerations.set(reloadKey, generation);
+          const pendingTimeout = pendingReloads.get(reloadKey);
+          if (pendingTimeout) {
+            clearTimeout(pendingTimeout);
+            pendingReloads.delete(reloadKey);
+          }
+
+          // Transcript and status are mandatory — without them there is nothing
+          // to reconcile. The two interaction lists are optional: letting a
+          // transient 500 on `/questions` reject the whole reconcile leaves the
+          // transcript, status, title *and* the other list stale, with no retry
+          // and no watchdog (`useStalledTurnWatchdog` is gated on `isLoading`,
+          // which a skipped reconcile leaves false).
+          const coreReconcile = Promise.all([
+            getSession(bridgeClient, sessionId),
+            getSessionMessages(bridgeClient, sessionId, { throwOnError: true }),
+          ]);
+          const interactionsReconcile = Promise.allSettled([
+            getPendingQuestions(bridgeClient, sessionId, { throwOnError: true }),
+            getPendingPlanApprovals(bridgeClient, sessionId, { throwOnError: true }),
+          ]);
+          const [serverSession, messages] = await coreReconcile;
+          if (reloadGenerations.get(reloadKey) !== generation || !serverSession) return;
+
+          const state = useClaudeStore.getState();
+          const currentSession = state.sessions.get(sessionTabId);
+          if (currentSession?.sessionId !== sessionId) return;
+
+          setMessages(sessionTabId, messages);
+          applyServerSessionMetadata(sessionTabId, serverSession);
+          setSessionLoading(sessionTabId, serverSession.status === "running");
+          setSessionError(
+            sessionTabId,
+            serverSession.status === "error"
+              ? serverSession.error?.trim() || "Claude session failed"
+              : undefined,
+          );
+          if (serverSession.title?.trim()) {
+            setSessionTitle(sessionTabId, serverSession.title);
+          }
+
+          const [questionsResult, approvalsResult] = await interactionsReconcile;
+          if (reloadGenerations.get(reloadKey) !== generation) return;
+          const reconciledState = useClaudeStore.getState();
+          if (reconciledState.sessions.get(sessionTabId)?.sessionId !== sessionId) return;
+
+          if (questionsResult.status === "fulfilled") {
+            const existingQuestionIds = Array.from(reconciledState.pendingQuestions.values())
+              .filter((question) => question.sessionId === sessionId)
+              .map((question) => question.id);
+            const nextQuestionIds = new Set(
+              questionsResult.value.map((question) => question.id),
+            );
+            for (const question of questionsResult.value) addPendingQuestion(question);
+            for (const questionId of existingQuestionIds) {
+              if (!nextQuestionIds.has(questionId)) removePendingQuestion(questionId);
+            }
+          } else {
+            console.warn(
+              "[ClaudeChatTab] Failed to reconcile pending questions:",
+              questionsResult.reason,
+            );
+          }
+
+          if (approvalsResult.status === "fulfilled") {
+            const existingApprovalIds = Array.from(reconciledState.pendingPlanApprovals.values())
+              .filter((approval) => approval.sessionId === sessionId)
+              .map((approval) => approval.id);
+            const nextApprovalIds = new Set(
+              approvalsResult.value.map((approval) => approval.id),
+            );
+            for (const approval of approvalsResult.value) addPendingPlanApproval(approval);
+            for (const approvalId of existingApprovalIds) {
+              if (!nextApprovalIds.has(approvalId)) removePendingPlanApproval(approvalId);
+            }
+          } else {
+            console.warn(
+              "[ClaudeChatTab] Failed to reconcile pending plan approvals:",
+              approvalsResult.reason,
+            );
           }
         };
 
@@ -1285,6 +1408,32 @@ export function ClaudeChatTab({
             || hasExactSessionUsage
             ? null
             : extractContextUsage(event.data);
+
+          if (eventType === "replay.required") {
+            // The cursor fell behind the bridge's bounded replay window.
+            // Rehydrate every Claude session owned by this environment; live
+            // events then resume as incremental updates against that snapshot.
+            const reconciles: Promise<void>[] = [];
+            for (const [sessionTabId, sessionState] of useClaudeStore.getState().sessions) {
+              if (
+                !sessionTabId.startsWith(`env-${environmentId}:`)
+                || !sessionState.sessionId
+              ) continue;
+              reconciles.push(
+                reconcileAuthoritativeSession(
+                  sessionState.sessionId,
+                  sessionTabId,
+                ).catch((error) => {
+                  console.warn(
+                    "[ClaudeChatTab] Failed to reconcile replay gap:",
+                    error,
+                  );
+                }),
+              );
+            }
+            await Promise.all(reconciles);
+            continue;
+          }
 
           if (!eventSessionId && !["question.asked", "question.answered", "plan.enter-requested", "plan.exit-requested", "plan.approval-requested", "plan.approval-responded"].includes(eventType || "")) {
             continue;
@@ -1583,7 +1732,7 @@ export function ClaudeChatTab({
         }
       }
     },
-    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setSessionTitle, setContextUsage, setPromptSuggestion, setBackgroundTasks, addMessage, addPendingQuestion, removePendingQuestion, addPendingPlanApproval, removePendingPlanApproval, setPlanMode, getSessionKeyBySdkSessionId]
+    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setSessionError, setSessionTitle, setContextUsage, setPromptSuggestion, setBackgroundTasks, applyServerSessionMetadata, addMessage, addPendingQuestion, removePendingQuestion, addPendingPlanApproval, removePendingPlanApproval, setPlanMode, getSessionKeyBySdkSessionId]
   );
   startSharedEventSubscriptionRef.current = startSharedEventSubscription;
 

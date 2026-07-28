@@ -3100,6 +3100,58 @@ describe("OpenCodeChatTab", () => {
       };
     }
 
+    test("keeps message error and provider usage while streamed parts update", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      const providerUsage = {
+        cost: 0.01,
+        inputTokens: 10,
+        outputTokens: 5,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 15,
+        modelId: "openai/gpt-5",
+      };
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [{
+        ...nativeMessage("stream-message", "old"),
+        hasError: true,
+        providerUsage,
+        parts: [{
+          type: "text",
+          content: "old",
+          sourcePartId: "part-1",
+          sourceMessageId: "stream-message",
+        }],
+      }]);
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      channel.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-1",
+            messageID: "stream-message",
+            sessionID: "session-1",
+            type: "text",
+            text: "updated",
+          },
+        },
+      });
+
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages[0])
+          .toMatchObject({
+            content: "updated",
+            hasError: true,
+            providerUsage,
+          });
+      });
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
     test("applies streaming parts, parent refreshes, idle state, errors, and context usage", async () => {
       const channel = eventChannel();
       mockSubscribeToEvents.mockResolvedValue(channel.stream);
@@ -3133,10 +3185,13 @@ describe("OpenCodeChatTab", () => {
         properties: { info: { sessionID: "session-1" } },
       });
       await waitFor(() => {
+        // An info payload without a message id cannot be applied in place, so
+        // the tab falls back to a refetch — the cheap streaming variant that
+        // skips recursive subagent hydration.
         expect(mockGetSessionMessages).toHaveBeenCalledWith(
           MOCK_CLIENT,
           "session-1",
-          { throwOnError: true },
+          { throwOnError: true, includeSubagents: false },
         );
       });
 

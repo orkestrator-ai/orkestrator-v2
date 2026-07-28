@@ -35,7 +35,8 @@ export const FileTreeNode = memo(function FileTreeNode({
   onRevert,
   onDelete,
 }: FileTreeNodeProps) {
-  const { expandedFolders, setFolderExpanded } = useFilesPanelStore();
+  const expandedFolders = useFilesPanelStore((state) => state.expandedFolders);
+  const setFolderExpanded = useFilesPanelStore((state) => state.setFolderExpanded);
   const isExpanded = expandedFolders.includes(item.path);
   const isFolder = item.isDirectory;
 

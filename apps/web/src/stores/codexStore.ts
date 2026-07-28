@@ -13,6 +13,7 @@ import {
   type CodexSlashCommand,
 } from "@/lib/codex-client";
 import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-messages";
+import { deepEqualJson } from "@/lib/chat/message-identity";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { FileMention } from "@/types";
 import {
@@ -163,6 +164,31 @@ function isSameApproval(a: CodexApproval, b: CodexApproval | undefined): boolean
     );
 }
 
+function isSameSlashCommand(
+  a: CodexSlashCommand,
+  b: CodexSlashCommand | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!b) return false;
+  return a.name === b.name
+    && a.description === b.description
+    && a.argumentHint === b.argumentHint
+    && a.source === b.source;
+}
+
+/**
+ * Snapshots are small plain-JSON records (a few counters plus optional
+ * rate-limit windows and category arrays), so structural equality is cheap and
+ * cannot drift when the snapshot grows a field the way a hand-written compare
+ * would.
+ */
+function isSameContextUsage(
+  a: ContextUsageSnapshot,
+  b: ContextUsageSnapshot,
+): boolean {
+  return deepEqualJson(a, b);
+}
+
 /**
  * Every map keyed by sessionKey, shared by the environment and tab sweeps so
  * the two cannot drift. A new session-keyed map goes here or it leaks.
@@ -208,6 +234,18 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
 
   setSlashCommands: (environmentId, commands) =>
     set((state) => {
+      const existing = state.slashCommands.get(environmentId);
+      // Same rationale as `setPendingApprovals`: refreshes re-report the same
+      // list with fresh array/object identities, and an always-new Map here
+      // would rerender every subscriber for a no-op.
+      if (commands.length === 0 && !existing) return state;
+      if (
+        existing
+        && existing.length === commands.length
+        && existing.every((entry, index) => isSameSlashCommand(entry, commands[index]))
+      ) {
+        return state;
+      }
       const next = new Map(state.slashCommands);
       if (commands.length > 0) {
         next.set(environmentId, commands);
@@ -343,6 +381,11 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
 
   setContextUsage: (sessionKey, usage) =>
     set((state) => {
+      const existing = state.contextUsage.get(sessionKey);
+      // Value-equality bail: token accounting is re-reported on every event
+      // batch, usually unchanged, and each write rerenders the compose bar.
+      if (!usage && !existing) return state;
+      if (usage && existing && isSameContextUsage(existing, usage)) return state;
       const next = new Map(state.contextUsage);
       if (usage) next.set(sessionKey, usage);
       else next.delete(sessionKey);

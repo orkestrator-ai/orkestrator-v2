@@ -939,6 +939,8 @@ afterEach(async () => {
   } finally {
     shutdownDiffStatsTracking();
     commandTesting.resetLocalServerLifecycle();
+    commandTesting.resetDockerContainerStateCache();
+    commandTesting.resetTerminalOutputBuffers();
     await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
     showOpenDialog.mockClear();
     ptySpawn.mockClear();
@@ -1848,7 +1850,8 @@ exit 0
       const setupOutput = emitted
         .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
         .map((entry) => Buffer.from(
-          (entry.payload as { data: number[] }).data,
+          (entry.payload as { bytesBase64: string }).bytesBase64,
+          "base64",
         ).toString("utf8"))
         .join("");
       expect(setupOutput).toContain("[orkestrator] Starting environment setup");
@@ -2733,7 +2736,7 @@ exit 0
     });
   }, ASYNC_TEST_BUDGET_MS);
 
-  test("frees a non-setup terminal output buffer when the session exits", async () => {
+  test("retains an exited terminal snapshot long enough for desync recovery", async () => {
     const worktreePath = await createTempDir("ork-electron-terminal-buffer-");
     const environment = createEnvironment({
       id: "env-local-terminal-buffer",
@@ -2756,11 +2759,129 @@ exit 0
     const buffer = await commands.get("get_terminal_output_buffer")?.({ sessionId }, context) as string;
     expect(buffer).toContain("hello from shell");
 
-    // One-shot terminal buffers must be freed on exit so they do not leak for
-    // the lifetime of the main process.
+    const beforeExit = await commands.get("get_terminal_output_snapshot")?.(
+      { sessionId },
+      context,
+    );
     ptyProcesses[0]?.emitExit({ exitCode: 0 });
-    const afterExit = await commands.get("get_terminal_output_buffer")?.({ sessionId }, context) as string;
-    expect(afterExit).toBe("");
+    expect(
+      await commands.get("get_terminal_output_snapshot")?.({ sessionId }, context),
+    ).toEqual(beforeExit);
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(1);
+
+    // Retention is bounded in time; pin the expiry result without making the
+    // suite sleep for the production recovery window.
+    commandTesting.deleteRetainedTerminalOutputBuffer(sessionId);
+    expect(
+      await commands.get("get_terminal_output_snapshot")?.({ sessionId }, context),
+    ).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("expires an exited terminal snapshot through the production timer path", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-buffer-expiry-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-buffer-expiry",
+      environmentType: "local",
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    commandTesting.setTerminalOutputRetentionMs(5);
+
+    const sessionId = terminalSessionResult(
+      await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ),
+    ).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    ptyProcesses.at(-1)?.emitData("short-lived tail");
+    ptyProcesses.at(-1)?.emitExit({ exitCode: 0 });
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(1);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+    expect(commands.get("get_terminal_output_snapshot")?.({ sessionId }, context))
+      .toEqual({ output: "", revision: 0, generation: 0, truncated: false });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("an explicitly closed terminal does not retain its output snapshot", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-explicit-close-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-explicit-close",
+      environmentType: "local",
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const sessionId = terminalSessionResult(
+      await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ),
+    ).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    ptyProcesses.at(-1)?.emitData("user closed this terminal");
+
+    await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+    expect(commands.get("get_terminal_output_snapshot")?.({ sessionId }, context))
+      .toEqual({ output: "", revision: 0, generation: 0, truncated: false });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("bounds retained exited terminal snapshots and evicts the oldest", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-retention-cap-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-retention-cap",
+      environmentType: "local",
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const sessionIds: string[] = [];
+
+    for (let index = 0; index < 33; index += 1) {
+      const sessionId = terminalSessionResult(
+        await commands.get("create_local_terminal_session")?.(
+          { environmentId: environment.id, cols: 80, rows: 24 },
+          context,
+        ),
+      ).sessionId;
+      sessionIds.push(sessionId);
+      await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+      const process = ptyProcesses.at(-1)!;
+      process.emitData(`snapshot-${index}`);
+      process.emitExit({ exitCode: 0 });
+    }
+
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(32);
+    expect(
+      await commands.get("get_terminal_output_snapshot")?.(
+        { sessionId: sessionIds[0] },
+        context,
+      ),
+    ).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
+    expect(
+      await commands.get("get_terminal_output_snapshot")?.(
+        { sessionId: sessionIds.at(-1) },
+        context,
+      ),
+    ).toEqual({
+      output: "snapshot-32",
+      revision: 1,
+      generation: 1,
+      truncated: false,
+    });
   }, ASYNC_TEST_BUDGET_MS);
 
   test("caps the terminal output buffer at the maximum size", async () => {
@@ -2785,13 +2906,23 @@ exit 0
 
     ptyProcesses[0]?.emitData("A".repeat(maxChars));
     ptyProcesses[0]?.emitData("B".repeat(1024));
+    for (let index = 0; index < 2_048; index += 1) {
+      ptyProcesses[0]?.emitData("x");
+    }
+    expect(commandTesting.terminalOutputBufferStats(sessionId)).toMatchObject({
+      chars: maxChars,
+      sequence: 2_050,
+      chunks: expect.any(Number),
+    });
+    expect(commandTesting.terminalOutputBufferStats(sessionId).chunks)
+      .toBeLessThanOrEqual(1_024);
     const buffer = await commands.get("get_terminal_output_buffer")?.({ sessionId }, context) as string;
     expect(buffer.length).toBe(maxChars);
-    expect(buffer.endsWith("B".repeat(1024))).toBe(true);
+    expect(buffer.endsWith(`${"B".repeat(1024)}${"x".repeat(2_048)}`)).toBe(true);
     expect(buffer.startsWith("A")).toBe(true);
     expect(commands.get("get_terminal_output_snapshot")?.({ sessionId }, context)).toEqual({
       output: buffer,
-      revision: 2,
+      revision: 2_050,
       generation: 1,
       truncated: true,
     });
@@ -2827,6 +2958,39 @@ exit 0
     expect(snapshot.truncated).toBe(true);
     expect(snapshot.output).toBe("A".repeat(maxChars - 1));
     expect(snapshot.output).not.toContain("\ufffd");
+    expect(Buffer.from(snapshot.output, "utf8").toString("utf8")).toBe(snapshot.output);
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("does not leave a low surrogate when the trimmed pair spans PTY chunks", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-unicode-chunks-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-unicode-chunks",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const maxChars = 500 * 1024;
+    const sessionId = terminalSessionResult(
+      await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ),
+    ).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+
+    // The high and low halves arrive in distinct PTY callbacks. Trimming the
+    // oldest code unit therefore drops an entire chunk and must also advance
+    // into the next one to remove the orphaned low half.
+    ptyProcesses.at(-1)?.emitData("\ud83d");
+    ptyProcesses.at(-1)?.emitData(`\ude00${"A".repeat(maxChars - 1)}`);
+
+    const snapshot = commands.get("get_terminal_output_snapshot")?.(
+      { sessionId },
+      context,
+    ) as { output: string; truncated: boolean };
+    expect(snapshot.truncated).toBe(true);
+    expect(snapshot.output).toBe("A".repeat(maxChars - 1));
+    expect(snapshot.output.charCodeAt(0)).not.toBe(0xde00);
     expect(Buffer.from(snapshot.output, "utf8").toString("utf8")).toBe(snapshot.output);
   }, ASYNC_TEST_BUDGET_MS);
 
@@ -5374,7 +5538,8 @@ exit 0
       const setupOutput = emitted
         .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
         .map((entry) => Buffer.from(
-          (entry.payload as { data: number[] }).data,
+          (entry.payload as { bytesBase64: string }).bytesBase64,
+          "base64",
         ).toString("utf8"))
         .join("");
       // Preparation performs the clone, so its announcement and output have to
@@ -9551,7 +9716,7 @@ exit 0
       {
         event: `terminal-output-${sessionId}`,
         payload: {
-          data: Array.from(Buffer.from("ready\r\n", "utf8")),
+          bytesBase64: Buffer.from("ready\r\n", "utf8").toString("base64"),
           revision: 1,
           generation: 1,
         },
@@ -9623,7 +9788,9 @@ exit 0
         {
           event: `terminal-output-${firstSessionId}`,
           payload: {
-            data: Array.from(Buffer.from("dev server listening on 3000\r\n")),
+            bytesBase64: Buffer.from(
+              "dev server listening on 3000\r\n",
+            ).toString("base64"),
             revision: 1,
             generation: 1,
           },
@@ -9631,7 +9798,7 @@ exit 0
         {
           event: `terminal-output-${firstSessionId}`,
           payload: {
-            data: Array.from(Buffer.from("second chunk\r\n")),
+            bytesBase64: Buffer.from("second chunk\r\n").toString("base64"),
             revision: 2,
             generation: 1,
           },
@@ -10978,6 +11145,183 @@ exit 1
       await expect(commands.get("sync_all_environments_with_docker")?.({}, context)).resolves.toEqual(["env-missing"]);
     });
     expect(updates).toContainEqual({ status: "stopped", containerId: null });
+  });
+
+  test("reconciles container statuses from one labelled docker ps snapshot", async () => {
+    const agreeing = createEnvironment({
+      id: "env-agree",
+      environmentType: "containerized",
+      containerId: "container-agree",
+      status: "running",
+    });
+    const transitioned = createEnvironment({
+      id: "env-transitioned",
+      environmentType: "containerized",
+      containerId: "container-transitioned",
+      status: "running",
+    });
+    const { context, updates } = createContext([agreeing, transitioned]);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf 'container-agree\\trunning\\n'
+  printf 'container-transitioned\\texited\\n'
+  exit 0
+fi
+if [ "$1" = "inspect" ]; then
+  printf 'exited\\n'
+  exit 0
+fi
+exit 0
+`, async ({ all }) => {
+      await commands.get("get_environments")?.({ projectId: agreeing.projectId }, context);
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      // The whole batch shares one labelled `docker ps` instead of one
+      // `docker inspect` per environment.
+      expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
+      // Only the container whose snapshot state disagrees with storage is
+      // confirmed with a fresh inspect before anything is rewritten.
+      expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
+        "inspect -f {{.State.Status}} container-transitioned",
+      ]);
+    });
+
+    expect(updates).toEqual([{ status: "stopped" }]);
+    expect(agreeing.status).toBe("running");
+    expect(transitioned.status).toBe("stopped");
+  });
+
+  test("reuses one docker ps snapshot across a burst of status refreshes", async () => {
+    const environment = createEnvironment({
+      id: "env-burst",
+      environmentType: "containerized",
+      containerId: "container-burst",
+      status: "running",
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf 'container-burst\\trunning\\n'
+  exit 0
+fi
+exit 1
+`, async ({ all }) => {
+      await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
+      await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
+      await expect(commands.get("get_environment_status")?.(
+        { environmentId: environment.id },
+        context,
+      )).resolves.toBe("running");
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
+      expect(log.some((line) => line.startsWith("inspect"))).toBe(false);
+    });
+    expect(updates).toHaveLength(0);
+  });
+
+  test("refreshes the docker ps snapshot after its cache expires", async () => {
+    const environment = createEnvironment({
+      id: "env-cache-expiry",
+      environmentType: "containerized",
+      containerId: "container-cache-expiry",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf 'container-cache-expiry\\trunning\\n'
+  exit 0
+fi
+exit 1
+`, async ({ all }) => {
+      await withFixedDate("2026-07-28T12:00:00.000Z", () =>
+        commands.get("get_environments")?.({ projectId: environment.projectId }, context)
+      );
+      await withFixedDate("2026-07-28T12:00:03.001Z", () =>
+        commands.get("get_environments")?.({ projectId: environment.projectId }, context)
+      );
+
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      expect(log.filter((line) => line.startsWith("ps -a"))).toHaveLength(2);
+    });
+  });
+
+  test("falls back to per-container inspect when the shared docker scan fails", async () => {
+    const environment = createEnvironment({
+      id: "env-cache-failure",
+      environmentType: "containerized",
+      containerId: "container-cache-failure",
+      status: "running",
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  exit 1
+fi
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+exit 1
+`, async ({ all }) => {
+      await commands.get("get_environments")?.(
+        { projectId: environment.projectId },
+        context,
+      );
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      expect(log.filter((line) => line.startsWith("ps -a"))).toHaveLength(1);
+      expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
+        "inspect -f {{.State.Status}} container-cache-failure",
+      ]);
+    });
+    expect(updates).toHaveLength(0);
+  });
+
+  test("only probes containers missing from the labelled snapshot during full sync", async () => {
+    const listed = createEnvironment({
+      id: "env-listed",
+      environmentType: "containerized",
+      containerId: "container-listed",
+      status: "running",
+    });
+    const missing = createEnvironment({
+      id: "env-absent",
+      environmentType: "containerized",
+      containerId: "container-absent",
+      status: "running",
+    });
+    const { context, updates } = createContext([listed, missing]);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf 'container-listed\\trunning\\n'
+  exit 0
+fi
+printf 'Error: No such object: container-absent\\n' >&2
+exit 1
+`, async ({ all }) => {
+      await expect(commands.get("sync_all_environments_with_docker")?.({}, context))
+        .resolves.toEqual([missing.id]);
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
+      expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
+        "inspect -f {{.State.Status}} container-absent",
+      ]);
+    });
+    expect(updates).toEqual([{ status: "stopped", containerId: null }]);
   });
 
   test("stops local and container environments and treats recreation without a container as a no-op", async () => {

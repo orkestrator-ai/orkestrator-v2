@@ -1204,6 +1204,57 @@ describe("Electron StorageService", () => {
     expect(await storage.getEnvironment(environment.id)).toEqual(before);
   });
 
+  test("ignores stored key order when deciding whether an activity write changed anything", async () => {
+    // The backend rebuilds the source map in a fixed order while the persisted
+    // file keeps whatever order it was written in. If the change check were
+    // order-sensitive, every ~10s lease renewal would look structural and be
+    // broadcast to every connected client, which is the storm this check exists
+    // to prevent.
+    const dataDir = await createTempDir("ork-storage-agent-key-order-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const createdTime = Date.parse(environment.createdAt);
+    const reportedAt = new Date(createdTime + 1_000).toISOString();
+
+    const environmentsPath = path.join(dataDir, "environments.json");
+    const stored = JSON.parse(await fs.readFile(environmentsPath, "utf8")) as Array<
+      Record<string, unknown>
+    >;
+    stored[0]!.agentActivityState = "working";
+    stored[0]!.agentActivityUpdatedAt = reportedAt;
+    stored[0]!.agentActivitySources = {
+      "claude-terminal": { state: "working", updatedAt: reportedAt },
+      frontend: { state: "working", updatedAt: reportedAt },
+    };
+    await fs.writeFile(environmentsPath, `${JSON.stringify(stored)}\n`, "utf8");
+
+    const announced: string[] = [];
+    storage.setResourceChangeListener((change) => announced.push(change.id));
+
+    // Same states everywhere, only the token moves forward.
+    await storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      new Date(createdTime + 2_000).toISOString(),
+      "claude-terminal",
+    );
+    expect(announced).toEqual([]);
+
+    // A real per-source transition is announced even though the aggregate —
+    // still "working" thanks to the frontend source — has not moved.
+    await storage.setEnvironmentAgentActivity(
+      environment.id,
+      "idle",
+      new Date(createdTime + 3_000).toISOString(),
+      "claude-terminal",
+    );
+    expect(announced).toEqual([environment.id]);
+    await expect(storage.getEnvironment(environment.id)).resolves.toMatchObject({
+      agentActivityState: "working",
+    });
+  });
+
   test("serializes concurrent agent observations to the newest source timestamp", async () => {
     const dataDir = await createTempDir("ork-storage-agent-concurrent-");
     const firstStorage = new StorageService(dataDir);

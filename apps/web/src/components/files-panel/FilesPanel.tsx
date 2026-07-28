@@ -9,7 +9,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 
 
 export function FilesPanel() {
-  const { activeTab, targetBranch } = useFilesPanelStore();
+  const activeTab = useFilesPanelStore((state) => state.activeTab);
+  const targetBranch = useFilesPanelStore((state) => state.targetBranch);
   const [pendingAction, setPendingAction] = useState<PendingFileAction | null>(null);
 
   // Initialize the files panel data loading

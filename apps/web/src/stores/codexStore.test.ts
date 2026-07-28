@@ -1123,3 +1123,140 @@ describe("codexStore context usage", () => {
     expect(useCodexStore.getState().getContextUsage(otherEnvKey)).toEqual(USAGE);
   });
 });
+
+describe("no-op equality bails", () => {
+  beforeEach(() => {
+    resetCodexStore();
+    useCodexStore.getState().setSession(SESSION_KEY, {
+      sessionId: "session-1",
+      messages: [],
+      isLoading: false,
+    });
+  });
+
+  test("setContextUsage with an equal snapshot keeps the same map identity", () => {
+    const store = useCodexStore.getState();
+    const usage: ContextUsageSnapshot = {
+      usedTokens: 10,
+      totalTokens: 100,
+      percentUsed: 10,
+      rateLimits: [],
+    };
+    store.setContextUsage(SESSION_KEY, usage);
+    const before = useCodexStore.getState().contextUsage;
+
+    // Fresh but value-identical object, as a poll would deliver.
+    store.setContextUsage(SESSION_KEY, {
+      usedTokens: 10,
+      totalTokens: 100,
+      percentUsed: 10,
+      rateLimits: [],
+    });
+
+    expect(useCodexStore.getState().contextUsage).toBe(before);
+
+    store.setContextUsage(SESSION_KEY, { ...usage, usedTokens: 11 });
+    expect(useCodexStore.getState().contextUsage).not.toBe(before);
+  });
+
+  test("setContextUsage(null) with nothing stored is a no-op", () => {
+    const before = useCodexStore.getState().contextUsage;
+    useCodexStore.getState().setContextUsage(SESSION_KEY, null);
+    expect(useCodexStore.getState().contextUsage).toBe(before);
+  });
+
+  test("setSlashCommands with an equal list keeps the same map identity", () => {
+    const store = useCodexStore.getState();
+    store.setSlashCommands("env-1", [
+      { name: "review", description: "Review", source: "prompt" },
+    ]);
+    const before = useCodexStore.getState().slashCommands;
+
+    store.setSlashCommands("env-1", [
+      { name: "review", description: "Review", source: "prompt" },
+    ]);
+    expect(useCodexStore.getState().slashCommands).toBe(before);
+
+    store.setSlashCommands("env-1", []);
+    expect(useCodexStore.getState().slashCommands).not.toBe(before);
+    const cleared = useCodexStore.getState().slashCommands;
+
+    // Clearing an already-empty entry is also a no-op.
+    store.setSlashCommands("env-1", []);
+    expect(useCodexStore.getState().slashCommands).toBe(cleared);
+  });
+
+  test("setMessages with a value-identical snapshot preserves state and message identities", () => {
+    const store = useCodexStore.getState();
+    const serverMessage = {
+      id: "server-1",
+      role: "user" as const,
+      content: "hello",
+      parts: [{ type: "text" as const, content: "hello" }],
+      createdAt: "2026-04-15T10:00:00.000Z",
+    };
+    store.setMessages(SESSION_KEY, [serverMessage]);
+    const sessionBefore = useCodexStore.getState().sessions.get(SESSION_KEY);
+    const messagesBefore = sessionBefore?.messages;
+
+    // A fresh snapshot with new object identities but identical content.
+    store.setMessages(SESSION_KEY, [
+      {
+        id: "server-1",
+        role: "user",
+        content: "hello",
+        parts: [{ type: "text", content: "hello" }],
+        createdAt: "2026-04-15T10:00:00.000Z",
+      },
+    ]);
+
+    const sessionAfter = useCodexStore.getState().sessions.get(SESSION_KEY);
+    expect(sessionAfter).toBe(sessionBefore!);
+    expect(sessionAfter?.messages).toBe(messagesBefore!);
+  });
+
+  test("setMessages reuses existing objects for unchanged messages when one message changes", () => {
+    const store = useCodexStore.getState();
+    store.setMessages(SESSION_KEY, [
+      {
+        id: "server-1",
+        role: "user",
+        content: "hello",
+        parts: [{ type: "text", content: "hello" }],
+        createdAt: "2026-04-15T10:00:00.000Z",
+      },
+      {
+        id: "server-2",
+        role: "assistant",
+        content: "streaming",
+        parts: [{ type: "text", content: "streaming" }],
+        createdAt: "2026-04-15T10:00:01.000Z",
+      },
+    ]);
+    const before = useCodexStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
+
+    store.setMessages(SESSION_KEY, [
+      {
+        id: "server-1",
+        role: "user",
+        content: "hello",
+        parts: [{ type: "text", content: "hello" }],
+        createdAt: "2026-04-15T10:00:00.000Z",
+      },
+      {
+        id: "server-2",
+        role: "assistant",
+        content: "streaming more",
+        parts: [{ type: "text", content: "streaming more" }],
+        createdAt: "2026-04-15T10:00:01.000Z",
+      },
+    ]);
+
+    const after = useCodexStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
+    expect(after).toHaveLength(2);
+    // Unchanged message keeps its identity; changed one is replaced.
+    expect(after[0]).toBe(before[0]!);
+    expect(after[1]).not.toBe(before[1]!);
+    expect(after[1]?.content).toBe("streaming more");
+  });
+});

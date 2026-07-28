@@ -36,7 +36,9 @@ interface SettingsPageProps {
 }
 
 export function SettingsPage({ open, onOpenChange }: SettingsPageProps) {
-  const { setConfig, isLoading, setLoading } = useConfigStore();
+  const setConfig = useConfigStore((state) => state.setConfig);
+  const isLoading = useConfigStore((state) => state.isLoading);
+  const setLoading = useConfigStore((state) => state.setLoading);
   const [initialLoadDone, setInitialLoadDone] = useState(false);
 
   // Load config when page opens

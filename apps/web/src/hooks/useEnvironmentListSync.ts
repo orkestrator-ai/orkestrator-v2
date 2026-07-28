@@ -2,12 +2,10 @@ import { useEffect, useRef } from "react";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 
 /**
- * Safety-net poll interval.
- *
- * The backend change feed is the primary path; this exists only to close the
- * window where a client was disconnected (laptop asleep, gateway restarted,
- * SSE dropped) and therefore missed the announcements it would otherwise have
- * acted on. It is deliberately far slower than the 5s poll it replaces.
+ * Kept exported for backwards compatibility; the periodic safety net now runs
+ * through `resource-sync`'s own `RESOURCE_RESYNC_INTERVAL_MS` timer (which
+ * raises `onResourceResync`), so this hook no longer runs its own interval —
+ * doing both refreshed every project twice per tick.
  */
 export const ENVIRONMENT_LIST_RESYNC_INTERVAL_MS = 60_000;
 
@@ -85,19 +83,17 @@ export function useEnvironmentListSync(
     const unsubscribe = onResourceChanged("environment", () => {
       void refreshAll();
     });
+    // The periodic safety net is provided by resource-sync itself: its
+    // interval raises a resync, which lands here. Running a second interval in
+    // this hook doubled every scheduled refresh.
     const unsubscribeResync = onResourceResync(() => {
       void refreshAll();
     });
-
-    const intervalId = window.setInterval(() => {
-      void refreshAll();
-    }, ENVIRONMENT_LIST_RESYNC_INTERVAL_MS);
 
     return () => {
       disposed = true;
       unsubscribe();
       unsubscribeResync();
-      window.clearInterval(intervalId);
     };
   }, []);
 }

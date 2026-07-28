@@ -272,7 +272,7 @@ export function EnvironmentSettingsDialog({
   onUpdate,
   onRestart,
 }: EnvironmentSettingsDialogProps) {
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const globalDomains = config.global.allowedDomains || [];
 
   // Name state

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { deepEqualJson } from "@/lib/chat/message-identity";
 import type { Session, SessionStatus, SessionType } from "@/types";
 import {
   getSessionsByEnvironment,
@@ -18,6 +19,8 @@ import {
 /** Sort sessions by order field (lower = first) */
 const sortByOrder = (sessions: Session[]): Session[] =>
   [...sessions].sort((a, b) => a.order - b.order);
+
+const activeSessionLoadRequests = new Map<string, object>();
 
 interface SessionState {
   // State
@@ -93,6 +96,8 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
 
   // Actions
   loadSessionsForEnvironment: async (environmentId) => {
+    const requestToken = {};
+    activeSessionLoadRequests.set(environmentId, requestToken);
     set((state) => ({
       loadingEnvironments: new Set(state.loadingEnvironments).add(environmentId),
       error: null,
@@ -100,7 +105,30 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
 
     try {
       const sessions = await getSessionsByEnvironment(environmentId);
+      if (activeSessionLoadRequests.get(environmentId) !== requestToken) return;
       set((state) => {
+        const existing = [...state.sessions.values()].filter(
+          (session) => session.environmentId === environmentId,
+        );
+        const existingById = new Map(existing.map((session) => [session.id, session]));
+        // Structural, not serialized: JSON.stringify is key-order sensitive (a
+        // reordered but identical record would publish a spurious update) and
+        // erases undefined-valued fields (a cleared field would be dropped).
+        const unchanged =
+          existing.length === sessions.length
+          && sessions.every((session) => {
+            const current = existingById.get(session.id);
+            return current !== undefined && deepEqualJson(current, session);
+          });
+        const newLoading = new Set(state.loadingEnvironments);
+        newLoading.delete(environmentId);
+        if (unchanged) {
+          return {
+            loadingEnvironments: newLoading,
+            ...(state.error === null ? {} : { error: null }),
+          };
+        }
+
         const newSessions = new Map(state.sessions);
         // Clear existing sessions for this environment first
         for (const [id, session] of newSessions) {
@@ -110,13 +138,20 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
         }
         // Add loaded sessions
         for (const session of sessions) {
-          newSessions.set(session.id, session);
+          const current = existingById.get(session.id);
+          newSessions.set(
+            session.id,
+            current && deepEqualJson(current, session) ? current : session,
+          );
         }
-        const newLoading = new Set(state.loadingEnvironments);
-        newLoading.delete(environmentId);
-        return { sessions: newSessions, loadingEnvironments: newLoading };
+        return {
+          sessions: newSessions,
+          loadingEnvironments: newLoading,
+          ...(state.error === null ? {} : { error: null }),
+        };
       });
     } catch (error) {
+      if (activeSessionLoadRequests.get(environmentId) !== requestToken) return;
       set((state) => {
         const newLoading = new Set(state.loadingEnvironments);
         newLoading.delete(environmentId);
@@ -125,6 +160,10 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
           loadingEnvironments: newLoading,
         };
       });
+    } finally {
+      if (activeSessionLoadRequests.get(environmentId) === requestToken) {
+        activeSessionLoadRequests.delete(environmentId);
+      }
     }
   },
 

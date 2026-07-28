@@ -4,6 +4,10 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
+import {
+  decodeTerminalOutputPayload,
+  type TerminalOutputPayload,
+} from "@/hooks/useTerminal";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import {
   createInteractiveTerminal,
@@ -199,26 +203,29 @@ export function ClaudeTmuxInteractiveTerminal({
     resizeObserver.observe(host);
 
     let cancelled = false;
+    let createdSessionId: string | null = null;
+    let activeUnlisten: UnlistenFn | null = null;
+    let detached = false;
+    const listenAbortController = new AbortController();
+
+    const cleanupCreatedSession = () => {
+      listenAbortController.abort();
+      const unlisten = activeUnlisten;
+      activeUnlisten = null;
+      unlisten?.();
+      if (unlistenRef.current === unlisten) {
+        unlistenRef.current = null;
+      }
+      if (createdSessionId && !detached) {
+        detached = true;
+        void detachInteractiveTerminal(createdSessionId);
+      }
+      if (sessionIdRef.current === createdSessionId) {
+        sessionIdRef.current = null;
+      }
+    };
 
     const connect = async () => {
-      let createdSessionId: string | null = null;
-      let activeUnlisten: UnlistenFn | null = null;
-
-      const cleanupCreatedSession = () => {
-        const unlisten = activeUnlisten;
-        activeUnlisten = null;
-        unlisten?.();
-        if (unlistenRef.current === unlisten) {
-          unlistenRef.current = null;
-        }
-        if (createdSessionId) {
-          void detachInteractiveTerminal(createdSessionId);
-        }
-        if (sessionIdRef.current === createdSessionId) {
-          sessionIdRef.current = null;
-        }
-      };
-
       try {
         if (!environmentId) {
           setError("No environment specified for interactive terminal");
@@ -237,11 +244,13 @@ export function ClaudeTmuxInteractiveTerminal({
         }
 
         sessionIdRef.current = sessionId;
-        activeUnlisten = await listen<number[]>(
+        activeUnlisten = await listen<TerminalOutputPayload>(
           `terminal-output-${sessionId}`,
           (event) => {
-            terminal.write(new Uint8Array(event.payload));
+            const bytes = decodeTerminalOutputPayload(event.payload);
+            if (bytes?.length) terminal.write(bytes);
           },
+          { signal: listenAbortController.signal },
         );
         if (cancelled) {
           cleanupCreatedSession();
@@ -267,16 +276,10 @@ export function ClaudeTmuxInteractiveTerminal({
 
     return () => {
       cancelled = true;
-      const sessionId = sessionIdRef.current;
-      sessionIdRef.current = null;
+      cleanupCreatedSession();
       setConnected(false);
       dataDisposable.dispose();
       resizeObserver.disconnect();
-      unlistenRef.current?.();
-      unlistenRef.current = null;
-      if (sessionId) {
-        void detachInteractiveTerminal(sessionId);
-      }
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;

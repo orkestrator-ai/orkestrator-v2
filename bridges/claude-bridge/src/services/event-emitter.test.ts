@@ -46,6 +46,23 @@ describe("eventEmitter", () => {
     expect(received2).toEqual([event]);
   });
 
+  test("assigns one strictly increasing revision to each synchronous fan-out", () => {
+    const before = eventEmitter.currentRevision;
+    const first: number[] = [];
+    const second: number[] = [];
+    trackedSubscribe((_event, revision) => first.push(revision));
+    trackedSubscribe((_event, revision) => second.push(revision));
+
+    eventEmitter.emit({ type: "session.updated", sessionId: "revision-1" });
+    eventEmitter.emit({ type: "session.idle", sessionId: "revision-2" });
+
+    expect(first).toEqual([before + 1, before + 2]);
+    expect(second).toEqual(first);
+    expect(eventEmitter.currentCursor).toBe(
+      `${eventEmitter.generation}:${before + 2}`,
+    );
+  });
+
   test("a throwing subscriber does not stop other subscribers from receiving the event", () => {
     const received: SSEEvent[] = [];
     trackedSubscribe(() => {

@@ -18,6 +18,7 @@ import { readCachedTranscript, readTranscriptHead } from "../transcript-cache.js
 import {
   buildFallbackSessionTitle,
   readPersistedSessionTitleEntries,
+  type PersistedSessionTitle,
   type PersistedSessionTitleSource,
 } from "../session-titles.js";
 import {
@@ -168,14 +169,35 @@ export function getTranscriptPathCacheStats(): { entries: number } {
   return { entries: cachedTranscriptPaths.size };
 }
 
+/**
+ * Picks the rollout belonging to `threadId` from a path listing.
+ *
+ * A bare `includes` is ambiguous: Codex names rollouts `rollout-<ts>-<id>.jsonl`,
+ * so searching for `thread-1` also matches `thread-10`'s file and whichever the
+ * directory walk happened to yield first wins. Prefer a boundary-anchored match
+ * — the stem is the id, or ends with `-<id>` — and only fall back to the loose
+ * containment check for filename shapes neither this code nor Codex produces.
+ */
+function selectTranscriptPath(
+  paths: readonly string[],
+  threadId: string,
+): string | null {
+  const anchored = paths.find((file) => {
+    const stem = basename(file).replace(/\.jsonl$/, "");
+    return stem === threadId || stem.endsWith(`-${threadId}`);
+  });
+  return anchored ?? paths.find((file) => file.includes(threadId)) ?? null;
+}
+
 export async function findTranscriptPath(
   threadId: string,
   transcriptPaths?: TranscriptPathSource,
+  options?: { allowNegativeCache?: boolean },
 ): Promise<string | null> {
   // An explicit snapshot is authoritative for this call; do not cache results
   // derived from it, since the caller may have scoped or filtered the listing.
   if (typeof transcriptPaths === "object") {
-    return transcriptPaths.find((file) => file.includes(threadId)) ?? null;
+    return selectTranscriptPath(transcriptPaths, threadId);
   }
 
   const key = transcriptPathCacheKey(threadId);
@@ -188,13 +210,20 @@ export async function findTranscriptPath(
       } catch {
         cachedTranscriptPaths.delete(key);
       }
-    } else if (Date.now() - cached.checkedAt < pathCacheLimits.negativeTtlMs) {
+    } else if (
+      options?.allowNegativeCache !== false
+      && Date.now() - cached.checkedAt < pathCacheLimits.negativeTtlMs
+    ) {
+      // Callers resolving one specific thread opt out: the rollout is written by
+      // the app-server child asynchronously after this process asks for the
+      // thread, so a miss cached moments ago says nothing about whether the file
+      // exists now. Re-listing on a miss is cheap; serving a stale miss is not.
       return null;
     }
   }
 
   const paths = transcriptPaths ? await transcriptPaths() : await listTranscriptPaths();
-  const found = paths.find((file) => file.includes(threadId)) ?? null;
+  const found = selectTranscriptPath(paths, threadId);
   rememberTranscriptPath(threadId, found);
   return found;
 }
@@ -280,6 +309,128 @@ export async function getSessionMetaFromTranscriptPath(
   };
 }
 
+/**
+ * Short-lived cache for the whole-home catalog scan.
+ *
+ * `/session/list` polls and rapid re-attaches both rebuild the catalog, and each
+ * rebuild is a stat + open + head read of **every** rollout on disk. A few
+ * seconds of reuse removes that cost without letting the listing go stale: the
+ * runtime invalidates it whenever this process creates, resumes, or forks a
+ * thread, and the TTL covers rollouts written by anything else.
+ *
+ * Keyed by Codex home so a changed `CODEX_HOME` can never serve another store's
+ * catalog. The promise is cached (not the value) so concurrent callers share one
+ * scan; a rejected scan is evicted immediately rather than pinned for the TTL.
+ */
+export const TRANSCRIPT_CATALOG_TTL_MS = 2_000;
+
+interface CachedTranscriptCatalog {
+  codexHome: string;
+  /** Undefined while the shared scan is still in flight. */
+  settledAt?: number;
+  catalog: Promise<TranscriptCatalog>;
+}
+
+let cachedTranscriptCatalog: CachedTranscriptCatalog | null = null;
+let catalogTtlMs = TRANSCRIPT_CATALOG_TTL_MS;
+let catalogNow = Date.now;
+let catalogInvalidations = 0;
+let transcriptCatalogBuilder: () => Promise<TranscriptCatalog> =
+  () => buildTranscriptCatalog();
+
+export function setTranscriptCatalogTtlForTesting(ttlMs?: number): void {
+  catalogTtlMs = ttlMs ?? TRANSCRIPT_CATALOG_TTL_MS;
+}
+
+export function setTranscriptCatalogNowForTesting(now?: () => number): void {
+  catalogNow = now ?? Date.now;
+}
+
+export function setTranscriptCatalogBuilderForTesting(
+  builder?: () => Promise<TranscriptCatalog>,
+): void {
+  transcriptCatalogBuilder = builder ?? (() => buildTranscriptCatalog());
+}
+
+export function invalidateTranscriptCatalogCache(): void {
+  cachedTranscriptCatalog = null;
+  catalogInvalidations += 1;
+}
+
+export function getTranscriptCatalogInvalidationCountForTesting(): number {
+  return catalogInvalidations;
+}
+
+/**
+ * Mirrors how {@link getPersistedSessionMeta} resolves a thread against a
+ * catalog, so "the cache can answer for this thread" and "the cache will answer
+ * for this thread" cannot drift apart.
+ */
+function catalogKnowsThread(catalog: TranscriptCatalog, threadId: string): boolean {
+  return (
+    catalog.transcriptPathByThreadId.has(threadId)
+    || selectTranscriptPath(
+      catalog.metas.flatMap((meta) => meta.transcriptPath ?? []),
+      threadId,
+    ) !== null
+  );
+}
+
+/**
+ * @param mustContainThreadId When set, a cached catalog that does not already
+ *   know this thread is treated as stale and rescanned. A cache may only ever
+ *   accelerate a *hit*: rollouts are written by the app-server child after this
+ *   process asks for the thread, so answering "no such rollout" from a scan
+ *   taken seconds ago hands the caller an empty transcript for a session that
+ *   has history. Re-scanning on a miss is the rare path; hits stay free.
+ */
+async function buildTranscriptCatalogCached(
+  mustContainThreadId?: string,
+): Promise<TranscriptCatalog> {
+  const codexHome = getCodexHomeDir();
+  const cached = cachedTranscriptCatalog;
+  if (
+    cached
+    && cached.codexHome === codexHome
+    && (
+      cached.settledAt === undefined
+      || catalogNow() - cached.settledAt < catalogTtlMs
+    )
+  ) {
+    if (mustContainThreadId === undefined) return cached.catalog;
+    const settled = await cached.catalog.catch(() => null);
+    if (settled && catalogKnowsThread(settled, mustContainThreadId)) {
+      return cached.catalog;
+    }
+    // Fall through and rescan: this entry cannot answer for the thread asked
+    // about, and only a fresh scan can distinguish "not written yet" from
+    // "written since this catalog was taken".
+    if (cachedTranscriptCatalog === cached) cachedTranscriptCatalog = null;
+  }
+
+  const catalog = transcriptCatalogBuilder();
+  const entry: CachedTranscriptCatalog = { codexHome, catalog };
+  cachedTranscriptCatalog = entry;
+  catalog.then(
+    () => {
+      // Start the freshness window only after the expensive scan is complete.
+      // Any number of callers continue sharing the promise while it is pending.
+      entry.settledAt = catalogNow();
+    },
+    () => {
+      if (cachedTranscriptCatalog === entry) cachedTranscriptCatalog = null;
+    },
+  );
+  return catalog;
+}
+
+/** Test seam for pending-scan coalescing and TTL semantics. */
+export function buildTranscriptCatalogCachedForTesting(
+  mustContainThreadId?: string,
+): Promise<TranscriptCatalog> {
+  return buildTranscriptCatalogCached(mustContainThreadId);
+}
+
 export async function buildTranscriptCatalog(): Promise<TranscriptCatalog> {
   const metas: PersistedSessionMeta[] = [];
   const metaByPath = new Map<string, PersistedSessionMeta>();
@@ -325,9 +476,10 @@ export async function getPersistedSessionMeta(
 ): Promise<PersistedSessionMeta | null> {
   const transcriptPath = transcriptCatalog
     ? transcriptCatalog.transcriptPathByThreadId.get(threadId) ??
-      transcriptCatalog.metas.find((meta) => meta.transcriptPath?.includes(threadId))
-        ?.transcriptPath ??
-      null
+      selectTranscriptPath(
+        transcriptCatalog.metas.flatMap((meta) => meta.transcriptPath ?? []),
+        threadId,
+      )
     : await findTranscriptPath(threadId, transcriptPaths);
   if (!transcriptPath) {
     return fallbackUpdatedAt
@@ -392,11 +544,31 @@ export function createSharedTranscriptMetaLoader(
   return async (threadId) => loadMeta(threadId, listPathsOnce);
 }
 
-export async function listPersistedSessionsForCwd(cwd: string): Promise<PersistedSessionMeta[]> {
+export interface PersistedSessionListing {
+  sessions: PersistedSessionMeta[];
+  /**
+   * The generated-title index this listing already read and parsed, exposed so a
+   * caller that also needs it does not read and line-parse the file a second
+   * time per request.
+   */
+  generatedTitles: Map<string, PersistedSessionTitle>;
+}
+
+export async function listPersistedSessionsForCwd(
+  cwd: string,
+  options?: { mustContainThreadId?: string },
+): Promise<PersistedSessionMeta[]> {
+  return (await listPersistedSessionsWithTitlesForCwd(cwd, options)).sessions;
+}
+
+export async function listPersistedSessionsWithTitlesForCwd(
+  cwd: string,
+  options?: { mustContainThreadId?: string },
+): Promise<PersistedSessionListing> {
   const indexPath = join(getCodexHomeDir(), "session_index.jsonl");
   const lines = await readTranscriptLines(indexPath);
   const sessions = new Map<string, PersistedSessionMeta>();
-  const transcriptCatalog = await buildTranscriptCatalog();
+  const transcriptCatalog = await buildTranscriptCatalogCached(options?.mustContainThreadId);
 
   for (const line of lines) {
     let entry: PersistedSessionIndexEntry;
@@ -441,9 +613,12 @@ export async function listPersistedSessionsForCwd(cwd: string): Promise<Persiste
     }
   }
 
-  return Array.from(sessions.values()).sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-  );
+  return {
+    sessions: Array.from(sessions.values()).sort(
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    ),
+    generatedTitles,
+  };
 }
 
 export function mergePersistedSessionMeta(
@@ -592,6 +767,71 @@ function persistedOutputState(
   return payloadType === "custom_tool_call_output" ? (part.toolState ?? null) : null;
 }
 
+/**
+ * The last `session_index.jsonl` entry for one thread, mirroring the
+ * map-overwrite in the full listing where a later line for the same id wins.
+ */
+async function findSessionIndexEntry(
+  threadId: string,
+): Promise<{ threadName?: string; updatedAt?: string } | null> {
+  const lines = await readTranscriptLines(join(getCodexHomeDir(), "session_index.jsonl"));
+  let match: { threadName?: string; updatedAt?: string } | null = null;
+  for (const line of lines) {
+    let entry: PersistedSessionIndexEntry;
+    try {
+      entry = JSON.parse(line) as PersistedSessionIndexEntry;
+    } catch {
+      continue;
+    }
+    if (entry.id !== threadId) continue;
+    match = {
+      threadName: typeof entry.thread_name === "string" ? entry.thread_name : undefined,
+      updatedAt: typeof entry.updated_at === "string" ? entry.updated_at : undefined,
+    };
+  }
+  return match;
+}
+
+/**
+ * Meta for one thread without the whole-home catalog scan the cwd listing pays.
+ *
+ * Reads only the two small index files plus one head read resolved through the
+ * bounded per-thread path cache, and applies the same title precedence as the
+ * listing: an indexed `thread_name` counts as a Codex title, and a generated
+ * title overrides anything that is not.
+ *
+ * Returns null when the rollout cannot be located this way — a rollout whose
+ * filename does not embed the thread id is only findable through the catalog,
+ * so the caller falls back to the listing on a miss.
+ */
+async function resolvePersistedSessionMetaForThread(
+  threadId: string,
+): Promise<PersistedSessionMeta | null> {
+  const indexed = await findSessionIndexEntry(threadId);
+  // `allowNegativeCache: false` — see findTranscriptPath. A thread we are being
+  // asked to hydrate may have had its rollout written moments ago, after any
+  // miss this process cached for it.
+  const transcriptPath = await findTranscriptPath(threadId, undefined, {
+    allowNegativeCache: false,
+  });
+  if (!transcriptPath) return null;
+  const meta = await getSessionMetaFromTranscriptPath(
+    transcriptPath,
+    indexed?.threadName,
+    indexed?.updatedAt,
+  );
+  if (!meta?.transcriptPath) return null;
+
+  if (meta.titleSource !== "codex") {
+    const generated = (await readPersistedSessionTitleEntries(getCodexHomeDir())).get(threadId);
+    if (generated) {
+      meta.title = generated.title;
+      meta.titleSource = generated.source;
+    }
+  }
+  return meta;
+}
+
 export async function hydrateMessagesFromPersistedSession(
   threadId: string,
 ): Promise<{
@@ -599,9 +839,14 @@ export async function hydrateMessagesFromPersistedSession(
   title?: string;
   titleSource?: PersistedSessionMeta["titleSource"];
 }> {
-  const meta = (await listPersistedSessionsForCwd(getWorkingDirectory()))
-    .find((session) => session.id === threadId)
-    ?? await getPersistedSessionMeta(threadId);
+  // Direct per-thread lookup first: hydration runs on every re-attach, and the
+  // cwd listing behind the fallback rebuilds the whole transcript catalog — one
+  // head read per rollout on disk — to answer for a single thread.
+  const meta = await resolvePersistedSessionMetaForThread(threadId)
+    ?? (await listPersistedSessionsForCwd(getWorkingDirectory(), {
+      mustContainThreadId: threadId,
+    }))
+      .find((session) => session.id === threadId);
   if (!meta?.transcriptPath) {
     return { messages: [], title: meta?.title, titleSource: meta?.titleSource };
   }

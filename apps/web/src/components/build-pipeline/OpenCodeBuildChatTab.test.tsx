@@ -6,6 +6,7 @@ import {
   TEST_STRUCTURED_REVIEW_OUTPUT,
   TEST_STRUCTURED_REVIEW_REPORT,
 } from "./structured-review-test-fixture";
+import * as realOpenCodeClient from "@/lib/opencode-client";
 
 const mockCreateClient = mock(() => ({ session: {}, event: {} }));
 const mockCreateSession = mock(async () => ({ id: "review-session", createdAt: "2026-04-15T00:00:00.000Z" }));
@@ -44,8 +45,10 @@ const mockGetOpenCodeServerStatus = mock(async (_containerId: string) => ({
 }));
 const mockStartOpenCodeServer = mock(async (_containerId: string) => ({ hostPort: 9999 }));
 const originalFetch = globalThis.fetch;
+const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
 
 mock.module("@/lib/opencode-client", () => ({
+  ...realOpenCodeClientSnapshot,
   ERROR_MESSAGE_PREFIX: "error-",
   abortSession: mockAbortSession,
   createClient: mockCreateClient,
@@ -516,6 +519,7 @@ describe("OpenCodeBuildChatTab", () => {
   afterAll(() => {
     mock.module("@/components/ui/scroll-area", () => realScrollAreaSnapshot);
     mock.module("@/components/ui/separator", () => realSeparatorSnapshot);
+    mock.module("@/lib/opencode-client", () => realOpenCodeClientSnapshot);
     globalThis.fetch = originalFetch;
     mock.restore();
   });
@@ -1023,6 +1027,67 @@ describe("OpenCodeBuildChatTab", () => {
       expect(pipeline?.phase).toBe("failed");
       expect(pipeline?.error).toBe("stream execution failed");
     });
+    act(() => {
+      useOpenCodeStore.getState().closeEventSubscription(ENV_ID);
+      channel.close();
+    });
+  });
+
+  test("keeps the final snapshot when an older streaming fallback resolves late", async () => {
+    const channel = eventChannel();
+    mockSubscribeToEvents.mockResolvedValueOnce(channel.stream as any);
+    seedPipeline("paused", "running");
+    seedOpenCodeStore(true);
+    let resolveFallback!: (messages: NativeMessage[]) => void;
+    const fallback = new Promise<NativeMessage[]>((resolve) => {
+      resolveFallback = resolve;
+    });
+    const authoritative: NativeMessage = {
+      id: "authoritative",
+      role: "assistant",
+      content: "Final snapshot",
+      parts: [{ type: "text", content: "Final snapshot" }],
+      createdAt: "2026-04-15T00:00:02.000Z",
+    };
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+    mockGetSessionMessages.mockClear();
+    let call = 0;
+    mockGetSessionMessages.mockImplementation(async () => {
+      call += 1;
+      return call === 1 ? fallback : [authoritative];
+    });
+
+    channel.push({
+      type: "message.part.updated",
+      properties: { part: { sessionID: SESSION_ID } },
+    });
+    channel.push({
+      type: "session.idle",
+      properties: { sessionID: SESSION_ID },
+    });
+
+    await waitFor(() => {
+      expect(mockGetSessionMessages).toHaveBeenCalledTimes(2);
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        messages: [authoritative],
+        isLoading: false,
+      });
+    });
+
+    resolveFallback([{
+      ...authoritative,
+      id: "stale",
+      content: "Stale fallback",
+      parts: [{ type: "text", content: "Stale fallback" }],
+    }]);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages)
+      .toEqual([authoritative]);
     act(() => {
       useOpenCodeStore.getState().closeEventSubscription(ENV_ID);
       channel.close();

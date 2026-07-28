@@ -78,6 +78,30 @@ const MAX_BROWSER_PREVIEW_BODY_BYTES = 8 * 1024 * 1024;
  */
 const MAX_INVOKE_BODY_BYTES = 48 * 1024 * 1024;
 const KEEPALIVE_MS = 25_000;
+/**
+ * Events whose payload is a raw byte stream rather than authoritative state.
+ *
+ * These are the only frames the gateway is allowed to drop under backpressure:
+ * a terminal is a view of a stream the backend also keeps in
+ * `get_terminal_output_buffer`, so a client that misses frames can resynchronize
+ * from that snapshot. Every other event carries state the renderer cannot
+ * reconstruct from a buffer and must never be dropped silently.
+ */
+const DROPPABLE_EVENT_PREFIX = "terminal-output-";
+/**
+ * Above this many buffered bytes a client is too far behind to keep receiving
+ * terminal output. Node buffers everything `write()` cannot flush, so without
+ * this a laptop terminal flooding output would grow backend heap for as long as
+ * a slow remote browser stayed connected.
+ */
+const SSE_CLIENT_SOFT_BUFFER_BYTES = 1024 * 1024;
+/**
+ * Above this a client is hopeless even for authoritative events. The connection
+ * is destroyed rather than dropping them: on reconnect the renderer receives
+ * `native-event-stream-connected` and refetches, which is correct, whereas a
+ * silently skipped state event is not.
+ */
+const SSE_CLIENT_HARD_BUFFER_BYTES = 8 * 1024 * 1024;
 const CORS_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 const CORS_ALLOWED_HEADERS = "Authorization, Content-Type, X-Orkestrator-Codex-Token";
 
@@ -629,6 +653,51 @@ function browserPreviewRefererPrefix(request: IncomingMessage): string | null {
   }
 }
 
+type GatewayEventClient = {
+  /**
+   * Event-name prefixes this client asked for, or `null` for "everything".
+   *
+   * Filtering is opt-in so an older client that does not send the parameter
+   * keeps its current firehose behavior. It exists because terminal output is
+   * namespaced per session: without it, every byte a local terminal produces is
+   * also serialized to a remote browser that is looking at another environment.
+   */
+  prefixes: string[] | null;
+  /**
+   * Extra prefixes allowed even when excluded. With no base `prefixes`, this
+   * also becomes the stream's restrictive allow-list.
+   */
+  includedPrefixes: string[] | null;
+  /** Prefixes omitted unless explicitly restored by `includedPrefixes`. */
+  excludedPrefixes: string[] | null;
+  /** Sessions whose frames were dropped for this client since its last notice. */
+  desyncedSessions: Set<string>;
+};
+
+/** Parses the opt-in `?events=` subscription filter. Empty/absent means all. */
+export function parseEventSubscriptionFilter(value: string | null): string[] | null {
+  if (value === null) return null;
+  const prefixes = value.split(",").map((prefix) => prefix.trim()).filter(Boolean);
+  return prefixes.length > 0 ? prefixes : null;
+}
+
+export function eventMatchesSubscription(
+  event: string,
+  prefixes: string[] | null,
+  includedPrefixes: string[] | null = null,
+  excludedPrefixes: string[] | null = null,
+): boolean {
+  if (includedPrefixes?.some((prefix) => event.startsWith(prefix))) return true;
+  if (excludedPrefixes?.some((prefix) => event.startsWith(prefix))) return false;
+  // `includeEvents` makes an otherwise unscoped stream restrictive. This is
+  // what lets one terminal connection opt one session back in after excluding
+  // the terminal namespace without also receiving every authoritative event
+  // already carried by the main stream.
+  if (prefixes === null && includedPrefixes !== null) return false;
+  if (prefixes === null) return true;
+  return prefixes.some((prefix) => event.startsWith(prefix));
+}
+
 export class OrkestratorGateway {
   private readonly backend: BackendInvoker;
   private readonly dataDir: string;
@@ -649,7 +718,16 @@ export class OrkestratorGateway {
   private servers = new Set<Server>();
   private token = "";
   private authFile = "";
-  private clients = new Set<ServerResponse>();
+  private clients = new Map<ServerResponse, GatewayEventClient>();
+  /**
+   * Latest full-pane tmux frame dropped for each lagging client/session.
+   *
+   * Interactive tmux output is already a complete repaint, not an incremental
+   * byte stream. Keeping only the newest refused frame makes recovery exact
+   * without retaining an unbounded history or requiring the renderer to call
+   * the ordinary PTY snapshot API.
+   */
+  private droppedTmuxFrames = new WeakMap<ServerResponse, Map<string, string>>();
   private proxyRequests = new Set<ReturnType<typeof http.request>>();
   private sockets = new Set<Socket>();
   private keepalive: ReturnType<typeof setInterval> | null = null;
@@ -862,7 +940,7 @@ export class OrkestratorGateway {
       clearInterval(this.keepalive);
       this.keepalive = null;
     }
-    for (const client of this.clients) {
+    for (const client of this.clients.keys()) {
       client.destroy();
     }
     this.clients.clear();
@@ -888,10 +966,122 @@ export class OrkestratorGateway {
 
   emit(event: string, payload: unknown): void {
     if (this.clients.size === 0) return;
-    const message = `data: ${JSON.stringify({ event, payload })}\n\n`;
-    for (const client of this.clients) {
+    const droppable = event.startsWith(DROPPABLE_EVENT_PREFIX);
+    let message: string | null = null;
+    let messageBytes = 0;
+    for (const [client, state] of this.clients) {
+      if (!eventMatchesSubscription(
+        event,
+        state.prefixes,
+        state.includedPrefixes,
+        state.excludedPrefixes,
+      )) continue;
+      if (message === null) {
+        message = `data: ${JSON.stringify({ event, payload })}\n\n`;
+        messageBytes = Buffer.byteLength(message);
+      }
+
+      if (client.writableLength > SSE_CLIENT_HARD_BUFFER_BYTES) {
+        this.dropBufferedClient(client, client.writableLength);
+        continue;
+      }
+
+      if (
+        droppable
+        && client.writableLength + messageBytes > SSE_CLIENT_SOFT_BUFFER_BYTES
+      ) {
+        this.markTerminalFrameDropped(client, state, event, message);
+        continue;
+      }
+      if (
+        state.desyncedSessions.size > 0
+        && !this.flushDesyncNotices(client, state)
+      ) {
+        continue;
+      }
+
+      const projectedBytes = client.writableLength + messageBytes;
+      if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
+        this.dropBufferedClient(client, projectedBytes);
+        continue;
+      }
+      // A desync notice may itself consume the last available soft-limit
+      // space. Re-check droppable frames after flushing it.
+      if (droppable && projectedBytes > SSE_CLIENT_SOFT_BUFFER_BYTES) {
+        this.markTerminalFrameDropped(client, state, event, message);
+        continue;
+      }
       client.write(message);
     }
+  }
+
+  private markTerminalFrameDropped(
+    client: ServerResponse,
+    state: GatewayEventClient,
+    event: string,
+    message: string,
+  ): void {
+    const sessionId = event.slice(DROPPABLE_EVENT_PREFIX.length);
+    state.desyncedSessions.add(sessionId);
+    if (
+      !sessionId.startsWith("tmux:")
+      || !state.includedPrefixes?.includes(event)
+    ) return;
+    let frames = this.droppedTmuxFrames.get(client);
+    if (!frames) {
+      frames = new Map();
+      this.droppedTmuxFrames.set(client, frames);
+    }
+    // A terminal-specific SSE subscribes to one tmux session, so this retains
+    // exactly one frame per client. Broader/legacy streams receive the ordinary
+    // desync notice instead of accumulating one pane per active session.
+    frames.set(sessionId, message);
+  }
+
+  private dropBufferedClient(client: ServerResponse, projectedBytes: number): void {
+    this.logger.warn(
+      `[RemoteGateway] Dropping an event-stream client buffering ${projectedBytes} bytes; it will reconnect and refetch`,
+    );
+    this.clients.delete(client);
+    client.destroy();
+  }
+
+  /**
+   * Tells a recovered client which terminal sessions lost frames.
+   *
+   * Dropping is only defensible if the client learns about it, so this is the
+   * other half of the soft-limit drop: the renderer reacts by replaying
+   * `get_terminal_output_buffer`, which is the authoritative window. The notice
+   * rides the session's own event rather than a second event name so consumers
+   * need no extra subscription and existing filters keep working.
+   */
+  private flushDesyncNotices(
+    client: ServerResponse,
+    state: GatewayEventClient,
+  ): boolean {
+    for (const sessionId of [...state.desyncedSessions]) {
+      const event = `${DROPPABLE_EVENT_PREFIX}${sessionId}`;
+      const retainedTmuxFrame = this.droppedTmuxFrames.get(client)?.get(sessionId);
+      const recoveryFrame = retainedTmuxFrame
+        ?? `data: ${JSON.stringify({ event, payload: { desynced: true } })}\n\n`;
+      const projectedBytes = client.writableLength + Buffer.byteLength(recoveryFrame);
+      if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
+        this.dropBufferedClient(client, projectedBytes);
+        return false;
+      }
+      // Retire the session before writing it. A write can emit "drain"
+      // synchronously, and the drain handler re-enters here: leaving the session
+      // pending across the write recurses on the same frame until the stack dies,
+      // taking the recovery path down with it.
+      if (retainedTmuxFrame) {
+        const retained = this.droppedTmuxFrames.get(client);
+        retained?.delete(sessionId);
+        if (retained?.size === 0) this.droppedTmuxFrames.delete(client);
+      }
+      state.desyncedSessions.delete(sessionId);
+      client.write(recoveryFrame);
+    }
+    return true;
   }
 
   private authenticated(request: IncomingMessage): boolean {
@@ -1070,7 +1260,7 @@ export class OrkestratorGateway {
     }
 
     if (url.pathname === `${API_PREFIX}/events`) {
-      this.handleEvents(request, response);
+      this.handleEvents(request, response, url);
       return;
     }
 
@@ -1237,7 +1427,7 @@ export class OrkestratorGateway {
     }
   }
 
-  private handleEvents(request: IncomingMessage, response: ServerResponse): void {
+  private handleEvents(request: IncomingMessage, response: ServerResponse, url: URL): void {
     if (request.method !== "GET") {
       response.writeHead(405, { allow: "GET" });
       response.end();
@@ -1251,10 +1441,36 @@ export class OrkestratorGateway {
       "x-accel-buffering": "no",
     });
     response.write(": connected\n\n");
-    this.clients.add(response);
+    const state: GatewayEventClient = {
+      prefixes: parseEventSubscriptionFilter(url.searchParams.get("events")),
+      includedPrefixes: parseEventSubscriptionFilter(
+        url.searchParams.get("includeEvents"),
+      ),
+      excludedPrefixes: parseEventSubscriptionFilter(
+        url.searchParams.get("excludeEvents"),
+      ),
+      desyncedSessions: new Set(),
+    };
+    this.clients.set(response, state);
+    // A client only ever falls behind after a write was refused, so "drained"
+    // is the earliest safe moment to tell it what it missed — waiting for the
+    // next event would leave a quiet session desynced indefinitely.
+    response.on("drain", () => {
+      if (this.clients.get(response) !== state || state.desyncedSessions.size === 0) return;
+      this.flushDesyncNotices(response, state);
+    });
 
+    // A keepalive is a write like any other, so it has to respect the same hard
+    // limit. Otherwise a stream with no event traffic keeps a client that is
+    // already hopelessly behind — and its buffer — alive indefinitely.
     this.keepalive ??= setInterval(() => {
-      for (const client of this.clients) client.write(": keepalive\n\n");
+      for (const client of this.clients.keys()) {
+        if (client.writableLength > SSE_CLIENT_HARD_BUFFER_BYTES) {
+          this.dropBufferedClient(client, client.writableLength);
+          continue;
+        }
+        client.write(": keepalive\n\n");
+      }
     }, this.keepaliveMs);
     this.keepalive.unref?.();
 

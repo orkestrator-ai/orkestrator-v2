@@ -45,7 +45,9 @@ export function OpenFileDialog() {
   const selectedItemRef = useRef<HTMLButtonElement>(null);
 
   const deferredQuery = useDeferredValue(query);
-  const { selectedEnvironmentId } = useUIStore();
+  const selectedEnvironmentId = useUIStore(
+    (state) => state.selectedEnvironmentId,
+  );
   const selectedEnvironment = useEnvironmentStore((state) =>
     state.environments.find((environment) => environment.id === selectedEnvironmentId) ?? null
   );

@@ -9,6 +9,7 @@ import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 
 const GATEWAY_PREFIX = "/__orkestrator";
 const EVENT_RECONNECT_DELAY_MS = 2_000;
+const TERMINAL_OUTPUT_EVENT_PREFIX = "terminal-output-";
 
 type EventCallback<T> = (payload: T) => void;
 type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
@@ -59,6 +60,24 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let eventSource: EventSource | null = null;
   let streamAbortController: AbortController | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  type TerminalEventStream = {
+    event: string;
+    source: EventSource | null;
+    controller: AbortController | null;
+    reconnectTimer: ReturnType<typeof setTimeout> | null;
+    ready: Promise<void>;
+    resolveReady: () => void;
+    readyResolved: boolean;
+    /**
+     * Whether this stream has ever been open. A reconnect is not the same as a
+     * first connect: the gateway has no replay buffer, so everything the PTY
+     * emitted during the gap is gone from this socket and the consumer has to
+     * be told to re-read the authoritative snapshot.
+     */
+    connectedBefore: boolean;
+    closed: boolean;
+  };
+  const terminalEventStreams = new Map<string, TerminalEventStream>();
   let bearerToken = options.token?.trim() || undefined;
   const baseUrl = normalizedBaseUrl(options.baseUrl);
   const apiUrl = (pathname: string): string =>
@@ -71,6 +90,26 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   const credentials = bearerToken || baseUrl ? "omit" as const : "same-origin" as const;
+
+  /**
+   * Receive every authoritative state event, but only terminal byte streams
+   * this browser currently consumes. Terminal events are namespaced by session,
+   * so a remote tab looking at one environment no longer downloads output from
+   * every terminal in every other environment.
+   */
+  const eventStreamPath = (terminalEvent?: string) => {
+    const params = new URLSearchParams({
+      excludeEvents: TERMINAL_OUTPUT_EVENT_PREFIX,
+    });
+    if (terminalEvent) params.set("includeEvents", terminalEvent);
+    return `${GATEWAY_PREFIX}/events?${params.toString()}`;
+  };
+
+  const isTerminalOutputEvent = (event: string): boolean =>
+    event.startsWith(TERMINAL_OUTPUT_EVENT_PREFIX);
+
+  const hasMainEventListeners = (): boolean =>
+    [...listeners.keys()].some((event) => !isTerminalOutputEvent(event));
 
   const dispatchMessage = (data: string) => {
     let parsed: { event?: unknown; payload?: unknown };
@@ -94,8 +133,29 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     for (const callback of callbacks) callback(undefined);
   };
 
+  const consumeFetchEventStream = async (
+    response: Response,
+    controller: AbortController,
+  ): Promise<void> => {
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (!controller.signal.aborted) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      let boundary = /\r?\n\r?\n/.exec(buffer);
+      while (boundary) {
+        const data = parseEventBlock(buffer.slice(0, boundary.index));
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        if (data) dispatchMessage(data);
+        boundary = /\r?\n\r?\n/.exec(buffer);
+      }
+      if (done) break;
+    }
+  };
+
   const scheduleReconnect = () => {
-    if (listeners.size === 0 || reconnectTimer) return;
+    if (!hasMainEventListeners() || reconnectTimer) return;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       ensureEventStream();
@@ -103,13 +163,13 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   const connectFetchEventStream = () => {
-    if (streamAbortController || listeners.size === 0) return;
+    if (streamAbortController || !hasMainEventListeners()) return;
     const controller = new AbortController();
     streamAbortController = controller;
 
     void (async () => {
       try {
-        const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/events`), {
+        const response = await fetch(apiUrl(eventStreamPath()), {
           credentials,
           headers: requestHeaders(),
           signal: controller.signal,
@@ -119,21 +179,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         }
         announceEventStreamConnected();
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        while (!controller.signal.aborted) {
-          const { done, value } = await reader.read();
-          buffer += decoder.decode(value, { stream: !done });
-          let boundary = /\r?\n\r?\n/.exec(buffer);
-          while (boundary) {
-            const data = parseEventBlock(buffer.slice(0, boundary.index));
-            buffer = buffer.slice(boundary.index + boundary[0].length);
-            if (data) dispatchMessage(data);
-            boundary = /\r?\n\r?\n/.exec(buffer);
-          }
-          if (done) break;
-        }
+        await consumeFetchEventStream(response, controller);
       } catch (error) {
         if (!controller.signal.aborted) {
           console.warn("[RemoteGateway] Event stream disconnected", error);
@@ -146,13 +192,13 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   const ensureEventStream = () => {
-    if (eventSource || streamAbortController || listeners.size === 0) return;
+    if (eventSource || streamAbortController || !hasMainEventListeners()) return;
     if (bearerToken || baseUrl) {
       connectFetchEventStream();
       return;
     }
 
-    eventSource = new EventSource(apiUrl(`${GATEWAY_PREFIX}/events`), {
+    eventSource = new EventSource(apiUrl(eventStreamPath()), {
       withCredentials: true,
     });
     eventSource.onopen = announceEventStreamConnected;
@@ -163,13 +209,127 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   const closeEventStreamIfIdle = () => {
-    if (listeners.size > 0) return;
+    if (hasMainEventListeners()) return;
     eventSource?.close();
     eventSource = null;
     streamAbortController?.abort();
     streamAbortController = null;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = null;
+  };
+
+  const resolveTerminalStreamReady = (stream: TerminalEventStream) => {
+    if (stream.readyResolved) return;
+    stream.readyResolved = true;
+    stream.resolveReady();
+  };
+
+  /**
+   * Announce that a per-terminal stream is open.
+   *
+   * `resolveTerminalStreamReady` is a one-shot latch, so on its own a stream
+   * that drops and reconnects tells the consumer nothing — none of `useTerminal`'s
+   * reconcile triggers fire and the terminal stays permanently truncated. Every
+   * open after the first therefore synthesizes a desync frame for exactly this
+   * event's listeners, which `decodeTerminalOutputPayload` maps to `null` and
+   * `useTerminal` turns into a snapshot reconcile. Scoping it to the one event
+   * avoids the app-wide resync `announceEventStreamConnected` would trigger.
+   */
+  const announceTerminalStreamOpen = (stream: TerminalEventStream) => {
+    const isReconnect = stream.connectedBefore;
+    stream.connectedBefore = true;
+    resolveTerminalStreamReady(stream);
+    if (!isReconnect) return;
+    dispatchMessage(
+      JSON.stringify({ event: stream.event, payload: { desynced: true } }),
+    );
+  };
+
+  const startTerminalEventStream = (stream: TerminalEventStream) => {
+    if (stream.closed || stream.source || stream.controller) return;
+    if (bearerToken || baseUrl) {
+      const controller = new AbortController();
+      stream.controller = controller;
+      void (async () => {
+        try {
+          const response = await fetch(apiUrl(eventStreamPath(stream.event)), {
+            credentials,
+            headers: requestHeaders(),
+            signal: controller.signal,
+          });
+          if (!response.ok || !response.body) {
+            throw new Error(`Gateway terminal event stream failed with HTTP ${response.status}`);
+          }
+          announceTerminalStreamOpen(stream);
+          await consumeFetchEventStream(response, controller);
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            console.warn("[RemoteGateway] Terminal event stream disconnected", error);
+          }
+        } finally {
+          if (stream.controller === controller) stream.controller = null;
+          if (
+            !stream.closed
+            && terminalEventStreams.get(stream.event) === stream
+            && listeners.has(stream.event)
+            && !stream.reconnectTimer
+          ) {
+            stream.reconnectTimer = setTimeout(() => {
+              stream.reconnectTimer = null;
+              startTerminalEventStream(stream);
+            }, options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS);
+          }
+        }
+      })();
+      return;
+    }
+
+    const source = new EventSource(apiUrl(eventStreamPath(stream.event)), {
+      withCredentials: true,
+    });
+    stream.source = source;
+    source.onopen = () => announceTerminalStreamOpen(stream);
+    source.onmessage = (message) => dispatchMessage(message.data);
+    source.onerror = () => {
+      console.warn("[RemoteGateway] Terminal event stream disconnected");
+    };
+  };
+
+  const ensureTerminalEventStream = (event: string): TerminalEventStream => {
+    const existing = terminalEventStreams.get(event);
+    if (existing) return existing;
+    let resolveReady: () => void = () => {};
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    const stream: TerminalEventStream = {
+      event,
+      source: null,
+      controller: null,
+      reconnectTimer: null,
+      ready,
+      resolveReady,
+      readyResolved: false,
+      connectedBefore: false,
+      closed: false,
+    };
+    terminalEventStreams.set(event, stream);
+    startTerminalEventStream(stream);
+    return stream;
+  };
+
+  const closeTerminalEventStream = (event: string) => {
+    const stream = terminalEventStreams.get(event);
+    if (!stream) return;
+    stream.closed = true;
+    stream.source?.close();
+    stream.source = null;
+    stream.controller?.abort();
+    stream.controller = null;
+    if (stream.reconnectTimer) clearTimeout(stream.reconnectTimer);
+    stream.reconnectTimer = null;
+    resolveTerminalStreamReady(stream);
+    terminalEventStreams.delete(event);
   };
 
   const readGatewayResponse = async <T>(response: Response, fallback: string): Promise<T> => {
@@ -194,12 +354,24 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       const callbackSet = listeners.get(event) ?? new Set<EventCallback<unknown>>();
       listeners.set(event, callbackSet);
       callbackSet.add(callback as EventCallback<unknown>);
-      ensureEventStream();
+      if (isTerminalOutputEvent(event)) {
+        ensureTerminalEventStream(event);
+      } else {
+        ensureEventStream();
+      }
       return () => {
         callbackSet.delete(callback as EventCallback<unknown>);
-        if (callbackSet.size === 0) listeners.delete(event);
+        if (callbackSet.size === 0) {
+          listeners.delete(event);
+          if (isTerminalOutputEvent(event)) closeTerminalEventStream(event);
+        }
         closeEventStreamIfIdle();
       };
+    },
+
+    eventStreamReady(event: string): Promise<void> {
+      if (!isTerminalOutputEvent(event)) return Promise.resolve();
+      return ensureTerminalEventStream(event).ready;
     },
 
     clipboard: {

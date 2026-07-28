@@ -287,6 +287,35 @@ describe("codexStore prompt dispatch claims", () => {
     expect(store.claimPromptDispatch(SESSION_KEY, "request-1")).toBe(true);
   });
 
+  test("releasing one request preserves other claims for the same session", () => {
+    const store = useCodexStore.getState();
+    expect(store.claimPromptDispatch(SESSION_KEY, "request-1")).toBe(true);
+    expect(store.claimPromptDispatch(SESSION_KEY, "request-2")).toBe(true);
+
+    store.releasePromptDispatch(SESSION_KEY, "request-1");
+
+    expect(useCodexStore.getState().promptDispatchClaims.get(SESSION_KEY))
+      .toEqual(new Set(["request-2"]));
+    expect(store.claimPromptDispatch(SESSION_KEY, "request-1")).toBe(true);
+    expect(store.claimPromptDispatch(SESSION_KEY, "request-2")).toBe(false);
+  });
+
+  test("releasing an unknown request preserves store and claim identities", () => {
+    const store = useCodexStore.getState();
+    store.claimPromptDispatch(SESSION_KEY, "request-1");
+    const stateBeforeRelease = useCodexStore.getState();
+    const claimsBeforeRelease = stateBeforeRelease.promptDispatchClaims;
+    const sessionClaimsBeforeRelease = claimsBeforeRelease.get(SESSION_KEY);
+
+    store.releasePromptDispatch(SESSION_KEY, "unknown-request");
+
+    const stateAfterRelease = useCodexStore.getState();
+    expect(stateAfterRelease).toBe(stateBeforeRelease);
+    expect(stateAfterRelease.promptDispatchClaims).toBe(claimsBeforeRelease);
+    expect(stateAfterRelease.promptDispatchClaims.get(SESSION_KEY))
+      .toBe(sessionClaimsBeforeRelease);
+  });
+
   test("session and environment cleanup release their claims", () => {
     const store = useCodexStore.getState();
     const otherSession = createSessionKey("env-2", "tab-1");
@@ -332,6 +361,10 @@ describe("codexStore session cleanup", () => {
         [targetKey, [interaction("interaction-target")]],
         [otherKey, [interaction("interaction-other")]],
       ]),
+      promptDispatchClaims: new Map([
+        [targetKey, new Set(["request-target"])],
+        [otherKey, new Set(["request-other"])],
+      ]),
     });
     usePromptDraftStore.getState().setDraftValue(
       codexInteractionDraftKey("interaction-target"),
@@ -360,6 +393,7 @@ describe("codexStore session cleanup", () => {
       "sessionPhase",
       "pendingApprovals",
       "pendingInteractions",
+      "promptDispatchClaims",
     ] as const;
     for (const field of sessionKeyedMaps) {
       expect(state[field].has(targetKey), `${field} should remove target`).toBe(false);

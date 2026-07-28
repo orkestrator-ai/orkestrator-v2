@@ -143,6 +143,11 @@ function confirmMerge() {
   fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
 }
 
+function confirmMergeAndCleanup() {
+  fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
+  fireEvent.click(screen.getByRole("button", { name: "Merge & Cleanup" }));
+}
+
 const MockContextMenuState = createContext<{
   open: boolean;
   setOpen: (open: boolean) => void;
@@ -2116,6 +2121,107 @@ describe("ActionBar successful cleanup and merge actions", () => {
     expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
       "If the pull request is a draft, it will be marked ready for review first.",
     );
+  });
+
+  test("offers cleanup after a confirmed successful merge", () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
+
+    expect(screen.getByRole("button", { name: "Merge & Cleanup" })).toBeTruthy();
+    expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
+      "only after the merge is confirmed successful",
+    );
+  });
+
+  test("cleans up only after a merge is confirmed successful", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    let resolveMerge!: (outcome: MergeOutcome) => void;
+    mergePrMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveMerge = resolve;
+    }));
+    render(<ActionBar />);
+
+    confirmMergeAndCleanup();
+
+    await waitFor(() => expect(mergePrMock).toHaveBeenCalledTimes(1));
+    expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+
+    resolveMerge({ outcome: "merged" });
+
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
+  });
+
+  test("does not clean up when the merge remains pending", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    mergePrMock.mockResolvedValueOnce({ outcome: "pending" });
+    render(<ActionBar />);
+
+    confirmMergeAndCleanup();
+
+    await waitFor(() => expect(setModeMergePendingMock).toHaveBeenCalledTimes(1));
+    expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+  });
+
+  test("does not clean up when the merge fails", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    mergePrMock.mockRejectedValueOnce(new Error("merge failed"));
+    render(<ActionBar />);
+
+    confirmMergeAndCleanup();
+
+    const errorAlert = await waitFor(() => findErrorAlert("Failed to merge PR:"));
+    expect(errorAlert.textContent).toContain("merge failed");
+    expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+  });
+
+  test("offers the regular cleanup retry when post-merge cleanup fails", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    deleteEnvironmentMock.mockRejectedValueOnce(new Error("delete failed"));
+    render(<ActionBar />);
+
+    confirmMergeAndCleanup();
+
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
+    const errorAlert = await waitFor(() => findErrorAlert("Failed to delete environment:"));
+    expect(errorAlert.textContent).toContain("delete failed");
+    expect(screen.getByRole("button", { name: "Delete Environment" })).toBeTruthy();
+  });
+
+  test("keeps a cleanup retry tied to the environment that initiated the merge", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    let resolveMerge!: (outcome: MergeOutcome) => void;
+    mergePrMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveMerge = resolve;
+    }));
+    deleteEnvironmentMock.mockRejectedValueOnce(new Error("delete failed"));
+    const { rerender } = render(<ActionBar />);
+    confirmMergeAndCleanup();
+    await waitFor(() => expect(mergePrMock).toHaveBeenCalledTimes(1));
+
+    currentEnvironment = {
+      ...selectedEnvironment,
+      id: "env-2",
+      name: "second-env",
+      branch: "feature/second",
+      containerId: "container-2",
+      prUrl: "https://github.com/org/repo/pull/2",
+      prState: "open",
+    };
+    currentSelectedEnvironmentId = "env-2";
+    rerender(<ActionBar />);
+    resolveMerge({ outcome: "merged" });
+
+    await waitFor(() => expect(findErrorAlert("Failed to delete environment:")).toBeTruthy());
+    expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
+      'environment "feature-env"',
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledTimes(2));
+    expect(deleteEnvironmentMock.mock.calls).toEqual([["env-1"], ["env-1"]]);
   });
 
   test("merges a container PR and persists its merged state", async () => {

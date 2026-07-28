@@ -11795,6 +11795,7 @@ describe("feature plan commands", () => {
       "assistant",
       "hello",
       undefined,
+      undefined,
     );
   });
 
@@ -11808,6 +11809,7 @@ describe("feature plan commands", () => {
         role: "assistant",
         content: "hello",
         stateApplication: "pending",
+        modelId: "  gpt-5.3-codex  ",
       },
       context,
     );
@@ -11816,6 +11818,7 @@ describe("feature plan commands", () => {
       "assistant",
       "hello",
       "pending",
+      "gpt-5.3-codex",
     );
 
     expect(() =>
@@ -11831,6 +11834,24 @@ describe("feature plan commands", () => {
       ),
     ).toThrow(/stateApplication/i);
     expect(storage.appendFeatureStoryMessage).not.toHaveBeenCalled();
+  });
+
+  test("rejects malformed feature-plan model attribution", () => {
+    const commands = createCommandRegistry();
+    const { context, storage } = featureContext();
+
+    expect(() =>
+      commands.get("append_feature_plan_message")!(
+        {
+          featureId: "feature-1",
+          role: "assistant",
+          content: "hello",
+          modelId: "   ",
+        },
+        context,
+      ),
+    ).toThrow(/modelId/i);
+    expect(storage.appendFeaturePlanMessage).not.toHaveBeenCalled();
   });
 
   test("rejects an invalid feature plan message role before touching storage", async () => {

@@ -30,6 +30,10 @@ import type {
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import {
+  isRootAssistantRecord,
+  normalizeBackendModelId,
+} from "@orkestrator/protocol/model-id";
+import {
   structuredOutputFailure,
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
@@ -1125,6 +1129,7 @@ function normalizePersistedSessionMessages(
     session_id: string;
     message: unknown;
     parent_tool_use_id: string | null;
+    isSidechain?: boolean;
   }>,
 ): { messages: NormalizedMessage[]; taskRegistry: TaskRegistry } {
   const toolTracker = new ToolTracker();
@@ -1168,12 +1173,24 @@ function normalizePersistedSessionMessages(
       typeof rawTimestamp === "string"
         ? rawTimestamp
         : new Date(now + index).toISOString();
+    const isRootAssistant =
+      entry.raw.type === "assistant"
+      && isRootAssistantRecord(
+        entry.raw.parent_tool_use_id,
+        entry.raw.isSidechain,
+      );
+    const modelId = isRootAssistant
+      && entry.raw.message
+      && typeof entry.raw.message === "object"
+      ? normalizeBackendModelId((entry.raw.message as { model?: unknown }).model)
+      : undefined;
     messages.push({
       id: entry.raw.uuid || generateMessageId(),
       role: entry.raw.type,
       content: entry.content,
       parts,
       timestamp,
+      ...(modelId ? { modelId } : {}),
       // Recorded explicitly rather than inferred from `id`: a record with no
       // uuid falls back to a generated id, which must never be mistaken for a
       // transcript uuid by `resolvePersistedMessageId`.
@@ -3032,6 +3049,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // text/thinking parts are rebuilt from scratch each time.
     let publishedParts: NormalizedPart[] = [];
     let publishedMessageId: string | null = null;
+    let publishedModelId: string | undefined;
 
     const emitCurrentAssistantMessage = () => {
       if (!currentAssistantMessage) return;
@@ -3042,8 +3060,25 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       if (publishedMessageId !== currentAssistantMessage.id) {
         publishedMessageId = currentAssistantMessage.id;
         publishedParts = parts.slice();
+        publishedModelId = currentAssistantMessage.modelId;
         // Stamped on the message itself, before it is serialized, so both this
         // frame and any REST read of the transcript agree on the revision.
+        currentAssistantMessage.revision = (currentAssistantMessage.revision ?? 0) + 1;
+        eventEmitter.emit({
+          type: "message.updated",
+          sessionId,
+          data: { message: currentAssistantMessage },
+        });
+        return;
+      }
+
+      // Model metadata is message-level, not part-level. If the authoritative
+      // SDK response resolves after streamed parts have already been published,
+      // send one full frame so live subscribers learn the same model REST
+      // hydration will return.
+      if (publishedModelId !== currentAssistantMessage.modelId) {
+        publishedParts = parts.slice();
+        publishedModelId = currentAssistantMessage.modelId;
         currentAssistantMessage.revision = (currentAssistantMessage.revision ?? 0) + 1;
         eventEmitter.emit({
           type: "message.updated",
@@ -3088,6 +3123,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // full-message emit) happens at most once per STREAM_EVENT_COALESCE_MS.
     let streamEventsDirty = false;
     let lastStreamMessageKey: string | null = null;
+    let lastStreamModelId: string | undefined;
 
     const flushStreamedAssistantMessage = () => {
       if (streamEventFlushTimer) {
@@ -3109,6 +3145,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           content,
           parts: finalParts,
           timestamp: new Date().toISOString(),
+          ...(lastStreamModelId ? { modelId: lastStreamModelId } : {}),
         };
         session.messages.push(currentAssistantMessage);
       } else {
@@ -3146,6 +3183,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           ? streamEvent.message.id
           : undefined;
         currentStreamApiMessageId = apiMessageId ?? null;
+        const isRootAssistant = isRootAssistantRecord(
+          partialMessage.parent_tool_use_id,
+          partialMessage.isSidechain,
+        );
+        const modelId = isRootAssistant
+          ? normalizeBackendModelId(streamEvent.message?.model)
+          : undefined;
+        if (modelId) lastStreamModelId = modelId;
         if (apiMessageId) {
           getBlocksForMessage(apiMessageId);
           if (explicitParentTaskUseId) {
@@ -3623,6 +3668,19 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // transcript record; the latest is the inclusive end of this message,
         // which is what a fork boundary must point at.
         const sdkMessageUuid = (message as { uuid?: unknown }).uuid;
+        const observedModel = (
+          message as { message?: { model?: unknown } }
+        ).message?.model;
+        const parentToolUseId = (
+          message as { parent_tool_use_id?: unknown }
+        ).parent_tool_use_id;
+        const isRootAssistant = isRootAssistantRecord(
+          parentToolUseId,
+          (message as { isSidechain?: unknown }).isSidechain,
+        );
+        const modelId = isRootAssistant
+          ? normalizeBackendModelId(observedModel)
+          : undefined;
         if (!currentAssistantMessage) {
           currentAssistantMessage = {
             id: messageKey,
@@ -3630,6 +3688,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             content: accumulatedContent,
             parts: finalParts,
             timestamp: new Date().toISOString(),
+            ...(modelId ? { modelId } : {}),
             ...(typeof sdkMessageUuid === "string" ? { sdkUuid: sdkMessageUuid } : {}),
           };
           session.messages.push(currentAssistantMessage);
@@ -3640,6 +3699,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         } else {
           currentAssistantMessage.content = accumulatedContent;
           currentAssistantMessage.parts = finalParts;
+          if (modelId) {
+            currentAssistantMessage.modelId = modelId;
+          }
           if (typeof sdkMessageUuid === "string") {
             currentAssistantMessage.sdkUuid = sdkMessageUuid;
           }

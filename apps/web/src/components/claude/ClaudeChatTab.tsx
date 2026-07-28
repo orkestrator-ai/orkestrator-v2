@@ -13,6 +13,7 @@ import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { TURN_STOPPED_BY_USER } from "@/lib/chat/client-only-messages";
 import {useClaudeStore} from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -213,6 +214,10 @@ export function ClaudeChatTab({
     pendingPlanApprovals: pendingPlanApprovalsMap,
   } = useClaudeStore();
   const models = modelCatalogs.get(environmentId)?.models ?? fallbackModels;
+  const resolveModelLabel = useCallback(
+    (modelId: string) => resolveCatalogModelLabel(modelId, models),
+    [models],
+  );
 
   const loadAuthoritativeModels = useCallback(
     async (
@@ -2006,6 +2011,7 @@ export function ClaudeChatTab({
       serverLog={serverLog}
       onRetry={handleRetry}
       messages={displayMessages}
+      resolveModelLabel={resolveModelLabel}
       isLoading={session?.isLoading ?? false}
       elapsedSeconds={elapsedSeconds}
       finalElapsedSeconds={finalElapsedSeconds}

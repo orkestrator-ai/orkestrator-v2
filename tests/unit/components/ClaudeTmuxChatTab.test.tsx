@@ -536,6 +536,42 @@ describe("ClaudeTmuxChatTab", () => {
     seedPane("Run the audit");
   });
 
+  test("renders a friendly catalog label for the transcript-confirmed assistant model", async () => {
+    const catalogModel: ClaudeModel = {
+      id: "sonnet",
+      resolvedModel: "claude-sonnet-5",
+      name: "Claude Sonnet",
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "medium", "high"],
+    };
+    useClaudeStore.setState({ models: [catalogModel], modelCatalogs: new Map() });
+    seedPane();
+    mockRunningTmuxStatus();
+    getTranscriptMock.mockResolvedValue([
+      {
+        type: "assistant",
+        uuid: "assistant-with-model",
+        timestamp: "2026-07-28T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: "Catalog-attributed tmux response",
+          model: "claude-sonnet-5",
+        },
+      },
+    ]);
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByTitle("Claude Sonnet")).toBeTruthy();
+    expect(screen.queryByText("claude-sonnet-5")).toBeNull();
+  });
+
   test("jumps to the bottom when reactivated after an environment switch", async () => {
     const { rerender } = render(
       <ClaudeTmuxChatTab

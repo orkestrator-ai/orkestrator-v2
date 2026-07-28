@@ -117,6 +117,29 @@ describe("NativeChatShell", () => {
     expect(spacer.style.height).toBe("735px");
   });
 
+  test("forwards the model-label resolver to each rendered message", () => {
+    const resolveModelLabel = mock(() => "Friendly Model");
+    const message = {
+      id: "assistant-1",
+      role: "assistant" as const,
+      content: "Done",
+      parts: [{ type: "text" as const, content: "Done" }],
+      createdAt: "2026-07-28T12:00:00.000Z",
+      modelId: "provider/model-id",
+    };
+
+    render(
+      <NativeChatShell
+        {...shellProps()}
+        messages={[message]}
+        resolveModelLabel={resolveModelLabel}
+      />,
+    );
+
+    expect(screen.getByText("Friendly Model")).toBeTruthy();
+    expect(resolveModelLabel).toHaveBeenCalledWith("provider/model-id");
+  });
+
   test("remeasures pinned clearance when the viewport changes", () => {
     render(
       <NativeChatShell

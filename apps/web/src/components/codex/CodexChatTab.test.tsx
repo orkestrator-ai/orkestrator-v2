@@ -59,6 +59,12 @@ const MOCK_MODELS = [
     reasoningEfforts: ["low", "high"],
     defaultReasoningEffort: "high",
   },
+  {
+    id: "gpt-5.4-codex-review",
+    name: "Codex Review",
+    reasoningEfforts: ["high"],
+    defaultReasoningEffort: "high",
+  },
 ];
 
 type TestCodexMessage = NativeMessage & {
@@ -832,6 +838,20 @@ describe("CodexChatTab", () => {
     cleanup();
     restoreTimerHarness();
     mock.restore();
+  });
+
+  test("renders a friendly catalog label for the backend-confirmed assistant model", async () => {
+    const assistantMessage = {
+      ...createMessage("assistant-with-model", "Catalog-attributed response"),
+      modelId: "gpt-5.4-codex-review",
+    };
+    seedCodexStore([assistantMessage]);
+    mockGetSessionMessages.mockResolvedValue([assistantMessage]);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByTitle("Codex Review")).toBeTruthy();
+    expect(screen.queryByText("gpt-5.4-codex-review")).toBeNull();
   });
 
   test("blocks sending until a restored agent handoff finishes loading", async () => {

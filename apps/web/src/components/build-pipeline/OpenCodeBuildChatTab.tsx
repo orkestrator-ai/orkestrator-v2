@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore, useEnvironmentStore } from "@/stores";
@@ -22,6 +23,7 @@ import {
   ERROR_MESSAGE_PREFIX,
   type OpenCodeEvent,
   type OpenCodeMessage,
+  type OpenCodeModel,
   type PromptAttachment,
 } from "@/lib/opencode-client";
 import { resolveGatewayLoopbackBaseUrl } from "@/lib/gateway-url";
@@ -65,6 +67,8 @@ interface OpenCodeBuildChatTabProps {
 }
 
 type ConnectionState = "connecting" | "connected" | "error";
+
+const EMPTY_MODELS: OpenCodeModel[] = [];
 
 const PHASE_LABELS: Record<BuildPhase, string> = {
   "creating-environment": "Creating Environment",
@@ -239,6 +243,16 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     sessions: sessionsMap,
   } = useOpenCodeStore();
   const client = useMemo(() => clientsMap.get(environmentId), [clientsMap, environmentId]);
+  const models = useOpenCodeStore(
+    useCallback(
+      (state) => state.models.get(environmentId) ?? EMPTY_MODELS,
+      [environmentId],
+    ),
+  );
+  const resolveModelLabel = useCallback(
+    (modelId: string) => resolveCatalogModelLabel(modelId, models),
+    [models],
+  );
 
   const setupScriptsRunning = useEnvironmentStore((state) => state.setupScriptsRunning.has(environmentId));
   const setupCommandsResolved = useEnvironmentStore((state) => state.setupCommandsResolved.has(environmentId));
@@ -1497,6 +1511,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
                             : null
                         }
                         assistantLabel="OpenCode"
+                        resolveModelLabel={resolveModelLabel}
                       />
                     ))}
                   {sessionData.isLoading && (

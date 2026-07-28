@@ -214,6 +214,7 @@ type SdkSessionMessage = {
   session_id: string;
   message: unknown;
   parent_tool_use_id: string | null;
+  isSidechain?: boolean;
 };
 
 const mockSdkListSessions = mock(
@@ -587,6 +588,7 @@ describe("sendPrompt", () => {
         type: "assistant",
         uuid: "asst-uuid-1",
         message: {
+          model: "claude-sonnet-4-6",
           content: [{ type: "text", text: "Hi there!" }],
         },
       });
@@ -605,6 +607,7 @@ describe("sendPrompt", () => {
       expect(stored.messages[0]?.content).toBe("Hello Claude");
       expect(stored.messages[1]?.role).toBe("assistant");
       expect(stored.messages[1]?.content).toBe("Hi there!");
+      expect(stored.messages[1]?.modelId).toBe("claude-sonnet-4-6");
 
       const initData = getSessionInitData(session.id);
       expect(initData?.slashCommands).toEqual(["help"]);
@@ -687,6 +690,19 @@ describe("sendPrompt", () => {
 
       call.push({
         type: "stream_event",
+        uuid: "partial-asst-start",
+        session_id: "sdk-session-stream",
+        parent_tool_use_id: null,
+        event: {
+          type: "message_start",
+          message: {
+            id: "partial-asst-1",
+            model: "claude-opus-5",
+          },
+        },
+      });
+      call.push({
+        type: "stream_event",
         uuid: "partial-asst-1",
         session_id: "sdk-session-stream",
         parent_tool_use_id: null,
@@ -718,11 +734,17 @@ describe("sendPrompt", () => {
         return event.type === "message.updated" && message?.content === "Hello";
       });
       expect(streamedEvent).toBeDefined();
+      expect(
+        (
+          streamedEvent?.data as { message?: { modelId?: string } } | undefined
+        )?.message?.modelId,
+      ).toBe("claude-opus-5");
 
       call.push({
         type: "assistant",
         uuid: "partial-asst-1",
         message: {
+          model: "claude-opus-5",
           content: [{ type: "text", text: "Hello final" }],
         },
       });
@@ -733,10 +755,168 @@ describe("sendPrompt", () => {
 
       const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
       expect(assistant?.content).toBe("Hello final");
+      expect(assistant?.modelId).toBe("claude-opus-5");
+      expect(events.some((event) => {
+        const published = (
+          event.data as { message?: { modelId?: string } } | undefined
+        )?.message;
+        return event.type === "message.updated"
+          && published?.modelId === "claude-opus-5";
+      })).toBe(true);
     } finally {
       stop();
     }
   });
+
+  test("publishes model attribution when only the final assistant record supplies it", async () => {
+    const session = createSession("late model metadata");
+    track(session.id);
+
+    const { events, stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Resolve the model later");
+      const call = await nextQueryCall();
+
+      call.push({
+        type: "stream_event",
+        uuid: "late-model-start",
+        session_id: "sdk-session-late-model",
+        parent_tool_use_id: null,
+        event: {
+          type: "message_start",
+          message: { id: "late-model-assistant" },
+        },
+      });
+      call.push({
+        type: "stream_event",
+        uuid: "late-model-assistant",
+        session_id: "sdk-session-late-model",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+      });
+      call.push({
+        type: "stream_event",
+        uuid: "late-model-assistant",
+        session_id: "sdk-session-late-model",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Hello" },
+        },
+      });
+
+      await waitFor(() =>
+        getSessionMessages(session.id).some(
+          (message) => message.role === "assistant" && message.content === "Hello",
+        ),
+      );
+      expect(
+        getSessionMessages(session.id).find((message) => message.role === "assistant")?.modelId,
+      ).toBeUndefined();
+
+      call.push({
+        type: "assistant",
+        uuid: "late-model-assistant",
+        parent_tool_use_id: null,
+        message: {
+          id: "late-model-assistant",
+          model: "claude-sonnet-5",
+          content: [{ type: "text", text: "Hello final" }],
+        },
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+
+      const assistant = getSessionMessages(session.id).find(
+        (message) => message.role === "assistant",
+      );
+      expect(assistant?.content).toBe("Hello final");
+      expect(assistant?.modelId).toBe("claude-sonnet-5");
+      expect(events.some((event) => {
+        const published = (
+          event.data as { message?: { modelId?: string } } | undefined
+        )?.message;
+        return event.type === "message.updated"
+          && published?.modelId === "claude-sonnet-5";
+      })).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
+  test.each(["", "   ", "<synthetic>"])(
+    "never attributes an unusable live model id %#",
+    async (model) => {
+      const session = createSession("invalid live model");
+      track(session.id);
+      const promptPromise = sendPrompt(session.id, "Stream please");
+      const call = await nextQueryCall();
+
+      call.push({
+        type: "stream_event",
+        uuid: "invalid-model-start",
+        session_id: "sdk-invalid-model",
+        parent_tool_use_id: null,
+        event: {
+          type: "message_start",
+          message: { id: "invalid-model-assistant", model },
+        },
+      });
+      call.push({
+        type: "stream_event",
+        uuid: "invalid-model-assistant",
+        session_id: "sdk-invalid-model",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+      });
+      call.push({
+        type: "stream_event",
+        uuid: "invalid-model-assistant",
+        session_id: "sdk-invalid-model",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Hello" },
+        },
+      });
+
+      await waitFor(() =>
+        getSessionMessages(session.id).some(
+          (message) => message.role === "assistant" && message.content === "Hello",
+        ),
+      );
+      expect(
+        getSessionMessages(session.id).find((message) => message.role === "assistant")?.modelId,
+      ).toBeUndefined();
+
+      call.push({
+        type: "assistant",
+        uuid: "invalid-model-assistant",
+        message: {
+          model,
+          content: [{ type: "text", text: "Hello final" }],
+        },
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+
+      expect(
+        getSessionMessages(session.id).find((message) => message.role === "assistant")?.modelId,
+      ).toBeUndefined();
+    },
+  );
 
   test("streams partial thinking content and preserves block order", async () => {
     const session = createSession("streaming-thinking");
@@ -2289,6 +2469,7 @@ describe("sendPrompt", () => {
         parent_tool_use_id: "task-a",
         message: {
           id: "child",
+          model: "claude-subagent",
           content: [
             { type: "tool_use", id: "child-a", name: "mcp_team_tools_search", input: {} },
           ],
@@ -2305,6 +2486,7 @@ describe("sendPrompt", () => {
       isMcpTool: true,
       mcpServerName: "team_tools",
     });
+    expect(session.messages.every((message) => message.modelId === undefined)).toBe(true);
   });
 
   test("recognizes Agent as a subagent tool and parents its thinking, text, and edits", async () => {
@@ -4197,6 +4379,77 @@ describe("hydratePersistedSessionMessages", () => {
     // The tool result was still applied to the tool it belongs to.
     expect(messages[1]?.parts[0]?.toolState).toBe("success");
     expect(state.persistedMessagesLoaded).toBe(true);
+  });
+
+  test("keeps only real root-assistant model attribution", async () => {
+    const state = await materializePersistedSession();
+    mockSdkGetSessionMessages.mockImplementation(async () => [
+      {
+        type: "assistant",
+        uuid: "root",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "assistant",
+          model: " claude-opus-5 ",
+          content: [{ type: "text", text: "Root" }],
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "assistant",
+        uuid: "synthetic",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "assistant",
+          model: "<synthetic>",
+          content: [{ type: "text", text: "Synthetic" }],
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "assistant",
+        uuid: "subagent",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "assistant",
+          model: "claude-subagent",
+          content: [{ type: "text", text: "Subagent" }],
+        },
+        parent_tool_use_id: "tool-1",
+      },
+      {
+        type: "assistant",
+        uuid: "sidechain",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "assistant",
+          model: "claude-sidechain",
+          content: [{ type: "text", text: "Sidechain" }],
+        },
+        parent_tool_use_id: null,
+        isSidechain: true,
+      },
+      {
+        type: "assistant",
+        uuid: "blank",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "assistant",
+          model: "   ",
+          content: [{ type: "text", text: "Blank" }],
+        },
+        parent_tool_use_id: null,
+      },
+    ]);
+
+    const messages = await hydratePersistedSessionMessages(state.id);
+    expect(messages.map((message) => message.modelId)).toEqual([
+      "claude-opus-5",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
   });
 
   test("generates an id for a record with no uuid and marks it unresolvable", async () => {

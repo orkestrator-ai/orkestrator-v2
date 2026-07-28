@@ -68,6 +68,8 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
    * holding and every visible message rerenders on each streamed frame.
    */
   messageActions?: (message: TMessage) => ReactNode;
+  /** Maps a backend-confirmed id to the friendly name from this tab's catalog. */
+  resolveModelLabel?: (modelId: string) => string;
   /**
    * Extra content in the dock's top strip, beside the scroll-to-bottom button
    * — Claude's prompt-suggestion chip.
@@ -120,6 +122,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   pinnedAccessory,
   bottomSpacerClassName = "h-32",
   messageActions,
+  resolveModelLabel,
   topAccessory,
   centerCompose,
   composer,
@@ -248,6 +251,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
               assistantLabel={agentLabel}
               containerId={containerId}
               actions={messageActions?.(message)}
+              resolveModelLabel={resolveModelLabel}
             />
           )}
           emptyState={

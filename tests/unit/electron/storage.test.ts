@@ -1512,12 +1512,14 @@ describe("Electron StorageService", () => {
       "assistant",
       "What should change?",
       "applied",
+      "gpt-5.3-codex",
     );
     expect(withStoryChat.stories[0]?.messages).toEqual([
       expect.objectContaining({
         role: "assistant",
         content: "What should change?",
         stateApplication: "applied",
+        modelId: "gpt-5.3-codex",
       }),
     ]);
 
@@ -1545,6 +1547,7 @@ describe("Electron StorageService", () => {
                 role: "assistant",
                 content: "What should change?",
                 stateApplication: "applied",
+                modelId: "gpt-5.3-codex",
               }),
             ],
           }),

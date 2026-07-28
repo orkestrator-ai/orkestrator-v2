@@ -1969,6 +1969,8 @@ export interface FeaturePlanMessage {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt: string;
+  /** Backend-confirmed model that produced this assistant response. */
+  modelId?: string;
   /** Durable recovery marker for assistant responses that carry plan/story state. */
   stateApplication?: "pending" | "applied" | "superseded";
 }
@@ -2091,12 +2093,14 @@ export async function appendFeaturePlanMessage(
   role: FeaturePlanMessage["role"],
   content: string,
   stateApplication?: FeaturePlanMessage["stateApplication"],
+  modelId?: string,
 ): Promise<FeaturePlan> {
   return invoke<FeaturePlan>("append_feature_plan_message", {
     featureId,
     role,
     content,
     stateApplication,
+    modelId,
   });
 }
 
@@ -2106,6 +2110,7 @@ export async function appendFeatureStoryMessage(
   role: FeaturePlanMessage["role"],
   content: string,
   stateApplication?: FeaturePlanMessage["stateApplication"],
+  modelId?: string,
 ): Promise<FeaturePlan> {
   return invoke<FeaturePlan>("append_feature_story_message", {
     featureId,
@@ -2113,5 +2118,6 @@ export async function appendFeatureStoryMessage(
     role,
     content,
     stateApplication,
+    modelId,
   });
 }

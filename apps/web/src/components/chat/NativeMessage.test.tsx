@@ -17,6 +17,7 @@ function makeMessage(
     role: "user" | "assistant";
     content: string;
     createdAt: string;
+    modelId: string;
   }>,
 ) {
   return {
@@ -25,8 +26,102 @@ function makeMessage(
     content: overrides?.content ?? "",
     createdAt: overrides?.createdAt ?? "2026-03-21T10:00:00.000Z",
     parts,
+    ...(overrides?.modelId !== undefined ? { modelId: overrides.modelId } : {}),
   };
 }
+
+describe("NativeMessage assistant attribution", () => {
+  test("shows the backend-confirmed model instead of the static provider label", () => {
+    render(
+      <NativeMessage
+        message={makeMessage(
+          [{ type: "text", content: "Done" }],
+          { modelId: "gpt-5.6-sol" },
+        )}
+        assistantLabel="Codex"
+      />,
+    );
+
+    expect(screen.getByText("gpt-5.6-sol")).toBeTruthy();
+    expect(screen.queryByText("Codex")).toBeNull();
+  });
+
+  test("keeps the provider label for legacy messages with no confirmed model", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Done" }])}
+        assistantLabel="Codex"
+      />,
+    );
+
+    expect(screen.getByText("Codex")).toBeTruthy();
+  });
+
+  test.each(["", "   \n"])(
+    "keeps the provider label for an unusable model id %#",
+    (modelId) => {
+      render(
+        <NativeMessage
+          message={makeMessage([{ type: "text", content: "Done" }], { modelId })}
+          assistantLabel="Codex"
+        />,
+      );
+
+      expect(screen.getByText("Codex")).toBeTruthy();
+    },
+  );
+
+  test("uses a friendly catalog label when the tab supplies a resolver", () => {
+    render(
+      <NativeMessage
+        message={makeMessage(
+          [{ type: "text", content: "Done" }],
+          { modelId: "anthropic/claude-sonnet-4" },
+        )}
+        assistantLabel="OpenCode"
+        resolveModelLabel={() => "Claude Sonnet 4"}
+      />,
+    );
+
+    expect(screen.getByText("Claude Sonnet 4").getAttribute("title"))
+      .toBe("Claude Sonnet 4");
+    expect(screen.queryByText("anthropic/claude-sonnet-4")).toBeNull();
+  });
+
+  test.each(["", "   \n"])(
+    "falls back to the confirmed model id when the resolver returns an unusable label %#",
+    (resolvedLabel) => {
+      render(
+        <NativeMessage
+          message={makeMessage(
+            [{ type: "text", content: "Done" }],
+            { modelId: "anthropic/claude-sonnet-4" },
+          )}
+          assistantLabel="OpenCode"
+          resolveModelLabel={() => resolvedLabel}
+        />,
+      );
+
+      expect(screen.getByText("anthropic/claude-sonnet-4")).toBeTruthy();
+      expect(screen.queryByText("OpenCode")).toBeNull();
+    },
+  );
+
+  test("always attributes user messages to You even if they carry a model id", () => {
+    render(
+      <NativeMessage
+        message={makeMessage(
+          [{ type: "text", content: "Prompt" }],
+          { role: "user", modelId: "gpt-5.6-sol" },
+        )}
+        assistantLabel="Codex"
+      />,
+    );
+
+    expect(screen.getByText("You")).toBeTruthy();
+    expect(screen.queryByText("gpt-5.6-sol")).toBeNull();
+  });
+});
 
 describe("NativeMessage task list rendering", () => {
   afterEach(() => {
@@ -288,6 +383,30 @@ describe("NativeMessage task list rendering", () => {
     render(<NativeMessage message={message} previousMessage={previousMessage} />);
 
     expect(screen.getByText(/responded in 45s/)).toBeTruthy();
+  });
+
+  test("truncates a long model label without making response metadata shrink", () => {
+    const previousMessage = makeMessage([], {
+      id: "user-long-model",
+      role: "user",
+      createdAt: "2026-03-21T10:00:00.000Z",
+    });
+    const modelId = "anthropic/claude-sonnet-4-5-20250929-with-a-long-suffix";
+    render(
+      <div className="w-48">
+        <NativeMessage
+          message={makeMessage([{ type: "text", content: "Answer" }], {
+            createdAt: "2026-03-21T10:01:03.000Z",
+            modelId,
+          })}
+          previousMessage={previousMessage}
+        />
+      </div>,
+    );
+
+    expect(screen.getByText(modelId).className).toContain("truncate");
+    expect(screen.getByText(/responded in 1m 3s/).className)
+      .toContain("whitespace-nowrap");
   });
 
   test("rounds a positive sub-second response duration up to one second", () => {

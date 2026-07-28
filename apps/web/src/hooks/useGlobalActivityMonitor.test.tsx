@@ -78,6 +78,8 @@ function resetStores() {
     clients: new Map(),
     sessions: new Map(),
     messageQueue: new Map(),
+    pendingApprovals: new Map(),
+    pendingInteractions: new Map(),
   });
   useOpenCodeStore.setState({
     clients: new Map(),
@@ -168,6 +170,100 @@ function addTmuxQuestion(stateKey: string, eventId = "question-1") {
     receivedAt: "2026-06-16T00:00:00.000Z",
   });
 }
+
+function addCodexInteraction(
+  sessionKey: string,
+  interactionId = "interaction-1",
+) {
+  useCodexStore.getState().addPendingInteraction(sessionKey, {
+    interactionId,
+    kind: "question",
+    method: "item/userInput/request",
+    threadId: "codex-thread",
+    turnId: "turn-1",
+    itemId: "item-1",
+    requestedAt: 0,
+    expiresAt: 300_000,
+    questions: [
+      {
+        id: "question-1",
+        header: "Choice",
+        question: "Continue?",
+        isOther: false,
+        isSecret: false,
+      },
+    ],
+  });
+}
+
+const tmuxPendingHookCases = [
+  {
+    name: "approval",
+    add(stateKey: string, eventId: string) {
+      useClaudeTmuxStore.getState().addPendingApproval(stateKey, {
+        eventId,
+        toolName: "Bash",
+        toolInput: {},
+        payload: {},
+        receivedAt: "2026-06-16T00:00:00.000Z",
+      });
+    },
+    remove(stateKey: string, eventId: string) {
+      useClaudeTmuxStore.getState().removePendingApproval(stateKey, eventId);
+    },
+  },
+  {
+    name: "plan",
+    add(stateKey: string, eventId: string) {
+      useClaudeTmuxStore.getState().addPendingPlan(stateKey, {
+        eventId,
+        plan: "Ship the change",
+        planFilePath: null,
+        allowedPrompts: [],
+        toolInput: {},
+        payload: {},
+        receivedAt: "2026-06-16T00:00:00.000Z",
+      });
+    },
+    remove(stateKey: string, eventId: string) {
+      useClaudeTmuxStore.getState().removePendingPlan(stateKey, eventId);
+    },
+  },
+  {
+    name: "permission",
+    add(stateKey: string, eventId: string) {
+      useClaudeTmuxStore.getState().addPendingPermission(stateKey, {
+        eventId,
+        toolName: "Bash",
+        toolInput: {},
+        permissionSuggestions: [],
+        payload: {},
+        receivedAt: "2026-06-16T00:00:00.000Z",
+      });
+    },
+    remove(stateKey: string, eventId: string) {
+      useClaudeTmuxStore.getState().removePendingPermission(stateKey, eventId);
+    },
+  },
+  {
+    name: "elicitation",
+    add(stateKey: string, eventId: string) {
+      useClaudeTmuxStore.getState().addPendingElicitation(stateKey, {
+        eventId,
+        mcpServerName: "example",
+        message: "Choose a value",
+        mode: "form",
+        url: null,
+        requestedSchema: {},
+        payload: {},
+        receivedAt: "2026-06-16T00:00:00.000Z",
+      });
+    },
+    remove(stateKey: string, eventId: string) {
+      useClaudeTmuxStore.getState().removePendingElicitation(stateKey, eventId);
+    },
+  },
+] as const;
 
 afterEach(() => {
   cleanup();
@@ -1215,6 +1311,39 @@ describe("useGlobalActivityMonitor tmux activity", () => {
         .toBe("waiting");
     });
   });
+
+  for (const pendingHook of tmuxPendingHookCases) {
+    test(`maps a pending Claude tmux ${pendingHook.name} to waiting and returns to idle when resolved`, async () => {
+      const stateKey = createClaudeTmuxStateKey(
+        "env-tmux",
+        `tab-${pendingHook.name}`,
+      );
+      const eventId = `${pendingHook.name}-1`;
+      render(<MonitorHarness />);
+
+      act(() => {
+        useClaudeTmuxStore.getState().setRunning(stateKey, true, {
+          environmentId: "env-tmux",
+          sessionId: `session-${pendingHook.name}`,
+        });
+        pendingHook.add(stateKey, eventId);
+      });
+
+      await waitFor(() => {
+        expect(useAgentActivityStore.getState().getContainerState("env-tmux"))
+          .toBe("waiting");
+      });
+
+      act(() => {
+        pendingHook.remove(stateKey, eventId);
+      });
+
+      await waitFor(() => {
+        expect(useAgentActivityStore.getState().getContainerState("env-tmux"))
+          .toBe("idle");
+      });
+    });
+  }
 
   test("keeps working activity above waiting when another tmux tab is busy", async () => {
     const waitingKey = createClaudeTmuxStateKey("env-tmux", "tab-waiting");
@@ -2637,6 +2766,84 @@ describe("useGlobalActivityMonitor native agent activity", () => {
     // Answering the approval releases it back to idle.
     act(() => {
       useCodexStore.setState({ pendingApprovals: new Map() });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("idle");
+    });
+  });
+
+  test("treats an interaction added to a loading Codex turn as waiting until resolved", async () => {
+    const sessionKey = createSessionKey("env-codex", "tab-interaction-loading");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useCodexStore.setState({
+        clients: new Map([["env-codex", {} as any]]),
+        sessions: new Map([
+          [sessionKey, { sessionId: "codex-thread", isLoading: true } as any],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("working");
+    });
+
+    act(() => {
+      addCodexInteraction(sessionKey);
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("waiting");
+    });
+
+    act(() => {
+      useCodexStore
+        .getState()
+        .removePendingInteraction(sessionKey, "interaction-1");
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("working");
+    });
+  });
+
+  test("treats an interaction added to an idle Codex session as waiting until resolved", async () => {
+    const sessionKey = createSessionKey("env-codex", "tab-interaction-idle");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useCodexStore.setState({
+        clients: new Map([["env-codex", {} as any]]),
+        sessions: new Map([
+          [sessionKey, { sessionId: "codex-thread", isLoading: false } as any],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("idle");
+    });
+
+    act(() => {
+      addCodexInteraction(sessionKey);
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("waiting");
+    });
+
+    act(() => {
+      useCodexStore
+        .getState()
+        .removePendingInteraction(sessionKey, "interaction-1");
     });
 
     await waitFor(() => {

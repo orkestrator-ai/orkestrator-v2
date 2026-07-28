@@ -1191,11 +1191,14 @@ export function useGlobalActivityMonitor(): void {
             state.sessions,
             state.clients,
             state.pendingApprovals,
+            state.pendingInteractions,
           ],
-          // Approvals are keyed by sessionKey rather than looked up by session
-          // id, so this reads the key rather than the session.
+          // Approvals and interactions are keyed by sessionKey rather than
+          // looked up by session id, so this reads the key rather than the
+          // session.
           isWaiting: (state, sessionKey) =>
-            (state.pendingApprovals.get(sessionKey)?.length ?? 0) > 0,
+            (state.pendingApprovals.get(sessionKey)?.length ?? 0) > 0
+            || (state.pendingInteractions.get(sessionKey)?.length ?? 0) > 0,
         },
         activitySources,
         setContainerState,

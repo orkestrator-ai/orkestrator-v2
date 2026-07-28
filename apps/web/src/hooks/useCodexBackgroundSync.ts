@@ -5,10 +5,14 @@ import {
   getSessionMessages,
   lookupSessionStatus,
   type CodexClient,
+  type CodexMessage,
   type CodexSessionStatusLookupResult,
 } from "@/lib/codex-client";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
-import { useCodexStore } from "@/stores/codexStore";
+import {
+  CODEX_UNCONFIRMED_DISPATCH_ERROR,
+  useCodexStore,
+} from "@/stores/codexStore";
 
 export const CODEX_BACKGROUND_SYNC_INTERVAL_MS = 2_000;
 
@@ -22,7 +26,7 @@ export interface CodexBackgroundSyncDependencies {
   fetchPendingInteractions: typeof fetchPendingInteractions;
 }
 
-interface CodexBackgroundSynchronizerOptions {
+export interface CodexBackgroundSynchronizerOptions {
   dependencies?: CodexBackgroundSyncDependencies;
 }
 
@@ -62,6 +66,20 @@ function isCurrentTurn(target: SessionTarget): boolean {
     && current.loadingStartedAt === target.loadingStartedAt;
 }
 
+function clearPendingInput(sessionKey: string): void {
+  const state = useCodexStore.getState();
+  state.setPendingApprovals(sessionKey, []);
+  state.setPendingInteractions(sessionKey, []);
+}
+
+function discardUnconfirmedDispatch(sessionKey: string): void {
+  const state = useCodexStore.getState();
+  const pending = state.unconfirmedDispatches.get(sessionKey);
+  if (!pending) return;
+  state.clearUnconfirmedDispatch(sessionKey);
+  state.removeMessage(sessionKey, pending.userMessageId);
+}
+
 function currentTargets(): SessionTarget[] {
   const state = useCodexStore.getState();
   const targets: SessionTarget[] = [];
@@ -96,10 +114,29 @@ export function createCodexBackgroundSynchronizer(
   const dependencies = options.dependencies ?? DEFAULT_DEPENDENCIES;
   const statusRequests = new Map<string, Promise<void>>();
   const pendingRequests = new Map<string, Promise<void>>();
+  const terminalTargets = new Set<string>();
   let disposed = false;
+
+  const finishMissingSession = (target: SessionTarget, id: string): void => {
+    terminalTargets.add(id);
+    const state = useCodexStore.getState();
+    state.setSessionPhase(target.sessionKey, undefined);
+    state.setSessionError(
+      target.sessionKey,
+      "The Codex session is no longer available on the server",
+    );
+    // A missing session cannot still own actionable requests. Clear these
+    // before unlocking so a delayed pending snapshot cannot strand a card.
+    clearPendingInput(target.sessionKey);
+    // Missing is definitive: there is no server-side session that could have
+    // accepted the ambiguous prompt or accept a same-key retry.
+    discardUnconfirmedDispatch(target.sessionKey);
+    state.setSessionLoading(target.sessionKey, false);
+  };
 
   const refreshPending = (target: SessionTarget): Promise<void> => {
     const id = targetId(target);
+    if (terminalTargets.has(id)) return Promise.resolve();
     const existing = pendingRequests.get(id);
     if (existing) return existing;
     const stateAtStart = useCodexStore.getState();
@@ -110,7 +147,7 @@ export function createCodexBackgroundSynchronizer(
       dependencies.fetchPendingApprovals(target.client, target.sessionId),
       dependencies.fetchPendingInteractions(target.client, target.sessionId),
     ]).then(([approvals, interactions]) => {
-      if (disposed || !isCurrentTurn(target)) return;
+      if (disposed || terminalTargets.has(id) || !isCurrentTurn(target)) return;
       const state = useCodexStore.getState();
       // A live SSE event that landed after these requests started is newer than
       // either HTTP snapshot. Reference identity is the store's event token:
@@ -151,34 +188,40 @@ export function createCodexBackgroundSynchronizer(
       const state = useCodexStore.getState();
       if (lookup.kind === "unavailable") return;
       if (lookup.kind === "missing") {
-        state.setSessionPhase(target.sessionKey, undefined);
-        state.setSessionError(
-          target.sessionKey,
-          "The Codex session is no longer available on the server",
-        );
-        state.setSessionLoading(target.sessionKey, false);
+        finishMissingSession(target, id);
         return;
       }
 
-      const status = lookup.session;
+      let status = lookup.session;
       if (status.status === "running") {
+        terminalTargets.delete(id);
         // The foreground SSE stream owns within-turn phase and usage updates.
         // Applying an HTTP running snapshot here could roll those values back
         // if a newer live frame landed while the request was in flight.
         return;
       }
 
+      terminalTargets.add(id);
+      const sessionAtTerminalStatus = state.sessions.get(target.sessionKey);
+      const phaseAtTerminalStatus = state.sessionPhase.get(target.sessionKey);
+      const approvalsAtTerminalStatus =
+        state.pendingApprovals.get(target.sessionKey);
+      const interactionsAtTerminalStatus =
+        state.pendingInteractions.get(target.sessionKey);
+      let dispatchResolution: "none" | "confirmed" | "retryable" = "none";
+      let transcriptHydrationFailed = false;
+      let terminalMessages: CodexMessage[] | undefined;
       try {
-        const messages = await dependencies.getSessionMessages(
+        terminalMessages = await dependencies.getSessionMessages(
           target.client,
           target.sessionId,
           { throwOnError: true },
         );
-        if (disposed || !isCurrentTurn(target)) return;
-        useCodexStore.getState().setMessages(target.sessionKey, messages);
       } catch (error) {
+        transcriptHydrationFailed = true;
         // Status remains authoritative even if transcript hydration has a
-        // transient failure. The visible tab retries `/messages` on remount.
+        // transient failure. Do not settle an ambiguous dispatch without the
+        // fresh transcript that proves whether its prompt landed.
         console.debug(
           "[CodexBackgroundSync] Failed to refresh terminal transcript:",
           error,
@@ -186,20 +229,102 @@ export function createCodexBackgroundSynchronizer(
       }
 
       if (disposed || !isCurrentTurn(target)) return;
-      const latest = useCodexStore.getState();
+      const rendererChangedAfterTerminalStatus = (): boolean => {
+        const current = useCodexStore.getState();
+        return (
+          current.sessions.get(target.sessionKey) !== sessionAtTerminalStatus
+          || current.sessionPhase.get(target.sessionKey) !== phaseAtTerminalStatus
+          || current.pendingApprovals.get(target.sessionKey)
+            !== approvalsAtTerminalStatus
+          || current.pendingInteractions.get(target.sessionKey)
+            !== interactionsAtTerminalStatus
+        );
+      };
+      if (rendererChangedAfterTerminalStatus()) {
+        // A live frame changed this renderer after the terminal status snapshot
+        // was observed. The loading timestamp can remain unchanged when this
+        // renderer missed the prior idle transition, so object/map identities
+        // are the additional generation token. Re-poll instead of clearing a
+        // newer turn or its pending input.
+        terminalTargets.delete(id);
+        return;
+      }
+      const confirmation = await dependencies.lookupSessionStatus(
+        target.client,
+        target.sessionId,
+      );
+      if (
+        disposed
+        || !isCurrentTurn(target)
+        || rendererChangedAfterTerminalStatus()
+      ) {
+        terminalTargets.delete(id);
+        return;
+      }
+      if (confirmation.kind === "unavailable") {
+        terminalTargets.delete(id);
+        return;
+      }
+      if (confirmation.kind === "missing") {
+        finishMissingSession(target, id);
+        return;
+      }
+      const confirmedStatus = confirmation.session;
+      if (confirmedStatus.status === "running") {
+        terminalTargets.delete(id);
+        return;
+      }
+      if (
+        confirmedStatus.messageRevision !== status.messageRevision
+        || confirmedStatus.engineGeneration !== status.engineGeneration
+      ) {
+        // A fast turn can start and finish while the transcript is being read,
+        // leaving both status snapshots terminal. Revisions/generations are the
+        // backend-side generation token for that otherwise invisible ABA race.
+        terminalTargets.delete(id);
+        return;
+      }
+      status = confirmedStatus;
+      const confirmedState = useCodexStore.getState();
+      if (terminalMessages) {
+        confirmedState.setMessages(target.sessionKey, terminalMessages);
+        dispatchResolution =
+          confirmedState.settleUnconfirmedDispatch(target.sessionKey);
+      }
       if (status.title?.trim()) {
-        latest.setSessionTitle(target.sessionKey, status.title);
+        confirmedState.setSessionTitle(target.sessionKey, status.title);
       }
       if (status.contextUsage) {
-        latest.setContextUsage(target.sessionKey, status.contextUsage);
+        confirmedState.setContextUsage(target.sessionKey, status.contextUsage);
       }
-      latest.setSessionPhase(target.sessionKey, undefined);
-      latest.setSessionLoading(target.sessionKey, false);
-      latest.setSessionError(
+      confirmedState.setSessionPhase(target.sessionKey, undefined);
+      // Terminal status is authoritative for pending input. Perform this
+      // synchronously before unlocking; any older in-flight pending request
+      // then fails `isCurrentTurn` and cannot resurrect the cleared entries.
+      clearPendingInput(target.sessionKey);
+      if (
+        transcriptHydrationFailed
+        && confirmedState.unconfirmedDispatches.has(target.sessionKey)
+      ) {
+        // The transcript is the only safe way to settle an ambiguous prompt.
+        // Keep this turn eligible for the next poll instead of unlocking with
+        // a local-only message or discarding its idempotency key.
+        if (status.status === "error") {
+          confirmedState.setSessionError(
+            target.sessionKey,
+            status.error?.trim() || "Codex session failed",
+          );
+        }
+        return;
+      }
+      confirmedState.setSessionLoading(target.sessionKey, false);
+      confirmedState.setSessionError(
         target.sessionKey,
         status.status === "error"
           ? status.error?.trim() || "Codex session failed"
-          : undefined,
+          : dispatchResolution === "retryable"
+            ? CODEX_UNCONFIRMED_DISPATCH_ERROR
+            : undefined,
       );
     })().catch((error) => {
       // A failed authoritative read changes no state; the next interval retries.
@@ -216,7 +341,12 @@ export function createCodexBackgroundSynchronizer(
   return {
     async reconcileNow(): Promise<void> {
       if (disposed) return;
-      const requests = currentTargets().flatMap((target) => [
+      const targets = currentTargets();
+      const currentTargetIds = new Set(targets.map(targetId));
+      for (const id of terminalTargets) {
+        if (!currentTargetIds.has(id)) terminalTargets.delete(id);
+      }
+      const requests = targets.flatMap((target) => [
         reconcileStatus(target),
         refreshPending(target),
       ]);
@@ -224,14 +354,18 @@ export function createCodexBackgroundSynchronizer(
     },
     dispose(): void {
       disposed = true;
+      terminalTargets.clear();
     },
   };
 }
 
 /** Keep authoritative Codex state current across environment switches. */
-export function useCodexBackgroundSync(): void {
+export function useCodexBackgroundSync(
+  options?: CodexBackgroundSynchronizerOptions,
+): void {
+  const dependencies = options?.dependencies;
   useEffect(() => {
-    const synchronizer = createCodexBackgroundSynchronizer();
+    const synchronizer = createCodexBackgroundSynchronizer({ dependencies });
     void synchronizer.reconcileNow();
     const intervalId = window.setInterval(() => {
       void synchronizer.reconcileNow();
@@ -240,5 +374,5 @@ export function useCodexBackgroundSync(): void {
       window.clearInterval(intervalId);
       synchronizer.dispose();
     };
-  }, []);
+  }, [dependencies]);
 }

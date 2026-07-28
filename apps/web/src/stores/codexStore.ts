@@ -62,7 +62,20 @@ export interface CodexUnconfirmedDispatch {
   userMessageId: string;
   fingerprint: string;
   requestId: string;
+  /**
+   * The authoritative transcript did not contain this prompt, so the original
+   * idempotency key must remain available for a safe retry.
+   */
+  retryable?: boolean;
 }
+
+export type CodexUnconfirmedDispatchResolution =
+  | "none"
+  | "confirmed"
+  | "retryable";
+
+export const CODEX_UNCONFIRMED_DISPATCH_ERROR =
+  "Could not confirm whether Codex received the prompt. You can send it again safely.";
 
 type CodexChatSlice = NativeChatStoreSlice<
   CodexClient,
@@ -151,6 +164,15 @@ interface CodexState extends CodexChatSlice {
   /** Atomically claims one logical request for a live mount. */
   claimPromptDispatch: (sessionKey: string, requestId: string) => boolean;
   releasePromptDispatch: (sessionKey: string, requestId: string) => void;
+  /**
+   * Settles an ambiguous dispatch after an authoritative transcript refresh.
+   *
+   * A matching server echo removes the optimistic message during `setMessages`,
+   * while an unmatched optimistic message survives and becomes a durable retry.
+   */
+  settleUnconfirmedDispatch: (
+    sessionKey: string,
+  ) => CodexUnconfirmedDispatchResolution;
   isFastMode: (sessionKey: string) => boolean;
   clearEnvironment: (environmentId: string) => void;
   /** Drop every session-keyed entry for one closed tab. */
@@ -483,6 +505,53 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       else next.set(sessionKey, remaining);
       return { promptDispatchClaims: next };
     }),
+
+  settleUnconfirmedDispatch: (sessionKey) => {
+    const state = get();
+    const pending = state.unconfirmedDispatches.get(sessionKey);
+    if (!pending) return "none";
+    if (pending.retryable) return "retryable";
+
+    const session = state.sessions.get(sessionKey);
+    const optimisticStillPresent = session?.messages.some(
+      (message) => message.id === pending.userMessageId,
+    ) === true;
+    if (!optimisticStillPresent) {
+      state.clearUnconfirmedDispatch(sessionKey);
+      return "confirmed";
+    }
+
+    set((latest) => {
+      const currentPending = latest.unconfirmedDispatches.get(sessionKey);
+      const currentSession = latest.sessions.get(sessionKey);
+      if (
+        currentPending !== pending
+        || !currentSession?.messages.some(
+          (message) => message.id === pending.userMessageId,
+        )
+      ) {
+        return latest;
+      }
+
+      const sessions = new Map(latest.sessions);
+      sessions.set(sessionKey, {
+        ...currentSession,
+        messages: currentSession.messages.filter(
+          (message) => message.id !== pending.userMessageId,
+        ),
+        error: CODEX_UNCONFIRMED_DISPATCH_ERROR,
+      });
+      const unconfirmedDispatches = new Map(latest.unconfirmedDispatches);
+      unconfirmedDispatches.set(sessionKey, {
+        ...pending,
+        retryable: true,
+      });
+      return { sessions, unconfirmedDispatches };
+    });
+    return get().unconfirmedDispatches.get(sessionKey)?.retryable
+      ? "retryable"
+      : "confirmed";
+  },
 
   isFastMode: (sessionKey) => get().fastMode.get(sessionKey) ?? false,
 

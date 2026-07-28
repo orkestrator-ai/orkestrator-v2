@@ -1751,6 +1751,7 @@ export class StorageService {
         "cleanupAfterMergeRequestedAt",
         "cleanupAfterMergeError",
         "lifecycleOperationStartedAt",
+        "lifecycleError",
       ] as const;
       for (const field of optionalStringFields) {
         if (field in updates) {

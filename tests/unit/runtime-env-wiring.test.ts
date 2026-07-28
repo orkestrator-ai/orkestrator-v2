@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -48,6 +49,15 @@ function runShell(
   };
 }
 
+function codexCopyHelperHarness(body: string): string {
+  const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
+  return `
+set -e
+eval "$(sed -n '/^copy_codex_file() {/,/^}$/p; /^copy_codex_directory() {/,/^}$/p' ${shellQuote(entrypoint)})"
+${body}
+`;
+}
+
 describe("container runtime environment wiring", () => {
   test("Docker image includes the shared runtime environment helper", () => {
     const dockerfile = read("docker/Dockerfile");
@@ -87,7 +97,34 @@ describe("container runtime environment wiring", () => {
 
     expect(entrypoint).toContain("copy_codex_file /codex-home");
     expect(entrypoint).toContain("copy_codex_directory /codex-home");
-    expect(entrypoint).toContain("plugins/cache");
+    for (const allowlistedFile of [
+      "auth.json",
+      "config.toml",
+      "AGENTS.md",
+      "hooks.json",
+      "models_cache.json",
+      ".codex-global-state.json",
+      "cloud-config-bundle-cache.json",
+      "cloud-requirements-cache.json",
+    ]) {
+      expect(entrypoint).toMatch(
+        new RegExp(`^[ \\t]*${allowlistedFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
+      );
+    }
+    for (const allowlistedDirectory of [
+      "rules",
+      "skills",
+      "prompts",
+      "vendor_imports",
+      "plugins/cache",
+    ]) {
+      expect(entrypoint).toMatch(
+        new RegExp(`^[ \\t]*${allowlistedDirectory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
+      );
+    }
+    expect(entrypoint).toContain("CODEX_COPY_MAX_FILE_BYTES");
+    expect(entrypoint).toContain("CODEX_COPY_MAX_DIRECTORY_ENTRIES");
+    expect(entrypoint).toContain("CODEX_COPY_MAX_DIRECTORY_KIB");
     expect(entrypoint).not.toContain("cp -r /codex-home/.");
     expect(entrypoint).not.toContain("cp -R /codex-home/.");
 
@@ -108,7 +145,7 @@ describe("container runtime environment wiring", () => {
     }
   });
 
-  test("Codex configuration copy helpers merge repeatably without copying runtime state", () => {
+  test("Codex configuration copy helpers overwrite changed inputs and merge repeatably", () => {
     withTempDir((dir) => {
       const source = join(dir, "source");
       const destination = join(dir, "destination");
@@ -118,25 +155,281 @@ describe("container runtime environment wiring", () => {
       writeFileSync(join(source, "skills", "review", "SKILL.md"), "first\n");
       writeFileSync(join(source, "sessions", "rollout.jsonl"), "large runtime state\n");
 
-      const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
-      const harness = `
-set -e
-eval "$(sed -n '/^copy_codex_file() {/,/^}$/p; /^copy_codex_directory() {/,/^}$/p' "$1")"
-copy_codex_file "$2" "$3" auth.json
-copy_codex_directory "$2" "$3" skills
-copy_codex_file "$2" "$3" auth.json
-copy_codex_directory "$2" "$3" skills
-`;
-      const result = Bun.spawnSync({
-        cmd: ["bash", "-c", harness, "--", entrypoint, source, destination],
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+      let result = runShell(
+        codexCopyHelperHarness(`
+copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
+copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          CODEX_TEST_SOURCE: source,
+          CODEX_TEST_DESTINATION: destination,
+        },
+      );
 
       expect(result.exitCode).toBe(0);
       expect(readFileSync(join(destination, "auth.json"), "utf8")).toBe("{\"token\":\"test\"}\n");
       expect(readFileSync(join(destination, "skills", "review", "SKILL.md"), "utf8")).toBe("first\n");
       expect(() => statSync(join(destination, "skills", "skills"))).toThrow();
+      expect(() => statSync(join(destination, "sessions"))).toThrow();
+
+      writeFileSync(join(source, "auth.json"), "{\"token\":\"changed\"}\n");
+      writeFileSync(join(source, "skills", "review", "SKILL.md"), "changed\n");
+      result = runShell(
+        codexCopyHelperHarness(`
+copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
+copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          CODEX_TEST_SOURCE: source,
+          CODEX_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(readFileSync(join(destination, "auth.json"), "utf8")).toBe("{\"token\":\"changed\"}\n");
+      expect(readFileSync(join(destination, "skills", "review", "SKILL.md"), "utf8")).toBe("changed\n");
+    });
+  });
+
+  test("Codex configuration copy helpers skip missing and symlinked allowlist entries", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      mkdirSync(join(source, "sessions"), { recursive: true });
+      writeFileSync(join(source, "sessions", "auth.json"), "excluded auth\n");
+      writeFileSync(join(source, "sessions", "rollout.jsonl"), "excluded rollout\n");
+      symlinkSync(join("sessions", "auth.json"), join(source, "auth.json"));
+      symlinkSync("sessions", join(source, "skills"));
+
+      const result = runShell(
+        codexCopyHelperHarness(`
+copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" missing.toml
+copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" missing
+copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
+copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+printf "continued"
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          CODEX_TEST_SOURCE: source,
+          CODEX_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Warning: Skipping symlinked Codex file: auth.json");
+      expect(result.stdout).toContain("Warning: Skipping symlinked Codex directory: skills");
+      expect(result.stdout).toEndWith("continued");
+      expect(result.stdout).not.toContain("missing.toml");
+      expect(() => statSync(join(destination, "auth.json"))).toThrow();
+      expect(() => statSync(join(destination, "skills"))).toThrow();
+      expect(() => statSync(join(destination, "sessions"))).toThrow();
+    });
+  });
+
+  test("Codex directory copy rejects nested absolute symlinks to excluded state", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const excludedSessions = join(source, "sessions");
+      mkdirSync(join(source, "skills", "review"), { recursive: true });
+      mkdirSync(excludedSessions, { recursive: true });
+      writeFileSync(join(source, "skills", "review", "SKILL.md"), "safe skill\n");
+      writeFileSync(join(excludedSessions, "rollout.jsonl"), "excluded rollout\n");
+      symlinkSync(
+        excludedSessions,
+        join(source, "skills", "review", "host-sessions"),
+      );
+
+      const result = runShell(
+        codexCopyHelperHarness(`
+copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+printf "continued"
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          CODEX_TEST_SOURCE: source,
+          CODEX_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(
+        "Warning: Skipping Codex directory containing symlink: skills",
+      );
+      expect(result.stdout).not.toContain(excludedSessions);
+      expect(result.stdout).toEndWith("continued");
+      expect(() => statSync(join(destination, "skills"))).toThrow();
+      expect(() => statSync(join(destination, "sessions"))).toThrow();
+    });
+  });
+
+  test("Codex configuration copy helpers enforce file and directory bounds", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      mkdirSync(join(source, "skills"), { recursive: true });
+      writeFileSync(join(source, "config.toml"), "12345");
+      writeFileSync(join(source, "skills", "one"), "1");
+      writeFileSync(join(source, "skills", "two"), "2");
+
+      const result = runShell(
+        codexCopyHelperHarness(`
+copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" config.toml
+copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+printf "continued"
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          CODEX_TEST_SOURCE: source,
+          CODEX_TEST_DESTINATION: destination,
+          CODEX_COPY_MAX_FILE_BYTES: "4",
+          CODEX_COPY_MAX_DIRECTORY_ENTRIES: "1",
+          CODEX_COPY_MAX_DIRECTORY_KIB: "1024",
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Warning: Skipping oversized Codex file: config.toml");
+      expect(result.stdout).toContain("Warning: Skipping oversized Codex directory: skills");
+      expect(result.stdout).toEndWith("continued");
+      expect(() => statSync(join(destination, "config.toml"))).toThrow();
+      expect(() => statSync(join(destination, "skills"))).toThrow();
+    });
+  });
+
+  test("Codex configuration copy failures warn and do not stop startup", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      mkdirSync(join(source, "skills"), { recursive: true });
+      mkdirSync(destination);
+      writeFileSync(join(source, "auth.json"), "auth\n");
+      writeFileSync(join(source, "skills", "SKILL.md"), "skill\n");
+      mkdirSync(join(destination, "auth.json"));
+      writeFileSync(join(destination, "skills"), "destination conflict\n");
+
+      const conflictResult = runShell(
+        codexCopyHelperHarness(`
+copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
+copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+printf "continued"
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          CODEX_TEST_SOURCE: source,
+          CODEX_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(conflictResult.exitCode).toBe(0);
+      expect(conflictResult.stdout).toContain("destination is a directory");
+      expect(conflictResult.stdout).toContain("destination is not a directory");
+      expect(conflictResult.stdout).toEndWith("continued");
+
+      const blockedDestination = join(dir, "blocked-destination");
+      writeFileSync(blockedDestination, "not a directory\n");
+      const mkdirResult = runShell(
+        codexCopyHelperHarness(`
+copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
+copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+printf "continued"
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          CODEX_TEST_SOURCE: source,
+          CODEX_TEST_DESTINATION: blockedDestination,
+        },
+      );
+
+      expect(mkdirResult.exitCode).toBe(0);
+      expect(mkdirResult.stdout).toContain("Failed to create destination for Codex file: auth.json");
+      expect(mkdirResult.stdout).toContain("Failed to create destination for Codex directory: skills");
+      expect(mkdirResult.stdout).toEndWith("continued");
+
+      const fakeBin = join(dir, "fake-bin");
+      const copyFailureDestination = join(dir, "copy-failure-destination");
+      mkdirSync(fakeBin);
+      writeFileSync(join(fakeBin, "cp"), "#!/bin/sh\nexit 1\n");
+      chmodSync(join(fakeBin, "cp"), 0o755);
+      const copyResult = runShell(
+        codexCopyHelperHarness(`
+copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
+copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+printf "continued"
+`),
+        {
+          PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+          CODEX_TEST_SOURCE: source,
+          CODEX_TEST_DESTINATION: copyFailureDestination,
+        },
+      );
+
+      expect(copyResult.exitCode).toBe(0);
+      expect(copyResult.stdout).toContain("Warning: Failed to copy Codex file: auth.json");
+      expect(copyResult.stdout).toContain("Warning: Failed to copy Codex directory: skills");
+      expect(copyResult.stdout).toEndWith("continued");
+    });
+  });
+
+  test("Codex setup copies the complete allowlist, secures auth, and excludes plugin runtime state", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const home = join(dir, "home");
+      const destination = join(home, ".codex");
+      const files = [
+        "auth.json",
+        "config.toml",
+        "AGENTS.md",
+        "hooks.json",
+        "models_cache.json",
+        ".codex-global-state.json",
+        "cloud-config-bundle-cache.json",
+        "cloud-requirements-cache.json",
+      ];
+      const directories = ["rules", "skills", "prompts", "vendor_imports", "plugins/cache"];
+      mkdirSync(source, { recursive: true });
+      for (const file of files) {
+        writeFileSync(join(source, file), `${file}\n`, { mode: 0o644 });
+      }
+      for (const directory of directories) {
+        mkdirSync(join(source, directory), { recursive: true });
+        writeFileSync(join(source, directory, "copied.txt"), `${directory}\n`);
+      }
+      mkdirSync(join(source, "plugins", ".plugin-appserver"), { recursive: true });
+      writeFileSync(join(source, "plugins", ".plugin-appserver", "host-binary"), "excluded\n");
+      mkdirSync(join(source, "sessions"), { recursive: true });
+      writeFileSync(join(source, "sessions", "rollout.jsonl"), "excluded\n");
+
+      const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
+      const result = runShell(
+        `
+set -e
+log_progress() { :; }
+eval "$(sed -n '/^copy_codex_file() {/,/^}$/p; /^copy_codex_directory() {/,/^}$/p' ${shellQuote(entrypoint)})"
+codex_setup="$(sed -n '/^# Set up Codex configuration$/,/^log_progress "Codex configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/codex-home#\\$CODEX_TEST_SOURCE#g")"
+eval "$codex_setup"
+`,
+        {
+          HOME: home,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          CODEX_TEST_SOURCE: source,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      for (const file of files) {
+        expect(readFileSync(join(destination, file), "utf8")).toBe(`${file}\n`);
+      }
+      for (const directory of directories) {
+        expect(readFileSync(join(destination, directory, "copied.txt"), "utf8")).toBe(`${directory}\n`);
+      }
+      expect(statSync(join(destination, "auth.json")).mode & 0o777).toBe(0o600);
+      expect(() => statSync(join(destination, "plugins", ".plugin-appserver"))).toThrow();
       expect(() => statSync(join(destination, "sessions"))).toThrow();
     });
   });

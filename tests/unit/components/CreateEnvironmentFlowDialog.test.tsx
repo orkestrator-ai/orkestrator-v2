@@ -355,6 +355,66 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(call[8]).toBeUndefined();
   });
 
+  test("starts a newly created environment as a backend-owned background task", async () => {
+    const startEnvironment = mock(async () => {});
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={mock(async () => ({ id: "env-background" }) as Environment)}
+        updateEnvironment={() => {}}
+        startEnvironment={startEnvironment}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(startEnvironment).toHaveBeenCalledWith(
+        "env-background",
+        "",
+        { background: true, silent: true },
+      );
+    });
+  });
+
+  test("closes after creation and contains a rejected background-start admission", async () => {
+    const startError = new Error("background admission rejected");
+    const startEnvironment = mock(async () => {
+      throw startError;
+    });
+    const onOpenChange = mock(() => {});
+    const originalConsoleError = console.error;
+    const consoleError = mock(() => undefined);
+    console.error = consoleError as typeof console.error;
+
+    try {
+      render(
+        <CreateEnvironmentFlowDialog
+          open
+          onOpenChange={onOpenChange}
+          projectId="project-1"
+          createEnvironment={mock(async () => ({ id: "env-rejected" }) as Environment)}
+          updateEnvironment={() => {}}
+          startEnvironment={startEnvironment}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+      await waitFor(() => {
+        expect(onOpenChange).toHaveBeenCalledWith(false);
+        expect(consoleError).toHaveBeenCalledWith(
+          "Failed to auto-start environment:",
+          startError,
+        );
+      });
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
   test("persists a cleared launch intent when the user turns the agent off", async () => {
     const call = await submitCreateFlow({ turnOffLaunchAgent: true });
     // Recording `false` explicitly is what stops an environment created with the

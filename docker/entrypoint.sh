@@ -18,13 +18,47 @@ copy_codex_file() {
     local source_root="$1"
     local destination_root="$2"
     local relative_path="$3"
+    local source_path="$source_root/$relative_path"
+    local destination_path="$destination_root/$relative_path"
+    local max_bytes="${CODEX_COPY_MAX_FILE_BYTES:-10485760}"
+    local file_bytes
 
-    if [ ! -f "$source_root/$relative_path" ]; then
+    # An allowlisted name must be a real file in the mounted Codex home. Following
+    # a top-level link could turn an allowlisted name into an arbitrary rollout,
+    # log, credential, or other host file.
+    if [ -L "$source_path" ]; then
+        echo "Warning: Skipping symlinked Codex file: $relative_path"
         return 0
     fi
 
-    mkdir -p "$(dirname "$destination_root/$relative_path")"
-    if ! cp "$source_root/$relative_path" "$destination_root/$relative_path" 2>/dev/null; then
+    if [ ! -f "$source_path" ]; then
+        return 0
+    fi
+
+    case "$max_bytes" in
+        ''|*[!0-9]*)
+            max_bytes=10485760
+            ;;
+    esac
+    file_bytes="$(wc -c < "$source_path" 2>/dev/null)" || {
+        echo "Warning: Failed to inspect Codex file: $relative_path"
+        return 0
+    }
+    file_bytes="${file_bytes//[[:space:]]/}"
+    if [ "$file_bytes" -gt "$max_bytes" ]; then
+        echo "Warning: Skipping oversized Codex file: $relative_path"
+        return 0
+    fi
+
+    if [ -d "$destination_path" ]; then
+        echo "Warning: Failed to copy Codex file: $relative_path (destination is a directory)"
+        return 0
+    fi
+    if ! mkdir -p "$(dirname "$destination_path")" 2>/dev/null; then
+        echo "Warning: Failed to create destination for Codex file: $relative_path"
+        return 0
+    fi
+    if ! cp "$source_path" "$destination_path" 2>/dev/null; then
         echo "Warning: Failed to copy Codex file: $relative_path"
     fi
 }
@@ -33,13 +67,80 @@ copy_codex_directory() {
     local source_root="$1"
     local destination_root="$2"
     local relative_path="$3"
+    local source_path="$source_root/$relative_path"
+    local destination_path="$destination_root/$relative_path"
+    local max_entries="${CODEX_COPY_MAX_DIRECTORY_ENTRIES:-5000}"
+    local max_kib="${CODEX_COPY_MAX_DIRECTORY_KIB:-262144}"
+    local entry_count
+    local directory_kib
+    local nested_symlinks
 
-    if [ ! -d "$source_root/$relative_path" ]; then
+    # Do not dereference a top-level allowlist link. In particular, a host can
+    # otherwise make "skills" or "plugins/cache" point at excluded runtime state.
+    if [ -L "$source_path" ]; then
+        echo "Warning: Skipping symlinked Codex directory: $relative_path"
         return 0
     fi
 
-    mkdir -p "$destination_root/$relative_path"
-    if ! cp -R "$source_root/$relative_path/." "$destination_root/$relative_path/" 2>/dev/null; then
+    if [ ! -d "$source_path" ]; then
+        return 0
+    fi
+
+    case "$max_entries" in
+        ''|*[!0-9]*)
+            max_entries=5000
+            ;;
+    esac
+    case "$max_kib" in
+        ''|*[!0-9]*)
+            max_kib=262144
+            ;;
+    esac
+    entry_count="$(find -P "$source_path" -print 2>/dev/null | wc -l)" || {
+        echo "Warning: Failed to inspect Codex directory: $relative_path"
+        return 0
+    }
+    entry_count="${entry_count//[[:space:]]/}"
+    # The first find result is the source directory itself.
+    if [ "$entry_count" -gt 0 ]; then
+        entry_count=$((entry_count - 1))
+    fi
+    if [ "$entry_count" -gt "$max_entries" ]; then
+        echo "Warning: Skipping oversized Codex directory: $relative_path"
+        return 0
+    fi
+    nested_symlinks="$(find -P "$source_path" -type l -print 2>/dev/null)" || {
+        echo "Warning: Failed to inspect Codex directory: $relative_path"
+        return 0
+    }
+    if [ -n "$nested_symlinks" ]; then
+        echo "Warning: Skipping Codex directory containing symlink: $relative_path"
+        return 0
+    fi
+    directory_kib="$(du -sk "$source_path" 2>/dev/null | awk '{print $1}')" || {
+        echo "Warning: Failed to inspect Codex directory: $relative_path"
+        return 0
+    }
+    case "$directory_kib" in
+        ''|*[!0-9]*)
+            echo "Warning: Failed to inspect Codex directory: $relative_path"
+            return 0
+            ;;
+    esac
+    if [ "$directory_kib" -gt "$max_kib" ]; then
+        echo "Warning: Skipping oversized Codex directory: $relative_path"
+        return 0
+    fi
+
+    if [ -e "$destination_path" ] && [ ! -d "$destination_path" ]; then
+        echo "Warning: Failed to copy Codex directory: $relative_path (destination is not a directory)"
+        return 0
+    fi
+    if ! mkdir -p "$destination_path" 2>/dev/null; then
+        echo "Warning: Failed to create destination for Codex directory: $relative_path"
+        return 0
+    fi
+    if ! cp -R "$source_path/." "$destination_path/" 2>/dev/null; then
         echo "Warning: Failed to copy Codex directory: $relative_path"
     fi
 }

@@ -67,6 +67,7 @@ import {
   type JsonRecord,
   type StorageService,
 } from "./storage.js";
+import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import {
   commandExists,
   homePath,
@@ -127,6 +128,7 @@ export type CommandContext = {
   emit: BackendEmit;
   appRoot: string;
   resourceRoot: string;
+  environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   toolchainBinDir?: string;
 };
 
@@ -429,6 +431,7 @@ const environmentSetupSessions = new Map<string, EnvironmentSetupSession>();
 const environmentSetupTasks = new Map<string, Promise<Environment>>();
 const environmentSetupStartTasks = new Map<string, Promise<EnvironmentSetupStartResult>>();
 const environmentStartTasks = new Map<string, Promise<EnvironmentSetupStartResult>>();
+const environmentLifecycleOperations = new Map<string, Promise<void>>();
 const environmentBaselineTasks = new Map<string, Promise<Environment>>();
 const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [".orkestrator", ".claude/settings.local.json"] as const;
 
@@ -3808,18 +3811,27 @@ function startEnvironmentSetup(
 async function startEnvironmentOnce(
   environmentId: string,
   context: CommandContext,
+  schedulePendingRename: (environmentId: string, context: CommandContext) => void,
 ): Promise<EnvironmentSetupStartResult> {
   const { storage } = context;
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-  await storage.updateEnvironment(environment.id, { status: "creating" });
+  let unpersistedContainerId: string | null = null;
+  let unpersistedWorktreePath: string | null = null;
 
   try {
+    await storage.updateEnvironment(environment.id, {
+      status: "creating",
+      lifecycleError: null,
+    });
     if (environment.environmentType === "local") {
       if (environment.worktreePath && await pathExists(environment.worktreePath)) {
-        const running = await storage.updateEnvironment(environment.id, { status: "running" });
+        const running = await storage.updateEnvironment(environment.id, {
+          status: "running",
+          lifecycleError: null,
+        });
         const result = await startEnvironmentSetup(running, context);
-        schedulePendingEnvironmentRename(environment.id, context);
+        schedulePendingRename(environment.id, context);
         await syncDiffStatsTracking(context);
         await syncPrMonitorTracking(context);
         return result;
@@ -3834,14 +3846,17 @@ async function startEnvironmentOnce(
         repoConfig.defaultBranch,
         repoConfig.filesToCopy,
       );
+      unpersistedWorktreePath = worktree.path;
       const updated = await storage.updateEnvironment(environment.id, {
         worktreePath: worktree.path,
         branch: worktree.branch,
         createdFromCommit: worktree.createdFromCommit,
         status: "running",
+        lifecycleError: null,
       });
+      unpersistedWorktreePath = null;
       const result = await startEnvironmentSetup(updated, context);
-      schedulePendingEnvironmentRename(environment.id, context);
+      schedulePendingRename(environment.id, context);
       await syncDiffStatsTracking(context);
       await syncPrMonitorTracking(context);
       return result;
@@ -3850,7 +3865,9 @@ async function startEnvironmentOnce(
     let containerId = environment.containerId;
     if (!containerId) {
       containerId = await createDockerContainer(environment, context);
+      unpersistedContainerId = containerId;
       await storage.updateEnvironment(environment.id, { containerId });
+      unpersistedContainerId = null;
     }
     await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
     const config = await storage.loadConfig();
@@ -3861,14 +3878,28 @@ async function startEnvironmentOnce(
       status: "running",
       entryPort: environment.entryPort ?? null,
       hostEntryPort,
+      lifecycleError: null,
     });
     const result = await startEnvironmentSetup(updated, context);
-    schedulePendingEnvironmentRename(environment.id, context);
+    schedulePendingRename(environment.id, context);
     await syncDiffStatsTracking(context);
     await syncPrMonitorTracking(context);
     return result;
   } catch (error) {
-    await storage.updateEnvironment(environment.id, { status: "error" }).catch(() => undefined);
+    if (unpersistedContainerId) {
+      await runCommand(
+        "docker",
+        ["rm", "-f", unpersistedContainerId],
+        { timeoutMs: 60_000 },
+      ).catch(() => undefined);
+    }
+    if (unpersistedWorktreePath) {
+      await removeLocalWorktree(unpersistedWorktreePath).catch(() => undefined);
+    }
+    await storage.updateEnvironment(environment.id, {
+      status: "error",
+      lifecycleError: environmentLifecycleErrorMessage(error),
+    }).catch(() => undefined);
     throw error;
   }
 }
@@ -3876,11 +3907,16 @@ async function startEnvironmentOnce(
 function startEnvironmentTask(
   environmentId: string,
   context: CommandContext,
+  schedulePendingRename: (environmentId: string, context: CommandContext) => void,
 ): Promise<EnvironmentSetupStartResult> {
   const existing = environmentStartTasks.get(environmentId);
   if (existing) return existing;
 
-  const task = startEnvironmentOnce(environmentId, context)
+  const task = enqueueEnvironmentLifecycleOperation(
+    environmentId,
+    context,
+    () => startEnvironmentOnce(environmentId, context, schedulePendingRename),
+  )
     .finally(() => {
       if (environmentStartTasks.get(environmentId) === task) {
         environmentStartTasks.delete(environmentId);
@@ -3888,6 +3924,142 @@ function startEnvironmentTask(
     });
   environmentStartTasks.set(environmentId, task);
   return task;
+}
+
+/**
+ * Serializes all resource-changing lifecycle operations for one environment.
+ *
+ * The queue tail always settles successfully so one failed operation cannot
+ * poison retries. Callers still receive the original result/rejection.
+ */
+function enqueueEnvironmentLifecycleOperation<T>(
+  environmentId: string,
+  context: CommandContext,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = environmentLifecycleOperations.get(environmentId) ?? Promise.resolve();
+  const result = context.environmentLifecycleTasks.admit(
+    () => previous.then(operation, operation),
+  );
+  const tail = result.then(() => undefined, () => undefined);
+  environmentLifecycleOperations.set(environmentId, tail);
+  void tail.finally(() => {
+    if (environmentLifecycleOperations.get(environmentId) === tail) {
+      environmentLifecycleOperations.delete(environmentId);
+    }
+  });
+  return result;
+}
+
+/**
+ * Once a conflicting operation has been admitted, a later start must queue
+ * behind it instead of joining an earlier start that will be stopped/deleted.
+ */
+function invalidateEnvironmentStartDedupe(environmentId: string): void {
+  environmentStartTasks.delete(environmentId);
+}
+
+async function stopEnvironmentOnce(
+  environmentId: string,
+  context: CommandContext,
+  invalidateDiscovery: (environmentId: string) => void,
+): Promise<void> {
+  const { storage } = context;
+  const environment = await storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  // Discovery runs inside the environment, so its cached result stops being
+  // meaningful the moment the environment does.
+  invalidateDiscovery(environment.id);
+  if (environment.lifecycleError) {
+    await storage.updateEnvironment(environment.id, { lifecycleError: null });
+  }
+  // A stopped environment cannot honour a post-setup agent launch, and the
+  // renderer cannot clear the intent for an environment it no longer mounts.
+  if (environment.containerId) {
+    await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
+    await storage.updateEnvironment(environment.id, {
+      status: "stopped",
+      ...clearPendingAgentLaunchUpdates(),
+    });
+    shutdownClaudeStatePolling(environment.containerId);
+    invalidatePendingDiffStatsSync();
+    diffStatsService.pause(environment.id);
+    invalidatePendingPrMonitorSync();
+    prMonitorService.pause(environment.id);
+    return;
+  }
+
+  // A stopped local environment must not keep its bridge process trees alive.
+  // Record partial progress even when one bridge refuses to terminate.
+  let stopError: unknown;
+  if (environment.worktreePath) {
+    try {
+      await enqueueLocalServerEnvironmentOperation(environment.id, () =>
+        stopLocalServersForEnvironmentUnlocked(environment.id, context),
+      );
+    } catch (error) {
+      stopError = error;
+    }
+  }
+  await storage.updateEnvironment(environment.id, {
+    status: "stopped",
+    ...clearPendingAgentLaunchUpdates(),
+  });
+  if (stopError) throw stopError;
+}
+
+function stopEnvironmentTask(
+  environmentId: string,
+  context: CommandContext,
+  invalidateDiscovery: (environmentId: string) => void,
+): Promise<void> {
+  invalidateEnvironmentStartDedupe(environmentId);
+  return enqueueEnvironmentLifecycleOperation(
+    environmentId,
+    context,
+    () => stopEnvironmentOnce(environmentId, context, invalidateDiscovery),
+  );
+}
+
+async function recreateEnvironmentOnce(
+  environmentId: string,
+  context: CommandContext,
+  schedulePendingRename: (environmentId: string, context: CommandContext) => void,
+  invalidateDiscovery: (environmentId: string) => void,
+): Promise<EnvironmentSetupStartResult | undefined> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (!environment?.containerId) return;
+  invalidateDiscovery(environment.id);
+  await runCommand(
+    "docker",
+    ["rm", "-f", environment.containerId],
+    { timeoutMs: 60_000 },
+  );
+  await context.storage.updateEnvironment(environment.id, {
+    containerId: null,
+    status: "stopped",
+    lifecycleError: null,
+  });
+  return startEnvironmentOnce(environment.id, context, schedulePendingRename);
+}
+
+function recreateEnvironmentTask(
+  environmentId: string,
+  context: CommandContext,
+  schedulePendingRename: (environmentId: string, context: CommandContext) => void,
+  invalidateDiscovery: (environmentId: string) => void,
+): Promise<EnvironmentSetupStartResult | undefined> {
+  invalidateEnvironmentStartDedupe(environmentId);
+  return enqueueEnvironmentLifecycleOperation(
+    environmentId,
+    context,
+    () => recreateEnvironmentOnce(
+      environmentId,
+      context,
+      schedulePendingRename,
+      invalidateDiscovery,
+    ),
+  );
 }
 
 async function runEnvironmentSetupNow(environmentId: string, context: CommandContext): Promise<Environment> {
@@ -4596,13 +4768,6 @@ async function deleteEnvironment(
   if (mergingEnvironments.has(environmentId) && !options.allowWhileMerging) {
     throw new Error(`Environment is currently being merged: ${environmentId}`);
   }
-  if (deletingLocalServerEnvironments.has(environmentId)) {
-    throw new Error(`Environment is already being deleted: ${environmentId}`);
-  }
-
-  // Set the tombstone before queueing so a later start cannot join the queue
-  // behind deletion and recreate a process for a removed environment.
-  deletingLocalServerEnvironments.add(environmentId);
   try {
     await enqueueLocalServerEnvironmentOperation(environmentId, async () => {
       const { storage } = context;
@@ -4679,8 +4844,32 @@ async function deleteEnvironment(
       }).catch(() => undefined);
     }
     throw error;
-  } finally {
+  }
+}
+
+function deleteEnvironmentTask(
+  environmentId: string,
+  context: CommandContext,
+  options: { allowWhileMerging?: boolean } = {},
+): Promise<void> {
+  if (deletingLocalServerEnvironments.has(environmentId)) {
+    return Promise.reject(new Error(`Environment is already being deleted: ${environmentId}`));
+  }
+  // Reserve deletion before queueing. Local server starts consult this guard,
+  // so work admitted after delete cannot recreate a process behind cleanup.
+  deletingLocalServerEnvironments.add(environmentId);
+  invalidateEnvironmentStartDedupe(environmentId);
+  try {
+    return enqueueEnvironmentLifecycleOperation(
+      environmentId,
+      context,
+      () => deleteEnvironment(environmentId, context, options),
+    ).finally(() => {
+      deletingLocalServerEnvironments.delete(environmentId);
+    });
+  } catch (error) {
     deletingLocalServerEnvironments.delete(environmentId);
+    throw error;
   }
 }
 
@@ -4708,7 +4897,7 @@ function scheduleMergeCleanupRecovery(
     ) {
       return;
     }
-    await deleteEnvironment(environmentId, context);
+    await deleteEnvironmentTask(environmentId, context);
   })()
     .catch((error) => {
       console.warn(
@@ -6115,6 +6304,35 @@ function cleanupErrorMessage(error: unknown): string {
   return "An unexpected error occurred";
 }
 
+const ENVIRONMENT_LIFECYCLE_ERROR_MAX_CHARS = 200;
+
+/**
+ * Converts an arbitrary subprocess/storage failure into a bounded message that
+ * is safe to persist, render, and log. Raw command errors can contain clone
+ * URLs, host paths, environment variables, and child output, so only
+ * deliberately selected categories cross that boundary.
+ */
+function environmentLifecycleErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  let safeMessage = "Environment start failed. Check the backend logs and retry.";
+
+  if (message === "Project has no local path - cannot create a local worktree") {
+    safeMessage = message;
+  } else if (message === "Setup script failed") {
+    safeMessage = "Environment setup script failed.";
+  } else if (/\b(?:timed? out|timeout)\b/i.test(message)) {
+    safeMessage = "Environment start timed out. Check the container runtime and retry.";
+  } else if (/\b(?:docker|container runtime)\b.*\b(?:not found|unavailable|not running)\b/i.test(message)) {
+    safeMessage = "The container runtime is unavailable. Start it and retry.";
+  } else if (/\bimage\b.*\b(?:not found|missing|pull)\b/i.test(message)) {
+    safeMessage = "The environment image is unavailable. Rebuild it and retry.";
+  }
+
+  return safeMessage.length > ENVIRONMENT_LIFECYCLE_ERROR_MAX_CHARS
+    ? `${safeMessage.slice(0, ENVIRONMENT_LIFECYCLE_ERROR_MAX_CHARS - 1)}…`
+    : safeMessage;
+}
+
 async function refreshClaudeModelCatalog(
   environmentId: string,
   context: CommandContext,
@@ -6644,7 +6862,7 @@ export function createCommandRegistry(
   register("delete_environment", ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
     extensionDiscoveryCache.invalidate(id);
-    return deleteEnvironment(id, context);
+    return deleteEnvironmentTask(id, context);
   });
   register("rename_environment", ({ environmentId, name }, { storage }) => {
     const newName = sanitizeEnvironmentName(asString(name, "name"));
@@ -6696,7 +6914,11 @@ export function createCommandRegistry(
     return cleared;
   });
   register("start_environment", ({ environmentId }, context) =>
-    startEnvironmentTask(asString(environmentId, "environmentId"), context)
+    startEnvironmentTask(
+      asString(environmentId, "environmentId"),
+      context,
+      schedulePendingEnvironmentRename,
+    )
   );
   register("start_environment_background", async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
@@ -6706,81 +6928,26 @@ export function createCommandRegistry(
     if (!await context.storage.getEnvironment(id)) {
       throw new Error(`Environment not found: ${id}`);
     }
-    const task = startEnvironmentTask(id, context);
+    const task = startEnvironmentTask(id, context, schedulePendingEnvironmentRename);
     void task.catch((error) => {
-      console.error(
-        `[environment-start] Background start failed for ${id}:`,
-        error instanceof Error ? error.message : error,
-      );
+      console.error(`[environment-start] Background start failed for ${id}: ${environmentLifecycleErrorMessage(error)}`);
     });
   });
-  register("stop_environment", async ({ environmentId }, context) => {
-    const { storage } = context;
-    const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
-    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    // Discovery runs inside the environment, so its cached result stops being
-    // meaningful the moment the environment does.
-    extensionDiscoveryCache.invalidate(environment.id);
-    // A stopped environment cannot honour a post-setup agent launch, and the
-    // renderer cannot clear the intent for an environment it no longer mounts.
-    // Dropping it here keeps the durable flag from outliving the run it belongs
-    // to. This matches the renderer clearing its transient pending launch when
-    // the container stops.
-    if (environment.containerId) {
-      await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
-      await storage.updateEnvironment(environment.id, {
-        status: "stopped",
-        ...clearPendingAgentLaunchUpdates(),
-      });
-      // Retired only once the stop has actually committed. Doing it earlier
-      // would leave a still-running environment with no poller if `docker stop`
-      // threw, and no renderer would re-register it — they each hold a lease
-      // they believe is live. `poll()` would reach the same conclusion on its
-      // next tick; this just skips the last pointless exec.
-      shutdownClaudeStatePolling(environment.containerId);
-      // Keeps the last counts on screen; a stopped container's work is still on
-      // disk, it just cannot be read until the container is back.
-      invalidatePendingDiffStatsSync();
-      diffStatsService.pause(environment.id);
-      // A stopped container cannot run `gh`; keep the last persisted PR
-      // reading and stop polling until the container is back.
-      invalidatePendingPrMonitorSync();
-      prMonitorService.pause(environment.id);
-      return;
-    }
-
-    // A stopped local environment must not keep its bridge processes (and the
-    // codex app-server tree behind them) running; they restart on demand.
-    //
-    // The status is recorded even when a bridge refuses to die. Stopping is
-    // partial progress the user can see — some servers did stop, and their
-    // PID/port records were cleared — so leaving the environment marked
-    // "running" would strand it with no way to stop it from the UI. The
-    // failure is still surfaced, just after the state is consistent.
-    let stopError: unknown;
-    if (environment.worktreePath) {
-      try {
-        await enqueueLocalServerEnvironmentOperation(environment.id, () =>
-          stopLocalServersForEnvironmentUnlocked(environment.id, context),
-        );
-      } catch (error) {
-        stopError = error;
-      }
-    }
-    await storage.updateEnvironment(environment.id, {
-      status: "stopped",
-      ...clearPendingAgentLaunchUpdates(),
-    });
-    if (stopError) throw stopError;
-  });
-  register("recreate_environment", async ({ environmentId }, context) => {
-    const environment = await context.storage.getEnvironment(asString(environmentId, "environmentId"));
-    if (!environment?.containerId) return;
-    extensionDiscoveryCache.invalidate(environment.id);
-    await runCommand("docker", ["rm", "-f", environment.containerId], { timeoutMs: 60_000 }).catch(() => undefined);
-    await context.storage.updateEnvironment(environment.id, { containerId: null, status: "stopped" });
-    return commands.get("start_environment")?.({ environmentId }, context);
-  });
+  register("stop_environment", ({ environmentId }, context) =>
+    stopEnvironmentTask(
+      asString(environmentId, "environmentId"),
+      context,
+      (id) => extensionDiscoveryCache.invalidate(id),
+    )
+  );
+  register("recreate_environment", ({ environmentId }, context) =>
+    recreateEnvironmentTask(
+      asString(environmentId, "environmentId"),
+      context,
+      schedulePendingEnvironmentRename,
+      (id) => extensionDiscoveryCache.invalidate(id),
+    )
+  );
   register("set_environment_pr", async ({ environmentId, prUrl, prState, hasMergeConflicts }, context) => {
     const updated = await context.storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: asString(prUrl, "prUrl"), prState, hasMergeConflicts });
     // A PR recorded outside the monitor (e.g. right after a merge command) must
@@ -7046,9 +7213,10 @@ export function createCommandRegistry(
       return { id, name: row.Names ?? "", status: row.Status ?? "", state: row.State ?? "", image: row.Image ?? "", created: 0, environmentId: env?.id ?? null, projectId: env?.projectId ?? null, isAssigned: !!env, cpuPercent: null };
     });
   });
-  register("cleanup_orphaned_containers", async (_args, { storage }) => {
+  register("cleanup_orphaned_containers", async (_args, context) => {
+    const { storage } = context;
     const environments = await storage.loadEnvironments();
-    const containers = await commands.get("list_docker_containers")?.({}, { storage, emit: () => undefined, appRoot: "", resourceRoot: "" }) as string[][];
+    const containers = await commands.get("list_docker_containers")?.({}, context) as string[][];
     let removed = 0;
     for (const [containerId] of containers) {
       if (containerId && !findEnvironmentByContainerId(environments, containerId)) {
@@ -7322,7 +7490,10 @@ export function createCommandRegistry(
   register("get_codex_server_log", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "cat /tmp/codex-bridge.log 2>/dev/null || true"));
 
   register("has_claude_credentials", () => pathExists(homePath(".claude", ".credentials.json")).then(async (exists) => exists || pathExists(homePath(".claude.json"))));
-  register("get_credential_status", async () => ({ available: await commands.get("has_claude_credentials")?.({}, { storage: null as never, emit: () => undefined, appRoot: "", resourceRoot: "" }), expiresAt: null }));
+  register("get_credential_status", async (_args, context) => ({
+    available: await commands.get("has_claude_credentials")?.({}, context),
+    expiresAt: null,
+  }));
   register("check_claude_cli", (_args, context) => hasPackagedOrPathBinary(context, "claude"));
   register("check_claude_config", () => pathExists(homePath(".claude.json")));
   register("check_opencode_cli", (_args, context) => hasPackagedOrPathBinary(context, "opencode"));
@@ -8211,7 +8382,7 @@ export function createCommandRegistry(
           await reconcileConfirmedMerge(environment, context);
 
           try {
-            await deleteEnvironment(id, context, { allowWhileMerging: true });
+            await deleteEnvironmentTask(id, context, { allowWhileMerging: true });
             return { ...result, cleanupOutcome: "completed" };
           } catch (error) {
             const cleanupError = cleanupErrorMessage(error);

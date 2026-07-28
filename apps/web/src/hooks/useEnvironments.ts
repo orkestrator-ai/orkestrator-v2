@@ -131,6 +131,56 @@ function bindSetupTerminalSession(environment: Environment, sessionId: string): 
 
 let setupSnapshotReconciliation: Promise<void> | null = null;
 let setupSnapshotReconcileRequested = false;
+const reportedLifecycleErrorByEnvironment = new Map<string, string>();
+
+/**
+ * Apply durable lifecycle failures from the environment store. Snapshot reads
+ * are the authority because the renderer may have been suspended while a
+ * backend-owned start failed. A given persisted error is reported once, then a
+ * cleared value rearms reporting so a later retry can surface the same reason.
+ */
+function reconcileEnvironmentLifecycleErrors(): void {
+  const store = useEnvironmentStore.getState();
+  const liveEnvironmentIds = new Set(
+    store.environments.map((environment) => environment.id),
+  );
+  for (const environmentId of reportedLifecycleErrorByEnvironment.keys()) {
+    if (!liveEnvironmentIds.has(environmentId)) {
+      reportedLifecycleErrorByEnvironment.delete(environmentId);
+    }
+  }
+
+  for (const environment of store.environments) {
+    const message = environment.lifecycleError?.trim();
+    if (!message) {
+      reportedLifecycleErrorByEnvironment.delete(environment.id);
+      continue;
+    }
+
+    // A failed background start cannot produce a setup plan. Resolve every
+    // transient gate so an inactive/remounted terminal does not wait forever.
+    store.consumePendingSetupCommands(environment.id);
+    store.setSetupCommandsResolved(environment.id, true);
+    store.setSetupScriptsRunning(environment.id, false);
+    store.setWorkspaceReady(environment.id, false);
+
+    if (reportedLifecycleErrorByEnvironment.get(environment.id) === message) {
+      continue;
+    }
+    reportedLifecycleErrorByEnvironment.set(environment.id, message);
+    store.setError(message);
+    toast.error("Failed to start environment", {
+      description: truncateForToast(message),
+      action: {
+        label: "Details",
+        onClick: () =>
+          useErrorDialogStore
+            .getState()
+            .showError("Failed to start environment", message),
+      },
+    });
+  }
+}
 
 /**
  * Reconcile setup gates from backend snapshots after a mobile browser resumes
@@ -156,10 +206,14 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
       .map((environment) => environment.id),
   ]);
   const targets = environmentStore.environments.filter((environment) =>
-    environment.status === "running"
-    && (
-      environmentStore.isSetupScriptsRunning(environment.id)
-      || pendingLaunchEnvironmentIds.has(environment.id)
+    environment.status === "creating"
+    || Boolean(environment.lifecycleError)
+    || (
+      environment.status === "running"
+      && (
+        environmentStore.isSetupScriptsRunning(environment.id)
+        || pendingLaunchEnvironmentIds.has(environment.id)
+      )
     )
   );
 
@@ -173,6 +227,11 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
       const store = useEnvironmentStore.getState();
       const safeSnapshot = preserveCompletedSetupState(environment.id, snapshot);
       store.updateEnvironment(environment.id, safeSnapshot);
+      reconcileEnvironmentLifecycleErrors();
+
+      if (safeSnapshot.lifecycleError) {
+        return;
+      }
 
       if (safeSnapshot.setupScriptsComplete) {
         store.setSetupCommandsResolved(environment.id, true);
@@ -218,6 +277,12 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
  * registration serves every consumer.
  */
 export function useEnvironmentLifecycleService(): void {
+  // Rehydrate a failure already present in the first environment snapshot.
+  // Periodic list syncs call the same reconciliation after every merge.
+  useEffect(() => {
+    reconcileEnvironmentLifecycleErrors();
+  }, []);
+
   // Listen for backend-owned setup lifecycle events. Setup can run while the
   // terminal UI is unmounted, so these events are only incremental updates; the
   // persisted environment remains the source of truth on reload.
@@ -239,6 +304,7 @@ export function useEnvironmentLifecycleService(): void {
         const store = useEnvironmentStore.getState();
         if (environment) {
           store.updateEnvironment(environment_id, environment);
+          reconcileEnvironmentLifecycleErrors();
           bindSetupTerminalSession(environment, session_id);
         }
         store.consumePendingSetupCommands(environment_id);
@@ -264,6 +330,7 @@ export function useEnvironmentLifecycleService(): void {
             environment_id,
             preserveCompletedSetupState(environment_id, environment),
           );
+          reconcileEnvironmentLifecycleErrors();
         }
         store.consumePendingSetupCommands(environment_id);
         store.setSetupCommandsResolved(environment_id, true);
@@ -464,6 +531,7 @@ export function useEnvironments(
         // created environment. Do not let it replace newer local state.
         if (snapshotIsCurrent) {
           mergeEnvironmentsForProject(pid, envs);
+          reconcileEnvironmentLifecycleErrors();
         }
         useBuildPipelineStore.getState().reconcilePipelinesForProject(
           pid,

@@ -79,6 +79,8 @@ export interface Environment {
   cleanupAfterMergeRequestedAt?: string;
   /** Last backend cleanup failure, retained so recovery UI can rehydrate. */
   cleanupAfterMergeError?: string;
+  /** Sanitized failure from the most recent backend-owned lifecycle operation. */
+  lifecycleError?: string | null;
   name: string;
   /** Git branch name (defaults to "main" for legacy environments via serde default) */
   branch: string;

@@ -10,6 +10,7 @@ import { spawnCommand } from "../../../apps/backend/src/core/shell";
 import type { Environment, RepositoryConfig } from "../../../apps/backend/src/core/models";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import { APP_SLUG, APP_VERSION } from "../../../apps/backend/src/core/constants";
+import { EnvironmentLifecycleTaskTracker } from "../../../apps/backend/src/core/environment-lifecycle-tasks";
 
 const execFileAsync = promisify(execFile);
 const liveDockerTest = process.env.RUN_LIVE_DOCKER_TESTS === "1" ? test : test.skip;
@@ -338,6 +339,7 @@ function createContext(
   const context = {
     appRoot: "",
     resourceRoot: "",
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
     emit: mock((event: string, payload: unknown) => {
       emitted.push({ event, payload });
     }),
@@ -3307,6 +3309,462 @@ exit 0
       });
     });
   }, ASYNC_TEST_BUDGET_MS);
+
+  test("accepts a background container start before Docker creation finishes", async () => {
+    const environment = createEnvironment({
+      id: "env-container-background",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+      setupScriptsComplete: true,
+      pendingAgentLaunch: true,
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const gateDirectory = await createTempDir("ork-background-container-start-");
+    const startedPath = path.join(gateDirectory, "started");
+    const releasePath = path.join(gateDirectory, "release");
+    const shellStartedPath = startedPath.replaceAll("'", "'\\''");
+    const shellReleasePath = releasePath.replaceAll("'", "'\\''");
+
+    await withFakeGh(`#!/bin/sh
+exit 1
+`, async () => {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  create)
+    : > '${shellStartedPath}'
+    while [ ! -f '${shellReleasePath}' ]; do sleep 0.01; done
+    printf 'container-background\\n'
+    ;;
+  start|exec)
+    exit 0
+    ;;
+esac
+`, async () => {
+        try {
+          await expect(
+            commands.get("start_environment_background")?.(
+              { environmentId: environment.id },
+              context,
+            ),
+          ).resolves.toBeUndefined();
+
+          await waitForCondition(
+            () => existsSync(startedPath),
+            "background Docker create to begin",
+          );
+          expect(environment.status).toBe("creating");
+          expect(environment.containerId).toBeNull();
+          expect(environment.pendingAgentLaunch).toBe(true);
+        } finally {
+          await fs.writeFile(releasePath, "");
+        }
+
+        await waitForCondition(
+          () => environment.status === "running",
+          "background environment start to finish",
+        );
+        expect(environment.containerId).toBe("container-background");
+        // The start task owns lifecycle only; the renderer clears this after it
+        // has durably persisted the requested agent tab.
+        expect(environment.pendingAgentLaunch).toBe(true);
+      });
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("rejects a background start before admission when the environment is missing or shutdown began", async () => {
+    const commands = createCommandRegistry();
+    const missing = createContext([]);
+    await expect(commands.get("start_environment_background")?.(
+      { environmentId: "missing-environment" },
+      missing.context,
+    )).rejects.toThrow("Environment not found: missing-environment");
+
+    const environment = createEnvironment({
+      id: "env-background-shutdown",
+      status: "stopped",
+      lifecycleError: "Previous failure",
+    });
+    const { context } = createContext(environment);
+    await context.environmentLifecycleTasks.beginShutdown();
+    await expect(commands.get("start_environment_background")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow("Backend is shutting down");
+    expect(environment.status).toBe("stopped");
+    expect(environment.lifecycleError).toBe("Previous failure");
+  });
+
+  test("deduplicates concurrent background starts for one environment", async () => {
+    const environment = createEnvironment({
+      id: "env-background-deduplicated",
+      environmentType: "containerized",
+      containerId: null,
+      status: "stopped",
+      setupScriptsComplete: true,
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const gateDirectory = await createTempDir("ork-background-dedupe-");
+    const releasePath = path.join(gateDirectory, "release");
+    const shellReleasePath = releasePath.replaceAll("'", "'\\''");
+
+    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  create)
+    while [ ! -f '${shellReleasePath}' ]; do sleep 0.01; done
+    printf 'container-deduplicated\\n'
+    ;;
+  start|exec) exit 0 ;;
+esac
+`, async (logs) => {
+        await Promise.all([
+          commands.get("start_environment_background")?.({ environmentId: environment.id }, context),
+          commands.get("start_environment_background")?.({ environmentId: environment.id }, context),
+        ]);
+        await fs.writeFile(releasePath, "");
+        await waitForCondition(
+          () => environment.status === "running",
+          "deduplicated background start to finish",
+        );
+        const calls = await fs.readFile(logs.all, "utf8");
+        expect(calls.split("\n").filter((line) => line.startsWith("create "))).toHaveLength(1);
+      });
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("persists and logs only a safe background start failure", async () => {
+    const secret = "https://user:private-token@example.invalid/private/repo.git";
+    const environment = createEnvironment({
+      id: "env-background-failure",
+      environmentType: "containerized",
+      containerId: null,
+      status: "stopped",
+      lifecycleError: "Old failure",
+      setupScriptsComplete: true,
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await withFakeDocker(`#!/bin/sh
+if [ "$1" = "create" ]; then
+  printf '%s\\n' '${secret}' >&2
+  exit 1
+fi
+exit 0
+`, async () => {
+        await expect(commands.get("start_environment_background")?.(
+          { environmentId: environment.id },
+          context,
+        )).resolves.toBeUndefined();
+        await waitForCondition(
+          () => environment.status === "error",
+          "background failure to persist",
+        );
+      });
+      expect(environment.lifecycleError).toBe(
+        "Environment start failed. Check the backend logs and retry.",
+      );
+      expect(JSON.stringify(errorLog.mock.calls)).not.toContain(secret);
+      expect(JSON.stringify(errorLog.mock.calls)).toContain(environment.lifecycleError);
+
+      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+        await withFakeDocker(`#!/bin/sh
+case "$1" in
+  create) printf 'container-after-retry\\n' ;;
+  start|exec) exit 0 ;;
+esac
+`, async () => {
+          await expect(commands.get("start_environment")?.(
+            { environmentId: environment.id },
+            context,
+          )).resolves.toEqual(expect.objectContaining({
+            setupManagedByBackend: true,
+          }));
+        });
+      });
+      expect(environment.status).toBe("running");
+      expect(environment.lifecycleError).toBeNull();
+    } finally {
+      errorLog.mockRestore();
+    }
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("removes a newly created container when persisting its identity fails", async () => {
+    const environment = createEnvironment({
+      id: "env-container-persist-compensation",
+      environmentType: "containerized",
+      containerId: null,
+      status: "stopped",
+      setupScriptsComplete: true,
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
+    const originalImplementation = updateEnvironment.getMockImplementation();
+    let rejectedContainerIdentity = false;
+    updateEnvironment.mockImplementation(async (
+      environmentId: string,
+      update: Record<string, unknown>,
+    ) => {
+      if (!rejectedContainerIdentity && update.containerId === "container-unpersisted") {
+        rejectedContainerIdentity = true;
+        throw new Error("storage unavailable at /private/user/path");
+      }
+      return originalImplementation!(environmentId, update);
+    });
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  create) printf 'container-unpersisted\\n' ;;
+  rm) exit 0 ;;
+esac
+`, async (logs) => {
+      await expect(commands.get("start_environment")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("storage unavailable");
+      const calls = await fs.readFile(logs.all, "utf8");
+      expect(calls).toContain("rm -f container-unpersisted");
+      expect(environment.containerId).toBeNull();
+      expect(environment.status).toBe("error");
+      expect(environment.lifecycleError).not.toContain("/private/user/path");
+    });
+  });
+
+  test("queues a container stop behind background provisioning", async () => {
+    const environment = createEnvironment({
+      id: "env-background-stop-race",
+      environmentType: "containerized",
+      containerId: null,
+      status: "stopped",
+      setupScriptsComplete: true,
+      pendingAgentLaunch: true,
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const gateDirectory = await createTempDir("ork-background-stop-race-");
+    const startedPath = path.join(gateDirectory, "started");
+    const releasePath = path.join(gateDirectory, "release");
+
+    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  create)
+    : > '${startedPath.replaceAll("'", "'\\''")}'
+    while [ ! -f '${releasePath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
+    printf 'container-stop-race\\n'
+    ;;
+  start|stop|exec) exit 0 ;;
+esac
+`, async (logs) => {
+        await commands.get("start_environment_background")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await waitForCondition(() => existsSync(startedPath), "container create to begin");
+        const stop = commands.get("stop_environment")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await fs.writeFile(releasePath, "");
+        await expect(stop).resolves.toBeUndefined();
+        expect(environment.status).toBe("stopped");
+        expect(environment.pendingAgentLaunch).toBe(false);
+        const calls = await fs.readFile(logs.all, "utf8");
+        expect(calls.indexOf("start container-stop-race")).toBeLessThan(
+          calls.indexOf("stop container-stop-race"),
+        );
+      });
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("queues container deletion behind provisioning and removes the created resource", async () => {
+    const environment = createEnvironment({
+      id: "env-background-delete-race",
+      environmentType: "containerized",
+      containerId: null,
+      status: "stopped",
+      setupScriptsComplete: true,
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const gateDirectory = await createTempDir("ork-background-delete-race-");
+    const startedPath = path.join(gateDirectory, "started");
+    const releasePath = path.join(gateDirectory, "release");
+
+    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  create)
+    : > '${startedPath.replaceAll("'", "'\\''")}'
+    while [ ! -f '${releasePath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
+    printf 'container-delete-race\\n'
+    ;;
+  start|exec|rm) exit 0 ;;
+esac
+`, async (logs) => {
+        await commands.get("start_environment_background")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await waitForCondition(() => existsSync(startedPath), "container create to begin");
+        const deletion = commands.get("delete_environment")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await fs.writeFile(releasePath, "");
+        await expect(deletion).resolves.toBeUndefined();
+        await expect(context.storage.getEnvironment(environment.id)).resolves.toBeNull();
+        const calls = await fs.readFile(logs.all, "utf8");
+        expect(calls).toContain("rm -f container-delete-race");
+      });
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("queues a local stop behind a background start", async () => {
+    const worktreePath = await createGitRepoOnBranch("feature-local-start-stop");
+    const environment = createEnvironment({
+      id: "env-local-background-stop-race",
+      environmentType: "local",
+      worktreePath,
+      branch: "feature-local-start-stop",
+      status: "stopped",
+      setupScriptsComplete: true,
+      pendingAgentLaunch: true,
+    });
+    const { context } = createContext(environment);
+    const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
+    const originalImplementation = updateEnvironment.getMockImplementation();
+    let announceCreating!: () => void;
+    let releaseCreating!: () => void;
+    const creatingStarted = new Promise<void>((resolve) => {
+      announceCreating = resolve;
+    });
+    const creatingRelease = new Promise<void>((resolve) => {
+      releaseCreating = resolve;
+    });
+    updateEnvironment.mockImplementation(async (
+      environmentId: string,
+      update: Record<string, unknown>,
+    ) => {
+      if (update.status === "creating") {
+        announceCreating();
+        await creatingRelease;
+      }
+      return originalImplementation!(environmentId, update);
+    });
+    const commands = createCommandRegistry();
+
+    await commands.get("start_environment_background")?.(
+      { environmentId: environment.id },
+      context,
+    );
+    await creatingStarted;
+    const stop = commands.get("stop_environment")?.(
+      { environmentId: environment.id },
+      context,
+    );
+    releaseCreating();
+    await expect(stop).resolves.toBeUndefined();
+    expect(environment.status).toBe("stopped");
+    expect(environment.pendingAgentLaunch).toBe(false);
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("queues stop behind container recreation without orphaning the replacement", async () => {
+    const environment = createEnvironment({
+      id: "env-recreate-stop-race",
+      environmentType: "containerized",
+      containerId: "container-old",
+      status: "running",
+      setupScriptsComplete: true,
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const gateDirectory = await createTempDir("ork-recreate-stop-race-");
+    const startedPath = path.join(gateDirectory, "started");
+    const releasePath = path.join(gateDirectory, "release");
+
+    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1:$2" in
+  rm:-f)
+    : > '${startedPath.replaceAll("'", "'\\''")}'
+    while [ ! -f '${releasePath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
+    ;;
+esac
+case "$1" in
+  create) printf 'container-replacement\\n' ;;
+  start|stop|exec|rm) exit 0 ;;
+esac
+`, async (logs) => {
+        const recreate = commands.get("recreate_environment")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await waitForCondition(() => existsSync(startedPath), "container removal to begin");
+        const stop = commands.get("stop_environment")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await fs.writeFile(releasePath, "");
+        await expect(recreate).resolves.toEqual(expect.objectContaining({
+          setupManagedByBackend: true,
+        }));
+        await expect(stop).resolves.toBeUndefined();
+        expect(environment.containerId).toBe("container-replacement");
+        expect(environment.status).toBe("stopped");
+        const calls = await fs.readFile(logs.all, "utf8");
+        expect(calls).toContain("rm -f container-old");
+        expect(calls).toContain("stop container-replacement");
+      });
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("preserves the old container identity when recreation cannot remove it", async () => {
+    const environment = createEnvironment({
+      id: "env-recreate-remove-failure",
+      environmentType: "containerized",
+      containerId: "container-still-present",
+      status: "running",
+      setupScriptsComplete: true,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "rm" ]; then
+  printf 'container runtime refused removal\\n' >&2
+  exit 1
+fi
+exit 0
+`, async () => {
+      await expect(commands.get("recreate_environment")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("container runtime refused removal");
+    });
+    expect(environment.containerId).toBe("container-still-present");
+    expect(environment.status).toBe("running");
+  });
 
   test("reports whether the selected host GitHub CLI credential is available", async () => {
     const { context } = createContext(createEnvironment());

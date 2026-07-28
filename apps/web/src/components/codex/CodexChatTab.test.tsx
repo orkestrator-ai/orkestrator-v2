@@ -1878,6 +1878,71 @@ describe("CodexChatTab", () => {
     });
   });
 
+  test("keeps a warned turn running until its real terminal event", async () => {
+    const continuedMessage = createMessage("continued-event", "Continued after warning");
+    const originalWarn = console.warn;
+    const warn = mock(() => {});
+    let releaseAfterWarning: (() => void) | undefined;
+    let releaseAfterUpdate: (() => void) | undefined;
+    console.warn = warn as unknown as typeof console.warn;
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    mockGetSessionMessages.mockResolvedValue([continuedMessage]);
+    mockSubscribeToEvents.mockImplementation(() => (async function* () {
+      yield {
+        type: "session.warning",
+        sessionId: SESSION_ID,
+        data: { error: "upstream hiccup", willRetry: true },
+      };
+      await new Promise<void>((resolve) => {
+        releaseAfterWarning = resolve;
+      });
+      yield {
+        type: "message.updated",
+        sessionId: SESSION_ID,
+        data: { message: continuedMessage },
+      };
+      await new Promise<void>((resolve) => {
+        releaseAfterUpdate = resolve;
+      });
+      yield {
+        type: "session.idle",
+        sessionId: SESSION_ID,
+        data: { phase: "idle" },
+      };
+    })() as any);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    try {
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => {
+        expect(warn).toHaveBeenCalledWith(
+          "[CodexChatTab] Codex turn warning:",
+          "upstream hiccup",
+        );
+        expect(
+          useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading,
+        ).toBe(true);
+      });
+
+      act(() => releaseAfterWarning?.());
+      await waitFor(() => {
+        const state = useCodexStore.getState().sessions.get(SESSION_KEY);
+        expect(state?.messages).toEqual([continuedMessage]);
+        expect(state?.isLoading).toBe(true);
+      });
+
+      act(() => releaseAfterUpdate?.());
+      await waitFor(() => {
+        expect(
+          useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading,
+        ).toBe(false);
+      });
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   test("skips malformed SSE events and refreshes fallback updates, titles, and generic errors", async () => {
     const refreshedMessage = createMessage("fallback-event", "Fetched after sparse event");
     const originalWarn = console.warn;

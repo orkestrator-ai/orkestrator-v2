@@ -4947,7 +4947,7 @@ describe("interactive approvals", () => {
     });
   });
 
-  test("retryable errors fan out to every tab sharing the thread", async () => {
+  test("non-terminal errors warn every shared tab without releasing the turn", async () => {
     const h = await harness({
       "thread/resume": () => ({ thread: threadPayload("thread-1") }),
     });
@@ -4972,12 +4972,18 @@ describe("interactive approvals", () => {
     const recipients = h.events
       .filter(
         (event) =>
-          event.type === "session.error"
+          event.type === "session.warning"
           && event.data?.error === "retry later",
       )
       .map((event) => event.sessionId)
       .sort();
     expect(recipients).toEqual([first.sessionId, second!.sessionId].sort());
+    expect(h.events.filter((event) => event.type === "session.error")).toEqual([]);
+    expect(h.runtime.getStatus(first.sessionId)).toMatchObject({
+      status: "running",
+      phase: "running",
+      turnId: "turn-1",
+    });
   });
 
   test("a file-change approval is described as such", async () => {

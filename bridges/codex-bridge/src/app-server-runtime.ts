@@ -98,6 +98,8 @@ export interface RuntimeSseEvent {
     | "session.updated"
     | "session.idle"
     | "session.error"
+    /** A turn-scoped problem that did not terminate the turn. */
+    | "session.warning"
     | "session.title-updated"
     | "message.updated"
     | "session.structured-output"
@@ -1481,9 +1483,13 @@ export class AppServerRuntime {
         if (turn) turn.onError(event.error);
         for (const sessionId of context.bridgeSessionIds) {
           this.options.emit({
-            type: "session.error",
+            type: "session.warning",
             sessionId,
-            data: { error: event.error.message, code: event.error.code },
+            data: {
+              error: event.error.message,
+              code: event.error.code,
+              willRetry: event.willRetry,
+            },
           });
         }
         return;

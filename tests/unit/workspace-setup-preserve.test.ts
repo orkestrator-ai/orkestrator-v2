@@ -76,6 +76,57 @@ emit_prepare_only_checkpoint "$2"
   return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
+function runGitScanCacheHarness(options: {
+  insideWorktree: boolean;
+  configFails?: boolean;
+}): { code: number | null; calls: string[] } {
+  const harnessRoot = mkdtempSync(join(tmpdir(), "ork-git-cache-"));
+  const fakeBin = join(harnessRoot, "bin");
+  const gitLog = join(harnessRoot, "git.log");
+  mkdirSync(fakeBin);
+  writeFileSync(join(fakeBin, "git"), `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GIT_LOG"
+case "$*" in
+  *"rev-parse --is-inside-work-tree"*)
+    [ "$FAKE_GIT_INSIDE" = "true" ]
+    ;;
+  *"config core.untrackedCache true"*)
+    [ "$FAKE_GIT_CONFIG_FAILS" != "true" ]
+    ;;
+  *)
+    exit 64
+    ;;
+esac
+`);
+  chmodSync(join(fakeBin, "git"), 0o755);
+
+  const harness = `
+set -e
+WORKSPACE_DIR="$2"
+export WORKSPACE_DIR
+eval "$(sed -n '/^enable_git_scan_caches() {/,/^}$/p' "$1")"
+enable_git_scan_caches
+`;
+  try {
+    const result = spawnSync("bash", ["-c", harness, "--", setupScript, "/workspace under test"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        FAKE_GIT_LOG: gitLog,
+        FAKE_GIT_INSIDE: options.insideWorktree ? "true" : "false",
+        FAKE_GIT_CONFIG_FAILS: options.configFails ? "true" : "false",
+      },
+    });
+    const calls = existsSync(gitLog)
+      ? readFileSync(gitLog, "utf8").trim().split("\n").filter(Boolean)
+      : [];
+    return { code: result.status, calls };
+  } finally {
+    rmSync(harnessRoot, { recursive: true, force: true });
+  }
+}
+
 describe("workspace setup prepare-only contract", () => {
   // The backend greps for this exact line before it will invoke --prepare-only.
   // An image whose script lacks it runs the whole setup instead of stopping at the
@@ -123,6 +174,36 @@ describe("workspace setup prepare-only contract", () => {
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
+  });
+});
+
+describe("workspace setup Git scan caches", () => {
+  test("enables the untracked cache inside a repository", () => {
+    const result = runGitScanCacheHarness({ insideWorktree: true });
+
+    expect(result.code).toBe(0);
+    expect(result.calls).toEqual([
+      "-C /workspace under test rev-parse --is-inside-work-tree",
+      "-C /workspace under test config core.untrackedCache true",
+    ]);
+  });
+
+  test("does not write Git config outside a repository", () => {
+    const result = runGitScanCacheHarness({ insideWorktree: false });
+
+    expect(result.code).toBe(0);
+    expect(result.calls).toEqual([
+      "-C /workspace under test rev-parse --is-inside-work-tree",
+    ]);
+  });
+
+  test("keeps setup best-effort when enabling the cache fails", () => {
+    const result = runGitScanCacheHarness({ insideWorktree: true, configFails: true });
+
+    expect(result.code).toBe(0);
+    expect(result.calls.at(-1)).toBe(
+      "-C /workspace under test config core.untrackedCache true",
+    );
   });
 });
 

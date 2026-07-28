@@ -28,6 +28,7 @@ const {
   deletePaneLayout,
   getEnvironmentSnapshots,
   getClaudeModelCatalog,
+  getCachedOpenCodeModelCatalog,
   getPaneLayout,
   getLinearConnection,
   getLinearIssue,
@@ -60,6 +61,7 @@ const {
   setEnvironmentUnread,
   setEnvironmentPendingAgentLaunch,
   setEnvironmentInitialPrompt,
+  cacheOpenCodeModelCatalog,
   updateAgentModelDefault,
   updateEnvironmentAgentSettings,
 } = backendWrappers;
@@ -224,6 +226,101 @@ describe("backend setup wrappers", () => {
     expect(invokeMock).toHaveBeenCalledWith("get_claude_model_catalog", {
       environmentId: "env-1",
       forceRefresh: true,
+    });
+  });
+
+  test("loads and updates the durable OpenCode model catalogue", async () => {
+    const snapshot = {
+      schemaVersion: 2 as const,
+      projectId: "project-1",
+      catalogVersion: "catalog-v1",
+      updatedAt: "2026-07-27T12:00:00.000Z",
+      models: [
+        {
+          id: "openrouter/anthropic/claude-sonnet",
+          name: "Claude Sonnet",
+          provider: "openrouter",
+        },
+      ],
+    };
+    invokeMock.mockResolvedValue(snapshot);
+
+    await expect(getCachedOpenCodeModelCatalog("project-1")).resolves.toEqual(
+      snapshot,
+    );
+    await expect(
+      cacheOpenCodeModelCatalog("project-1", snapshot.models),
+    ).resolves.toEqual(snapshot);
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_opencode_model_catalog_cache", { projectId: "project-1" }],
+      [
+        "cache_opencode_model_catalog",
+        { projectId: "project-1", models: snapshot.models },
+      ],
+    ]);
+  });
+
+  test("projects catalogue entries onto the fields the cache command accepts", async () => {
+    invokeMock.mockResolvedValue(null);
+
+    await cacheOpenCodeModelCatalog("project-1", [
+      {
+        id: "openai/gpt-5",
+        name: "GPT-5",
+        provider: "openai",
+        variants: ["high", "  ", ""],
+        inputCost: 0,
+        outputCost: 1.5,
+        contextWindow: 400_000,
+        // A field added to `OpenCodeModel` upstream must not start failing the
+        // command's strict key check.
+        extra: "unexpected",
+      } as never,
+      {
+        id: "openai/gpt-4",
+        name: "GPT-4",
+        provider: "openai",
+        // `typeof x === "number"` lets these through upstream; the command
+        // rejects them, so they are dropped rather than sent.
+        inputCost: Number.NaN,
+        outputCost: Number.POSITIVE_INFINITY,
+        contextWindow: Number.NEGATIVE_INFINITY,
+        variants: [],
+      },
+    ]);
+
+    expect(invokeMock).toHaveBeenCalledWith("cache_opencode_model_catalog", {
+      projectId: "project-1",
+      models: [
+        {
+          id: "openai/gpt-5",
+          name: "GPT-5",
+          provider: "openai",
+          variants: ["high"],
+          inputCost: 0,
+          outputCost: 1.5,
+          contextWindow: 400_000,
+        },
+        { id: "openai/gpt-4", name: "GPT-4", provider: "openai" },
+      ],
+    });
+  });
+
+  test("keeps a non-array variants field from reaching the command", async () => {
+    invokeMock.mockResolvedValue(null);
+
+    await cacheOpenCodeModelCatalog("project-1", [
+      {
+        id: "openai/gpt-5",
+        name: "GPT-5",
+        provider: "openai",
+        variants: "high" as never,
+      },
+    ]);
+
+    expect(invokeMock).toHaveBeenCalledWith("cache_opencode_model_catalog", {
+      projectId: "project-1",
+      models: [{ id: "openai/gpt-5", name: "GPT-5", provider: "openai" }],
     });
   });
 
@@ -857,6 +954,58 @@ describe("backend command wrapper coverage", () => {
     expect(invokeMock).toHaveBeenCalledWith("get_environment_extensions", {
       environmentId: "env-1",
       refresh: true,
+    });
+  });
+
+  test("deletes an agent handoff through its environment-scoped command", async () => {
+    invokeMock.mockResolvedValueOnce(true);
+
+    await expect(
+      backendWrappers.deleteAgentHandoff("handoff-1", "env-1"),
+    ).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith("delete_agent_handoff", {
+      handoffId: "handoff-1",
+      environmentId: "env-1",
+    });
+  });
+
+  test("reads and writes agent handoff snapshots through their commands", async () => {
+    const snapshot = { messages: [{ id: "m1" }] };
+    const stored = {
+      id: "handoff-1",
+      environmentId: "env-1",
+      version: 1,
+      snapshot,
+      createdAt: "2026-07-27T11:00:00.000Z",
+    };
+
+    invokeMock.mockResolvedValueOnce(stored);
+    await expect(backendWrappers.getAgentHandoff("handoff-1")).resolves.toEqual(stored);
+    expect(invokeMock).toHaveBeenCalledWith("get_agent_handoff", {
+      handoffId: "handoff-1",
+    });
+
+    invokeMock.mockResolvedValueOnce(stored);
+    await expect(
+      backendWrappers.saveAgentHandoff("handoff-1", "env-1", 1, snapshot),
+    ).resolves.toEqual(stored);
+    expect(invokeMock).toHaveBeenCalledWith("save_agent_handoff", {
+      handoffId: "handoff-1",
+      environmentId: "env-1",
+      version: 1,
+      snapshot,
+    });
+  });
+
+  test("prunes agent handoffs against the layout's reference set", async () => {
+    invokeMock.mockResolvedValueOnce(["orphan"]);
+
+    await expect(
+      backendWrappers.pruneAgentHandoffs("env-1", ["kept"]),
+    ).resolves.toEqual(["orphan"]);
+    expect(invokeMock).toHaveBeenCalledWith("prune_agent_handoffs", {
+      environmentId: "env-1",
+      referencedHandoffIds: ["kept"],
     });
   });
 

@@ -4,6 +4,8 @@ import {
   browseForDirectory,
   deleteContainerFile,
   deleteLocalFile,
+  getEnvironmentDiffStats,
+  refreshEnvironmentDiffStats,
   revertContainerFile,
   revertLocalFile,
 } from "../../../apps/web/src/lib/backend";
@@ -56,6 +58,26 @@ describe("file action backend wrappers", () => {
     expect(invokeMock).toHaveBeenNthCalledWith(2, "delete_local_file", {
       environmentId: "env-local",
       filePath: "src/App.tsx",
+    });
+  });
+
+  test("uses the exact diff-stat snapshot and refresh command contracts", async () => {
+    const snapshot = {
+      entries: [{
+        environmentId: "env-local",
+        comparisonRef: "trunk",
+        stats: { additions: 2, deletions: 1, filesChanged: 1, truncated: false },
+        computedAt: "2026-07-28T12:00:00.000Z",
+      }],
+    };
+    invokeMock.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(undefined);
+
+    await expect(getEnvironmentDiffStats()).resolves.toEqual(snapshot);
+    await expect(refreshEnvironmentDiffStats("env-local")).resolves.toBeUndefined();
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "get_environment_diff_stats");
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "refresh_environment_diff_stats", {
+      environmentId: "env-local",
     });
   });
 

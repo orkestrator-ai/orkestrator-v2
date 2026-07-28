@@ -9,6 +9,7 @@ import {
 } from "@/hooks/useManualSessionRefresh";
 import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
+import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
@@ -110,6 +111,8 @@ interface ClaudeChatTabProps {
   isReviewTab?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
+  agentHandoffId?: string;
+  consumedAgentHandoffId?: string;
   refreshRequestId?: number;
 }
 type ConnectionState = "connecting" | "connected" | "error";
@@ -132,6 +135,8 @@ export function ClaudeChatTab({
   isReviewTab = false,
   initialAgentModel,
   initialReasoningEffort,
+  agentHandoffId,
+  consumedAgentHandoffId,
   refreshRequestId = 0,
 }: ClaudeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
@@ -232,7 +237,11 @@ export function ClaudeChatTab({
   );
 
   // Pane layout store - for clearing initialPrompt after it's been sent
-  const { clearTabInitialPrompt, updateTabNativeSessionId } = usePaneLayoutStore();
+  const {
+    clearTabInitialPrompt,
+    clearTabAgentHandoff,
+    updateTabNativeSessionId,
+  } = usePaneLayoutStore();
 
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
@@ -561,14 +570,33 @@ export function ClaudeChatTab({
   // Memoize messages separately to provide stable reference for child components
   // This prevents unnecessary recalculations when other session properties change
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
-  const displayMessages = useMemo(
+  const providerDisplayMessages = useMemo(
     () => pinActiveNativeAgentParts(
       normalizeClaudeMessagesForDisplay(sessionMessages),
     ),
     [sessionMessages],
   );
+  const handoff = useAgentHandoff(
+    agentHandoffId,
+    "claude",
+    environmentId,
+    providerDisplayMessages,
+    consumedAgentHandoffId,
+  );
+  const displayMessages = handoff.displayMessages;
+  const launchPrompt = initialPrompt ?? handoff.initialPrompt;
+  /*
+   * Initialization is blocked while a handoff loads, so by the time the effect
+   * below runs this ref holds the resolved prompt. Reading it through a ref
+   * rather than a dependency keeps the prompt out of the effect's identity: it
+   * resolves a few milliseconds after mount, and re-running initialization then
+   * would tear down an in-flight connect.
+   */
+  const handoffPending = !handoff.ready;
+  const launchPromptRef = useRef<string | undefined>(undefined);
+  launchPromptRef.current = launchPrompt;
   const forkPlan = useMemo(
-    () => buildMessageForkPlan(displayMessages, {
+    () => buildMessageForkPlan(providerDisplayMessages, {
       responseInProgress: session?.isLoading ?? false,
       // Claude's boundary is inclusive, so branching *before* a prompt means
       // forking at the message before it; the first prompt has nothing to fork
@@ -589,14 +617,14 @@ export function ClaudeChatTab({
         messageId: getClaudeSourceMessageId(message.id),
       }),
     }),
-    [displayMessages, session?.isLoading],
+    [providerDisplayMessages, session?.isLoading],
   );
   // Read by the fork handler so it does not have to depend on the transcript:
   // `displayMessages` is a fresh array on every streaming tick, and a handler
   // that changed with it would rebuild every fork button on every tick.
   const forkPlanRef = useRef(forkPlan);
   forkPlanRef.current = forkPlan;
-  const hasMessageHistory = sessionMessages.length > 0;
+  const hasMessageHistory = displayMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
 
   // Queue length for this session - use selector to only re-render when this specific queue changes
@@ -655,6 +683,16 @@ export function ClaudeChatTab({
   useEffect(() => {
     // Block initialization until setup scripts finish (local environments with orkestrator-ai.json)
     if (setupPending) {
+      return;
+    }
+
+    /*
+     * Block until a restored handoff has loaded. Without this the first run
+     * captures `launchPrompt === undefined` and the in-init send below can never
+     * fire, pushing every handoff bootstrap onto the post-SSE path this function
+     * deliberately avoids.
+     */
+    if (handoffPending) {
       return;
     }
 
@@ -1037,7 +1075,9 @@ export function ClaudeChatTab({
           // Check if we have an initial prompt to send
           // We send it BEFORE starting SSE to avoid race conditions where
           // SSE events could wipe locally-added messages before they're synced
-          const shouldSendInitialPrompt = initialPrompt && !initialPromptSentRef.current;
+          const pendingLaunchPrompt = launchPromptRef.current;
+          const shouldSendInitialPrompt =
+            pendingLaunchPrompt && !initialPromptSentRef.current;
 
           if (shouldSendInitialPrompt) {
             // Mark as sent immediately to prevent double-sending
@@ -1049,15 +1089,15 @@ export function ClaudeChatTab({
             const userMessage = {
               id: createUuid(),
               role: "user" as const,
-              content: initialPrompt,
-              parts: [{ type: "text" as const, content: initialPrompt }],
+              content: pendingLaunchPrompt,
+              parts: [{ type: "text" as const, content: pendingLaunchPrompt }],
               timestamp: new Date().toISOString(),
             };
 
             console.debug("[ClaudeChatTab] Sending initial prompt during initialization", {
               tabId,
               sessionId: newSession.sessionId,
-              promptLength: initialPrompt.length,
+              promptLength: pendingLaunchPrompt.length,
             });
 
             // Set session with the user message already included and loading state
@@ -1084,7 +1124,7 @@ export function ClaudeChatTab({
             startSharedEventSubscription(bridgeClient);
 
             // Now send the prompt
-            const success = await sendPrompt(bridgeClient, newSession.sessionId, initialPrompt, {
+            const success = await sendPrompt(bridgeClient, newSession.sessionId, pendingLaunchPrompt, {
               model: selectedModel,
               effort: effortLevel,
               permissionMode,
@@ -1155,7 +1195,7 @@ export function ClaudeChatTab({
       slashCmdCleanupRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerId, environmentId, tabId, isLocal, setupPending, initAttempt]);
+  }, [containerId, environmentId, tabId, isLocal, setupPending, handoffPending, initAttempt]);
 
   const startSharedEventSubscription = useCallback(
     async (bridgeClient: ReturnType<typeof createClient>) => {
@@ -1703,7 +1743,8 @@ export function ClaudeChatTab({
       connectionState === "connected" &&
       client &&
       session &&
-      initialPrompt &&
+      handoff.ready &&
+      launchPrompt &&
       !setupPending &&
       !initialPromptSentRef.current &&
       !sessionHasMessages
@@ -1712,15 +1753,19 @@ export function ClaudeChatTab({
       // Also clear the initialPrompt from the pane store to prevent re-submission on remount
       clearTabInitialPrompt(tabId, environmentId);
       console.debug("[ClaudeChatTab] Sending initial prompt on reconnection for tab:", tabId);
-      handleSendRef.current?.(initialPrompt, [], effortValue, planModeEnabledValue, fastModeEnabledValue);
+      handleSendRef.current?.(launchPrompt, [], effortValue, planModeEnabledValue, fastModeEnabledValue);
     }
-  }, [connectionState, client, session, initialPrompt, setupPending, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
+  }, [connectionState, client, session, handoff.ready, launchPrompt, setupPending, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
 
   useNativeMessageQueue({
     agentLabel: "Claude",
     sessionKey,
     store: useClaudeStore,
-    canDrain: !setupPending && connectionState === "connected" && !!client,
+    canDrain:
+      handoff.ready
+      && !setupPending
+      && connectionState === "connected"
+      && !!client,
     queueLength,
     isLoading: session?.isLoading ?? false,
     blockedByDraft: isQueueBlockedByDraft,
@@ -1838,6 +1883,7 @@ export function ClaudeChatTab({
         });
         tabSessionIdRef.current = sessionId;
         updateTabNativeSessionId(tabId, sessionId, environmentId);
+        clearTabAgentHandoff(tabId, environmentId);
 
         console.debug("[ClaudeChatTab] Session state updated:", {
           sessionKey,
@@ -1850,7 +1896,14 @@ export function ClaudeChatTab({
         console.error("[ClaudeChatTab] Failed to resume session:", error);
       }
     },
-    [client, environmentId, sessionKey, tabId, updateTabNativeSessionId]
+    [
+      clearTabAgentHandoff,
+      client,
+      environmentId,
+      sessionKey,
+      tabId,
+      updateTabNativeSessionId,
+    ]
   );
 
   const handleForkFromMessage = useCallback(async (
@@ -2022,7 +2075,7 @@ export function ClaudeChatTab({
           containerId={containerId}
           models={models}
           onSend={handleSend}
-          disabled={!client || !session}
+          disabled={!handoff.ready || !client || !session}
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}
           onStop={handleStop}

@@ -34,6 +34,8 @@ import type {
   Environment,
   EnvironmentStatus,
   EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  OpenCodeModelCatalogSnapshot,
   PortMapping,
   PrState,
   Project,
@@ -41,6 +43,7 @@ import type {
   PersistedLoopedReviewWorkflow,
   PersistedBuildPipeline,
   PersistedPromptQueue,
+  PersistedAgentHandoff,
   RepositoryConfig,
   Session,
   SessionType,
@@ -342,6 +345,20 @@ function isPersistedPromptQueue(
     && typeof value.updatedAt === "string"
     && Number.isFinite(Date.parse(value.updatedAt))
     && isPositiveInteger(value.revision);
+}
+
+function isPersistedAgentHandoff(
+  value: unknown,
+  expectedId?: string,
+): value is PersistedAgentHandoff {
+  return isRecord(value)
+    && isPositiveInteger(value.version)
+    && isNonBlankString(value.id)
+    && (expectedId === undefined || value.id === expectedId)
+    && isNonBlankString(value.environmentId)
+    && isRecord(value.snapshot)
+    && typeof value.createdAt === "string"
+    && Number.isFinite(Date.parse(value.createdAt));
 }
 
 function isPersistedBuildPipeline(
@@ -698,6 +715,149 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
+function normalizeOpenCodeModelCatalogEntries(
+  models: OpenCodeModelCatalogEntry[],
+): OpenCodeModelCatalogEntry[] {
+  const byId = new Map<string, OpenCodeModelCatalogEntry[]>();
+
+  for (const candidate of models) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+    const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
+    const provider =
+      typeof candidate.provider === "string" ? candidate.provider.trim() : "";
+    if (!id || !name || !provider) continue;
+
+    const variants = Array.isArray(candidate.variants)
+      ? Array.from(new Set(candidate.variants.filter(
+          (variant): variant is string =>
+            typeof variant === "string" && variant.trim().length > 0,
+        ).map((variant) => variant.trim()))).sort((left, right) =>
+          left.localeCompare(right)
+        )
+      : undefined;
+    const nonNegativeNumber = (value: unknown): number | undefined =>
+      typeof value === "number" && Number.isFinite(value) && value >= 0
+        ? value
+        : undefined;
+    const contextWindow =
+      typeof candidate.contextWindow === "number" &&
+      Number.isSafeInteger(candidate.contextWindow) &&
+      candidate.contextWindow > 0
+        ? candidate.contextWindow
+        : undefined;
+
+    const normalized = {
+      id,
+      name,
+      provider,
+      ...(variants?.length ? { variants } : {}),
+      ...(nonNegativeNumber(candidate.inputCost) !== undefined
+        ? { inputCost: nonNegativeNumber(candidate.inputCost) }
+        : {}),
+      ...(nonNegativeNumber(candidate.outputCost) !== undefined
+        ? { outputCost: nonNegativeNumber(candidate.outputCost) }
+        : {}),
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+    };
+    const duplicates = byId.get(id) ?? [];
+    duplicates.push(normalized);
+    byId.set(id, duplicates);
+  }
+
+  return Array.from(byId.values())
+    .map((duplicates) =>
+      duplicates.reduce((selected, candidate) =>
+        JSON.stringify(candidate).localeCompare(JSON.stringify(selected)) < 0
+          ? candidate
+          : selected
+      )
+    )
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+type PersistedOpenCodeModelCatalogStore = {
+  schemaVersion: 2;
+  catalogs: Record<string, unknown>;
+  legacyUnscoped?: unknown;
+};
+
+function normalizeOpenCodeModelCatalogProjectId(projectId: string): string {
+  const normalized = projectId.trim();
+  if (!normalized) {
+    throw new Error("OpenCode model catalogue projectId must be a non-blank string.");
+  }
+  return normalized;
+}
+
+function parseOpenCodeModelCatalogSnapshot(
+  projectId: string,
+  value: unknown,
+): OpenCodeModelCatalogSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.models)) return null;
+
+  const models = normalizeOpenCodeModelCatalogEntries(
+    record.models as OpenCodeModelCatalogEntry[],
+  );
+  if (models.length === 0) return null;
+
+  const updatedAt =
+    typeof record.updatedAt === "string" && !Number.isNaN(Date.parse(record.updatedAt))
+      ? record.updatedAt
+      : new Date(0).toISOString();
+  const catalogVersion = createHash("sha256")
+    .update(JSON.stringify(models))
+    .digest("hex");
+
+  return {
+    schemaVersion: 2,
+    projectId,
+    catalogVersion,
+    updatedAt,
+    models,
+  };
+}
+
+function parseOpenCodeModelCatalogStore(
+  value: unknown,
+): Record<string, OpenCodeModelCatalogSnapshot> {
+  if (!value || typeof value !== "object") return {};
+  const record = value as Record<string, unknown>;
+  // Schema 1 was one host-global catalogue. It is deliberately left
+  // unassigned: attaching it to whichever project reads first would leak a
+  // project-specific opencode.json catalogue into another project.
+  if (record.schemaVersion !== 2 || !record.catalogs ||
+      typeof record.catalogs !== "object" || Array.isArray(record.catalogs)) {
+    return {};
+  }
+
+  const catalogs = Object.create(null) as Record<
+    string,
+    OpenCodeModelCatalogSnapshot
+  >;
+  for (const [rawProjectId, candidate] of Object.entries(
+    record.catalogs as Record<string, unknown>,
+  )) {
+    const projectId = rawProjectId.trim();
+    if (!projectId || Object.hasOwn(catalogs, projectId)) continue;
+    const snapshot = parseOpenCodeModelCatalogSnapshot(projectId, candidate);
+    if (snapshot) catalogs[projectId] = snapshot;
+  }
+  return catalogs;
+}
+
+function getUnscopedLegacyOpenCodeModelCatalog(value: unknown): unknown {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.schemaVersion === 1) return value;
+  if (record.schemaVersion === 2 && Object.hasOwn(record, "legacyUnscoped")) {
+    return record.legacyUnscoped;
+  }
+  return undefined;
+}
+
 export type ResourceChangeListener = (change: ResourceChange) => void;
 
 export class StorageService {
@@ -705,12 +865,14 @@ export class StorageService {
   private writeQueue = Promise.resolve();
   private environmentMutationQueue: Promise<unknown> = Promise.resolve();
   private configMutationQueue: Promise<unknown> = Promise.resolve();
+  private openCodeModelCatalogMutationQueue: Promise<unknown> = Promise.resolve();
   private githubCompletionCommentMutationQueue: Promise<unknown> = Promise.resolve();
   private featurePlanMutation: Promise<unknown> = Promise.resolve();
   private paneLayoutMutation: Promise<unknown> = Promise.resolve();
   private loopedReviewMutation: Promise<unknown> = Promise.resolve();
   private buildPipelineMutation: Promise<unknown> = Promise.resolve();
   private promptQueueMutation: Promise<unknown> = Promise.resolve();
+  private agentHandoffMutation: Promise<unknown> = Promise.resolve();
   private changeListener: ResourceChangeListener | null = null;
   private changeRevision = 0;
 
@@ -769,6 +931,10 @@ export class StorageService {
     return this.file("config.json");
   }
 
+  private openCodeModelCatalogFile(): string {
+    return this.file("opencode-model-catalog.json");
+  }
+
   private sessionsFile(): string {
     return this.file("sessions.json");
   }
@@ -787,6 +953,10 @@ export class StorageService {
 
   private promptQueuesFile(): string {
     return this.file("prompt-queues.json");
+  }
+
+  private agentHandoffsFile(): string {
+    return this.file("agent-handoffs.json");
   }
 
   private kanbanFile(): string {
@@ -1686,6 +1856,77 @@ export class StorageService {
     this.announce("config", "app");
   }
 
+  async getOpenCodeModelCatalog(
+    projectId: string,
+  ): Promise<OpenCodeModelCatalogSnapshot | null> {
+    const normalizedProjectId = normalizeOpenCodeModelCatalogProjectId(projectId);
+    const store = await this.loadJson<unknown>(
+      this.openCodeModelCatalogFile(),
+      () => null,
+    );
+    return parseOpenCodeModelCatalogStore(store)[normalizedProjectId] ?? null;
+  }
+
+  async cacheOpenCodeModelCatalog(
+    projectId: string,
+    models: OpenCodeModelCatalogEntry[],
+  ): Promise<OpenCodeModelCatalogSnapshot> {
+    const normalizedProjectId = normalizeOpenCodeModelCatalogProjectId(projectId);
+    const normalizedModels = normalizeOpenCodeModelCatalogEntries(models);
+    if (normalizedModels.length === 0) {
+      throw new Error("OpenCode model catalogue must contain at least one model.");
+    }
+
+    const catalogVersion = createHash("sha256")
+      .update(JSON.stringify(normalizedModels))
+      .digest("hex");
+
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.openCodeModelCatalogFile(),
+        "OpenCode model catalogue storage",
+      );
+      try {
+        const persisted = await this.loadJson<unknown>(
+          this.openCodeModelCatalogFile(),
+          () => null,
+        );
+        const catalogs = parseOpenCodeModelCatalogStore(persisted);
+        const current = catalogs[normalizedProjectId];
+        if (current?.catalogVersion === catalogVersion) return current;
+
+        const snapshot: OpenCodeModelCatalogSnapshot = {
+          schemaVersion: 2,
+          projectId: normalizedProjectId,
+          catalogVersion,
+          updatedAt: new Date().toISOString(),
+          models: normalizedModels,
+        };
+        catalogs[normalizedProjectId] = snapshot;
+        const legacyUnscoped =
+          getUnscopedLegacyOpenCodeModelCatalog(persisted);
+        const store: PersistedOpenCodeModelCatalogStore = {
+          schemaVersion: 2,
+          catalogs,
+          ...(legacyUnscoped === undefined
+            ? {}
+            : { legacyUnscoped }),
+        };
+        await this.saveJson(this.openCodeModelCatalogFile(), store);
+        return snapshot;
+      } finally {
+        await release();
+      }
+    };
+
+    const next = this.openCodeModelCatalogMutationQueue.then(run, run);
+    this.openCodeModelCatalogMutationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
   async getDesktopConnections(): Promise<StoredDesktopConnections> {
     const config = await this.loadConfig();
     if (config.desktopConnections === undefined) return { activeConnectionId: "local", connections: [] };
@@ -2211,6 +2452,248 @@ export class StorageService {
           && queue.environmentId !== environmentId,
       );
       return removedKeys;
+    });
+  }
+
+  private enqueueAgentHandoffMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.agentHandoffsFile(),
+        "agent handoff storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.agentHandoffMutation.then(run, run);
+    this.agentHandoffMutation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async loadAgentHandoffEntries(): Promise<Record<string, unknown>> {
+    const stored = await this.loadJson<unknown>(
+      this.agentHandoffsFile(),
+      () => ({}),
+    );
+    return isRecord(stored) ? stored : {};
+  }
+
+  private async loadAgentHandoffs(): Promise<Record<string, PersistedAgentHandoff>> {
+    const stored = await this.loadAgentHandoffEntries();
+    return Object.fromEntries(
+      Object.entries(stored).filter(([storedId, handoff]) =>
+        isPersistedAgentHandoff(handoff, storedId)
+      ),
+    ) as Record<string, PersistedAgentHandoff>;
+  }
+
+  async getAgentHandoff(handoffId: string): Promise<PersistedAgentHandoff | null> {
+    if (!isNonBlankString(handoffId)) {
+      throw new Error("Agent handoff ID must not be blank");
+    }
+    return (await this.loadAgentHandoffs())[handoffId] ?? null;
+  }
+
+  async saveAgentHandoff(
+    handoffId: string,
+    environmentId: string,
+    version: number,
+    snapshot: unknown,
+  ): Promise<PersistedAgentHandoff> {
+    if (!isNonBlankString(handoffId)) {
+      throw new Error("Agent handoff ID must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Agent handoff environment ID must not be blank");
+    }
+    if (!isPositiveInteger(version)) {
+      throw new Error("Agent handoff version must be a positive integer");
+    }
+    if (!isRecord(snapshot)) {
+      throw new Error("Agent handoff snapshot must be an object");
+    }
+
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(snapshot);
+    } catch {
+      throw new Error("Agent handoff snapshot must be JSON serializable");
+    }
+    if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
+      throw new Error("Agent handoff exceeds the 32 MB limit");
+    }
+
+    return this.enqueueAgentHandoffMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Agent handoff");
+      const handoffs = await this.loadAgentHandoffs();
+      const previous = handoffs[handoffId];
+      if (previous) {
+        if (previous.environmentId !== environmentId) {
+          throw new Error("Agent handoff belongs to another environment");
+        }
+        // Handoffs are immutable. Returning the committed record makes a retry
+        // idempotent without allowing a second client to replace its contents.
+        return previous;
+      }
+      const saved: PersistedAgentHandoff = {
+        version,
+        id: handoffId,
+        environmentId,
+        snapshot,
+        createdAt: nowIso(),
+      };
+      handoffs[handoffId] = saved;
+      await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      return saved;
+    });
+  }
+
+  private async assertAgentHandoffBackupOwnership(
+    handoffId: string,
+    environmentId: string,
+  ): Promise<void> {
+    for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
+      const backup = this.backupPath(this.agentHandoffsFile(), index);
+      if (!await exists(backup)) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await fs.readFile(backup, "utf8"));
+      } catch {
+        // The scrub that follows removes corrupt backups because their content
+        // cannot be proven free of the targeted handoff.
+        continue;
+      }
+      if (!isRecord(parsed)) continue;
+      const candidate = parsed[handoffId];
+      if (
+        isRecord(candidate)
+        && isNonBlankString(candidate.environmentId)
+        && candidate.environmentId !== environmentId
+      ) {
+        throw new Error("Agent handoff belongs to another environment");
+      }
+    }
+  }
+
+  /**
+   * Deletes one handoff after its destination tab no longer references it.
+   *
+   * The environment id is required even though handoff ids are globally unique:
+   * it prevents a stale or malformed client from deleting another environment's
+   * transcript. Backups are scrubbed even when the primary no longer contains
+   * the record so retrying a partially completed cleanup finishes the privacy
+   * boundary rather than reporting success with retained content.
+   */
+  async deleteAgentHandoff(
+    handoffId: string,
+    environmentId: string,
+  ): Promise<boolean> {
+    if (!isNonBlankString(handoffId)) {
+      throw new Error("Agent handoff ID must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Agent handoff environment ID must not be blank");
+    }
+    return this.enqueueAgentHandoffMutation(async () => {
+      const handoffs = await this.loadAgentHandoffEntries();
+      const stored = handoffs[handoffId];
+      if (
+        isRecord(stored)
+        && isNonBlankString(stored.environmentId)
+        && stored.environmentId !== environmentId
+      ) {
+        throw new Error("Agent handoff belongs to another environment");
+      }
+      await this.assertAgentHandoffBackupOwnership(handoffId, environmentId);
+      const existed = Object.prototype.hasOwnProperty.call(handoffs, handoffId);
+      delete handoffs[handoffId];
+      // Always rewrite an existing file: a corrupt primary may have fallen back
+      // to a backup, and an idempotent retry still needs to replace that
+      // unreadable primary. Do not *create* one — a client deleting a stale
+      // reference on an installation that never used the feature should leave no
+      // trace, and there is nothing to recover when no file exists.
+      if (await exists(this.agentHandoffsFile())) {
+        await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.agentHandoffsFile(),
+        (storedId) => storedId !== handoffId,
+      );
+      return existed;
+    });
+  }
+
+  /**
+   * Reconciles stored handoffs against the ids a pane layout still references.
+   *
+   * Deletion at tab close is a best-effort renderer call: a backend restart, a
+   * lock timeout or a kill between the layout update and the request drops it
+   * silently, and the id is gone from the layout by then, so nothing would ever
+   * retry. Without this sweep those transcripts stay on disk permanently,
+   * unreachable and unremovable short of deleting the environment. Called after
+   * pane-layout hydration, when `referencedHandoffIds` is authoritative.
+   */
+  async pruneAgentHandoffs(
+    environmentId: string,
+    referencedHandoffIds: string[],
+  ): Promise<string[]> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Agent handoff environment ID must not be blank");
+    }
+    const referenced = new Set(referencedHandoffIds.filter(isNonBlankString));
+    return this.enqueueAgentHandoffMutation(async () => {
+      const stored = await this.loadAgentHandoffEntries();
+      const isOrphan = (storedId: string, handoff: unknown): boolean =>
+        isRecord(handoff)
+        && handoff.environmentId === environmentId
+        && !referenced.has(storedId);
+      const removedIds = Object.entries(stored)
+        .filter(([storedId, handoff]) => isOrphan(storedId, handoff))
+        .map(([storedId]) => storedId);
+      if (removedIds.length === 0) return [];
+      const retained = Object.fromEntries(
+        Object.entries(stored).filter(([storedId, handoff]) => !isOrphan(storedId, handoff)),
+      );
+      await this.saveSensitiveJson(this.agentHandoffsFile(), retained);
+      await this.scrubSensitiveJsonBackups(
+        this.agentHandoffsFile(),
+        (storedId, handoff) => !isOrphan(storedId, handoff),
+      );
+      return removedIds;
+    });
+  }
+
+  async deleteAgentHandoffsByEnvironment(environmentId: string): Promise<string[]> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Agent handoff environment ID must not be blank");
+    }
+    return this.enqueueAgentHandoffMutation(async () => {
+      const stored = await this.loadAgentHandoffEntries();
+      const removedIds = Object.entries(stored)
+        .filter(([, handoff]) =>
+          isRecord(handoff) && handoff.environmentId === environmentId
+        )
+        .map(([storedId]) => storedId);
+      const handoffs = Object.fromEntries(
+        Object.entries(stored).filter(([storedId, handoff]) =>
+          isPersistedAgentHandoff(handoff, storedId)
+          && handoff.environmentId !== environmentId
+        ),
+      );
+      // Rewrite even if no valid record matched. Invalid primary entries cannot
+      // be proven free of content from the environment being deleted.
+      if (await exists(this.agentHandoffsFile())) {
+        await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.agentHandoffsFile(),
+        (storedId, handoff) =>
+          isPersistedAgentHandoff(handoff, storedId)
+          && handoff.environmentId !== environmentId,
+      );
+      return removedIds;
     });
   }
 

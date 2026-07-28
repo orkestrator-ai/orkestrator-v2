@@ -442,6 +442,11 @@ export function EnvironmentItem({
               </span>
               {diffStats && (diffStats.additions > 0 || diffStats.deletions > 0 || diffStats.filesChanged > 0) && (
                 <span className="ml-1 flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">
+                  {/* The scan stopped before reading every untracked file, so
+                      these are a lower bound rather than an exact count. */}
+                  {diffStats.truncated && (
+                    <span className="text-muted-foreground" aria-hidden="true">~</span>
+                  )}
                   {diffStats.additions > 0 && (
                     <span className="text-green-500">+{diffStats.additions}</span>
                   )}
@@ -534,6 +539,11 @@ export function EnvironmentItem({
                   <p className="text-xs text-muted-foreground">
                     {diffStats.filesChanged} file{diffStats.filesChanged !== 1 ? "s" : ""} changed
                   </p>
+                  {diffStats.truncated && (
+                    <p className="text-xs text-muted-foreground">
+                      Line counts are approximate: too many untracked files to count them all.
+                    </p>
+                  )}
                   <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
                     {diffStats.additions > 0 && (
                       <span className="text-green-500">+{diffStats.additions} added</span>

@@ -182,6 +182,106 @@ describe("prompt queue commands", () => {
   });
 });
 
+describe("agent handoff commands", () => {
+  test("saves, reads, and deletes an environment-owned handoff", async () => {
+    await withCommands(async (invoke, storage) => {
+      const snapshot = {
+        sourceProvider: "claude",
+        destinationProvider: "codex",
+        messages: [{ id: "m1" }],
+      };
+      await expect(invoke("save_agent_handoff", {
+        handoffId: "h1",
+        environmentId: "e1",
+        version: 1,
+        snapshot,
+      })).resolves.toMatchObject({
+        id: "h1",
+        environmentId: "e1",
+        version: 1,
+        snapshot,
+      });
+      await expect(invoke("get_agent_handoff", { handoffId: "h1" }))
+        .resolves.toMatchObject({ id: "h1", snapshot });
+      await expect(invoke("delete_agent_handoff", {
+        handoffId: "h1",
+        environmentId: "e1",
+      })).resolves.toBe(true);
+      await expect(storage.getAgentHandoff("h1")).resolves.toBeNull();
+      await expect(invoke("delete_agent_handoff", {
+        handoffId: "h1",
+        environmentId: "e1",
+      })).resolves.toBe(false);
+    });
+  });
+
+  test("rejects malformed command arguments before mutation", async () => {
+    await withCommands(async (invoke, storage) => {
+      await expect(invoke("save_agent_handoff", {
+        handoffId: "h1",
+        environmentId: "e1",
+        version: "1",
+        snapshot: {},
+      })).rejects.toThrow("version");
+      await expect(invoke("save_agent_handoff", {
+        handoffId: "h1",
+        environmentId: "e1",
+        version: 1,
+        snapshot: [],
+      })).rejects.toThrow("must be an object");
+      await expect(invoke("get_agent_handoff", { handoffId: 1 }))
+        .rejects.toThrow("handoffId");
+      await expect(invoke("delete_agent_handoff", {
+        handoffId: "h1",
+        environmentId: null,
+      })).rejects.toThrow("environmentId");
+      await expect(storage.getAgentHandoff("h1")).resolves.toBeNull();
+    });
+  });
+
+  test("prunes handoffs the restored layout no longer references", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.saveAgentHandoff("kept", "e1", 1, { messages: [] });
+      await storage.saveAgentHandoff("orphan", "e1", 1, { messages: [] });
+
+      await expect(invoke("prune_agent_handoffs", {
+        environmentId: "e1",
+        referencedHandoffIds: ["kept"],
+      })).resolves.toEqual(["orphan"]);
+      await expect(storage.getAgentHandoff("kept")).resolves.not.toBeNull();
+      await expect(storage.getAgentHandoff("orphan")).resolves.toBeNull();
+    });
+  });
+
+  test("refuses a prune whose reference list is not an array of strings", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.saveAgentHandoff("kept", "e1", 1, { messages: [] });
+
+      /*
+       * `asStringArray` would coerce each of these to `[]`, which here reads as
+       * "nothing is referenced" and would delete every transcript in the
+       * environment. Prune has to reject the request instead.
+       */
+      for (const referencedHandoffIds of [undefined, null, "kept", { 0: "kept" }]) {
+        await expect(invoke("prune_agent_handoffs", {
+          environmentId: "e1",
+          referencedHandoffIds,
+        })).rejects.toThrow("referencedHandoffIds");
+      }
+      await expect(invoke("prune_agent_handoffs", {
+        environmentId: "e1",
+        referencedHandoffIds: ["kept", 7],
+      })).rejects.toThrow("only strings");
+      await expect(invoke("prune_agent_handoffs", {
+        environmentId: 1,
+        referencedHandoffIds: [],
+      })).rejects.toThrow("environmentId");
+
+      await expect(storage.getAgentHandoff("kept")).resolves.not.toBeNull();
+    });
+  });
+});
+
 describe("build pipeline commands", () => {
   const snapshot = { id: "p1", phase: "building" };
 

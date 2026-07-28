@@ -56,6 +56,7 @@ describe("pane layout persistence", () => {
       id: "native",
       type: "claude-native",
       initialPrompt: "do not persist",
+      agentHandoffId: "handoff-1",
       initialAgentModel: "gpt-5.6-sol",
       initialReasoningEffort: "xhigh",
       initialCommands: ["do not persist"],
@@ -70,6 +71,7 @@ describe("pane layout persistence", () => {
     expect(save).toHaveBeenCalledTimes(1);
     const persisted = save.mock.calls[0]?.[1];
     expect(JSON.stringify(persisted)).not.toContain("initialPrompt");
+    expect(JSON.stringify(persisted)).toContain('"agentHandoffId":"handoff-1"');
     expect(JSON.stringify(persisted)).toContain('"initialAgentModel":"gpt-5.6-sol"');
     expect(JSON.stringify(persisted)).toContain('"initialReasoningEffort":"xhigh"');
     expect(JSON.stringify(persisted)).not.toContain("initialCommands");
@@ -89,6 +91,7 @@ describe("pane layout persistence", () => {
     expect(rehydratedTab?.initialAgentModel).toBe("gpt-5.6-sol");
     expect(rehydratedTab?.initialReasoningEffort).toBe("xhigh");
     expect(rehydratedTab?.initialPrompt).toBeUndefined();
+    expect(rehydratedTab?.agentHandoffId).toBe("handoff-1");
 
     store.clearTabInitialAgentOptions("native", "env-1");
     await waitForTimers();

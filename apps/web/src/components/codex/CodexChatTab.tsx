@@ -11,6 +11,7 @@ import { useEscapeToStop } from "@/hooks/useEscapeToStop";
 import { useManualSessionRefresh } from "@/hooks/useManualSessionRefresh";
 import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
+import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useCodexStore, useConfigStore } from "@/stores";
 import {
@@ -100,6 +101,8 @@ interface CodexChatTabProps {
   isReviewTab?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
+  agentHandoffId?: string;
+  consumedAgentHandoffId?: string;
   refreshRequestId?: number;
 }
 type ConnectionState = "connecting" | "connected" | "error";
@@ -172,6 +175,8 @@ export function CodexChatTab({
   isReviewTab = false,
   initialAgentModel,
   initialReasoningEffort,
+  agentHandoffId,
+  consumedAgentHandoffId,
   refreshRequestId = 0,
 }: CodexChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
@@ -360,7 +365,11 @@ export function CodexChatTab({
   );
   const slashCommands = storedSlashCommands ?? [];
 
-  const { clearTabInitialPrompt, updateTabNativeSessionId } = usePaneLayoutStore();
+  const {
+    clearTabInitialPrompt,
+    clearTabAgentHandoff,
+    updateTabNativeSessionId,
+  } = usePaneLayoutStore();
 
   // Setup completion awareness - block initialization until setup scripts finish
   const setupScriptsRunning = useEnvironmentStore(
@@ -423,12 +432,30 @@ export function CodexChatTab({
     () => session?.messages ?? [],
     [session?.messages],
   );
-  const displayMessages = useMemo(
+  const providerDisplayMessages = useMemo(
     () => sessionMessages.map(normalizeCodexNativeMessage),
     [sessionMessages],
   );
+  const handoff = useAgentHandoff(
+    agentHandoffId,
+    "codex",
+    environmentId,
+    providerDisplayMessages,
+    consumedAgentHandoffId,
+  );
+  const displayMessages = handoff.displayMessages;
+  const launchPrompt = initialPrompt ?? handoff.initialPrompt;
+  /*
+   * Read through a ref inside the initialization effect. `launchPrompt` resolves
+   * a few milliseconds after mount for a handoff tab, so listing it as a
+   * dependency would tear down and restart an in-flight connect; `handoffPending`
+   * flips once and is the correct gate.
+   */
+  const handoffPending = !handoff.ready;
+  const launchPromptRef = useRef<string | undefined>(undefined);
+  launchPromptRef.current = launchPrompt;
   const forkPlan = useMemo(
-    () => buildMessageForkPlan(displayMessages, {
+    () => buildMessageForkPlan(providerDisplayMessages, {
       responseInProgress: session?.isLoading ?? false,
       /*
        * Codex forks at *turn* granularity, so branching before a prompt means
@@ -460,14 +487,14 @@ export function CodexChatTab({
         message.turnId ? { type: "message", messageId: message.id } : null
       ),
     }),
-    [displayMessages, session?.isLoading],
+    [providerDisplayMessages, session?.isLoading],
   );
   // Read by the fork handler so it does not have to depend on the transcript:
   // `displayMessages` is a fresh array on every streaming tick, and a handler
   // that changed with it would rebuild every fork button on every tick.
   const forkPlanRef = useRef(forkPlan);
   forkPlanRef.current = forkPlan;
-  const hasMessageHistory = sessionMessages.length > 0;
+  const hasMessageHistory = displayMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
   const latestAssistantMessage = useMemo(() => {
     for (let i = sessionMessages.length - 1; i >= 0; i--) {
@@ -808,7 +835,11 @@ export function CodexChatTab({
     sessionKey,
     claimHead: () => claimAgentPromptQueueHead<CodexQueuedMessage>("codex", sessionKey),
     store: useCodexStore,
-    canDrain: !setupPending && connectionState === "connected" && !!client,
+    canDrain:
+      handoff.ready
+      && !setupPending
+      && connectionState === "connected"
+      && !!client,
     queueLength,
     isLoading: session?.isLoading ?? false,
     blockedByDraft: isQueueBlockedByDraft,
@@ -1032,10 +1063,12 @@ export function CodexChatTab({
         };
       });
       updateTabNativeSessionId(tabId, resumed.session.sessionId, environmentId);
+      clearTabAgentHandoff(tabId, environmentId);
       setResumeDialogOpen(false);
     },
     [
       client,
+      clearTabAgentHandoff,
       fastModeEnabled,
       selectedModel,
       selectedMode,
@@ -1154,7 +1187,8 @@ export function CodexChatTab({
   }, [config]);
 
   useEffect(() => {
-    if (!isActive && !initialPrompt?.trim() && queueLength === 0) return;
+    if (handoffPending) return;
+    if (!isActive && !launchPromptRef.current?.trim() && queueLength === 0) return;
 
     // Block initialization until setup scripts finish (local environments with orkestrator-ai.json)
     if (setupPending) {
@@ -1448,7 +1482,7 @@ export function CodexChatTab({
     acknowledgeInitialLaunchOptions,
     containerId,
     environmentId,
-    initialPrompt,
+    handoffPending,
     isActive,
     isLocal,
     initAttempt,
@@ -1905,7 +1939,7 @@ export function CodexChatTab({
       connectionState !== "connected"
       || !client
       || !session?.sessionId
-      || hasPendingInitialPrompt(initialPrompt, initialPromptSent)
+      || hasPendingInitialPrompt(launchPrompt, initialPromptSent)
     ) {
       return;
     }
@@ -1914,7 +1948,7 @@ export function CodexChatTab({
   }, [
     client,
     connectionState,
-    initialPrompt,
+    launchPrompt,
     initialPromptSent,
     reconcileSessionState,
     session?.sessionId,
@@ -2184,7 +2218,8 @@ export function CodexChatTab({
     if (
       connectionState !== "connected"
       || !session?.sessionId
-      || !initialPrompt
+      || !handoff.ready
+      || !launchPrompt
       || initialPromptSent
       || setupPending
     ) {
@@ -2192,7 +2227,7 @@ export function CodexChatTab({
     }
 
     setInitialPromptSent(true);
-    void handleSend(initialPrompt, []).then(() => {
+    void handleSend(launchPrompt, []).then(() => {
       clearTabInitialPrompt(tabId, environmentId);
     });
   }, [
@@ -2200,7 +2235,8 @@ export function CodexChatTab({
     connectionState,
     environmentId,
     handleSend,
-    initialPrompt,
+    handoff.ready,
+    launchPrompt,
     initialPromptSent,
     setupPending,
     session?.sessionId,
@@ -2307,7 +2343,7 @@ export function CodexChatTab({
           selectedReasoningEffort={selectedReasoningEffort}
           slashCommands={slashCommands}
           settingsLocked={session?.isLoading ?? false}
-          disabled={!session?.sessionId}
+          disabled={!handoff.ready || !session?.sessionId}
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}
           onSend={handleSend}

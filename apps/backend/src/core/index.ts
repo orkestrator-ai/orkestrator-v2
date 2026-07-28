@@ -1,5 +1,6 @@
 import {
   createCommandRegistry,
+  shutdownDiffStatsTracking,
   shutdownLocalServers,
   type BackendEmit,
   type CommandContext,
@@ -80,6 +81,9 @@ export class OrkestratorBackend {
       clearInterval(this.activityLeaseSweep);
       this.activityLeaseSweep = null;
     }
+    // Synchronous and cannot fail, so it runs before the awaited drain rather
+    // than racing it: every watcher holds a file descriptor and a debounce timer.
+    shutdownDiffStatsTracking();
     const attempt = shutdownLocalServers();
     this.shutdownPromise = attempt;
     try {

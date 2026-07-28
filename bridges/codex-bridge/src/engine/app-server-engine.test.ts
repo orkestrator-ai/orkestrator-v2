@@ -179,6 +179,21 @@ describe("startup and capabilities", () => {
 });
 
 describe("thread lifecycle", () => {
+  test("returns the model resolved by app-server rather than echoing request intent", async () => {
+    const h = harness({
+      "thread/start": () => ({
+        thread: thread("t1"),
+        model: "gpt-5.6-terra",
+      }),
+    });
+    await h.engine.start();
+
+    const started = await h.engine.startThread({ config: BUILD });
+
+    expect(BUILD.model).toBe("gpt-5.6-sol");
+    expect(started.model).toBe("gpt-5.6-terra");
+  });
+
   test("thread/start passes explicit policy and clears the service tier", async () => {
     const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
     await h.engine.start();

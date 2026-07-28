@@ -94,6 +94,8 @@ export interface TranscriptLine {
   message?: {
     role?: "user" | "assistant" | "system";
     content?: Array<TranscriptContent> | string;
+    /** Provider-confirmed model recorded by Claude Code in the transcript. */
+    model?: string;
   };
   content?: Array<TranscriptContent> | string;
   /**

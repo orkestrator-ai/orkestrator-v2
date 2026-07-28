@@ -682,6 +682,34 @@ describe("rollout public helpers (continued)", () => {
     }
   });
 
+  test("rehydrates the model Codex persisted in each turn context", async () => {
+    const hydrated = await hydrateRollout("thread-model", [
+      sessionMeta("thread-model"),
+      {
+        type: "turn_context",
+        payload: {
+          turn_id: "turn-1",
+          cwd: "/workspace",
+          model: "gpt-5.6-sol",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Done" }],
+        },
+      },
+    ]);
+
+    expect(hydrated.messages[0]).toMatchObject({
+      role: "assistant",
+      modelId: "gpt-5.6-sol",
+      turnId: "turn-1",
+    });
+  });
+
   /**
    * `status: "failed"` has not been observed in 34,640 sampled `custom_tool_call`
    * records — every one was `"completed"`. It is kept as a guard because it is

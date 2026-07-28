@@ -1088,6 +1088,7 @@ export class AppServerRuntime {
         engineGeneration: generation,
         cwd: thread.cwd,
         name: thread.name,
+        modelId: thread.model,
       });
       context.cwd = thread.cwd ?? context.cwd;
       context.name = thread.name ?? context.name;
@@ -1349,6 +1350,12 @@ export class AppServerRuntime {
       case "thread.name.updated":
         context.name = event.name ?? null;
         return;
+      case "thread.model.updated":
+        this.applyConfirmedModel(context, event.model);
+        return;
+      case "turn.model.updated":
+        this.applyConfirmedModel(context, event.model, event.turnId);
+        return;
       case "thread.usage.updated": {
         const usage = {
           ...event.usage,
@@ -1438,6 +1445,53 @@ export class AppServerRuntime {
   }
 
   /**
+   * Publish only app-server-observed model values. Thread settings confirm the
+   * effective model for an accepted turn; a turn-scoped reroute wins over it.
+   */
+  private applyConfirmedModel(
+    context: ThreadContext,
+    model: string,
+    turnId?: string,
+  ): void {
+    if (!turnId) context.modelId = model;
+    let target: NormalizedMessage | undefined;
+
+    if (turnId) {
+      target = context.messages.find(
+        (message) => message.role === "assistant" && message.turnId === turnId,
+      );
+      if (!target && context.activeTurn?.turnId === turnId) {
+        target = context.messages.find(
+          (message) => message.id === context.activeTurn?.assistantMessageId,
+        );
+      }
+    } else if (context.activeTurn) {
+      target = context.messages.find(
+        (message) => message.id === context.activeTurn?.assistantMessageId,
+      );
+    } else if (context.dispatchInFlight) {
+      for (let index = context.messages.length - 1; index >= 0; index -= 1) {
+        const message = context.messages[index];
+        if (message?.role === "assistant") {
+          target = message;
+          break;
+        }
+      }
+    }
+
+    if (!target || target.modelId === model) return;
+    target.modelId = model;
+    this.bumpMessageRevision(context);
+    for (const sessionId of context.bridgeSessionIds) {
+      this.options.emit({
+        type: "message.updated",
+        sessionId,
+        data: { message: target },
+      });
+    }
+  }
+
+  /**
    * Rebinds every loaded thread after a restart and brings active work back to a
    * definite state.
    *
@@ -1500,6 +1554,7 @@ export class AppServerRuntime {
         context.engineHandle = thread.handle;
         context.cwd = thread.cwd ?? context.cwd;
         context.name = thread.name ?? context.name;
+        context.modelId = thread.model ?? context.modelId;
         context.unsubscribed = false;
         context.engineGeneration = generation;
 
@@ -1796,6 +1851,7 @@ export class AppServerRuntime {
       engineGeneration: this.options.engine.info().generation,
       cwd: thread.cwd,
       name: thread.name,
+      modelId: thread.model,
     });
     context.materialized = true;
 
@@ -1891,6 +1947,7 @@ export class AppServerRuntime {
         engineGeneration: this.options.engine.info().generation,
         cwd: fork.cwd,
         name: fork.name,
+        modelId: fork.model,
       });
       context.materialized = true;
       const hydrated = await hydrateMessagesFromPersistedSession(fork.id);
@@ -2143,6 +2200,7 @@ export class AppServerRuntime {
       content: "",
       parts: [],
       createdAt: new Date(this.now()).toISOString(),
+      ...(context.modelId ? { modelId: context.modelId } : {}),
     };
     context.messages.push(assistantMessage);
     this.bumpMessageRevision(context);
@@ -2657,6 +2715,7 @@ export class AppServerRuntime {
     const parsed = parseSlashCommandPrompt(executionPrompt);
     const bypassModeWrapper = !!parsed && isCodexCliNativeSlashCommand(parsed.name);
     const isPlanReview = session.config.mode === "plan" && !bypassModeWrapper;
+    let confirmedModelForTurn: string | undefined;
 
     // 4. Lazily create the Codex thread on first prompt.
     if (!context) {
@@ -2666,8 +2725,19 @@ export class AppServerRuntime {
         engineHandle: thread.handle,
         engineGeneration: this.options.engine.info().generation,
         cwd: thread.cwd,
+        modelId: thread.model,
       });
+      // `ThreadStartResponse.model` is app-server's resolved value, not an echo
+      // from the compose bar, so it is safe even when it differs from the request.
+      confirmedModelForTurn = thread.model;
       await this.persistSession(session);
+    } else if (
+      context.modelId
+      && (!session.config.model || session.config.model === context.modelId)
+    ) {
+      // A changed requested model invalidates the previous thread setting until
+      // app-server confirms the new one via `thread/settings/updated`.
+      confirmedModelForTurn = context.modelId;
     }
 
     context.dispatchInFlight = true;
@@ -2680,6 +2750,7 @@ export class AppServerRuntime {
       content: "",
       parts: [],
       createdAt: new Date(this.now()).toISOString(),
+      ...(confirmedModelForTurn ? { modelId: confirmedModelForTurn } : {}),
       ...(isPlanReview ? { planReview: true } : {}),
     };
     context.messages.push(assistantMessage);

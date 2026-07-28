@@ -586,6 +586,7 @@ describe("sendPrompt", () => {
         type: "assistant",
         uuid: "asst-uuid-1",
         message: {
+          model: "claude-sonnet-4-6",
           content: [{ type: "text", text: "Hi there!" }],
         },
       });
@@ -604,6 +605,7 @@ describe("sendPrompt", () => {
       expect(stored.messages[0]?.content).toBe("Hello Claude");
       expect(stored.messages[1]?.role).toBe("assistant");
       expect(stored.messages[1]?.content).toBe("Hi there!");
+      expect(stored.messages[1]?.modelId).toBe("claude-sonnet-4-6");
 
       const initData = getSessionInitData(session.id);
       expect(initData?.slashCommands).toEqual(["help"]);
@@ -722,6 +724,7 @@ describe("sendPrompt", () => {
         type: "assistant",
         uuid: "partial-asst-1",
         message: {
+          model: "claude-opus-5",
           content: [{ type: "text", text: "Hello final" }],
         },
       });
@@ -732,6 +735,14 @@ describe("sendPrompt", () => {
 
       const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
       expect(assistant?.content).toBe("Hello final");
+      expect(assistant?.modelId).toBe("claude-opus-5");
+      expect(events.some((event) => {
+        const published = (
+          event.data as { message?: { modelId?: string } } | undefined
+        )?.message;
+        return event.type === "message.updated"
+          && published?.modelId === "claude-opus-5";
+      })).toBe(true);
     } finally {
       stop();
     }

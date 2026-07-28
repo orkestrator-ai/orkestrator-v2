@@ -41,6 +41,22 @@ describe("state keys", () => {
 });
 
 describe("applyTranscriptLine", () => {
+  test("preserves the model Claude Code recorded on an assistant transcript line", () => {
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", {
+      type: "assistant",
+      uuid: "assistant-model",
+      message: {
+        role: "assistant",
+        model: "claude-opus-4-6",
+        content: [{ type: "text", text: "Done" }],
+      },
+    });
+
+    expect(
+      useClaudeTmuxStore.getState().getTab("e").messages[0]?.modelId,
+    ).toBe("claude-opus-4-6");
+  });
+
   test("user text line becomes a message", () => {
     const line: TranscriptLine = {
       type: "user",

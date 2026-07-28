@@ -17,6 +17,7 @@ function makeMessage(
     role: "user" | "assistant";
     content: string;
     createdAt: string;
+    modelId: string;
   }>,
 ) {
   return {
@@ -25,8 +26,37 @@ function makeMessage(
     content: overrides?.content ?? "",
     createdAt: overrides?.createdAt ?? "2026-03-21T10:00:00.000Z",
     parts,
+    ...(overrides?.modelId ? { modelId: overrides.modelId } : {}),
   };
 }
+
+describe("NativeMessage assistant attribution", () => {
+  test("shows the backend-confirmed model instead of the static provider label", () => {
+    render(
+      <NativeMessage
+        message={makeMessage(
+          [{ type: "text", content: "Done" }],
+          { modelId: "gpt-5.6-sol" },
+        )}
+        assistantLabel="Codex"
+      />,
+    );
+
+    expect(screen.getByText("gpt-5.6-sol")).toBeTruthy();
+    expect(screen.queryByText("Codex")).toBeNull();
+  });
+
+  test("keeps the provider label for legacy messages with no confirmed model", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Done" }])}
+        assistantLabel="Codex"
+      />,
+    );
+
+    expect(screen.getByText("Codex")).toBeTruthy();
+  });
+});
 
 describe("NativeMessage task list rendering", () => {
   afterEach(() => {

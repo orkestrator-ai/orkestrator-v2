@@ -121,5 +121,7 @@ export interface NativeMessage {
   content: string;
   parts: NativeMessagePart[];
   createdAt: string;
+  /** Provider/backend-observed model that produced this assistant message. */
+  modelId?: string;
   turnId?: string;
 }

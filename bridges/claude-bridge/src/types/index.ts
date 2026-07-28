@@ -148,6 +148,8 @@ export interface NormalizedMessage {
   content: string;
   parts: NormalizedPart[];
   timestamp: string;
+  /** Model observed on the provider's assistant response. */
+  modelId?: string;
   /**
    * UUID of the record this message occupies in the SDK's persisted transcript.
    *

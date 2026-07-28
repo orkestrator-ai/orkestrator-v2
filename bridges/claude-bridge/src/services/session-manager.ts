@@ -1168,6 +1168,13 @@ function normalizePersistedSessionMessages(
       content: entry.content,
       parts,
       timestamp,
+      ...(entry.raw.type === "assistant"
+        && entry.raw.message
+        && typeof entry.raw.message === "object"
+        && typeof (entry.raw.message as { model?: unknown }).model === "string"
+        && (entry.raw.message as { model: string }).model.trim().length > 0
+        ? { modelId: (entry.raw.message as { model: string }).model.trim() }
+        : {}),
       // Recorded explicitly rather than inferred from `id`: a record with no
       // uuid falls back to a generated id, which must never be mistaken for a
       // transcript uuid by `resolvePersistedMessageId`.
@@ -2941,6 +2948,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // text/thinking parts are rebuilt from scratch each time.
     let publishedParts: NormalizedPart[] = [];
     let publishedMessageId: string | null = null;
+    let publishedModelId: string | undefined;
 
     const emitCurrentAssistantMessage = () => {
       if (!currentAssistantMessage) return;
@@ -2951,8 +2959,25 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       if (publishedMessageId !== currentAssistantMessage.id) {
         publishedMessageId = currentAssistantMessage.id;
         publishedParts = parts.slice();
+        publishedModelId = currentAssistantMessage.modelId;
         // Stamped on the message itself, before it is serialized, so both this
         // frame and any REST read of the transcript agree on the revision.
+        currentAssistantMessage.revision = (currentAssistantMessage.revision ?? 0) + 1;
+        eventEmitter.emit({
+          type: "message.updated",
+          sessionId,
+          data: { message: currentAssistantMessage },
+        });
+        return;
+      }
+
+      // Model metadata is message-level, not part-level. If the authoritative
+      // SDK response resolves after streamed parts have already been published,
+      // send one full frame so live subscribers learn the same model REST
+      // hydration will return.
+      if (publishedModelId !== currentAssistantMessage.modelId) {
+        publishedParts = parts.slice();
+        publishedModelId = currentAssistantMessage.modelId;
         currentAssistantMessage.revision = (currentAssistantMessage.revision ?? 0) + 1;
         eventEmitter.emit({
           type: "message.updated",
@@ -2997,6 +3022,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // full-message emit) happens at most once per STREAM_EVENT_COALESCE_MS.
     let streamEventsDirty = false;
     let lastStreamMessageKey: string | null = null;
+    let lastStreamModelId: string | undefined;
 
     const flushStreamedAssistantMessage = () => {
       if (streamEventFlushTimer) {
@@ -3018,6 +3044,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           content,
           parts: finalParts,
           timestamp: new Date().toISOString(),
+          ...(lastStreamModelId ? { modelId: lastStreamModelId } : {}),
         };
         session.messages.push(currentAssistantMessage);
       } else {
@@ -3050,6 +3077,16 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           ? streamEvent.message.id
           : undefined;
         currentStreamApiMessageId = apiMessageId ?? null;
+        const isRootAssistant =
+          typeof partialMessage.parent_tool_use_id !== "string"
+          || partialMessage.parent_tool_use_id.trim().length === 0;
+        if (
+          isRootAssistant
+          && typeof streamEvent.message?.model === "string"
+          && streamEvent.message.model.trim().length > 0
+        ) {
+          lastStreamModelId = streamEvent.message.model.trim();
+        }
         if (apiMessageId) {
           getBlocksForMessage(apiMessageId);
         }
@@ -3514,6 +3551,20 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // transcript record; the latest is the inclusive end of this message,
         // which is what a fork boundary must point at.
         const sdkMessageUuid = (message as { uuid?: unknown }).uuid;
+        const observedModel = (
+          message as { message?: { model?: unknown } }
+        ).message?.model;
+        const parentToolUseId = (
+          message as { parent_tool_use_id?: unknown }
+        ).parent_tool_use_id;
+        const isRootAssistant =
+          typeof parentToolUseId !== "string" || parentToolUseId.trim().length === 0;
+        const modelId =
+          isRootAssistant
+          && typeof observedModel === "string"
+          && observedModel.trim().length > 0
+            ? observedModel.trim()
+            : undefined;
         if (!currentAssistantMessage) {
           currentAssistantMessage = {
             id: messageKey,
@@ -3521,6 +3572,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             content: accumulatedContent,
             parts: finalParts,
             timestamp: new Date().toISOString(),
+            ...(modelId ? { modelId } : {}),
             ...(typeof sdkMessageUuid === "string" ? { sdkUuid: sdkMessageUuid } : {}),
           };
           session.messages.push(currentAssistantMessage);
@@ -3531,6 +3583,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         } else {
           currentAssistantMessage.content = accumulatedContent;
           currentAssistantMessage.parts = finalParts;
+          if (modelId) {
+            currentAssistantMessage.modelId = modelId;
+          }
           if (typeof sdkMessageUuid === "string") {
             currentAssistantMessage.sdkUuid = sdkMessageUuid;
           }

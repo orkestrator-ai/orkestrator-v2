@@ -2988,16 +2988,17 @@ describe("opencode-client normalizeOpenCodeMessage providerUsage", () => {
   }
 
   test("captures the full provider counter block", () => {
-    expect(
-      assistant({
-        tokens,
-        cost: 0.25,
-        providerID: "anthropic",
-        modelID: "claude-sonnet-4",
-        agent: "build",
-        time: { created: 1_000, completed: 3_500 },
-      })?.providerUsage,
-    ).toEqual({
+    const message = assistant({
+      tokens,
+      cost: 0.25,
+      providerID: "anthropic",
+      modelID: "claude-sonnet-4",
+      agent: "build",
+      time: { created: 1_000, completed: 3_500 },
+    });
+
+    expect(message?.modelId).toBe("anthropic/claude-sonnet-4");
+    expect(message?.providerUsage).toEqual({
       cost: 0.25,
       inputTokens: 100,
       outputTokens: 20,
@@ -3009,6 +3010,13 @@ describe("opencode-client normalizeOpenCodeMessage providerUsage", () => {
       agent: "build",
       durationMs: 2_500,
     });
+  });
+
+  test("publishes the provider-confirmed model before usage counters arrive", () => {
+    expect(assistant({
+      providerID: "openai",
+      modelID: "gpt-5.6-sol",
+    })?.modelId).toBe("openai/gpt-5.6-sol");
   });
 
   test("attaches usage only to assistant messages that report tokens", () => {

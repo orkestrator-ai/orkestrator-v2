@@ -146,6 +146,8 @@ export interface ThreadContext {
    * and the thread is unrecoverable. Verified against codex 0.145.0.
    */
   materialized: boolean;
+  /** Last model app-server confirmed for this thread. */
+  modelId?: string;
 }
 
 /**
@@ -306,7 +308,13 @@ export class ThreadRegistry {
   attach(
     sessionId: string,
     threadId: string,
-    options: { engineHandle: string; engineGeneration?: EngineGeneration; cwd?: string; name?: string | null },
+    options: {
+      engineHandle: string;
+      engineGeneration?: EngineGeneration;
+      cwd?: string;
+      name?: string | null;
+      modelId?: string;
+    },
   ): ThreadContext {
     const session = this.sessions.get(sessionId);
     if (session) session.threadId = threadId;
@@ -325,6 +333,7 @@ export class ThreadRegistry {
         compacting: false,
         unsubscribed: false,
         materialized: false,
+        modelId: options.modelId,
         cwd: options.cwd,
         name: options.name ?? null,
       };
@@ -336,6 +345,7 @@ export class ThreadRegistry {
         context.engineGeneration = options.engineGeneration;
       }
       context.unsubscribed = false;
+      if (options.modelId) context.modelId = options.modelId;
     }
 
     context.bridgeSessionIds.add(sessionId);

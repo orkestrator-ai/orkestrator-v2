@@ -1653,7 +1653,11 @@ export const NativeMessage = memo(function NativeMessage({
     <AgentExpansionContext.Provider value={agentExpansionValue}>
       <MessageShell
         isUser={isUser}
-        authorLabel={isUser ? "You" : assistantLabel}
+        authorLabel={
+          isUser
+            ? "You"
+            : message.modelId?.trim() || assistantLabel
+        }
         timestampLabel={formatTime(message.createdAt)}
         durationLabel={durationLabel}
         showHeader={!isContinuation}

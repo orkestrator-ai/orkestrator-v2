@@ -368,6 +368,7 @@ export function normalizeClaudeMessage(message: ClaudeMessage): NativeMessage {
       ),
     ),
     createdAt: message.timestamp,
+    ...(message.modelId ? { modelId: message.modelId } : {}),
   };
 }
 

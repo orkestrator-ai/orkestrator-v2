@@ -29,6 +29,33 @@ describe("thread and turn lifecycle", () => {
     expect(events[0]).toMatchObject({ kind: "turn.started", threadId: "t1", turnId: "turn-1" });
   });
 
+  test("publishes app-server-confirmed models and turn reroutes", () => {
+    expect(reduce("thread/settings/updated", {
+      threadId: "t1",
+      threadSettings: { model: "gpt-5.6-sol" },
+    })).toEqual([{
+      kind: "thread.model.updated",
+      threadId: "t1",
+      model: "gpt-5.6-sol",
+      engineGeneration: 1,
+      handle: "handle-1",
+    }]);
+
+    expect(reduce("model/rerouted", {
+      threadId: "t1",
+      turnId: "turn-1",
+      fromModel: "gpt-5.6-sol",
+      toModel: "gpt-5.6-sol-mini",
+    })).toEqual([{
+      kind: "turn.model.updated",
+      threadId: "t1",
+      turnId: "turn-1",
+      model: "gpt-5.6-sol-mini",
+      engineGeneration: 1,
+      handle: "handle-1",
+    }]);
+  });
+
   test("turn/completed maps each terminal status", () => {
     for (const [status, expected] of [
       ["completed", "completed"],

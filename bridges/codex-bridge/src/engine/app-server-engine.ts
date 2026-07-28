@@ -672,19 +672,25 @@ export class AppServerEngine implements CodexEngine {
   }
 
   async startThread(options: StartThreadOptions): Promise<EngineThread> {
-    const response = await this.supervisor.request<{ thread: Record<string, unknown> }>(
+    const response = await this.supervisor.request<{
+      thread: Record<string, unknown>;
+      model?: unknown;
+    }>(
       "thread/start",
       this.toThreadParams(options.config),
     );
-    return this.bindThread(response.thread, options.config);
+    return this.bindThread(response.thread, options.config, response.model);
   }
 
   async resumeThread(threadId: string, options: ResumeThreadOptions): Promise<EngineThread> {
-    const response = await this.supervisor.request<{ thread: Record<string, unknown> }>(
+    const response = await this.supervisor.request<{
+      thread: Record<string, unknown>;
+      model?: unknown;
+    }>(
       "thread/resume",
       { threadId, ...this.toThreadParams(options.config) },
     );
-    const thread = this.bindThread(response.thread, options.config);
+    const thread = this.bindThread(response.thread, options.config, response.model);
     // app-server reconstructs turn history on resume by default.
     thread.turns = this.extractTurns(response.thread);
     return thread;
@@ -695,7 +701,10 @@ export class AppServerEngine implements CodexEngine {
     config: EngineTurnConfig,
     lastTurnId?: string,
   ): Promise<EngineThread> {
-    const response = await this.supervisor.request<{ thread: Record<string, unknown> }>(
+    const response = await this.supervisor.request<{
+      thread: Record<string, unknown>;
+      model?: unknown;
+    }>(
       "thread/fork",
       {
         threadId,
@@ -703,7 +712,7 @@ export class AppServerEngine implements CodexEngine {
         ...this.toThreadParams(config),
       },
     );
-    return this.bindThread(response.thread, config);
+    return this.bindThread(response.thread, config, response.model);
   }
 
   async compactThread(threadId: string): Promise<void> {
@@ -870,8 +879,15 @@ export class AppServerEngine implements CodexEngine {
     return { threads, nextCursor: response.nextCursor, supported: true };
   }
 
-  private bindThread(raw: Record<string, unknown>, config: EngineTurnConfig): EngineThread {
+  private bindThread(
+    raw: Record<string, unknown>,
+    config: EngineTurnConfig,
+    confirmedModel?: unknown,
+  ): EngineThread {
     const thread = this.toEngineThread(raw);
+    if (typeof confirmedModel === "string" && confirmedModel.trim().length > 0) {
+      thread.model = confirmedModel.trim();
+    }
     if (thread.id) {
       // The thread id doubles as the engine handle: app-server addresses
       // everything by thread id, so a second indirection would add nothing.
@@ -893,6 +909,10 @@ export class AppServerEngine implements CodexEngine {
       id,
       handle: id ?? "",
       cwd: typeof thread.cwd === "string" ? thread.cwd : undefined,
+      model:
+        typeof thread.model === "string" && thread.model.trim().length > 0
+          ? thread.model.trim()
+          : undefined,
       name: typeof thread.name === "string" ? thread.name : null,
       preview: typeof thread.preview === "string" ? thread.preview : undefined,
       source: describeSource(thread.source),

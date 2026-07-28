@@ -3734,6 +3734,50 @@ describe("idle detach and transparent re-attach", () => {
 });
 
 describe("models", () => {
+  test("publishes app-server's resolved and rerouted model on the assistant message", async () => {
+    const h = await harness({
+      "thread/start": () => ({
+        thread: threadPayload("thread-1"),
+        model: "gpt-resolved",
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      model: "gpt-requested",
+    });
+
+    await h.runtime.prompt(sessionId, {
+      prompt: "Use the confirmed model",
+      requestId: "req-model",
+      attachments: [],
+    });
+
+    let assistant = (await h.runtime.getMessages(sessionId))
+      ?.find((message) => message.role === "assistant");
+    expect(assistant?.modelId).toBe("gpt-resolved");
+
+    h.child().notify("thread/settings/updated", {
+      threadId: "thread-1",
+      threadSettings: { model: "gpt-settings-confirmed" },
+    });
+    await h.drain();
+    assistant = (await h.runtime.getMessages(sessionId))
+      ?.find((message) => message.role === "assistant");
+    expect(assistant?.modelId).toBe("gpt-settings-confirmed");
+
+    h.child().notify("model/rerouted", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      fromModel: "gpt-settings-confirmed",
+      toModel: "gpt-rerouted",
+      reason: "highRiskCyber",
+    });
+    await h.drain();
+    assistant = (await h.runtime.getMessages(sessionId))
+      ?.find((message) => message.role === "assistant");
+    expect(assistant?.modelId).toBe("gpt-rerouted");
+  });
+
   test("model/list is authoritative and preserves reasoning order", async () => {
     const h = await harness({
       "model/list": () => ({

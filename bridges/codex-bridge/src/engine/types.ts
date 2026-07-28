@@ -276,6 +276,8 @@ export interface EngineEventMeta {
 export type EngineEvent = EngineEventMeta &
   (
     | { kind: "thread.started"; threadId: string }
+    | { kind: "thread.model.updated"; threadId: string; model: string }
+    | { kind: "turn.model.updated"; threadId: string; turnId: string; model: string }
     | { kind: "turn.started"; threadId: string | null; turnId: string }
     | {
         kind: "item.started" | "item.updated" | "item.completed";

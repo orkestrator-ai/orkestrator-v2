@@ -609,6 +609,11 @@ function applyLine(state: TmuxTabState, line: TranscriptLine): TmuxTabState {
     content: textOfParts(parts),
     parts,
     timestamp,
+    ...(role === "assistant"
+      && typeof line.message?.model === "string"
+      && line.message.model.trim().length > 0
+      ? { modelId: line.message.model.trim() }
+      : {}),
   };
 
   const existingIdx = state.messages.findIndex((m) => m.id === id);

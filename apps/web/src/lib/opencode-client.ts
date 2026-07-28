@@ -845,6 +845,12 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
   const createdAt = parseOpenCodeCreatedAt(info?.time?.created);
   const parsedParts: OpenCodeMessagePart[] = [];
   let textContent = "";
+  const modelId =
+    typeof info?.modelID === "string" && info.modelID.trim().length > 0
+      ? typeof info?.providerID === "string" && info.providerID.trim().length > 0
+        ? `${info.providerID.trim()}/${info.modelID.trim()}`
+        : info.modelID.trim()
+        : undefined;
 
   if (Array.isArray(msg.parts)) {
     for (const part of msg.parts) {
@@ -863,6 +869,7 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
     content: textContent,
     parts: parsedParts,
     createdAt,
+    ...(info?.role === "assistant" && modelId ? { modelId } : {}),
     ...(info?.error !== undefined && info?.error !== null
       ? { hasError: true }
       : {}),
@@ -879,6 +886,9 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
               typeof info.tokens.total === "number"
                 ? info.tokens.total
                 : undefined,
+            // Keep usage parsing tolerant of older OpenCode payloads whose
+            // model id was not typed as a string. The top-level `modelId`
+            // displayed in the footer remains strict and backend-confirmed.
             modelId:
               typeof info.providerID === "string" && typeof info.modelID === "string"
                 ? `${info.providerID}/${info.modelID}`

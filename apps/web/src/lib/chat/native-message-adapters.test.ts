@@ -18,6 +18,51 @@ import {
 } from "./native-message-adapters";
 
 describe("native message adapters", () => {
+  test("preserves model attribution through provider-neutral normalization", () => {
+    const message: NativeMessage = {
+      id: "native-model",
+      role: "assistant",
+      content: "Done",
+      createdAt: "2026-06-18T12:00:00.000Z",
+      parts: [{ type: "text", content: "Done" }],
+      modelId: "provider/model",
+    };
+
+    expect(normalizeCodexNativeMessage(message).modelId).toBe("provider/model");
+    expect(normalizeOpenCodeNativeMessage(message).modelId).toBe("provider/model");
+  });
+
+  test("propagates Claude model attribution to every timestamp-split row", () => {
+    const normalized = normalizeClaudeMessage({
+      id: "claude-model",
+      role: "assistant",
+      content: "FirstSecond",
+      timestamp: "2026-06-18T12:00:00.000Z",
+      modelId: "claude-opus-5",
+      parts: [
+        {
+          type: "text",
+          content: "First",
+          timestamp: "2026-06-18T12:00:00.000Z",
+        },
+        {
+          type: "thinking",
+          content: "Inspecting",
+          timestamp: "2026-06-18T12:01:00.000Z",
+        },
+        {
+          type: "text",
+          content: "Second",
+          timestamp: "2026-06-18T12:03:00.000Z",
+        },
+      ],
+    });
+
+    expect(normalized.modelId).toBe("claude-opus-5");
+    expect(splitClaudeAssistantTextBlocks(normalized).map((row) => row.modelId))
+      .toEqual(["claude-opus-5", "claude-opus-5"]);
+  });
+
   test("groups consecutive native tool activity into a tool group", () => {
     const message: NativeMessage = {
       id: "native-1",
@@ -275,6 +320,70 @@ describe("native message adapters", () => {
       expect(normalized.parts[0].task.toolName).toBe("Agent");
       expect(normalized.parts[0].task.toolArgs?.description).toBe("Review presentation polish");
       expect(normalized.parts[0].childTools.map((part) => part.toolName)).toEqual(["Read"]);
+    }
+  });
+
+  test("keeps subagent thinking, text, and edits inside the Agent group", () => {
+    const message: ClaudeMessage = {
+      id: "claude-agent-activity",
+      role: "assistant",
+      content: "Subagent answer",
+      timestamp: "2026-07-28T08:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "Agent",
+          content: "Run reviewer",
+          toolUseId: "agent-activity-1",
+        },
+        {
+          type: "thinking",
+          content: "Inspecting files",
+          parentTaskUseId: "agent-activity-1",
+        },
+        {
+          type: "text",
+          content: "Subagent answer",
+          parentTaskUseId: "agent-activity-1",
+        },
+        {
+          type: "tool-invocation",
+          toolName: "Edit",
+          content: "Edit",
+          toolUseId: "edit-1",
+          parentTaskUseId: "agent-activity-1",
+        },
+      ],
+    };
+
+    const normalized = normalizeClaudeMessage(message);
+
+    expect(normalized.parts).toHaveLength(1);
+    expect(normalized.parts[0]?.type).toBe("task-group");
+    if (normalized.parts[0]?.type === "task-group") {
+      expect(
+        normalized.parts[0].childTools.map((part) => ({
+          type: part.type,
+          content: part.content,
+          parentTaskUseId: part.parentTaskUseId,
+        })),
+      ).toEqual([
+        {
+          type: "thinking",
+          content: "Inspecting files",
+          parentTaskUseId: "agent-activity-1",
+        },
+        {
+          type: "text",
+          content: "Subagent answer",
+          parentTaskUseId: "agent-activity-1",
+        },
+        {
+          type: "tool-invocation",
+          content: "Edit",
+          parentTaskUseId: "agent-activity-1",
+        },
+      ]);
     }
   });
 

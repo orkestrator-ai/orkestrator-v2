@@ -29,6 +29,53 @@ describe("thread and turn lifecycle", () => {
     expect(events[0]).toMatchObject({ kind: "turn.started", threadId: "t1", turnId: "turn-1" });
   });
 
+  test("publishes app-server-confirmed models and turn reroutes", () => {
+    expect(reduce("thread/settings/updated", {
+      threadId: "t1",
+      threadSettings: { model: "gpt-5.6-sol" },
+    })).toEqual([{
+      kind: "thread.model.updated",
+      threadId: "t1",
+      model: "gpt-5.6-sol",
+      engineGeneration: 1,
+      handle: "handle-1",
+    }]);
+
+    expect(reduce("model/rerouted", {
+      threadId: "t1",
+      turnId: "turn-1",
+      fromModel: "gpt-5.6-sol",
+      toModel: "gpt-5.6-sol-mini",
+    })).toEqual([{
+      kind: "turn.model.updated",
+      threadId: "t1",
+      turnId: "turn-1",
+      model: "gpt-5.6-sol-mini",
+      engineGeneration: 1,
+      handle: "handle-1",
+    }]);
+  });
+
+  test("drops malformed model notifications", () => {
+    for (const params of [
+      {},
+      { threadSettings: { model: "gpt" } },
+      { threadId: "t1", threadSettings: null },
+      { threadId: "t1", threadSettings: {} },
+      { threadId: "t1", threadSettings: { model: "   " } },
+    ]) {
+      expect(reduce("thread/settings/updated", params)).toEqual([]);
+    }
+    for (const params of [
+      {},
+      { threadId: "t1", toModel: "gpt" },
+      { threadId: "t1", turnId: "turn-1" },
+      { threadId: "t1", turnId: "turn-1", toModel: "   " },
+    ]) {
+      expect(reduce("model/rerouted", params)).toEqual([]);
+    }
+  });
+
   test("turn/completed maps each terminal status", () => {
     for (const [status, expected] of [
       ["completed", "completed"],
@@ -443,6 +490,8 @@ describe("unknown and ignored notifications", () => {
       "item/completed",
       "item/agentMessage/delta",
       "turn/diff/updated",
+      "thread/settings/updated",
+      "model/rerouted",
       "error",
     ]) {
       expect(isIgnoredNotification(method)).toBe(false);

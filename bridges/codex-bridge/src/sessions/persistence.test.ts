@@ -149,6 +149,7 @@ describe("BridgeSessionStore", () => {
       title: "A session",
       titleSource: "explicit",
       lastAcceptedRequestId: "request-1",
+      confirmedModelsByTurn: { "turn-1": "gpt-rerouted" },
     });
 
     await store.upsert(record);
@@ -156,6 +157,35 @@ describe("BridgeSessionStore", () => {
 
     await store.remove("session-1");
     expect(await store.load()).toEqual([]);
+  });
+
+  test("rejects malformed confirmed model overlays", async () => {
+    const now = Date.parse("2026-07-25T12:00:00.000Z");
+    const { codexHome, store } = await makeStore({ now: () => now });
+    await writeRecordFile(codexHome, "valid", {
+      ...validRecordFields("valid", now),
+      confirmedModelsByTurn: { "turn-1": "gpt-rerouted" },
+    });
+    const malformed: unknown[] = [
+      null,
+      [],
+      { "": "gpt-rerouted" },
+      { "   ": "gpt-rerouted" },
+      { "turn-1": "" },
+      { "turn-1": "   " },
+      { "turn-1": 42 },
+    ];
+    await Promise.all(
+      malformed.map((confirmedModelsByTurn, index) =>
+        writeRecordFile(codexHome, `invalid-${index}`, {
+          ...validRecordFields(`invalid-${index}`, now),
+          confirmedModelsByTurn,
+        }),
+      ),
+    );
+
+    expect((await store.load()).map((record) => record.bridgeSessionId))
+      .toEqual(["valid"]);
   });
 
   test("serializes concurrent upserts without losing either session", async () => {

@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -56,7 +57,7 @@ import {
 } from "@/lib/compose-draft-persistence";
 import { cn } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
-import { useConfigStore, useEnvironmentStore, useFeaturePlanStore, useKanbanStore, useProjectStore } from "@/stores";
+import { useCodexStore, useConfigStore, useEnvironmentStore, useFeaturePlanStore, useKanbanStore, useProjectStore } from "@/stores";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import type { Environment, EnvironmentType } from "@/types";
 import type {
@@ -140,6 +141,12 @@ function messageContent(message: CodexMessage): string {
     .trim();
 }
 
+interface FeatureAssistantReply {
+  id: string;
+  content: string;
+  modelId?: string;
+}
+
 function latestAssistantMessage(
   messages: CodexMessage[],
   options: {
@@ -147,7 +154,7 @@ function latestAssistantMessage(
     accept?: (content: string) => boolean;
     createdAtOrAfter?: string;
   } = {},
-): { id: string; content: string } | null {
+): FeatureAssistantReply | null {
   const minimumCreatedAt = options.createdAtOrAfter
     ? Date.parse(options.createdAtOrAfter)
     : Number.NEGATIVE_INFINITY;
@@ -162,7 +169,11 @@ function latestAssistantMessage(
     )) continue;
     const content = messageContent(message);
     if (content.trim() && (!options.accept || options.accept(content))) {
-      return { id: message.id, content };
+      return {
+        id: message.id,
+        content,
+        ...(message.modelId ? { modelId: message.modelId } : {}),
+      };
     }
   }
   return null;
@@ -176,7 +187,7 @@ async function waitForCodexReply(
   client: CodexClient,
   sessionId: string,
   baselineAssistantIds: ReadonlySet<string>,
-): Promise<string | null> {
+): Promise<FeatureAssistantReply | null> {
   const startedAt = Date.now();
   let idleWithoutReplySince: number | null = null;
 
@@ -190,7 +201,7 @@ async function waitForCodexReply(
 
     const reply = latestAssistantMessage(messages, { excludeIds: baselineAssistantIds });
     if (status?.status === "idle" && reply) {
-      return reply.content;
+      return reply;
     }
 
     /**
@@ -274,6 +285,7 @@ function toNativeChatMessage(
     content,
     parts: [{ type: "text", content }],
     createdAt: message.createdAt,
+    modelId: message.modelId,
   };
 }
 
@@ -365,6 +377,7 @@ function latestUnappliedPersistedConversation(
         startedAt: userMessage.createdAt,
         phase: "running",
         responseContent: featureAssistant.content,
+        ...(featureAssistant.modelId ? { responseModelId: featureAssistant.modelId } : {}),
       });
     }
   }
@@ -390,6 +403,7 @@ function latestUnappliedPersistedConversation(
       startedAt: userMessage.createdAt,
       phase: "running",
       responseContent: storyAssistant.content,
+      ...(storyAssistant.modelId ? { responseModelId: storyAssistant.modelId } : {}),
     });
   }
 
@@ -434,17 +448,25 @@ function persistedResponseAfterTarget(
 function latestPersistedResponseAfterTarget(
   target: LocalConversationTarget,
   conversation: ActiveFeatureConversation,
-): string | undefined {
+): FeatureAssistantReply | undefined {
   for (let index = target.messages.length - 1; index > target.userMessageIndex; index -= 1) {
     const message = target.messages[index];
     if (message?.role !== "assistant") continue;
     if (conversation.storyId) {
       const parsed = parseStoryRefinement(message.content);
       if (parsed && (!parsed.storyId || parsed.storyId === conversation.storyId)) {
-        return message.content;
+        return {
+          id: message.id,
+          content: message.content,
+          ...(message.modelId ? { modelId: message.modelId } : {}),
+        };
       }
     } else if (parseFeaturePlannerState(message.content)) {
-      return message.content;
+      return {
+        id: message.id,
+        content: message.content,
+        ...(message.modelId ? { modelId: message.modelId } : {}),
+      };
     }
   }
   return undefined;
@@ -917,6 +939,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       feature: FeaturePlan,
       conversation: ActiveFeatureConversation,
       assistantContent: string,
+      modelId?: string,
     ) => {
       const currentFeature = useFeaturePlanStore.getState().features.find(
         (candidate) => candidate.id === feature.id,
@@ -927,12 +950,20 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       let updatedFeature = currentFeature;
       let responseMessage = persistedResponseAfterTarget(target, assistantContent);
       if (!responseMessage) {
-        const updated = await appendMessage(
-          currentFeature.id,
-          "assistant",
-          assistantContent,
-          "pending",
-        );
+        const updated = modelId
+          ? await appendMessage(
+              currentFeature.id,
+              "assistant",
+              assistantContent,
+              "pending",
+              modelId,
+            )
+          : await appendMessage(
+              currentFeature.id,
+              "assistant",
+              assistantContent,
+              "pending",
+            );
         if (!updated) throw new Error("Failed to persist the feature planning response");
         updatedFeature = updated;
         responseMessage = updated.messages.at(-1);
@@ -1001,12 +1032,12 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           return;
         }
 
-        const assistantContent = await waitForCodexReply(
+        const assistantReply = await waitForCodexReply(
           client,
           sessionId,
           assistantMessageIds(baselineMessages),
         );
-        if (!assistantContent) {
+        if (!assistantReply) {
           preserveConversation = updateConversation(conversationIdentity(conversation), {
             phase: "unavailable",
             error: "Codex is still working. Check again to resume monitoring or stop waiting.",
@@ -1019,7 +1050,8 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
 
         if (!claimConversationPersistence(
           conversationIdentity(conversation),
-          assistantContent,
+          assistantReply.content,
+          assistantReply.modelId,
         )) {
           preserveConversation = true;
           return;
@@ -1027,7 +1059,8 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         await persistFeatureConversationResponse(
           latestFeature,
           conversation,
-          assistantContent,
+          assistantReply.content,
+          assistantReply.modelId,
         );
       } catch (error) {
         if (!userMessagePersisted) setChatDraft(featureChatDraftId(feature.id), text);
@@ -1093,14 +1126,15 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       try {
         const { client, sessionId } = await ensureCodexSession(feature);
         const messages = await getSessionMessages(client, sessionId);
-        const assistantContent = latestAssistantMessage(messages, {
+        const assistantReply = latestAssistantMessage(messages, {
           createdAtOrAfter: pendingFeatureConversation?.startedAt,
           accept: (content) => parseFeaturePlannerState(content) !== null,
-        })?.content;
-        if (assistantContent && pendingFeatureConversation) {
+        });
+        if (assistantReply && pendingFeatureConversation) {
           if (!claimConversationPersistence(
             conversationIdentity(conversation),
-            assistantContent,
+            assistantReply.content,
+            assistantReply.modelId,
           )) {
             preserveConversation = true;
             return;
@@ -1108,24 +1142,33 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           await persistFeatureConversationResponse(
             feature,
             conversation,
-            assistantContent,
+            assistantReply.content,
+            assistantReply.modelId,
           );
-        } else if (assistantContent) {
+        } else if (assistantReply) {
           const persistedAssistantContents = new Set(
             feature.messages
               .filter((message) => message.role === "assistant")
               .map((message) => message.content),
           );
           if (
-            !persistedAssistantContents.has(assistantContent)
+            !persistedAssistantContents.has(assistantReply.content)
             && updateConversation(conversationIdentity(conversation), {})
           ) {
-            const updated = await appendMessage(
-              feature.id,
-              "assistant",
-              assistantContent,
-              "pending",
-            );
+            const updated = assistantReply.modelId
+              ? await appendMessage(
+                  feature.id,
+                  "assistant",
+                  assistantReply.content,
+                  "pending",
+                  assistantReply.modelId,
+                )
+              : await appendMessage(
+                  feature.id,
+                  "assistant",
+                  assistantReply.content,
+                  "pending",
+                );
             if (!updated) throw new Error("Failed to persist the refreshed feature response");
             if (!updateConversation(conversationIdentity(conversation), {})) return;
             const responseMessage = updated.messages.at(-1);
@@ -1134,7 +1177,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             }
             await applyFeaturePlannerState(
               updated,
-              assistantContent,
+              assistantReply.content,
               responseMessage.id,
             );
           }
@@ -1221,6 +1264,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       feature: FeaturePlan,
       conversation: ActiveFeatureConversation,
       assistantContent: string,
+      modelId?: string,
     ) => {
       const currentFeature = useFeaturePlanStore.getState().features.find(
         (candidate) => candidate.id === feature.id,
@@ -1232,13 +1276,22 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       let updatedStory = target.story;
       let responseMessage = persistedResponseAfterTarget(target, assistantContent);
       if (!responseMessage) {
-        const updated = await appendStoryMessage(
-          currentFeature.id,
-          target.story.id,
-          "assistant",
-          assistantContent,
-          "pending",
-        );
+        const updated = modelId
+          ? await appendStoryMessage(
+              currentFeature.id,
+              target.story.id,
+              "assistant",
+              assistantContent,
+              "pending",
+              modelId,
+            )
+          : await appendStoryMessage(
+              currentFeature.id,
+              target.story.id,
+              "assistant",
+              assistantContent,
+              "pending",
+            );
         if (!updated) throw new Error("Failed to persist the story refinement response");
         updatedFeature = updated;
         updatedStory = updated.stories.find(
@@ -1273,11 +1326,18 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       }
 
       const localTarget = findLocalConversationTarget(feature, conversation);
-      let assistantContent = currentConversation.responseContent
-        ?? (localTarget
-          ? latestPersistedResponseAfterTarget(localTarget, conversation)
-          : undefined);
-      if (!assistantContent) {
+      let assistantReply: FeatureAssistantReply | undefined = currentConversation.responseContent
+        ? {
+            id: "active-conversation-response",
+            content: currentConversation.responseContent,
+            ...(currentConversation.responseModelId
+              ? { modelId: currentConversation.responseModelId }
+              : {}),
+          }
+        : (localTarget
+            ? latestPersistedResponseAfterTarget(localTarget, conversation)
+            : undefined);
+      if (!assistantReply) {
         if (!client || !sessionId) return "missing";
         const messages = await getSessionMessages(client, sessionId, { throwOnError: true });
         if (conversation.storyId) {
@@ -1285,32 +1345,43 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             (candidate) => candidate.id === conversation.storyId,
           );
           if (!story) throw new Error("The story being refined no longer exists.");
-          assistantContent = latestAssistantMessage(messages, {
+          assistantReply = latestAssistantMessage(messages, {
             createdAtOrAfter: conversation.startedAt,
             accept: (content) => {
               const parsed = parseStoryRefinement(content);
               return parsed !== null && (!parsed.storyId || parsed.storyId === story.id);
             },
-          })?.content;
+          }) ?? undefined;
         } else {
-          assistantContent = latestAssistantMessage(messages, {
+          assistantReply = latestAssistantMessage(messages, {
             createdAtOrAfter: conversation.startedAt,
             accept: (content) => parseFeaturePlannerState(content) !== null,
-          })?.content;
+          }) ?? undefined;
         }
       }
-      if (!assistantContent) return "missing";
+      if (!assistantReply) return "missing";
       if (!claimConversationPersistence(
         conversationIdentity(conversation),
-        assistantContent,
+        assistantReply.content,
+        assistantReply.modelId,
       )) {
         return "claimed-elsewhere";
       }
 
       if (conversation.storyId) {
-        await persistStoryConversationResponse(feature, conversation, assistantContent);
+        await persistStoryConversationResponse(
+          feature,
+          conversation,
+          assistantReply.content,
+          assistantReply.modelId,
+        );
       } else {
-        await persistFeatureConversationResponse(feature, conversation, assistantContent);
+        await persistFeatureConversationResponse(
+          feature,
+          conversation,
+          assistantReply.content,
+          assistantReply.modelId,
+        );
       }
       return "hydrated";
     },
@@ -1712,12 +1783,12 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           return;
         }
 
-        const assistantContent = await waitForCodexReply(
+        const assistantReply = await waitForCodexReply(
           client,
           sessionId,
           assistantMessageIds(baselineMessages),
         );
-        if (!assistantContent) {
+        if (!assistantReply) {
           preserveConversation = updateConversation(conversationIdentity(conversation), {
             phase: "unavailable",
             error: "Codex is still refining this story. Check again to resume monitoring or stop waiting.",
@@ -1730,7 +1801,8 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
 
         if (!claimConversationPersistence(
           conversationIdentity(conversation),
-          assistantContent,
+          assistantReply.content,
+          assistantReply.modelId,
         )) {
           preserveConversation = true;
           return;
@@ -1738,7 +1810,8 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         await persistStoryConversationResponse(
           latestFeature,
           conversation,
-          assistantContent,
+          assistantReply.content,
+          assistantReply.modelId,
         );
       } catch (error) {
         if (!userMessagePersisted) {
@@ -1816,17 +1889,18 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       try {
         const { client, sessionId } = await ensureCodexSession(feature);
         const messages = await getSessionMessages(client, sessionId);
-        const assistantContent = latestAssistantMessage(messages, {
+        const assistantReply = latestAssistantMessage(messages, {
           createdAtOrAfter: pendingStoryConversation?.startedAt,
           accept: (content) => {
             const parsed = parseStoryRefinement(content);
             return parsed !== null && (!parsed.storyId || parsed.storyId === story.id);
           },
-        })?.content;
-        if (assistantContent && pendingStoryConversation) {
+        });
+        if (assistantReply && pendingStoryConversation) {
           if (!claimConversationPersistence(
             conversationIdentity(conversation),
-            assistantContent,
+            assistantReply.content,
+            assistantReply.modelId,
           )) {
             preserveConversation = true;
             return;
@@ -1834,25 +1908,35 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           await persistStoryConversationResponse(
             feature,
             conversation,
-            assistantContent,
+            assistantReply.content,
+            assistantReply.modelId,
           );
-        } else if (assistantContent) {
+        } else if (assistantReply) {
           const persistedAssistantContents = new Set(
             story.messages
               .filter((message) => message.role === "assistant")
               .map((message) => message.content),
           );
           if (
-            !persistedAssistantContents.has(assistantContent)
+            !persistedAssistantContents.has(assistantReply.content)
             && updateConversation(conversationIdentity(conversation), {})
           ) {
-            const updated = await appendStoryMessage(
-              feature.id,
-              story.id,
-              "assistant",
-              assistantContent,
-              "pending",
-            );
+            const updated = assistantReply.modelId
+              ? await appendStoryMessage(
+                  feature.id,
+                  story.id,
+                  "assistant",
+                  assistantReply.content,
+                  "pending",
+                  assistantReply.modelId,
+                )
+              : await appendStoryMessage(
+                  feature.id,
+                  story.id,
+                  "assistant",
+                  assistantReply.content,
+                  "pending",
+                );
             if (!updated) throw new Error("Failed to persist the refreshed story response");
             if (!updateConversation(conversationIdentity(conversation), {})) return;
             const updatedStory = updated.stories.find(
@@ -1865,7 +1949,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             await applyStoryRefinement(
               updated,
               updatedStory,
-              assistantContent,
+              assistantReply.content,
               responseMessage.id,
             );
           }
@@ -2256,6 +2340,11 @@ export function NativeStyleChatPanel({
   onSend: (text: string) => void;
   onRefresh?: () => void;
 }) {
+  const models = useCodexStore((state) => state.models);
+  const resolveModelLabel = useCallback(
+    (modelId: string) => resolveCatalogModelLabel(modelId, models),
+    [models],
+  );
   const nativeMessages = useMemo(
     () => messages
       .map((message) => toNativeChatMessage(message, stripState))
@@ -2285,6 +2374,7 @@ export function NativeStyleChatPanel({
               message={message}
               previousMessage={previousMessage}
               assistantLabel="Codex"
+              resolveModelLabel={resolveModelLabel}
             />
           )}
           footer={

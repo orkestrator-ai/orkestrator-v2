@@ -2513,6 +2513,40 @@ describe("opencode-client buildOpenCodeMessageFromPart", () => {
     expect(updated.parts).toHaveLength(2);
     expect(updated.content).toBe("Hello again");
   });
+
+  test("preserves message-level metadata while streamed parts are rebuilt", () => {
+    const existing: OpenCodeMessage = {
+      id: "message-1",
+      role: "assistant",
+      content: "Hello",
+      parts: [{ type: "text", content: "Hello", sourcePartId: "p1", sourceMessageId: "message-1" }],
+      createdAt: new Date(0).toISOString(),
+      modelId: "anthropic/claude-sonnet-4",
+      hasError: true,
+      turnId: "turn-1",
+      providerUsage: {
+        cost: 0.1,
+        inputTokens: 10,
+        outputTokens: 2,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        modelId: "anthropic/claude-sonnet-4",
+      },
+    };
+
+    const updated = buildOpenCodeMessageFromPart(existing, "message-1", {
+      type: "text",
+      content: "Hello world",
+      sourcePartId: "p1",
+      sourceMessageId: "message-1",
+    });
+
+    expect(updated.modelId).toBe(existing.modelId);
+    expect(updated.hasError).toBe(true);
+    expect(updated.turnId).toBe("turn-1");
+    expect(updated.providerUsage).toEqual(existing.providerUsage);
+  });
 });
 
 describe("opencode-client formatOpenCodeError", () => {
@@ -2988,16 +3022,17 @@ describe("opencode-client normalizeOpenCodeMessage providerUsage", () => {
   }
 
   test("captures the full provider counter block", () => {
-    expect(
-      assistant({
-        tokens,
-        cost: 0.25,
-        providerID: "anthropic",
-        modelID: "claude-sonnet-4",
-        agent: "build",
-        time: { created: 1_000, completed: 3_500 },
-      })?.providerUsage,
-    ).toEqual({
+    const message = assistant({
+      tokens,
+      cost: 0.25,
+      providerID: "anthropic",
+      modelID: "claude-sonnet-4",
+      agent: "build",
+      time: { created: 1_000, completed: 3_500 },
+    });
+
+    expect(message?.modelId).toBe("anthropic/claude-sonnet-4");
+    expect(message?.providerUsage).toEqual({
       cost: 0.25,
       inputTokens: 100,
       outputTokens: 20,
@@ -3009,6 +3044,34 @@ describe("opencode-client normalizeOpenCodeMessage providerUsage", () => {
       agent: "build",
       durationMs: 2_500,
     });
+  });
+
+  test("publishes the provider-confirmed model before usage counters arrive", () => {
+    expect(assistant({
+      providerID: "openai",
+      modelID: "gpt-5.6-sol",
+    })?.modelId).toBe("openai/gpt-5.6-sol");
+  });
+
+  test("normalizes model attribution without assigning it to user messages", () => {
+    expect(assistant({ modelID: "claude-sonnet-4" })?.modelId)
+      .toBe("claude-sonnet-4");
+    expect(assistant({ providerID: "  ", modelID: "claude-sonnet-4" })?.modelId)
+      .toBe("claude-sonnet-4");
+    expect(assistant({ providerID: "anthropic", modelID: "  " })?.modelId)
+      .toBeUndefined();
+    expect(
+      normalizeOpenCodeMessage({
+        info: {
+          id: "msg-user",
+          role: "user",
+          providerID: "anthropic",
+          modelID: "claude-sonnet-4",
+          time: { created: 1_000 },
+        },
+        parts: [],
+      })?.modelId,
+    ).toBeUndefined();
   });
 
   test("attaches usage only to assistant messages that report tokens", () => {

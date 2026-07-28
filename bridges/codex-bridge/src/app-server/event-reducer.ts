@@ -107,7 +107,6 @@ const IGNORED_METHODS = new Set([
   "guardianWarning",
   "deprecationNotice",
   "configWarning",
-  "model/rerouted",
   "model/verification",
   "model/safetyBuffering/updated",
   "turn/moderationMetadata",
@@ -117,7 +116,6 @@ const IGNORED_METHODS = new Set([
   // Bookkeeping the bridge tracks itself.
   "serverRequest/resolved",
   "thread/status/changed",
-  "thread/settings/updated",
   "thread/archived",
   "thread/unarchived",
   "thread/deleted",
@@ -170,6 +168,36 @@ export function reduceNotification(
   const turnId = isRecord(params) ? str(params.turnId) : undefined;
 
   switch (notification.method) {
+    case "thread/settings/updated": {
+      const settings = isRecord(params) && isRecord(params.threadSettings)
+        ? params.threadSettings
+        : undefined;
+      const model = settings ? str(settings.model)?.trim() : undefined;
+      if (!threadId || !model) return { events: [] };
+      return {
+        events: [{
+          kind: "thread.model.updated",
+          threadId,
+          model,
+          ...base,
+        }],
+      };
+    }
+
+    case "model/rerouted": {
+      const model = isRecord(params) ? str(params.toModel)?.trim() : undefined;
+      if (!threadId || !turnId || !model) return { events: [] };
+      return {
+        events: [{
+          kind: "turn.model.updated",
+          threadId,
+          turnId,
+          model,
+          ...base,
+        }],
+      };
+    }
+
     case "thread/tokenUsage/updated": {
       if (!isRecord(params) || !threadId || !turnId || !isRecord(params.tokenUsage)) {
         return { events: [] };

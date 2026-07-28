@@ -7,6 +7,7 @@ import { Separator } from "@/components/ui/separator";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { createUuid } from "@/lib/uuid";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { persistBuildPipelineNow } from "@/lib/build-pipeline-persistence";
@@ -288,12 +289,14 @@ function LoggedNativeMessage({
   sessionKey,
   sessionPhase,
   messageIndex,
+  resolveModelLabel,
 }: {
   message: CodexMessage;
   previousMessage: CodexMessage | null;
   sessionKey: string;
   sessionPhase: string;
   messageIndex: number;
+  resolveModelLabel: (modelId: string) => string;
 }) {
   const renderCountRef = useRef(0);
   renderCountRef.current += 1;
@@ -341,6 +344,7 @@ function LoggedNativeMessage({
       message={normalizedMessage}
       previousMessage={normalizedPreviousMessage}
       assistantLabel="Codex"
+      resolveModelLabel={resolveModelLabel}
     />
   );
 }
@@ -419,6 +423,11 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
   const setSessionTitle = useCodexStore((state) => state.setSessionTitle);
   const client = useCodexStore(
     useCallback((state) => state.clients.get(environmentId), [environmentId]),
+  );
+  const models = useCodexStore((state) => state.models);
+  const resolveModelLabel = useCallback(
+    (modelId: string) => resolveCatalogModelLabel(modelId, models),
+    [models],
   );
 
   const setupScriptsRunning = useEnvironmentStore((state) => state.setupScriptsRunning.has(environmentId));
@@ -572,9 +581,10 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         sessionKey={row.sessionKey}
         sessionPhase={row.sessionPhase}
         messageIndex={row.messageIndex}
+        resolveModelLabel={resolveModelLabel}
       />
     );
-  }, []);
+  }, [resolveModelLabel]);
 
   const resolveCodexPreferences = useCallback(
     (projectId: string): { model: string; effort: CodexReasoningEffort } => {

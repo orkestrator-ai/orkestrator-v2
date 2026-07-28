@@ -9,6 +9,7 @@
     "./connections": "./src/connections.ts",
     "./diff-stats": "./src/diff-stats.ts",
     "./gateway-token": "./src/gateway-token.ts",
+    "./model-id": "./src/model-id.ts",
     "./parent-watchdog": "./src/parent-watchdog.ts",
     "./pr-monitor": "./src/pr-monitor.ts",
     "./resource-events": "./src/resource-events.ts",

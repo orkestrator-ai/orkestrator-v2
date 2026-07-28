@@ -100,6 +100,7 @@ type FeaturePlanMessage = {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt: string;
+  modelId?: string;
   stateApplication?: "pending" | "applied" | "superseded";
 };
 
@@ -3711,6 +3712,7 @@ export class StorageService {
     role: FeaturePlanMessage["role"],
     content: string,
     stateApplication?: FeaturePlanMessage["stateApplication"],
+    modelId?: string,
   ): Promise<FeaturePlan> {
     return this.mutateFeaturePlans((plans) => {
       const plan = plans.find((candidate) => candidate.id === featureId);
@@ -3721,6 +3723,7 @@ export class StorageService {
         role,
         content,
         createdAt: nowIso(),
+        ...(modelId ? { modelId } : {}),
         ...(stateApplication ? { stateApplication } : {}),
       });
       plan.updatedAt = nowIso();
@@ -3734,6 +3737,7 @@ export class StorageService {
     role: FeaturePlanMessage["role"],
     content: string,
     stateApplication?: FeaturePlanMessage["stateApplication"],
+    modelId?: string,
   ): Promise<FeaturePlan> {
     return this.mutateFeaturePlans((plans) => {
       const plan = plans.find((candidate) => candidate.id === featureId);
@@ -3746,6 +3750,7 @@ export class StorageService {
         role,
         content,
         createdAt: nowIso(),
+        ...(modelId ? { modelId } : {}),
         ...(stateApplication ? { stateApplication } : {}),
       });
       story.updatedAt = nowIso();

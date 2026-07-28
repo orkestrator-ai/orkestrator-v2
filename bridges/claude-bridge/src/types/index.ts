@@ -148,6 +148,8 @@ export interface NormalizedMessage {
   content: string;
   parts: NormalizedPart[];
   timestamp: string;
+  /** Model observed on the provider's assistant response. */
+  modelId?: string;
   /**
    * UUID of the record this message occupies in the SDK's persisted transcript.
    *
@@ -262,6 +264,14 @@ export interface SessionState {
   } | undefined>;
   /** Control for the currently executing (or most recently completed) turn. */
   queryControl?: ClaudeQueryControl;
+  /**
+   * Re-evaluate whether the current streaming prompt may close its input.
+   *
+   * A Claude result is not terminal while background agents are live. The
+   * callback is installed only for the active turn and closes stdin once that
+   * turn has a result and no live background task remains.
+   */
+  finishTurnInputIfSettled?: () => void;
   /**
    * Control that owns each live background task.
    *

@@ -94,7 +94,8 @@ export interface NativeToolGroupPart extends NativeBasePart {
 export interface NativeTaskGroupPart extends NativeBasePart {
   type: "task-group";
   task: NativeToolInvocationPart;
-  childTools: NativeToolInvocationPart[];
+  /** All activity emitted by this agent, including reasoning and final text. */
+  childTools: NativeMessagePart[];
 }
 
 export type NativeAgentActivityPart = NativeSubagentPart | NativeTaskGroupPart;
@@ -121,5 +122,7 @@ export interface NativeMessage {
   content: string;
   parts: NativeMessagePart[];
   createdAt: string;
+  /** Provider/backend-observed model that produced this assistant message. */
+  modelId?: string;
   turnId?: string;
 }

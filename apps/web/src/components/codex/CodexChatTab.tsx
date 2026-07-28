@@ -2,6 +2,7 @@ import { createSessionKey } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import {
   clearPersistedVirtuosoState,
   useElapsedTimer,
@@ -98,6 +99,8 @@ interface CodexChatTabProps {
   tabId: string;
   data: CodexNativeData;
   isActive: boolean;
+  /** Whether this pane currently owns document-level shortcuts. */
+  ownsGlobalShortcuts?: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
   initialAgentModel?: string;
@@ -173,6 +176,7 @@ export function CodexChatTab({
   tabId,
   data,
   isActive,
+  ownsGlobalShortcuts = isActive,
   initialPrompt,
   isReviewTab = false,
   initialAgentModel,
@@ -309,6 +313,10 @@ export function CodexChatTab({
   const persistedPreferencesRef = useRef(getPersistedCodexPreferences(config));
 
   const models = useCodexStore((state) => state.models);
+  const resolveModelLabel = useCallback(
+    (modelId: string) => resolveCatalogModelLabel(modelId, models),
+    [models],
+  );
   const setModels = useCodexStore((state) => state.setModels);
   const setSlashCommands = useCodexStore((state) => state.setSlashCommands);
   const setServerStatus = useCodexStore((state) => state.setServerStatus);
@@ -2340,12 +2348,14 @@ export function CodexChatTab({
   return (
     <NativeChatShell
       agentLabel="Codex"
+      isActive={ownsGlobalShortcuts}
       containerId={containerId}
       connectionState={connectionState}
       errorMessage={errorMessage}
       serverLog={serverLog}
       onRetry={handleRetry}
       messages={displayMessages}
+      resolveModelLabel={resolveModelLabel}
       isLoading={session?.isLoading ?? false}
       statusLabel={
         /*

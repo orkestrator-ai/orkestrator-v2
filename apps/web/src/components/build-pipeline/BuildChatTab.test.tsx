@@ -531,6 +531,48 @@ describe("BuildChatTab", () => {
     cleanup();
   });
 
+  test("renders a friendly catalog label for the build assistant's confirmed model", async () => {
+    const catalogModel = {
+      id: "sonnet",
+      resolvedModel: "claude-sonnet-5",
+      name: "Claude Sonnet",
+    };
+    const assistantMessage: ClaudeMessage = {
+      id: "assistant-with-model",
+      role: "assistant",
+      content: "Catalog-attributed build response",
+      parts: [{ type: "text", content: "Catalog-attributed build response" }],
+      timestamp: "2026-07-28T12:00:00.000Z",
+      modelId: "claude-sonnet-5",
+    };
+    seedPipelineWithBuildSession("paused", "idle");
+    seedEnvironment({ workspaceReady: true });
+    seedClaudeSession(false);
+    setClaudeBuildMessages([assistantMessage]);
+    mockGetModels.mockResolvedValue([catalogModel] as any);
+    mockGetSessionMessages.mockResolvedValue([assistantMessage]);
+    useClaudeStore.setState({
+      models: [catalogModel],
+      modelCatalogs: new Map([
+        [
+          ENV_ID,
+          {
+            environmentId: ENV_ID,
+            models: [catalogModel],
+            source: "sdk",
+            fetchedAt: "2026-07-28T12:00:00.000Z",
+            stale: false,
+          },
+        ],
+      ]),
+    });
+
+    render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+    expect(await screen.findByTitle("Claude Sonnet")).toBeTruthy();
+    expect(screen.queryByText("claude-sonnet-5")).toBeNull();
+  });
+
   test.each([
     ["codex", "Codex"],
     ["opencode", "OpenCode"],

@@ -162,12 +162,15 @@ export function MessageShell({
             {showAssistantActionRow ? (
               <div className="mt-1 flex min-h-6 items-center justify-between gap-3 text-[10px] leading-none text-muted-foreground/55">
                 {metadata ? (
-                  <div className="min-w-0 truncate text-left">
-                    <span className="font-medium text-muted-foreground/70">
+                  <div className="flex min-w-0 items-center text-left">
+                    <span
+                      className="min-w-0 truncate font-medium text-muted-foreground/70"
+                      title={authorLabel}
+                    >
                       {authorLabel}
                     </span>
-                    <span className="mx-1.5">·</span>
-                    <span>{metadata}</span>
+                    <span className="mx-1.5 shrink-0">·</span>
+                    <span className="shrink-0 whitespace-nowrap">{metadata}</span>
                   </div>
                 ) : <span />}
                 {actions ? (
@@ -219,7 +222,10 @@ export function MessageErrorAlert({
         <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/20">
           <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
-            <div className="text-sm text-destructive whitespace-pre-wrap break-words">
+            <div
+              data-agent-chat-search-content="true"
+              className="text-sm text-destructive whitespace-pre-wrap break-words"
+            >
               {content}
             </div>
             {details ? (

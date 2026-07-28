@@ -9,7 +9,10 @@ import {
   type CodexInteraction,
 } from "@/lib/codex-client";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
-import { useCodexStore } from "./codexStore";
+import {
+  CODEX_UNCONFIRMED_DISPATCH_ERROR,
+  useCodexStore,
+} from "./codexStore";
 import {
   codexInteractionDraftKey,
   usePromptDraftStore,
@@ -195,6 +198,115 @@ describe("codexStore message helpers", () => {
     const messages = useCodexStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
     expect(messages).toHaveLength(1);
     expect(messages[0]?.id).toBe("server-2");
+  });
+
+  test("settles an unconfirmed dispatch as confirmed when the transcript echoes it", () => {
+    const store = useCodexStore.getState();
+    const optimistic = createOptimisticNativeMessage(
+      "optimistic-confirmed",
+      "Run the checks",
+    );
+    store.addMessage(SESSION_KEY, optimistic);
+    store.setUnconfirmedDispatch(SESSION_KEY, {
+      userMessageId: optimistic.id,
+      fingerprint: "fingerprint-confirmed",
+      requestId: "request-confirmed",
+    });
+    store.setMessages(SESSION_KEY, [{
+      id: "server-confirmed",
+      role: "user",
+      content: "Run the checks",
+      parts: [{ type: "text", content: "Run the checks" }],
+      createdAt: optimistic.createdAt,
+    }]);
+
+    expect(store.settleUnconfirmedDispatch(SESSION_KEY)).toBe("confirmed");
+    expect(useCodexStore.getState().unconfirmedDispatches.has(SESSION_KEY)).toBe(false);
+    expect(
+      useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.map(
+        (message) => message.id,
+      ),
+    ).toEqual(["server-confirmed"]);
+  });
+
+  test("does not treat an unrelated transcript catch-up as proof of delivery", () => {
+    const store = useCodexStore.getState();
+    const existing = {
+      id: "server-existing",
+      role: "assistant" as const,
+      content: "Earlier response",
+      parts: [{ type: "text" as const, content: "Earlier response" }],
+      createdAt: "2026-04-15T10:00:00.000Z",
+    };
+    const optimistic = createOptimisticNativeMessage(
+      "optimistic-response",
+      "Run the checks",
+    );
+    store.setMessages(SESSION_KEY, [existing]);
+    store.addMessage(SESSION_KEY, optimistic);
+    store.setUnconfirmedDispatch(SESSION_KEY, {
+      userMessageId: optimistic.id,
+      fingerprint: "fingerprint-response",
+      requestId: "request-response",
+    });
+    store.setMessages(SESSION_KEY, [
+      existing,
+      {
+        id: "server-new-response",
+        role: "assistant",
+        content: "Checks passed",
+        parts: [{ type: "text", content: "Checks passed" }],
+        createdAt: "2026-04-15T10:01:00.000Z",
+      },
+    ]);
+
+    expect(store.settleUnconfirmedDispatch(SESSION_KEY)).toBe("retryable");
+    const state = useCodexStore.getState();
+    expect(state.unconfirmedDispatches.get(SESSION_KEY)).toEqual({
+      userMessageId: optimistic.id,
+      fingerprint: "fingerprint-response",
+      requestId: "request-response",
+      retryable: true,
+    });
+    expect(state.sessions.get(SESSION_KEY)?.messages.map((message) => message.id))
+      .toEqual(["server-existing", "server-new-response"]);
+  });
+
+  test("turns an unmatched unconfirmed dispatch into a durable safe retry", () => {
+    const store = useCodexStore.getState();
+    const optimistic = createOptimisticNativeMessage(
+      "optimistic-retryable",
+      "Run the checks",
+    );
+    store.addMessage(SESSION_KEY, optimistic);
+    store.setUnconfirmedDispatch(SESSION_KEY, {
+      userMessageId: optimistic.id,
+      fingerprint: "fingerprint-retryable",
+      requestId: "request-retryable",
+    });
+    store.setMessages(SESSION_KEY, []);
+
+    expect(store.settleUnconfirmedDispatch(SESSION_KEY)).toBe("retryable");
+    expect(store.settleUnconfirmedDispatch(SESSION_KEY)).toBe("retryable");
+    expect(
+      useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+        (message) => message.id === optimistic.id,
+      ),
+    ).toBe(false);
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.error)
+      .toBe(CODEX_UNCONFIRMED_DISPATCH_ERROR);
+    expect(useCodexStore.getState().unconfirmedDispatches.get(SESSION_KEY))
+      .toEqual({
+        userMessageId: optimistic.id,
+        fingerprint: "fingerprint-retryable",
+        requestId: "request-retryable",
+        retryable: true,
+      });
+  });
+
+  test("reports no unconfirmed dispatch when there is nothing to settle", () => {
+    expect(useCodexStore.getState().settleUnconfirmedDispatch(SESSION_KEY))
+      .toBe("none");
   });
 
   test("preserves timer metadata across loading transitions", () => {
@@ -470,6 +582,16 @@ describe("codexStore cleanup and queue helpers", () => {
     store.setSelectedReasoningEffort(sessionKeyA, "high");
     store.setSessionPhase(sessionKeyA, "recovering");
     store.setSessionPhase(sessionKeyB, "running");
+    store.setUnconfirmedDispatch(sessionKeyA, {
+      userMessageId: "message-a",
+      fingerprint: "fingerprint-a",
+      requestId: "request-a",
+    });
+    store.setUnconfirmedDispatch(sessionKeyB, {
+      userMessageId: "message-b",
+      fingerprint: "fingerprint-b",
+      requestId: "request-b",
+    });
     store.setDraftText(sessionKeyA, "draft");
     store.addAttachment(sessionKeyA, {
       id: "att-a",
@@ -500,6 +622,10 @@ describe("codexStore cleanup and queue helpers", () => {
     expect(useCodexStore.getState().selectedModel.get(sessionKeyB)).toBe("gpt-4");
     expect(useCodexStore.getState().sessionPhase.get(sessionKeyA)).toBeUndefined();
     expect(useCodexStore.getState().sessionPhase.get(sessionKeyB)).toBe("running");
+    expect(useCodexStore.getState().unconfirmedDispatches.get(sessionKeyA))
+      .toBeUndefined();
+    expect(useCodexStore.getState().unconfirmedDispatches.get(sessionKeyB))
+      .toMatchObject({ requestId: "request-b" });
     expect(useCodexStore.getState().slashCommands.get("env-1")).toBeUndefined();
     expect(useCodexStore.getState().slashCommands.get("env-2")).toEqual([
       { name: "/keep", source: "builtin" },

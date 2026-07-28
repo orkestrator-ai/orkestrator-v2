@@ -642,24 +642,18 @@ export function CodexChatTab({
   }, [sessionKey, session?.sessionId]);
 
   /**
-   * Settles an unconfirmed dispatch against an authoritative idle session.
+   * Settles an unconfirmed dispatch against an authoritative terminal session.
    *
-   * Call only once the transcript has been refreshed from the bridge: if the
-   * optimistic message survived that refresh, the server never recorded the
-   * prompt, so it must be withdrawn and offered for retry instead of sitting in
-   * the transcript as if Codex had seen it.
+   * Call only once the transcript has been refreshed from the bridge. A user
+   * echo proves delivery; otherwise the optimistic prompt is withdrawn and its
+   * idempotency key is retained for a safe retry.
    */
   const resolveUnconfirmedDispatch = useCallback(() => {
     const store = useCodexStore.getState();
     const pending = store.unconfirmedDispatches.get(sessionKey);
     if (!pending) return;
-    store.clearUnconfirmedDispatch(sessionKey);
-
-    const current = store.sessions.get(sessionKey);
-    const stillPresent = current?.messages.some(
-      (message) => message.id === pending.userMessageId,
-    ) === true;
-    if (!stillPresent) {
+    const resolution = store.settleUnconfirmedDispatch(sessionKey);
+    if (resolution === "confirmed") {
       // The bridge echoed the prompt, so the dispatch did land and its key is
       // spent.
       retryablePromptRef.current = null;
@@ -673,22 +667,16 @@ export function CodexChatTab({
       return;
     }
 
+    if (resolution !== "retryable") return;
     retryablePromptRef.current = {
       fingerprint: pending.fingerprint,
       requestId: pending.requestId,
     };
-    removeMessage(sessionKey, pending.userMessageId);
-    setSessionError(
-      sessionKey,
-      "Could not confirm whether Codex received the prompt. You can send it again safely.",
-    );
   }, [
     clearTabInitialPrompt,
     environmentId,
     initialPromptRequestId,
-    removeMessage,
     sessionKey,
-    setSessionError,
     tabId,
   ]);
 
@@ -708,11 +696,16 @@ export function CodexChatTab({
           name,
         })),
       });
+      const durableRetry = useCodexStore
+        .getState()
+        .unconfirmedDispatches.get(sessionKey);
       const requestId =
         logicalRequestId
         ?? (retryablePromptRef.current?.fingerprint === fingerprint
           ? retryablePromptRef.current.requestId
-          : createUuid());
+          : durableRetry?.retryable && durableRetry.fingerprint === fingerprint
+            ? durableRetry.requestId
+            : createUuid());
       const clearMatchingUnconfirmedDispatch = () => {
         const store = useCodexStore.getState();
         if (store.unconfirmedDispatches.get(sessionKey)?.requestId === requestId) {
@@ -820,15 +813,27 @@ export function CodexChatTab({
         } else if (reconciliation === "unavailable") {
           // Keep the lock. The running turn remains authoritative until status or
           // an SSE terminal event proves otherwise.
-          setSessionError(
-            sessionKey,
-            "Lost connection while sending the prompt. Reconnecting to Codex…",
-          );
+          if (!reconciledSession?.error) {
+            setSessionError(
+              sessionKey,
+              "Lost connection while sending the prompt. Reconnecting to Codex…",
+            );
+          }
           return "unknown";
         } else if (
           reconciliation === "applied"
           && reconciledSession?.isLoading !== true
         ) {
+          const reconciledDispatch = useCodexStore
+            .getState()
+            .unconfirmedDispatches.get(sessionKey);
+          if (reconciledDispatch?.retryable) {
+            retryablePromptRef.current = {
+              fingerprint: reconciledDispatch.fingerprint,
+              requestId: reconciledDispatch.requestId,
+            };
+            return "rejected";
+          }
           setSessionPhase(sessionKey, undefined);
           if (
             retryablePromptRef.current?.fingerprint === fingerprint
@@ -862,9 +867,9 @@ export function CodexChatTab({
        * bridge's dispatch journal remembers a terminal record for 24 hours. A user
        * re-sending short text ("yes") would then hit the `already-processed` branch
        * below forever instead of running a turn.
-       */
+      */
       retryablePromptRef.current = null;
-      clearMatchingUnconfirmedDispatch();
+      useCodexStore.getState().clearUnconfirmedDispatch(sessionKey);
 
       if (sent.status === "processing" && sent.duplicate) {
         /**
@@ -2045,31 +2050,76 @@ export function CodexChatTab({
     );
 
     if (status.status === "idle") {
-      setSessionLoading(sessionKey, false);
-      setSessionError(sessionKey, undefined);
-      const refreshed = await refreshMessages(client, session.sessionId, {
-        throwOnError: options?.throwOnError,
-        shouldApply,
-      });
+      const hasUnconfirmedDispatch =
+        useCodexStore.getState().unconfirmedDispatches.has(sessionKey);
+      if (!hasUnconfirmedDispatch) {
+        // Apply an ordinary terminal snapshot before awaiting transcript I/O.
+        // A new dispatch can start while that read is in flight, and a delayed
+        // completion must not clear the newer dispatch's error or loading state.
+        setSessionLoading(sessionKey, false);
+        setSessionError(sessionKey, undefined);
+      }
+      let refreshed: boolean;
+      try {
+        refreshed = await refreshMessages(client, session.sessionId, {
+          throwOnError: hasUnconfirmedDispatch || options?.throwOnError,
+          shouldApply,
+        });
+      } catch (error) {
+        if (options?.throwOnError) throw error;
+        console.error(
+          "[CodexChatTab] Failed to refresh terminal transcript:",
+          error,
+        );
+        return "unavailable";
+      }
+      if (!shouldApply()) return "stale";
+      if (!refreshed) return "stale";
+      if (hasUnconfirmedDispatch) {
+        // Ambiguous dispatches need the fresh transcript before they can safely
+        // unlock or expose a same-key retry.
+        setSessionLoading(sessionKey, false);
+        setSessionError(sessionKey, undefined);
+      }
       // Authoritative idle plus a fresh transcript is exactly what an earlier
       // unresolved dispatch was waiting for. A superseded refresh is not proof:
       // resolving from whatever transcript happens to be in the store can
       // classify a landed prompt as missing while a newer refresh is applying
       // its authoritative echo.
-      if (!shouldApply() || !refreshed) return "stale";
       resolveUnconfirmedDispatch();
       return "applied";
     }
 
     if (status.status === "error") {
       const error = status.error?.trim() || "Codex session failed";
-      setSessionLoading(sessionKey, false);
       setSessionError(sessionKey, error);
       setErrorMessage(error);
-      await refreshMessages(client, session.sessionId, {
-        throwOnError: options?.throwOnError,
-        shouldApply,
-      });
+      const hasUnconfirmedDispatch =
+        useCodexStore.getState().unconfirmedDispatches.has(sessionKey);
+      let refreshed: boolean;
+      try {
+        refreshed = await refreshMessages(client, session.sessionId, {
+          // An empty fallback transcript is not evidence that an ambiguous
+          // dispatch missed the server. Preserve loading so the app-level poller
+          // can retry when this authoritative read fails.
+          throwOnError: hasUnconfirmedDispatch || options?.throwOnError,
+          shouldApply,
+        });
+      } catch (refreshError) {
+        if (options?.throwOnError) throw refreshError;
+        console.error(
+          "[CodexChatTab] Failed to refresh terminal transcript:",
+          refreshError,
+        );
+        return "unavailable";
+      }
+      if (!shouldApply()) return "stale";
+      if (refreshed) resolveUnconfirmedDispatch();
+      if (!refreshed) return "stale";
+      setSessionLoading(sessionKey, false);
+      // Safe-retry settlement writes its own explanatory error. The actual
+      // terminal engine error remains the primary failure shown to the user.
+      setSessionError(sessionKey, error);
       return "applied";
     }
 
@@ -2301,22 +2351,35 @@ export function CodexChatTab({
             }
 
             if (event.type === "session.idle") {
-              // The turn this session was running has finished, so any idempotency
-              // key held for an ambiguous earlier dispatch is spent: reusing it
-              // would make the bridge answer `already-processed` for a genuinely
-              // new prompt.
-              retryablePromptRef.current = null;
+              const hasUnconfirmedDispatch =
+                useCodexStore.getState().unconfirmedDispatches.has(sessionKey);
               setSessionPhase(sessionKey, undefined);
-              setSessionLoading(sessionKey, false);
-              setSessionError(sessionKey, undefined);
+              if (!hasUnconfirmedDispatch) {
+                setSessionLoading(sessionKey, false);
+                setSessionError(sessionKey, undefined);
+              }
               const title = event.data?.title;
               if (typeof title === "string" && title.trim().length > 0) {
                 setSessionTitle(sessionKey, title);
               }
-              await refreshMessages(client, session.sessionId);
+              const refreshed = await refreshMessages(
+                client,
+                session.sessionId,
+                { throwOnError: hasUnconfirmedDispatch },
+              );
+              if (hasUnconfirmedDispatch && refreshed) {
+                setSessionLoading(sessionKey, false);
+                setSessionError(sessionKey, undefined);
+              }
               // The transcript is now authoritative for this idle turn, so an
               // earlier unconfirmed dispatch can finally be settled.
-              resolveUnconfirmedDispatch();
+              if (refreshed) {
+                resolveUnconfirmedDispatch();
+              }
+              if (!hasUnconfirmedDispatch && refreshed) {
+                // This completed turn spends any ordinary local retry key.
+                retryablePromptRef.current = null;
+              }
               continue;
             }
 
@@ -2345,10 +2408,23 @@ export function CodexChatTab({
                 typeof event.data?.error === "string"
                   ? event.data.error
                   : "Codex session failed";
+              const hasUnconfirmedDispatch =
+                useCodexStore.getState().unconfirmedDispatches.has(sessionKey);
               setSessionPhase(sessionKey, undefined);
-              setSessionLoading(sessionKey, false);
               setSessionError(sessionKey, error);
               setErrorMessage(error);
+              const refreshed = await refreshMessages(
+                client,
+                session.sessionId,
+                { throwOnError: hasUnconfirmedDispatch },
+              );
+              if (refreshed) resolveUnconfirmedDispatch();
+              if (refreshed) {
+                setSessionLoading(sessionKey, false);
+              }
+              // Preserve the server's terminal error over the safe-retry copy
+              // written when the authoritative transcript has no user echo.
+              setSessionError(sessionKey, error);
             }
           }
         } catch (error) {

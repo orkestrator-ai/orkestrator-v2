@@ -36,6 +36,7 @@ import * as realGitHubCompletionMonitor from "@/components/github/GitHubPipeline
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realButton from "@/components/ui/button";
 import * as realPrMonitorService from "@/hooks/usePrMonitorService";
+import * as realCodexBackgroundSync from "@/hooks/useCodexBackgroundSync";
 import * as realGlobalActivityMonitor from "@/hooks/useGlobalActivityMonitor";
 import * as realHooks from "@/hooks";
 import * as realBackend from "@/lib/backend";
@@ -58,6 +59,7 @@ const realGitHubCompletionMonitorSnapshot = { ...realGitHubCompletionMonitor };
 const realAlertDialogSnapshot = { ...realAlertDialog };
 const realButtonSnapshot = { ...realButton };
 const realPrMonitorServiceSnapshot = { ...realPrMonitorService };
+const realCodexBackgroundSyncSnapshot = { ...realCodexBackgroundSync };
 const realGlobalActivityMonitorSnapshot = { ...realGlobalActivityMonitor };
 const realHooksSnapshot = { ...realHooks };
 const realBackendSnapshot = { ...realBackend };
@@ -71,6 +73,7 @@ const mockStartEnvironment = mock(async () => {});
 const mockCreateEnvironment = mock(async () => makeEnvironment("created", "project-1"));
 const mockUpdateEnvironment = mock(() => {});
 const mockUseEnvironmentLifecycleService = mock(() => {});
+const mockUseCodexBackgroundSync = mock(() => {});
 const mockExit = mock(async () => {});
 const mockLinearMonitorRender = mock(() => undefined);
 const mockGitHubMonitorRender = mock(() => undefined);
@@ -219,6 +222,10 @@ mock.module("@/components/ui/button", () => ({
 
 mock.module("@/hooks/usePrMonitorService", () => ({
   usePrMonitorService: () => {},
+}));
+
+mock.module("@/hooks/useCodexBackgroundSync", () => ({
+  useCodexBackgroundSync: mockUseCodexBackgroundSync,
 }));
 
 mock.module("@/hooks/useGlobalActivityMonitor", () => ({
@@ -454,6 +461,7 @@ function resetAppMocks() {
   mockCreateEnvironment.mockImplementation(async () => makeEnvironment("created", "project-1"));
   mockUpdateEnvironment.mockClear();
   mockUseEnvironmentLifecycleService.mockClear();
+  mockUseCodexBackgroundSync.mockClear();
   projectLauncherProps = null;
   mockExit.mockClear();
   mockCheckDocker.mockClear();
@@ -519,6 +527,7 @@ afterAll(() => {
   mock.module("@/components/ui/alert-dialog", () => realAlertDialogSnapshot);
   mock.module("@/components/ui/button", () => realButtonSnapshot);
   mock.module("@/hooks/usePrMonitorService", () => realPrMonitorServiceSnapshot);
+  mock.module("@/hooks/useCodexBackgroundSync", () => realCodexBackgroundSyncSnapshot);
   mock.module("@/hooks/useGlobalActivityMonitor", () => realGlobalActivityMonitorSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
@@ -559,6 +568,18 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     expect(mockUseEnvironmentLifecycleService).toHaveBeenCalledTimes(1);
+  });
+
+  test("mounts the Codex background synchronizer exactly once at the app root", () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+
+    render(<App />);
+
+    expect(mockUseCodexBackgroundSync).toHaveBeenCalledTimes(1);
   });
 
   test("keeps off-screen setup-running environments mounted in hidden background terminals", async () => {

@@ -1179,9 +1179,8 @@ export function useGlobalActivityMonitor(): void {
     ],
   );
   // ── Native Codex mode: derive activity from session store ──────────
-  // Codex SSE streams close on unmount, so state may go stale for background
-  // environments. The last-known state is preserved until the component
-  // remounts and reconnects.
+  // The app-level Codex background synchronizer keeps these store snapshots
+  // authoritative even when an environment's own SSE component is unmounted.
   useEffect(
     () =>
       subscribeNativeActivity(
@@ -1192,11 +1191,14 @@ export function useGlobalActivityMonitor(): void {
             state.sessions,
             state.clients,
             state.pendingApprovals,
+            state.pendingInteractions,
           ],
-          // Approvals are keyed by sessionKey rather than looked up by session
-          // id, so this reads the key rather than the session.
+          // Approvals and interactions are keyed by sessionKey rather than
+          // looked up by session id, so this reads the key rather than the
+          // session.
           isWaiting: (state, sessionKey) =>
-            (state.pendingApprovals.get(sessionKey)?.length ?? 0) > 0,
+            (state.pendingApprovals.get(sessionKey)?.length ?? 0) > 0
+            || (state.pendingInteractions.get(sessionKey)?.length ?? 0) > 0,
         },
         activitySources,
         setContainerState,

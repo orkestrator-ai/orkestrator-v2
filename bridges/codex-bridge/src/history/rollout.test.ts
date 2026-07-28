@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   buildTranscriptCatalog,
@@ -10,9 +10,12 @@ import {
   createSharedTranscriptMetaLoader,
   extractPersistedMessageText,
   findTranscriptPath,
+  getCodexHomeDir,
   getPersistedSessionMeta,
   getSessionMetaFromTranscriptPath,
   hydrateMessagesFromPersistedSession,
+  getWorkingDirectory,
+  listTranscriptPaths,
   listPersistedSessionsForCwd,
   mergePersistedSessionMeta,
   readTranscriptLines,
@@ -75,6 +78,49 @@ afterEach(async () => {
 });
 
 describe("rollout public helpers", () => {
+  test("resolves Codex home and working-directory overrides with fallbacks", () => {
+    const previousHome = process.env.CODEX_HOME;
+    const previousCwd = process.env.CWD;
+    try {
+      process.env.CODEX_HOME = "/tmp/codex-home-override";
+      process.env.CWD = "/tmp/codex-cwd-override";
+      expect(getCodexHomeDir()).toBe("/tmp/codex-home-override");
+      expect(getWorkingDirectory()).toBe("/tmp/codex-cwd-override");
+      expect(getWorkingDirectory("/tmp/explicit-cwd")).toBe("/tmp/explicit-cwd");
+
+      delete process.env.CODEX_HOME;
+      delete process.env.CWD;
+      expect(getCodexHomeDir()).toBe(join(homedir(), ".codex"));
+      expect(getWorkingDirectory()).toBe(process.cwd());
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+    }
+  });
+
+  test("lists nested active and archived JSONL transcripts only", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-list-"));
+    temporaryDirectories.push(root);
+    const active = join(root, "sessions", "2026", "active.jsonl");
+    const archived = join(root, "archived_sessions", "archived.jsonl");
+    await mkdir(dirname(active), { recursive: true });
+    await mkdir(dirname(archived), { recursive: true });
+    await writeFile(active, "{}\n", "utf8");
+    await writeFile(archived, "{}\n", "utf8");
+    await writeFile(join(root, "sessions", "ignored.txt"), "not a rollout", "utf8");
+
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+    try {
+      expect((await listTranscriptPaths()).sort()).toEqual([active, archived].sort());
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
   test("finds supplied transcript paths without scanning global state", async () => {
     expect(await findTranscriptPath("thread-2", ["/a/thread-1.jsonl", "/b/thread-2.jsonl"]))
       .toBe("/b/thread-2.jsonl");

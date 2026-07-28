@@ -1389,6 +1389,41 @@ describe("session lifecycle", () => {
     expect(h.runtime.getRegistry().getSession(sessionId)?.config.mode).toBe("build");
   });
 
+  test("a rejected model configuration restores the prior confirmed model", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      model: "gpt-accepted-request",
+    });
+    await h.runtime.prompt(sessionId, {
+      prompt: "materialize",
+      requestId: "req-model-config-rollback",
+      attachments: [],
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const context = h.runtime.getRegistry().getThread("thread-1")!;
+    context.modelId = "gpt-accepted-confirmation";
+    h.engine.configureThread = async () => {
+      // Model notifications can race the RPC response. A failed response means
+      // this tentative confirmation must not replace the last accepted model.
+      context.modelId = "gpt-rejected-confirmation";
+      throw new Error("configure rejected");
+    };
+
+    expect(await h.runtime.updateConfig(sessionId, {
+      mode: "build",
+      model: "gpt-rejected-request",
+    })).toBe("unavailable");
+    expect(context.modelId).toBe("gpt-accepted-confirmation");
+    expect(h.runtime.getRegistry().getSession(sessionId)?.config.model)
+      .toBe("gpt-accepted-request");
+  });
+
   test("a running session found only after re-attaching is still refused", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
@@ -3885,6 +3920,166 @@ describe("models", () => {
     const messages = await h.runtime.getMessages(sessionId);
     expect(messages?.find((message) => message.role === "assistant")?.modelId)
       .toBe("gpt-rerouted");
+  });
+
+  test("persists reroutes for inactive sessions across a stale-first restart", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    for (const bridgeSessionId of ["session-active", "session-inactive"]) {
+      await store.upsert(
+        store.toRecord({
+          bridgeSessionId,
+          threadId: "thread-shared-model",
+          cwd: "/tmp/ws",
+          config: { mode: "build" },
+        }),
+      );
+    }
+    const first = await harness({
+      "thread/resume": () => ({
+        thread: threadPayload("thread-shared-model"),
+        model: "gpt-start",
+      }),
+      "turn/start": () => ({ turn: { id: "turn-1" } }),
+    });
+    expect(await first.runtime.getMessages("session-active")).toEqual([]);
+    await first.runtime.prompt("session-active", {
+      prompt: "Persist for both tabs",
+      requestId: "req-shared-reroute",
+      attachments: [],
+    });
+    // session-inactive is restored in the registry but has never attached.
+    expect(
+      first.runtime.getRegistry().getThread("thread-shared-model")?.bridgeSessionIds,
+    ).toEqual(new Set(["session-active"]));
+
+    first.child().notify("model/rerouted", {
+      threadId: "thread-shared-model",
+      turnId: "turn-1",
+      fromModel: "gpt-start",
+      toModel: "gpt-rerouted",
+    });
+    first.child().notify("turn/completed", {
+      threadId: "thread-shared-model",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await first.drain();
+    writeRolloutWithTurns("thread-shared-model", [{
+      turnId: "turn-1",
+      user: "Persist for both tabs",
+      assistant: "Done",
+      model: "gpt-start",
+    }]);
+    await first.runtime.stop();
+
+    expect(
+      (await store.load()).map((record) => [
+        record.bridgeSessionId,
+        record.confirmedModelsByTurn?.["turn-1"],
+      ]).sort(),
+    ).toEqual([
+      ["session-active", "gpt-rerouted"],
+      ["session-inactive", "gpt-rerouted"],
+    ]);
+
+    const restarted = await harness({
+      "thread/resume": () => ({
+        thread: threadPayload("thread-shared-model"),
+        model: "gpt-start",
+      }),
+    });
+    // Reopen the formerly inactive tab first, then join the formerly active one.
+    for (const sessionId of ["session-inactive", "session-active"]) {
+      expect(
+        (await restarted.runtime.getMessages(sessionId))
+          ?.find((message) => message.role === "assistant")?.modelId,
+      ).toBe("gpt-rerouted");
+    }
+  });
+
+  test("a joining overlay updates an already hydrated transcript and every view", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-first",
+        threadId: "thread-overlay-join",
+        cwd: "/tmp/ws",
+        config: { mode: "build" },
+        confirmedModelsByTurn: { "turn-1": "gpt-first-reroute" },
+      }),
+    );
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-second",
+        threadId: "thread-overlay-join",
+        cwd: "/tmp/ws",
+        config: { mode: "build" },
+        confirmedModelsByTurn: { "turn-2": "gpt-second-reroute" },
+      }),
+    );
+    writeRolloutWithTurns("thread-overlay-join", [
+      {
+        turnId: "turn-1",
+        user: "First",
+        assistant: "First answer",
+        model: "gpt-rollout",
+      },
+      {
+        turnId: "turn-2",
+        user: "Second",
+        assistant: "Second answer",
+        model: "gpt-rollout",
+      },
+    ]);
+    const h = await harness({
+      "thread/resume": () => ({
+        thread: threadPayload("thread-overlay-join"),
+      }),
+    });
+
+    const initial = await h.runtime.getMessages("session-first");
+    expect(
+      initial?.find(
+        (message) => message.role === "assistant" && message.turnId === "turn-1",
+      )?.modelId,
+    )
+      .toBe("gpt-first-reroute");
+    expect(
+      initial?.find(
+        (message) => message.role === "assistant" && message.turnId === "turn-2",
+      )?.modelId,
+    )
+      .toBe("gpt-rollout");
+    const revisionBeforeJoin =
+      h.runtime.getStatus("session-first")?.messageRevision ?? 0;
+    h.events.length = 0;
+
+    const joined = await h.runtime.getMessages("session-second");
+    expect(
+      joined?.find(
+        (message) => message.role === "assistant" && message.turnId === "turn-2",
+      )?.modelId,
+    )
+      .toBe("gpt-second-reroute");
+    expect(h.runtime.getStatus("session-first")?.messageRevision)
+      .toBeGreaterThan(revisionBeforeJoin);
+    const recipients = new Set(
+      h.events
+        .filter((event) =>
+          event.type === "message.updated"
+          && (
+            event.data as { message?: { turnId?: string; modelId?: string } }
+          ).message?.turnId === "turn-2"
+        )
+        .map((event) => event.sessionId),
+    );
+    expect(recipients).toEqual(new Set(["session-first", "session-second"]));
+    expect(
+      (await store.load()).every(
+        (record) =>
+          record.confirmedModelsByTurn?.["turn-1"] === "gpt-first-reroute"
+          && record.confirmedModelsByTurn?.["turn-2"] === "gpt-second-reroute",
+      ),
+    ).toBe(true);
   });
 
   test("matches confirmations during active-turn and dispatch race windows", async () => {

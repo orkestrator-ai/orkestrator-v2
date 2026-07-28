@@ -194,6 +194,32 @@ describe("thread lifecycle", () => {
     expect(started.model).toBe("gpt-5.6-terra");
   });
 
+  test("ignores a blank response-envelope model", async () => {
+    const h = harness({
+      "thread/start": () => ({
+        thread: thread("t1", { model: "untrusted-raw-model" }),
+        model: "   ",
+      }),
+    });
+    await h.engine.start();
+
+    expect((await h.engine.startThread({ config: BUILD })).model).toBeUndefined();
+  });
+
+  test("ignores a non-string response-envelope model", async () => {
+    const h = harness({
+      "thread/resume": () => ({
+        thread: thread("t1", { model: "untrusted-raw-model" }),
+        model: 42,
+      }),
+    });
+    await h.engine.start();
+
+    expect(
+      (await h.engine.resumeThread("t1", { config: BUILD })).model,
+    ).toBeUndefined();
+  });
+
   test("thread/start passes explicit policy and clears the service tier", async () => {
     const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
     await h.engine.start();

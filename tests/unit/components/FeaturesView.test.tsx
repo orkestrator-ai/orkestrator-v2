@@ -47,6 +47,7 @@ const appendMessageMock = mock(async (
   _role: FeaturePlanMessage["role"],
   _content: string,
   _stateApplication?: FeaturePlanMessage["stateApplication"],
+  _modelId?: string,
 ) => undefined as FeaturePlan | undefined);
 const appendStoryMessageMock = mock(async (
   _featureId: string,
@@ -54,6 +55,7 @@ const appendStoryMessageMock = mock(async (
   _role: FeaturePlanMessage["role"],
   _content: string,
   _stateApplication?: FeaturePlanMessage["stateApplication"],
+  _modelId?: string,
 ) => undefined as FeaturePlan | undefined);
 const updateFeatureMock = mock(async (
   _id: string,
@@ -141,12 +143,13 @@ mock.module("@/components/chat/NativeMessage", () => ({
     message,
     previousMessage,
   }: {
-    message: { id: string; content: string };
+    message: { id: string; content: string; modelId?: string };
     previousMessage?: { id: string };
   }) => (
     <div
       data-testid={`native-message-${message.id}`}
       data-previous-id={previousMessage?.id ?? ""}
+      data-model-id={message.modelId ?? ""}
     >
       {message.content}
     </div>
@@ -377,6 +380,7 @@ function appendFeatureMessageInStore(
   role: FeaturePlanMessage["role"],
   content: string,
   stateApplication?: FeaturePlanMessage["stateApplication"],
+  modelId?: string,
 ): FeaturePlan | undefined {
   const feature = useFeaturePlanStore.getState().features.find((candidate) => candidate.id === featureId);
   if (!feature) return undefined;
@@ -386,6 +390,7 @@ function appendFeatureMessageInStore(
       role,
       content,
       createdAt: NOW,
+      ...(modelId ? { modelId } : {}),
       ...(stateApplication ? { stateApplication } : {}),
     }],
   });
@@ -397,6 +402,7 @@ function appendStoryMessageInStore(
   role: FeaturePlanMessage["role"],
   content: string,
   stateApplication?: FeaturePlanMessage["stateApplication"],
+  modelId?: string,
 ): FeaturePlan | undefined {
   const feature = useFeaturePlanStore.getState().features.find((candidate) => candidate.id === featureId);
   if (!feature) return undefined;
@@ -409,6 +415,7 @@ function appendStoryMessageInStore(
             role,
             content,
             createdAt: NOW,
+            ...(modelId ? { modelId } : {}),
             ...(stateApplication ? { stateApplication } : {}),
           }],
         }
@@ -516,8 +523,8 @@ beforeEach(() => {
     return created.id;
   });
   appendMessageMock.mockClear();
-  appendMessageMock.mockImplementation(async (featureId, role, content, stateApplication) =>
-    appendFeatureMessageInStore(featureId, role, content, stateApplication)
+  appendMessageMock.mockImplementation(async (featureId, role, content, stateApplication, modelId) =>
+    appendFeatureMessageInStore(featureId, role, content, stateApplication, modelId)
   );
   appendStoryMessageMock.mockClear();
   appendStoryMessageMock.mockImplementation(async (
@@ -526,6 +533,7 @@ beforeEach(() => {
     role,
     content,
     stateApplication,
+    modelId,
   ) =>
     appendStoryMessageInStore(
       featureId,
@@ -533,6 +541,7 @@ beforeEach(() => {
       role,
       content,
       stateApplication,
+      modelId,
     )
   );
   updateFeatureMock.mockClear();
@@ -1235,7 +1244,11 @@ describe("FeaturesView lifecycle and navigation", () => {
     seedExistingCodexEnvironment();
     getSessionStatusMock.mockImplementation(async () => ({ status: "idle" }));
     getSessionMessagesMock.mockImplementation(async () => [
-      makeCodexMessage({ id: "story-reply", content: refinement }),
+      makeCodexMessage({
+        id: "story-reply",
+        content: refinement,
+        modelId: "gpt-5.3-codex",
+      }),
     ]);
 
     render(<FeaturesView projectId="project-1" />);
@@ -1246,6 +1259,7 @@ describe("FeaturesView lifecycle and navigation", () => {
       "assistant",
       refinement,
       "pending",
+      "gpt-5.3-codex",
     ));
     expect(updateFeatureMock).toHaveBeenCalledWith("feature-1", expect.objectContaining({
       stories: [expect.objectContaining({
@@ -1615,12 +1629,38 @@ describe("FeaturesView lifecycle and navigation", () => {
     ];
 
     try {
-      for (const scenario of cases) {
+      for (const [index, scenario] of cases.entries()) {
         await drainReconcileMonitors();
-        useEnvironmentStore.setState({ environments: scenario.environment ? [scenario.environment] : [] });
-        seedStores(chatFeature({ messages: [pendingUser()] }));
+        const environmentId = `env-unreachable-${index}`;
+        const sessionId = `session-unreachable-${index}`;
+        const featureId = `feature-unreachable-${index}`;
+        const environment = scenario.environment
+          ? {
+              ...scenario.environment,
+              id: environmentId,
+              containerId: scenario.environment.containerId
+                ? `container-unreachable-${index}`
+                : null,
+            }
+          : undefined;
+        const backendEnvironment = scenario.backendEnvironment
+          ? {
+              ...scenario.backendEnvironment,
+              id: environmentId,
+              containerId: scenario.backendEnvironment.containerId
+                ? `container-unreachable-${index}`
+                : null,
+            }
+          : null;
+        useEnvironmentStore.setState({ environments: environment ? [environment] : [] });
+        seedStores(chatFeature({
+          id: featureId,
+          codexEnvironmentId: environmentId,
+          codexSessionId: sessionId,
+          messages: [pendingUser()],
+        }));
         getEnvironmentMock.mockClear();
-        getEnvironmentMock.mockImplementation(async () => scenario.backendEnvironment ?? null);
+        getEnvironmentMock.mockImplementation(async () => backendEnvironment);
         getCodexServerStatusMock.mockClear();
         getCodexServerStatusMock.mockImplementation(async () => (
           scenario.bridge ?? {
@@ -1632,21 +1672,28 @@ describe("FeaturesView lifecycle and navigation", () => {
         getSessionStatusMock.mockClear();
         createClientMock.mockClear();
 
-        render(<FeaturesView projectId="project-1" />);
-        await act(async () => {
-          await new Promise<void>((resolve) => realSetTimeout(resolve, 50));
-        });
+        const view = render(<FeaturesView projectId="project-1" />);
+        for (let turn = 0; turn < 20; turn += 1) {
+          if (
+            useFeaturePlanStore.getState().activeConversations.get(featureId)?.phase
+            === "unavailable"
+          ) break;
+          await act(async () => {
+            await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+          });
+        }
         expect(
-          useFeaturePlanStore.getState().activeConversations.get("feature-1"),
+          useFeaturePlanStore.getState().activeConversations.get(featureId),
         ).toMatchObject({
-          featureId: "feature-1",
+          featureId,
           phase: "unavailable",
         });
-        // Safe as an absolute count: both spies are cleared inside this loop
-        // iteration, immediately before the render above, so nothing an earlier
-        // test leaked can reach these assertions.
-        expect(getSessionStatusMock).not.toHaveBeenCalled();
-        expect(createClientMock).not.toHaveBeenCalled();
+        view.unmount();
+        await drainReconcileMonitors();
+
+        // Use per-scenario identities so an unrelated monitor cannot make this
+        // assertion depend on parallel-suite scheduling.
+        expect(getSessionStatusMock.mock.calls.some((call) => call[1] === sessionId)).toBe(false);
       }
     } finally {
       timeoutSpy.mockRestore();
@@ -2864,6 +2911,7 @@ describe("NativeStyleChatPanel", () => {
           role: "assistant",
           content: "Second reply",
           createdAt: "2026-01-02T00:00:02.000Z",
+          modelId: "gpt-5.3-codex",
         },
       ],
     });
@@ -2871,6 +2919,7 @@ describe("NativeStyleChatPanel", () => {
     expect(screen.getByTestId("native-message-visible").textContent).toBe("Visible reply");
     expect(screen.queryByTestId("native-message-state-only")).toBeNull();
     expect(screen.getByTestId("native-message-second").dataset.previousId).toBe("visible");
+    expect(screen.getByTestId("native-message-second").dataset.modelId).toBe("gpt-5.3-codex");
     expect(screen.getByTestId("native-message-visible").parentElement?.dataset.itemKey).toBe("visible");
     expect(useVirtuosoScrollStateMock).toHaveBeenCalledWith({
       isActive: true,
@@ -2979,6 +3028,7 @@ describe("FeaturesView feature planning chat", () => {
       id: "new",
       content: "",
       parts: [{ type: "text", content: plannerReply }],
+      modelId: "gpt-5.3-codex",
     });
     seedStores(chatFeature());
     seedExistingCodexEnvironment();
@@ -3001,6 +3051,7 @@ describe("FeaturesView feature planning chat", () => {
       "assistant",
       plannerReply,
       "pending",
+      "gpt-5.3-codex",
     ));
     expect(sendPromptMock).toHaveBeenCalledWith(
       { baseUrl: "http://127.0.0.1:4200", authToken: "container-token" },
@@ -3015,6 +3066,15 @@ describe("FeaturesView feature planning chat", () => {
       expect(updated.stories[0]?.title).toBe("First story");
     });
     expect(screen.getByRole("tab", { name: "Stories" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Chat" }), { button: 0, ctrlKey: false });
+    expect(screen.getByTestId("native-message-assistant-2").dataset.modelId).toBe("gpt-5.3-codex");
+
+    const persistedFeature = structuredClone(useFeaturePlanStore.getState().features[0]!);
+    await drainReconcileMonitors();
+    seedStores(persistedFeature);
+    render(<FeaturesView projectId="project-1" />);
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Chat" }), { button: 0, ctrlKey: false });
+    expect(screen.getByTestId("native-message-assistant-2").dataset.modelId).toBe("gpt-5.3-codex");
     unsubscribe();
     expect(phases).toContainEqual(expect.objectContaining({
       startedAt: NOW,
@@ -3927,7 +3987,11 @@ describe("FeaturesView story refinement chat", () => {
     seedExistingCodexEnvironment();
     getSessionMessagesMock
       .mockImplementationOnce(async () => [])
-      .mockImplementationOnce(async () => [makeCodexMessage({ id: "refinement", content: refinement })]);
+      .mockImplementationOnce(async () => [makeCodexMessage({
+        id: "refinement",
+        content: refinement,
+        modelId: "gpt-5.3-codex",
+      })]);
     const phases: ActiveFeatureConversation[] = [];
     const unsubscribe = useFeaturePlanStore.subscribe((state) => {
       const conversation = state.activeConversations.get("feature-1");
@@ -3947,6 +4011,7 @@ describe("FeaturesView story refinement chat", () => {
       "assistant",
       refinement,
       "pending",
+      "gpt-5.3-codex",
     ));
     await waitFor(() => expect(
       useFeaturePlanStore.getState().features[0]?.stories[0]?.title

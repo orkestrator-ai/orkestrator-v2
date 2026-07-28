@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { isRootAssistantRecord, normalizeBackendModelId } from "./model-id";
+import {
+  isRootAssistantRecord,
+  normalizeBackendModelId,
+} from "@orkestrator/protocol/model-id";
+
+test("the model helpers are available through the package export", async () => {
+  const exported = await import("@orkestrator/protocol/model-id");
+  expect(exported.normalizeBackendModelId).toBe(normalizeBackendModelId);
+  expect(exported.isRootAssistantRecord).toBe(isRootAssistantRecord);
+});
 
 describe("normalizeBackendModelId", () => {
   test("trims real model ids", () => {
@@ -15,10 +24,21 @@ describe("normalizeBackendModelId", () => {
 });
 
 describe("isRootAssistantRecord", () => {
-  test("accepts root records and rejects subagent or sidechain records", () => {
+  test("accepts only absent or blank parent ids on the main chain", () => {
+    expect(isRootAssistantRecord(undefined)).toBe(true);
     expect(isRootAssistantRecord(null)).toBe(true);
     expect(isRootAssistantRecord("  ")).toBe(true);
+    expect(isRootAssistantRecord(null, false)).toBe(true);
     expect(isRootAssistantRecord("tool-1")).toBe(false);
     expect(isRootAssistantRecord(null, true)).toBe(false);
+  });
+
+  test("fails closed for malformed parent and sidechain metadata", () => {
+    expect(isRootAssistantRecord(42)).toBe(false);
+    expect(isRootAssistantRecord({})).toBe(false);
+    expect(isRootAssistantRecord([])).toBe(false);
+    expect(isRootAssistantRecord(null, "true")).toBe(false);
+    expect(isRootAssistantRecord(null, null)).toBe(false);
+    expect(isRootAssistantRecord(null, 0)).toBe(false);
   });
 });

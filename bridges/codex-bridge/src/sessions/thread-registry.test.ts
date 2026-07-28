@@ -95,6 +95,41 @@ describe("lazy thread creation", () => {
     });
   });
 
+  test("a joining session cannot overwrite a canonical turn confirmation", () => {
+    const registry = makeRegistry();
+    registry.restoreSession({
+      id: "current",
+      threadId: "thread-1",
+      config: CONFIG,
+      confirmedModelsByTurn: { "turn-1": "gpt-rerouted" },
+      lastAccessed: 1,
+    });
+    registry.restoreSession({
+      id: "stale",
+      threadId: "thread-1",
+      config: CONFIG,
+      confirmedModelsByTurn: {
+        "turn-1": "gpt-before-reroute",
+        "turn-2": "gpt-second-turn",
+      },
+      lastAccessed: 1,
+    });
+
+    const context = registry.attach("current", "thread-1", {
+      engineHandle: "thread-1",
+    });
+    registry.attach("stale", "thread-1", { engineHandle: "thread-1" });
+
+    expect(Object.fromEntries(context.confirmedModelsByTurn)).toEqual({
+      "turn-1": "gpt-rerouted",
+      "turn-2": "gpt-second-turn",
+    });
+    expect(registry.getSession("stale")?.confirmedModelsByTurn).toEqual({
+      "turn-1": "gpt-rerouted",
+      "turn-2": "gpt-second-turn",
+    });
+  });
+
   test("a session created with a thread id attaches immediately", () => {
     const registry = makeRegistry();
     createSession(registry, "s1", "thread-1");
@@ -380,6 +415,24 @@ describe("same thread in multiple tabs", () => {
       "tab-a",
       "tab-b",
     ]);
+  });
+
+  test("bound session lookup includes restored tabs that are not attached", () => {
+    const registry = makeRegistry();
+    createSession(registry, "tab-a");
+    registry.restoreSession({
+      id: "tab-b",
+      threadId: "thread-1",
+      config: CONFIG,
+      lastAccessed: 1,
+    });
+    registry.attach("tab-a", "thread-1", { engineHandle: "thread-1" });
+
+    expect(registry.sessionsForThread("thread-1").map((session) => session.id))
+      .toEqual(["tab-a"]);
+    expect(
+      registry.boundSessionsForThread("thread-1").map((session) => session.id).sort(),
+    ).toEqual(["tab-a", "tab-b"]);
   });
 
   test("a second tab cannot start an overlapping turn on the same thread", () => {

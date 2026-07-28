@@ -88,6 +88,25 @@ describe("NativeMessage assistant attribution", () => {
     expect(screen.queryByText("anthropic/claude-sonnet-4")).toBeNull();
   });
 
+  test.each(["", "   \n"])(
+    "falls back to the confirmed model id when the resolver returns an unusable label %#",
+    (resolvedLabel) => {
+      render(
+        <NativeMessage
+          message={makeMessage(
+            [{ type: "text", content: "Done" }],
+            { modelId: "anthropic/claude-sonnet-4" },
+          )}
+          assistantLabel="OpenCode"
+          resolveModelLabel={() => resolvedLabel}
+        />,
+      );
+
+      expect(screen.getByText("anthropic/claude-sonnet-4")).toBeTruthy();
+      expect(screen.queryByText("OpenCode")).toBeNull();
+    },
+  );
+
   test("always attributes user messages to You even if they carry a model id", () => {
     render(
       <NativeMessage

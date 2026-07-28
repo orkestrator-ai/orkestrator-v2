@@ -767,6 +767,88 @@ describe("sendPrompt", () => {
     }
   });
 
+  test("publishes model attribution when only the final assistant record supplies it", async () => {
+    const session = createSession("late model metadata");
+    track(session.id);
+
+    const { events, stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Resolve the model later");
+      const call = await nextQueryCall();
+
+      call.push({
+        type: "stream_event",
+        uuid: "late-model-start",
+        session_id: "sdk-session-late-model",
+        parent_tool_use_id: null,
+        event: {
+          type: "message_start",
+          message: { id: "late-model-assistant" },
+        },
+      });
+      call.push({
+        type: "stream_event",
+        uuid: "late-model-assistant",
+        session_id: "sdk-session-late-model",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+      });
+      call.push({
+        type: "stream_event",
+        uuid: "late-model-assistant",
+        session_id: "sdk-session-late-model",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Hello" },
+        },
+      });
+
+      await waitFor(() =>
+        getSessionMessages(session.id).some(
+          (message) => message.role === "assistant" && message.content === "Hello",
+        ),
+      );
+      expect(
+        getSessionMessages(session.id).find((message) => message.role === "assistant")?.modelId,
+      ).toBeUndefined();
+
+      call.push({
+        type: "assistant",
+        uuid: "late-model-assistant",
+        parent_tool_use_id: null,
+        message: {
+          id: "late-model-assistant",
+          model: "claude-sonnet-5",
+          content: [{ type: "text", text: "Hello final" }],
+        },
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+
+      const assistant = getSessionMessages(session.id).find(
+        (message) => message.role === "assistant",
+      );
+      expect(assistant?.content).toBe("Hello final");
+      expect(assistant?.modelId).toBe("claude-sonnet-5");
+      expect(events.some((event) => {
+        const published = (
+          event.data as { message?: { modelId?: string } } | undefined
+        )?.message;
+        return event.type === "message.updated"
+          && published?.modelId === "claude-sonnet-5";
+      })).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
   test.each(["", "   ", "<synthetic>"])(
     "never attributes an unusable live model id %#",
     async (model) => {

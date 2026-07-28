@@ -789,6 +789,12 @@ function asFeaturePlanStateApplication(
   throw new Error("Expected stateApplication to be pending, applied, or superseded");
 }
 
+function asFeaturePlanModelId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string" && value.trim()) return value.trim();
+  throw new Error("Expected modelId to be a non-empty string");
+}
+
 function asPortMappings(value: unknown): PortMapping[] | undefined {
   return Array.isArray(value) ? value as PortMapping[] : undefined;
 }
@@ -6585,21 +6591,23 @@ export function createCommandRegistry(
   register("get_feature_plans", ({ projectId }, { storage }) => storage.getFeaturePlans(asString(projectId, "projectId")));
   register("create_feature_plan", ({ projectId }, { storage }) => storage.createFeaturePlan(asString(projectId, "projectId")));
   register("update_feature_plan", ({ featureId, updates }, { storage }) => storage.updateFeaturePlan(asString(featureId, "featureId"), parseUpdateObject(updates) as never));
-  register("append_feature_plan_message", ({ featureId, role, content, stateApplication }, { storage }) =>
+  register("append_feature_plan_message", ({ featureId, role, content, stateApplication, modelId }, { storage }) =>
     storage.appendFeaturePlanMessage(
       asString(featureId, "featureId"),
       asFeaturePlanRole(role),
       asString(content, "content"),
       asFeaturePlanStateApplication(stateApplication),
+      asFeaturePlanModelId(modelId),
     ),
   );
-  register("append_feature_story_message", ({ featureId, storyId, role, content, stateApplication }, { storage }) =>
+  register("append_feature_story_message", ({ featureId, storyId, role, content, stateApplication, modelId }, { storage }) =>
     storage.appendFeatureStoryMessage(
       asString(featureId, "featureId"),
       asString(storyId, "storyId"),
       asFeaturePlanRole(role),
       asString(content, "content"),
       asFeaturePlanStateApplication(stateApplication),
+      asFeaturePlanModelId(modelId),
     ),
   );
 

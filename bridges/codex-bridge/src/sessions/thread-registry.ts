@@ -356,7 +356,14 @@ export class ThreadRegistry {
       for (const [turnId, modelId] of Object.entries(
         session?.confirmedModelsByTurn ?? {},
       )) {
-        context.confirmedModelsByTurn.set(turnId, modelId);
+        // The loaded context is canonical. A restored tab can carry an older
+        // copy of the same turn overlay, so joining it must never overwrite a
+        // confirmation already observed by the live thread. Non-conflicting
+        // entries are still imported because the joining record may be the only
+        // durable copy after a restart.
+        if (!context.confirmedModelsByTurn.has(turnId)) {
+          context.confirmedModelsByTurn.set(turnId, modelId);
+        }
       }
     }
 
@@ -500,6 +507,19 @@ export class ThreadRegistry {
     return [...context.bridgeSessionIds]
       .map((id) => this.sessions.get(id))
       .filter((session): session is BridgeSession => session !== undefined);
+  }
+
+  /**
+   * Every durable bridge session bound to a thread, including restored sessions
+   * that have not subscribed in this process yet.
+   *
+   * Live fan-out deliberately uses `sessionsForThread`; persistence fan-out
+   * must use this broader set so an inactive tab cannot retain a stale reroute.
+   */
+  boundSessionsForThread(threadId: string): BridgeSession[] {
+    return [...this.sessions.values()].filter(
+      (session) => session.threadId === threadId,
+    );
   }
 
   /**

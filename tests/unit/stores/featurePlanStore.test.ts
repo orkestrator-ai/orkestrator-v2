@@ -63,10 +63,14 @@ const mockAppendFeaturePlanMessage = mock(async (
   role: FeaturePlanMessage["role"],
   content: string,
   stateApplication?: FeaturePlanMessage["stateApplication"],
+  modelId?: string,
 ) => {
   const feature = backing.find((candidate) => candidate.id === featureId);
   if (!feature) throw new Error(`Feature plan not found: ${featureId}`);
-  feature.messages = [...feature.messages, makeMessage(role, content, stateApplication)];
+  feature.messages = [...feature.messages, {
+    ...makeMessage(role, content, stateApplication),
+    ...(modelId ? { modelId } : {}),
+  }];
   return { ...feature };
 });
 const mockAppendFeatureStoryMessage = mock(
@@ -76,12 +80,16 @@ const mockAppendFeatureStoryMessage = mock(
     role: FeaturePlanMessage["role"],
     content: string,
     stateApplication?: FeaturePlanMessage["stateApplication"],
+    modelId?: string,
   ) => {
     const feature = backing.find((candidate) => candidate.id === featureId);
     if (!feature) throw new Error(`Feature plan not found: ${featureId}`);
     const story = feature.stories.find((candidate) => candidate.id === storyId);
     if (!story) throw new Error(`Feature story not found: ${storyId}`);
-    story.messages = [...story.messages, makeMessage(role, content, stateApplication)];
+    story.messages = [...story.messages, {
+      ...makeMessage(role, content, stateApplication),
+      ...(modelId ? { modelId } : {}),
+    }];
     return { ...feature };
   },
 );
@@ -322,10 +330,15 @@ describe("featurePlanStore", () => {
     expect(store.markConversationRunning(conversation)).toBe(true);
     expect(useFeaturePlanStore.getState()).toBe(runningState);
 
-    expect(store.claimConversationPersistence(conversation, "response")).toBe(true);
+    expect(store.claimConversationPersistence(
+      conversation,
+      "response",
+      "gpt-5.3-codex",
+    )).toBe(true);
     expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
       phase: "persisting",
       responseContent: "response",
+      responseModelId: "gpt-5.3-codex",
     });
     expect(store.claimConversationPersistence(conversation, "duplicate")).toBe(false);
     expect(store.markConversationRunning(conversation)).toBe(false);
@@ -347,6 +360,7 @@ describe("featurePlanStore", () => {
     expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
       phase: "running",
       responseContent: "response",
+      responseModelId: "gpt-5.3-codex",
       error: undefined,
     });
     expect(store.claimConversationPersistence(conversation, "response")).toBe(true);
@@ -511,6 +525,7 @@ describe("featurePlanStore", () => {
       "assistant",
       "Add saved filters",
       "pending",
+      "gpt-5.3-codex",
     );
 
     const stored = useFeaturePlanStore.getState().features.find((feature) => feature.id === created);
@@ -518,12 +533,14 @@ describe("featurePlanStore", () => {
       role: "assistant",
       content: "Add saved filters",
       stateApplication: "pending",
+      modelId: "gpt-5.3-codex",
     });
     expect(mockAppendFeaturePlanMessage).toHaveBeenLastCalledWith(
       created,
       "assistant",
       "Add saved filters",
       "pending",
+      "gpt-5.3-codex",
     );
   });
 
@@ -560,6 +577,7 @@ describe("featurePlanStore", () => {
       "assistant",
       "What to refine?",
       "applied",
+      "gpt-5.3-codex",
     );
 
     const stored = useFeaturePlanStore.getState().features.find((feature) => feature.id === created);
@@ -567,6 +585,7 @@ describe("featurePlanStore", () => {
       role: "assistant",
       content: "What to refine?",
       stateApplication: "applied",
+      modelId: "gpt-5.3-codex",
     });
     expect(mockAppendFeatureStoryMessage).toHaveBeenLastCalledWith(
       created,
@@ -574,6 +593,7 @@ describe("featurePlanStore", () => {
       "assistant",
       "What to refine?",
       "applied",
+      "gpt-5.3-codex",
     );
   });
 

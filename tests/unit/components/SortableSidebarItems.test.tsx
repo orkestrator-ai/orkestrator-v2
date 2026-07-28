@@ -370,7 +370,11 @@ describe("sortable sidebar items", () => {
 
     expect(onDeleteProject).toHaveBeenCalledTimes(1);
     expect(onDeleteProject).toHaveBeenCalledWith("project-1");
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    // Radix keeps the portaled node mounted until its exit animation completes.
+    // Under parallel load that cleanup can take several seconds even though the
+    // controlled dialog has already closed, so assert the state transition
+    // instead of animation timing.
+    await waitFor(() => expect(dialog.getAttribute("data-state")).toBe("closed"));
   });
 
   test("SortableProjectGroup keeps the delete confirmation open after deletion fails", async () => {

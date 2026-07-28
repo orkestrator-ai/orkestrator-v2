@@ -1073,21 +1073,15 @@ export class AppServerRuntime {
       // already attached would otherwise never join `bridgeSessionIds` — and
       // every emit path iterates that set, so the tab would receive no status,
       // no messages and no approval cards, not even for its own prompts.
-      const modelsBeforeAttach = JSON.stringify(
-        session.confirmedModelsByTurn ?? {},
-      );
+      const modelsBeforeAttach = this.snapshotBoundModelOverrides(existing.threadId);
       const attached = this.registry.attach(sessionId, existing.threadId, {
         engineHandle: existing.engineHandle,
         engineGeneration: existing.engineGeneration,
         cwd: existing.cwd,
         name: existing.name,
       });
-      if (
-        JSON.stringify(session.confirmedModelsByTurn ?? {})
-        !== modelsBeforeAttach
-      ) {
-        await this.persistSession(session);
-      }
+      this.publishPersistedModelOverrides(attached);
+      await this.synchronizeAttachedModelOverrides(attached, modelsBeforeAttach);
       return attached;
     }
     // No thread id yet: lazy creation on first prompt, nothing to re-attach.
@@ -1095,6 +1089,7 @@ export class AppServerRuntime {
 
     const threadId = session.threadId;
     try {
+      const modelsBeforeAttach = this.snapshotBoundModelOverrides(threadId);
       const thread = await this.options.engine.resumeThread(threadId, { config: session.config });
       // Always through `attach`: it is idempotent for an existing context, and it
       // is the only thing that registers this session in `bridgeSessionIds`.
@@ -1118,7 +1113,10 @@ export class AppServerRuntime {
           session.title = thread.name ?? hydrated.title;
           session.titleSource = thread.name ? "codex" : hydrated.titleSource;
         }
+      } else {
+        this.publishPersistedModelOverrides(context);
       }
+      await this.synchronizeAttachedModelOverrides(context, modelsBeforeAttach);
       this.reattachedThreads += 1;
       return context;
     } catch (error) {
@@ -1472,9 +1470,7 @@ export class AppServerRuntime {
     if (!turnId) context.modelId = model;
     if (turnId) {
       context.confirmedModelsByTurn.set(turnId, model);
-      for (const sessionId of context.bridgeSessionIds) {
-        const session = this.registry.getSession(sessionId);
-        if (!session) continue;
+      for (const session of this.registry.boundSessionsForThread(context.threadId)) {
         session.confirmedModelsByTurn = {
           ...(session.confirmedModelsByTurn ?? {}),
           [turnId]: model,
@@ -1534,12 +1530,71 @@ export class AppServerRuntime {
    * Reapply the bridge's sparse durable overlay after transcript hydration so
    * REST reads and a newly mounted tab agree with the live SSE view.
    */
-  private applyPersistedModelOverrides(context: ThreadContext): void {
+  private applyPersistedModelOverrides(context: ThreadContext): NormalizedMessage[] {
+    const changed: NormalizedMessage[] = [];
     for (const message of context.messages) {
       if (message.role !== "assistant" || !message.turnId) continue;
       const model = context.confirmedModelsByTurn.get(message.turnId);
-      if (model) message.modelId = model;
+      if (!model || message.modelId === model) continue;
+      message.modelId = model;
+      changed.push(message);
     }
+    return changed;
+  }
+
+  /**
+   * A restored session can contribute a non-conflicting durable overlay after
+   * another tab already hydrated the canonical transcript. Reconcile that
+   * overlay immediately and publish the same revision/SSE updates as a live
+   * reroute so every mounted view catches up.
+   */
+  private publishPersistedModelOverrides(context: ThreadContext): void {
+    const changed = this.applyPersistedModelOverrides(context);
+    if (changed.length === 0) return;
+    this.bumpMessageRevision(context);
+    for (const message of changed) {
+      for (const sessionId of context.bridgeSessionIds) {
+        this.options.emit({
+          type: "message.updated",
+          sessionId,
+          data: { message },
+        });
+      }
+    }
+  }
+
+  private snapshotBoundModelOverrides(threadId: string): Map<string, string> {
+    return new Map(
+      this.registry.boundSessionsForThread(threadId).map((session) => [
+        session.id,
+        JSON.stringify(session.confirmedModelsByTurn ?? {}),
+      ]),
+    );
+  }
+
+  /**
+   * Keep every currently attached record aligned with the canonical overlay.
+   * Inactive restored sessions are intentionally left alone here: only a live
+   * reroute has authority to update all bound records, while attach-time merging
+   * must not let one tab's stale snapshot overwrite another inactive snapshot.
+   */
+  private async synchronizeAttachedModelOverrides(
+    context: ThreadContext,
+    before: Map<string, string>,
+  ): Promise<void> {
+    const canonical = Object.fromEntries(context.confirmedModelsByTurn);
+    const changed: BridgeSession[] = [];
+    for (const session of this.registry.sessionsForThread(context.threadId)) {
+      session.confirmedModelsByTurn =
+        context.confirmedModelsByTurn.size > 0 ? { ...canonical } : undefined;
+      if (
+        JSON.stringify(session.confirmedModelsByTurn ?? {})
+        !== (before.get(session.id) ?? "{}")
+      ) {
+        changed.push(session);
+      }
+    }
+    await Promise.all(changed.map((session) => this.persistSession(session)));
   }
 
   /**
@@ -1897,6 +1952,7 @@ export class AppServerRuntime {
       return { sessionId, title: hydrated.title, threadId, messages: hydrated.messages };
     }
 
+    const modelsBeforeAttach = this.snapshotBoundModelOverrides(threadId);
     const context = this.registry.attach(sessionId, threadId, {
       engineHandle: thread.handle,
       engineGeneration: this.options.engine.info().generation,
@@ -1916,6 +1972,7 @@ export class AppServerRuntime {
       session.title = thread.name ?? hydrated.title;
       session.titleSource = thread.name ? "codex" : hydrated.titleSource;
     } else {
+      this.publishPersistedModelOverrides(context);
       const existing = this.registry
         .sessionsForThread(threadId)
         .find((entry) => entry.id !== sessionId && entry.title);
@@ -1923,6 +1980,7 @@ export class AppServerRuntime {
       session.titleSource = existing?.titleSource;
     }
 
+    await this.synchronizeAttachedModelOverrides(context, modelsBeforeAttach);
     await this.persistSession(session);
     return {
       sessionId,
@@ -2374,7 +2432,7 @@ export class AppServerRuntime {
         await this.options.engine.configureThread(attached.engineHandle, nextConfig);
       }
     } catch (error) {
-      if (attached && requestedModelChanged && attached.modelId === undefined) {
+      if (attached && requestedModelChanged) {
         attached.modelId = previousConfirmedModel;
       }
       // A transient resume, an in-flight restart or an open circuit are all

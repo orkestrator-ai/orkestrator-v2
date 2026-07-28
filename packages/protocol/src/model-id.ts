@@ -17,11 +17,9 @@ export function isRootAssistantRecord(
   parentToolUseId: unknown,
   isSidechain?: unknown,
 ): boolean {
-  return (
-    isSidechain !== true
-    && (
-      typeof parentToolUseId !== "string"
-      || parentToolUseId.trim().length === 0
-    )
-  );
+  const hasNoParent =
+    parentToolUseId == null
+    || (typeof parentToolUseId === "string" && parentToolUseId.trim().length === 0);
+  const isMainChain = isSidechain === undefined || isSidechain === false;
+  return hasNoParent && isMainChain;
 }

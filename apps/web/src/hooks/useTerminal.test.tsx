@@ -133,10 +133,18 @@ describe("useTerminal reconnect behavior", () => {
   it("attaches once to a backend-owned setup session while preparation is running before its PTY exists", async () => {
     const received: Uint8Array[] = [];
     let emitLiveOutput: ((event: { payload: number[] }) => void) | undefined;
-    listenMock.mockImplementation(async (_eventName, handler) => {
-      emitLiveOutput = handler;
+    listenMock.mockImplementation(async (eventName, handler) => {
+      if (eventName === "terminal-output-env-1:setup") {
+        emitLiveOutput = handler;
+      }
       return unlistenMock;
     });
+    const outputListenerCalls = () => listenMock.mock.calls.filter(
+      ([eventName]) => eventName === "terminal-output-env-1:setup",
+    );
+    const reconnectListenerCalls = () => listenMock.mock.calls.filter(
+      ([eventName]) => eventName === NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+    );
 
     const { result, rerender } = renderHook(
       ({ existingSessionId }: { existingSessionId?: string }) =>
@@ -183,7 +191,8 @@ describe("useTerminal reconnect behavior", () => {
     expect(getTerminalSessionMock).toHaveBeenCalledTimes(1);
     expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(1);
     expect(getTerminalOutputSnapshotMock).toHaveBeenCalledWith("env-1:setup");
-    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(outputListenerCalls()).toHaveLength(1);
+    expect(reconnectListenerCalls()).toHaveLength(1);
     expect(listenMock).toHaveBeenCalledWith(
       "terminal-output-env-1:setup",
       expect.any(Function),
@@ -212,7 +221,8 @@ describe("useTerminal reconnect behavior", () => {
     expect(result.current.error).toBeNull();
     expect(getTerminalSessionMock).toHaveBeenCalledTimes(1);
     expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(1);
-    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(outputListenerCalls()).toHaveLength(1);
+    expect(reconnectListenerCalls()).toHaveLength(1);
     expect(unlistenMock).not.toHaveBeenCalled();
   });
 

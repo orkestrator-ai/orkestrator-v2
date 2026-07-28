@@ -2354,6 +2354,7 @@ export function OpenCodeChatTab({
   return (
     <NativeChatShell
       agentLabel="OpenCode"
+      isActive={isActive}
       containerId={containerId}
       connectionState={connectionState}
       errorMessage={errorMessage}

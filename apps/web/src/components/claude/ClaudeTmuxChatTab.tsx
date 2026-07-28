@@ -129,6 +129,8 @@ interface Props {
   refreshRequestId?: number;
 }
 
+const getTmuxMessageSearchText = (message: { content: string }) => message.content;
+
 /**
  * Fallback model list for tmux mode, mirroring what the Claude Agent SDK's
  * `supportedModels()` reports for the current Claude Code release. When a
@@ -1590,6 +1592,10 @@ export function ClaudeTmuxChatTab({
               }
               scrollProps={scrollProps}
               virtuosoRef={virtuosoRef}
+              find={{
+                isActive: isActive && !interactiveMode,
+                getSearchText: getTmuxMessageSearchText,
+              }}
             />
 
           </div>

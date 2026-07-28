@@ -32,6 +32,7 @@ const originalResizeObserver = globalThis.ResizeObserver;
 function shellProps() {
   return {
     agentLabel: "Test",
+    isActive: true,
     connectionState: "connected" as const,
     onRetry: () => {},
     messages: [],

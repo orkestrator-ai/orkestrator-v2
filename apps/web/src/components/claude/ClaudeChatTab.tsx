@@ -1996,6 +1996,7 @@ export function ClaudeChatTab({
   return (
     <NativeChatShell
       agentLabel="Claude"
+      isActive={isActive}
       containerId={containerId}
       connectionState={connectionState}
       errorMessage={errorMessage}

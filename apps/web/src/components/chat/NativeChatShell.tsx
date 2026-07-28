@@ -19,9 +19,13 @@ import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-messa
 
 export type NativeConnectionState = "connecting" | "connected" | "error";
 
+const getNativeMessageSearchText = (message: NativeMessageType) => message.content;
+
 interface NativeChatShellProps<TMessage extends NativeMessageType> {
   /** Rendered as the assistant name and used in copy: "Connecting to {label}…". */
   agentLabel: string;
+  /** Only the visible chat tab owns global keyboard shortcuts. */
+  isActive: boolean;
   /**
    * Container the environment runs in, when Dockerised.
    *
@@ -102,6 +106,7 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
  */
 export function NativeChatShell<TMessage extends NativeMessageType>({
   agentLabel,
+  isActive,
   containerId,
   connectionState,
   errorMessage,
@@ -316,6 +321,10 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           }
           scrollProps={scrollProps}
           virtuosoRef={virtuosoRef}
+          find={{
+            isActive,
+            getSearchText: getNativeMessageSearchText,
+          }}
         />
       </div>
 

@@ -2255,6 +2255,7 @@ export function CodexChatTab({
   return (
     <NativeChatShell
       agentLabel="Codex"
+      isActive={isActive}
       containerId={containerId}
       connectionState={connectionState}
       errorMessage={errorMessage}

@@ -180,6 +180,45 @@ const OPTIONAL_USAGE_NUMBER_KEYS = [
   "linesRemoved",
 ] as const satisfies readonly (keyof ContextUsageSnapshot)[];
 
+function parseClaudeRateLimits(
+  value: unknown,
+  droppedFields?: string[],
+): NonNullable<ContextUsageSnapshot["rateLimits"]> | undefined {
+  if (value === undefined) return undefined;
+  const drop = () => {
+    if (droppedFields && !droppedFields.includes("rateLimits")) {
+      droppedFields.push("rateLimits");
+    }
+  };
+  if (!Array.isArray(value)) {
+    drop();
+    return undefined;
+  }
+  return value.flatMap((entry) => {
+    if (
+      isRecord(entry)
+      && typeof entry.label === "string"
+      && isOptionalNonNegativeNumber(entry.usedPercent)
+      && (entry.usedPercent === undefined || entry.usedPercent <= 100)
+      && isOptionalString(entry.resetsAt)
+      && isOptionalNonNegativeNumber(entry.windowMinutes)
+    ) {
+      return [{
+        label: entry.label,
+        ...(entry.usedPercent !== undefined ? { usedPercent: entry.usedPercent } : {}),
+        ...(entry.resetsAt !== undefined ? { resetsAt: entry.resetsAt } : {}),
+        ...(entry.windowMinutes !== undefined
+          ? { windowMinutes: entry.windowMinutes }
+          : {}),
+      }];
+    }
+    // e.g. `usedPercent > 100`: the bridge forwards utilization unclamped,
+    // so an overdrawn window is dropped rather than costing the reading.
+    drop();
+    return [];
+  });
+}
+
 /**
  * Validate exact provider usage snapshots before they cross the REST/SSE trust
  * boundary into Zustand. UI formatters assume finite numeric fields.
@@ -253,34 +292,8 @@ export function parseClaudeContextUsage(
   }
 
   if (value.rateLimits !== undefined) {
-    if (Array.isArray(value.rateLimits)) {
-      const windows = value.rateLimits.flatMap((entry) => {
-        if (
-          isRecord(entry)
-          && typeof entry.label === "string"
-          && isOptionalNonNegativeNumber(entry.usedPercent)
-          && (entry.usedPercent === undefined || entry.usedPercent <= 100)
-          && isOptionalString(entry.resetsAt)
-          && isOptionalNonNegativeNumber(entry.windowMinutes)
-        ) {
-          return [{
-            label: entry.label,
-            ...(entry.usedPercent !== undefined ? { usedPercent: entry.usedPercent } : {}),
-            ...(entry.resetsAt !== undefined ? { resetsAt: entry.resetsAt } : {}),
-            ...(entry.windowMinutes !== undefined
-              ? { windowMinutes: entry.windowMinutes }
-              : {}),
-          }];
-        }
-        // e.g. `usedPercent > 100`: the bridge forwards utilization unclamped,
-        // so an overdrawn window is dropped rather than costing the reading.
-        drop("rateLimits");
-        return [];
-      });
-      if (windows.length > 0) result.rateLimits = windows;
-    } else {
-      drop("rateLimits");
-    }
+    const windows = parseClaudeRateLimits(value.rateLimits, droppedFields);
+    if (windows && windows.length > 0) result.rateLimits = windows;
   }
 
   if (value.credits !== undefined) {
@@ -818,6 +831,22 @@ export async function lookupSession(
       session.contextUsage,
       droppedUsageFields,
     );
+    const droppedRateLimitFields: string[] = [];
+    const authoritativeRateLimits = parseClaudeRateLimits(
+      session.rateLimits,
+      droppedRateLimitFields,
+    );
+    if (
+      contextUsage
+      && session.rateLimits !== undefined
+      && droppedRateLimitFields.length === 0
+    ) {
+      if (authoritativeRateLimits && authoritativeRateLimits.length > 0) {
+        contextUsage.rateLimits = authoritativeRateLimits;
+      } else {
+        delete contextUsage.rateLimits;
+      }
+    }
     const droppedTaskIds: string[] = [];
     const backgroundTasks = parseClaudeBackgroundTasks(
       session.backgroundTasks,
@@ -831,6 +860,7 @@ export async function lookupSession(
         invalidMetadataFields.push(`contextUsage.${field}`);
       }
     }
+    invalidMetadataFields.push(...droppedRateLimitFields);
     if (
       session.promptSuggestion !== undefined
       && typeof session.promptSuggestion !== "string"

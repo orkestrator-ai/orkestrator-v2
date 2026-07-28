@@ -180,6 +180,13 @@ export interface ClaudeQueryControl {
   stopTask?: (taskId: string) => Promise<void>;
   backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
   getContextUsage?: () => Promise<unknown>;
+  /**
+   * Structured data behind Claude Code's `/usage` screen.
+   *
+   * The Agent SDK deliberately marks this control request experimental, so the
+   * bridge feature-detects it and validates the unknown response at runtime.
+   */
+  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
   rewindFiles?: (
     userMessageId: string,
     options?: { dryRun?: boolean },

@@ -309,6 +309,46 @@ describe("claude-client", () => {
       }
     });
 
+    test("rehydrates authoritative top-level rate limits into context usage", async () => {
+      mockFetchJson({
+        id: "s-1",
+        status: "idle",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+        contextUsage: {
+          usedTokens: 1,
+          totalTokens: 10,
+          percentUsed: 10,
+          rateLimits: [{ label: "Five Hour" }],
+        },
+        rateLimits: [
+          { label: "Five Hour", usedPercent: 11 },
+          {
+            label: "Weekly",
+            usedPercent: 13,
+            resetsAt: "2026-08-04T10:00:00.000Z",
+          },
+        ],
+      });
+
+      const result = await lookupSession(client, "s-1");
+      expect(result).toMatchObject({
+        kind: "found",
+        session: {
+          contextUsage: {
+            rateLimits: [
+              { label: "Five Hour", usedPercent: 11 },
+              {
+                label: "Weekly",
+                usedPercent: 13,
+                resetsAt: "2026-08-04T10:00:00.000Z",
+              },
+            ],
+          },
+        },
+      });
+    });
+
     test("propagates a valid plan-mode preference", async () => {
       mockFetchJson({
         id: "s-1",

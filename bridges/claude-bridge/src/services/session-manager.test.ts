@@ -74,11 +74,10 @@ const queryWaiters: Array<(call: QueryCall) => void> = [];
 /**
  * Extra members spliced onto the object `query()` returns.
  *
- * The bridge feature-detects `stopTask`, `rewindFiles` and `getContextUsage`
- * with `typeof x === "function"` and skips them silently when absent, so they
- * are opt-in per test: installing them unconditionally would change what every
- * other test's turn does (a present `getContextUsage` rewrites the whole usage
- * snapshot).
+ * The bridge feature-detects `stopTask`, `rewindFiles`, `getContextUsage` and
+ * the experimental structured-usage request with `typeof x === "function"` and
+ * skips them silently when absent, so they are opt-in per test: installing
+ * them unconditionally would change what every other test's turn does.
  */
 let queryControlOverrides: Record<string, unknown> = {};
 
@@ -6950,6 +6949,67 @@ describe("stopBackgroundTask", () => {
 // ---------------------------------------------------------------------------
 
 describe("rate_limit_event", () => {
+  test("replaces sparse threshold data with all structured /usage windows", async () => {
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      mock(async () => ({
+        rate_limits_available: true,
+        rate_limits: {
+          five_hour: {
+            utilization: 11,
+            resets_at: "2026-07-28T22:30:00.000Z",
+          },
+          seven_day: {
+            utilization: 13,
+            resets_at: "2026-08-04T10:00:00.000Z",
+          },
+          seven_day_opus: null,
+          model_scoped: [
+            {
+              display_name: "Fable",
+              utilization: 0,
+              resets_at: "2026-08-04T10:00:00.000Z",
+            },
+          ],
+        },
+      }));
+
+    const { session } = await runPromptWithMessages([
+      {
+        type: "rate_limit_event",
+        // Threshold events can identify/reset a bucket without reporting its
+        // current utilization — the exact shape behind the reported bug.
+        rate_limit_info: {
+          rateLimitType: "five_hour",
+          resetsAt: Date.parse("2026-07-28T22:30:00.000Z") / 1000,
+        },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        usage: { input_tokens: 10, output_tokens: 5, context_window_tokens: 1000 },
+      },
+    ]);
+
+    expect(session.rateLimits).toEqual([
+      {
+        label: "Five Hour",
+        usedPercent: 11,
+        resetsAt: "2026-07-28T22:30:00.000Z",
+      },
+      {
+        label: "Weekly",
+        usedPercent: 13,
+        resetsAt: "2026-08-04T10:00:00.000Z",
+      },
+      {
+        label: "Weekly (Fable)",
+        usedPercent: 0,
+        resetsAt: "2026-08-04T10:00:00.000Z",
+      },
+    ]);
+    expect(session.usage?.rateLimits).toEqual(session.rateLimits);
+  });
+
   test("retains a window that arrives before any turn has completed", async () => {
     const { events, stop } = captureEvents();
     let session;

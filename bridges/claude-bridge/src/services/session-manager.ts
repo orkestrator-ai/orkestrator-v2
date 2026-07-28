@@ -350,6 +350,87 @@ function extractContextUsageFromUnknown(payload: unknown, fallbackModel?: string
   return null;
 }
 
+const STRUCTURED_RATE_LIMIT_WINDOWS = [
+  ["five_hour", "Five Hour"],
+  ["seven_day", "Weekly"],
+  ["seven_day_oauth_apps", "Weekly (OAuth Apps)"],
+  ["seven_day_opus", "Weekly (Opus)"],
+  ["seven_day_sonnet", "Weekly (Sonnet)"],
+] as const;
+
+function structuredRateLimitReset(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
+}
+
+function structuredRateLimitWindow(
+  value: unknown,
+  label: string,
+): SessionRateLimitWindow | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const window = value as Record<string, unknown>;
+  const usedPercent =
+    typeof window.utilization === "number"
+    && Number.isFinite(window.utilization)
+    && window.utilization >= 0
+      ? window.utilization
+      : undefined;
+  const resetsAt = structuredRateLimitReset(window.resets_at);
+  if (usedPercent === undefined && resetsAt === undefined) return undefined;
+  return {
+    label,
+    ...(usedPercent !== undefined ? { usedPercent } : {}),
+    ...(resetsAt !== undefined ? { resetsAt } : {}),
+  };
+}
+
+/**
+ * Parse the structured data behind Claude Code's `/usage` screen.
+ *
+ * `rate_limit_event` is only a sparse threshold notification: it may omit
+ * utilization and reports one changed bucket at a time. The structured control
+ * response is the authoritative snapshot that includes the five-hour, weekly,
+ * and model-scoped weekly windows shown by Claude Code itself.
+ */
+function rateLimitsFromStructuredUsage(
+  value: unknown,
+): SessionRateLimitWindow[] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const usage = value as Record<string, unknown>;
+  if (usage.rate_limits_available === false || usage.rate_limits === null) return undefined;
+  if (
+    !usage.rate_limits
+    || typeof usage.rate_limits !== "object"
+    || Array.isArray(usage.rate_limits)
+  ) {
+    return undefined;
+  }
+
+  const rawLimits = usage.rate_limits as Record<string, unknown>;
+  const windows: SessionRateLimitWindow[] = [];
+  for (const [key, label] of STRUCTURED_RATE_LIMIT_WINDOWS) {
+    const window = structuredRateLimitWindow(rawLimits[key], label);
+    if (window) windows.push(window);
+  }
+
+  if (Array.isArray(rawLimits.model_scoped)) {
+    for (const entry of rawLimits.model_scoped) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const modelWindow = entry as Record<string, unknown>;
+      if (typeof modelWindow.display_name !== "string" || !modelWindow.display_name.trim()) {
+        continue;
+      }
+      const window = structuredRateLimitWindow(
+        modelWindow,
+        `Weekly (${modelWindow.display_name.trim()})`,
+      );
+      if (window) windows.push(window);
+    }
+  }
+  return windows;
+}
+
 async function buildClaudeUsageSnapshot(
   session: SessionState,
   result: SdkResultMessage,
@@ -432,6 +513,20 @@ async function buildClaudeUsageSnapshot(
       }
     } catch (error) {
       console.debug("[session-manager] Context usage control request failed:", error);
+    }
+  }
+
+  const getStructuredUsage =
+    queryControl?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+  if (getStructuredUsage) {
+    try {
+      const structuredUsage = await getStructuredUsage.call(queryControl);
+      const rateLimits = rateLimitsFromStructuredUsage(structuredUsage);
+      if (rateLimits !== undefined) session.rateLimits = rateLimits;
+    } catch (error) {
+      // The API is explicitly experimental. A failure must not discard the
+      // sparse windows already retained from rate_limit_event notifications.
+      console.debug("[session-manager] Structured usage control request failed:", error);
     }
   }
 

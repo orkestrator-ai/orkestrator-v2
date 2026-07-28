@@ -90,6 +90,20 @@ type ActivitySourcesByEnvironment = Map<
   Map<ActivitySource, AgentActivityState>
 >;
 
+function getEnvironmentSourceActivity(
+  activitySources: ActivitySourcesByEnvironment,
+  environmentId: string,
+): AgentActivityState | undefined {
+  const environmentSources = activitySources.get(environmentId);
+  if (!environmentSources || environmentSources.size === 0) return undefined;
+
+  let desiredState: AgentActivityState = "idle";
+  for (const state of environmentSources.values()) {
+    desiredState = mergeActivityState(desiredState, state);
+  }
+  return desiredState;
+}
+
 /**
  * Activity ordering changes when a prompt starts, work finishes, or an agent
  * stops to ask for input. Pure teardown transitions are intentionally ignored.
@@ -133,10 +147,9 @@ function setEnvironmentSourceActivity(
   const previousSourceState = environmentSources.get(source);
   environmentSources.set(source, sourceState);
 
-  let desiredState: AgentActivityState = "idle";
-  for (const state of environmentSources.values()) {
-    desiredState = mergeActivityState(desiredState, state);
-  }
+  const desiredState =
+    getEnvironmentSourceActivity(activitySources.current, environmentId)
+    ?? "idle";
 
   const currentState =
     useAgentActivityStore.getState().containerStates[environmentId];
@@ -485,6 +498,17 @@ export function useGlobalActivityMonitor(): void {
   const registerStateCallback = useAgentActivityStore((s) => s.registerStateCallback);
   const unregisterStateCallback = useAgentActivityStore((s) => s.unregisterStateCallback);
   const activitySources = useRef<ActivitySourcesByEnvironment>(new Map());
+  /**
+   * A successful write can still return a different, newer aggregate when
+   * another renderer won the ordering race. Reassert the state still derived
+   * from this renderer's live sessions once; without that retry the response
+   * replaces the runtime store and no later session mutation exists to turn a
+   * completed environment green. The per-state latch bounds a genuinely
+   * conflicting pair of renderers instead of letting them hot-loop.
+   */
+  const reassertedAgentActivity = useRef(
+    new Map<string, AgentActivityState>(),
+  );
   const lastIssuedActivityTime = useRef(0);
 
   // Track active pollers and listeners for container environments
@@ -686,6 +710,28 @@ export function useGlobalActivityMonitor(): void {
             updatedEnvironment.agentActivityState,
             updatedEnvironment.agentActivityUpdatedAt,
           );
+
+          const desiredState = getEnvironmentSourceActivity(
+            activitySources.current,
+            environment.id,
+          );
+          if (!desiredState) return;
+          if (updatedEnvironment.agentActivityState === desiredState) {
+            reassertedAgentActivity.current.delete(environment.id);
+            return;
+          }
+          if (
+            reassertedAgentActivity.current.get(environment.id)
+            === desiredState
+          ) {
+            return;
+          }
+
+          reassertedAgentActivity.current.set(environment.id, desiredState);
+          // `reconcileContainerState` just installed the divergent backend
+          // value, so this is a real state transition and reaches the normal
+          // persistence callback with a fresh ordering token.
+          setContainerState(environment.id, desiredState);
         })
         .catch(async (error) => {
           const currentEnvironment = useEnvironmentStore
@@ -731,7 +777,11 @@ export function useGlobalActivityMonitor(): void {
     });
 
     return () => unregisterStateCallback(callbackId);
-  }, [registerStateCallback, unregisterStateCallback]);
+  }, [
+    registerStateCallback,
+    setContainerState,
+    unregisterStateCallback,
+  ]);
 
   // ── Terminal mode: poll ALL running container environments ──────────
   useEffect(() => {

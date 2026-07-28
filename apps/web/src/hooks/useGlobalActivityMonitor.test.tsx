@@ -414,6 +414,85 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     });
   });
 
+  test("reasserts completed native activity after a newer working response wins", async () => {
+    const environment = {
+      ...makeEnvironment("env-native", ""),
+      environmentType: "local" as const,
+      containerId: null,
+    };
+    const sessionKey = createSessionKey(environment.id, "tab-1");
+    let activityWrites = 0;
+    useEnvironmentStore.setState({ environments: [environment] });
+    useClaudeStore.setState({
+      clients: new Map([[environment.id, {} as any]]),
+      sessions: new Map([[
+        sessionKey,
+        {
+          sessionId: "session-1",
+          messages: [],
+          isLoading: true,
+        } as any,
+      ]]),
+    });
+    mockInvoke.mockImplementation((
+      command: string,
+      args?: Record<string, unknown>,
+    ) => {
+      if (
+        command === "record_environment_activity"
+        || command === "record_environment_completion"
+      ) {
+        return Promise.resolve({
+          ...environment,
+          lastActivityAt: args?.occurredAt,
+          ...(command === "record_environment_completion"
+            ? { hasUnreadWork: true }
+            : {}),
+        });
+      }
+      if (command === "get_environment_snapshots") {
+        return Promise.resolve(
+          useEnvironmentStore.getState().environments,
+        );
+      }
+      if (command !== "set_environment_agent_activity") {
+        return Promise.resolve(undefined);
+      }
+      activityWrites += 1;
+      if (activityWrites === 2) {
+        // Simulate another renderer winning the ordering race after this
+        // renderer observed the final idle transition.
+        return Promise.resolve({
+          ...environment,
+          agentActivityState: "working",
+          agentActivityUpdatedAt: new Date(
+            Date.parse(String(args?.occurredAt)) + 1,
+          ).toISOString(),
+        });
+      }
+      return Promise.resolve({
+        ...environment,
+        agentActivityState: args?.state,
+        agentActivityUpdatedAt: args?.occurredAt,
+      });
+    });
+
+    render(<MonitorHarness />);
+    await waitFor(() => expect(activityWrites).toBe(1));
+
+    act(() => {
+      useClaudeStore.getState().setSessionLoading(sessionKey, false);
+    });
+
+    await waitFor(() => {
+      expect(activityWrites).toBe(3);
+      expect(useAgentActivityStore.getState().getContainerState(environment.id))
+        .toBe("idle");
+      expect(useEnvironmentStore.getState().getEnvironmentById(environment.id))
+        .toMatchObject({ agentActivityState: "idle" });
+    });
+  });
+
   test("refreshes the authoritative agent state after persistence fails", async () => {
     const environment = {
       ...makeEnvironment("env-local", ""),

@@ -1587,6 +1587,30 @@ describe("CodexChatTab", () => {
     });
   });
 
+  test("connects to an already-running local bridge without restarting it", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    useEnvironmentStore.setState({
+      setupCommandsResolved: new Set([ENVIRONMENT_ID]),
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData({ isLocal: true })} isActive />);
+
+    await waitFor(() => {
+      expect(mockGetLocalCodexServerStatus).toHaveBeenCalledWith(ENVIRONMENT_ID);
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        "local-test-token",
+      );
+      expect(mockCreateSession).toHaveBeenCalled();
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(SESSION_ID);
+    });
+    expect(mockStartLocalCodexServer).not.toHaveBeenCalled();
+  });
+
   test("fails cold container initialization without a container id", async () => {
     useCodexStore.setState((state) => ({
       ...state,
@@ -3552,6 +3576,17 @@ describe("CodexChatTab", () => {
 
   test("replaces a duplicate-running retry bubble with the authoritative prompt", async () => {
     composeText = "Resume the already-running request";
+    const authoritativePrompt = {
+      id: "server-running-prompt",
+      role: "user" as const,
+      content: composeText,
+      parts: [{ type: "text" as const, content: composeText }],
+      createdAt: "2026-07-28T12:00:00.000Z",
+      turnId: "turn-1",
+    };
+    // The regression requires an existing server echo: without it, the generic
+    // fingerprint merge already consumes the first optimistic copy.
+    seedCodexStore([authoritativePrompt]);
     mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
     mockSendPrompt.mockResolvedValue({
       status: "processing",
@@ -3559,14 +3594,7 @@ describe("CodexChatTab", () => {
       requestId: "request-1",
       turnId: "turn-1",
     });
-    mockGetSessionMessages.mockResolvedValue([{
-      id: "server-running-prompt",
-      role: "user",
-      content: composeText,
-      parts: [{ type: "text", content: composeText }],
-      createdAt: "2026-07-28T12:00:00.000Z",
-      turnId: "turn-1",
-    }]);
+    mockGetSessionMessages.mockResolvedValue([authoritativePrompt]);
 
     render(
       <CodexChatTab
@@ -3611,6 +3639,47 @@ describe("CodexChatTab", () => {
 
     await waitFor(() => {
       const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.messages.some((message) => message.id === existing.id)).toBe(true);
+      expect(session?.messages.some(
+        (message) => message.role === "user" && message.content === composeText,
+      )).toBe(true);
+      expect(session?.isLoading).toBe(true);
+    });
+    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  test("preserves the optimistic prompt when duplicate-running reconciliation is stale", async () => {
+    const existing = createMessage("existing-server-message", "Keep this newer state");
+    const messages = deferred<NativeMessage[]>();
+    composeText = "Keep this stale-refresh retry";
+    seedCodexStore([existing]);
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    mockSendPrompt.mockResolvedValue({
+      status: "processing",
+      duplicate: true,
+      requestId: "request-1",
+      turnId: "turn-1",
+    });
+    mockGetSessionMessages.mockImplementationOnce(() => messages.promise);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+    act(() => {
+      useCodexStore.getState().setSessionTitle(SESSION_KEY, "Newer live title");
+    });
+    messages.resolve([existing]);
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.title).toBe("Newer live title");
       expect(session?.messages.some((message) => message.id === existing.id)).toBe(true);
       expect(session?.messages.some(
         (message) => message.role === "user" && message.content === composeText,

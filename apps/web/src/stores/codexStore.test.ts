@@ -300,7 +300,7 @@ describe("codexStore prompt dispatch claims", () => {
     expect(store.claimPromptDispatch(SESSION_KEY, "request-2")).toBe(false);
   });
 
-  test("releasing an unknown request preserves store and claim identities", () => {
+  test("releasing an unknown request or session preserves store and claim identities", () => {
     const store = useCodexStore.getState();
     store.claimPromptDispatch(SESSION_KEY, "request-1");
     const stateBeforeRelease = useCodexStore.getState();
@@ -314,6 +314,14 @@ describe("codexStore prompt dispatch claims", () => {
     expect(stateAfterRelease.promptDispatchClaims).toBe(claimsBeforeRelease);
     expect(stateAfterRelease.promptDispatchClaims.get(SESSION_KEY))
       .toBe(sessionClaimsBeforeRelease);
+
+    store.releasePromptDispatch(
+      createSessionKey("env-1", "missing-tab"),
+      "request-1",
+    );
+
+    expect(useCodexStore.getState()).toBe(stateAfterRelease);
+    expect(useCodexStore.getState().promptDispatchClaims).toBe(claimsBeforeRelease);
   });
 
   test("session and environment cleanup release their claims", () => {
@@ -361,6 +369,28 @@ describe("codexStore session cleanup", () => {
         [targetKey, [interaction("interaction-target")]],
         [otherKey, [interaction("interaction-other")]],
       ]),
+      contextUsage: new Map([
+        [targetKey, { usedTokens: 10, totalTokens: 100, percentUsed: 10 }],
+        [otherKey, { usedTokens: 20, totalTokens: 100, percentUsed: 20 }],
+      ]),
+      unconfirmedDispatches: new Map([
+        [
+          targetKey,
+          {
+            userMessageId: "message-target",
+            fingerprint: "fingerprint-target",
+            requestId: "request-target",
+          },
+        ],
+        [
+          otherKey,
+          {
+            userMessageId: "message-other",
+            fingerprint: "fingerprint-other",
+            requestId: "request-other",
+          },
+        ],
+      ]),
       promptDispatchClaims: new Map([
         [targetKey, new Set(["request-target"])],
         [otherKey, new Set(["request-other"])],
@@ -393,6 +423,8 @@ describe("codexStore session cleanup", () => {
       "sessionPhase",
       "pendingApprovals",
       "pendingInteractions",
+      "contextUsage",
+      "unconfirmedDispatches",
       "promptDispatchClaims",
     ] as const;
     for (const field of sessionKeyedMaps) {

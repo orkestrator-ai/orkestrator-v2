@@ -2,6 +2,7 @@ import {
   DIFF_STATS_CHANGED_EVENT,
   type EnvironmentDiffStats,
   type EnvironmentDiffStatsChange,
+  type EnvironmentDiffStatsRemoval,
 } from "@orkestrator/protocol/diff-stats";
 import { startWorktreeWatcher, type WorktreeWatcher } from "./worktree-watcher.js";
 
@@ -68,7 +69,11 @@ interface DiffStatsEntry {
   active: boolean;
   timer: unknown;
   watcher?: WorktreeWatcher;
+  /** Invalidates callbacks from a watcher that was closed or superseded. */
+  watcherGeneration: number;
   inFlight?: Promise<void>;
+  /** Invalidates a scan that began before a known workspace mutation. */
+  scanGeneration: number;
   /** A change arrived while a scan was running; scan again when it lands. */
   rescanRequested: boolean;
   last?: EnvironmentDiffStatsChange;
@@ -117,18 +122,27 @@ export class DiffStatsService {
       if (!retargeted && existing.active) return;
 
       if (retargeted) {
+        const hadPublishedCounts = existing.last !== undefined;
         existing.target = target;
         // The previous counts were measured against something else; drop them so
         // a stale number cannot be served from the cache or suppress an emit.
         existing.last = undefined;
         existing.cachedChanges = undefined;
         existing.cachedAt = undefined;
+        existing.scanGeneration += 1;
+        if (hadPublishedCounts) {
+          this.emitSafely({
+            environmentId: target.environmentId,
+            comparisonRef: target.comparisonRef,
+            computedAt: this.options.now(),
+            removed: true,
+          } satisfies EnvironmentDiffStatsRemoval);
+        }
       }
       // Covers both a retarget and a resume from `pause`, and is idempotent for
       // an active entry whose watched path did not move.
       existing.active = true;
-      existing.watcher?.close();
-      existing.watcher = undefined;
+      this.detachWatcher(existing);
       this.attachWatcher(existing);
       this.restartTimer(existing);
       this.request(existing);
@@ -139,6 +153,8 @@ export class DiffStatsService {
       target,
       active: true,
       timer: undefined,
+      watcherGeneration: 0,
+      scanGeneration: 0,
       rescanRequested: false,
     };
     this.entries.set(target.environmentId, entry);
@@ -152,7 +168,7 @@ export class DiffStatsService {
     const entry = this.entries.get(environmentId);
     if (!entry) return;
     entry.active = false;
-    entry.watcher?.close();
+    this.detachWatcher(entry);
     this.options.cancel(entry.timer);
     this.entries.delete(environmentId);
   }
@@ -170,8 +186,7 @@ export class DiffStatsService {
     if (!entry || !entry.active) return;
     entry.active = false;
     entry.rescanRequested = false;
-    entry.watcher?.close();
-    entry.watcher = undefined;
+    this.detachWatcher(entry);
     this.options.cancel(entry.timer);
     entry.timer = undefined;
     // The file list can go stale in ways the counts cannot, because nothing will
@@ -241,6 +256,18 @@ export class DiffStatsService {
     entry.cachedAt = this.options.monotonicNow();
   }
 
+  /** Discards per-file detail after a mutation without losing last-known counts. */
+  invalidateChanges(lookup: { worktreePath?: string; containerId?: string }): void {
+    const entry = this.findEntry(lookup);
+    if (!entry) return;
+    entry.scanGeneration += 1;
+    entry.cachedChanges = undefined;
+    entry.cachedAt = undefined;
+    // A scan that began before the mutation cannot repopulate the cache when it
+    // lands. Arrange one fresh replacement without starting a parallel scan.
+    if (entry.inFlight) entry.rescanRequested = true;
+  }
+
   private findEntry(lookup: { worktreePath?: string; containerId?: string }): DiffStatsEntry | undefined {
     for (const entry of this.entries.values()) {
       if (lookup.worktreePath && entry.target.worktreePath === lookup.worktreePath) return entry;
@@ -263,19 +290,37 @@ export class DiffStatsService {
   private attachWatcher(entry: DiffStatsEntry): void {
     const { worktreePath } = entry.target;
     if (entry.target.kind !== "local" || !worktreePath) return;
-    entry.watcher = this.options.startWatcher({
+    const generation = ++entry.watcherGeneration;
+    let failedSynchronously = false;
+    const watcher = this.options.startWatcher({
       worktreePath,
       onChange: () => {
-        if (entry.active) this.request(entry);
+        if (entry.active && entry.watcherGeneration === generation) this.request(entry);
       },
       onError: (error) => {
-        this.options.onWarning?.(`Diff watcher failed for ${entry.target.environmentId}`, error);
+        if (entry.watcherGeneration !== generation) return;
+        failedSynchronously = true;
+        this.warn(`Diff watcher failed for ${entry.target.environmentId}`, error);
         // The interval is the fallback, so it has to go back to the fast cadence
         // now that change signals will no longer arrive.
+        entry.watcher?.close();
         entry.watcher = undefined;
         this.restartTimer(entry);
       },
     });
+    // `startWorktreeWatcher` reports setup failures synchronously. Do not restore
+    // the failed watcher after its callback deliberately switched us to polling.
+    if (entry.watcherGeneration !== generation || failedSynchronously) {
+      watcher.close();
+      return;
+    }
+    entry.watcher = watcher;
+  }
+
+  private detachWatcher(entry: DiffStatsEntry): void {
+    entry.watcherGeneration += 1;
+    entry.watcher?.close();
+    entry.watcher = undefined;
   }
 
   private restartTimer(entry: DiffStatsEntry): void {
@@ -316,18 +361,23 @@ export class DiffStatsService {
 
   private async run(entry: DiffStatsEntry): Promise<void> {
     const target = entry.target;
+    const scanGeneration = entry.scanGeneration;
     let result: DiffScanResult;
     try {
       result = await this.options.scan(target);
     } catch (error) {
       // Counts are non-critical: a container that is still starting, or a git
       // that failed, must not clear a reading that was true a moment ago.
-      this.options.onWarning?.(`Diff scan failed for ${target.environmentId}`, error);
+      this.warn(`Diff scan failed for ${target.environmentId}`, error);
       return;
     }
 
     // The environment may have been retargeted or dropped while the scan ran.
-    if (!entry.active || !isSameTarget(entry.target, target)) return;
+    if (
+      !entry.active
+      || !isSameTarget(entry.target, target)
+      || entry.scanGeneration !== scanGeneration
+    ) return;
 
     entry.cachedChanges = result.changes;
     entry.cachedAt = this.options.monotonicNow();
@@ -340,7 +390,26 @@ export class DiffStatsService {
       computedAt: this.options.now(),
     };
     entry.last = change;
-    this.options.emit(DIFF_STATS_CHANGED_EVENT, change);
+    this.emitSafely(change);
+  }
+
+  private emitSafely(payload: EnvironmentDiffStatsChange | EnvironmentDiffStatsRemoval): void {
+    try {
+      this.options.emit(DIFF_STATS_CHANGED_EVENT, payload);
+    } catch (error) {
+      // One faulty event sink must not turn a best-effort background refresh
+      // into an unhandled rejection or stop future scans.
+      this.warn(`Failed to emit diff stats for ${payload.environmentId}`, error);
+    }
+  }
+
+  private warn(message: string, error: unknown): void {
+    try {
+      this.options.onWarning?.(message, error);
+    } catch {
+      // Warning reporters are observational. A broken logger must never break
+      // the background scan lifecycle it is supposed to describe.
+    }
   }
 }
 

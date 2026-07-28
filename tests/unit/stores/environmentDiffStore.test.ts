@@ -57,6 +57,32 @@ describe("environmentDiffStore", () => {
     expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.truncated).toBe(true);
   });
 
+  test("removes an entry when the backend invalidates its counts", () => {
+    useEnvironmentDiffStore.getState().applyChange(change("env-1"));
+
+    useEnvironmentDiffStore.getState().applyChange({
+      environmentId: "env-1",
+      comparisonRef: "release",
+      computedAt: "2026-07-27T12:01:00.000Z",
+      removed: true,
+    });
+
+    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(false);
+  });
+
+  test("does not replace state when an invalidation repeats for an absent entry", () => {
+    const statsMap = useEnvironmentDiffStore.getState().stats;
+
+    useEnvironmentDiffStore.getState().applyChange({
+      environmentId: "env-1",
+      comparisonRef: "release",
+      computedAt: "2026-07-27T12:01:00.000Z",
+      removed: true,
+    });
+
+    expect(useEnvironmentDiffStore.getState().stats).toBe(statsMap);
+  });
+
   test("a snapshot replaces the map rather than merging into it", () => {
     useEnvironmentDiffStore.getState().applyChange(change("env-gone"));
 

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { DIFF_STATS_CHANGED_EVENT } from "@orkestrator/protocol/diff-stats";
 import {
   DiffStatsService,
@@ -9,6 +9,7 @@ import {
 interface Harness {
   service: DiffStatsService;
   emitted: Array<{ event: string; payload: any }>;
+  warnings: Array<{ message: string; error: unknown }>;
   scans: DiffStatsTarget[];
   /** Fires the interval registered for a target, if any. */
   tick: (environmentId: string) => void;
@@ -16,7 +17,9 @@ interface Harness {
   signalChange: (environmentId: string) => void;
   intervalFor: (environmentId: string) => number | undefined;
   watcherClosed: (environmentId: string) => boolean;
+  watcherClosedAtPath: (worktreePath: string) => boolean;
   failWatch: (environmentId: string) => void;
+  failWatchAtPath: (worktreePath: string) => void;
   setScan: (scan: (target: DiffStatsTarget) => Promise<DiffScanResult>) => void;
   clock: { value: number };
 }
@@ -25,9 +28,14 @@ function stats(overrides: Partial<DiffScanResult["stats"]> = {}) {
   return { additions: 1, deletions: 0, filesChanged: 1, truncated: false, ...overrides };
 }
 
-function createHarness(options: { watchable?: boolean } = {}): Harness {
+function createHarness(options: {
+  watchable?: boolean;
+  watcherStartError?: Error;
+  emit?: (event: string, payload: unknown) => void;
+} = {}): Harness {
   const watchable = options.watchable ?? true;
   const emitted: Array<{ event: string; payload: any }> = [];
+  const warnings: Array<{ message: string; error: unknown }> = [];
   const scans: DiffStatsTarget[] = [];
   const clock = { value: 1_000 };
 
@@ -54,7 +62,8 @@ function createHarness(options: { watchable?: boolean } = {}): Harness {
       scans.push(target);
       return scan(target);
     },
-    emit: (event, payload) => emitted.push({ event, payload }),
+    emit: options.emit ?? ((event, payload) => emitted.push({ event, payload })),
+    onWarning: (message, error) => warnings.push({ message, error }),
     now: () => new Date(clock.value).toISOString(),
     monotonicNow: () => clock.value,
     schedule: (callback, intervalMs) => {
@@ -75,6 +84,10 @@ function createHarness(options: { watchable?: boolean } = {}): Harness {
         watching: watchable,
       };
       watchers.set(key, record);
+      if (options.watcherStartError) {
+        record.watching = false;
+        watcherOptions.onError?.(options.watcherStartError);
+      }
       return {
         get watching() {
           return record.watching && !record.closed;
@@ -114,6 +127,7 @@ function createHarness(options: { watchable?: boolean } = {}): Harness {
   return {
     service,
     emitted,
+    warnings,
     scans,
     clock,
     tick(environmentId) {
@@ -136,6 +150,9 @@ function createHarness(options: { watchable?: boolean } = {}): Harness {
       const key = watcherKeyFor(environmentId);
       return key ? watchers.get(key)?.closed === true : true;
     },
+    watcherClosedAtPath(worktreePath) {
+      return watchers.get(worktreePath)?.closed === true;
+    },
     failWatch(environmentId) {
       const key = watcherKeyFor(environmentId);
       const record = key ? watchers.get(key) : undefined;
@@ -147,6 +164,9 @@ function createHarness(options: { watchable?: boolean } = {}): Harness {
       } finally {
         schedulingFor = undefined;
       }
+    },
+    failWatchAtPath(worktreePath) {
+      watchers.get(worktreePath)?.onError?.(new Error("stale watch failed"));
     },
     setScan(next) {
       scan = next;
@@ -250,7 +270,9 @@ describe("DiffStatsService", () => {
     await settle();
 
     expect(watched.intervalFor("env-local")).toBe(120_000);
+    expect(watched.service.isWatching("env-local")).toBe(true);
     expect(unwatched.intervalFor("env-local")).toBe(15_000);
+    expect(unwatched.service.isWatching("env-local")).toBe(false);
   });
 
   test("containers are polled rather than watched", async () => {
@@ -275,6 +297,44 @@ describe("DiffStatsService", () => {
     harness.failWatch("env-local");
 
     expect(harness.intervalFor("env-local")).toBe(15_000);
+    expect(harness.warnings).toEqual([
+      expect.objectContaining({ message: "Diff watcher failed for env-local" }),
+    ]);
+  });
+
+  test("falls back cleanly when watcher setup reports an error synchronously", async () => {
+    const harness = createHarness({ watcherStartError: new Error("watch unsupported") });
+
+    harness.service.track(localTarget());
+    await settle();
+
+    expect(harness.service.isWatching("env-local")).toBe(false);
+    expect(harness.intervalFor("env-local")).toBe(15_000);
+    expect(harness.warnings).toEqual([
+      expect.objectContaining({ message: "Diff watcher failed for env-local" }),
+    ]);
+  });
+
+  test("ignores a late error from a watcher replaced by retargeting", async () => {
+    const harness = createHarness();
+    const originalPath = "/tmp/env-local-original";
+    const replacementPath = "/tmp/env-local-replacement";
+    harness.service.track(localTarget({ worktreePath: originalPath }));
+    await settle();
+
+    harness.service.track(localTarget({
+      worktreePath: replacementPath,
+      comparisonRef: "develop",
+    }));
+    await settle();
+    expect(harness.watcherClosedAtPath(originalPath)).toBe(true);
+    expect(harness.service.isWatching("env-local")).toBe(true);
+
+    harness.failWatchAtPath(originalPath);
+
+    expect(harness.service.isWatching("env-local")).toBe(true);
+    expect(harness.intervalFor("env-local")).toBe(120_000);
+    expect(harness.warnings).toEqual([]);
   });
 
   test("a failed scan keeps the previous counts and stays silent", async () => {
@@ -288,6 +348,9 @@ describe("DiffStatsService", () => {
 
     expect(harness.emitted).toHaveLength(1);
     expect(harness.service.snapshot()[0]?.stats).toEqual(stats());
+    expect(harness.warnings).toEqual([
+      expect.objectContaining({ message: "Diff scan failed for env-local" }),
+    ]);
   });
 
   test("retargeting drops the old counts and rescans", async () => {
@@ -300,9 +363,31 @@ describe("DiffStatsService", () => {
     await settle();
 
     expect(harness.scans[1]?.comparisonRef).toBe("develop");
+    expect(harness.emitted[1]?.payload).toMatchObject({
+      environmentId: "env-local",
+      comparisonRef: "develop",
+      removed: true,
+    });
     expect(harness.service.snapshot()).toEqual([
       expect.objectContaining({ comparisonRef: "develop", stats: stats({ additions: 4 }) }),
     ]);
+  });
+
+  test("retargeting removes published counts even when the replacement scan fails", async () => {
+    const harness = createHarness();
+    harness.service.track(localTarget());
+    await settle();
+
+    harness.setScan(() => Promise.reject(new Error("missing replacement ref")));
+    harness.service.track(localTarget({ comparisonRef: "develop" }));
+    await settle();
+
+    expect(harness.emitted.at(-1)?.payload).toMatchObject({
+      environmentId: "env-local",
+      comparisonRef: "develop",
+      removed: true,
+    });
+    expect(harness.service.snapshot()).toEqual([]);
   });
 
   // The counts previously came from a different baseline, so an identical
@@ -316,8 +401,47 @@ describe("DiffStatsService", () => {
     harness.service.track(localTarget({ comparisonRef: "develop" }));
     await settle();
 
-    expect(harness.emitted).toHaveLength(2);
-    expect(harness.emitted[1]?.payload.comparisonRef).toBe("develop");
+    expect(harness.emitted).toHaveLength(3);
+    expect(harness.emitted[1]?.payload.removed).toBe(true);
+    expect(harness.emitted[2]?.payload.comparisonRef).toBe("develop");
+  });
+
+  test("a retarget during an in-flight scan performs a complete replacement scan", async () => {
+    const harness = createHarness();
+    let releaseInitial: (() => void) | undefined;
+    harness.setScan((target) => {
+      if (target.comparisonRef === "main") {
+        return new Promise((resolve) => {
+          releaseInitial = () => resolve({
+            stats: stats({ additions: 99 }),
+            changes: [{ path: "stale.ts" }],
+          });
+        });
+      }
+      return Promise.resolve({
+        stats: stats({ additions: 7 }),
+        changes: [{ path: "replacement.ts" }],
+      });
+    });
+
+    harness.service.track(localTarget());
+    await settle();
+    harness.service.track(localTarget({ comparisonRef: "develop" }));
+    releaseInitial?.();
+    await settle();
+
+    expect(harness.scans.map((target) => target.comparisonRef)).toEqual(["main", "develop"]);
+    expect(harness.service.snapshot()).toEqual([
+      expect.objectContaining({
+        comparisonRef: "develop",
+        stats: stats({ additions: 7 }),
+      }),
+    ]);
+    expect(harness.service.cachedChanges(
+      { worktreePath: "/tmp/env-local-worktree" },
+      "develop",
+      3_000,
+    )).toEqual([{ path: "replacement.ts" }]);
   });
 
   test("tracking an unchanged target is a no-op", async () => {
@@ -329,6 +453,36 @@ describe("DiffStatsService", () => {
     await settle();
 
     expect(harness.scans).toHaveLength(1);
+  });
+
+  test("refresh forces a scan and is safe for an unknown environment", async () => {
+    const harness = createHarness();
+    harness.service.track(containerTarget());
+    await settle();
+
+    expect(() => harness.service.refresh("missing")).not.toThrow();
+    harness.service.refresh("env-container");
+    await settle();
+
+    expect(harness.scans).toHaveLength(2);
+  });
+
+  test("refresh during an in-flight scan queues exactly one replacement scan", async () => {
+    const harness = createHarness();
+    let release: (() => void) | undefined;
+    harness.setScan(() => new Promise((resolve) => {
+      release = () => resolve({ stats: stats(), changes: [] });
+    }));
+    harness.service.track(containerTarget());
+    await settle();
+
+    harness.service.refresh("env-container");
+    harness.service.refresh("env-container");
+    expect(harness.scans).toHaveLength(1);
+
+    release?.();
+    await settle();
+    expect(harness.scans).toHaveLength(2);
   });
 
   test("pause keeps the counts but stops scanning", async () => {
@@ -433,6 +587,72 @@ describe("DiffStatsService", () => {
     expect(announced).not.toContain("main");
   });
 
+  test("continues scanning when an event sink throws", async () => {
+    const harness = createHarness({
+      emit: () => {
+        throw new Error("event sink failed");
+      },
+    });
+    harness.service.track(localTarget());
+    await settle();
+    harness.service.refresh("env-local");
+    await settle();
+
+    expect(harness.scans).toHaveLength(2);
+    expect(harness.service.snapshot()).toHaveLength(1);
+    expect(harness.warnings).toEqual([
+      expect.objectContaining({ message: "Failed to emit diff stats for env-local" }),
+    ]);
+  });
+
+  test("a throwing warning reporter cannot break later scans", async () => {
+    let shouldFail = true;
+    const service = new DiffStatsService({
+      emit: () => undefined,
+      scan: async () => {
+        if (shouldFail) throw new Error("first scan failed");
+        return { stats: stats({ additions: 6 }), changes: [] };
+      },
+      onWarning: () => {
+        throw new Error("logger failed");
+      },
+      schedule: () => 1,
+      cancel: () => undefined,
+      startWatcher: () => ({ watching: true, close: () => undefined }),
+    });
+
+    service.track(localTarget());
+    await settle();
+    shouldFail = false;
+    service.refresh("env-local");
+    await settle();
+
+    expect(service.snapshot()[0]?.stats.additions).toBe(6);
+    service.shutdown();
+  });
+
+  test("the default interval is unrefed so tracking cannot hold the process open", async () => {
+    const unref = mock(() => undefined);
+    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(
+      (() => ({ unref })) as typeof setInterval,
+    );
+    const service = new DiffStatsService({
+      emit: () => undefined,
+      scan: async () => ({ stats: stats(), changes: [] }),
+      cancel: () => undefined,
+    });
+
+    try {
+      service.track(containerTarget());
+      await settle();
+      expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(unref).toHaveBeenCalledTimes(1);
+    } finally {
+      service.shutdown();
+      setIntervalSpy.mockRestore();
+    }
+  });
+
   describe("shared scan cache", () => {
     test("serves a recent file list to a second reader", async () => {
       const harness = createHarness();
@@ -462,6 +682,20 @@ describe("DiffStatsService", () => {
       )).toBeUndefined();
     });
 
+    test("serves a file list at the exact maximum-age boundary", async () => {
+      const harness = createHarness();
+      harness.setScan(async () => ({ stats: stats(), changes: [{ path: "boundary.ts" }] }));
+      harness.service.track(localTarget());
+      await settle();
+      harness.clock.value += 3_000;
+
+      expect(harness.service.cachedChanges(
+        { worktreePath: "/tmp/env-local-worktree" },
+        "main",
+        3_000,
+      )).toEqual([{ path: "boundary.ts" }]);
+    });
+
     test("withholds a file list measured against a different ref", async () => {
       const harness = createHarness();
       harness.setScan(async () => ({ stats: stats(), changes: [{ path: "a.ts" }] }));
@@ -485,6 +719,77 @@ describe("DiffStatsService", () => {
 
       expect(harness.service.cachedChanges({ containerId: "container-1" }, "main", 3_000))
         .toEqual([{ path: "b.ts" }]);
+    });
+
+    test("does not adopt a scan measured against the wrong ref", async () => {
+      const harness = createHarness();
+      harness.setScan(async () => ({ stats: stats(), changes: [{ path: "original.ts" }] }));
+      harness.service.track(containerTarget());
+      await settle();
+
+      harness.service.adoptScan({ containerId: "container-1" }, "develop", [{ path: "wrong.ts" }]);
+
+      expect(harness.service.cachedChanges({ containerId: "container-1" }, "main", 3_000))
+        .toEqual([{ path: "original.ts" }]);
+      expect(harness.service.cachedChanges({ containerId: "container-1" }, "develop", 3_000))
+        .toBeUndefined();
+    });
+
+    test("invalidates a matching cached file list after a mutation", async () => {
+      const harness = createHarness();
+      harness.setScan(async () => ({ stats: stats(), changes: [{ path: "before.ts" }] }));
+      harness.service.track(localTarget());
+      await settle();
+
+      harness.service.invalidateChanges({ worktreePath: "/tmp/env-local-worktree" });
+
+      expect(harness.service.cachedChanges(
+        { worktreePath: "/tmp/env-local-worktree" },
+        "main",
+        3_000,
+      )).toBeUndefined();
+      expect(harness.service.snapshot()).toHaveLength(1);
+    });
+
+    test("invalidation rejects a pre-mutation in-flight result and rescans", async () => {
+      const harness = createHarness();
+      let scanNumber = 0;
+      let releaseStale: (() => void) | undefined;
+      harness.setScan(() => {
+        scanNumber += 1;
+        if (scanNumber === 1) {
+          return new Promise((resolve) => {
+            releaseStale = () => resolve({
+              stats: stats({ additions: 99 }),
+              changes: [{ path: "stale.ts" }],
+            });
+          });
+        }
+        return Promise.resolve({
+          stats: stats({ additions: 2 }),
+          changes: [{ path: "fresh.ts" }],
+        });
+      });
+      harness.service.track(localTarget());
+      await settle();
+
+      harness.service.invalidateChanges({ worktreePath: "/tmp/env-local-worktree" });
+      releaseStale?.();
+      await settle();
+
+      expect(harness.scans).toHaveLength(2);
+      expect(harness.emitted).toHaveLength(1);
+      expect(harness.emitted[0]?.payload.stats.additions).toBe(2);
+      expect(harness.service.cachedChanges(
+        { worktreePath: "/tmp/env-local-worktree" },
+        "main",
+        3_000,
+      )).toEqual([{ path: "fresh.ts" }]);
+    });
+
+    test("invalidating an unknown target is safe", () => {
+      const harness = createHarness();
+      expect(() => harness.service.invalidateChanges({ containerId: "missing" })).not.toThrow();
     });
 
     test("ignores an adopted scan for an untracked target", () => {

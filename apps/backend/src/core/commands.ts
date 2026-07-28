@@ -306,7 +306,12 @@ process.stdin.on("end", () => {
     let count = 0;
     let fd;
     try {
-      fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      fd = fs.openSync(
+        filePath,
+        fs.constants.O_RDONLY
+          | (fs.constants.O_NOFOLLOW || 0)
+          | (fs.constants.O_NONBLOCK || 0),
+      );
       const initial = fs.fstatSync(fd);
       if (!initial.isFile() || initial.size === 0 || initial.size > limit) throw new Error("skip");
       const buffer = Buffer.allocUnsafe(64 * 1024);
@@ -397,6 +402,8 @@ const DIFF_CACHE_MAX_AGE_MS = 3_000;
  * does not exist yet.
  */
 let diffStatsEmit: BackendEmit | undefined;
+let diffStatsSyncGeneration = 0;
+let diffStatsSyncQueue: Promise<void> = Promise.resolve();
 
 const diffStatsService = new DiffStatsService({
   emit: (event, payload) => diffStatsEmit?.(event, payload),
@@ -427,42 +434,60 @@ const diffStatsService = new DiffStatsService({
  * lifecycle event self-corrects on the next call instead of leaving an
  * environment permanently unwatched or a deleted one permanently watched.
  */
+function invalidatePendingDiffStatsSync(): void {
+  diffStatsSyncGeneration += 1;
+}
+
 async function syncDiffStatsTracking(context: CommandContext): Promise<void> {
   diffStatsEmit = context.emit;
-  const [environments, config] = await Promise.all([
-    context.storage.loadEnvironments(),
-    context.storage.loadConfig(),
-  ]);
+  const generation = diffStatsSyncGeneration;
+  const operation = diffStatsSyncQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const [environments, config] = await Promise.all([
+        context.storage.loadEnvironments(),
+        context.storage.loadConfig(),
+      ]);
 
-  const live = new Set<string>();
-  for (const environment of environments) {
-    live.add(environment.id);
-    const comparisonRef = resolveComparisonRef(
-      environment.createdFromCommit,
-      config.repositories?.[environment.projectId],
-    );
-    const target = environment.environmentType === "local"
-      ? (environment.worktreePath
-        ? { environmentId: environment.id, kind: "local" as const, worktreePath: environment.worktreePath, comparisonRef }
-        : undefined)
-      : (environment.status === "running" && environment.containerId
-        ? { environmentId: environment.id, kind: "container" as const, containerId: environment.containerId, comparisonRef }
-        : undefined);
+      // A stop, delete, shutdown, or newer reconciliation may have happened
+      // while storage was loading. Applying this older snapshot would recreate
+      // a watcher or poller that the later lifecycle action deliberately
+      // removed.
+      if (generation !== diffStatsSyncGeneration) return;
 
-    // Readable now: scan it. Not readable but still an environment: hold the
-    // last counts and stop scanning, rather than discarding a reading that
-    // described work which is still on disk.
-    if (target) diffStatsService.track(target);
-    else diffStatsService.pause(environment.id);
-  }
+      const live = new Set<string>();
+      for (const environment of environments) {
+        live.add(environment.id);
+        const comparisonRef = resolveComparisonRef(
+          environment.createdFromCommit,
+          config.repositories?.[environment.projectId],
+        );
+        const target = environment.environmentType === "local"
+          ? (environment.worktreePath
+            ? { environmentId: environment.id, kind: "local" as const, worktreePath: environment.worktreePath, comparisonRef }
+            : undefined)
+          : (environment.status === "running" && environment.containerId
+            ? { environmentId: environment.id, kind: "container" as const, containerId: environment.containerId, comparisonRef }
+            : undefined);
 
-  for (const environmentId of diffStatsService.trackedIds()) {
-    if (!live.has(environmentId)) diffStatsService.untrack(environmentId);
-  }
+        // Readable now: scan it. Not readable but still an environment: hold the
+        // last counts and stop scanning, rather than discarding a reading that
+        // described work which is still on disk.
+        if (target) diffStatsService.track(target);
+        else diffStatsService.pause(environment.id);
+      }
+
+      for (const environmentId of diffStatsService.trackedIds()) {
+        if (!live.has(environmentId)) diffStatsService.untrack(environmentId);
+      }
+    });
+  diffStatsSyncQueue = operation;
+  await operation;
 }
 
 /** Releases every diff watcher and timer; called on backend shutdown. */
 export function shutdownDiffStatsTracking(): void {
+  invalidatePendingDiffStatsSync();
   diffStatsService.shutdown();
 }
 
@@ -3501,6 +3526,7 @@ async function deleteEnvironment(
       cleanupEnvironmentSetupState(environmentId);
       // Releases the watcher and discards the counts. This is the one case where
       // discarding is right: the worktree they described is gone.
+      invalidatePendingDiffStatsSync();
       diffStatsService.untrack(environmentId);
       if (environment?.worktreePath) gitFetchScheduler.forget(environment.worktreePath);
     });
@@ -4015,7 +4041,12 @@ async function countLocalFileLines(rootPath: string, relativePath: string): Prom
   // O_NOFOLLOW, and a stat of the descriptor rather than the path, so an
   // untracked symlink cannot be followed out of the worktree and the file that
   // gets measured is provably the one that passed the size check.
-  const handle = await fs.open(fullPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0));
+  const handle = await fs.open(
+    fullPath,
+    fsConstants.O_RDONLY
+      | (fsConstants.O_NOFOLLOW || 0)
+      | (fsConstants.O_NONBLOCK || 0),
+  );
   try {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size === 0 || stat.size > MAX_BINARY_FILE_BYTES) return 0;
@@ -5196,6 +5227,7 @@ export function createCommandRegistry(
           const running = await storage.updateEnvironment(environment.id, { status: "running" });
           const result = await startEnvironmentSetup(running, context);
           schedulePendingEnvironmentRename(environment.id, context);
+          await syncDiffStatsTracking(context);
           return result;
         }
         const project = await storage.getProject(environment.projectId);
@@ -5216,6 +5248,7 @@ export function createCommandRegistry(
         });
         const result = await startEnvironmentSetup(updated, context);
         schedulePendingEnvironmentRename(environment.id, context);
+        await syncDiffStatsTracking(context);
         return result;
       }
 
@@ -5233,7 +5266,7 @@ export function createCommandRegistry(
       });
       const result = await startEnvironmentSetup(updated, context);
       schedulePendingEnvironmentRename(environment.id, context);
-      void syncDiffStatsTracking(context).catch(() => undefined);
+      await syncDiffStatsTracking(context);
       return result;
     } catch (error) {
       await storage.updateEnvironment(environment.id, { status: "error" }).catch(() => undefined);
@@ -5266,6 +5299,7 @@ export function createCommandRegistry(
       shutdownClaudeStatePolling(environment.containerId);
       // Keeps the last counts on screen; a stopped container's work is still on
       // disk, it just cannot be read until the container is back.
+      invalidatePendingDiffStatsSync();
       diffStatsService.pause(environment.id);
       return;
     }
@@ -6151,13 +6185,25 @@ export function createCommandRegistry(
   );
   register("read_file_base64", ({ filePath }) => readFileBase64(asString(filePath, "filePath")));
   register("write_local_file", ({ worktreePath, filePath, base64Data }) => writeFileBase64(asString(worktreePath, "worktreePath"), asString(filePath, "filePath"), asString(base64Data, "base64Data")));
-  register("revert_local_file", async ({ environmentId, filePath, targetBranch }, { storage }) => {
-    const environment = await requireLocalMutationEnvironment(storage, asString(environmentId, "environmentId"));
-    return revertLocalFile(environment.worktreePath!, asString(filePath, "filePath"), asString(targetBranch, "targetBranch"));
+  register("revert_local_file", async ({ environmentId, filePath, targetBranch }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await requireLocalMutationEnvironment(context.storage, id);
+    const result = await revertLocalFile(
+      environment.worktreePath!,
+      asString(filePath, "filePath"),
+      asString(targetBranch, "targetBranch"),
+    );
+    diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
+    diffStatsService.refresh(id);
+    return result;
   });
-  register("delete_local_file", async ({ environmentId, filePath }, { storage }) => {
-    const environment = await requireLocalMutationEnvironment(storage, asString(environmentId, "environmentId"));
-    return deleteLocalFile(environment.worktreePath!, asString(filePath, "filePath"));
+  register("delete_local_file", async ({ environmentId, filePath }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await requireLocalMutationEnvironment(context.storage, id);
+    const result = await deleteLocalFile(environment.worktreePath!, asString(filePath, "filePath"));
+    diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
+    diffStatsService.refresh(id);
+    return result;
   });
 
   register("get_git_status", async ({ containerId, targetBranch, includeUncommitted }) => {
@@ -6223,19 +6269,25 @@ export function createCommandRegistry(
     });
     return fullPath;
   });
-  register("revert_container_file", async ({ environmentId, filePath, targetBranch }, { storage }) => {
-    const environment = await requireContainerMutationEnvironment(storage, asString(environmentId, "environmentId"));
+  register("revert_container_file", async ({ environmentId, filePath, targetBranch }, context) => {
+    const environmentIdString = asString(environmentId, "environmentId");
+    const environment = await requireContainerMutationEnvironment(context.storage, environmentIdString);
     const id = environment.containerId!;
     const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
     const branch = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
     await dockerExec(id, containerRevertFileCommand(target, branch));
+    diffStatsService.invalidateChanges({ containerId: id });
+    diffStatsService.refresh(environmentIdString);
     return target;
   });
-  register("delete_container_file", async ({ environmentId, filePath }, { storage }) => {
-    const environment = await requireContainerMutationEnvironment(storage, asString(environmentId, "environmentId"));
+  register("delete_container_file", async ({ environmentId, filePath }, context) => {
+    const environmentIdString = asString(environmentId, "environmentId");
+    const environment = await requireContainerMutationEnvironment(context.storage, environmentIdString);
     const id = environment.containerId!;
     const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
     await dockerExec(id, containerDeleteFileCommand(target));
+    diffStatsService.invalidateChanges({ containerId: id });
+    diffStatsService.refresh(environmentIdString);
     return target;
   });
 
@@ -6397,8 +6449,16 @@ export const __testing = {
   isMissingTargetRefResponse,
   buildContainerGitStatusScript,
   parseHeadCommit,
+  countLocalFileLines,
   establishCreatedFromCommit,
   completeEnvironmentSetup,
+  enableGitScanCaches,
+  trackDiffStats(target: Parameters<DiffStatsService["track"]>[0]): void {
+    diffStatsService.track(target);
+  },
+  trackedDiffStatsIds(): string[] {
+    return diffStatsService.trackedIds();
+  },
   CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER,
   CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL,
   CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL,

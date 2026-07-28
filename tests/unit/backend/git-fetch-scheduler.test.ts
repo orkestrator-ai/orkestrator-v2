@@ -4,6 +4,7 @@ import { GitFetchScheduler } from "../../../apps/backend/src/core/git-fetch-sche
 interface Harness {
   scheduler: GitFetchScheduler;
   calls: string[][];
+  timeouts: number[];
   fetches: string[][];
   clock: { value: number };
   /** Holds the next fetch open until released. */
@@ -14,8 +15,13 @@ interface Harness {
   setCommonDir: (worktreePath: string, commonDir: string) => void;
 }
 
-function createHarness(options: { ttlMs?: number } = {}): Harness {
+function createHarness(options: {
+  ttlMs?: number;
+  fetchTimeoutMs?: number;
+  resolveTimeoutMs?: number;
+} = {}): Harness {
   const calls: string[][] = [];
+  const timeouts: number[] = [];
   const fetches: string[][] = [];
   const clock = { value: 0 };
   const commonDirs = new Map<string, string>();
@@ -26,9 +32,12 @@ function createHarness(options: { ttlMs?: number } = {}): Harness {
 
   const scheduler = new GitFetchScheduler({
     ttlMs: options.ttlMs,
+    fetchTimeoutMs: options.fetchTimeoutMs,
+    resolveTimeoutMs: options.resolveTimeoutMs,
     now: () => clock.value,
-    run: async (args) => {
+    run: async (args, timeoutMs) => {
       calls.push(args);
+      timeouts.push(timeoutMs);
       if (args.includes("--git-common-dir")) {
         if (resolveFails) throw new Error("old git");
         const worktreePath = args[1]!;
@@ -49,6 +58,7 @@ function createHarness(options: { ttlMs?: number } = {}): Harness {
   return {
     scheduler,
     calls,
+    timeouts,
     fetches,
     clock,
     block() {
@@ -86,11 +96,11 @@ describe("GitFetchScheduler", () => {
     expect(harness.fetches).toHaveLength(1);
   });
 
-  test("fetches again once the ttl expires", async () => {
+  test("fetches again at the exact ttl boundary", async () => {
     const harness = createHarness({ ttlMs: 60_000 });
     await harness.scheduler.ensureFetched("/wt/a", "main");
 
-    harness.clock.value += 60_001;
+    harness.clock.value += 60_000;
     await harness.scheduler.ensureFetched("/wt/a", "main");
 
     expect(harness.fetches).toHaveLength(2);
@@ -194,6 +204,31 @@ describe("GitFetchScheduler", () => {
     ]);
   });
 
+  test("degrades to per-worktree keying when the common dir output is empty", async () => {
+    const harness = createHarness({ ttlMs: 60_000 });
+    harness.setCommonDir("/wt/a", "");
+    harness.setCommonDir("/wt/b", "");
+
+    await harness.scheduler.ensureFetched("/wt/a", "main");
+    await harness.scheduler.ensureFetched("/wt/b", "main");
+
+    expect(harness.fetches).toEqual([
+      ["-C", "/wt/a", "fetch", "origin", "main"],
+      ["-C", "/wt/b", "fetch", "origin", "main"],
+    ]);
+  });
+
+  test("forwards configured timeouts to resolve and fetch commands", async () => {
+    const harness = createHarness({
+      fetchTimeoutMs: 1_234,
+      resolveTimeoutMs: 5_678,
+    });
+
+    await harness.scheduler.ensureFetched("/wt/a", "main");
+
+    expect(harness.timeouts).toEqual([5_678, 1_234]);
+  });
+
   test("invalidate forces the next request to fetch", async () => {
     const harness = createHarness({ ttlMs: 60_000 });
     await harness.scheduler.ensureFetched("/wt/a", "main");
@@ -218,19 +253,40 @@ describe("GitFetchScheduler", () => {
     expect(harness.fetches).toHaveLength(4);
   });
 
+  test("invalidate during an in-flight fetch queues a fresh fetch for the following request", async () => {
+    const harness = createHarness({ ttlMs: 60_000 });
+    const release = harness.block();
+    const inFlight = harness.scheduler.ensureFetched("/wt/a", "main");
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    harness.scheduler.invalidate("/wt/a", "main");
+    await Promise.resolve();
+    const following = harness.scheduler.ensureFetched("/wt/a", "main");
+    await Promise.resolve();
+    expect(harness.fetches).toHaveLength(1);
+
+    release();
+    await Promise.all([inFlight, following]);
+
+    expect(harness.fetches).toHaveLength(2);
+  });
+
   test("invalidate is safe for a worktree that was never fetched", () => {
     const harness = createHarness();
     expect(() => harness.scheduler.invalidate("/wt/unknown")).not.toThrow();
   });
 
-  test("forget makes a recreated worktree resolve its common dir again", async () => {
+  test("forget makes a recreated worktree resolve and fetch from its new repository", async () => {
     const harness = createHarness({ ttlMs: 60_000 });
+    harness.setCommonDir("/wt/a", "/repo-one/.git");
     await harness.scheduler.ensureFetched("/wt/a", "main");
 
     harness.scheduler.forget("/wt/a");
+    harness.setCommonDir("/wt/a", "/repo-two/.git");
     await harness.scheduler.ensureFetched("/wt/a", "main");
 
     const resolves = harness.calls.filter((args) => args.includes("--git-common-dir"));
     expect(resolves).toHaveLength(2);
+    expect(harness.fetches).toHaveLength(2);
   });
 });

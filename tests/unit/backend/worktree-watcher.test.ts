@@ -174,6 +174,26 @@ describe("startWorktreeWatcher", () => {
     expect(watcher.watching).toBe(false);
   });
 
+  test("close remains safe when the platform watcher throws while closing", () => {
+    const start = ((_target: string, _listener: (eventType: string, filename: string | null) => void) => ({
+      on() {
+        return this;
+      },
+      close() {
+        throw new Error("watcher already torn down");
+      },
+    })) as NonNullable<Parameters<typeof startWorktreeWatcher>[0]["startWatch"]>;
+    const watcher = startWorktreeWatcher({
+      worktreePath: "/wt",
+      startWatch: start,
+      onChange: () => {},
+    });
+
+    expect(watcher.watching).toBe(true);
+    expect(() => watcher.close()).not.toThrow();
+    expect(watcher.watching).toBe(false);
+  });
+
   // The owner has to fall back to polling rather than going quiet forever.
   test("reports not watching when the watch cannot be established", () => {
     let reported: unknown;

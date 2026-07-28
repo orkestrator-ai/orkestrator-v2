@@ -14,7 +14,7 @@
  * still refetch, and are served from the same cached scan.
  */
 
-/** SSE/IPC event name carrying an {@link EnvironmentDiffStatsChange}. */
+/** SSE/IPC event name carrying an {@link EnvironmentDiffStatsEvent}. */
 export const DIFF_STATS_CHANGED_EVENT = "environment-diff-stats-changed";
 
 export interface EnvironmentDiffStats {
@@ -40,6 +40,25 @@ export interface EnvironmentDiffStatsChange {
   computedAt: string;
 }
 
+/**
+ * Incremental invalidation emitted when previously published counts stop being
+ * valid, for example while an environment is being retargeted to a new
+ * comparison ref. A removal is deliberately distinct from zero counts: zero is
+ * a measured result, while removal means there is no current result to show.
+ */
+export interface EnvironmentDiffStatsRemoval {
+  environmentId: string;
+  /** The comparison ref for which a replacement scan is being attempted. */
+  comparisonRef: string;
+  /** ISO timestamp at which the previous result became invalid. */
+  computedAt: string;
+  removed: true;
+}
+
+export type EnvironmentDiffStatsEvent =
+  | EnvironmentDiffStatsChange
+  | EnvironmentDiffStatsRemoval;
+
 /** Full snapshot returned by the `get_environment_diff_stats` command. */
 export interface EnvironmentDiffStatsSnapshot {
   entries: EnvironmentDiffStatsChange[];
@@ -55,19 +74,54 @@ export const EMPTY_DIFF_STATS: EnvironmentDiffStats = {
 export function isEnvironmentDiffStats(value: unknown): value is EnvironmentDiffStats {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.additions === "number"
-    && typeof candidate.deletions === "number"
-    && typeof candidate.filesChanged === "number"
+  return isCount(candidate.additions)
+    && isCount(candidate.deletions)
+    && isCount(candidate.filesChanged)
     && typeof candidate.truncated === "boolean";
 }
 
 export function isEnvironmentDiffStatsChange(value: unknown): value is EnvironmentDiffStatsChange {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.environmentId === "string"
-    && typeof candidate.comparisonRef === "string"
-    && typeof candidate.computedAt === "string"
+  return isNonBlankString(candidate.environmentId)
+    && isNonBlankString(candidate.comparisonRef)
+    && isIsoTimestamp(candidate.computedAt)
     && isEnvironmentDiffStats(candidate.stats);
+}
+
+export function isEnvironmentDiffStatsRemoval(value: unknown): value is EnvironmentDiffStatsRemoval {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return candidate.removed === true
+    && isNonBlankString(candidate.environmentId)
+    && isNonBlankString(candidate.comparisonRef)
+    && isIsoTimestamp(candidate.computedAt);
+}
+
+export function isEnvironmentDiffStatsEvent(value: unknown): value is EnvironmentDiffStatsEvent {
+  return isEnvironmentDiffStatsChange(value) || isEnvironmentDiffStatsRemoval(value);
+}
+
+export function isEnvironmentDiffStatsSnapshot(
+  value: unknown,
+): value is EnvironmentDiffStatsSnapshot {
+  if (typeof value !== "object" || value === null) return false;
+  const entries = (value as Record<string, unknown>).entries;
+  return Array.isArray(entries) && entries.every(isEnvironmentDiffStatsChange);
+}
+
+function isCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0) return false;
+  const date = new Date(value);
+  return !Number.isNaN(date.valueOf()) && date.toISOString() === value;
 }
 
 /** Last-resort baseline when a repository has no branch configured at all. */
@@ -97,8 +151,13 @@ export function resolveComparisonRef(
   createdFromCommit: string | undefined | null,
   repositoryConfig: BaselineRepositoryConfig | undefined | null,
 ): string {
-  return createdFromCommit
-    || repositoryConfig?.prBaseBranch
-    || repositoryConfig?.defaultBranch
+  return normaliseRef(createdFromCommit)
+    || normaliseRef(repositoryConfig?.prBaseBranch)
+    || normaliseRef(repositoryConfig?.defaultBranch)
     || FALLBACK_COMPARISON_REF;
+}
+
+function normaliseRef(value: string | undefined | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
 }

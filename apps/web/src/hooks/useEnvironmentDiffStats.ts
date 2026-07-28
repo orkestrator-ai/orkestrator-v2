@@ -1,8 +1,9 @@
 import { useEffect } from "react";
 import {
   DIFF_STATS_CHANGED_EVENT,
-  isEnvironmentDiffStatsChange,
-  type EnvironmentDiffStatsChange,
+  isEnvironmentDiffStatsEvent,
+  isEnvironmentDiffStatsSnapshot,
+  type EnvironmentDiffStatsEvent,
 } from "@orkestrator/protocol/diff-stats";
 import { useEnvironmentDiffStore } from "@/stores/environmentDiffStore";
 import * as backend from "@/lib/backend";
@@ -26,43 +27,88 @@ export function useEnvironmentDiffStats() {
   useEffect(() => {
     let disposed = false;
     const unlisteners: UnlistenFn[] = [];
+    let rehydrating = false;
+    let rehydrateRequested = false;
+    let bufferedEvents: EnvironmentDiffStatsEvent[] = [];
 
     // The event stream has no replay buffer, so anything that happened while
     // this client was disconnected is only recoverable from the snapshot. This
-    // runs on mount and again on every reconnect.
-    const rehydrate = async () => {
-      try {
-        const snapshot = await backend.getEnvironmentDiffStats();
-        if (!disposed) applySnapshot(snapshot.entries);
-      } catch {
-        // Non-critical: the next change event or reconnect will resynchronise.
-      }
+    // runs after subscribing on mount and again on every reconnect. Events are
+    // buffered while a snapshot is in flight, then replayed over it: applying
+    // the snapshot last could otherwise overwrite a newer live update.
+    const requestRehydrate = () => {
+      rehydrateRequested = true;
+      if (rehydrating || disposed) return;
+      rehydrating = true;
+
+      void (async () => {
+        try {
+          // Reconnects may overlap a slow snapshot. Serialising requests keeps
+          // an older response from landing after a newer one; a reconnect that
+          // arrives mid-request causes one more pass through the loop.
+          while (!disposed && rehydrateRequested) {
+            rehydrateRequested = false;
+
+            try {
+              const snapshot: unknown = await backend.getEnvironmentDiffStats();
+              if (!disposed && isEnvironmentDiffStatsSnapshot(snapshot)) {
+                applySnapshot(snapshot.entries);
+              }
+            } catch {
+              // Non-critical: buffered changes still apply below, and the next
+              // reconnect will request another authoritative snapshot.
+            }
+
+            if (disposed) return;
+            const pending = bufferedEvents;
+            bufferedEvents = [];
+            for (const event of pending) applyChange(event);
+          }
+        } finally {
+          rehydrating = false;
+        }
+      })();
     };
 
     const subscribe = async () => {
-      const stopChanges = await listen<unknown>(DIFF_STATS_CHANGED_EVENT, (event) => {
-        // The payload crosses a process boundary and is the only thing driving
-        // the badge, so it is validated rather than trusted.
-        if (!isEnvironmentDiffStatsChange(event.payload)) return;
-        applyChange(event.payload as EnvironmentDiffStatsChange);
-      });
-      const stopReconnects = await listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
-        void rehydrate();
-      });
-
-      if (disposed) {
-        stopChanges();
-        stopReconnects();
-        return;
+      try {
+        const stopChanges = await listen<unknown>(DIFF_STATS_CHANGED_EVENT, (event) => {
+          // The payload crosses a process boundary and is the only thing
+          // driving the badge, so it is validated rather than trusted.
+          if (!isEnvironmentDiffStatsEvent(event.payload)) return;
+          if (rehydrating) {
+            bufferedEvents.push(event.payload);
+          } else {
+            applyChange(event.payload);
+          }
+        });
+        if (disposed) stopChanges();
+        else unlisteners.push(stopChanges);
+      } catch {
+        // A snapshot remains useful when native event subscription is
+        // temporarily unavailable.
       }
-      unlisteners.push(stopChanges, stopReconnects);
+
+      if (disposed) return;
+
+      try {
+        const stopReconnects = await listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+          requestRehydrate();
+        });
+        if (disposed) stopReconnects();
+        else unlisteners.push(stopReconnects);
+      } catch {
+        // The initial snapshot still runs. Remounting retries the listener.
+      }
+
+      if (!disposed) requestRehydrate();
     };
 
     void subscribe();
-    void rehydrate();
 
     return () => {
       disposed = true;
+      bufferedEvents = [];
       for (const unlisten of unlisteners) unlisten();
     };
   }, [applySnapshot, applyChange]);

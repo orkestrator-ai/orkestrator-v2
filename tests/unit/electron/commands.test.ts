@@ -75,7 +75,9 @@ const {
   __testing: commandTesting,
   CONTAINER_UNTRACKED_STATS_SCANNER,
   createCommandRegistry,
+  isImmutableCommitRef,
   resolveBrowserOpenCommand,
+  shutdownDiffStatsTracking,
   shutdownLocalServers,
 } = await import("../../../apps/backend/src/core/commands");
 
@@ -930,6 +932,7 @@ afterEach(async () => {
   try {
     await shutdownLocalServers();
   } finally {
+    shutdownDiffStatsTracking();
     commandTesting.resetLocalServerLifecycle();
     await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
     showOpenDialog.mockClear();
@@ -3662,6 +3665,20 @@ exit 0
     });
   });
 
+  test("only treats an exact hexadecimal object id as an immutable baseline", () => {
+    expect(isImmutableCommitRef("a".repeat(40))).toBe(true);
+    expect(isImmutableCommitRef(`  ${"A1".repeat(20)}  `)).toBe(true);
+    for (const ref of [
+      "a".repeat(39),
+      "a".repeat(41),
+      "g".repeat(40),
+      `refs/heads/${"a".repeat(40)}`,
+      "",
+    ]) {
+      expect(isImmutableCommitRef(ref)).toBe(false);
+    }
+  });
+
   test("still fetches when the baseline is a branch that can move", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
     await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
@@ -3763,6 +3780,260 @@ exit 0
       }
     });
 
+    test("invalidates the shared file-list cache after local revert and delete", async () => {
+      const { worktree } = await createGitWorktreeWithOrigin();
+      await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
+      const { environment, context, emitted } = localDiffEnvironment(worktree);
+      const commands = createCommandRegistry();
+
+      try {
+        await commands.get("get_environment_diff_stats")?.({}, context);
+        await waitForCondition(
+          () => emitted.some((entry) => entry.event === "environment-diff-stats-changed"),
+          "initial diff stats to be announced",
+        );
+
+        await commands.get("revert_local_file")?.(
+          { environmentId: environment.id, filePath: "tracked.txt", targetBranch: "main" },
+          context,
+        );
+        const immediate = await commands.get("get_local_git_status")?.(
+          { worktreePath: worktree, targetBranch: "main" },
+          context,
+        ) as Array<{ path: string }>;
+
+        expect(immediate.some((change) => change.path === "tracked.txt")).toBe(false);
+
+        await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged again\n");
+        emitted.splice(0);
+        await commands.get("refresh_environment_diff_stats")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await waitForCondition(
+          () => emitted.some((entry) =>
+            entry.event === "environment-diff-stats-changed"
+            && (entry.payload as { stats?: { additions?: number } }).stats?.additions === 1
+          ),
+          "changed file to be cached again",
+        );
+
+        await commands.get("delete_local_file")?.(
+          { environmentId: environment.id, filePath: "tracked.txt" },
+          context,
+        );
+        const afterDelete = await commands.get("get_local_git_status")?.(
+          { worktreePath: worktree, targetBranch: "main" },
+          context,
+        ) as Array<{ path: string; status: string; additions: number; deletions: number }>;
+        expect(afterDelete).toContainEqual(expect.objectContaining({
+          path: "tracked.txt",
+          status: "D",
+          additions: 0,
+          deletions: 1,
+        }));
+      } finally {
+        await commands.get("delete_environment")?.({ environmentId: environment.id }, context)
+          .catch(() => undefined);
+      }
+    });
+
+    test("invalidates the shared file-list cache after container revert and delete", async () => {
+      const environment = createEnvironment({
+        id: "env-container-mutation-cache",
+        environmentType: "containerized",
+        worktreePath: undefined,
+        containerId: "container-mutation-cache",
+        status: "running",
+      });
+      const { context, emitted } = createContext(environment);
+      const commands = createCommandRegistry();
+      const responsePath = path.join(
+        await createTempDir("ork-container-mutation-response-"),
+        "response",
+      );
+      await fs.writeFile(
+        responsePath,
+        framedContainerGitStatus("M\0tracked.txt\0", "1\t0\ttracked.txt\0"),
+      );
+      const previousResponse = process.env.FAKE_CONTAINER_MUTATION_RESPONSE;
+      process.env.FAKE_CONTAINER_MUTATION_RESPONSE = responsePath;
+
+      try {
+        await withFakeDocker(`#!/bin/sh
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *ORKESTRATOR_NAME_STATUS*) cat "$FAKE_CONTAINER_MUTATION_RESPONSE" ;;
+  esac
+  exit 0
+fi
+exit 1
+`, async () => {
+          await commands.get("get_environment_diff_stats")?.({}, context);
+          await waitForCondition(
+            () => emitted.some((entry) => entry.event === "environment-diff-stats-changed"),
+            "initial container diff stats to be announced",
+          );
+          await fs.writeFile(responsePath, framedContainerGitStatus());
+
+          await commands.get("revert_container_file")?.(
+            { environmentId: environment.id, filePath: "tracked.txt", targetBranch: "main" },
+            context,
+          );
+          const afterRevert = await commands.get("get_git_status")?.(
+            { containerId: environment.containerId, targetBranch: "main" },
+            context,
+          ) as Array<{ path: string }>;
+          expect(afterRevert).toEqual([]);
+
+          await fs.writeFile(
+            responsePath,
+            framedContainerGitStatus("M\0tracked.txt\0", "1\t0\ttracked.txt\0"),
+          );
+          emitted.splice(0);
+          await commands.get("refresh_environment_diff_stats")?.(
+            { environmentId: environment.id },
+            context,
+          );
+          await waitForCondition(
+            () => emitted.some((entry) =>
+              entry.event === "environment-diff-stats-changed"
+              && (entry.payload as { stats?: { additions?: number } }).stats?.additions === 1
+            ),
+            "container file to be cached again",
+          );
+          await fs.writeFile(responsePath, framedContainerGitStatus());
+
+          await commands.get("delete_container_file")?.(
+            { environmentId: environment.id, filePath: "tracked.txt" },
+            context,
+          );
+          const afterDelete = await commands.get("get_git_status")?.(
+            { containerId: environment.containerId, targetBranch: "main" },
+            context,
+          ) as Array<{ path: string }>;
+          expect(afterDelete).toEqual([]);
+        });
+      } finally {
+        if (previousResponse === undefined) delete process.env.FAKE_CONTAINER_MUTATION_RESPONSE;
+        else process.env.FAKE_CONTAINER_MUTATION_RESPONSE = previousResponse;
+      }
+    });
+
+    test("refreshes a tracked environment on explicit request", async () => {
+      const { worktree } = await createGitWorktreeWithOrigin();
+      await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
+      const { environment, context, emitted } = localDiffEnvironment(worktree);
+      const commands = createCommandRegistry();
+
+      try {
+        await commands.get("get_environment_diff_stats")?.({}, context);
+        await waitForCondition(
+          () => emitted.some((entry) => entry.event === "environment-diff-stats-changed"),
+          "initial diff stats to be announced",
+        );
+        emitted.splice(0);
+        await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\nagain\n");
+
+        await commands.get("refresh_environment_diff_stats")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await waitForCondition(
+          () => emitted.some((entry) =>
+            entry.event === "environment-diff-stats-changed"
+            && (entry.payload as { stats?: { additions?: number } }).stats?.additions === 2
+          ),
+          "refreshed diff stats to be announced",
+        );
+      } finally {
+        await commands.get("delete_environment")?.({ environmentId: environment.id }, context)
+          .catch(() => undefined);
+      }
+    });
+
+    test("clears published counts when a repository config retarget cannot be scanned", async () => {
+      const { worktree } = await createGitWorktreeWithOrigin();
+      await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
+      const { environment, context, emitted } = localDiffEnvironment(worktree);
+      const commands = createCommandRegistry();
+
+      try {
+        await commands.get("get_environment_diff_stats")?.({}, context);
+        await waitForCondition(
+          () => emitted.some((entry) => entry.event === "environment-diff-stats-changed"),
+          "initial diff stats to be announced",
+        );
+        emitted.splice(0);
+
+        await commands.get("update_repository_config")?.(
+          {
+            projectId: environment.projectId,
+            repoConfig: { defaultBranch: "missing-base", prBaseBranch: "missing-base" },
+          },
+          context,
+        );
+        await waitForCondition(
+          () => emitted.some((entry) =>
+            entry.event === "environment-diff-stats-changed"
+            && (entry.payload as { environmentId?: string; removed?: boolean }).environmentId === environment.id
+            && (entry.payload as { removed?: boolean }).removed === true
+          ),
+          "retargeted counts to be removed",
+        );
+
+        const snapshot = await commands.get("get_environment_diff_stats")?.({}, context) as {
+          entries: Array<{ environmentId: string }>;
+        };
+        expect(snapshot.entries).not.toContainEqual(expect.objectContaining({
+          environmentId: environment.id,
+        }));
+      } finally {
+        await commands.get("delete_environment")?.({ environmentId: environment.id }, context)
+          .catch(() => undefined);
+      }
+    });
+
+    test("does not resurrect deleted tracking from a stale reconciliation", async () => {
+      const { worktree } = await createGitWorktreeWithOrigin();
+      const environment = createEnvironment({
+        id: "env-stale-sync",
+        status: "stopped",
+        worktreePath: worktree,
+      });
+      const { context, emitted } = createContext(environment);
+      const commands = createCommandRegistry();
+      await commands.get("get_environment_diff_stats")?.({}, context);
+      await waitForCondition(
+        () => emitted.some((entry) => entry.event === "environment-diff-stats-changed"),
+        "initial diff tracking to start",
+      );
+      expect(commandTesting.trackedDiffStatsIds()).toContain(environment.id);
+
+      const staleSnapshot = [environment];
+      let releaseLoad!: () => void;
+      let loadStarted!: () => void;
+      const loadBlocked = new Promise<void>((resolve) => {
+        releaseLoad = resolve;
+      });
+      const loadEntered = new Promise<void>((resolve) => {
+        loadStarted = resolve;
+      });
+      context.storage.loadEnvironments = mock(async () => {
+        loadStarted();
+        await loadBlocked;
+        return staleSnapshot;
+      });
+
+      const rehydrate = commands.get("get_environment_diff_stats")?.({}, context);
+      await loadEntered;
+      await commands.get("delete_environment")?.({ environmentId: environment.id }, context);
+      releaseLoad();
+      await rehydrate;
+
+      expect(commandTesting.trackedDiffStatsIds()).not.toContain(environment.id);
+    });
+
     test("reads for itself when no recent scan is cached", async () => {
       const { worktree } = await createGitWorktreeWithOrigin();
       await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
@@ -3833,6 +4104,73 @@ exit 0
       }
     });
 
+    test("marks capped container scans approximate and shares their file-list cache", async () => {
+      const environment = createEnvironment({
+        id: "env-container-diff-cap",
+        environmentType: "containerized",
+        worktreePath: undefined,
+        containerId: "container-diff-cap",
+        status: "running",
+      });
+      const { context, emitted } = createContext(environment);
+      const commands = createCommandRegistry();
+      const responsePath = path.join(
+        await createTempDir("ork-container-diff-response-"),
+        "response",
+      );
+      const names = Array.from({ length: 2_001 }, (_, index) => `generated/file-${index}.txt`);
+      const untrackedStats = names
+        .map((filePath, index) => `${index < 2_000 ? 1 : 0}\t${filePath}\0`)
+        .join("");
+      await fs.writeFile(
+        responsePath,
+        framedContainerGitStatus(
+          "",
+          "",
+          untrackedStats,
+        ),
+      );
+      const previousResponse = process.env.FAKE_CONTAINER_DIFF_RESPONSE;
+      process.env.FAKE_CONTAINER_DIFF_RESPONSE = responsePath;
+
+      try {
+        await withFakeDocker(`#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '%s\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  cat "$FAKE_CONTAINER_DIFF_RESPONSE"
+  exit 0
+fi
+exit 1
+`, async (logs) => {
+          await commands.get("get_environment_diff_stats")?.({}, context);
+          await waitForCondition(
+            () => emitted.some((entry) => entry.event === "environment-diff-stats-changed"),
+            "container diff stats to be announced",
+          );
+          const change = emitted.find((entry) => entry.event === "environment-diff-stats-changed")
+            ?.payload as { stats: { truncated: boolean; filesChanged: number; additions: number } };
+          expect(change.stats).toEqual({
+            additions: 2_000,
+            deletions: 0,
+            filesChanged: 2_001,
+            truncated: true,
+          });
+
+          const execsBefore = (await fs.readFile(logs.exec, "utf8")).trim().split("\n").length;
+          const files = await commands.get("get_git_status")?.(
+            { containerId: environment.containerId, targetBranch: "main" },
+            context,
+          ) as Array<{ path: string }>;
+          expect(files).toHaveLength(2_001);
+          const execsAfter = (await fs.readFile(logs.exec, "utf8")).trim().split("\n").length;
+          expect(execsAfter).toBe(execsBefore);
+        });
+      } finally {
+        if (previousResponse === undefined) delete process.env.FAKE_CONTAINER_DIFF_RESPONSE;
+        else process.env.FAKE_CONTAINER_DIFF_RESPONSE = previousResponse;
+      }
+    }, 15_000);
+
     // git status is dominated by walking and stat'ing the tree, and the
     // untracked cache is what stops it re-reading directories it has already
     // seen to be clean.
@@ -3845,7 +4183,7 @@ exit 0
         branch: `feature/scan-caches-${suffix}`,
         environmentType: "local",
       });
-      const { context } = createContext(environment, {
+      const { context, emitted } = createContext(environment, {
         project: {
           id: environment.projectId,
           name: `Scan Caches ${suffix}`,
@@ -3862,6 +4200,20 @@ exit 0
         await commands.get("start_environment")?.({ environmentId: environment.id }, context);
         const worktreePath = environment.worktreePath!;
 
+        await waitForCondition(
+          () => emitted.some((entry) =>
+            entry.event === "environment-diff-stats-changed"
+            && (entry.payload as { environmentId?: string }).environmentId === environment.id
+          ),
+          "new local environment diff tracking to start",
+        );
+        const snapshot = await commands.get("get_environment_diff_stats")?.({}, context) as {
+          entries: Array<{ environmentId: string }>;
+        };
+        expect(snapshot.entries).toContainEqual(expect.objectContaining({
+          environmentId: environment.id,
+        }));
+
         await expect(gitOutput(worktreePath, ["config", "--get", "core.untrackedCache"]))
           .resolves.toBe("true");
         // Scoped to this worktree, never to the shared config: these worktrees
@@ -3874,6 +4226,23 @@ exit 0
         await commands.get("delete_environment")?.({ environmentId: environment.id }, context)
           .catch(() => undefined);
       }
+    });
+
+    test("keeps scanning usable when Git rejects cache configuration", async () => {
+      const { worktree } = await createGitWorktreeWithOrigin();
+
+      await withFailingGitSubcommand("config", async () => {
+        await expect(commandTesting.enableGitScanCaches(worktree)).resolves.toBeUndefined();
+      });
+
+      await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
+      await expect(createCommandRegistry().get("get_local_git_status")?.(
+        { worktreePath: worktree, targetBranch: "main" },
+        createContext(createEnvironment()).context,
+      )).resolves.toContainEqual(expect.objectContaining({
+        path: "tracked.txt",
+        additions: 1,
+      }));
     });
 
     test("deleting an environment drops its counts from the snapshot", async () => {
@@ -4187,6 +4556,36 @@ exit 0
     expect(changes).toContainEqual(expect.objectContaining({ path: "binary.bin", additions: 0, status: "?" }));
   });
 
+  test("does not block local untracked scanning on a named pipe", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const fifoPath = path.join(worktree, "waiting.pipe");
+    const created = spawnSync("mkfifo", [fifoPath], { encoding: "utf8" });
+    expect(created.status).toBe(0);
+
+    await expect(commandTesting.countLocalFileLines(worktree, "waiting.pipe"))
+      .resolves.toBe(0);
+  });
+
+  test("abandons line counting when an untracked file grows beyond the read cap", async () => {
+    const read = mock(async (buffer: Buffer, offset: number, length: number) => {
+      buffer.fill(0x61, offset, offset + length);
+      return { bytesRead: length, buffer };
+    });
+    const openSpy = spyOn(fs, "open").mockResolvedValue({
+      stat: mock(async () => ({ isFile: () => true, size: 1 })),
+      read,
+      close: mock(async () => undefined),
+    } as never);
+
+    try {
+      await expect(commandTesting.countLocalFileLines("/unused", "growing.log"))
+        .resolves.toBe(0);
+      expect(read).toHaveBeenCalledTimes(161);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   test("maps rename stats to the new path in local git status", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
     await fs.writeFile(path.join(worktree, "original.txt"), "a\nb\nc\nd\ne\n");
@@ -4320,6 +4719,53 @@ exit 0
     expect(changes).toContainEqual(expect.objectContaining({ path: "exact-limit.txt", additions: 1 }));
     expect(changes).toContainEqual(expect.objectContaining({ path: "over-limit.txt", additions: 0 }));
     expect(changes).toContainEqual(expect.objectContaining({ path: "link.txt", additions: 0 }));
+  });
+
+  test("does not block container untracked scanning on a named pipe", async () => {
+    const workspace = await createTempDir("ork-container-untracked-fifo-");
+    const fifoPath = path.join(workspace, "waiting.pipe");
+    const created = spawnSync("mkfifo", [fifoPath], { encoding: "utf8" });
+    expect(created.status).toBe(0);
+
+    const result = spawnSync(
+      "node",
+      ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "1024", "10"],
+      {
+        cwd: workspace,
+        input: Buffer.from("?? waiting.pipe\0"),
+        encoding: "utf8",
+        timeout: 2_000,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(commandTesting.parseContainerUntrackedStats(result.stdout)).toEqual([
+      expect.objectContaining({ path: "waiting.pipe", additions: 0 }),
+    ]);
+  });
+
+  test("stops line-counting container files after the configured scan cap", async () => {
+    const workspace = await createTempDir("ork-container-untracked-cap-");
+    await Promise.all(["one.txt", "two.txt", "three.txt"].map((filePath) =>
+      fs.writeFile(path.join(workspace, filePath), "one\ntwo\n")
+    ));
+    const result = spawnSync(
+      "node",
+      ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "1024", "2"],
+      {
+        cwd: workspace,
+        input: Buffer.from("?? one.txt\0?? two.txt\0?? three.txt\0"),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(commandTesting.parseContainerUntrackedStats(result.stdout)).toEqual([
+      expect.objectContaining({ path: "one.txt", additions: 2 }),
+      expect.objectContaining({ path: "two.txt", additions: 2 }),
+      expect.objectContaining({ path: "three.txt", additions: 0 }),
+    ]);
   });
 
   test("rejects every malformed Git tuple shape the framing can produce", () => {

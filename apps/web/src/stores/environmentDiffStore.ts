@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type {
   EnvironmentDiffStats,
   EnvironmentDiffStatsChange,
+  EnvironmentDiffStatsEvent,
 } from "@orkestrator/protocol/diff-stats";
 
 export type { EnvironmentDiffStats };
@@ -18,8 +19,8 @@ interface EnvironmentDiffState {
    * would let one deleted between two rehydrations linger forever.
    */
   applySnapshot: (entries: EnvironmentDiffStatsChange[]) => void;
-  /** Applies one incremental change announced by the backend. */
-  applyChange: (change: EnvironmentDiffStatsChange) => void;
+  /** Applies one incremental update or invalidation announced by the backend. */
+  applyChange: (change: EnvironmentDiffStatsEvent) => void;
 }
 
 function isSameStats(a: EnvironmentDiffStats, b: EnvironmentDiffStats): boolean {
@@ -56,6 +57,13 @@ export const useEnvironmentDiffStore = create<EnvironmentDiffState>()(
 
     applyChange: (change) =>
       set((state) => {
+        if ("removed" in change) {
+          if (!state.stats.has(change.environmentId)) return state;
+          const next = new Map(state.stats);
+          next.delete(change.environmentId);
+          return { stats: next };
+        }
+
         const existing = state.stats.get(change.environmentId);
         if (existing && isSameStats(existing, change.stats)) return state;
         const next = new Map(state.stats);

@@ -54,4 +54,22 @@ describe("resolveComparisonRef", () => {
       prBaseBranch: "release",
     })).toBe("release");
   });
+
+  test("treats a whitespace-only creation commit as absent", () => {
+    expect(resolveComparisonRef(" \t\n", {
+      defaultBranch: "trunk",
+      prBaseBranch: "release",
+    })).toBe("release");
+  });
+
+  test("ignores whitespace-only configured branches", () => {
+    expect(resolveComparisonRef(undefined, {
+      defaultBranch: "trunk",
+      prBaseBranch: " \t ",
+    })).toBe("trunk");
+    expect(resolveComparisonRef(undefined, {
+      defaultBranch: "\n ",
+      prBaseBranch: "\t",
+    })).toBe(FALLBACK_COMPARISON_REF);
+  });
 });

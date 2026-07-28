@@ -57,11 +57,19 @@ describe("OrkestratorBackend", () => {
       emit: () => undefined,
     });
     await backend.init();
+    commandTesting.trackDiffStats({
+      environmentId: "active-during-shutdown",
+      kind: "local",
+      worktreePath: root,
+      comparisonRef: "main",
+    });
+    expect(commandTesting.trackedDiffStatsIds()).toContain("active-during-shutdown");
 
     await expect(Promise.all([
       backend.shutdown(),
       backend.shutdown(),
     ])).resolves.toEqual([undefined, undefined]);
+    expect(commandTesting.trackedDiffStatsIds()).toEqual([]);
     await expect(backend.invoke("greet", { name: "late" })).rejects.toThrow(
       "Backend is shutting down",
     );

@@ -3,6 +3,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import {
   DIFF_STATS_CHANGED_EVENT,
   type EnvironmentDiffStatsChange,
+  type EnvironmentDiffStatsRemoval,
 } from "@orkestrator/protocol/diff-stats";
 import * as realBackend from "@/lib/backend";
 import { useEnvironmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
@@ -29,18 +30,21 @@ mock.module("@/lib/backend", () => ({
 const listeners = new Map<string, Set<(payload: unknown) => void>>();
 const NATIVE_EVENT_STREAM_CONNECTED_EVENT = "native-event-stream-connected";
 
+const defaultListen = (event: string, handler: (event: { payload: unknown }) => void) => {
+  const wrapped = (payload: unknown) => handler({ payload });
+  const existing = listeners.get(event) ?? new Set();
+  existing.add(wrapped);
+  listeners.set(event, existing);
+  return Promise.resolve(() => {
+    existing.delete(wrapped);
+  });
+};
+const mockListen = mock(defaultListen);
+
 mock.module("@/lib/native/events", () => ({
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
   emit: mock(() => Promise.resolve()),
-  listen: mock((event: string, handler: (event: { payload: unknown }) => void) => {
-    const wrapped = (payload: unknown) => handler({ payload });
-    const existing = listeners.get(event) ?? new Set();
-    existing.add(wrapped);
-    listeners.set(event, existing);
-    return Promise.resolve(() => {
-      existing.delete(wrapped);
-    });
-  }),
+  listen: mockListen,
 }));
 
 const { useEnvironmentDiffStats } = await import("../../../apps/web/src/hooks/useEnvironmentDiffStats");
@@ -66,6 +70,25 @@ function change(
   };
 }
 
+function removal(environmentId: string): EnvironmentDiffStatsRemoval {
+  return {
+    environmentId,
+    comparisonRef: "release",
+    computedAt: "2026-07-27T12:01:00.000Z",
+    removed: true,
+  };
+}
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  let reject: (reason?: unknown) => void = () => {};
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 /** Waits for the hook's async subscribe/rehydrate to settle. */
 async function flush() {
   await act(async () => {
@@ -77,6 +100,8 @@ async function flush() {
 describe("useEnvironmentDiffStats", () => {
   beforeEach(() => {
     listeners.clear();
+    mockListen.mockClear();
+    mockListen.mockImplementation(defaultListen);
     mockGetEnvironmentDiffStats.mockClear();
     mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({ entries: [] }));
     useEnvironmentDiffStore.setState({ stats: new Map() });
@@ -139,6 +164,20 @@ describe("useEnvironmentDiffStats", () => {
     });
   });
 
+  test("removes counts invalidated by the backend", async () => {
+    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({
+      entries: [change("env-1")],
+    }));
+    renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(true));
+
+    act(() => {
+      emitEvent(DIFF_STATS_CHANGED_EVENT, removal("env-1"));
+    });
+
+    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(false);
+  });
+
   // The payload crosses a process boundary and is the only thing driving the
   // badge, so a malformed frame must be dropped rather than written through.
   test.each([
@@ -183,6 +222,71 @@ describe("useEnvironmentDiffStats", () => {
     });
   });
 
+  test("replays a newer event over a snapshot that resolves later", async () => {
+    const snapshot = deferred<{ entries: EnvironmentDiffStatsChange[] }>();
+    mockGetEnvironmentDiffStats.mockImplementation(() => snapshot.promise);
+    renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      emitEvent(DIFF_STATS_CHANGED_EVENT, change("env-1", { additions: 12 }));
+    });
+    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(false);
+
+    await act(async () => {
+      snapshot.resolve({ entries: [change("env-1", { additions: 2 })] });
+      await snapshot.promise;
+    });
+
+    expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.additions).toBe(12);
+  });
+
+  test("replays a removal over a snapshot that resolves later", async () => {
+    const snapshot = deferred<{ entries: EnvironmentDiffStatsChange[] }>();
+    mockGetEnvironmentDiffStats.mockImplementation(() => snapshot.promise);
+    renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      emitEvent(DIFF_STATS_CHANGED_EVENT, removal("env-1"));
+    });
+    await act(async () => {
+      snapshot.resolve({ entries: [change("env-1")] });
+      await snapshot.promise;
+    });
+
+    expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(false);
+  });
+
+  test("serialises overlapping reconnect snapshots and applies the newest last", async () => {
+    mockGetEnvironmentDiffStats.mockImplementationOnce(() => Promise.resolve({ entries: [] }));
+    renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
+
+    const first = deferred<{ entries: EnvironmentDiffStatsChange[] }>();
+    const second = deferred<{ entries: EnvironmentDiffStatsChange[] }>();
+    mockGetEnvironmentDiffStats
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+
+    act(() => emitEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined));
+    await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(2));
+    act(() => emitEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined));
+    expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      first.resolve({ entries: [change("env-1", { additions: 1 })] });
+      await first.promise;
+    });
+    await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      second.resolve({ entries: [change("env-1", { additions: 9 })] });
+      await second.promise;
+    });
+    expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.additions).toBe(9);
+  });
+
   test("drops environments missing from a later snapshot", async () => {
     mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({
       entries: [change("env-1"), change("env-2")],
@@ -214,6 +318,51 @@ describe("useEnvironmentDiffStats", () => {
     await flush();
 
     expect(useEnvironmentDiffStore.getState().stats.get("env-1")).toBeDefined();
+  });
+
+  test("ignores a malformed snapshot from the process boundary", async () => {
+    useEnvironmentDiffStore.getState().applyChange(change("env-existing"));
+    mockGetEnvironmentDiffStats.mockImplementation(
+      () => Promise.resolve({
+        entries: [change("env-bad", { additions: -1 })],
+      }),
+    );
+
+    renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
+    await flush();
+
+    expect([...useEnvironmentDiffStore.getState().stats.keys()]).toEqual(["env-existing"]);
+  });
+
+  test("still rehydrates when the change listener rejects", async () => {
+    mockListen.mockImplementation((event, handler) => {
+      if (event === DIFF_STATS_CHANGED_EVENT) return Promise.reject(new Error("listen failed"));
+      return defaultListen(event, handler);
+    });
+    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({
+      entries: [change("env-1")],
+    }));
+
+    renderHook(() => useEnvironmentDiffStats());
+
+    await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(true));
+    expect(listenerCount(NATIVE_EVENT_STREAM_CONNECTED_EVENT)).toBe(1);
+  });
+
+  test("cleans up the first listener when the reconnect listener rejects", async () => {
+    mockListen.mockImplementation((event, handler) => {
+      if (event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) {
+        return Promise.reject(new Error("listen failed"));
+      }
+      return defaultListen(event, handler);
+    });
+    const { unmount } = renderHook(() => useEnvironmentDiffStats());
+    await waitFor(() => expect(listenerCount(DIFF_STATS_CHANGED_EVENT)).toBe(1));
+
+    unmount();
+
+    expect(listenerCount(DIFF_STATS_CHANGED_EVENT)).toBe(0);
   });
 
   test("unsubscribes from both streams on unmount", async () => {

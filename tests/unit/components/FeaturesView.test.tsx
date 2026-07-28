@@ -1629,17 +1629,18 @@ describe("FeaturesView lifecycle and navigation", () => {
     ];
 
     try {
-      for (const [index, scenario] of cases.entries()) {
+      for (const [scenarioIndex, scenario] of cases.entries()) {
+        const environmentId = `env-unreachable-${scenarioIndex}`;
+        const scenarioSessionId = `unreachable-session-${scenarioIndex}`;
+        const featureId = `feature-unreachable-${scenarioIndex}`;
+        const scenarioAuthToken = `unreachable-token-${scenarioIndex}`;
         await drainReconcileMonitors();
-        const environmentId = `env-unreachable-${index}`;
-        const sessionId = `session-unreachable-${index}`;
-        const featureId = `feature-unreachable-${index}`;
         const environment = scenario.environment
           ? {
               ...scenario.environment,
               id: environmentId,
               containerId: scenario.environment.containerId
-                ? `container-unreachable-${index}`
+                ? `container-unreachable-${scenarioIndex}`
                 : null,
             }
           : undefined;
@@ -1648,7 +1649,7 @@ describe("FeaturesView lifecycle and navigation", () => {
               ...scenario.backendEnvironment,
               id: environmentId,
               containerId: scenario.backendEnvironment.containerId
-                ? `container-unreachable-${index}`
+                ? `container-unreachable-${scenarioIndex}`
                 : null,
             }
           : null;
@@ -1656,18 +1657,20 @@ describe("FeaturesView lifecycle and navigation", () => {
         seedStores(chatFeature({
           id: featureId,
           codexEnvironmentId: environmentId,
-          codexSessionId: sessionId,
+          codexSessionId: scenarioSessionId,
           messages: [pendingUser()],
         }));
         getEnvironmentMock.mockClear();
         getEnvironmentMock.mockImplementation(async () => backendEnvironment);
         getCodexServerStatusMock.mockClear();
         getCodexServerStatusMock.mockImplementation(async () => (
-          scenario.bridge ?? {
-            running: true,
-            hostPort: 4200,
-            authToken: "container-token",
-          }
+          scenario.bridge
+            ? { ...scenario.bridge, authToken: scenarioAuthToken }
+            : {
+                running: true,
+                hostPort: 4200 + scenarioIndex,
+                authToken: scenarioAuthToken,
+              }
         ));
         getSessionStatusMock.mockClear();
         createClientMock.mockClear();
@@ -1691,9 +1694,14 @@ describe("FeaturesView lifecycle and navigation", () => {
         view.unmount();
         await drainReconcileMonitors();
 
-        // Use per-scenario identities so an unrelated monitor cannot make this
-        // assertion depend on parallel-suite scheduling.
-        expect(getSessionStatusMock.mock.calls.some((call) => call[1] === sessionId)).toBe(false);
+        // Reconciliation monitors deliberately survive a component unmount
+        // until their in-flight operation reaches an abort checkpoint. Scope
+        // this assertion to the case's unique session so those background calls
+        // cannot make the result depend on suite scheduling.
+        expect(statusReadsFor(scenarioSessionId)).toHaveLength(0);
+        expect(
+          createClientMock.mock.calls.filter((call) => call[1] === scenarioAuthToken),
+        ).toHaveLength(0);
       }
     } finally {
       timeoutSpy.mockRestore();

@@ -323,6 +323,70 @@ describe("native message adapters", () => {
     }
   });
 
+  test("keeps subagent thinking, text, and edits inside the Agent group", () => {
+    const message: ClaudeMessage = {
+      id: "claude-agent-activity",
+      role: "assistant",
+      content: "Subagent answer",
+      timestamp: "2026-07-28T08:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "Agent",
+          content: "Run reviewer",
+          toolUseId: "agent-activity-1",
+        },
+        {
+          type: "thinking",
+          content: "Inspecting files",
+          parentTaskUseId: "agent-activity-1",
+        },
+        {
+          type: "text",
+          content: "Subagent answer",
+          parentTaskUseId: "agent-activity-1",
+        },
+        {
+          type: "tool-invocation",
+          toolName: "Edit",
+          content: "Edit",
+          toolUseId: "edit-1",
+          parentTaskUseId: "agent-activity-1",
+        },
+      ],
+    };
+
+    const normalized = normalizeClaudeMessage(message);
+
+    expect(normalized.parts).toHaveLength(1);
+    expect(normalized.parts[0]?.type).toBe("task-group");
+    if (normalized.parts[0]?.type === "task-group") {
+      expect(
+        normalized.parts[0].childTools.map((part) => ({
+          type: part.type,
+          content: part.content,
+          parentTaskUseId: part.parentTaskUseId,
+        })),
+      ).toEqual([
+        {
+          type: "thinking",
+          content: "Inspecting files",
+          parentTaskUseId: "agent-activity-1",
+        },
+        {
+          type: "text",
+          content: "Subagent answer",
+          parentTaskUseId: "agent-activity-1",
+        },
+        {
+          type: "tool-invocation",
+          content: "Edit",
+          parentTaskUseId: "agent-activity-1",
+        },
+      ]);
+    }
+  });
+
   test("carries external tmux usage counts onto the normalized task part", () => {
     const message: ClaudeMessage = {
       id: "claude-agent-usage",

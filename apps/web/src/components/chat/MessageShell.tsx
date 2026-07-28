@@ -222,7 +222,10 @@ export function MessageErrorAlert({
         <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/20">
           <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
-            <div className="text-sm text-destructive whitespace-pre-wrap break-words">
+            <div
+              data-agent-chat-search-content="true"
+              className="text-sm text-destructive whitespace-pre-wrap break-words"
+            >
               {content}
             </div>
             {details ? (

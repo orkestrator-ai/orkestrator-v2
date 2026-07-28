@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
 import { BrowserTab } from "./BrowserTab";
@@ -868,6 +868,35 @@ describe("BrowserTab", () => {
     expect(view.container.querySelector(".animate-spin")).toBeNull();
   });
 
+  test("persists changed direct HTTP native URLs and ignores non-HTTP native URLs", async () => {
+    const native = installNativePreview();
+    setBrowserTab("http://localhost:3000/");
+    render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+    );
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+
+    native.emitState(previewState({
+      url: "http://localhost:3000/direct?q=1#result",
+    }));
+    await waitFor(() => expect(
+      (screen.getByLabelText("Browser address") as HTMLInputElement).value,
+    ).toBe("http://localhost:3000/direct?q=1#result"));
+    const environment = usePaneLayoutStore.getState().environments.get("env-1");
+    if (!environment || environment.root.kind !== "leaf") throw new Error("expected leaf");
+    expect(environment.root.tabs[0]?.browserData?.url).toBe(
+      "http://localhost:3000/direct?q=1#result",
+    );
+
+    native.emitState(previewState({
+      url: "https://localhost:3000/ignored",
+    }));
+    await Promise.resolve();
+    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
+      "http://localhost:3000/direct?q=1#result",
+    );
+  });
+
   test("routes native navigation, history, reload, and refresh actions and reports rejections", async () => {
     const navigate = mock(async (_tabId: string, url: string) => previewState({ url }));
     const rejectedBack = mock(async () => { throw new Error("history failed"); });
@@ -911,6 +940,61 @@ describe("BrowserTab", () => {
       />,
     );
     await waitFor(() => expect(native.browserPreview.reload.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  test("converges on the latest URL when navigation and refresh race the initial native attach", async () => {
+    const pendingAttaches = new Map<string, (state: BrowserPreviewState) => void>();
+    const attach = mock((input: { url: string }) => new Promise<BrowserPreviewState>((resolve) => {
+      pendingAttaches.set(input.url, resolve);
+    }));
+    const native = installNativePreview({ attach });
+    setBrowserTab("http://localhost:3000/");
+    const view = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+    await waitFor(() => expect(pendingAttaches.has("http://localhost:3000/")).toBe(true));
+
+    fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "4000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    await waitFor(() => expect(pendingAttaches.has("http://localhost:4000/")).toBe(true));
+    expect(native.browserPreview.navigate).not.toHaveBeenCalled();
+
+    view.rerender(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:4000/" }}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+    await Promise.resolve();
+    expect(native.browserPreview.reload).not.toHaveBeenCalled();
+
+    pendingAttaches.get("http://localhost:4000/")?.(
+      previewState({ url: "http://localhost:4000/" }),
+    );
+    await waitFor(() => {
+      expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
+        "http://localhost:4000/",
+      );
+      expect(view.container.querySelector(".animate-spin")).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Open preview DevTools" }).hasAttribute("disabled"),
+      ).toBe(false);
+    });
+
+    pendingAttaches.get("http://localhost:3000/")?.(
+      previewState({ error: "stale attach error" }),
+    );
+    await Promise.resolve();
+    expect(screen.queryByText("stale attach error")).toBeNull();
   });
 
   test("reports native navigation, forward, toolbar reload, and refresh reload failures", async () => {
@@ -1011,6 +1095,41 @@ describe("BrowserTab", () => {
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
     );
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalledWith(expect.objectContaining({ visible: false })));
+
+    native.browserPreview.attach.mockClear();
+    dialog.setAttribute("aria-hidden", "true");
+    fireEvent.transitionEnd(dialog);
+    await Promise.resolve();
+    expect(native.browserPreview.attach).not.toHaveBeenCalled();
+
+    dialog.style.visibility = "hidden";
+    fireEvent.transitionEnd(dialog);
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: true }),
+    ));
+
+    dialog.style.visibility = "visible";
+    dialog.style.opacity = "0";
+    dialog.setAttribute("aria-hidden", "false");
+    fireEvent(dialog, new Event("transitionrun", { bubbles: true }));
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: false }),
+    ));
+
+    dialog.style.opacity = "1";
+    fireEvent.transitionEnd(dialog);
+    native.browserPreview.attach.mockClear();
+    dialog.setAttribute("aria-hidden", "true");
+    fireEvent(dialog, new Event("transitionrun", { bubbles: true }));
+    await Promise.resolve();
+    expect(native.browserPreview.attach).not.toHaveBeenCalled();
+
+    dialog.style.opacity = "0";
+    fireEvent.transitionEnd(dialog);
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: true }),
+    ));
+
     view.unmount();
     dialog.remove();
 
@@ -1027,10 +1146,152 @@ describe("BrowserTab", () => {
     expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false);
   });
 
+  test("tracks the painted lifecycle of dialogs, menus, listboxes, and multiple overlays", async () => {
+    const native = installNativePreview();
+    setBrowserTab("http://localhost:3000/");
+    const view = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+    );
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: true }),
+    ));
+
+    const alertDialog = document.createElement("div");
+    alertDialog.setAttribute("role", "alertdialog");
+    alertDialog.setAttribute("aria-hidden", "true");
+    alertDialog.setAttribute("data-state", "closed");
+    alertDialog.style.visibility = "visible";
+    alertDialog.style.opacity = "1";
+    document.body.append(alertDialog);
+    fireEvent.animationStart(alertDialog);
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: false }),
+    ));
+
+    alertDialog.style.visibility = "hidden";
+    fireEvent.transitionEnd(alertDialog);
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: true }),
+    ));
+
+    native.browserPreview.attach.mockClear();
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("data-state", "closed");
+    menu.style.visibility = "hidden";
+    document.body.append(menu);
+    await Promise.resolve();
+    expect(native.browserPreview.attach).not.toHaveBeenCalled();
+
+    menu.style.visibility = "visible";
+    menu.style.opacity = "0";
+    menu.setAttribute("data-state", "open");
+    fireEvent.transitionRun(menu);
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: false }),
+    ));
+
+    const listbox = document.createElement("div");
+    listbox.setAttribute("role", "listbox");
+    listbox.setAttribute("data-state", "open");
+    document.body.append(listbox);
+    await Promise.resolve();
+
+    native.browserPreview.attach.mockClear();
+    menu.style.visibility = "hidden";
+    menu.setAttribute("data-state", "closed");
+    fireEvent.transitionEnd(menu);
+    await Promise.resolve();
+    expect(native.browserPreview.attach).not.toHaveBeenCalled();
+
+    menu.remove();
+    listbox.remove();
+    // Happy DOM does not deliver child-removal MutationObserver records here,
+    // so use the same browser lifecycle signal to force a fresh document scan.
+    fireEvent.transitionEnd(alertDialog);
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: true }),
+    ));
+
+    view.unmount();
+    alertDialog.remove();
+    menu.remove();
+  });
+
+  test("rescans blocking overlays after child insertion and removal mutations", async () => {
+    const NativeMutationObserver = window.MutationObserver;
+    const observe = mock((_target: Node, _options?: MutationObserverInit) => {});
+    const disconnect = mock(() => {});
+    let notifyMutations: MutationCallback | undefined;
+    let controlledObserver: MutationObserver | undefined;
+
+    class ControlledMutationObserver {
+      private readonly callback: MutationCallback;
+
+      constructor(callback: MutationCallback) {
+        this.callback = callback;
+      }
+
+      observe = (target: Node, options?: MutationObserverInit) => {
+        observe(target, options);
+        if (options?.attributeFilter?.includes("aria-hidden")) {
+          notifyMutations = this.callback;
+          controlledObserver = this as unknown as MutationObserver;
+        }
+      };
+      disconnect = disconnect;
+      takeRecords = () => [];
+    }
+
+    window.MutationObserver = ControlledMutationObserver as unknown as typeof MutationObserver;
+    const native = installNativePreview();
+    setBrowserTab("http://localhost:3000/");
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("data-state", "open");
+
+    try {
+      const view = render(
+        <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+      );
+      await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ));
+      expect(observe).toHaveBeenCalledWith(document.body, expect.objectContaining({
+        childList: true,
+        subtree: true,
+      }));
+
+      document.body.append(menu);
+      await act(async () => {
+        notifyMutations?.([], controlledObserver as MutationObserver);
+      });
+      await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: false }),
+      ));
+
+      menu.remove();
+      await act(async () => {
+        notifyMutations?.([], controlledObserver as MutationObserver);
+      });
+      await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ));
+
+      view.unmount();
+      expect(disconnect).toHaveBeenCalled();
+    } finally {
+      menu.remove();
+      window.MutationObserver = NativeMutationObserver;
+    }
+  });
+
   test("handles attach and DevTools failures and ignores a disposed attach completion", async () => {
     let resolveAttach: ((state: BrowserPreviewState) => void) | undefined;
     const attach = mock(() => new Promise<BrowserPreviewState>((resolve) => { resolveAttach = resolve; }));
-    const openDevTools = mock(async () => { throw "DevTools failed"; });
+    const openDevTools = mock()
+      .mockRejectedValueOnce("DevTools failed")
+      .mockRejectedValueOnce(new Error("DevTools failed again"));
     const native = installNativePreview({ attach, openDevTools });
     setBrowserTab("http://localhost:3000/");
     const view = render(
@@ -1042,6 +1303,8 @@ describe("BrowserTab", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Open preview DevTools" }).hasAttribute("disabled")).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "Open preview DevTools" }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("DevTools failed"));
+    fireEvent.click(screen.getByRole("button", { name: "Open preview DevTools" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("DevTools failed again"));
 
     let resolveDisposed: ((state: BrowserPreviewState) => void) | undefined;
     native.browserPreview.attach = mock(() => new Promise<BrowserPreviewState>((resolve) => { resolveDisposed = resolve; }));
@@ -1055,10 +1318,39 @@ describe("BrowserTab", () => {
     expect(screen.queryByText("late attach error")).toBeNull();
   });
 
+  test("ignores a disposed native attach rejection", async () => {
+    let rejectAttach: ((reason?: unknown) => void) | undefined;
+    const attach = mock(() => new Promise<BrowserPreviewState>((_resolve, reject) => {
+      rejectAttach = reject;
+    }));
+    installNativePreview({ attach });
+    setBrowserTab("http://localhost:3000/");
+    const view = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+    );
+    await waitFor(() => expect(attach).toHaveBeenCalled());
+    view.unmount();
+    consoleErrorSpy?.mockClear();
+
+    rejectAttach?.("late attach rejection");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    expect(screen.queryByText("late attach rejection")).toBeNull();
+  });
+
   test("reports a native attach rejection", async () => {
     installNativePreview({ attach: mock(async () => { throw new Error("attach failed"); }) });
     setBrowserTab("http://localhost:3000/");
     render(<BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />);
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("attach failed"));
+  });
+
+  test("reports a non-Error native attach rejection", async () => {
+    installNativePreview({ attach: mock(async () => { throw "attach failed as text"; }) });
+    setBrowserTab("http://localhost:3000/");
+    render(<BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("attach failed as text"));
   });
 });

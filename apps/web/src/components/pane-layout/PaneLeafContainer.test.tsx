@@ -85,6 +85,7 @@ mock.module("@/components/claude/ClaudeChatTab", () => ({
     agentHandoffId,
     consumedAgentHandoffId,
     refreshRequestId,
+    ownsGlobalShortcuts,
   }: {
     tabId: string;
     isReviewTab?: boolean;
@@ -93,6 +94,7 @@ mock.module("@/components/claude/ClaudeChatTab", () => ({
     agentHandoffId?: string;
     consumedAgentHandoffId?: string;
     refreshRequestId?: number;
+    ownsGlobalShortcuts?: boolean;
   }) => (
     <div
       data-agent-model={initialAgentModel}
@@ -101,6 +103,7 @@ mock.module("@/components/claude/ClaudeChatTab", () => ({
       data-reasoning-effort={initialReasoningEffort}
       data-refresh-request-id={refreshRequestId}
       data-review-tab={String(Boolean(isReviewTab))}
+      data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
       data-testid="claude-tab"
     >
       claude:{tabId}
@@ -115,18 +118,21 @@ mock.module("@/components/claude/ClaudeTmuxChatTab", () => ({
     initialAgentModel,
     initialReasoningEffort,
     refreshRequestId,
+    ownsGlobalShortcuts,
   }: {
     tabId: string;
     isReviewTab?: boolean;
     initialAgentModel?: string;
     initialReasoningEffort?: string;
     refreshRequestId?: number;
+    ownsGlobalShortcuts?: boolean;
   }) => (
     <div
       data-agent-model={initialAgentModel}
       data-reasoning-effort={initialReasoningEffort}
       data-refresh-request-id={refreshRequestId}
       data-review-tab={String(Boolean(isReviewTab))}
+      data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
       data-testid="claude-tmux-tab"
     >
       tmux:{tabId}
@@ -143,6 +149,7 @@ mock.module("@/components/codex/CodexChatTab", () => ({
     agentHandoffId,
     consumedAgentHandoffId,
     refreshRequestId,
+    ownsGlobalShortcuts,
   }: {
     tabId: string;
     isReviewTab?: boolean;
@@ -151,6 +158,7 @@ mock.module("@/components/codex/CodexChatTab", () => ({
     agentHandoffId?: string;
     consumedAgentHandoffId?: string;
     refreshRequestId?: number;
+    ownsGlobalShortcuts?: boolean;
   }) => (
     <div
       data-agent-model={initialAgentModel}
@@ -159,6 +167,7 @@ mock.module("@/components/codex/CodexChatTab", () => ({
       data-reasoning-effort={initialReasoningEffort}
       data-refresh-request-id={refreshRequestId}
       data-review-tab={String(Boolean(isReviewTab))}
+      data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
       data-testid="codex-tab"
     >
       codex:{tabId}
@@ -175,6 +184,7 @@ mock.module("@/components/opencode/OpenCodeChatTab", () => ({
     agentHandoffId,
     consumedAgentHandoffId,
     refreshRequestId,
+    ownsGlobalShortcuts,
   }: {
     tabId: string;
     isReviewTab?: boolean;
@@ -183,6 +193,7 @@ mock.module("@/components/opencode/OpenCodeChatTab", () => ({
     agentHandoffId?: string;
     consumedAgentHandoffId?: string;
     refreshRequestId?: number;
+    ownsGlobalShortcuts?: boolean;
   }) => (
     <div
       data-agent-model={initialAgentModel}
@@ -191,6 +202,7 @@ mock.module("@/components/opencode/OpenCodeChatTab", () => ({
       data-reasoning-effort={initialReasoningEffort}
       data-refresh-request-id={refreshRequestId}
       data-review-tab={String(Boolean(isReviewTab))}
+      data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
       data-testid="opencode-tab"
     >
       opencode:{tabId}
@@ -426,6 +438,48 @@ describe("PaneLeafContainer", () => {
 
     expect(screen.getByTestId("claude-tmux-tab")).toBeDefined();
     expect(screen.getByText("tmux:tab-tmux")).toBeDefined();
+  });
+
+  test("grants global shortcut ownership only to the focused pane", () => {
+    const chatPane = {
+      kind: "leaf" as const,
+      id: "pane-chat",
+      tabs: [
+        {
+          id: "tab-codex",
+          type: "codex-native" as const,
+          codexNativeData: { environmentId: "env-visible" },
+        },
+      ],
+      activeTabId: "tab-codex",
+    };
+    usePaneLayoutStore.setState((state) => {
+      const environments = new Map(state.environments);
+      environments.set("env-visible", {
+        root: chatPane,
+        activePaneId: "another-pane",
+        containerId: "container-visible",
+      });
+      return { environments };
+    });
+
+    const view = render(
+      <PaneLeafContainer
+        pane={chatPane}
+        containerId="container-visible"
+        environmentId="env-visible"
+        isActive
+      />,
+    );
+
+    expect(
+      screen.getByTestId("codex-tab").getAttribute("data-owns-global-shortcuts"),
+    ).toBe("false");
+
+    fireEvent.click(view.container.firstElementChild as HTMLElement);
+    expect(
+      screen.getByTestId("codex-tab").getAttribute("data-owns-global-shortcuts"),
+    ).toBe("true");
   });
 
   test("forwards review-tab state to native chat tabs", () => {

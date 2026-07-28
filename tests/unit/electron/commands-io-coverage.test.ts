@@ -154,7 +154,14 @@ describe("backend command I/O coverage", () => {
     expect(spawnedPtys[0]?.write).toHaveBeenCalledWith("pwd\r");
     expect(spawnedPtys[0]?.resize).toHaveBeenCalledWith(121, 40);
     expect(emitted).toEqual([
-      { event: `terminal-output-${sessionId}`, payload: Array.from(Buffer.from("ready\r\n")) },
+      {
+        event: `terminal-output-${sessionId}`,
+        payload: {
+          data: Array.from(Buffer.from("ready\r\n")),
+          revision: 1,
+          generation: 1,
+        },
+      },
     ]);
 
     commands.get("detach_terminal")?.({ sessionId }, context);

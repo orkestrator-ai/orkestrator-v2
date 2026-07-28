@@ -996,6 +996,7 @@ function TextPart({
   return (
     <div className={cn("group", !truncateUserPrompt && "py-1.5")}>
       <div
+        data-agent-chat-search-content="true"
         className={cn(
           "[&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0",
           shouldTruncate && !isExpanded && "overflow-hidden",
@@ -1330,7 +1331,10 @@ function TaskGroupPart({
   const displayLabel = buildAgentDisplayLabel(displayName, role);
   const statusLabel = getSubagentStatusLabel(part.task.toolState);
   const childCount = part.childTools.length;
-  const toolCount = part.task.toolUseCount ?? childCount;
+  const capturedToolCount = part.childTools.filter(
+    (child) => child.type === "tool-invocation",
+  ).length;
+  const toolCount = part.task.toolUseCount ?? capturedToolCount;
   const toolCountLabel = hasExternalUsage
     ? `${toolCount} ${toolCount === 1 ? "tool use" : "tool uses"}`
     : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
@@ -1343,6 +1347,12 @@ function TaskGroupPart({
           : "Waiting for activity."
       );
     }
+
+    if (latestChild.type === "thinking") return "Thinking";
+    if (latestChild.type === "text") {
+      return latestChild.content.trim() || "Response";
+    }
+    if (latestChild.type === "file") return latestChild.content;
 
     const command =
       typeof latestChild.toolArgs?.command === "string"
@@ -1430,7 +1440,7 @@ function TaskGroupPart({
           <div className="space-y-1">
             {part.childTools.map((child, index) => (
               <MessagePart
-                key={`task-child-${index}-${child.toolUseId ?? child.toolName ?? child.type}`}
+                key={`task-child-${index}-${child.toolUseId ?? child.sourcePartId ?? child.toolName ?? child.type}`}
                 part={child}
                 containerId={containerId}
                 partKey={partKey ? `${partKey}/task-child-${index}` : undefined}
@@ -1647,7 +1657,10 @@ export const NativeMessage = memo(function NativeMessage({
     return (
       <div className="px-2 @sm:px-4 py-2">
         <div className="max-w-3xl mx-auto min-w-0">
-          <div className="text-xs text-muted-foreground italic text-center py-1 break-words">
+          <div
+            data-agent-chat-search-content="true"
+            className="text-xs text-muted-foreground italic text-center py-1 break-words"
+          >
             {message.content}
           </div>
         </div>

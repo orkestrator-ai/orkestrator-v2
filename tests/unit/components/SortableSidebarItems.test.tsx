@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Environment, Project } from "../../../apps/web/src/types";
 import * as realSortable from "@dnd-kit/sortable";
 import * as realEnvironmentItem from "@/components/environments/EnvironmentItem";
@@ -366,15 +366,16 @@ describe("sortable sidebar items", () => {
     expect(dialog.textContent).toContain("Project One");
     expect(dialog.textContent).toContain("1 environment");
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    });
 
     expect(onDeleteProject).toHaveBeenCalledTimes(1);
     expect(onDeleteProject).toHaveBeenCalledWith("project-1");
-    // Radix keeps the portaled node mounted until its exit animation completes.
-    // Under parallel load that cleanup can take several seconds even though the
-    // controlled dialog has already closed, so assert the state transition
-    // instead of animation timing.
-    await waitFor(() => expect(dialog.getAttribute("data-state")).toBe("closed"));
+    // confirmDelete awaits the deletion callback, so flush that continuation
+    // with act. Avoid waitFor here: Radix's focus-restoration timers can make an
+    // already-closed portal consume most of Bun's per-test timeout under load.
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   test("SortableProjectGroup keeps the delete confirmation open after deletion fails", async () => {

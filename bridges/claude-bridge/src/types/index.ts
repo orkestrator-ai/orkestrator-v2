@@ -247,6 +247,14 @@ export interface SessionState {
   /** Control for the currently executing (or most recently completed) turn. */
   queryControl?: ClaudeQueryControl;
   /**
+   * Re-evaluate whether the current streaming prompt may close its input.
+   *
+   * A Claude result is not terminal while background agents are live. The
+   * callback is installed only for the active turn and closes stdin once that
+   * turn has a result and no live background task remains.
+   */
+  finishTurnInputIfSettled?: () => void;
+  /**
    * Control that owns each live background task.
    *
    * A follow-up turn installs a new `queryControl`; these per-task handles keep

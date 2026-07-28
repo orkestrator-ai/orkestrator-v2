@@ -104,6 +104,8 @@ interface OpenCodeChatTabProps {
   tabId: string;
   data: OpenCodeNativeData;
   isActive: boolean;
+  /** Whether this pane currently owns document-level shortcuts. */
+  ownsGlobalShortcuts?: boolean;
   /** Initial prompt to send after session creation */
   initialPrompt?: string;
   isReviewTab?: boolean;
@@ -177,6 +179,7 @@ export function OpenCodeChatTab({
   tabId,
   data,
   isActive,
+  ownsGlobalShortcuts = isActive,
   initialPrompt,
   isReviewTab = false,
   initialAgentModel,
@@ -2359,6 +2362,7 @@ export function OpenCodeChatTab({
   return (
     <NativeChatShell
       agentLabel="OpenCode"
+      isActive={ownsGlobalShortcuts}
       containerId={containerId}
       connectionState={connectionState}
       errorMessage={errorMessage}

@@ -94,7 +94,8 @@ export interface NativeToolGroupPart extends NativeBasePart {
 export interface NativeTaskGroupPart extends NativeBasePart {
   type: "task-group";
   task: NativeToolInvocationPart;
-  childTools: NativeToolInvocationPart[];
+  /** All activity emitted by this agent, including reasoning and final text. */
+  childTools: NativeMessagePart[];
 }
 
 export type NativeAgentActivityPart = NativeSubagentPart | NativeTaskGroupPart;

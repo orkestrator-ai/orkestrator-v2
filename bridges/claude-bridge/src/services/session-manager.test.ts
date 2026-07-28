@@ -5,6 +5,7 @@ import * as realFs from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 // Snapshot the real mcp-config / plugin-config modules BEFORE installing the
 // stub mocks below. Bun's `mock.module(...)` is process-global, so without
@@ -2004,12 +2005,17 @@ describe("sendPrompt", () => {
     expect(abortSession(session.id)).toBe(true);
     const secondPrompt = sendPrompt(session.id, "second");
     const secondCall = await nextQueryCall();
+    const secondInput =
+      (secondCall.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await secondInput.next()).done).toBe(false);
+    const secondInputCompletion = secondInput.next();
     await firstPrompt;
 
     expect(session.status).toBe("running");
     expect(session.abortController).toBe(secondCall.options.abortController);
 
     secondCall.push({ type: "result", subtype: "success" });
+    expect(await secondInputCompletion).toEqual({ done: true, value: undefined });
     secondCall.finish();
     await secondPrompt;
     expect(session.status).toBe("idle");
@@ -2481,6 +2487,75 @@ describe("sendPrompt", () => {
       mcpServerName: "team_tools",
     });
     expect(session.messages.every((message) => message.modelId === undefined)).toBe(true);
+  });
+
+  test("recognizes Agent as a subagent tool and parents its thinking, text, and edits", async () => {
+    const { session, call } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        message: {
+          id: "parent",
+          content: [
+            {
+              type: "tool_use",
+              id: "agent-a",
+              name: "Agent",
+              input: { description: "Review the bridge" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "agent-a",
+              content: "Agent started in the background",
+            },
+          ],
+        },
+      },
+      {
+        type: "assistant",
+        parent_tool_use_id: "agent-a",
+        message: {
+          id: "child",
+          content: [
+            { type: "thinking", thinking: "Inspecting the lifecycle." },
+            { type: "text", text: "I found the lifecycle edge." },
+            {
+              type: "tool_use",
+              id: "child-edit",
+              name: "Edit",
+              input: {
+                file_path: "bridge.ts",
+                old_string: "old",
+                new_string: "new",
+              },
+            },
+          ],
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    expect(call.options.allowedTools).toContain("Agent");
+    expect(call.options.forwardSubagentText).toBe(true);
+    const assistant = session.messages.find((message) => message.role === "assistant");
+    expect(
+      assistant?.parts.map((part) => ({
+        type: part.type,
+        toolName: part.toolName,
+        parentTaskUseId: part.parentTaskUseId,
+      })),
+    ).toEqual([
+      { type: "tool-invocation", toolName: "Agent", parentTaskUseId: undefined },
+      { type: "thinking", toolName: undefined, parentTaskUseId: "agent-a" },
+      { type: "text", toolName: undefined, parentTaskUseId: "agent-a" },
+      { type: "tool-invocation", toolName: "Edit", parentTaskUseId: "agent-a" },
+    ]);
   });
 
   test("sends valid images natively, omits empty image-only text, and escapes file metadata", async () => {
@@ -4951,6 +5026,71 @@ async function inspectDuringTurn(
 }
 
 describe("background task reducer", () => {
+  test("keeps streaming input and running status open until background agents settle", async () => {
+    const created = createSession("held input");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate the review");
+    const call = await nextQueryCall();
+
+    expect(typeof call.prompt).not.toBe("string");
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    const firstInput = await input.next();
+    expect(firstInput.done).toBe(false);
+    if (firstInput.done) throw new Error("Held prompt closed before sending its user message");
+    expect(firstInput.value.message.content).toEqual([
+      { type: "text", text: "delegate the review" },
+    ]);
+
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-1",
+      description: "Review the bridge",
+    });
+    call.push({
+      type: "result",
+      subtype: "success",
+      usage: { input_tokens: 1, output_tokens: 1 },
+      modelUsage: {
+        "claude-mock": {
+          inputTokens: 1,
+          outputTokens: 1,
+          contextWindow: 200_000,
+        },
+      },
+    });
+    await waitFor(
+      () =>
+        getSession(created.id)?.backgroundTasks?.["agent-1"]?.status === "running"
+        && getSession(created.id)?.usage !== undefined,
+    );
+
+    expect(inputClosed).toBe(false);
+    expect(getSession(created.id)?.status).toBe("running");
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-1",
+      status: "completed",
+      summary: "Review complete",
+    });
+    await waitFor(() => inputClosed);
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    // The bridge remains authoritative until the provider stream itself ends.
+    expect(getSession(created.id)?.status).toBe("running");
+
+    call.finish();
+    await promptPromise;
+    expect(getSession(created.id)?.status).toBe("idle");
+  });
+
   test("records a started task as running, then settles it when the stream ends", async () => {
     const { session, finish } = await inspectDuringTurn(
       [

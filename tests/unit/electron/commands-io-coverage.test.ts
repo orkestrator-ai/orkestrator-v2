@@ -159,6 +159,7 @@ describe("backend command I/O coverage", () => {
         payload: {
           data: Array.from(Buffer.from("ready\r\n")),
           revision: 1,
+          generation: 1,
         },
       },
     ]);

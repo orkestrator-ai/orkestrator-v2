@@ -224,6 +224,11 @@ export async function attachTerminal(
   return invoke<string>("attach_terminal", { containerId, cols, rows });
 }
 
+export interface TerminalSessionCreateResult {
+  sessionId: string;
+  created: boolean;
+}
+
 export async function createTerminalSession(
   containerId: string,
   cols: number,
@@ -232,8 +237,8 @@ export async function createTerminalSession(
   trackEnvironmentActivity = false,
   environmentId?: string,
   terminalKey?: string,
-): Promise<string> {
-  return invoke<string>("create_terminal_session", {
+): Promise<TerminalSessionCreateResult> {
+  return invoke<TerminalSessionCreateResult>("create_terminal_session", {
     containerId,
     cols,
     rows,
@@ -266,6 +271,13 @@ export async function getTerminalOutputBuffer(sessionId: string): Promise<string
 export interface TerminalOutputSnapshot {
   output: string;
   revision: number;
+  generation: number;
+}
+
+export interface TerminalOutputEvent {
+  data: number[];
+  revision: number;
+  generation: number;
 }
 
 export async function getTerminalOutputSnapshot(
@@ -1814,8 +1826,8 @@ export async function createLocalTerminalSession(
   rows: number,
   trackEnvironmentActivity = false,
   terminalKey?: string,
-): Promise<string> {
-  return invoke<string>("create_local_terminal_session", {
+): Promise<TerminalSessionCreateResult> {
+  return invoke<TerminalSessionCreateResult>("create_local_terminal_session", {
     environmentId,
     cols,
     rows,

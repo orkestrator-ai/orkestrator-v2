@@ -35,6 +35,7 @@ const {
   getLinearIssues,
   getGitHubIssues,
   getGitHubIssue,
+  getTerminalOutputSnapshot,
   updateGitHubIssue,
   updateGitHubIssueStatus,
   closeGitHubIssue,
@@ -523,11 +524,13 @@ describe("backend setup wrappers", () => {
   });
 
   test("creates environment-tracked local and container terminal sessions", async () => {
-    invokeMock.mockResolvedValueOnce("local-session");
+    const localResult = { sessionId: "local-session", created: true };
+    invokeMock.mockResolvedValueOnce(localResult);
     await expect(createLocalTerminalSession("env-local", 100, 30, true, "tab-local"))
-      .resolves.toBe("local-session");
+      .resolves.toEqual(localResult);
 
-    invokeMock.mockResolvedValueOnce("container-session");
+    const containerResult = { sessionId: "container-session", created: false };
+    invokeMock.mockResolvedValueOnce(containerResult);
     await expect(createTerminalSession(
       "container-1",
       120,
@@ -536,7 +539,7 @@ describe("backend setup wrappers", () => {
       true,
       "env-container",
       "tab-container",
-    )).resolves.toBe("container-session");
+    )).resolves.toEqual(containerResult);
 
     expect(invokeMock.mock.calls).toEqual([
       ["create_local_terminal_session", {
@@ -555,6 +558,20 @@ describe("backend setup wrappers", () => {
         environmentId: "env-container",
         terminalKey: "tab-container",
       }],
+    ]);
+  });
+
+  test("returns the revisioned terminal output snapshot with its generation", async () => {
+    const snapshot = {
+      output: "ready\r\n",
+      revision: 7,
+      generation: 3,
+    };
+    invokeMock.mockResolvedValueOnce(snapshot);
+
+    await expect(getTerminalOutputSnapshot("terminal-1")).resolves.toEqual(snapshot);
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_terminal_output_snapshot", { sessionId: "terminal-1" }],
     ]);
   });
 

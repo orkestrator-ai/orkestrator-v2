@@ -86,6 +86,10 @@ const SETUP_DONE_OSC = "\u001b]9999;setup_done\u0007";
 const SETUP_FAILED_OSC = "\u001b]9999;setup_failed\u0007";
 const TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS = 850;
 
+function terminalSessionResult(value: unknown): { sessionId: string; created: boolean } {
+  return value as { sessionId: string; created: boolean };
+}
+
 function framedContainerGitStatus(
   nameStatus = "",
   numstat = "",
@@ -2625,6 +2629,17 @@ exit 0
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
     const setupSessionId = `${environment.id}:setup`;
+    const retainedStableTerminal = terminalSessionResult(
+      commands.get("create_local_terminal_session")?.(
+        {
+          environmentId: environment.id,
+          terminalKey: "retained-tab",
+          cols: 80,
+          rows: 24,
+        },
+        context,
+      ),
+    );
 
     await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
       const setupPromise = commands.get("run_environment_setup")?.(
@@ -2653,6 +2668,28 @@ exit 0
         context,
       ) as string;
       expect(buffer).toBe("");
+
+      expect(commands.get("get_terminal_output_snapshot")?.(
+        { sessionId: retainedStableTerminal.sessionId },
+        context,
+      )).toEqual({ output: "", revision: 0, generation: 0 });
+      const recreated = terminalSessionResult(
+        commands.get("create_local_terminal_session")?.(
+          {
+            environmentId: environment.id,
+            terminalKey: "retained-tab",
+            cols: 80,
+            rows: 24,
+          },
+          context,
+        ),
+      );
+      expect(recreated.created).toBe(true);
+      expect(recreated.sessionId).not.toBe(retainedStableTerminal.sessionId);
+      commands.get("close_local_terminal_session")?.(
+        { sessionId: recreated.sessionId },
+        context,
+      );
     });
   }, ASYNC_TEST_BUDGET_MS);
 
@@ -2668,10 +2705,10 @@ exit 0
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    const sessionId = await commands.get("create_local_terminal_session")?.(
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
       { environmentId: environment.id, cols: 80, rows: 24 },
       context,
-    ) as string;
+    )).sessionId;
     await commands.get("start_local_terminal_session")?.({ sessionId }, context);
     await waitForPtyProcessCount(1);
 
@@ -2699,10 +2736,10 @@ exit 0
     const commands = createCommandRegistry();
     const maxChars = 500 * 1024;
 
-    const sessionId = await commands.get("create_local_terminal_session")?.(
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
       { environmentId: environment.id, cols: 80, rows: 24 },
       context,
-    ) as string;
+    )).sessionId;
     await commands.get("start_local_terminal_session")?.({ sessionId }, context);
     await waitForPtyProcessCount(1);
 
@@ -5428,6 +5465,69 @@ exit 0
       expect(emitted.some((entry) => entry.event === "environment-setup-complete"
         && (entry.payload as { success: boolean }).success === false)).toBe(true);
       expect(environment.pendingAgentLaunch).toBe(false);
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("increments the terminal transcript generation when setup is retried", async () => {
+    const environment = createEnvironment({
+      id: "env-container-prepare-generation",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+    const sessionId = `${environment.id}:setup`;
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      printf 'transient clone failure\\n' >&2
+      exit 1
+      ;;
+  esac
+fi
+exit 0
+`, async () => {
+      await expect(commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("transient clone failure");
+      const firstSnapshot = commands.get("get_terminal_output_snapshot")?.(
+        { sessionId },
+        context,
+      ) as { output: string; revision: number; generation: number };
+      expect(firstSnapshot.generation).toBe(1);
+      expect(firstSnapshot.revision).toBeGreaterThan(0);
+
+      await expect(commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("transient clone failure");
+      const retrySnapshot = commands.get("get_terminal_output_snapshot")?.(
+        { sessionId },
+        context,
+      ) as { output: string; revision: number; generation: number };
+      expect(retrySnapshot.generation).toBe(2);
+      expect(retrySnapshot.revision).toBeGreaterThan(0);
+
+      const outputGenerations = emitted
+        .filter(({ event }) => event === `terminal-output-${sessionId}`)
+        .map(({ payload }) => (payload as { generation: number }).generation);
+      expect(outputGenerations).toContain(1);
+      expect(outputGenerations).toContain(2);
+      expect(outputGenerations.indexOf(1)).toBeLessThan(outputGenerations.indexOf(2));
     });
   }, ASYNC_TEST_BUDGET_MS);
 
@@ -9055,10 +9155,10 @@ exit 0
     context.toolchainBinDir = toolchainBinDir;
     const commands = createCommandRegistry();
 
-    const sessionId = await commands.get("create_local_terminal_session")?.(
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
       { environmentId: environment.id, cols: 132, rows: 43 },
       context,
-    ) as string;
+    )).sessionId;
     await commands.get("start_local_terminal_session")?.({ sessionId }, context);
 
     const spawnCall = ptySpawn.mock.calls[0];
@@ -9086,6 +9186,7 @@ exit 0
         payload: {
           data: Array.from(Buffer.from("ready\r\n", "utf8")),
           revision: 1,
+          generation: 1,
         },
       },
     ]);
@@ -9103,7 +9204,7 @@ exit 0
   test("reattaches a stable terminal tab to the same backend PTY and buffer", async () => {
     const worktreePath = await createTempDir("ork-electron-terminal-reattach-");
     const environment = createEnvironment({ worktreePath });
-    const { context } = createContext(environment);
+    const { context, emitted } = createContext(environment);
     const commands = createCommandRegistry();
     const args = {
       environmentId: environment.id,
@@ -9112,23 +9213,28 @@ exit 0
       rows: 24,
     };
 
-    const firstSessionId = await commands.get("create_local_terminal_session")?.(
+    const firstResult = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
       args,
       context,
-    ) as string;
+    ));
+    const firstSessionId = firstResult.sessionId;
+    expect(firstResult.created).toBe(true);
     await commands.get("start_local_terminal_session")?.(
       { sessionId: firstSessionId },
       context,
     );
     ptyProcesses[0]?.emitData("dev server listening on 3000\r\n");
+    ptyProcesses[0]?.emitData("second chunk\r\n");
 
     // A second renderer (or a remount after project refresh) has only the
     // durable environment + tab identity. Ensuring that identity must return
     // the original running PTY, and starting it again must remain idempotent.
-    const reattachedSessionId = await commands.get("create_local_terminal_session")?.(
+    const reattachedResult = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
       args,
       context,
-    ) as string;
+    ));
+    const reattachedSessionId = reattachedResult.sessionId;
+    expect(reattachedResult.created).toBe(false);
     await commands.get("start_local_terminal_session")?.(
       { sessionId: reattachedSessionId },
       context,
@@ -9140,18 +9246,63 @@ exit 0
       { sessionId: reattachedSessionId },
       context,
     )).toEqual({
-      output: "dev server listening on 3000\r\n",
-      revision: 1,
+      output: "dev server listening on 3000\r\nsecond chunk\r\n",
+      revision: 2,
+      generation: 1,
     });
+    expect(emitted.filter(({ event }) => event === `terminal-output-${firstSessionId}`))
+      .toEqual([
+        {
+          event: `terminal-output-${firstSessionId}`,
+          payload: {
+            data: Array.from(Buffer.from("dev server listening on 3000\r\n")),
+            revision: 1,
+            generation: 1,
+          },
+        },
+        {
+          event: `terminal-output-${firstSessionId}`,
+          payload: {
+            data: Array.from(Buffer.from("second chunk\r\n")),
+            revision: 2,
+            generation: 1,
+          },
+        },
+      ]);
+
+    // A natural shell exit retains the stable tab identity and bounded
+    // transcript. Reopening the tab starts a replacement PTY under that same
+    // identity rather than losing its history.
+    ptyProcesses[0]?.emitExit({ exitCode: 0 });
+    const exitedResult = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      args,
+      context,
+    ));
+    expect(exitedResult).toEqual({ sessionId: firstSessionId, created: false });
+    expect(commands.get("get_terminal_output_snapshot")?.(
+      { sessionId: firstSessionId },
+      context,
+    )).toEqual({
+      output: "dev server listening on 3000\r\nsecond chunk\r\n",
+      revision: 2,
+      generation: 1,
+    });
+    await commands.get("start_local_terminal_session")?.(
+      { sessionId: exitedResult.sessionId },
+      context,
+    );
+    expect(ptySpawn).toHaveBeenCalledTimes(2);
 
     await commands.get("close_local_terminal_session")?.(
       { sessionId: firstSessionId },
       context,
     );
-    const replacementSessionId = await commands.get("create_local_terminal_session")?.(
+    const replacementResult = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
       args,
       context,
-    ) as string;
+    ));
+    const replacementSessionId = replacementResult.sessionId;
+    expect(replacementResult.created).toBe(true);
     expect(replacementSessionId).not.toBe(firstSessionId);
   });
 
@@ -9167,7 +9318,7 @@ exit 0
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
     const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
 
-    const sessionId = await commands.get("create_local_terminal_session")?.(
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
       {
         environmentId: environment.id,
         cols: 80,
@@ -9175,7 +9326,7 @@ exit 0
         trackEnvironmentActivity: true,
       },
       context,
-    ) as string;
+    )).sessionId;
     await commands.get("start_local_terminal_session")?.({ sessionId }, context);
 
     await withFixedDate("2026-07-23T10:00:00.000Z", () =>
@@ -9227,7 +9378,7 @@ exit 0
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
     const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
 
-    const sessionId = await commands.get("create_local_terminal_session")?.(
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
       {
         environmentId: environment.id,
         cols: 80,
@@ -9235,7 +9386,7 @@ exit 0
         trackEnvironmentActivity: true,
       },
       context,
-    ) as string;
+    )).sessionId;
     await commands.get("start_local_terminal_session")?.({ sessionId }, context);
 
     await commands.get("local_terminal_write")?.({ sessionId, data: "unfinished" }, context);
@@ -9284,7 +9435,7 @@ exit 0
     const consoleError = spyOn(console, "error").mockImplementation(() => {});
 
     try {
-      const sessionId = await commands.get("create_local_terminal_session")?.(
+      const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
         {
           environmentId: environment.id,
           cols: 80,
@@ -9292,7 +9443,7 @@ exit 0
           trackEnvironmentActivity: true,
         },
         context,
-      ) as string;
+      )).sessionId;
       await commands.get("start_local_terminal_session")?.({ sessionId }, context);
       await commands.get("local_terminal_write")?.({ sessionId, data: "codex\r" }, context);
 
@@ -9325,7 +9476,7 @@ exit 0
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
     const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
 
-    const sessionId = await commands.get("create_local_terminal_session")?.(
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
       {
         environmentId: environment.id,
         cols: 80,
@@ -9333,7 +9484,7 @@ exit 0
         trackEnvironmentActivity: true,
       },
       context,
-    ) as string;
+    )).sessionId;
     await commands.get("start_local_terminal_session")?.({ sessionId }, context);
     await commands.get("local_terminal_write")?.({ sessionId, data: "claude\r" }, context);
     recordActivity.mockClear();
@@ -9360,7 +9511,7 @@ exit 0
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
     const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
 
-    const sessionId = await commands.get("create_terminal_session")?.(
+    const sessionId = terminalSessionResult(await commands.get("create_terminal_session")?.(
       {
         containerId: environment.containerId,
         cols: 80,
@@ -9368,7 +9519,7 @@ exit 0
         trackEnvironmentActivity: true,
       },
       context,
-    ) as string;
+    )).sessionId;
     await commands.get("start_terminal_session")?.({ sessionId }, context);
 
     await withFixedDate("2026-07-23T11:00:00.000Z", () =>
@@ -9410,6 +9561,17 @@ exit 0
       },
       context,
     )).rejects.toThrow("Tracked terminal container is not associated with an environment");
+
+    await expect(commands.get("create_terminal_session")?.(
+      {
+        containerId: "container-unrelated",
+        environmentId: environment.id,
+        terminalKey: "plain-tab",
+        cols: 80,
+        rows: 24,
+      },
+      context,
+    )).rejects.toThrow("Terminal container is not associated with the requested environment");
   });
 
   test("does not record shell activity for untracked terminal tabs", async () => {
@@ -9420,10 +9582,10 @@ exit 0
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
     const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
 
-    const sessionId = await commands.get("create_local_terminal_session")?.(
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
       { environmentId: environment.id, cols: 80, rows: 24 },
       context,
-    ) as string;
+    )).sessionId;
     await commands.get("start_local_terminal_session")?.({ sessionId }, context);
     await commands.get("local_terminal_write")?.({ sessionId, data: "pwd\r" }, context);
     ptyProcesses[0]?.emitData("/tmp/worktree\r\n");
@@ -9439,10 +9601,10 @@ exit 0
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    const sessionId = await commands.get("create_local_terminal_session")?.(
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
       { environmentId: environment.id, cols: 80, rows: 24 },
       context,
-    ) as string;
+    )).sessionId;
 
     await expect(commands.get("start_local_terminal_session")?.({ sessionId }, context)).rejects.toThrow(
       `Local environment worktree does not exist: ${missingWorktreePath}`,
@@ -9961,15 +10123,19 @@ exit 0
       user: "node",
     };
 
-    const sessionId = await commands.get("create_terminal_session")?.(
+    const firstResult = terminalSessionResult(await commands.get("create_terminal_session")?.(
       createArgs,
       context,
-    ) as string;
+    ));
+    const sessionId = firstResult.sessionId;
+    expect(firstResult.created).toBe(true);
     await commands.get("start_terminal_session")?.({ sessionId }, context);
-    const reattachedSessionId = await commands.get("create_terminal_session")?.(
+    const reattachedResult = terminalSessionResult(await commands.get("create_terminal_session")?.(
       createArgs,
       context,
-    ) as string;
+    ));
+    const reattachedSessionId = reattachedResult.sessionId;
+    expect(reattachedResult.created).toBe(false);
     await commands.get("start_terminal_session")?.(
       { sessionId: reattachedSessionId },
       context,
@@ -9984,6 +10150,71 @@ exit 0
       cols: 100,
       rows: 32,
     });
+  });
+
+  test("supersedes a stable container terminal when its target or activity context changes", async () => {
+    const environment = createEnvironment({
+      id: "env-container-terminal-replaced",
+      environmentType: "containerized",
+      containerId: "container-old",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const baseArgs = {
+      environmentId: environment.id,
+      terminalKey: "root-tab",
+      cols: 100,
+      rows: 32,
+    };
+
+    const first = terminalSessionResult(await commands.get("create_terminal_session")?.(
+      { ...baseArgs, containerId: "container-old", user: "node" },
+      context,
+    ));
+    await commands.get("start_terminal_session")?.({ sessionId: first.sessionId }, context);
+
+    environment.containerId = "container-new";
+    const changedContainer = terminalSessionResult(await commands.get("create_terminal_session")?.(
+      { ...baseArgs, containerId: "container-new", user: "node" },
+      context,
+    ));
+    expect(changedContainer.created).toBe(true);
+    expect(changedContainer.sessionId).not.toBe(first.sessionId);
+    expect(ptyProcesses[0]?.kill).toHaveBeenCalledTimes(1);
+    await commands.get("start_terminal_session")?.(
+      { sessionId: changedContainer.sessionId },
+      context,
+    );
+    expect(ptySpawn.mock.calls[1]?.[1]).toEqual([
+      "exec",
+      "-it",
+      "--user",
+      "node",
+      "container-new",
+      "zsh",
+      "-l",
+    ]);
+
+    const changedUser = terminalSessionResult(await commands.get("create_terminal_session")?.(
+      { ...baseArgs, containerId: "container-new", user: "root" },
+      context,
+    ));
+    expect(changedUser.created).toBe(true);
+    expect(changedUser.sessionId).not.toBe(changedContainer.sessionId);
+    expect(ptyProcesses[1]?.kill).toHaveBeenCalledTimes(1);
+
+    const changedActivity = terminalSessionResult(await commands.get("create_terminal_session")?.(
+      {
+        ...baseArgs,
+        containerId: "container-new",
+        user: "root",
+        trackEnvironmentActivity: true,
+      },
+      context,
+    ));
+    expect(changedActivity.created).toBe(true);
+    expect(changedActivity.sessionId).not.toBe(changedUser.sessionId);
   });
 });
 

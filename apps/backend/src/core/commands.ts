@@ -143,6 +143,7 @@ const terminalProcesses = new Map<string, PtyProcess>();
 const terminalSessionConfigs = new Map<string, TerminalSessionConfig>();
 const terminalOutputBuffers = new Map<string, string>();
 const terminalOutputRevisions = new Map<string, number>();
+const terminalOutputGenerations = new Map<string, number>();
 const terminalSessionIdsByStableKey = new Map<string, string>();
 const terminalStableKeysBySessionId = new Map<string, string>();
 const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -2180,7 +2181,15 @@ function bytesPayload(data: string | Buffer): number[] {
   return Array.from(Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8"));
 }
 
+function ensureTerminalOutputGeneration(sessionId: string): number {
+  const existing = terminalOutputGenerations.get(sessionId);
+  if (existing !== undefined) return existing;
+  terminalOutputGenerations.set(sessionId, 1);
+  return 1;
+}
+
 function appendTerminalOutputBuffer(sessionId: string, data: string | Buffer): void {
+  ensureTerminalOutputGeneration(sessionId);
   const text = Buffer.isBuffer(data) ? data.toString("utf8") : data;
   const combined = `${terminalOutputBuffers.get(sessionId) ?? ""}${text}`;
   terminalOutputBuffers.set(
@@ -2200,12 +2209,17 @@ function emitTerminalOutput(sessionId: string, data: string | Buffer, emit: Back
   emit(`terminal-output-${sessionId}`, {
     data: bytesPayload(data),
     revision: terminalOutputRevisions.get(sessionId) ?? 0,
+    generation: terminalOutputGenerations.get(sessionId) ?? 1,
   });
 }
 
 function resetTerminalOutputBuffer(sessionId: string): void {
   terminalOutputBuffers.set(sessionId, "");
   terminalOutputRevisions.set(sessionId, 0);
+  terminalOutputGenerations.set(
+    sessionId,
+    (terminalOutputGenerations.get(sessionId) ?? 0) + 1,
+  );
 }
 
 function logSetupTerminal(message: string, details: Record<string, unknown> = {}): void {
@@ -2236,6 +2250,7 @@ function resolveLocalShellPath(): string {
 
 function rememberTerminalSession(id: string, config: TerminalSessionConfig): string {
   terminalSessionConfigs.set(id, config);
+  ensureTerminalOutputGeneration(id);
   return id;
 }
 
@@ -2269,6 +2284,28 @@ function existingStableTerminalSession(stableKey: string | null): string | null 
   terminalSessionIdsByStableKey.delete(stableKey);
   terminalStableKeysBySessionId.delete(id);
   return null;
+}
+
+function containerTerminalConfigMatches(
+  id: string,
+  expected: Extract<TerminalSessionConfig, { kind: "container" }>,
+): boolean {
+  const config = terminalSessionConfigs.get(id);
+  return config?.kind === "container"
+    && containerIdMatches(config.containerId, expected.containerId)
+    && config.user === expected.user
+    && config.activityEnvironmentId === expected.activityEnvironmentId
+    && config.trackEnvironmentActivity === expected.trackEnvironmentActivity;
+}
+
+function localTerminalConfigMatches(
+  id: string,
+  expected: Extract<TerminalSessionConfig, { kind: "local" }>,
+): boolean {
+  const config = terminalSessionConfigs.get(id);
+  return config?.kind === "local"
+    && config.environmentId === expected.environmentId
+    && config.trackEnvironmentActivity === expected.trackEnvironmentActivity;
 }
 
 function getTrackedTerminalEnvironmentId(id: string): string | null {
@@ -2343,14 +2380,22 @@ function trackedTerminalActivityHooks(
   };
 }
 
-function cleanupTerminalSession(id: string): void {
+function cleanupTerminalSession(
+  id: string,
+  options: { explicit?: boolean } = {},
+): void {
   const activityTimer = terminalActivityTimers.get(id);
   if (activityTimer) clearTimeout(activityTimer);
   terminalActivityTimers.delete(id);
   terminalActivityArmed.delete(id);
   terminalProcesses.delete(id);
-  terminalSessionConfigs.delete(id);
   const stableKey = terminalStableKeysBySessionId.get(id);
+  const retainStableState = !options.explicit
+    && stableKey !== undefined
+    && terminalSessionConfigs.has(id);
+  if (retainStableState) return;
+
+  terminalSessionConfigs.delete(id);
   if (stableKey) {
     terminalStableKeysBySessionId.delete(id);
     if (terminalSessionIdsByStableKey.get(stableKey) === id) {
@@ -2359,13 +2404,38 @@ function cleanupTerminalSession(id: string): void {
   }
   // Setup-session buffers are retained intentionally so the renderer can replay
   // setup output after the PTY exits / on reattach (cleared when the setup
-  // session is superseded or the environment is removed). Every other session
-  // is keyed by a one-shot UUID, so its buffer would otherwise leak for the
-  // lifetime of the main process.
+  // session is superseded or the environment is removed). Stable tab sessions
+  // returned above retain their bounded transcript until explicit tab or
+  // environment cleanup. One-shot session buffers must not outlive their PTY.
   if (!isSetupTerminalSessionId(id)) {
     terminalOutputBuffers.delete(id);
     terminalOutputRevisions.delete(id);
+    terminalOutputGenerations.delete(id);
   }
+}
+
+function explicitlyCloseTerminalSession(id: string): void {
+  terminalProcesses.get(id)?.kill();
+  cleanupTerminalSession(id, { explicit: true });
+}
+
+function terminalStableKeyEnvironmentId(id: string): string | null {
+  const stableKey = terminalStableKeysBySessionId.get(id);
+  return stableKey?.split("\0")[1] ?? null;
+}
+
+function cleanupTerminalSessionsForEnvironment(environmentId: string): void {
+  const sessionIds = new Set<string>();
+  for (const [id, config] of terminalSessionConfigs) {
+    if (
+      (config.kind === "local" && config.environmentId === environmentId)
+      || (config.kind === "container" && config.activityEnvironmentId === environmentId)
+      || terminalStableKeyEnvironmentId(id) === environmentId
+    ) {
+      sessionIds.add(id);
+    }
+  }
+  for (const id of sessionIds) explicitlyCloseTerminalSession(id);
 }
 
 function spawnTerminalProcess(
@@ -2628,6 +2698,7 @@ function isTerminalSessionAttachable(sessionId: string): boolean {
 function cleanupEnvironmentSetupState(environmentId: string): void {
   terminalOutputBuffers.delete(setupTerminalSessionId(environmentId));
   terminalOutputRevisions.delete(setupTerminalSessionId(environmentId));
+  terminalOutputGenerations.delete(setupTerminalSessionId(environmentId));
   environmentSetupSessions.delete(environmentId);
   environmentSetupTasks.delete(environmentId);
   environmentSetupStartTasks.delete(environmentId);
@@ -3675,6 +3746,7 @@ async function deleteEnvironment(
     await enqueueLocalServerEnvironmentOperation(environmentId, async () => {
       const { storage } = context;
       const environment = await storage.getEnvironment(environmentId);
+      cleanupTerminalSessionsForEnvironment(environmentId);
       // Persist the deletion intent before any durable child-state cleanup.
       // Queue/pipeline saves consult this marker while holding their own locks:
       // a write that began earlier is swept by cleanup, and a later write is
@@ -6275,19 +6347,24 @@ export function createCommandRegistry(
       requestedEnvironmentId,
       requestedTerminalKey,
     );
-    const existingId = existingStableTerminalSession(stableKey);
-    if (existingId) return existingId;
-
-    const id = `${resolvedContainerId}:${randomUUID()}`;
-    return rememberStableTerminalSession(id, {
-      kind: "container",
+    const config = {
+      kind: "container" as const,
       containerId: resolvedContainerId,
       cols: asTerminalDimension(cols, 80),
       rows: asTerminalDimension(rows, 24),
       user: asOptionalString(user),
       activityEnvironmentId,
       trackEnvironmentActivity: shouldTrackActivity,
-    }, stableKey);
+    };
+    const existingId = existingStableTerminalSession(stableKey);
+    if (existingId && containerTerminalConfigMatches(existingId, config)) {
+      return { sessionId: existingId, created: false };
+    }
+    if (existingId) explicitlyCloseTerminalSession(existingId);
+
+    const id = `${resolvedContainerId}:${randomUUID()}`;
+    rememberStableTerminalSession(id, config, stableKey);
+    return { sessionId: id, created: true };
   });
   register("attach_terminal", ({ containerId, cols, rows, user }, { emit }) => {
     const id = `${asString(containerId, "containerId")}:${randomUUID()}`;
@@ -6333,8 +6410,7 @@ export function createCommandRegistry(
     asTerminalDimension(rows, 24),
   ));
   register("detach_terminal", ({ sessionId }) => {
-    terminalProcesses.get(asString(sessionId, "sessionId"))?.kill();
-    cleanupTerminalSession(asString(sessionId, "sessionId"));
+    explicitlyCloseTerminalSession(asString(sessionId, "sessionId"));
   });
   register("list_terminal_sessions", () => Array.from(terminalProcesses.keys()));
   register("get_terminal_session", ({ sessionId }) => {
@@ -6367,6 +6443,7 @@ export function createCommandRegistry(
     return {
       output: terminalOutputBuffers.get(id) ?? "",
       revision: terminalOutputRevisions.get(id) ?? 0,
+      generation: terminalOutputGenerations.get(id) ?? 0,
     };
   });
 
@@ -6383,17 +6460,22 @@ export function createCommandRegistry(
       resolvedEnvironmentId,
       asOptionalString(terminalKey),
     );
-    const existingId = existingStableTerminalSession(stableKey);
-    if (existingId) return existingId;
-
-    const id = `${resolvedEnvironmentId}:${randomUUID()}`;
-    return rememberStableTerminalSession(id, {
-      kind: "local",
+    const config = {
+      kind: "local" as const,
       environmentId: resolvedEnvironmentId,
       cols: asTerminalDimension(cols, 80),
       rows: asTerminalDimension(rows, 24),
       trackEnvironmentActivity: asBoolean(trackEnvironmentActivity),
-    }, stableKey);
+    };
+    const existingId = existingStableTerminalSession(stableKey);
+    if (existingId && localTerminalConfigMatches(existingId, config)) {
+      return { sessionId: existingId, created: false };
+    }
+    if (existingId) explicitlyCloseTerminalSession(existingId);
+
+    const id = `${resolvedEnvironmentId}:${randomUUID()}`;
+    rememberStableTerminalSession(id, config, stableKey);
+    return { sessionId: id, created: true };
   });
   register("start_local_terminal_session", async ({ sessionId }, context) => {
     const { storage, emit } = context;
@@ -6436,8 +6518,7 @@ export function createCommandRegistry(
     asTerminalDimension(rows, 24),
   ));
   register("close_local_terminal_session", ({ sessionId }) => {
-    terminalProcesses.get(asString(sessionId, "sessionId"))?.kill();
-    cleanupTerminalSession(asString(sessionId, "sessionId"));
+    explicitlyCloseTerminalSession(asString(sessionId, "sessionId"));
   });
 
   register("get_local_git_status", async ({ worktreePath, targetBranch, includeUncommitted }) => {

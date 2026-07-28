@@ -1,6 +1,10 @@
 // Hook for managing terminal sessions with Electron backend
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen, UnlistenFn } from "@/lib/native/events";
+import {
+  listen,
+  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+  UnlistenFn,
+} from "@/lib/native/events";
 import { toast } from "sonner";
 import * as backend from "@/lib/backend";
 
@@ -13,8 +17,11 @@ interface UseTerminalOptions {
   cols?: number;
   rows?: number;
   onData?: (data: Uint8Array) => void;
-  /** Replace the client view with an authoritative backend buffer snapshot. */
-  onReplay?: (data: Uint8Array) => void;
+  /** Reconcile the client view with an authoritative backend buffer snapshot. */
+  onReplay?: (
+    data: Uint8Array,
+    metadata: { preserveExisting: boolean },
+  ) => void;
   /** Stable tab identity used by the backend to make session creation idempotent. */
   terminalKey?: string;
   /** Existing session ID to reconnect to (for tab moves between panes) */
@@ -178,278 +185,347 @@ export function useTerminal({
     console.log("[useTerminal] connect called, containerId:", containerId, "environmentId:", environmentId, "isLocal:", isLocal, "existingSessionId:", existingSessionId, "attachExistingOnly:", attachExistingOnly);
 
     if (attachExistingOnly && !existingSessionId) {
-      console.info("[setup-terminal] waiting for backend-owned session id before attaching", {
-        environmentId: environmentId ?? null,
-        containerId,
-        isLocal,
-      });
-      console.log("[useTerminal] Waiting for existing backend terminal session before connecting");
       setError(null);
       return;
     }
-
-    // Validate inputs based on environment type
-    if (isLocal) {
-      if (!environmentId) {
-        setError("No environment ID provided for local environment");
-        return;
-      }
-    } else {
-      if (!containerId) {
-        setError("No container ID provided");
-        return;
-      }
-    }
-
-    if (isConnectingRef.current || isConnectedRef.current) {
-      console.log("[useTerminal] Already connecting or connected, skipping");
+    if (isLocal ? !environmentId : !containerId) {
+      setError(isLocal
+        ? "No environment ID provided for local environment"
+        : "No container ID provided");
       return;
     }
+    if (isConnectingRef.current || isConnectedRef.current) return;
 
     isConnectingRef.current = true;
     const connectGeneration = connectGenerationRef.current + 1;
     connectGenerationRef.current = connectGeneration;
-    const isCurrentConnect = () => connectGenerationRef.current === connectGeneration;
+    const isCurrentConnect = () =>
+      connectGenerationRef.current === connectGeneration;
     setIsConnecting(true);
     setError(null);
 
     let targetSessionId: string | null = null;
-    let shouldStartSession = true;
+    let targetCreated = false;
+    let targetShouldStart = false;
     let existingSessionRunning: boolean | null = null;
 
-    try {
-
-      // If we have an existing session, try to reconnect to it
-      if (existingSessionId) {
-        console.log("[useTerminal] Reconnecting to existing session:", existingSessionId);
-        const existingStatus = await backend.getTerminalSession(existingSessionId).catch((err) => {
-          console.warn("[useTerminal] Failed to check existing terminal session, creating a new one:", err);
-          return null;
-        });
-        if (!isCurrentConnect()) return;
-
-        existingSessionRunning = existingStatus?.running ?? false;
-        if (attachExistingOnly || existingSessionId.endsWith(":setup")) {
-          console.info("[setup-terminal] existing terminal session status", {
-            environmentId: environmentId ?? null,
-            sessionId: existingSessionId,
-            running: existingSessionRunning,
-            attachExistingOnly,
-            replayOutputBuffer,
-          });
-        }
-
-        if (existingSessionRunning) {
-          targetSessionId = existingSessionId;
-          shouldStartSession = false;
-        } else if (attachExistingOnly) {
-          targetSessionId = existingSessionId;
-          shouldStartSession = false;
-        } else if (isLocal && environmentId) {
-          console.log("[useTerminal] Existing terminal session is stale, creating a new local session");
-          targetSessionId = await backend.createLocalTerminalSession(
-            environmentId,
-            cols,
-            rows,
-            trackEnvironmentActivity,
-            terminalKey,
-          );
-          console.log("[useTerminal] Got replacement local sessionId:", targetSessionId);
-        } else {
-          console.log("[useTerminal] Existing terminal session is stale, creating a new container session");
-          targetSessionId = await backend.createTerminalSession(
-            containerId!,
-            cols,
-            rows,
-            user,
-            trackEnvironmentActivity,
-            environmentId,
-            terminalKey,
-          );
-          console.log("[useTerminal] Got replacement sessionId:", targetSessionId);
-        }
-      } else if (isLocal && environmentId) {
-        // Create new local session
-        console.log("[useTerminal] Creating local terminal session for environment:", environmentId);
-        targetSessionId = await backend.createLocalTerminalSession(
-          environmentId,
-          cols,
-          rows,
-          trackEnvironmentActivity,
-          terminalKey,
-        );
-        if (!isCurrentConnect()) {
-          await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
-          return;
-        }
-        console.log("[useTerminal] Got local sessionId:", targetSessionId);
+    const destroyIfCreated = async (
+      id: string | null,
+      created: boolean,
+    ): Promise<void> => {
+      if (!id || !created) return;
+      if (isLocal) {
+        await backend.closeLocalTerminalSession(id).catch(() => {});
       } else {
-        // Create new container session
-        console.log("[useTerminal] Calling createTerminalSession...");
-        targetSessionId = await backend.createTerminalSession(
-          containerId!,
+        await backend.detachTerminal(id).catch(() => {});
+      }
+    };
+
+    const createSession = async (): Promise<backend.TerminalSessionCreateResult> => {
+      if (isLocal) {
+        return backend.createLocalTerminalSession(
+          environmentId!,
           cols,
           rows,
-          user,
           trackEnvironmentActivity,
-          environmentId,
           terminalKey,
         );
-        if (!isCurrentConnect()) {
-          await backend.detachTerminal(targetSessionId).catch(() => {});
-          return;
-        }
-        console.log("[useTerminal] Got sessionId:", targetSessionId);
       }
+      return backend.createTerminalSession(
+        containerId!,
+        cols,
+        rows,
+        user,
+        trackEnvironmentActivity,
+        environmentId,
+        terminalKey,
+      );
+    };
 
-      if (!isCurrentConnect()) {
-        if (shouldStartSession) {
-          if (isLocal) {
-            await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
-          } else {
-            await backend.detachTerminal(targetSessionId).catch(() => {});
-          }
-        }
-        return;
-      }
+    const attachOutput = async (
+      id: string,
+      preserveExisting: boolean,
+    ): Promise<void> => {
+      type TerminalOutputEventPayload = number[] | backend.TerminalOutputEvent;
+      type PendingOutput = {
+        data: Uint8Array;
+        revision: number | null;
+        generation: number | null;
+      };
 
-      // Update ref immediately so write() can use it right away
-      sessionIdRef.current = targetSessionId;
-      setSessionId(targetSessionId);
-
-      cleanupEventListener();
-
-      // Listen for terminal output events
-      const eventName = `terminal-output-${targetSessionId}`;
-      console.log("[useTerminal] Listening for events on:", eventName);
-      if (attachExistingOnly || targetSessionId.endsWith(":setup")) {
-        console.info("[setup-terminal] listening for backend terminal output", {
-          environmentId: environmentId ?? null,
-          sessionId: targetSessionId,
-          eventName,
-          shouldStartSession,
-          replayOutputBuffer,
-          attachExistingOnly,
-        });
-      }
-      type TerminalOutputEventPayload =
-        | number[]
-        | { data: number[]; revision: number };
-      const pendingLiveOutput: Array<{ data: Uint8Array; revision: number | null }> = [];
+      const eventName = `terminal-output-${id}`;
+      const pendingLiveOutput: PendingOutput[] = [];
+      let disposed = false;
+      // Buffer immediately; output can arrive after the output listener is
+      // registered but before the lifecycle listener and first snapshot exist.
       let snapshotPending = replayOutputBuffer;
-      const unlisten = await listen<TerminalOutputEventPayload>(eventName, (event) => {
-        const payload = event.payload;
-        const data = new Uint8Array(Array.isArray(payload) ? payload : payload.data);
-        const revision = Array.isArray(payload) ? null : payload.revision;
-        if (snapshotPending) {
-          pendingLiveOutput.push({ data, revision });
+      let activeGeneration: number | null = null;
+      let lastAppliedRevision = 0;
+      let reconciliationQueued = false;
+      let reconciliationPromise: Promise<void> | null = null;
+      let snapshotErrorActive = false;
+
+      const deliverWithoutSnapshot = (pending: PendingOutput): void => {
+        // Legacy payloads have no cursor and therefore cannot be deduplicated.
+        if (pending.revision === null || pending.generation === null) {
+          onDataRef.current?.(pending.data);
           return;
         }
-        onDataRef.current?.(data);
-      });
-      if (!isCurrentConnect()) {
-        unlisten();
-        if (shouldStartSession) {
-          if (isLocal) {
-            await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
-          } else {
-            await backend.detachTerminal(targetSessionId).catch(() => {});
+
+        if (activeGeneration !== pending.generation) {
+          activeGeneration = pending.generation;
+          lastAppliedRevision = 0;
+        }
+        if (pending.revision <= lastAppliedRevision) return;
+        onDataRef.current?.(pending.data);
+        lastAppliedRevision = pending.revision;
+      };
+
+      const reconcileOnce = async (): Promise<void> => {
+        snapshotPending = true;
+        try {
+          const snapshot = await backend.getTerminalOutputSnapshot(id);
+          if (disposed || !isCurrentConnect()) return;
+
+          onReplayRef.current?.(
+            new TextEncoder().encode(snapshot.output),
+            { preserveExisting },
+          );
+          activeGeneration = snapshot.generation;
+          lastAppliedRevision = snapshot.revision;
+          if (snapshotErrorActive) {
+            snapshotErrorActive = false;
+            setError(null);
           }
-        }
-        return;
-      }
 
-      unlistenRef.current = unlisten;
-
-      if (replayOutputBuffer) {
-        const snapshot = await backend.getTerminalOutputSnapshot(targetSessionId).catch((err) => {
-          console.warn("[useTerminal] Failed to replay terminal output snapshot:", err);
-          return { output: "", revision: 0 };
-        });
-        if (attachExistingOnly || targetSessionId.endsWith(":setup")) {
-          console.info("[setup-terminal] replay buffer fetched", {
-            environmentId: environmentId ?? null,
-            sessionId: targetSessionId,
-            bufferChars: snapshot.output.length,
-            revision: snapshot.revision,
-          });
-        }
-        if (!isCurrentConnect()) {
-          unlisten();
-          if (shouldStartSession) {
-            if (isLocal) {
-              await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
-            } else {
-              await backend.detachTerminal(targetSessionId).catch(() => {});
+          const buffered = pendingLiveOutput.splice(0);
+          snapshotPending = false;
+          for (const pending of buffered) {
+            if (pending.revision === null || pending.generation === null) {
+              onDataRef.current?.(pending.data);
+              continue;
             }
-          }
-          return;
-        }
-        onReplayRef.current?.(new TextEncoder().encode(snapshot.output));
-        snapshotPending = false;
-        for (const pending of pendingLiveOutput) {
-          if (pending.revision === null || pending.revision > snapshot.revision) {
+            if (pending.generation !== activeGeneration) {
+              pendingLiveOutput.push(pending);
+              reconciliationQueued = true;
+              continue;
+            }
+            if (pending.revision <= lastAppliedRevision) continue;
+            if (pending.revision !== lastAppliedRevision + 1) {
+              pendingLiveOutput.push(pending);
+              reconciliationQueued = true;
+              continue;
+            }
             onDataRef.current?.(pending.data);
+            lastAppliedRevision = pending.revision;
           }
-        }
-        pendingLiveOutput.length = 0;
-      }
+        } catch (snapshotError) {
+          if (disposed || !isCurrentConnect()) return;
+          console.warn("[useTerminal] Failed to reconcile terminal output snapshot:", snapshotError);
+          snapshotErrorActive = true;
+          const message = snapshotError instanceof Error
+            ? snapshotError.message
+            : "Unknown snapshot error";
+          setError(`Failed to synchronize terminal output: ${message}`);
 
-      if (attachExistingOnly && targetSessionId && existingSessionRunning === false) {
-        console.info("[setup-terminal] backend-owned session is not running after attach", {
-          environmentId: environmentId ?? null,
-          sessionId: targetSessionId,
-          replayOutputBuffer,
+          // Keep the existing view. Live output should continue even though
+          // history cannot be made authoritative until a later reconnect.
+          snapshotPending = false;
+          const buffered = pendingLiveOutput.splice(0);
+          for (const pending of buffered) deliverWithoutSnapshot(pending);
+        } finally {
+          snapshotPending = false;
+        }
+      };
+
+      const reconcileSnapshot = (): Promise<void> => {
+        if (disposed || !isCurrentConnect() || !replayOutputBuffer) {
+          return Promise.resolve();
+        }
+        if (reconciliationPromise) {
+          reconciliationQueued = true;
+          return reconciliationPromise;
+        }
+
+        // Deferring the runner one microtask ensures the promise is assigned
+        // before a synchronously resolved snapshot can trigger more events.
+        reconciliationPromise = Promise.resolve().then(async () => {
+          let attempts = 0;
+          do {
+            reconciliationQueued = false;
+            await reconcileOnce();
+            attempts += 1;
+          } while (
+            reconciliationQueued &&
+            // One coalesced follow-up closes the normal event/snapshot race.
+            // If an inconsistent backend keeps returning an older generation,
+            // wait for the next live/reconnect trigger instead of tight-looping.
+            attempts < 2 &&
+            !disposed &&
+            isCurrentConnect()
+          );
+        }).finally(() => {
+          reconciliationPromise = null;
         });
-        setError("Backend terminal session is not running");
+        return reconciliationPromise;
+      };
+
+      const outputUnlisten = await listen<TerminalOutputEventPayload>(
+        eventName,
+        (event) => {
+          const payload = event.payload;
+          const pending: PendingOutput = Array.isArray(payload)
+            ? {
+                data: new Uint8Array(payload),
+                revision: null,
+                generation: null,
+              }
+            : {
+                data: new Uint8Array(payload.data),
+                revision: payload.revision,
+                generation: payload.generation,
+              };
+
+          if (snapshotPending) {
+            pendingLiveOutput.push(pending);
+            return;
+          }
+          if (pending.revision === null || pending.generation === null) {
+            onDataRef.current?.(pending.data);
+            return;
+          }
+          if (activeGeneration === null) {
+            activeGeneration = pending.generation;
+            lastAppliedRevision = pending.revision;
+            onDataRef.current?.(pending.data);
+            return;
+          }
+          if (
+            pending.generation !== activeGeneration ||
+            pending.revision > lastAppliedRevision + 1
+          ) {
+            pendingLiveOutput.push(pending);
+            void reconcileSnapshot();
+            return;
+          }
+          if (pending.revision <= lastAppliedRevision) return;
+          onDataRef.current?.(pending.data);
+          lastAppliedRevision = pending.revision;
+        },
+      );
+
+      if (!isCurrentConnect()) {
+        outputUnlisten();
         return;
       }
 
-      // Only start session if it's new (existing sessions are already running)
-      if (shouldStartSession) {
-        console.log("[useTerminal] Starting terminal session...", isLocal ? "(local)" : "(container)");
-        if (isLocal) {
-          await backend.startLocalTerminalSession(targetSessionId);
-        } else {
-          await backend.startTerminalSession(targetSessionId);
+      let reconnectUnlisten: UnlistenFn | null = null;
+      try {
+        if (replayOutputBuffer) {
+          reconnectUnlisten = await listen(
+            NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+            () => {
+              void reconcileSnapshot();
+            },
+          );
         }
+      } catch (listenerError) {
+        outputUnlisten();
+        throw listenerError;
       }
+
+      if (!isCurrentConnect()) {
+        outputUnlisten();
+        reconnectUnlisten?.();
+        return;
+      }
+
+      unlistenRef.current = () => {
+        disposed = true;
+        outputUnlisten();
+        reconnectUnlisten?.();
+      };
+
+      if (replayOutputBuffer) await reconcileSnapshot();
+    };
+
+    const finishAttachment = async (
+      id: string,
+      created: boolean,
+      shouldStart: boolean,
+    ): Promise<void> => {
+      sessionIdRef.current = id;
+      setSessionId(id);
+      cleanupEventListener();
+      await attachOutput(id, created);
       if (!isCurrentConnect()) {
         cleanupEventListener();
-        if (shouldStartSession) {
-          if (isLocal) {
-            await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
-          } else {
-            await backend.detachTerminal(targetSessionId).catch(() => {});
-          }
+        await destroyIfCreated(id, created);
+        return;
+      }
+      if (shouldStart) {
+        if (isLocal) {
+          await backend.startLocalTerminalSession(id);
+        } else {
+          await backend.startTerminalSession(id);
         }
+      }
+    };
+
+    try {
+      if (existingSessionId) {
+        const existingStatus = await backend
+          .getTerminalSession(existingSessionId)
+          .catch(() => null);
+        if (!isCurrentConnect()) return;
+        existingSessionRunning = existingStatus?.running ?? false;
+        if (existingSessionRunning || attachExistingOnly) {
+          targetSessionId = existingSessionId;
+        } else {
+          const created = await createSession();
+          targetSessionId = created.sessionId;
+          targetCreated = created.created;
+          targetShouldStart = true;
+        }
+      } else {
+        const created = await createSession();
+        targetSessionId = created.sessionId;
+        targetCreated = created.created;
+        targetShouldStart = true;
+      }
+
+      if (!isCurrentConnect()) {
+        await destroyIfCreated(targetSessionId, targetCreated);
+        return;
+      }
+
+      await finishAttachment(
+        targetSessionId,
+        targetCreated,
+        targetShouldStart,
+      );
+      if (!isCurrentConnect()) return;
+
+      if (attachExistingOnly && existingSessionRunning === false) {
+        setError("Backend terminal session is not running");
         return;
       }
 
       isConnectedRef.current = true;
       setIsConnected(true);
-      console.log("[useTerminal] Connected successfully");
     } catch (err) {
-      // Clean up listener if we set one up
       cleanupEventListener();
-
       if (!isCurrentConnect()) {
-        if (targetSessionId && shouldStartSession) {
-          if (isLocal) {
-            await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
-          } else {
-            await backend.detachTerminal(targetSessionId).catch(() => {});
-          }
-        }
+        await destroyIfCreated(targetSessionId, targetCreated);
         if (sessionIdRef.current === targetSessionId) {
           sessionIdRef.current = null;
         }
         return;
       }
 
-      console.error("[useTerminal] Connection error:", err);
-      const message = err instanceof Error ? err.message : "Failed to connect to terminal";
-
+      const message = err instanceof Error
+        ? err.message
+        : "Failed to connect to terminal";
       if (attachExistingOnly) {
         setError(message);
         sessionIdRef.current = null;
@@ -459,176 +535,62 @@ export function useTerminal({
         return;
       }
 
-      // If we were trying to reconnect to an existing session and it failed,
-      // the session may have been cleaned up on the backend. Fall back to
-      // creating a new session.
-      if (existingSessionId && !attachExistingOnly) {
-        console.log("[useTerminal] Reconnect failed, falling back to new session");
+      if (existingSessionId) {
+        // A failed attach may mean the supplied session disappeared. Use the
+        // same attachment/reconciliation path for the replacement.
+        await destroyIfCreated(targetSessionId, targetCreated);
         sessionIdRef.current = null;
-        isConnectedRef.current = false;
         setSessionId(null);
-        setError(null);
+        targetSessionId = null;
+        targetCreated = false;
+        targetShouldStart = false;
 
-        // Try to create a fresh session instead
-        let newSessionId: string | null = null;
         try {
-          if (isLocal && environmentId) {
-            newSessionId = await backend.createLocalTerminalSession(
-              environmentId,
-              cols,
-              rows,
-              trackEnvironmentActivity,
-              terminalKey,
-            );
-            if (!isCurrentConnect()) {
-              await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
-              return;
-            }
-          } else {
-            newSessionId = await backend.createTerminalSession(
-              containerId!,
-              cols,
-              rows,
-              user,
-              trackEnvironmentActivity,
-              environmentId,
-              terminalKey,
-            );
-            if (!isCurrentConnect()) {
-              await backend.detachTerminal(newSessionId).catch(() => {});
-              return;
-            }
-          }
-          console.log("[useTerminal] Created fallback session:", newSessionId);
-
-          sessionIdRef.current = newSessionId;
-          setSessionId(newSessionId);
-
-          cleanupEventListener();
-
-          const eventName = `terminal-output-${newSessionId}`;
-
-          type TerminalOutputEventPayload =
-            | number[]
-            | { data: number[]; revision: number };
-          const pendingLiveOutput: Array<{ data: Uint8Array; revision: number | null }> = [];
-          let snapshotPending = replayOutputBuffer;
-          const unlisten = await listen<TerminalOutputEventPayload>(eventName, (event) => {
-            const payload = event.payload;
-            const data = new Uint8Array(Array.isArray(payload) ? payload : payload.data);
-            const revision = Array.isArray(payload) ? null : payload.revision;
-            if (snapshotPending) {
-              pendingLiveOutput.push({ data, revision });
-              return;
-            }
-            onDataRef.current?.(data);
-          });
+          const replacement = await createSession();
+          targetSessionId = replacement.sessionId;
+          targetCreated = replacement.created;
+          targetShouldStart = true;
           if (!isCurrentConnect()) {
-            unlisten();
-            if (isLocal) {
-              await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
-            } else {
-              await backend.detachTerminal(newSessionId).catch(() => {});
-            }
+            await destroyIfCreated(targetSessionId, targetCreated);
             return;
           }
-          unlistenRef.current = unlisten;
-
-          if (replayOutputBuffer) {
-            const snapshot = await backend.getTerminalOutputSnapshot(newSessionId).catch((err) => {
-              console.warn("[useTerminal] Failed to replay fallback terminal output snapshot:", err);
-              return { output: "", revision: 0 };
-            });
-            if (!isCurrentConnect()) {
-              unlisten();
-              if (isLocal) {
-                await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
-              } else {
-                await backend.detachTerminal(newSessionId).catch(() => {});
-              }
-              return;
-            }
-            onReplayRef.current?.(new TextEncoder().encode(snapshot.output));
-            snapshotPending = false;
-            for (const pending of pendingLiveOutput) {
-              if (pending.revision === null || pending.revision > snapshot.revision) {
-                onDataRef.current?.(pending.data);
-              }
-            }
-            pendingLiveOutput.length = 0;
-          }
-
-          if (isLocal) {
-            await backend.startLocalTerminalSession(newSessionId);
-          } else {
-            await backend.startTerminalSession(newSessionId);
-          }
-          if (!isCurrentConnect()) {
-            cleanupEventListener();
-            if (isLocal) {
-              await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
-            } else {
-              await backend.detachTerminal(newSessionId).catch(() => {});
-            }
-            return;
-          }
+          await finishAttachment(
+            targetSessionId,
+            targetCreated,
+            targetShouldStart,
+          );
+          if (!isCurrentConnect()) return;
           isConnectedRef.current = true;
           setIsConnected(true);
-          console.log("[useTerminal] Fallback session connected successfully");
           return;
         } catch (fallbackErr) {
-          if (!isCurrentConnect()) {
-            cleanupEventListener();
-            if (newSessionId) {
-              if (isLocal) {
-                await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
-              } else {
-                await backend.detachTerminal(newSessionId).catch(() => {});
-              }
-            }
-            if (sessionIdRef.current === newSessionId) {
-              sessionIdRef.current = null;
-            }
-            return;
-          }
-          console.error("[useTerminal] Fallback session creation also failed:", fallbackErr);
-          const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : "Failed to create terminal session";
+          cleanupEventListener();
+          await destroyIfCreated(targetSessionId, targetCreated);
+          if (!isCurrentConnect()) return;
+          const fallbackMessage = fallbackErr instanceof Error
+            ? fallbackErr.message
+            : "Failed to create terminal session";
           setError(`Reconnect failed and new session creation failed: ${fallbackMessage}`);
-          toast.error("Terminal connection failed", { description: fallbackMessage });
+          toast.error("Terminal connection failed", {
+            description: fallbackMessage,
+          });
           sessionIdRef.current = null;
           setSessionId(null);
         }
       } else {
-        // We created a new session but it failed - clean up
+        await destroyIfCreated(targetSessionId, targetCreated);
         setError(message);
         toast.error("Terminal connection failed", { description: message });
-        if (sessionIdRef.current) {
-          try {
-            if (isLocal) {
-              await backend.closeLocalTerminalSession(sessionIdRef.current);
-            } else {
-              await backend.detachTerminal(sessionIdRef.current);
-            }
-          } catch (detachErr) {
-            console.error("[useTerminal] Error detaching after failure:", detachErr);
-          }
-          sessionIdRef.current = null;
-        }
+        sessionIdRef.current = null;
         isConnectedRef.current = false;
         setSessionId(null);
       }
     } finally {
-      isConnectingRef.current = false;
-      if (!isCurrentConnect() && (attachExistingOnly || existingSessionId?.endsWith(":setup") || targetSessionId?.endsWith(":setup"))) {
-        console.info("[setup-terminal] stale connect cleared connecting state", {
-          environmentId: environmentId ?? null,
-          existingSessionId: existingSessionId ?? null,
-          targetSessionId,
-          mounted: isMountedRef.current,
-        });
-      }
-      if (isCurrentConnect() || isMountedRef.current) {
-        setIsConnecting(false);
+      // A superseded connect must not clear the in-flight state of the newer
+      // generation that replaced it.
+      if (isCurrentConnect()) {
+        isConnectingRef.current = false;
+        if (isMountedRef.current) setIsConnecting(false);
       }
     }
   }, [containerId, environmentId, isLocal, cols, rows, existingSessionId, user, replayOutputBuffer, attachExistingOnly, trackEnvironmentActivity, terminalKey, cleanupEventListener]);

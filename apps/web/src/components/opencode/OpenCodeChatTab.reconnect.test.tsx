@@ -23,6 +23,7 @@ const mockGetSessionStatus = mock(async () => null);
 const mockGetPendingQuestions = mock(async () => []);
 const mockGetPendingPermissions = mock(async () => []);
 const mockGetAvailableSlashCommands = mock(async () => []);
+const mockCheckClientHealth = mock(async () => true);
 const mockGetOpenCodeRuntimeHealth = mock(async () => ({
   agents: [],
   skills: [],
@@ -42,6 +43,7 @@ mock.module("@/lib/opencode-client", () => ({
   getPendingQuestions: mockGetPendingQuestions,
   getPendingPermissions: mockGetPendingPermissions,
   getAvailableSlashCommands: mockGetAvailableSlashCommands,
+  checkClientHealth: mockCheckClientHealth,
   getOpenCodeRuntimeHealth: mockGetOpenCodeRuntimeHealth,
 }));
 
@@ -280,6 +282,8 @@ describe("OpenCodeChatTab SSE reconnect", () => {
     mockGetPendingPermissions.mockResolvedValue([]);
     mockGetAvailableSlashCommands.mockReset();
     mockGetAvailableSlashCommands.mockResolvedValue([]);
+    mockCheckClientHealth.mockReset();
+    mockCheckClientHealth.mockResolvedValue(true);
     mockGetOpenCodeRuntimeHealth.mockReset();
     mockGetOpenCodeRuntimeHealth.mockResolvedValue({
       agents: [],

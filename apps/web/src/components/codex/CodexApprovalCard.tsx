@@ -1,10 +1,11 @@
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { AlertTriangle, FileDiff, Globe, ShieldAlert, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { respondToApproval } from "@/lib/codex-client";
 import { useCodexStore } from "@/stores/codexStore";
+import { usePromptDeadline } from "@/hooks/usePromptDeadline";
 import type {
   CodexApproval,
   CodexApprovalDecision,
@@ -16,42 +17,6 @@ interface CodexApprovalCardProps {
   client: CodexClient;
   sessionId: string;
   sessionKey: string;
-}
-
-/** Formats the remaining time as `m:ss`, or null once expired. */
-function formatRemaining(msRemaining: number): string | null {
-  /**
-   * Fail closed on a deadline we cannot read.
-   *
-   * A missing or non-numeric `expiresAt` used to render `NaN:NaN` next to live
-   * Approve/Decline buttons. This card is the control that runs commands, so an
-   * approval we cannot describe must look inert rather than actionable.
-   */
-  if (!Number.isFinite(msRemaining) || msRemaining <= 0) return null;
-  const totalSeconds = Math.ceil(msRemaining / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-/**
- * Live countdown to the bridge's auto-deny.
- *
- * Shown because the deadline is real and silent: if the user walks away the
- * request is denied and the turn continues without it, so a card with no visible
- * clock would be misleading.
- */
-function useCountdown(expiresAt: number): string | null {
-  const [remaining, setRemaining] = useState(() => formatRemaining(expiresAt - Date.now()));
-
-  useEffect(() => {
-    const update = () => setRemaining(formatRemaining(expiresAt - Date.now()));
-    update();
-    const timer = setInterval(update, 1000);
-    return () => clearInterval(timer);
-  }, [expiresAt]);
-
-  return remaining;
 }
 
 function ApprovalIcon({ approval }: { approval: CodexApproval }) {
@@ -96,7 +61,12 @@ export function CodexApprovalCard({
   const removePendingApproval = useCodexStore((state) => state.removePendingApproval);
   const [submitting, setSubmitting] = useState<CodexApprovalDecision | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const remaining = useCountdown(approval.expiresAt);
+  // Codex always promises a deadline. If a malformed bridge response omits it,
+  // pass NaN so the shared hook fails closed instead of treating it like a
+  // protocol that legitimately has no deadline.
+  const { remaining, expired } = usePromptDeadline(
+    approval.expiresAt ?? Number.NaN,
+  );
   const canApprove = approval.actionable;
 
   const respond = useCallback(
@@ -120,8 +90,6 @@ export function CodexApprovalCard({
     },
     [approval.approvalId, client, removePendingApproval, sessionId, sessionKey, submitting],
   );
-
-  const expired = remaining === null;
 
   return (
     <BlockingPromptCard

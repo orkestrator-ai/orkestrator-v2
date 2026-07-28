@@ -3,6 +3,7 @@
 
 import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
 import { isRendererDebugLoggingEnabled, rendererDebugLog } from "./debug-log";
+import { createUuid } from "./uuid";
 import type {
   ClaudeModelCatalogEntry,
   ClaudeModelCatalogSnapshot,
@@ -550,6 +551,8 @@ export interface ClaudeQuestionRequest {
   sessionId: string;
   questions: QuestionInfo[];
   toolUseId?: string;
+  /** Absolute time when the bridge will deny the unanswered request. */
+  expiresAt?: number;
 }
 
 /** Plan approval request from Claude (when ExitPlanMode is called) */
@@ -557,6 +560,8 @@ export interface ClaudePlanApprovalRequest {
   id: string;
   sessionId: string;
   toolUseId?: string;
+  /** Absolute time when the bridge will deny the unanswered request. */
+  expiresAt?: number;
 }
 
 /** Event data for plan.approval-requested events */
@@ -564,6 +569,7 @@ export interface PlanApprovalRequestedEventData {
   id: string;
   sessionId?: string;
   toolUseId?: string;
+  expiresAt?: number;
 }
 
 /** Event data for plan.approval-responded events */
@@ -646,9 +652,12 @@ export const SYSTEM_MESSAGE_PREFIX = "system-";
 /** Claude Bridge Client */
 export interface ClaudeClient {
   baseUrl: string;
+  /** Per-process bearer token minted by the backend that spawned the bridge. */
+  authToken?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const PROMPT_TIMEOUT_MS = 120_000;
 
 async function fetchWithTimeout(
   url: string,
@@ -658,25 +667,49 @@ async function fetchWithTimeout(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, controller.signal])
+      : controller.signal;
+    return await fetch(url, { ...options, signal });
   } finally {
     clearTimeout(timer);
   }
 }
 
-/**
- * Create a Claude bridge client
- */
-export function createClient(baseUrl: string): ClaudeClient {
-  return { baseUrl: resolveGatewayLoopbackBaseUrl(baseUrl) };
+function fetchClaude(
+  client: ClaudeClient,
+  path: string,
+  options: RequestInit = {},
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<Response> {
+  const headers = new Headers(options.headers);
+  // The desktop gateway consumes its own Authorization header before proxying.
+  // Keep bridge authentication in a dedicated header so it survives that hop.
+  if (client.authToken) headers.set("X-Orkestrator-Claude-Token", client.authToken);
+  return fetchWithTimeout(
+    `${client.baseUrl}${path}`,
+    { ...options, headers },
+    timeoutMs,
+  );
 }
 
 /**
- * Check server health
+ * Create a Claude bridge client
+ */
+export function createClient(baseUrl: string, authToken?: string): ClaudeClient {
+  return {
+    baseUrl: resolveGatewayLoopbackBaseUrl(baseUrl),
+    ...(authToken ? { authToken } : {}),
+  };
+}
+
+/**
+ * Check server health through the authenticated probe, so a cached client
+ * holding a stale token after bridge restart fails the gate and is recreated.
  */
 export async function checkHealth(client: ClaudeClient): Promise<boolean> {
   try {
-    const response = await fetch(`${client.baseUrl}/global/health`);
+    const response = await fetchClaude(client, "/global/auth-check");
     return response.ok;
   } catch {
     return false;
@@ -688,7 +721,7 @@ export async function checkHealth(client: ClaudeClient): Promise<boolean> {
  */
 export async function getModels(client: ClaudeClient): Promise<ClaudeModel[]> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/config/models`);
+    const response = await fetchClaude(client, "/config/models");
     if (!response.ok) return [];
     const data = await response.json();
     return data.models || [];
@@ -706,7 +739,7 @@ export async function createSession(
   title?: string
 ): Promise<{ sessionId: string; title?: string } | null> {
   try {
-    const response = await fetchWithTimeout(`${client.baseUrl}/session/create`, {
+    const response = await fetchClaude(client, "/session/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title }),
@@ -734,7 +767,7 @@ export async function listSessions(
   }>
 > {
   try {
-    const response = await fetch(`${client.baseUrl}/session/list`);
+    const response = await fetchClaude(client, "/session/list");
     if (!response.ok) return [];
     const data = await response.json();
     return data.sessions || [];
@@ -753,9 +786,7 @@ export async function lookupSession(
   sessionId: string,
 ): Promise<ClaudeSessionLookupResult> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}`,
-    );
+    const response = await fetchClaude(client, `/session/${sessionId}`);
     if (response.status === 404) return { kind: "missing" };
     if (!response.ok) {
       return {
@@ -875,7 +906,7 @@ export async function getSessionMessages(
   options: { throwOnError?: boolean } = {},
 ): Promise<ClaudeMessage[]> {
   rendererDebugLog("[claude-client] Fetching messages for session:", sessionId);
-  const response = await fetch(`${client.baseUrl}/session/${sessionId}/messages`);
+  const response = await fetchClaude(client, `/session/${sessionId}/messages`);
   if (response.status === 404) {
     throw new SessionNotFoundError(sessionId);
   }
@@ -903,8 +934,53 @@ export async function getSessionMessages(
 /** Permission mode for Claude Agent SDK */
 export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
 
+export type ClaudePromptSendOutcome =
+  | {
+      ok: true;
+      outcome: "accepted";
+      status: "processing" | "already-processed";
+      requestId: string;
+      duplicate: boolean;
+    }
+  | {
+      ok: false;
+      outcome: "rejected";
+      requestId: string;
+      httpStatus: number;
+    }
+  | {
+      ok: false;
+      outcome: "unknown";
+      requestId: string;
+    };
+
+/**
+ * Whether a caller must reconcile against authoritative session state.
+ *
+ * Transport ambiguity stays pending just like definite acceptance: unlocking
+ * the composer would invite a fresh request id and could duplicate a turn the
+ * bridge already started. Legacy boolean test doubles remain supported.
+ */
+export function shouldReconcileClaudePrompt(result: unknown): boolean {
+  return result === true
+    || (
+      typeof result === "object"
+      && result !== null
+      && (
+        (result as { ok?: unknown }).ok === true
+        || (result as { outcome?: unknown }).outcome === "unknown"
+      )
+    );
+}
+
 /**
  * Send a prompt to a session (async - returns immediately, results via SSE)
+ *
+ * Always carries a `requestId`. The bridge deduplicates on it, so a prompt
+ * retried after a lost HTTP response attaches to the turn already running
+ * instead of starting a second one that would repeat its file edits and shell
+ * commands. Callers that retry must pass the *same* id back; a caller that omits
+ * it gets a fresh one, which makes each call a distinct turn by definition.
  */
 export async function sendPrompt(
   client: ClaudeClient,
@@ -922,7 +998,8 @@ export async function sendPrompt(
     outputSchema?: JsonSchema;
     requestId?: string;
   }
-): Promise<boolean> {
+): Promise<ClaudePromptSendOutcome> {
+  const requestId = options?.requestId ?? createUuid();
   try {
     console.debug("[claude-client] Sending prompt", {
       sessionId,
@@ -934,23 +1011,28 @@ export async function sendPrompt(
       fastMode: options?.fastMode,
       structured: options?.outputSchema !== undefined,
     });
-    const response = await fetch(`${client.baseUrl}/session/${sessionId}/prompt`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt,
-        model: options?.model,
-        attachments: options?.attachments,
-        effort: options?.effort,
-        permissionMode: options?.permissionMode,
-        fastMode: options?.fastMode,
-        agent: options?.agent,
-        includeLocalSettings: options?.includeLocalSettings,
-        promptSuggestions: options?.promptSuggestions,
-        outputSchema: options?.outputSchema,
-        requestId: options?.requestId,
-      }),
-    });
+    const response = await fetchClaude(
+      client,
+      `/session/${sessionId}/prompt`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt,
+          model: options?.model,
+          attachments: options?.attachments,
+          effort: options?.effort,
+          permissionMode: options?.permissionMode,
+          fastMode: options?.fastMode,
+          agent: options?.agent,
+          includeLocalSettings: options?.includeLocalSettings,
+          promptSuggestions: options?.promptSuggestions,
+          outputSchema: options?.outputSchema,
+          requestId,
+        }),
+      },
+      PROMPT_TIMEOUT_MS,
+    );
     console.debug("[claude-client] Prompt response", {
       sessionId,
       status: response.status,
@@ -959,11 +1041,30 @@ export async function sendPrompt(
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       console.error("[claude-client] Prompt failed", { sessionId, status: response.status, text });
+      return {
+        ok: false,
+        outcome: "rejected",
+        requestId,
+        httpStatus: response.status,
+      };
     }
-    return response.ok;
+    const body = (await response.json().catch(() => ({}))) as {
+      requestId?: unknown;
+      status?: unknown;
+      duplicate?: unknown;
+    };
+    return {
+      ok: true,
+      outcome: "accepted",
+      status: body.status === "already-processed"
+        ? "already-processed"
+        : "processing",
+      requestId: typeof body.requestId === "string" ? body.requestId : requestId,
+      duplicate: body.duplicate === true,
+    };
   } catch (error) {
     console.error("[claude-client] Failed to send prompt:", error);
-    return false;
+    return { ok: false, outcome: "unknown", requestId };
   }
 }
 
@@ -988,9 +1089,11 @@ export async function sendStructuredPrompt(
     requestId?: string;
   } = {},
 ): Promise<ClaudeStructuredPromptAccepted | null> {
-  const requestId = options.requestId ?? crypto.randomUUID();
+  // `createUuid` rather than `crypto.randomUUID`: the latter is secure-context
+  // only, and the web client is served over plain HTTP on a private network.
+  const requestId = options.requestId ?? createUuid();
   try {
-    const response = await fetch(`${client.baseUrl}/session/${sessionId}/prompt`, {
+    const response = await fetchClaude(client, `/session/${sessionId}/prompt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...options, prompt, outputSchema, requestId }),
@@ -1024,8 +1127,9 @@ export async function getStructuredOutput<T = unknown>(
   let response: Response;
   try {
     const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
-    response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/structured-output${query}`,
+    response = await fetchClaude(
+      client,
+      `/session/${sessionId}/structured-output${query}`,
     );
   } catch (error) {
     throw new StructuredOutputReadUnavailableError(
@@ -1080,7 +1184,7 @@ export async function abortSession(
   sessionId: string
 ): Promise<boolean> {
   try {
-    const response = await fetch(`${client.baseUrl}/session/${sessionId}/abort`, {
+    const response = await fetchClaude(client, `/session/${sessionId}/abort`, {
       method: "POST",
     });
     return response.ok;
@@ -1098,7 +1202,7 @@ export async function deleteSession(
   sessionId: string
 ): Promise<boolean> {
   try {
-    const response = await fetch(`${client.baseUrl}/session/${sessionId}`, {
+    const response = await fetchClaude(client, `/session/${sessionId}`, {
       method: "DELETE",
     });
     return response.ok;
@@ -1113,7 +1217,7 @@ export async function forkClaudeSession(
   sessionId: string,
   options: { upToMessageId?: string; title?: string } = {},
 ): Promise<{ sessionId: string; title?: string }> {
-  const response = await fetch(`${client.baseUrl}/session/${sessionId}/fork`, {
+  const response = await fetchClaude(client, `/session/${sessionId}/fork`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(options),
@@ -1141,7 +1245,7 @@ export async function compactClaudeSession(
   sessionId: string,
 ): Promise<boolean> {
   try {
-    const response = await fetch(`${client.baseUrl}/session/${sessionId}/compact`, {
+    const response = await fetchClaude(client, `/session/${sessionId}/compact`, {
       method: "POST",
     });
     return response.ok;
@@ -1157,7 +1261,7 @@ export async function rewindClaudeFiles(
   messageId: string,
   dryRun = false,
 ): Promise<unknown> {
-  const response = await fetch(`${client.baseUrl}/session/${sessionId}/rewind`, {
+  const response = await fetchClaude(client, `/session/${sessionId}/rewind`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messageId, dryRun }),
@@ -1174,8 +1278,9 @@ export async function stopClaudeBackgroundTask(
   taskId: string,
 ): Promise<boolean> {
   try {
-    const response = await fetch(
-      `${client.baseUrl}/session/${sessionId}/tasks/${encodeURIComponent(taskId)}/stop`,
+    const response = await fetchClaude(
+      client,
+      `/session/${sessionId}/tasks/${encodeURIComponent(taskId)}/stop`,
       { method: "POST" },
     );
     return response.ok;
@@ -1194,7 +1299,7 @@ export async function getPendingQuestions(
   options: { throwOnError?: boolean } = {},
 ): Promise<ClaudeQuestionRequest[]> {
   try {
-    const response = await fetch(`${client.baseUrl}/session/${sessionId}/questions`);
+    const response = await fetchClaude(client, `/session/${sessionId}/questions`);
     if (!response.ok) {
       throw new Error(`Failed to get pending Claude questions: HTTP ${response.status}`);
     }
@@ -1220,8 +1325,9 @@ export async function getPendingPlanApprovals(
   options: { throwOnError?: boolean } = {},
 ): Promise<ClaudePlanApprovalRequest[]> {
   try {
-    const response = await fetch(
-      `${client.baseUrl}/session/${sessionId}/plan-approvals`,
+    const response = await fetchClaude(
+      client,
+      `/session/${sessionId}/plan-approvals`,
     );
     if (!response.ok) {
       throw new Error(
@@ -1242,6 +1348,34 @@ export async function getPendingPlanApprovals(
 }
 
 /**
+ * Outcome of answering a blocking prompt — a question, a dismissal, or a plan
+ * approval.
+ *
+ * `stale` is expected, not exceptional: the prompt's window can close while the
+ * user is deciding (the turn was aborted, the request was answered from another
+ * window, the bridge restarted). It is deliberately distinct from `error` so the
+ * UI can drop the card silently instead of telling the user to retry something
+ * that no longer exists.
+ *
+ * Same vocabulary as `CodexApprovalResponseResult` — both bridges answer 409 +
+ * `{status:"stale"}` for a closed window and 403 for a prompt that belongs
+ * somewhere else, so the two agents' cards can reason identically.
+ */
+export type ClaudeApprovalResponseResult =
+  | "applied"
+  | "stale"
+  | "forbidden"
+  | "error";
+
+/** Maps a bridge reply onto the shared outcome union. */
+function approvalResponseResult(response: Response): ClaudeApprovalResponseResult {
+  if (response.ok) return "applied";
+  if (response.status === 409) return "stale";
+  if (response.status === 403) return "forbidden";
+  return "error";
+}
+
+/**
  * Answer a question
  */
 export async function answerQuestion(
@@ -1249,20 +1383,21 @@ export async function answerQuestion(
   sessionId: string,
   questionId: string,
   answers: string[][]
-): Promise<boolean> {
+): Promise<ClaudeApprovalResponseResult> {
   try {
-    const response = await fetch(
-      `${client.baseUrl}/session/${sessionId}/questions/${questionId}/answer`,
+    const response = await fetchClaude(
+      client,
+      `/session/${sessionId}/questions/${questionId}/answer`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ answers }),
       }
     );
-    return response.ok;
+    return approvalResponseResult(response);
   } catch (error) {
     console.error("[claude-client] Failed to answer question:", error);
-    return false;
+    return "error";
   }
 }
 
@@ -1273,49 +1408,47 @@ export async function dismissQuestion(
   client: ClaudeClient,
   sessionId: string,
   questionId: string,
-): Promise<boolean> {
+): Promise<ClaudeApprovalResponseResult> {
   try {
-    const response = await fetch(
-      `${client.baseUrl}/session/${sessionId}/questions/${questionId}`,
+    const response = await fetchClaude(
+      client,
+      `/session/${sessionId}/questions/${questionId}`,
       { method: "DELETE" },
     );
-    return response.ok;
+    return approvalResponseResult(response);
   } catch (error) {
     console.error("[claude-client] Failed to dismiss question:", error);
-    return false;
+    return "error";
   }
 }
 
 /**
  * Respond to a plan approval request (approve or reject)
  */
-export type ClaudePlanApprovalResponseResult =
-  | "applied"
-  | "expired"
-  | "failed";
-
 export async function respondToPlanApproval(
   client: ClaudeClient,
   sessionId: string,
   approvalId: string,
   approved: boolean,
   feedback?: string
-): Promise<ClaudePlanApprovalResponseResult> {
+): Promise<ClaudeApprovalResponseResult> {
   try {
-    const response = await fetch(
-      `${client.baseUrl}/session/${sessionId}/plan-approvals/${approvalId}/respond`,
+    const response = await fetchClaude(
+      client,
+      `/session/${sessionId}/plan-approvals/${approvalId}/respond`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ approved, feedback }),
       }
     );
-    if (response.ok) return "applied";
-    if (response.status === 404) return "expired";
-    return "failed";
+    // A 404 here means the *session* is unknown, which is a genuine failure —
+    // the closed-window case is 409/`stale`. These were conflated while the
+    // bridge answered 404 for both.
+    return approvalResponseResult(response);
   } catch (error) {
     console.error("[claude-client] Failed to respond to plan approval:", error);
-    return "failed";
+    return "error";
   }
 }
 
@@ -1330,8 +1463,9 @@ export async function getSlashCommands(
   signal?: AbortSignal
 ): Promise<string[]> {
   try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/plugins/commands`,
+    const response = await fetchClaude(
+      client,
+      "/plugins/commands",
       signal ? { signal } : {}
     );
     if (!response.ok) return [];
@@ -1489,12 +1623,18 @@ export function subscribeToEvents(
       }
       signal?.addEventListener("abort", cleanup, { once: true });
 
-      // Create EventSource
+      const url = new URL(`${client.baseUrl}/event/subscribe`);
       const cursor = claudeEventCursorByBaseUrl.get(client.baseUrl);
-      const eventUrl = `${client.baseUrl}/event/subscribe${
-        cursor === undefined ? "" : `?since=${encodeURIComponent(cursor)}`
-      }`;
-      eventSource = new EventSource(eventUrl);
+      if (cursor !== undefined) {
+        url.searchParams.set("since", cursor);
+      }
+      // Native EventSource cannot set Authorization headers. The bridge
+      // accepts its per-process bearer token only on this SSE query path.
+      if (client.authToken) {
+        url.searchParams.set("token", client.authToken);
+      }
+
+      eventSource = new EventSource(url.toString());
       eventSource.onopen = () => {
         console.debug("[claude-client] SSE connection opened");
       };

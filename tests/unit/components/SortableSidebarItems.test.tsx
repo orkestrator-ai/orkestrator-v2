@@ -373,8 +373,9 @@ describe("sortable sidebar items", () => {
     expect(onDeleteProject).toHaveBeenCalledTimes(1);
     expect(onDeleteProject).toHaveBeenCalledWith("project-1");
     // confirmDelete awaits the deletion callback, so flush that continuation
-    // with act. Avoid waitFor here: Radix's focus-restoration timers can make an
-    // already-closed portal consume most of Bun's per-test timeout under load.
+    // with act. The controlled close state is owned by this component; Radix
+    // may keep the hidden portal mounted while exit-presence settles.
+    expect(dialog.getAttribute("data-state")).toBe("closed");
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 

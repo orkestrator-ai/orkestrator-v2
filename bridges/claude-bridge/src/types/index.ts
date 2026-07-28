@@ -372,6 +372,8 @@ export interface QuestionRequest {
   sessionId: string;
   questions: QuestionInfo[];
   toolUseId?: string;
+  /** Absolute time when the bridge will deny the unanswered request. */
+  expiresAt: number;
 }
 
 /** Plan approval request from Claude (when ExitPlanMode is called) */
@@ -379,6 +381,8 @@ export interface PlanApprovalRequest {
   id: string;
   sessionId: string;
   toolUseId?: string;
+  /** Absolute time when the bridge will deny the unanswered request. */
+  expiresAt: number;
 }
 
 /** SSE event types */

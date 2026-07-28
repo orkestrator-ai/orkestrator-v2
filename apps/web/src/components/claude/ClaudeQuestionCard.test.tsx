@@ -11,8 +11,8 @@ import * as realClaudeStore from "@/stores/claudeStore";
 const realClaudeClientSnapshot = { ...realClaudeClient };
 const realClaudeStoreSnapshot = { ...realClaudeStore };
 
-const mockAnswerQuestion = mock(async () => true);
-const mockDismissQuestion = mock(async () => true);
+const mockAnswerQuestion = mock(async (): Promise<ClaudeApprovalResponseResult> => "applied");
+const mockDismissQuestion = mock(async (): Promise<ClaudeApprovalResponseResult> => "applied");
 mock.module("@/lib/claude-client", () => ({
   ...realClaudeClientSnapshot,
   answerQuestion: mockAnswerQuestion,
@@ -33,7 +33,11 @@ afterAll(() => {
 });
 
 import { ClaudeQuestionCard } from "./ClaudeQuestionCard";
-import type { ClaudeClient, ClaudeQuestionRequest } from "@/lib/claude-client";
+import type {
+  ClaudeApprovalResponseResult,
+  ClaudeClient,
+  ClaudeQuestionRequest,
+} from "@/lib/claude-client";
 
 const client = { baseUrl: "http://127.0.0.1:9999" } as ClaudeClient;
 
@@ -110,7 +114,7 @@ afterEach(() => {
   cleanup();
   mockAnswerQuestion.mockClear();
   mockDismissQuestion.mockReset();
-  mockDismissQuestion.mockImplementation(async () => true);
+  mockDismissQuestion.mockImplementation(async () => "applied");
   mockRemovePendingQuestion.mockClear();
 });
 
@@ -479,12 +483,12 @@ describe("ClaudeQuestionCard", () => {
       expect(submit.disabled).toBe(false);
     } finally {
       console.error = origError;
-      mockAnswerQuestion.mockImplementation(async () => true);
+      mockAnswerQuestion.mockImplementation(async () => "applied");
     }
   });
 
-  test("when answerQuestion returns false, the question stays pending", async () => {
-    mockAnswerQuestion.mockImplementation((async () => false) as never);
+  test("when answerQuestion reports an error, the question stays pending", async () => {
+    mockAnswerQuestion.mockImplementation((async () => "error") as never);
 
     try {
       render(
@@ -506,7 +510,7 @@ describe("ClaudeQuestionCard", () => {
       expect(mockAnswerQuestion).toHaveBeenCalledTimes(1);
       expect(mockRemovePendingQuestion).not.toHaveBeenCalled();
     } finally {
-      mockAnswerQuestion.mockImplementation(async () => true);
+      mockAnswerQuestion.mockImplementation(async () => "applied");
     }
   });
 
@@ -527,8 +531,56 @@ test("dismiss releases the server question before removing it locally", async ()
     expect(mockRemovePendingQuestion).toHaveBeenCalledWith("q-1");
   });
 
+  /**
+   * A stale answer is resolved, not failed. The bridge answers 409 when the
+   * question's window closed (the turn ended, or another window answered it), so
+   * the card has to go away — leaving it up would invite the user to retry a
+   * prompt that no longer exists.
+   */
+  test("a stale answer removes the question instead of leaving it retryable", async () => {
+    mockAnswerQuestion.mockImplementation((async () => "stale") as never);
+
+    try {
+      render(
+        <ClaudeQuestionCard
+          question={singleQuestionWithOptions()}
+          client={client}
+          sessionId="s-1"
+        />
+      );
+
+      const input = screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "Green" } });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+      });
+
+      expect(mockRemovePendingQuestion).toHaveBeenCalledWith("q-1");
+    } finally {
+      mockAnswerQuestion.mockImplementation(async () => "applied");
+    }
+  });
+
+  test("a stale dismissal removes the question", async () => {
+    mockDismissQuestion.mockImplementationOnce(async () => "stale");
+    render(
+      <ClaudeQuestionCard
+        question={singleQuestionWithOptions()}
+        client={client}
+        sessionId="s-1"
+      />
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    });
+
+    expect(mockRemovePendingQuestion).toHaveBeenCalledWith("q-1");
+  });
+
   test("dismiss keeps the question pending when the server rejects it", async () => {
-    mockDismissQuestion.mockImplementationOnce(async () => false);
+    mockDismissQuestion.mockImplementationOnce(async () => "error");
     render(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
@@ -545,9 +597,9 @@ test("dismiss releases the server question before removing it locally", async ()
   });
 
   test("dismiss disables the card and cannot be submitted twice while in flight", async () => {
-    let resolveDismiss!: (value: boolean) => void;
+    let resolveDismiss!: (value: ClaudeApprovalResponseResult) => void;
     mockDismissQuestion.mockImplementationOnce(
-      () => new Promise<boolean>((resolve) => {
+      () => new Promise<ClaudeApprovalResponseResult>((resolve) => {
         resolveDismiss = resolve;
       }),
     );
@@ -566,7 +618,7 @@ test("dismiss releases the server question before removing it locally", async ()
     expect(mockDismissQuestion).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      resolveDismiss(true);
+      resolveDismiss("applied");
     });
     expect(mockRemovePendingQuestion).toHaveBeenCalledWith("q-1");
   });

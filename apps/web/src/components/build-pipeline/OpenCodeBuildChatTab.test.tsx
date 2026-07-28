@@ -34,16 +34,24 @@ const mockGetLocalOpencodeServerStatus = mock(async (_environmentId: string) => 
   running: true,
   port: 9999 as number | null,
   pid: 1234 as number | undefined,
+  authToken: "opencode-secret" as string | undefined,
 }));
 const mockStartLocalOpencodeServer = mock(async (_environmentId: string) => ({
   port: 9999,
   pid: 1234,
+  authToken: "opencode-secret",
 }));
 const mockGetOpenCodeServerStatus = mock(async (_containerId: string) => ({
   running: true,
   hostPort: 9999 as number | null,
+  authToken: "opencode-secret" as string | undefined,
 }));
-const mockStartOpenCodeServer = mock(async (_containerId: string) => ({ hostPort: 9999 }));
+const mockStartOpenCodeServer = mock(async (_containerId: string) => ({
+  hostPort: 9999,
+  authToken: "opencode-secret",
+}));
+const mockCheckClientHealth = mock(async () => true);
+const mockCheckHealth = mock(async () => true);
 const originalFetch = globalThis.fetch;
 const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
 
@@ -51,6 +59,8 @@ mock.module("@/lib/opencode-client", () => ({
   ...realOpenCodeClientSnapshot,
   ERROR_MESSAGE_PREFIX: "error-",
   abortSession: mockAbortSession,
+  checkClientHealth: mockCheckClientHealth,
+  checkHealth: mockCheckHealth,
   createClient: mockCreateClient,
   createSession: mockCreateSession,
   getSessionMessages: mockGetSessionMessages,
@@ -546,14 +556,30 @@ describe("OpenCodeBuildChatTab", () => {
     mockStartLocalOpencodeServer.mockClear();
     mockGetOpenCodeServerStatus.mockClear();
     mockStartOpenCodeServer.mockClear();
+    mockCheckClientHealth.mockClear();
+    mockCheckClientHealth.mockResolvedValue(true);
+    mockCheckHealth.mockClear();
+    mockCheckHealth.mockResolvedValue(true);
     mockGetLocalOpencodeServerStatus.mockImplementation(async () => ({
       running: true,
       port: 9999,
       pid: 1234,
+      authToken: "opencode-secret",
     }));
-    mockStartLocalOpencodeServer.mockImplementation(async () => ({ port: 9999, pid: 1234 }));
-    mockGetOpenCodeServerStatus.mockImplementation(async () => ({ running: true, hostPort: 9999 }));
-    mockStartOpenCodeServer.mockImplementation(async () => ({ hostPort: 9999 }));
+    mockStartLocalOpencodeServer.mockImplementation(async () => ({
+      port: 9999,
+      pid: 1234,
+      authToken: "opencode-secret",
+    }));
+    mockGetOpenCodeServerStatus.mockImplementation(async () => ({
+      running: true,
+      hostPort: 9999,
+      authToken: "opencode-secret",
+    }));
+    mockStartOpenCodeServer.mockImplementation(async () => ({
+      hostPort: 9999,
+      authToken: "opencode-secret",
+    }));
     mockCreateSession.mockImplementation(async () => ({
       id: "review-session",
       createdAt: "2026-04-15T00:00:00.000Z",
@@ -569,6 +595,44 @@ describe("OpenCodeBuildChatTab", () => {
   afterEach(() => {
     cleanup();
     delete window.orkestratorGateway;
+  });
+
+  test("evicts a stale cached client and recreates its event subscription", async () => {
+    seedPipeline("building", "running");
+    seedOpenCodeStore(false);
+    const cachedClient = useOpenCodeStore.getState().clients.get(ENV_ID);
+    const staleSubscription = new AbortController();
+    useOpenCodeStore.setState({
+      eventSubscriptions: new Map([
+        [
+          ENV_ID,
+          {
+            abortController: staleSubscription,
+            stream: null,
+            isActive: true,
+          },
+        ],
+      ]),
+    });
+    mockCreateClient.mockClear();
+    mockCheckClientHealth.mockResolvedValueOnce(false);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(mockCheckClientHealth).toHaveBeenCalledWith(cachedClient);
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        undefined,
+        "opencode-secret",
+      );
+    });
+    expect(staleSubscription.signal.aborted).toBe(true);
+    expect(useOpenCodeStore.getState().clients.get(ENV_ID)).not.toBe(cachedClient);
+    expect(mockCheckHealth).toHaveBeenCalledWith(
+      "http://127.0.0.1:9999",
+      "opencode-secret",
+    );
   });
 
   test("renders a friendly catalog label for the build assistant's confirmed model", async () => {
@@ -854,16 +918,15 @@ describe("OpenCodeBuildChatTab", () => {
     expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions).toHaveLength(1);
   });
 
-  test("routes startup health checks through the remote gateway proxy when enabled", async () => {
+  test("health-checks startup with the backend-issued OpenCode credential", async () => {
     seedPendingPipeline();
     window.orkestratorGateway = { enabled: true };
-    globalThis.fetch = mock(async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
-
     render(<OpenCodeBuildChatTab data={createData()} isActive />);
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        `${window.location.origin}/__orkestrator/proxy/loopback/9999/global/health`,
+      expect(mockCheckHealth).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        "opencode-secret",
       );
     });
   });
@@ -897,7 +960,11 @@ describe("OpenCodeBuildChatTab", () => {
     fireEvent.click(reconnectButton);
 
     await waitFor(() => {
-      expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:9999");
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        undefined,
+        "opencode-secret",
+      );
     });
   });
 
@@ -1718,6 +1785,7 @@ describe("OpenCodeBuildChatTab", () => {
         running: false,
         port: null,
         pid: undefined,
+        authToken: undefined,
       }));
       globalThis.fetch = mock(async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
 
@@ -1733,7 +1801,11 @@ describe("OpenCodeBuildChatTab", () => {
       // container status API.
       expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
       await waitFor(() => {
-        expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:9999");
+        expect(mockCreateClient).toHaveBeenCalledWith(
+          "http://127.0.0.1:9999",
+          undefined,
+          "opencode-secret",
+        );
       });
     });
 
@@ -1807,6 +1879,7 @@ describe("OpenCodeBuildChatTab", () => {
       mockGetOpenCodeServerStatus.mockImplementationOnce(async () => ({
         running: false,
         hostPort: null,
+        authToken: undefined,
       }));
       globalThis.fetch = mock(async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
 

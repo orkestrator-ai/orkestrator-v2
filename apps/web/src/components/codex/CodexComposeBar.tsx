@@ -10,6 +10,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useCodexStore } from "@/stores";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { ContextUsageWheel } from "@/components/chat/ContextUsageWheel";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
@@ -127,6 +128,9 @@ export function CodexComposeBar({
       (state) => state.messageQueue.get(sessionKey) ?? EMPTY_QUEUE,
       [sessionKey],
     ),
+  );
+  const contextUsage = useCodexStore(
+    useCallback((state) => state.contextUsage.get(sessionKey), [sessionKey]),
   );
   const setDraftText = useCodexStore((state) => state.setDraftText);
   const setDraftMentions = useCodexStore((state) => state.setDraftMentions);
@@ -605,6 +609,9 @@ export function CodexComposeBar({
           data-native-compose-controls="secondary"
           className="flex w-full items-center gap-1 sm:ml-auto sm:w-auto"
         >
+        <ContextUsageWheel usage={contextUsage} className="ml-1" />
+
+        {/* Spacer */}
         <div className="flex-1 sm:hidden" />
 
         {queueLength > 0 && (

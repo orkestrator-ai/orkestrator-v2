@@ -21,6 +21,8 @@ const originalDockerFailInfo = process.env.FAKE_DOCKER_FAIL_INFO;
 const originalDockerFailImage = process.env.FAKE_DOCKER_FAIL_IMAGE;
 const originalDockerNoPort = process.env.FAKE_DOCKER_NO_PORT;
 const originalCodexBridgeToken = process.env.FAKE_CODEX_BRIDGE_TOKEN;
+const originalClaudeBridgeToken = process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
+const originalOpenCodeServerPassword = process.env.FAKE_OPENCODE_SERVER_PASSWORD;
 let root = "";
 let binDir = "";
 let commandLog = "";
@@ -84,6 +86,8 @@ fi
 if [ "$1" = "exec" ]; then
   case "$*" in
     *codex-bridge-token*) printf '%s' "\${FAKE_CODEX_BRIDGE_TOKEN:-}" ;;
+    *claude-bridge-token*) printf '%s' "\${FAKE_CLAUDE_BRIDGE_TOKEN:-}" ;;
+    *opencode-server-password*) printf '%s' "\${FAKE_OPENCODE_SERVER_PASSWORD:-}" ;;
     *opencode-serve.log*) printf 'opencode log\n' ;;
     *claude-bridge.log*) printf 'claude log\n' ;;
     *codex-bridge.log*) printf 'codex log\n' ;;
@@ -230,6 +234,8 @@ beforeEach(async () => {
   delete process.env.FAKE_DOCKER_FAIL_IMAGE;
   delete process.env.FAKE_DOCKER_NO_PORT;
   delete process.env.FAKE_CODEX_BRIDGE_TOKEN;
+  delete process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
+  delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
 });
 
 afterEach(() => {
@@ -256,6 +262,10 @@ afterAll(async () => {
   else process.env.FAKE_DOCKER_NO_PORT = originalDockerNoPort;
   if (originalCodexBridgeToken === undefined) delete process.env.FAKE_CODEX_BRIDGE_TOKEN;
   else process.env.FAKE_CODEX_BRIDGE_TOKEN = originalCodexBridgeToken;
+  if (originalClaudeBridgeToken === undefined) delete process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
+  else process.env.FAKE_CLAUDE_BRIDGE_TOKEN = originalClaudeBridgeToken;
+  if (originalOpenCodeServerPassword === undefined) delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
+  else process.env.FAKE_OPENCODE_SERVER_PASSWORD = originalOpenCodeServerPassword;
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -357,8 +367,16 @@ describe("process and platform command behavior", () => {
 
     const healthyStatus = await startHealthServer(200);
     process.env.FAKE_DOCKER_PORT = String(healthyStatus.port);
+    process.env.FAKE_OPENCODE_SERVER_PASSWORD = "o".repeat(43);
     try {
-      for (const agent of ["opencode", "claude", "codex"]) {
+      expect(
+        await invoke("get_opencode_server_status", { containerId: "container-a" }),
+      ).toEqual({
+        running: true,
+        hostPort: healthyStatus.port,
+        authToken: "o".repeat(43),
+      });
+      for (const agent of ["claude", "codex"]) {
         expect(
           await invoke(`get_${agent}_server_status`, { containerId: "container-a" }),
         ).toEqual({ running: true, hostPort: healthyStatus.port });
@@ -392,11 +410,23 @@ describe("process and platform command behavior", () => {
     const healthy = await startHealthyServer();
     process.env.FAKE_DOCKER_PORT = String(healthy.port);
     process.env.FAKE_CODEX_BRIDGE_TOKEN = "a".repeat(43);
+    process.env.FAKE_CLAUDE_BRIDGE_TOKEN = "b".repeat(43);
+    process.env.FAKE_OPENCODE_SERVER_PASSWORD = "o".repeat(43);
     try {
+      expect(await invoke("start_opencode_server", { containerId: "container-a" })).toEqual({
+        hostPort: healthy.port,
+        wasRunning: true,
+        authToken: "o".repeat(43),
+      });
       expect(await invoke("start_codex_server", { containerId: "container-a" })).toEqual({
         hostPort: healthy.port,
         wasRunning: true,
         authToken: "a".repeat(43),
+      });
+      expect(await invoke("start_claude_server", { containerId: "container-a" })).toEqual({
+        hostPort: healthy.port,
+        wasRunning: true,
+        authToken: "b".repeat(43),
       });
     } finally {
       await healthy.close();
@@ -573,8 +603,16 @@ describe("process and platform command behavior", () => {
     await expect(invoke("stop_codex_server", { containerId: "container-a" })).resolves.toBeUndefined();
 
     const log = await readCommandLog();
-    expect(log).toContain("pkill -f '[c]odex-bridge' || true; rm -f /tmp/codex-bridge-token");
+    expect(log).toContain("pkill -f '[c]odex-bridge/dist/index.js' || true; rm -f /tmp/codex-bridge-token");
     expect(log).not.toContain("pkill -f 'codex-bridge'");
+  });
+
+  test("stops the in-container Claude bridge without the pattern matching its own shell", async () => {
+    await expect(invoke("stop_claude_server", { containerId: "container-a" })).resolves.toBeUndefined();
+
+    const log = await readCommandLog();
+    expect(log).toContain("pkill -f '[c]laude-bridge/dist/index.js' || true; rm -f /tmp/claude-bridge-token");
+    expect(log).not.toContain("pkill -f 'claude-bridge'");
   });
 
   test("omits the Codex auth token when the container token file is missing or malformed", async () => {
@@ -590,6 +628,32 @@ describe("process and platform command behavior", () => {
       expect(await invoke("get_codex_server_status", { containerId: "container-a" })).toEqual({
         running: true,
         hostPort: healthy.port,
+      });
+    } finally {
+      await healthy.close();
+    }
+  });
+
+  test("reports the Claude auth token from status only when it is well-formed", async () => {
+    const healthy = await startHealthyServer();
+    process.env.FAKE_DOCKER_PORT = String(healthy.port);
+    try {
+      expect(await invoke("get_claude_server_status", { containerId: "container-a" })).toEqual({
+        running: true,
+        hostPort: healthy.port,
+      });
+
+      process.env.FAKE_CLAUDE_BRIDGE_TOKEN = "not-a-valid-token";
+      expect(await invoke("get_claude_server_status", { containerId: "container-a" })).toEqual({
+        running: true,
+        hostPort: healthy.port,
+      });
+
+      process.env.FAKE_CLAUDE_BRIDGE_TOKEN = "c".repeat(43);
+      expect(await invoke("get_claude_server_status", { containerId: "container-a" })).toEqual({
+        running: true,
+        hostPort: healthy.port,
+        authToken: "c".repeat(43),
       });
     } finally {
       await healthy.close();

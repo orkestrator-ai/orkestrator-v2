@@ -74,6 +74,7 @@ import {
   type MessageForkKind,
 } from "@/components/chat/message-fork";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
+import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { CodexComposeBar } from "./CodexComposeBar";
 import { CodexApprovalCard } from "./CodexApprovalCard";
 import { CodexInteractionCard } from "./CodexInteractionCard";
@@ -445,7 +446,9 @@ export function CodexChatTab({
     [session?.messages],
   );
   const providerDisplayMessages = useMemo(
-    () => sessionMessages.map(normalizeCodexNativeMessage),
+    () => pinActiveNativeAgentParts(
+      sessionMessages.map(normalizeCodexNativeMessage),
+    ),
     [sessionMessages],
   );
   const handoff = useAgentHandoff(

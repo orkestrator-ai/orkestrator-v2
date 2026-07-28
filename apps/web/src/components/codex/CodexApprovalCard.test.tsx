@@ -267,29 +267,28 @@ describe("CodexApprovalCard", () => {
     release?.("applied");
   });
 
-  test("an expired approval shows no buttons", () => {
+  test("a host-clock-past approval remains answerable until the bridge says stale", () => {
     renderCard(makeApproval({ expiresAt: Date.now() - 1_000 }));
 
-    // The bridge has already auto-denied by this point; offering buttons would be
-    // a lie.
-    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
-    expect(screen.getByText("This request expired and was declined.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+    expect(screen.queryByText("This request expired and was declined.")).toBeNull();
   });
 
-  test("removes the actions when a live countdown expires", async () => {
+  test("keeps actions after the informational countdown reaches zero", async () => {
     renderCard(makeApproval({ expiresAt: Date.now() + 25 }));
     expect(screen.getByRole("button", { name: "Decline" })).toBeTruthy();
 
     await waitFor(
       () => {
-        expect(screen.queryByRole("button", { name: "Decline" })).toBeNull();
-        expect(screen.getByText("This request expired and was declined.")).toBeTruthy();
+        expect(screen.queryByText(/\d+:\d+/)).toBeNull();
       },
       // The countdown ticks on a real one-second interval, so this needs room for
       // more than one tick: under a loaded parallel run a 1.5s budget can expire
       // between ticks and fail a card that does expire correctly.
       { timeout: 5_000 },
     );
+    expect(screen.getByRole("button", { name: "Decline" })).toBeTruthy();
+    expect(screen.queryByText("This request expired and was declined.")).toBeNull();
   });
 
   test("mentions the requested grant root when there is one", () => {

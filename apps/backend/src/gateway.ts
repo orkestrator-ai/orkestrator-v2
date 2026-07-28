@@ -103,7 +103,8 @@ const SSE_CLIENT_SOFT_BUFFER_BYTES = 1024 * 1024;
  */
 const SSE_CLIENT_HARD_BUFFER_BYTES = 8 * 1024 * 1024;
 const CORS_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
-const CORS_ALLOWED_HEADERS = "Authorization, Content-Type, X-Orkestrator-Codex-Token";
+const CORS_ALLOWED_HEADERS =
+  "Authorization, Content-Type, X-Orkestrator-Codex-Token, X-Orkestrator-Claude-Token, X-Orkestrator-OpenCode-Token";
 
 class InvalidRequestBodyError extends Error {}
 class RequestBodyTooLargeError extends Error {}
@@ -443,6 +444,18 @@ function sanitizeTargetRequestHeaders(
   delete sanitized.authorization;
   delete sanitized.connection;
   delete sanitized["proxy-authorization"];
+  const openCodePasswordHeader = sanitized["x-orkestrator-opencode-token"];
+  delete sanitized["x-orkestrator-opencode-token"];
+  const openCodePassword = Array.isArray(openCodePasswordHeader)
+    ? openCodePasswordHeader[0]
+    : openCodePasswordHeader;
+  if (openCodePassword) {
+    // The public gateway consumes its own Bearer Authorization header. Carry
+    // OpenCode's per-process credential in a dedicated header across that hop,
+    // then translate it into the Basic scheme the upstream server supports.
+    sanitized.authorization =
+      `Basic ${Buffer.from(`opencode:${openCodePassword}`).toString("base64")}`;
+  }
   if (stripOrigin) {
     // This endpoint is an authenticated server-side hop to a loopback API.
     // Forwarding the public browser origin would make the loopback service

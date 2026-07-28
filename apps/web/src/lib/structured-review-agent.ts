@@ -32,6 +32,7 @@ import {
 } from "@/lib/codex-client";
 import {
   abortSession as abortOpenCodeSession,
+  checkHealth as checkOpenCodeHealth,
   createClient as createOpenCodeClient,
   createSession as createOpenCodeSession,
   getStructuredOutput as getOpenCodeStructuredOutput,
@@ -110,8 +111,12 @@ async function resolveProviderPort(
   if (environment.environmentType === "local") {
     if (agent === "claude") {
       const status = await backend.getLocalClaudeServerStatus(environment.id);
-      if (status.running && status.port) return { port: status.port };
-      return { port: (await backend.startLocalClaudeServer(environment.id)).port };
+      if (status.running && status.port && status.authToken) {
+        return { port: status.port, authToken: status.authToken };
+      }
+      const started = await backend.startLocalClaudeServer(environment.id);
+      if (!started.authToken) throw new Error("Claude bridge did not return an authentication token");
+      return { port: started.port, authToken: started.authToken };
     }
     if (agent === "codex") {
       const status = await backend.getLocalCodexServerStatus(environment.id);
@@ -123,8 +128,12 @@ async function resolveProviderPort(
       return { port: started.port, authToken: started.authToken };
     }
     const status = await backend.getLocalOpencodeServerStatus(environment.id);
-    if (status.running && status.port) return { port: status.port };
-    return { port: (await backend.startLocalOpencodeServer(environment.id)).port };
+    if (status.running && status.port && status.authToken) {
+      return { port: status.port, authToken: status.authToken };
+    }
+    const started = await backend.startLocalOpencodeServer(environment.id);
+    if (!started.authToken) throw new Error("OpenCode server did not return an authentication credential");
+    return { port: started.port, authToken: started.authToken };
   }
 
   if (!environment.containerId) {
@@ -132,8 +141,11 @@ async function resolveProviderPort(
   }
   if (agent === "claude") {
     const status = await backend.getClaudeServerStatus(environment.containerId);
-    if (status.running && status.hostPort) return { port: status.hostPort };
-    return { port: (await backend.startClaudeServer(environment.containerId)).hostPort };
+    if (status.running && status.hostPort && status.authToken) {
+      return { port: status.hostPort, authToken: status.authToken };
+    }
+    const started = await backend.startClaudeServer(environment.containerId);
+    return { port: started.hostPort, authToken: started.authToken };
   }
   if (agent === "codex") {
     const status = await backend.getCodexServerStatus(environment.containerId);
@@ -144,8 +156,11 @@ async function resolveProviderPort(
     return { port: started.hostPort, authToken: started.authToken };
   }
   const status = await backend.getOpenCodeServerStatus(environment.containerId);
-  if (status.running && status.hostPort) return { port: status.hostPort };
-  return { port: (await backend.startOpenCodeServer(environment.containerId)).hostPort };
+  if (status.running && status.hostPort && status.authToken) {
+    return { port: status.hostPort, authToken: status.authToken };
+  }
+  const started = await backend.startOpenCodeServer(environment.containerId);
+  return { port: started.hostPort, authToken: started.authToken };
 }
 
 export function claudeAdapter(
@@ -322,7 +337,8 @@ export async function connectStructuredReviewAgent(
   const { port, authToken } = await resolveProviderPort(workflow.agent, environment);
   const baseUrl = `http://127.0.0.1:${port}`;
   if (workflow.agent === "claude") {
-    const client = createClaudeClient(baseUrl);
+    if (!authToken) throw new Error("Claude bridge authentication is unavailable");
+    const client = createClaudeClient(baseUrl, authToken);
     if (!await checkClaudeHealth(client)) {
       throw new Error("Claude native bridge health check failed");
     }
@@ -336,12 +352,17 @@ export async function connectStructuredReviewAgent(
     }
     return codexAdapter(client, workflow);
   }
+  if (!authToken) throw new Error("OpenCode server authentication is unavailable");
+  if (!await checkOpenCodeHealth(baseUrl, authToken)) {
+    throw new Error("OpenCode server health check failed");
+  }
   return openCodeAdapter(
     createOpenCodeClient(
       baseUrl,
       environment.environmentType === "local"
         ? environment.worktreePath
         : undefined,
+      authToken,
     ),
     workflow,
   );

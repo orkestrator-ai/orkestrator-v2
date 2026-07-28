@@ -444,6 +444,12 @@ export function ClaudeComposeBar({
 
   const handleAddressAll = () => submitPrompt(ADDRESS_ALL_REVIEW_PROMPT);
 
+  const sendDisabled =
+    disabled ||
+    isSending ||
+    (attachments.length === 0 && !text.trim());
+  const showSendButton = !isLoading || !sendDisabled;
+
   // Defensively reset fast mode if the selected model doesn't support it
   // (e.g. model catalog loaded after a stale preference, or bundled defaults changed).
   useEffect(() => {
@@ -693,6 +699,22 @@ export function ClaudeComposeBar({
           </button>
         )}
 
+        {/* Stop button stays available while loading */}
+        {isLoading && (
+          <button
+            onClick={handleStop}
+            disabled={disabled || !onStop}
+            className={cn(
+              "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
+              "bg-destructive/10 hover:bg-destructive/20 text-destructive",
+              "disabled:opacity-50 disabled:cursor-not-allowed"
+            )}
+            title="Stop current query"
+          >
+            <Square className="w-4 h-4 fill-current" />
+          </button>
+        )}
+
         {showAddressAll && !isLoading && (
           <Button
             type="button"
@@ -709,26 +731,11 @@ export function ClaudeComposeBar({
           </Button>
         )}
 
-        {/* Send/Stop button - round grey style */}
-        {isLoading && !text.trim() && attachments.length === 0 ? (
-          // Stop button when loading and no content
-          <button
-            onClick={handleStop}
-            disabled={disabled || !onStop}
-            className={cn(
-              "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
-              "bg-destructive/10 hover:bg-destructive/20 text-destructive",
-              "disabled:opacity-50 disabled:cursor-not-allowed"
-            )}
-            title="Stop current query"
-          >
-            <Square className="w-4 h-4 fill-current" />
-          </button>
-        ) : (
-          // Send button (immediate send or queue)
+        {/* Send button (immediate send or queue) */}
+        {showSendButton && (
           <button
             onClick={() => void submit()}
-            disabled={disabled || isSending || (attachments.length === 0 && !text.trim())}
+            disabled={sendDisabled}
             className={cn(
               "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
               isLoading

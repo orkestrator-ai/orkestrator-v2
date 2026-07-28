@@ -7,6 +7,8 @@ import {
   parseCodexMcpList,
   parseCodexPlugins,
   parseOpenCodeConfig,
+  parseOpenCodeMcpServers,
+  parseOpenCodePlugins,
   type AgentExtensionCatalog,
   type AgentExtensionId,
 } from "./extension-discovery.js";
@@ -316,6 +318,32 @@ describe("parseOpenCodeConfig edge cases", () => {
     ]);
   });
 
+  test("each surface parser only rejects its own section", () => {
+    const brokenMcp = JSON.stringify({ mcp: 42, plugin: ["@team/review"] });
+    expect(() => parseOpenCodeMcpServers(brokenMcp)).toThrow("unreadable mcp section");
+    expect(parseOpenCodePlugins(brokenMcp)).toEqual([
+      { name: "@team/review", status: "configured" },
+    ]);
+
+    const brokenPlugins = JSON.stringify({
+      mcp: { docs: { type: "local", command: ["docs"] } },
+      plugin_origins: "nope",
+    });
+    expect(() => parseOpenCodePlugins(brokenPlugins)).toThrow(
+      "unreadable plugin_origins section",
+    );
+    expect(parseOpenCodeMcpServers(brokenPlugins)).toEqual([
+      { name: "docs", status: "configured" },
+    ]);
+  });
+
+  test("treats an absent or null section as configured-with-nothing", () => {
+    expect(parseOpenCodeConfig(JSON.stringify({ mcp: null, plugin: null }))).toEqual({
+      mcpServers: [],
+      plugins: [],
+    });
+  });
+
   test("reads plugin entries given as strings or as objects", () => {
     expect(parseOpenCodeConfig(JSON.stringify({
       plugin: ["@team/review", { name: "named" }, { spec: "@team/spec" }, "   ", 7],
@@ -457,6 +485,50 @@ describe("discoverAgentExtensions", () => {
       mcpServers: [],
       plugins: [{ name: "review", status: "configured" }],
       mcpError: "Could not read Claude MCP servers.",
+    });
+  });
+
+  test("keeps OpenCode plugins when only its mcp section is unreadable", async () => {
+    // One `debug config` dump feeds both OpenCode surfaces, so a single
+    // try/catch around both parses reported this partial success as a total
+    // failure: the plugin list was blanked and marked unreadable because the
+    // mcp section beside it had drifted.
+    const { run } = fixtureRunner({
+      ...EMPTY_CLAUDE,
+      ...EMPTY_CODEX,
+      "opencode debug config": JSON.stringify({
+        mcp: "servers-moved-elsewhere",
+        plugin: ["@team/review"],
+      }),
+    });
+
+    const [, , opencode] = await discoverAgentExtensions(run);
+
+    expect(opencode).toEqual({
+      agent: "opencode",
+      mcpServers: [],
+      plugins: [{ name: "@team/review", status: "configured" }],
+      mcpError: "Could not read OpenCode MCP servers.",
+    });
+  });
+
+  test("keeps OpenCode MCP servers when only its plugin section is unreadable", async () => {
+    const { run } = fixtureRunner({
+      ...EMPTY_CLAUDE,
+      ...EMPTY_CODEX,
+      "opencode debug config": JSON.stringify({
+        mcp: { docs: { type: "local", command: ["docs"] } },
+        plugin: { "@team/review": true },
+      }),
+    });
+
+    const [, , opencode] = await discoverAgentExtensions(run);
+
+    expect(opencode).toEqual({
+      agent: "opencode",
+      mcpServers: [{ name: "docs", status: "configured" }],
+      plugins: [],
+      pluginError: "Could not read OpenCode plugins.",
     });
   });
 

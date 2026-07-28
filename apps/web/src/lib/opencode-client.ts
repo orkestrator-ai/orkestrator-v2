@@ -1121,11 +1121,66 @@ export function buildOpenCodeMessageFromPart(
 /**
  * Create an OpenCode SDK client connected to a server
  */
-export function createClient(baseUrl: string, directory?: string): OpencodeClient {
-  return createOpencodeClient({
+function openCodeAuthHeaders(authToken?: string): Record<string, string> | undefined {
+  if (!authToken) return undefined;
+  return {
+    // Direct loopback requests use the Basic header OpenCode supports.
+    Authorization: `Basic ${globalThis.btoa(`opencode:${authToken}`)}`,
+    // A remote Orkestrator gateway consumes Authorization for its own bearer
+    // token. It translates this dedicated credential header back to Basic on
+    // the authenticated server-side hop.
+    "X-Orkestrator-OpenCode-Token": authToken,
+  };
+}
+
+const openCodeClientConnections = new WeakMap<
+  OpencodeClient,
+  { baseUrl: string; authToken?: string }
+>();
+
+export function createClient(
+  baseUrl: string,
+  directory?: string,
+  authToken?: string,
+): OpencodeClient {
+  const client = createOpencodeClient({
     baseUrl: resolveGatewayLoopbackBaseUrl(baseUrl),
     directory,
+    headers: openCodeAuthHeaders(authToken),
   });
+  openCodeClientConnections.set(client, { baseUrl, authToken });
+  return client;
+}
+
+/**
+ * Check server health.
+ *
+ * Mirrors claude-client's checkHealth. The SDK client does not expose its base
+ * URL, so this takes the URL directly and probes the same GET /global/health
+ * route the backend polls for readiness.
+ */
+export async function checkHealth(baseUrl: string, authToken?: string): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `${resolveGatewayLoopbackBaseUrl(baseUrl)}/global/health`,
+      { headers: openCodeAuthHeaders(authToken) },
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate a cached SDK client against the exact per-process credential it was
+ * created with. This is the OpenCode equivalent of `checkHealth(client)` in
+ * the Claude/Codex wrappers and prevents a server restart from leaving a
+ * renderer stuck retrying an obsolete Basic password.
+ */
+export function checkClientHealth(client: OpencodeClient): Promise<boolean> {
+  const connection = openCodeClientConnections.get(client);
+  if (!connection) return Promise.resolve(false);
+  return checkHealth(connection.baseUrl, connection.authToken);
 }
 
 type ProviderLike = {

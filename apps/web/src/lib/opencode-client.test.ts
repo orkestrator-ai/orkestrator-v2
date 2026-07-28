@@ -4,6 +4,7 @@ import {
   carryOverOpenCodeSubagentHydration,
   abortSession,
   compactOpenCodeSession,
+  checkClientHealth,
   collectOpenCodeSubagentIds,
   createClient,
   createSession,
@@ -60,21 +61,62 @@ afterEach(() => {
 describe("opencode-client createClient", () => {
   test("rewrites loopback SDK requests through the gateway when enabled", async () => {
     const requests: string[] = [];
+    const headers: Headers[] = [];
     setTestUrl("http://gateway.test/");
     window.orkestratorGateway = { enabled: true };
     globalThis.fetch = mock(async (input) => {
-      requests.push((input as Request).url);
+      const request = input as Request;
+      requests.push(request.url);
+      headers.push(request.headers);
       return new Response(JSON.stringify({ data: [] }), {
         headers: { "content-type": "application/json" },
       });
     }) as unknown as typeof fetch;
 
-    const client = createClient("http://127.0.0.1:7777");
+    const client = createClient(
+      "http://127.0.0.1:7777",
+      undefined,
+      "opencode-secret",
+    );
     await client.session.list();
 
     expect(requests).toEqual([
       `${window.location.origin}/__orkestrator/proxy/loopback/7777/session`,
     ]);
+    expect(headers[0]?.get("authorization")).toBe(
+      `Basic ${btoa("opencode:opencode-secret")}`,
+    );
+    expect(headers[0]?.get("x-orkestrator-opencode-token")).toBe("opencode-secret");
+  });
+
+  test("health-checks a cached client with the credential it was created with", async () => {
+    const requests: Array<{ url: string; headers: Headers }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      requests.push({
+        url: String(input),
+        headers: new Headers(init?.headers),
+      });
+      return new Response("ok");
+    }) as unknown as typeof fetch;
+
+    const client = createClient(
+      "http://127.0.0.1:7777",
+      undefined,
+      "cached-secret",
+    );
+
+    await expect(checkClientHealth(client)).resolves.toBe(true);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toBe("http://127.0.0.1:7777/global/health");
+    expect(requests[0]?.headers.get("authorization")).toBe(
+      `Basic ${btoa("opencode:cached-secret")}`,
+    );
+    expect(requests[0]?.headers.get("x-orkestrator-opencode-token"))
+      .toBe("cached-secret");
+  });
+
+  test("fails closed for a client not created by this wrapper", async () => {
+    await expect(checkClientHealth({} as OpencodeClient)).resolves.toBe(false);
   });
 });
 

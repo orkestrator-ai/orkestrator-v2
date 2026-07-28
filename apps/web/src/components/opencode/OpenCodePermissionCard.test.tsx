@@ -15,6 +15,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type {
   OpencodeClient,
@@ -65,6 +66,7 @@ function makePermission(
 beforeEach(() => {
   replyMock.mockReset();
   replyMock.mockResolvedValue(true);
+  mockToastError.mockClear();
   useOpenCodeStore.setState({
     pendingPermissions: new Map(),
   });
@@ -135,25 +137,35 @@ describe("OpenCodePermissionCard", () => {
     });
   });
 
-  test("keeps the permission and unlocks all decisions after a failed reply", async () => {
-    replyMock.mockResolvedValue(false);
-    const permission = makePermission();
-    useOpenCodeStore.getState().addPendingPermission(permission);
-    render(
-      <OpenCodePermissionCard permission={permission} client={CLIENT} />,
-    );
+  test("keeps the permission, unlocks all decisions, and toasts after a failed reply", async () => {
+    const originalError = console.error;
+    console.error = mock(() => {});
+    try {
+      replyMock.mockResolvedValue(false);
+      const permission = makePermission();
+      useOpenCodeStore.getState().addPendingPermission(permission);
+      render(
+        <OpenCodePermissionCard permission={permission} client={CLIENT} />,
+      );
 
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
-    });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+      });
 
-    expect(
-      useOpenCodeStore.getState().getPendingPermission(permission.id),
-    ).toBeTruthy();
-    for (const label of ["Reject", "Allow Once", "Always Allow"]) {
       expect(
-        screen.getByRole("button", { name: label }).hasAttribute("disabled"),
-      ).toBe(false);
+        useOpenCodeStore.getState().getPendingPermission(permission.id),
+      ).toBeTruthy();
+      for (const label of ["Reject", "Allow Once", "Always Allow"]) {
+        expect(
+          screen.getByRole("button", { name: label }).hasAttribute("disabled"),
+        ).toBe(false);
+      }
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Failed to send permission decision",
+        { description: "OpenCode is still waiting for a decision. Please try again." },
+      );
+    } finally {
+      console.error = originalError;
     }
   });
 
@@ -207,8 +219,26 @@ describe("OpenCodePermissionCard", () => {
       expect(
         screen.getByRole("button", { name: "Reject" }).hasAttribute("disabled"),
       ).toBe(false);
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Failed to send permission decision",
+        { description: "transport exploded" },
+      );
     } finally {
       console.error = originalError;
     }
+  });
+
+  test("does not toast when a reply succeeds", async () => {
+    const permission = makePermission();
+    useOpenCodeStore.getState().addPendingPermission(permission);
+    render(
+      <OpenCodePermissionCard permission={permission} client={CLIENT} />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+    });
+
+    expect(mockToastError).not.toHaveBeenCalled();
   });
 });

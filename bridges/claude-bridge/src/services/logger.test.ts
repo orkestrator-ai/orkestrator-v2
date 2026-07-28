@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { createRequestLogger, readDebugFlag } from "./logger.js";
+import { Hono } from "hono";
+import {
+  createRequestLogger,
+  readDebugFlag,
+  redactRequestLogMessage,
+} from "./logger.js";
 
 describe("readDebugFlag", () => {
   test("is off when the variable is unset or blank", () => {
@@ -31,5 +36,22 @@ describe("createRequestLogger", () => {
   test("returns middleware when debug logging is on", () => {
     const middleware = createRequestLogger(true);
     expect(typeof middleware).toBe("function");
+  });
+
+  test("redacts EventSource tokens from request logs", async () => {
+    const token = "live-bridge-credential";
+    const lines: string[] = [];
+    const app = new Hono();
+    app.use("*", createRequestLogger(true, (...parts) => {
+      lines.push(parts.join(" "));
+    })!);
+    app.get("/event/subscribe", (context) => context.text("ok"));
+
+    await app.request(`/event/subscribe?token=${token}&cursor=4`);
+
+    expect(lines.join("\n")).not.toContain(token);
+    expect(lines.join("\n")).toContain("token=<redacted>&cursor=4");
+    expect(redactRequestLogMessage(`GET /?TOKEN=${token}`))
+      .toBe("GET /?TOKEN=<redacted>");
   });
 });

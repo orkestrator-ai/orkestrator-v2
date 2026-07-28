@@ -4,7 +4,7 @@ import type {
   ClaudeClient,
   ClaudeMessage,
   ClaudePlanApprovalRequest,
-  ClaudePlanApprovalResponseResult,
+  ClaudeApprovalResponseResult,
 } from "@/lib/claude-client";
 import * as realClaudeClient from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
@@ -12,7 +12,7 @@ import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 const realClaudeClientSnapshot = { ...realClaudeClient };
 const respondToPlanApprovalMock = mock(
-  async (): Promise<ClaudePlanApprovalResponseResult> => "applied",
+  async (): Promise<ClaudeApprovalResponseResult> => "applied",
 );
 
 mock.module("@/lib/claude-client", () => ({
@@ -55,11 +55,14 @@ function assistantMessage(
   };
 }
 
-function renderCard(messages: ClaudeMessage[] = []) {
-  useClaudeStore.getState().addPendingPlanApproval(approval);
+function renderCard(
+  messages: ClaudeMessage[] = [],
+  approvalOverride: ClaudePlanApprovalRequest = approval,
+) {
+  useClaudeStore.getState().addPendingPlanApproval(approvalOverride);
   return render(
     <ClaudePlanApprovalCard
-      approval={approval}
+      approval={approvalOverride}
       client={client}
       sessionId="session-1"
       messages={messages}
@@ -81,6 +84,17 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("ClaudePlanApprovalCard", () => {
+  test("shows the bridge deadline without trusting browser clock drift to disable decisions", () => {
+    renderCard([], { ...approval, expiresAt: Date.now() + 65_000 });
+    expect(screen.getByText("Expires in 1:05")).toBeTruthy();
+    cleanup();
+
+    renderCard([], { ...approval, expiresAt: Date.now() - 1 });
+    expect(screen.queryByText("This request expired and was declined.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve Plan" })).toBeTruthy();
+    expect(respondToPlanApprovalMock).not.toHaveBeenCalled();
+  });
+
   test("shows the most recent Write to a recognized plan path", async () => {
     renderCard([
       assistantMessage("old", "/workspace/implementation-plan.md", "# Old plan"),
@@ -229,8 +243,10 @@ describe("ClaudePlanApprovalCard", () => {
   });
 
   test.each([
-    ["expired response", async () => "expired" as const],
-  ])("removes a no-longer-actionable approval after an %s", async (_label, response) => {
+    // 409 + {status:"stale"} from the bridge: the window closed while the user
+    // was deciding. Nothing to retry, so the card goes away silently.
+    ["stale response", async () => "stale" as const],
+  ])("removes a no-longer-actionable approval after a %s", async (_label, response) => {
     respondToPlanApprovalMock.mockImplementation(response);
     renderCard();
     fireEvent.click(screen.getByRole("button", { name: "Approve Plan" }));
@@ -241,7 +257,7 @@ describe("ClaudePlanApprovalCard", () => {
   });
 
   test.each([
-    ["failed response", async () => "failed" as const, {
+    ["error response", async () => "error" as const, {
       description: "Claude is still waiting for a decision. Please try again.",
     }],
     ["transport error", async () => {
@@ -270,7 +286,7 @@ describe("ClaudePlanApprovalCard", () => {
   });
 
   test.each([
-    ["failed response", async () => "failed" as const, {
+    ["error response", async () => "error" as const, {
       description: "Claude is still waiting for a decision. Please try again.",
     }],
     ["transport error", async () => {
@@ -300,7 +316,7 @@ describe("ClaudePlanApprovalCard", () => {
   });
 
   test("keeps a failed dismiss available for retry and reports it", async () => {
-    respondToPlanApprovalMock.mockImplementation(async () => "failed");
+    respondToPlanApprovalMock.mockImplementation(async () => "error");
     const consoleError = console.error;
     console.error = (() => {}) as typeof console.error;
     try {
@@ -319,6 +335,40 @@ describe("ClaudePlanApprovalCard", () => {
     }
   });
 
+  test("removes the card without a toast when a dismissal is stale", async () => {
+    // Stale is resolved-not-failed: the approval is gone, so there is nothing to
+    // retry and nothing to warn the user about.
+    respondToPlanApprovalMock.mockImplementation(async () => "stale");
+    const consoleWarn = console.warn;
+    console.warn = (() => {}) as typeof console.warn;
+    try {
+      renderCard();
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+      await waitFor(() =>
+        expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(false),
+      );
+      expect(mockToastError).not.toHaveBeenCalled();
+    } finally {
+      console.warn = consoleWarn;
+    }
+  });
+
+  test("reports a forbidden response as a failure the user can retry", async () => {
+    respondToPlanApprovalMock.mockImplementation(async () => "forbidden");
+    const consoleError = console.error;
+    console.error = (() => {}) as typeof console.error;
+    try {
+      renderCard();
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+      expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
+    } finally {
+      console.error = consoleError;
+    }
+  });
+
   test("stays silent when the response lands", async () => {
     renderCard();
     fireEvent.click(screen.getByRole("button", { name: "Approve Plan" }));
@@ -330,9 +380,9 @@ describe("ClaudePlanApprovalCard", () => {
   });
 
   test("locks every decision while a response is in flight", async () => {
-    let resolveResponse!: (value: ClaudePlanApprovalResponseResult) => void;
+    let resolveResponse!: (value: ClaudeApprovalResponseResult) => void;
     respondToPlanApprovalMock.mockImplementation(
-      () => new Promise<ClaudePlanApprovalResponseResult>((resolve) => {
+      () => new Promise<ClaudeApprovalResponseResult>((resolve) => {
         resolveResponse = resolve;
       }),
     );

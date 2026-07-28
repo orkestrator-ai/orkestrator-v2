@@ -27,6 +27,7 @@ import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import {
+  checkClientHealth,
   createClient,
   getModelsWithDefaults,
   createSession,
@@ -119,6 +120,45 @@ interface OpenCodeChatTabProps {
 }
 
 type ConnectionState = "connecting" | "connected" | "error";
+
+type SessionPendingRequests = {
+  questions: Map<string, QuestionRequest>;
+  permissions: Map<string, PermissionRequest>;
+};
+
+function readSessionPendingRequests(sessionId: string): SessionPendingRequests {
+  const state = useOpenCodeStore.getState();
+  const questions = new Map<string, QuestionRequest>();
+  for (const question of state.pendingQuestions.values()) {
+    if (question.sessionId === sessionId) questions.set(question.id, question);
+  }
+  const permissions = new Map<string, PermissionRequest>();
+  for (const permission of state.pendingPermissions.values()) {
+    if (permission.sessionId === sessionId) permissions.set(permission.id, permission);
+  }
+  return { questions, permissions };
+}
+
+function pendingRequestMapChanged<T>(
+  before: Map<string, T>,
+  after: Map<string, T>,
+): boolean {
+  if (before.size !== after.size) return true;
+  for (const [id, value] of before) {
+    if (after.get(id) !== value) return true;
+  }
+  return false;
+}
+
+function sessionPendingRequestsChanged(
+  before: SessionPendingRequests,
+  after: SessionPendingRequests,
+): boolean {
+  return (
+    pendingRequestMapChanged(before.questions, after.questions)
+    || pendingRequestMapChanged(before.permissions, after.permissions)
+  );
+}
 
 const EMPTY_MODEL_PREFERENCES = EMPTY_OPENCODE_MODEL_PREFERENCES;
 
@@ -291,6 +331,9 @@ export function OpenCodeChatTab({
   const setEventStream = useOpenCodeStore((state) => state.setEventStream);
   const hasActiveEventSubscription = useOpenCodeStore(
     (state) => state.hasActiveEventSubscription,
+  );
+  const closeEventSubscription = useOpenCodeStore(
+    (state) => state.closeEventSubscription,
   );
   // Pending-request maps stay map-level subscriptions: the filtered views below
   // need to react to any entry for this session appearing or disappearing.
@@ -642,35 +685,37 @@ export function OpenCodeChatTab({
         shouldApply?: () => boolean;
       } = {},
     ): Promise<boolean> => {
-      const stateBeforeSync = useOpenCodeStore.getState();
-      const questionsBeforeSync = stateBeforeSync.pendingQuestions;
-      const permissionsBeforeSync = stateBeforeSync.pendingPermissions;
-      const existingQuestionIds = new Set<string>();
-      const existingPermissionIds = new Set<string>();
+      const pendingBeforeSync = readSessionPendingRequests(sessionId);
 
-      for (const existingQuestion of questionsBeforeSync.values()) {
-        if (existingQuestion.sessionId === sessionId) {
-          existingQuestionIds.add(existingQuestion.id);
-        }
+      let questions: QuestionRequest[];
+      let permissions: PermissionRequest[];
+      try {
+        [questions, permissions] = await Promise.all([
+          // An empty authoritative snapshot means "remove every old card"; a
+          // transport fallback must never be allowed to masquerade as one.
+          getPendingQuestions(sdkClient, { throwOnError: true }),
+          getPendingPermissions(sdkClient, { throwOnError: true }),
+        ]);
+      } catch (error) {
+        console.error(
+          "[OpenCodeChatTab] Failed to synchronize pending requests:",
+          error,
+        );
+        if (options.throwOnError) throw error;
+        return false;
       }
-
-      for (const existingPermission of permissionsBeforeSync.values()) {
-        if (existingPermission.sessionId === sessionId) {
-          existingPermissionIds.add(existingPermission.id);
-        }
-      }
-
-      const [questions, permissions] = await Promise.all([
-        getPendingQuestions(sdkClient, { throwOnError: options.throwOnError }),
-        getPendingPermissions(sdkClient, { throwOnError: options.throwOnError }),
-      ]);
       if (options.shouldApply && !options.shouldApply()) return false;
 
       const stateAfterSync = useOpenCodeStore.getState();
-      const pendingStateChanged =
-        stateAfterSync.pendingQuestions !== questionsBeforeSync ||
-        stateAfterSync.pendingPermissions !== permissionsBeforeSync;
-      if (pendingStateChanged) {
+      if (
+        stateAfterSync.clients.get(environmentId) !== sdkClient
+        || stateAfterSync.sessions.get(sessionKey)?.sessionId !== sessionId
+      ) {
+        return false;
+      }
+
+      const pendingAfterSync = readSessionPendingRequests(sessionId);
+      if (sessionPendingRequestsChanged(pendingBeforeSync, pendingAfterSync)) {
         if (options.throwOnStale ?? options.throwOnError) {
           throw new Error(
             "OpenCode pending requests changed while refreshing; try again",
@@ -693,13 +738,13 @@ export function OpenCodeChatTab({
         addPendingPermission(permission);
       }
 
-      for (const existingQuestionId of existingQuestionIds) {
+      for (const existingQuestionId of pendingBeforeSync.questions.keys()) {
         if (!questionIds.has(existingQuestionId)) {
           removePendingQuestion(existingQuestionId);
         }
       }
 
-      for (const existingPermissionId of existingPermissionIds) {
+      for (const existingPermissionId of pendingBeforeSync.permissions.keys()) {
         if (!permissionIds.has(existingPermissionId)) {
           removePendingPermission(existingPermissionId);
         }
@@ -710,8 +755,10 @@ export function OpenCodeChatTab({
     [
       addPendingPermission,
       addPendingQuestion,
+      environmentId,
       removePendingPermission,
       removePendingQuestion,
+      sessionKey,
     ],
   );
 
@@ -838,8 +885,17 @@ export function OpenCodeChatTab({
         // Fast path: if we already have a client and session from a previous init,
         // skip all expensive steps (server status, model fetch, etc.) and
         // reconnect instantly. This makes environment switching near-instant.
-        const existingClient = useOpenCodeStore.getState().clients.get(environmentId);
+        let existingClient = useOpenCodeStore.getState().clients.get(environmentId);
         const existingSession = useOpenCodeStore.getState().sessions.get(sessionKey);
+        if (existingClient && !await checkClientHealth(existingClient)) {
+          if (!mounted) return;
+          // A restarted OpenCode server rotates its Basic credential. Keeping
+          // this SDK client would make both REST rehydration and the shared SSE
+          // loop retry the obsolete password forever.
+          closeEventSubscription(environmentId);
+          setClient(environmentId, null);
+          existingClient = undefined;
+        }
         /**
          * Seed this sessionKey's model/variant before either warm path returns.
          *
@@ -959,6 +1015,15 @@ export function OpenCodeChatTab({
             getSessionStatus(existingClient, existingSession.sessionId, {
               throwOnError: true,
             }),
+            // Pending requests are equally authoritative. A tab can have been
+            // unmounted when the upstream SSE frame arrived, and a cached
+            // client/session fast path must not leave that blocked request
+            // invisible until the watchdog runs.
+            syncPendingRequests(existingClient, existingSession.sessionId, {
+              shouldApply: () =>
+                mounted
+                && reconnectSequence === manualRefreshSequenceRef.current,
+            }),
           ]).then(([messages, status]) => {
             if (
               !mounted ||
@@ -1048,6 +1113,7 @@ export function OpenCodeChatTab({
         setErrorMessage(null);
 
         let hostPort: number | null = null;
+        let authToken: string | undefined;
 
         if (isLocal) {
           // Local environment - use local server commands
@@ -1055,7 +1121,12 @@ export function OpenCodeChatTab({
 
           if (!localStatus.running) {
             const result = await startLocalOpencodeServer(environmentId);
-            localStatus = { running: true, port: result.port, pid: result.pid };
+            localStatus = {
+              running: true,
+              port: result.port,
+              pid: result.pid,
+              authToken: result.authToken,
+            };
           }
 
           if (!mounted) return;
@@ -1065,6 +1136,7 @@ export function OpenCodeChatTab({
           }
 
           hostPort = localStatus.port;
+          authToken = localStatus.authToken;
         } else {
           // Containerized environment - use container server commands
           if (!containerId) {
@@ -1077,7 +1149,11 @@ export function OpenCodeChatTab({
 
           if (!status.running) {
             const result = await startOpenCodeServer(containerId);
-            status = { running: true, hostPort: result.hostPort };
+            status = {
+              running: true,
+              hostPort: result.hostPort,
+              authToken: result.authToken,
+            };
           }
 
           if (!mounted) return;
@@ -1087,10 +1163,14 @@ export function OpenCodeChatTab({
           }
 
           hostPort = status.hostPort;
+          authToken = status.authToken;
         }
 
         if (!hostPort) {
           throw new Error("Failed to get server port");
+        }
+        if (!authToken) {
+          throw new Error("OpenCode server did not return an authentication credential");
         }
 
         setServerStatus(environmentId, {
@@ -1105,7 +1185,7 @@ export function OpenCodeChatTab({
         // environment worktree, so attaching the SDK-wide directory header is
         // unnecessary here. Avoiding that extra browser header also removes one
         // more local-only variable from native-tab startup.
-        const sdkClient = createClient(baseUrl);
+        const sdkClient = createClient(baseUrl, undefined, authToken);
         setClient(environmentId, sdkClient);
 
         // Fetch available models, server defaults, and model preferences

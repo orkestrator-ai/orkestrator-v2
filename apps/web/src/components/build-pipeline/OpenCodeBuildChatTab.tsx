@@ -12,6 +12,8 @@ import { useConfigStore, useEnvironmentStore } from "@/stores";
 import type { BuildPhase, PipelineSession } from "@/stores/buildPipelineStore";
 import {
   abortSession,
+  checkClientHealth,
+  checkHealth,
   buildOpenCodeMessageFromPart,
   carryOverOpenCodeSubagentHydration,
   createClient,
@@ -30,7 +32,6 @@ import {
   type OpenCodeModel,
   type PromptAttachment,
 } from "@/lib/opencode-client";
-import { resolveGatewayLoopbackBaseUrl } from "@/lib/gateway-url";
 import { createUuid } from "@/lib/uuid";
 import type { BuildTabData } from "@/types/paneLayout";
 import type { TaskSnapshotImage } from "@/prompts";
@@ -190,15 +191,6 @@ function extractEventSessionId(event: OpenCodeEvent): string | undefined {
     || (event as OpenCodeEvent & { sessionID?: string }).sessionID;
 }
 
-async function checkOpenCodeHealth(baseUrl: string): Promise<boolean> {
-  try {
-    const response = await fetch(`${resolveGatewayLoopbackBaseUrl(baseUrl)}/global/health`);
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
 export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabProps) {
   const { environmentId, pipelineId, isLocal } = data;
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -249,6 +241,9 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
   );
   const hasActiveEventSubscription = useOpenCodeStore(
     (state) => state.hasActiveEventSubscription,
+  );
+  const closeEventSubscription = useOpenCodeStore(
+    (state) => state.closeEventSubscription,
   );
   const sessionsMap = useOpenCodeStore((state) => state.sessions);
   const client = useOpenCodeStore(
@@ -302,18 +297,29 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
 
   const initializeClient = useCallback(async () => {
     const cachedClient = useOpenCodeStore.getState().clients.get(environmentId);
-    if (cachedClient) {
+    if (cachedClient && await checkClientHealth(cachedClient)) {
       return cachedClient;
+    }
+    if (cachedClient) {
+      closeEventSubscription(environmentId);
+      setClient(environmentId, null);
     }
 
     let port: number | null = null;
+    let authToken: string | undefined;
     if (isLocal) {
       let status = await backend.getLocalOpencodeServerStatus(environmentId);
       if (!status.running) {
         const result = await backend.startLocalOpencodeServer(environmentId);
-        status = { running: true, port: result.port, pid: result.pid };
+        status = {
+          running: true,
+          port: result.port,
+          pid: result.pid,
+          authToken: result.authToken,
+        };
       }
       port = status.port ?? null;
+      authToken = status.authToken;
     } else {
       const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
       const containerId = environment?.containerId;
@@ -324,26 +330,40 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
       let status = await backend.getOpenCodeServerStatus(containerId);
       if (!status.running) {
         const result = await backend.startOpenCodeServer(containerId);
-        status = { running: true, hostPort: result.hostPort };
+        status = {
+          running: true,
+          hostPort: result.hostPort,
+          authToken: result.authToken,
+        };
       }
       port = status.hostPort ?? null;
+      authToken = status.authToken;
     }
 
     if (!port) {
       throw new Error("Failed to resolve OpenCode server port");
     }
+    if (!authToken) {
+      throw new Error("OpenCode server did not return an authentication credential");
+    }
 
     const baseUrl = `http://127.0.0.1:${port}`;
-    if (!(await checkOpenCodeHealth(baseUrl))) {
+    if (!(await checkHealth(baseUrl, authToken))) {
       throw new Error("OpenCode server health check failed");
     }
 
     setServerStatus(environmentId, { running: true, hostPort: port });
-    const nextClient = createClient(baseUrl);
+    const nextClient = createClient(baseUrl, undefined, authToken);
     setClient(environmentId, nextClient);
 
     return nextClient;
-  }, [environmentId, isLocal, setClient, setServerStatus]);
+  }, [
+    closeEventSubscription,
+    environmentId,
+    isLocal,
+    setClient,
+    setServerStatus,
+  ]);
 
   const startSharedEventSubscription = useCallback(
     async (activeClient: ReturnType<typeof createClient>) => {

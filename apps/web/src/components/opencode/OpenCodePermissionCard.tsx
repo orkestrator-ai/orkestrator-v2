@@ -1,6 +1,7 @@
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { useCallback, useState } from "react";
 import { Loader2, ShieldAlert } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   replyToPermission,
@@ -13,6 +14,17 @@ import { useOpenCodeStore } from "@/stores/openCodeStore";
 interface OpenCodePermissionCardProps {
   permission: PermissionRequest;
   client: OpencodeClient;
+}
+
+const REPLY_FAILURE_TITLE = "Failed to send permission decision";
+/**
+ * Shown when the server answered but did not accept the reply. There is no
+ * error object to quote, and the turn stays blocked until a decision lands.
+ */
+const RETRY_HINT = "OpenCode is still waiting for a decision. Please try again.";
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function OpenCodePermissionCard({
@@ -33,9 +45,15 @@ export function OpenCodePermissionCard({
         const success = await replyToPermission(client, permission.id, reply);
         if (success) {
           removePendingPermission(permission.id);
+        } else {
+          // The card stays retryable, but the turn is fully blocked on this
+          // answer: without a toast the user has no signal it never landed.
+          console.error("[OpenCodePermissionCard] Permission reply was not delivered");
+          toast.error(REPLY_FAILURE_TITLE, { description: RETRY_HINT });
         }
       } catch (error) {
         console.error("[OpenCodePermissionCard] Failed to submit permission reply:", error);
+        toast.error(REPLY_FAILURE_TITLE, { description: describeError(error) });
       } finally {
         setIsSubmitting(false);
       }

@@ -9,6 +9,7 @@ import {
   lookupSession,
   getSessionMessages,
   getStructuredOutput,
+  shouldReconcileClaudePrompt,
   sendPrompt,
   sendStructuredPrompt,
   abortSession,
@@ -83,6 +84,30 @@ describe("claude-client", () => {
       const c = createClient("http://localhost:5000");
 
       expect(c.baseUrl).toBe(`${window.location.origin}/__orkestrator/proxy/loopback/5000`);
+    });
+
+    test("adds the Claude bridge credential to REST requests", async () => {
+      const requests: Array<{ url: string; headers: Headers }> = [];
+      globalThis.fetch = mock(async (input, init) => {
+        requests.push({
+          url: String(input),
+          headers: new Headers(init?.headers),
+        });
+        return new Response(JSON.stringify({ models: [] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch;
+
+      const authenticated = createClient(
+        "http://127.0.0.1:5000",
+        "claude-secret",
+      );
+      await getModels(authenticated);
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.url).toBe("http://127.0.0.1:5000/config/models");
+      expect(requests[0]?.headers.get("x-orkestrator-claude-token"))
+        .toBe("claude-secret");
     });
   });
 
@@ -448,10 +473,31 @@ describe("claude-client", () => {
   });
 
   describe("sendPrompt", () => {
-    test("returns true on 202 accepted", async () => {
+    test("keeps ambiguous dispatches locked for authoritative reconciliation", () => {
+      expect(shouldReconcileClaudePrompt({
+        ok: false,
+        outcome: "unknown",
+        requestId: "request-1",
+      })).toBe(true);
+      expect(shouldReconcileClaudePrompt({
+        ok: false,
+        outcome: "rejected",
+        requestId: "request-1",
+        httpStatus: 409,
+      })).toBe(false);
+      expect(shouldReconcileClaudePrompt(true)).toBe(true);
+      expect(shouldReconcileClaudePrompt(false)).toBe(false);
+    });
+
+    test("returns the accepted request identity on 202", async () => {
       mockFetchJson({ status: "processing" }, 202);
       const result = await sendPrompt(client, "s-1", "Hello");
-      expect(result).toBe(true);
+      expect(result).toMatchObject({
+        ok: true,
+        outcome: "accepted",
+        status: "processing",
+        requestId: expect.any(String),
+      });
     });
 
     /**
@@ -504,17 +550,92 @@ describe("claude-client", () => {
 
       await sendPrompt(client, "s-1", "Hello");
 
-      expect(JSON.parse(capturedBody!)).toEqual({ prompt: "Hello" });
+      // `requestId` is the exception: it is always present, because the bridge
+      // deduplicates on it and a prompt sent without one can be dispatched twice
+      // if its HTTP response is lost.
+      const body = JSON.parse(capturedBody!);
+      expect(body.requestId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
+      expect(body).toEqual({ prompt: "Hello", requestId: body.requestId });
     });
 
-    test("returns false on server error", async () => {
+    test("sends a distinct request id per call so separate prompts are separate turns", async () => {
+      const bodies: string[] = [];
+      globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+        bodies.push(init?.body as string);
+        return new Response(JSON.stringify({ status: "processing" }), { status: 202 });
+      }) as unknown as typeof fetch;
+
+      await sendPrompt(client, "s-1", "Hello");
+      await sendPrompt(client, "s-1", "Hello");
+
+      const [first, second] = bodies.map((body) => JSON.parse(body).requestId);
+      expect(first).toBeTruthy();
+      expect(second).not.toBe(first);
+    });
+
+    test("reuses a caller-supplied request id so a retry cannot double-dispatch", async () => {
+      const bodies: string[] = [];
+      globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+        bodies.push(init?.body as string);
+        return new Response(JSON.stringify({ status: "processing" }), { status: 202 });
+      }) as unknown as typeof fetch;
+
+      await sendPrompt(client, "s-1", "Hello", { requestId: "retry-me" });
+      await sendPrompt(client, "s-1", "Hello", { requestId: "retry-me" });
+
+      expect(bodies.map((body) => JSON.parse(body).requestId)).toEqual([
+        "retry-me",
+        "retry-me",
+      ]);
+    });
+
+    test("distinguishes a definite HTTP rejection from an ambiguous transport failure", async () => {
       mockFetchStatus(500);
-      expect(await sendPrompt(client, "s-1", "Hello")).toBe(false);
+      expect(await sendPrompt(client, "s-1", "Hello", {
+        requestId: "rejected-request",
+      })).toEqual({
+        ok: false,
+        outcome: "rejected",
+        requestId: "rejected-request",
+        httpStatus: 500,
+      });
+
+      mockFetchError();
+      expect(await sendPrompt(client, "s-1", "Hello", {
+        requestId: "ambiguous-request",
+      })).toEqual({
+        ok: false,
+        outcome: "unknown",
+        requestId: "ambiguous-request",
+      });
     });
 
-    test("returns false on network error", async () => {
-      mockFetchError();
-      expect(await sendPrompt(client, "s-1", "Hello")).toBe(false);
+    test("surfaces a generated id that a transport-failure retry can reuse", async () => {
+      const bodies: string[] = [];
+      globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+        bodies.push(init?.body as string);
+        if (bodies.length === 1) throw new TypeError("response lost");
+        return Response.json({ status: "already-processed", duplicate: true });
+      }) as unknown as typeof fetch;
+
+      const first = await sendPrompt(client, "s-1", "Hello");
+      expect(first.outcome).toBe("unknown");
+      const retry = await sendPrompt(client, "s-1", "Hello", {
+        requestId: first.requestId,
+      });
+
+      expect(retry).toMatchObject({
+        ok: true,
+        status: "already-processed",
+        requestId: first.requestId,
+        duplicate: true,
+      });
+      expect(bodies.map((body) => JSON.parse(body).requestId)).toEqual([
+        first.requestId,
+        first.requestId,
+      ]);
     });
   });
 
@@ -910,6 +1031,23 @@ describe("claude-client", () => {
       expect(source.close).toHaveBeenCalledTimes(1);
     });
 
+    test("adds the bridge credential to the EventSource query", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const authenticated = createClient(
+        "http://127.0.0.1:4001",
+        "claude secret/with symbols",
+      );
+      const iterator = subscribeToEvents(authenticated)[Symbol.asyncIterator]();
+
+      const sourceUrl = new URL(MockEventSource.latest!.url);
+      expect(sourceUrl.pathname).toBe("/event/subscribe");
+      expect(sourceUrl.searchParams.get("token")).toBe(
+        "claude secret/with symbols",
+      );
+
+      await iterator.return?.();
+    });
+
     test("rejects a pending read on connection failure", async () => {
       globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
       const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
@@ -1078,33 +1216,52 @@ describe("claude-client", () => {
   });
 
   describe("answerQuestion", () => {
-    test("returns true on success", async () => {
+    test("returns applied on success", async () => {
       mockFetchJson({ status: "answered" });
-      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe(true);
+      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("applied");
     });
 
-    test("returns false on error", async () => {
+    test("returns error on network failure", async () => {
       mockFetchError();
-      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe(false);
+      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("error");
+    });
+
+    // 409 is the bridge saying the window closed; 404 is "no such session",
+    // which is a genuine failure the user can act on. Collapsing the two is what
+    // made a closed window look like a broken bridge.
+    test("maps a closed window to stale and an unknown session to error", async () => {
+      mockFetchJson({ error: "Question is no longer pending", status: "stale" }, 409);
+      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("stale");
+
+      mockFetchJson({ error: "Session not found" }, 404);
+      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("error");
+
+      mockFetchStatus(403);
+      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("forbidden");
     });
   });
 
   describe("dismissQuestion", () => {
-    test("returns true when the bridge accepts the dismissal", async () => {
+    test("returns applied when the bridge accepts the dismissal", async () => {
       mockFetchJson({ status: "dismissed" });
-      expect(await dismissQuestion(client, "s-1", "q-1")).toBe(true);
+      expect(await dismissQuestion(client, "s-1", "q-1")).toBe("applied");
+      // Asserted on url + method only: requests go through `fetchClaude`, which
+      // also attaches the bridge auth header and a timeout signal.
       expect(globalThis.fetch).toHaveBeenCalledWith(
         `${client.baseUrl}/session/s-1/questions/q-1`,
-        { method: "DELETE" },
+        expect.objectContaining({ method: "DELETE" }),
       );
     });
 
-    test("returns false for HTTP and network failures", async () => {
+    test("distinguishes a stale question from HTTP and network failures", async () => {
+      mockFetchJson({ error: "Question is no longer pending", status: "stale" }, 409);
+      expect(await dismissQuestion(client, "s-1", "q-1")).toBe("stale");
+
       mockFetchJson({ error: "gone" }, 404);
-      expect(await dismissQuestion(client, "s-1", "q-1")).toBe(false);
+      expect(await dismissQuestion(client, "s-1", "q-1")).toBe("error");
 
       mockFetchError();
-      expect(await dismissQuestion(client, "s-1", "q-1")).toBe(false);
+      expect(await dismissQuestion(client, "s-1", "q-1")).toBe("error");
     });
   });
 
@@ -1119,15 +1276,19 @@ describe("claude-client", () => {
       expect(await respondToPlanApproval(client, "s-1", "a-1", false, "needs changes")).toBe("applied");
     });
 
-    test("distinguishes expired requests from retryable HTTP and network failures", async () => {
+    test("distinguishes a stale approval from retryable HTTP and network failures", async () => {
+      mockFetchJson({ error: "Plan approval is no longer pending", status: "stale" }, 409);
+      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("stale");
+
+      // Unknown session, not a closed window: retryable and worth reporting.
       mockFetchStatus(404);
-      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("expired");
+      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("error");
 
       mockFetchStatus(503);
-      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("failed");
+      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("error");
 
       mockFetchError();
-      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("failed");
+      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("error");
     });
   });
 
@@ -1146,6 +1307,28 @@ describe("claude-client", () => {
     test("returns empty array on network error", async () => {
       mockFetchError();
       expect(await getSlashCommands(client)).toEqual([]);
+    });
+
+    test("combines the caller signal with the internal timeout signal", async () => {
+      const controller = new AbortController();
+      let observedSignal: AbortSignal | undefined;
+      globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+        observedSignal = init?.signal as AbortSignal;
+        return await new Promise<Response>((_resolve, reject) => {
+          observedSignal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      }) as unknown as typeof fetch;
+
+      const commands = getSlashCommands(client, controller.signal);
+      await Promise.resolve();
+      controller.abort();
+
+      expect(await commands).toEqual([]);
+      expect(observedSignal?.aborted).toBe(true);
     });
   });
 

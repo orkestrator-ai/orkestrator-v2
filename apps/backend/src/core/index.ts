@@ -5,7 +5,11 @@ import {
   type BackendEmit,
   type CommandContext,
 } from "./commands.js";
-import { reapOrphanedLocalServers } from "./local-server-reaper.js";
+import {
+  reapOrphanedClaudeTmuxRuntimes,
+  reapOrphanedLocalServers,
+} from "./local-server-reaper.js";
+import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
@@ -16,6 +20,8 @@ export class OrkestratorBackend {
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
+  private readonly reapPidServers: typeof reapOrphanedLocalServers;
+  private readonly reapTmuxRuntimes: typeof reapOrphanedClaudeTmuxRuntimes;
 
   constructor(options: {
     dataDir: string;
@@ -23,6 +29,10 @@ export class OrkestratorBackend {
     appRoot: string;
     resourceRoot: string;
     emit: BackendEmit;
+    startupReapers?: {
+      localServers?: typeof reapOrphanedLocalServers;
+      claudeTmuxRuntimes?: typeof reapOrphanedClaudeTmuxRuntimes;
+    };
   }) {
     const storage = new StorageService(options.dataDir);
     // Every committed mutation fans out to all connected clients, so a second
@@ -38,6 +48,11 @@ export class OrkestratorBackend {
       resourceRoot: options.resourceRoot,
       emit: options.emit,
     };
+    this.reapPidServers =
+      options.startupReapers?.localServers ?? reapOrphanedLocalServers;
+    this.reapTmuxRuntimes =
+      options.startupReapers?.claudeTmuxRuntimes
+      ?? reapOrphanedClaudeTmuxRuntimes;
   }
 
   async init(): Promise<void> {
@@ -60,9 +75,21 @@ export class OrkestratorBackend {
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
     // pidfile they still hold blocks this instance's app-server ownership.
-    await reapOrphanedLocalServers({ storage: this.context.storage }).catch(
+    await this.reapPidServers({ storage: this.context.storage }).catch(
       (error) => {
         console.warn("[backend] Failed to reap orphaned local servers:", error);
+      },
+    );
+    // claude-tmux leaves no PID behind — its sessions belong to a tmux server
+    // we do not own — so its orphans are found by their runtime roots instead.
+    await this.reapTmuxRuntimes({
+      storage: this.context.storage,
+      runtimeRootPrefix: claudeTmuxRuntimeRootPrefix(
+        this.context.storage.getDataDir(),
+      ),
+    }).catch(
+      (error) => {
+        console.warn("[backend] Failed to reap orphaned claude-tmux runtimes:", error);
       },
     );
   }

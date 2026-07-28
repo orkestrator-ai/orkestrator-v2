@@ -26,6 +26,7 @@ import {
   getSessionMessages,
   getPendingQuestions,
   getPendingPlanApprovals,
+  shouldReconcileClaudePrompt,
   forkClaudeSession,
   sendPrompt,
   abortSession,
@@ -103,6 +104,51 @@ const UNMATCHED_EVENT_WARNING_EXEMPT = new Set([
   "system.compact",
   "system.message",
 ]);
+
+type SessionPendingPrompts = {
+  questions: Map<string, ClaudeQuestionRequest>;
+  approvals: Map<string, ClaudePlanApprovalRequest>;
+};
+
+/**
+ * The pending questions and plan approvals the store holds for one session.
+ *
+ * Both store maps are global across every environment and tab, so comparing the
+ * map *references* would report "changed" for traffic this tab has no interest
+ * in — and a rehydration that bails on another environment's question is the
+ * exact gap `syncPendingPrompts` exists to close.
+ */
+function readSessionPendingPrompts(sessionId: string): SessionPendingPrompts {
+  const state = useClaudeStore.getState();
+  const questions = new Map<string, ClaudeQuestionRequest>();
+  for (const question of state.pendingQuestions.values()) {
+    if (question.sessionId === sessionId) questions.set(question.id, question);
+  }
+  const approvals = new Map<string, ClaudePlanApprovalRequest>();
+  for (const approval of state.pendingPlanApprovals.values()) {
+    if (approval.sessionId === sessionId) approvals.set(approval.id, approval);
+  }
+  return { questions, approvals };
+}
+
+function pendingPromptMapChanged<T>(before: Map<string, T>, after: Map<string, T>): boolean {
+  if (before.size !== after.size) return true;
+  for (const [id, value] of before) {
+    // Identity, not just presence: a live frame can replace a card in place.
+    if (after.get(id) !== value) return true;
+  }
+  return false;
+}
+
+function sessionPendingPromptsChanged(
+  before: SessionPendingPrompts,
+  after: SessionPendingPrompts,
+): boolean {
+  return (
+    pendingPromptMapChanged(before.questions, after.questions)
+    || pendingPromptMapChanged(before.approvals, after.approvals)
+  );
+}
 
 interface ClaudeChatTabProps {
   tabId: string;
@@ -437,6 +483,128 @@ export function ClaudeChatTab({
    */
   const manualRefreshInFlightRef = useRef(false);
 
+  /**
+   * Rehydrate this session's question and plan-approval cards from the bridge.
+   *
+   * `GET /session/:id/questions` and `/plan-approvals` are the authoritative
+   * source, not the SSE frame. A tab that was unmounted — or an environment that
+   * was in the background — when Claude asked never saw the event, and its
+   * resubscription carries no cursor, so the bridge replays nothing. The turn
+   * stays blocked on a card nobody can see until the stalled-turn watchdog
+   * happens to fire. Every path that (re)establishes a view of a session
+   * therefore calls this: mount/fast reconnect, cold reconnect, resume, the
+   * user's own refresh, and the watchdog.
+   *
+   * It removes as well as adds. A question answered in another window, or a plan
+   * approved from the CLI, is gone from the server's list; without the removal
+   * pass its card would linger in the store forever with nothing able to clear
+   * it.
+   */
+  const syncPendingPrompts = useCallback(
+    async (
+      bridgeClient: ReturnType<typeof createClient>,
+      sessionId: string,
+      options: {
+        /**
+         * Propagate a failed fetch to the caller instead of logging it and
+         * leaving the current cards untouched.
+         */
+        throwOnError?: boolean;
+        /**
+         * Whether a live frame landing mid-sync is an error.
+         *
+         * Separate from `throwOnError` so a background reconcile can still let
+         * fetch failures propagate while treating a raced snapshot as "try again
+         * later" rather than a user-facing error.
+         */
+        throwOnStale?: boolean;
+        shouldApply?: () => boolean;
+      } = {},
+    ): Promise<boolean> => {
+      const promptsBeforeSync = readSessionPendingPrompts(sessionId);
+
+      let questions: ClaudeQuestionRequest[];
+      let approvals: ClaudePlanApprovalRequest[];
+      try {
+        /*
+         * Always `throwOnError` on the wire calls. These helpers otherwise
+         * resolve to `[]` on an HTTP failure, and an empty list here does not
+         * mean "nothing is pending" — it would clear a live card because the
+         * bridge blipped.
+         */
+        [questions, approvals] = await Promise.all([
+          getPendingQuestions(bridgeClient, sessionId, { throwOnError: true }),
+          getPendingPlanApprovals(bridgeClient, sessionId, { throwOnError: true }),
+        ]);
+      } catch (error) {
+        if (options.throwOnError) throw error;
+        console.debug("[ClaudeChatTab] Failed to rehydrate pending prompts:", error);
+        return false;
+      }
+
+      if (options.shouldApply && !options.shouldApply()) return false;
+
+      /*
+       * Recheck client identity and session id *after* the await: the
+       * environment may have been retried onto a new bridge client, or the tab
+       * may have resumed or forked into a different session, while the fetch was
+       * in flight. Either way this answer belongs to nobody.
+       */
+      const stateAfterSync = useClaudeStore.getState();
+      if (
+        stateAfterSync.clients.get(environmentId) !== bridgeClient
+        || stateAfterSync.sessions.get(sessionKey)?.sessionId !== sessionId
+      ) {
+        return false;
+      }
+
+      const promptsAfterSync = readSessionPendingPrompts(sessionId);
+      if (sessionPendingPromptsChanged(promptsBeforeSync, promptsAfterSync)) {
+        /*
+         * A live frame already moved this session's cards, so the snapshot is
+         * older than what the store holds; applying it would resurrect a prompt
+         * the user just answered. A manual refresh reports this so the user can
+         * retry; every other caller stays silent and re-syncs on the next path.
+         */
+        if (options.throwOnStale ?? options.throwOnError) {
+          throw new Error("Claude session changed while refreshing; try again");
+        }
+        return false;
+      }
+
+      const serverQuestionIds = new Set<string>();
+      for (const question of questions) {
+        if (question.sessionId !== sessionId) continue;
+        serverQuestionIds.add(question.id);
+        addPendingQuestion(question);
+      }
+
+      const serverApprovalIds = new Set<string>();
+      for (const approval of approvals) {
+        if (approval.sessionId !== sessionId) continue;
+        serverApprovalIds.add(approval.id);
+        addPendingPlanApproval(approval);
+      }
+
+      for (const questionId of promptsBeforeSync.questions.keys()) {
+        if (!serverQuestionIds.has(questionId)) removePendingQuestion(questionId);
+      }
+      for (const approvalId of promptsBeforeSync.approvals.keys()) {
+        if (!serverApprovalIds.has(approvalId)) removePendingPlanApproval(approvalId);
+      }
+
+      return true;
+    },
+    [
+      addPendingPlanApproval,
+      addPendingQuestion,
+      environmentId,
+      removePendingPlanApproval,
+      removePendingQuestion,
+      sessionKey,
+    ],
+  );
+
   const applyServerSessionSnapshot = useCallback(async (
     { manual = false }: RefreshSessionOptions = {},
   ) => {
@@ -463,24 +631,9 @@ export function ClaudeChatTab({
       return;
     }
 
-    const questionsBeforeAttempt = stateBeforeAttempt.pendingQuestions;
-    const approvalsBeforeAttempt = stateBeforeAttempt.pendingPlanApprovals;
-    const existingQuestionIds = new Set(
-      Array.from(questionsBeforeAttempt.values())
-        .filter((question) => question.sessionId === sessionId)
-        .map((question) => question.id),
-    );
-    const existingApprovalIds = new Set(
-      Array.from(approvalsBeforeAttempt.values())
-        .filter((approval) => approval.sessionId === sessionId)
-        .map((approval) => approval.id),
-    );
-
-    const [serverSession, messages, questions, approvals] = await Promise.all([
+    const [serverSession, messages] = await Promise.all([
       getSession(activeClient, sessionId),
       getSessionMessages(activeClient, sessionId, { throwOnError: true }),
-      getPendingQuestions(activeClient, sessionId, { throwOnError: true }),
-      getPendingPlanApprovals(activeClient, sessionId, { throwOnError: true }),
       /**
        * Only an explicit user refresh forces the catalog. A forced refresh
        * bypasses the backend cache and makes the bridge spawn Claude model
@@ -504,11 +657,7 @@ export function ClaudeChatTab({
     ) {
       return;
     }
-    const liveStateChanged =
-      sessionAfterAttempt !== sessionBeforeAttempt ||
-      stateAfterAttempt.pendingQuestions !== questionsBeforeAttempt ||
-      stateAfterAttempt.pendingPlanApprovals !== approvalsBeforeAttempt;
-    if (liveStateChanged) {
+    if (sessionAfterAttempt !== sessionBeforeAttempt) {
       /**
        * The snapshot is older than a frame that already landed; applying it
        * would let a stale `running` response re-lock a session that just went
@@ -533,31 +682,22 @@ export function ClaudeChatTab({
       setSessionTitle(sessionKey, serverSession.title);
     }
 
-    const refreshedQuestionIds = new Set(questions.map((question) => question.id));
-    for (const question of questions) addPendingQuestion(question);
-    for (const questionId of existingQuestionIds) {
-      if (!refreshedQuestionIds.has(questionId)) removePendingQuestion(questionId);
-    }
-
-    const refreshedApprovalIds = new Set(approvals.map((approval) => approval.id));
-    for (const approval of approvals) addPendingPlanApproval(approval);
-    for (const approvalId of existingApprovalIds) {
-      if (!refreshedApprovalIds.has(approvalId)) removePendingPlanApproval(approvalId);
-    }
+    await syncPendingPrompts(activeClient, sessionId, {
+      throwOnError: true,
+      throwOnStale: manual,
+      shouldApply,
+    });
     return;
   }, [
     applyServerSessionMetadata,
-    addPendingPlanApproval,
-    addPendingQuestion,
     environmentId,
     loadAuthoritativeModels,
-    removePendingPlanApproval,
-    removePendingQuestion,
     sessionKey,
     setMessages,
     setSessionError,
     setSessionLoading,
     setSessionTitle,
+    syncPendingPrompts,
   ]);
 
   const refreshSessionFromServer = useCallback(
@@ -777,6 +917,22 @@ export function ClaudeChatTab({
               return;
             }
 
+            /*
+             * Start the card rehydration before the transcript reads and await it
+             * last, so it neither serializes behind them nor gets skipped by the
+             * `!serverSession` early return below. A blocked turn is the one piece
+             * of state nothing else can recover: the question was raised while this
+             * tab was unmounted, so no SSE frame will ever replay it.
+             *
+             * Deliberately not gated on `mounted` — the cards live in the store, so
+             * they must land even if the user switches away again mid-fetch. The
+             * helper's client and session-id rechecks keep a superseded session out.
+             */
+            const pendingPromptsSync = syncPendingPrompts(
+              existingClient,
+              existingSession.sessionId,
+            );
+
             // Re-sync session state from the server.
             // If SSE events were missed while this tab was inactive (e.g. due to
             // an EventSource error killing the subscription), messages and loading
@@ -800,6 +956,8 @@ export function ClaudeChatTab({
             if (serverSession.status !== "running" && currentSession?.isLoading) {
               setSessionLoading(sessionKey, false);
             }
+
+            await pendingPromptsSync;
           }).catch((err) => {
             if (!mounted) return;
             console.debug("[ClaudeChatTab] Background health check / re-sync failed:", err);
@@ -860,6 +1018,9 @@ export function ClaudeChatTab({
               if (!hasActiveEventSubscription(environmentId)) {
                 startSharedEventSubscription(bridgeClient);
               }
+              // A restored session can already be blocked on a question or plan
+              // approval raised before this tab existed.
+              await syncPendingPrompts(bridgeClient, data.sessionId);
               return;
             } catch (error) {
               if (!(error instanceof SessionNotFoundError)) throw error;
@@ -905,17 +1066,22 @@ export function ClaudeChatTab({
         setErrorMessage(null);
 
         let hostPort: number | null = null;
+        let authToken: string | undefined;
 
         if (isLocal) {
           // Local environment - use local server commands
           let localStatus = await getLocalClaudeServerStatus(environmentId);
-          console.debug("[ClaudeChatTab] Local server status:", localStatus);
+          console.debug("[ClaudeChatTab] Local server status:", localStatus.running);
 
-          if (!localStatus.running) {
+          if (!localStatus.running || !localStatus.authToken) {
             console.debug("[ClaudeChatTab] Starting local Claude server...");
             const result = await startLocalClaudeServer(environmentId);
-            console.debug("[ClaudeChatTab] Local Claude server start result:", result);
-            localStatus = { running: true, port: result.port, pid: result.pid };
+            localStatus = {
+              running: true,
+              port: result.port,
+              pid: result.pid,
+              authToken: result.authToken,
+            };
           }
 
           if (!mounted) return;
@@ -925,6 +1091,7 @@ export function ClaudeChatTab({
           }
 
           hostPort = localStatus.port;
+          authToken = localStatus.authToken;
         } else {
           // Containerized environment - use container server commands
           if (!containerId) {
@@ -932,13 +1099,16 @@ export function ClaudeChatTab({
           }
 
           let status = await getClaudeServerStatus(containerId);
-          console.debug("[ClaudeChatTab] Container server status:", status);
+          console.debug("[ClaudeChatTab] Container server status:", status.running);
 
-          if (!status.running) {
+          if (!status.running || !status.authToken) {
             console.debug("[ClaudeChatTab] Starting container Claude server...");
             const result = await startClaudeServer(containerId);
-            console.debug("[ClaudeChatTab] Container Claude server start result:", result);
-            status = { running: true, hostPort: result.hostPort };
+            status = {
+              running: true,
+              hostPort: result.hostPort,
+              authToken: result.authToken,
+            };
           }
 
           if (!mounted) return;
@@ -948,10 +1118,14 @@ export function ClaudeChatTab({
           }
 
           hostPort = status.hostPort;
+          authToken = status.authToken;
         }
 
         if (!hostPort) {
           throw new Error("Failed to get server port");
+        }
+        if (!authToken) {
+          throw new Error("Failed to resolve Claude bridge authentication");
         }
 
         setServerStatus(environmentId, {
@@ -961,7 +1135,7 @@ export function ClaudeChatTab({
 
         const baseUrl = `http://127.0.0.1:${hostPort}`;
         console.debug("[ClaudeChatTab] Claude bridge server base URL:", baseUrl);
-        const bridgeClient = createClient(baseUrl);
+        const bridgeClient = createClient(baseUrl, authToken);
         setClient(environmentId, bridgeClient);
 
         const healthy = await checkHealth(bridgeClient);
@@ -1086,6 +1260,15 @@ export function ClaudeChatTab({
               throw err;
             }
           }
+
+          /*
+           * Rehydrate the cards for the session we actually ended up on. If the
+           * catch above replaced an expired session, `tabSessionIdRef` has moved
+           * and the fresh session cannot have pending prompts.
+           */
+          if (tabSessionIdRef.current === existingSessionId) {
+            await syncPendingPrompts(bridgeClient, existingSessionId);
+          }
         } else {
           const newSession = await createSession(bridgeClient);
           if (!mounted) return;
@@ -1165,7 +1348,7 @@ export function ClaudeChatTab({
               fastMode: fastModeEnabled && modelSupportsFastMode,
             });
 
-            if (!success) {
+            if (!shouldReconcileClaudePrompt(success)) {
               console.error("[ClaudeChatTab] Failed to send initial prompt");
               setSessionLoading(sessionKey, false);
               // Show error message to user
@@ -1612,6 +1795,14 @@ export function ClaudeChatTab({
                 sessionId: questionData.sessionId || eventSessionId || "",
                 questions: questionData.questions,
                 toolUseId: questionData.toolUseId,
+                ...(questionData.expiresAt === undefined
+                  ? {}
+                  : {
+                      expiresAt:
+                        typeof questionData.expiresAt === "number"
+                          ? questionData.expiresAt
+                          : Number.NaN,
+                    }),
               };
               addPendingQuestion(questionRequest);
             }
@@ -1647,6 +1838,14 @@ export function ClaudeChatTab({
                 id: approvalData.id,
                 sessionId: approvalData.sessionId || eventSessionId || "",
                 toolUseId: approvalData.toolUseId,
+                ...(approvalData.expiresAt === undefined
+                  ? {}
+                  : {
+                      expiresAt:
+                        typeof approvalData.expiresAt === "number"
+                          ? approvalData.expiresAt
+                          : Number.NaN,
+                    }),
               };
               console.log("[ClaudeChatTab] Plan approval requested:", approvalRequest);
               addPendingPlanApproval(approvalRequest);
@@ -1807,7 +2006,7 @@ export function ClaudeChatTab({
           useClaudeStore.getState().promptSuggestionOptIn.get(sessionKey) === true,
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         console.error("[ClaudeChatTab] Failed to send prompt");
         setSessionLoading(sessionKey, false);
       }
@@ -2049,6 +2248,15 @@ export function ClaudeChatTab({
         });
 
         setResumeDialogOpen(false);
+
+        /*
+         * A resumed session can be parked on a question or plan approval raised
+         * long before this tab opened it — nothing replays that over SSE, so the
+         * bridge's pending lists are the only way the card can appear.
+         */
+        await syncPendingPrompts(client, sessionId, {
+          shouldApply: () => resumeSequence === resumeSequenceRef.current,
+        });
       } catch (error) {
         console.error("[ClaudeChatTab] Failed to resume session:", error);
       }
@@ -2058,6 +2266,7 @@ export function ClaudeChatTab({
       client,
       environmentId,
       sessionKey,
+      syncPendingPrompts,
       tabId,
       updateTabNativeSessionId,
     ]

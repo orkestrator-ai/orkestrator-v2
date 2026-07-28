@@ -72,8 +72,8 @@ const mockAnswerQuestion = mock(() => true);
 const mockDismissQuestion = mock(() => true);
 const mockGetPendingPlanApprovals = mock(() => []);
 const mockRespondToPlanApproval = mock(() => true);
-const mockGetStructuredPromptDispatchState = mock<
-  typeof realSessionManager.getStructuredPromptDispatchState
+const mockGetPromptDispatchState = mock<
+  typeof realSessionManager.getPromptDispatchState
 >(() => "new");
 const mockReconcilePersistedSessions = mock(async () => {});
 const mockEnsurePersistedSession = mock(async (id: string) => mockGetSession(id));
@@ -129,7 +129,7 @@ mock.module("../services/session-manager.js", () => ({
   dismissQuestion: mockDismissQuestion,
   getPendingPlanApprovals: mockGetPendingPlanApprovals,
   respondToPlanApproval: mockRespondToPlanApproval,
-  getStructuredPromptDispatchState: mockGetStructuredPromptDispatchState,
+  getPromptDispatchState: mockGetPromptDispatchState,
 }));
 
 /**
@@ -207,8 +207,8 @@ describe("session routes", () => {
     mockDismissQuestion.mockClear();
     mockGetPendingPlanApprovals.mockClear();
     mockRespondToPlanApproval.mockClear();
-    mockGetStructuredPromptDispatchState.mockReset();
-    mockGetStructuredPromptDispatchState.mockImplementation(() => "new");
+    mockGetPromptDispatchState.mockReset();
+    mockGetPromptDispatchState.mockImplementation(() => "new");
     resetPersistenceMocks();
   });
 
@@ -450,7 +450,7 @@ describe("session routes", () => {
       });
       expect(malformed.status).toBe(400);
 
-      mockGetStructuredPromptDispatchState.mockReturnValueOnce("processing");
+      mockGetPromptDispatchState.mockReturnValueOnce("processing");
       const duplicate = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Review",
         outputSchema: { type: "object" },
@@ -472,7 +472,7 @@ describe("session routes", () => {
       });
       expect(tooLong.status).toBe(400);
 
-      mockGetStructuredPromptDispatchState.mockReturnValueOnce("already-processed");
+      mockGetPromptDispatchState.mockReturnValueOnce("already-processed");
       const completed = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Review",
         outputSchema: { type: "object" },
@@ -484,6 +484,90 @@ describe("session routes", () => {
         requestId: "complete-1",
         duplicate: true,
       });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The destructive case. A plain prompt runs shell commands and edits files,
+     * so a retry after a lost HTTP response must attach to the turn already
+     * running instead of starting a second one. Dedup used to be gated on
+     * `outputSchema`, which left every ordinary prompt unprotected.
+     */
+    test("deduplicates an unstructured prompt carrying a repeated request id", async () => {
+      mockGetPromptDispatchState.mockReturnValueOnce("processing");
+      const duplicate = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "rm the temp dir",
+        requestId: "plain-1",
+      });
+
+      expect(duplicate.status).toBe(202);
+      expect(await jsonBody(duplicate)).toEqual({
+        status: "processing",
+        requestId: "plain-1",
+        duplicate: true,
+      });
+      expect(mockGetPromptDispatchState).toHaveBeenCalledWith("s-1", "plain-1");
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("replays the original outcome for an unstructured prompt that already finished", async () => {
+      mockGetPromptDispatchState.mockReturnValueOnce("already-processed");
+      const duplicate = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "rm the temp dir",
+        requestId: "plain-2",
+      });
+
+      expect(duplicate.status).toBe(200);
+      expect(await jsonBody(duplicate)).toEqual({
+        status: "already-processed",
+        requestId: "plain-2",
+        duplicate: true,
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("forwards the client request id on an unstructured prompt so the bridge can dedup it", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Hello",
+        requestId: "plain-3",
+      });
+
+      expect(res.status).toBe(202);
+      expect(await jsonBody(res)).toMatchObject({ requestId: "plain-3" });
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        "s-1",
+        "Hello",
+        expect.objectContaining({ requestId: "plain-3" }),
+      );
+    });
+
+    /**
+     * Ordered before the `running` conflict: the retry *is* the running turn, so
+     * answering 409 "already processing a prompt" would tell the client its own
+     * request collided with somebody else's.
+     */
+    test("answers a duplicate rather than a conflict while its own turn runs", async () => {
+      mockGetSession.mockImplementationOnce((id: string) =>
+        id === "s-1"
+          ? {
+              id,
+              title: "Test",
+              status: "running" as const,
+              createdAt: new Date("2026-01-01"),
+              lastActivity: new Date("2026-01-01"),
+              taskRegistry: undefined,
+            }
+          : undefined,
+      );
+      mockGetPromptDispatchState.mockReturnValueOnce("processing");
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Hello",
+        requestId: "plain-4",
+      });
+
+      expect(res.status).toBe(202);
+      expect(await jsonBody(res)).toMatchObject({ duplicate: true });
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
@@ -948,17 +1032,23 @@ describe("session routes", () => {
       expect(res.status).toBe(400);
     });
 
-    test("returns 404 when the pending question does not exist", async () => {
+    /**
+     * 409 + `{status:"stale"}`, matching the Codex bridge's approval contract.
+     * 404 would be wrong: it means "no such session", which the UI has to treat
+     * as a retryable failure. A window that has closed is neither.
+     */
+    test("returns 409 stale when the pending question does not exist", async () => {
       mockGetPendingQuestions.mockImplementationOnce(() => []);
       const res = await jsonRequest(
         "POST",
         "/session/s-1/questions/q-missing/answer",
         { answers: [["x"]] },
       );
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toMatchObject({ status: "stale" });
     });
 
-    test("returns 404 when answerQuestion reports the question is gone", async () => {
+    test("returns 409 stale when answerQuestion reports the question is gone", async () => {
       mockGetPendingQuestions.mockImplementationOnce(() => [
         {
           id: "q-5",
@@ -975,9 +1065,12 @@ describe("session routes", () => {
         "/session/s-1/questions/q-5/answer",
         { answers: [["x"]] },
       );
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toMatchObject({ status: "stale" });
     });
 
+    // Still a 404: the session itself is unknown, which is a genuine error the
+    // client must surface rather than silently discard.
     test("returns 404 for unknown session", async () => {
       const res = await jsonRequest(
         "POST",
@@ -1016,7 +1109,8 @@ describe("session routes", () => {
 
       const res = await app.request("/session/s-1/questions/q-other", { method: "DELETE" });
 
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toMatchObject({ status: "stale" });
       expect(mockDismissQuestion).not.toHaveBeenCalled();
     });
 
@@ -1026,7 +1120,7 @@ describe("session routes", () => {
       expect(mockDismissQuestion).not.toHaveBeenCalled();
     });
 
-    test("returns 404 when the question resolves between snapshot and dismissal", async () => {
+    test("returns 409 stale when the question resolves between snapshot and dismissal", async () => {
       mockGetPendingQuestions.mockImplementationOnce(() => [{
         id: "q-1",
         sessionId: "s-1",
@@ -1035,7 +1129,8 @@ describe("session routes", () => {
       mockDismissQuestion.mockImplementationOnce(() => false);
 
       const res = await app.request("/session/s-1/questions/q-1", { method: "DELETE" });
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toMatchObject({ status: "stale" });
     });
   });
 
@@ -1121,11 +1216,12 @@ describe("session routes", () => {
         approved: true,
       });
 
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toMatchObject({ status: "stale" });
       expect(mockRespondToPlanApproval).not.toHaveBeenCalled();
     });
 
-    test("returns 404 when the approval resolves between snapshot and response", async () => {
+    test("returns 409 stale when the approval resolves between snapshot and response", async () => {
       mockGetPendingPlanApprovals.mockImplementationOnce(() => [{
         id: "a-1",
         sessionId: "s-1",
@@ -1135,7 +1231,8 @@ describe("session routes", () => {
         approved: true,
       });
 
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toMatchObject({ status: "stale" });
     });
   });
 

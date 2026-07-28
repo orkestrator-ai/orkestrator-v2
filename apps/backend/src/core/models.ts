@@ -4,12 +4,14 @@ import type {
   AgentActivitySource,
   AgentActivitySourceSnapshot,
   AgentActivityState,
+  FrontendAgentActivityObserverSnapshot,
 } from "@orkestrator/protocol/agent-activity";
 
 export type {
   AgentActivitySource,
   AgentActivitySourceSnapshot,
   AgentActivityState,
+  FrontendAgentActivityObserverSnapshot,
 };
 
 export interface Project {
@@ -120,6 +122,14 @@ export interface Environment {
   /** Backend-internal observations used to derive the aggregate state. */
   agentActivitySources?: Partial<
     Record<AgentActivitySource, AgentActivitySourceSnapshot>
+  >;
+  /**
+   * Renderer observations keyed by a hash of the renderer's opaque token.
+   * Entries are leased so a crashed renderer cannot pin the aggregate forever.
+   */
+  frontendAgentActivityObservers?: Record<
+    string,
+    FrontendAgentActivityObserverSnapshot
   >;
   createdFromCommit?: string;
   networkAccessMode: NetworkAccessMode;

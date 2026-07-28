@@ -394,13 +394,19 @@ describe("backend setup wrappers", () => {
 
   test("persists aggregate agent activity with its observation time", async () => {
     const occurredAt = "2026-07-23T11:12:13.500Z";
-    await setEnvironmentAgentActivity("env-1", "waiting", occurredAt);
+    await setEnvironmentAgentActivity(
+      "env-1",
+      "waiting",
+      occurredAt,
+      "observer-1",
+    );
 
     expect(invokeMock.mock.calls).toEqual([
       ["set_environment_agent_activity", {
         environmentId: "env-1",
         state: "waiting",
         occurredAt,
+        observerId: "observer-1",
       }],
     ]);
   });

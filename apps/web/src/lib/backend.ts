@@ -122,11 +122,13 @@ export async function setEnvironmentAgentActivity(
   environmentId: string,
   state: AgentActivityState,
   occurredAt: string,
+  observerId: string,
 ): Promise<Environment> {
   return invoke<Environment>("set_environment_agent_activity", {
     environmentId,
     state,
     occurredAt,
+    observerId,
   });
 }
 

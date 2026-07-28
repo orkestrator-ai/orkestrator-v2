@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { StorageService } from "./storage.js";
 import { ClaudeStatePollManager } from "./tmux.js";
@@ -346,6 +347,7 @@ describe("set_environment_agent_activity", () => {
         environmentId: "e1",
         state: "working",
         occurredAt,
+        observerId: "renderer-observer-1",
       })).resolves.toMatchObject({
         agentActivityState: "working",
         agentActivityUpdatedAt: occurredAt,
@@ -375,6 +377,18 @@ describe("set_environment_agent_activity", () => {
       await expect(invoke("set_environment_agent_activity", {
         environmentId: "e1",
         state: "working",
+        occurredAt,
+        observerId: 42,
+      })).rejects.toThrow("Expected observerId to be a string");
+      await expect(invoke("set_environment_agent_activity", {
+        environmentId: "e1",
+        state: "working",
+        occurredAt,
+        observerId: "",
+      })).rejects.toThrow("observerId must be a non-blank string");
+      await expect(invoke("set_environment_agent_activity", {
+        environmentId: "e1",
+        state: "working",
         occurredAt: "invalid",
       })).rejects.toThrow("occurredAt must be a valid ISO timestamp");
       await expect(invoke("set_environment_agent_activity", {
@@ -399,12 +413,18 @@ describe("set_environment_agent_activity", () => {
         environmentId: "e1",
         state: "working",
         occurredAt: "2026-07-27T12:00:00.000Z",
+        observerId: "renderer-observer-1",
         source: "claude-terminal",
       });
 
       const environment = await storage.getEnvironment("e1");
-      expect(environment?.agentActivitySources).toEqual({
-        frontend: { state: "working", updatedAt: "2026-07-27T12:00:00.000Z" },
+      expect(environment?.agentActivitySources).toEqual({});
+      expect(environment?.frontendAgentActivityObservers).toMatchObject({
+        [createHash("sha256").update("renderer-observer-1").digest("hex")]: {
+          state: "working",
+          updatedAt: "2026-07-27T12:00:00.000Z",
+          leaseExpiresAt: expect.any(String),
+        },
       });
       expect(environment?.agentActivitySources)
         .not.toHaveProperty("claude-terminal");

@@ -25,6 +25,8 @@ import {
 } from "@/stores/claudeTmuxStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useCodexStore } from "@/stores/codexStore";
+import { createUuid } from "@/lib/uuid";
+import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
 
 interface ClaudeStateEvent {
   container_id: string;
@@ -59,6 +61,12 @@ function createPollSubscriptionId(containerId: string): string {
 }
 
 /**
+ * One token per renderer JavaScript context. Multiple hook mounts in one window
+ * must renew the same backend lease rather than leaving duplicate observations.
+ */
+const activityObserverId = `renderer-activity-${createUuid()}`;
+
+/**
  * Extract environmentId from a session key (format: "env-{uuid}:{tabId}")
  */
 function extractEnvironmentId(sessionKey: string): string | undefined {
@@ -79,6 +87,12 @@ type ClaudeTmuxTabs = ReturnType<typeof useClaudeTmuxStore.getState>["tabs"];
 type SetContainerState = ReturnType<
   typeof useAgentActivityStore.getState
 >["setContainerState"];
+type PersistFrontendActivity = (
+  environmentId: string,
+  observerState: AgentActivityState,
+  aggregateState: AgentActivityState,
+  occurredAt?: string,
+) => void;
 type ActivitySource =
   | "claude"
   | "claude-terminal"
@@ -89,6 +103,26 @@ type ActivitySourcesByEnvironment = Map<
   string,
   Map<ActivitySource, AgentActivityState>
 >;
+
+function getEnvironmentSourceActivity(
+  activitySources: ActivitySourcesByEnvironment,
+  environmentId: string,
+  includeBackendTerminal = true,
+): AgentActivityState | undefined {
+  const environmentSources = activitySources.get(environmentId);
+  if (!environmentSources || environmentSources.size === 0) return undefined;
+
+  let desiredState: AgentActivityState = "idle";
+  for (const [source, state] of environmentSources) {
+    if (!includeBackendTerminal && source === "claude-terminal") continue;
+    desiredState = mergeActivityState(desiredState, state);
+  }
+  return !includeBackendTerminal
+    && environmentSources.size === 1
+    && environmentSources.has("claude-terminal")
+      ? undefined
+      : desiredState;
+}
 
 /**
  * Activity ordering changes when a prompt starts, work finishes, or an agent
@@ -122,6 +156,7 @@ function setEnvironmentSourceActivity(
   source: ActivitySource,
   sourceState: AgentActivityState,
   setContainerState: SetContainerState,
+  persistFrontendActivity: PersistFrontendActivity,
   occurredAt?: string,
   notifyCallbacks = true,
 ): void {
@@ -131,26 +166,49 @@ function setEnvironmentSourceActivity(
     activitySources.current.set(environmentId, environmentSources);
   }
   const previousSourceState = environmentSources.get(source);
+  const previousFrontendState = getEnvironmentSourceActivity(
+    activitySources.current,
+    environmentId,
+    false,
+  );
   environmentSources.set(source, sourceState);
 
-  let desiredState: AgentActivityState = "idle";
-  for (const state of environmentSources.values()) {
-    desiredState = mergeActivityState(desiredState, state);
-  }
+  const desiredState =
+    getEnvironmentSourceActivity(activitySources.current, environmentId)
+    ?? "idle";
 
   const currentState =
     useAgentActivityStore.getState().containerStates[environmentId];
-  if (currentState === desiredState) return;
-
-  if (setContainerState(environmentId, desiredState, occurredAt, notifyCallbacks)) {
+  if (currentState !== desiredState) {
+    if (setContainerState(
+      environmentId,
+      desiredState,
+      occurredAt,
+      notifyCallbacks,
+    )) {
+      // The normal aggregate transition callback persists the renderer source.
+      return;
+    }
+    // The store rejected the observation as older than the one it holds. Undo
+    // the per-source record too so a later merge cannot resurrect it.
+    if (previousSourceState === undefined) environmentSources.delete(source);
+    else environmentSources.set(source, previousSourceState);
     return;
   }
-  // The store rejected the observation as older than the one it holds. Undo the
-  // per-source record too: leaving it applied would make this map and the store
-  // disagree, and the next call would compute its aggregate from a state that
-  // was never adopted.
-  if (previousSourceState === undefined) environmentSources.delete(source);
-  else environmentSources.set(source, previousSourceState);
+
+  const frontendState = getEnvironmentSourceActivity(
+    activitySources.current,
+    environmentId,
+    false,
+  );
+  if (frontendState && frontendState !== previousFrontendState) {
+    persistFrontendActivity(
+      environmentId,
+      frontendState,
+      desiredState,
+      useAgentActivityStore.getState().containerStateUpdatedAt[environmentId],
+    );
+  }
 }
 
 function getSessionEnvironmentIds(
@@ -289,6 +347,7 @@ function subscribeNativeActivity<TState extends NativeActivityState>(
   config: NativeActivityConfig<TState>,
   activitySources: MutableRefObject<ActivitySourcesByEnvironment>,
   setContainerState: SetContainerState,
+  persistFrontendActivity: PersistFrontendActivity,
   recordActivity: (environmentId: string) => void,
   markCompleted: (environmentId: string) => void,
 ): () => void {
@@ -353,6 +412,7 @@ function subscribeNativeActivity<TState extends NativeActivityState>(
             config.source,
             "idle",
             setContainerState,
+            persistFrontendActivity,
           );
         }
         continue;
@@ -373,6 +433,7 @@ function subscribeNativeActivity<TState extends NativeActivityState>(
         config.source,
         desiredState,
         setContainerState,
+        persistFrontendActivity,
       );
     }
   };
@@ -408,13 +469,14 @@ function syncClaudeTmuxActivityState(
   previousTabs: ClaudeTmuxTabs | undefined,
   activitySources: MutableRefObject<ActivitySourcesByEnvironment>,
   setContainerState: SetContainerState,
-  recordActivity?: (environmentId: string) => void,
-  markCompleted?: (environmentId: string) => void,
+  persistFrontendActivity: PersistFrontendActivity,
+  recordActivity: (environmentId: string) => void,
+  markCompleted: (environmentId: string) => void,
 ): void {
   const desiredByEnvironment = new Map<string, AgentActivityState>();
   const seenEnvironmentIds = new Set<string>();
 
-  if (previousTabs && recordActivity) {
+  if (previousTabs) {
     const transitions = getEnvironmentTransitionIds(
       tabs,
       previousTabs,
@@ -436,13 +498,7 @@ function syncClaudeTmuxActivityState(
           )
         ),
     );
-    if (markCompleted) {
-      persistEnvironmentTransitions(transitions, recordActivity, markCompleted);
-    } else {
-      for (const environmentId of transitions.activityEnvironmentIds) {
-        recordActivity(environmentId);
-      }
-    }
+    persistEnvironmentTransitions(transitions, recordActivity, markCompleted);
   }
 
   for (const sourceTabs of previousTabs ? [previousTabs, tabs] : [tabs]) {
@@ -475,6 +531,7 @@ function syncClaudeTmuxActivityState(
       "claude-tmux",
       desiredState,
       setContainerState,
+      persistFrontendActivity,
     );
   }
 }
@@ -482,8 +539,12 @@ function syncClaudeTmuxActivityState(
 export function useGlobalActivityMonitor(): void {
   const environments = useEnvironmentStore((s) => s.environments);
   const setContainerState = useAgentActivityStore((s) => s.setContainerState);
-  const registerStateCallback = useAgentActivityStore((s) => s.registerStateCallback);
-  const unregisterStateCallback = useAgentActivityStore((s) => s.unregisterStateCallback);
+  const registerStateCallback = useAgentActivityStore(
+    (s) => s.registerStateCallback,
+  );
+  const unregisterStateCallback = useAgentActivityStore(
+    (s) => s.unregisterStateCallback,
+  );
   const activitySources = useRef<ActivitySourcesByEnvironment>(new Map());
   const lastIssuedActivityTime = useRef(0);
 
@@ -616,16 +677,18 @@ export function useGlobalActivityMonitor(): void {
     persistActivity(environmentId, true);
   }, [persistActivity]);
 
-  // Persist activity independently of whichever sidebar/chat is mounted. The
-  // backend timestamp is the source of truth; the optimistic store update
-  // keeps an activity-sorted sidebar responsive while the write completes.
-  useEffect(() => {
-    const callbackId = registerStateCallback((
-      activityKey,
-      _previousState,
-      newState,
-      occurredAt,
-    ) => {
+  /**
+   * Persist this renderer's aggregate independently of the visible aggregate.
+   * Another renderer or the backend terminal poller may keep the environment
+   * working while this renderer changes state, so state-change callbacks alone
+   * are not a sufficient durable-write trigger.
+   */
+  const persistFrontendActivity = useCallback<PersistFrontendActivity>((
+    activityKey,
+    observerState,
+    aggregateState,
+    occurredAt,
+  ) => {
       let observedAt = occurredAt ?? new Date().toISOString();
       const environmentStore = useEnvironmentStore.getState();
       const environment = environmentStore.environments.find(
@@ -646,6 +709,13 @@ export function useGlobalActivityMonitor(): void {
         // `parseUsableAgentActivityTime` already caps this at now + 5 minutes,
         // so the bump can never reach the maximum representable date.
         observedAt = new Date(persistedTime + 1).toISOString();
+      }
+      const finalObservedTime = parseUsableAgentActivityTime(observedAt);
+      if (Number.isFinite(finalObservedTime)) {
+        lastIssuedActivityTime.current = Math.max(
+          lastIssuedActivityTime.current,
+          finalObservedTime,
+        );
       }
 
       // The environment record is the cross-client authority. Apply the local
@@ -668,13 +738,14 @@ export function useGlobalActivityMonitor(): void {
         );
       };
       environmentStore.updateEnvironment(environment.id, {
-        agentActivityState: newState,
+        agentActivityState: aggregateState,
         agentActivityUpdatedAt: observedAt,
       });
       void backend.setEnvironmentAgentActivity(
         environment.id,
-        newState,
+        observerState,
         observedAt,
+        activityObserverId,
       )
         .then((updatedEnvironment) => {
           if (!updatedEnvironment) return;
@@ -727,11 +798,103 @@ export function useGlobalActivityMonitor(): void {
             error,
           );
         });
+  }, []);
 
+  useEffect(() => {
+    const callbackId = registerStateCallback((
+      activityKey,
+      _previousState,
+      newState,
+      occurredAt,
+    ) => {
+      const observerState = getEnvironmentSourceActivity(
+        activitySources.current,
+        activityKey,
+        false,
+      ) ?? newState;
+      persistFrontendActivity(
+        activityKey,
+        observerState,
+        newState,
+        occurredAt,
+      );
     });
-
     return () => unregisterStateCallback(callbackId);
-  }, [registerStateCallback, unregisterStateCallback]);
+  }, [
+    persistFrontendActivity,
+    registerStateCallback,
+    unregisterStateCallback,
+  ]);
+
+  // Renderer observations are leased independently in the backend. Renew each
+  // live local aggregate without replaying semantic state callbacks; a crashed
+  // or unmounted renderer naturally expires and cannot pin the shared status.
+  useEffect(() => {
+    const renewLeases = () => {
+      for (const environment of useEnvironmentStore.getState().environments) {
+        const desiredState = getEnvironmentSourceActivity(
+          activitySources.current,
+          environment.id,
+          false,
+        );
+        if (!desiredState) continue;
+
+        const previousUpdatedAt = environment.agentActivityUpdatedAt;
+        const previousTime = parseUsableAgentActivityTime(previousUpdatedAt);
+        const occurredTime = Math.max(
+          Date.now(),
+          lastIssuedActivityTime.current + 1,
+          Number.isFinite(previousTime)
+            ? previousTime + 1
+            : Number.NEGATIVE_INFINITY,
+        );
+        lastIssuedActivityTime.current = occurredTime;
+        const occurredAt = new Date(occurredTime).toISOString();
+        void backend.setEnvironmentAgentActivity(
+          environment.id,
+          desiredState,
+          occurredAt,
+          activityObserverId,
+        ).then((updatedEnvironment) => {
+          if (!updatedEnvironment) return;
+          const currentEnvironment = useEnvironmentStore
+            .getState()
+            .getEnvironmentById(environment.id);
+          const currentDesiredState = getEnvironmentSourceActivity(
+            activitySources.current,
+            environment.id,
+            false,
+          );
+          if (
+            currentEnvironment?.agentActivityUpdatedAt !== previousUpdatedAt
+            || currentDesiredState !== desiredState
+          ) {
+            return;
+          }
+          useEnvironmentStore.getState().updateEnvironment(environment.id, {
+            agentActivityState: updatedEnvironment.agentActivityState,
+            agentActivityUpdatedAt: updatedEnvironment.agentActivityUpdatedAt,
+          });
+          useAgentActivityStore.getState().reconcileContainerState(
+            environment.id,
+            updatedEnvironment.agentActivityState,
+            updatedEnvironment.agentActivityUpdatedAt,
+          );
+        }).catch((error) => {
+          console.warn(
+            "[GlobalActivityMonitor] Failed to renew agent activity lease:",
+            error,
+          );
+        });
+      }
+    };
+
+    const interval = setInterval(
+      renewLeases,
+      FRONTEND_AGENT_ACTIVITY_LEASE_MS / 3,
+    );
+    return () => clearInterval(interval);
+  }, []);
 
   // ── Terminal mode: poll ALL running container environments ──────────
   useEffect(() => {
@@ -773,6 +936,7 @@ export function useGlobalActivityMonitor(): void {
             "claude-terminal",
             state,
             setContainerState,
+            persistFrontendActivity,
             occurredAt,
             // Terminal polling commits its own `claude-terminal` source before
             // emitting. Re-persisting this event as `frontend` would leave a
@@ -879,7 +1043,13 @@ export function useGlobalActivityMonitor(): void {
         });
       }
     }
-  }, [environments, markCompleted, recordActivity, setContainerState]);
+  }, [
+    environments,
+    markCompleted,
+    persistFrontendActivity,
+    recordActivity,
+    setContainerState,
+  ]);
 
   // Cleanup all polling on unmount (app shutdown)
   useEffect(() => {
@@ -923,10 +1093,16 @@ export function useGlobalActivityMonitor(): void {
         },
         activitySources,
         setContainerState,
+        persistFrontendActivity,
         recordActivity,
         markCompleted,
       ),
-    [markCompleted, recordActivity, setContainerState],
+    [
+      markCompleted,
+      persistFrontendActivity,
+      recordActivity,
+      setContainerState,
+    ],
   );
 
   // ── Claude tmux mode: derive activity from hydrated tmux tab state ──
@@ -939,6 +1115,9 @@ export function useGlobalActivityMonitor(): void {
       undefined,
       activitySources,
       setContainerState,
+      persistFrontendActivity,
+      recordActivity,
+      markCompleted,
     );
 
     const unsubscribe = useClaudeTmuxStore.subscribe((state, prevState) => {
@@ -951,13 +1130,19 @@ export function useGlobalActivityMonitor(): void {
         prevState.tabs,
         activitySources,
         setContainerState,
+        persistFrontendActivity,
         recordActivity,
         markCompleted,
       );
     });
 
     return unsubscribe;
-  }, [markCompleted, recordActivity, setContainerState]);
+  }, [
+    markCompleted,
+    persistFrontendActivity,
+    recordActivity,
+    setContainerState,
+  ]);
 
   // ── Native OpenCode mode: derive activity from session store ───────
   useEffect(
@@ -982,10 +1167,16 @@ export function useGlobalActivityMonitor(): void {
         },
         activitySources,
         setContainerState,
+        persistFrontendActivity,
         recordActivity,
         markCompleted,
       ),
-    [markCompleted, recordActivity, setContainerState],
+    [
+      markCompleted,
+      persistFrontendActivity,
+      recordActivity,
+      setContainerState,
+    ],
   );
   // ── Native Codex mode: derive activity from session store ──────────
   // Codex SSE streams close on unmount, so state may go stale for background
@@ -1009,10 +1200,16 @@ export function useGlobalActivityMonitor(): void {
         },
         activitySources,
         setContainerState,
+        persistFrontendActivity,
         recordActivity,
         markCompleted,
       ),
-    [markCompleted, recordActivity, setContainerState],
+    [
+      markCompleted,
+      persistFrontendActivity,
+      recordActivity,
+      setContainerState,
+    ],
   );
   // Terminal-mode activity is detected by the backend PTY so it continues to
   // work while an environment's React tree is inactive. Apply the persisted

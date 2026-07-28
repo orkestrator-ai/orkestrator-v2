@@ -364,11 +364,12 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith(
         "set_environment_agent_activity",
-        {
+        expect.objectContaining({
           environmentId: environment.id,
           state: "working",
           occurredAt: "2026-07-27T12:00:00.001Z",
-        },
+          observerId: expect.any(String),
+        }),
       );
     });
   });
@@ -412,6 +413,253 @@ describe("useGlobalActivityMonitor tmux activity", () => {
       expect(useAgentActivityStore.getState().containerStateUpdatedAt[environment.id])
         .toBe(authoritativeAt);
     });
+  });
+
+  test("preserves a newer aggregate without replaying completion callbacks", async () => {
+    const environment = {
+      ...makeEnvironment("env-native", ""),
+      environmentType: "local" as const,
+      containerId: null,
+    };
+    const sessionKey = createSessionKey(environment.id, "tab-1");
+    let activityWrites = 0;
+    let completionCallbacks = 0;
+    useEnvironmentStore.setState({ environments: [environment] });
+    useClaudeStore.setState({
+      clients: new Map([[environment.id, {} as any]]),
+      sessions: new Map([[
+        sessionKey,
+        {
+          sessionId: "session-1",
+          messages: [],
+          isLoading: true,
+        } as any,
+      ]]),
+    });
+    mockInvoke.mockImplementation((
+      command: string,
+      args?: Record<string, unknown>,
+    ) => {
+      if (
+        command === "record_environment_activity"
+        || command === "record_environment_completion"
+      ) {
+        return Promise.resolve({
+          ...environment,
+          lastActivityAt: args?.occurredAt,
+          ...(command === "record_environment_completion"
+            ? { hasUnreadWork: true }
+            : {}),
+        });
+      }
+      if (command === "get_environment_snapshots") {
+        return Promise.resolve(
+          useEnvironmentStore.getState().environments,
+        );
+      }
+      if (command !== "set_environment_agent_activity") {
+        return Promise.resolve(undefined);
+      }
+      activityWrites += 1;
+      if (activityWrites === 2) {
+        // Another independently leased renderer is still genuinely working.
+        return Promise.resolve({
+          ...environment,
+          agentActivityState: "working",
+          agentActivityUpdatedAt: new Date(
+            Date.parse(String(args?.occurredAt)) + 1,
+          ).toISOString(),
+        });
+      }
+      return Promise.resolve({
+        ...environment,
+        agentActivityState: args?.state,
+        agentActivityUpdatedAt: args?.occurredAt,
+      });
+    });
+
+    render(<MonitorHarness />);
+    await waitFor(() => expect(activityWrites).toBe(1));
+    const callbackId = useAgentActivityStore.getState().registerStateCallback(
+      (_environmentId, previousState, state) => {
+        if (previousState === "working" && state === "idle") {
+          completionCallbacks += 1;
+        }
+      },
+    );
+
+    try {
+      act(() => {
+        useClaudeStore.getState().setSessionLoading(sessionKey, false);
+      });
+
+      await waitFor(() => {
+        expect(activityWrites).toBe(2);
+        expect(completionCallbacks).toBe(1);
+        expect(useAgentActivityStore.getState().getContainerState(environment.id))
+          .toBe("working");
+        expect(useEnvironmentStore.getState().getEnvironmentById(environment.id))
+          .toMatchObject({ agentActivityState: "working" });
+      });
+
+      const activityCalls = mockInvoke.mock.calls.filter(
+        ([command]) => command === "set_environment_agent_activity",
+      );
+      const firstArgs = activityCalls[0]?.[1] as Record<string, unknown>;
+      const secondArgs = activityCalls[1]?.[1] as Record<string, unknown>;
+      expect(secondArgs.observerId).toBe(firstArgs.observerId);
+      expect(Date.parse(String(secondArgs.occurredAt)))
+        .toBeGreaterThan(Date.parse(String(firstArgs.occurredAt)));
+
+      // A new local turn must update this renderer's lease even though the
+      // shared aggregate is already working because of the other renderer.
+      act(() => {
+        useClaudeStore.getState().setSessionLoading(sessionKey, true);
+      });
+      await waitFor(() => {
+        expect(activityWrites).toBe(3);
+      });
+      const thirdArgs = mockInvoke.mock.calls.filter(
+        ([command]) => command === "set_environment_agent_activity",
+      )[2]?.[1] as Record<string, unknown>;
+      expect(thirdArgs).toMatchObject({
+        state: "working",
+        observerId: firstArgs.observerId,
+      });
+      expect(completionCallbacks).toBe(1);
+    } finally {
+      useAgentActivityStore.getState().unregisterStateCallback(callbackId);
+    }
+  });
+
+  test("renews the renderer lease without emitting another semantic transition", async () => {
+    const environment = {
+      ...makeEnvironment("env-native", ""),
+      environmentType: "local" as const,
+      containerId: null,
+    };
+    const sessionKey = createSessionKey(environment.id, "tab-1");
+    let leaseCallback: (() => void) | undefined;
+    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(
+      ((callback: TimerHandler, delay?: number) => {
+        if (delay === 10_000 && typeof callback === "function") {
+          leaseCallback = () => callback();
+        }
+        return 1 as unknown as ReturnType<typeof setInterval>;
+      }) as unknown as typeof setInterval,
+    );
+    useEnvironmentStore.setState({ environments: [environment] });
+    useClaudeStore.setState({
+      clients: new Map([[environment.id, {} as any]]),
+      sessions: new Map([[
+        sessionKey,
+        {
+          sessionId: "session-1",
+          messages: [],
+          isLoading: true,
+        } as any,
+      ]]),
+    });
+
+    const view = render(<MonitorHarness />);
+    try {
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(leaseCallback).toBeDefined();
+      expect(mockInvoke.mock.calls.filter(
+        ([command]) => command === "set_environment_agent_activity",
+      )).toHaveLength(1);
+      const semanticCallback = mock(() => {});
+      const callbackId = useAgentActivityStore
+        .getState()
+        .registerStateCallback(semanticCallback);
+      mockInvoke.mockClear();
+
+      try {
+        await act(async () => {
+          leaseCallback?.();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(mockInvoke).toHaveBeenCalledWith(
+          "set_environment_agent_activity",
+          expect.objectContaining({
+            environmentId: environment.id,
+            state: "working",
+            observerId: expect.any(String),
+            occurredAt: expect.any(String),
+          }),
+        );
+        expect(semanticCallback).not.toHaveBeenCalled();
+
+        let resolveRenewal: ((value: Environment) => void) | undefined;
+        mockInvoke.mockImplementation((command: string) =>
+          command === "set_environment_agent_activity"
+            ? new Promise<Environment>((resolve) => {
+                resolveRenewal = resolve;
+              })
+            : Promise.resolve(),
+        );
+        await act(async () => {
+          leaseCallback?.();
+          await Promise.resolve();
+        });
+        const newerAt = new Date(Date.now() + 100).toISOString();
+        act(() => {
+          useEnvironmentStore.getState().updateEnvironment(environment.id, {
+            agentActivityState: "waiting",
+            agentActivityUpdatedAt: newerAt,
+          });
+          useAgentActivityStore.getState().reconcileContainerState(
+            environment.id,
+            "waiting",
+            newerAt,
+          );
+        });
+        await act(async () => {
+          resolveRenewal?.({
+            ...environment,
+            agentActivityState: "idle",
+            agentActivityUpdatedAt: new Date(Date.now() + 50).toISOString(),
+          });
+          await Promise.resolve();
+        });
+        expect(useAgentActivityStore.getState().getContainerState(environment.id))
+          .toBe("waiting");
+
+        const consoleWarn = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          act(() => {
+            useEnvironmentStore.getState().updateEnvironment(environment.id, {
+              agentActivityUpdatedAt: undefined,
+            });
+          });
+          mockInvoke.mockImplementation((command: string) =>
+            command === "set_environment_agent_activity"
+              ? Promise.reject(new Error("lease unavailable"))
+              : Promise.resolve(),
+          );
+          await act(async () => {
+            leaseCallback?.();
+            await Promise.resolve();
+            await Promise.resolve();
+          });
+          expect(consoleWarn).toHaveBeenCalledWith(
+            "[GlobalActivityMonitor] Failed to renew agent activity lease:",
+            expect.any(Error),
+          );
+        } finally {
+          consoleWarn.mockRestore();
+        }
+      } finally {
+        useAgentActivityStore.getState().unregisterStateCallback(callbackId);
+      }
+    } finally {
+      view.unmount();
+      setIntervalSpy.mockRestore();
+    }
   });
 
   test("refreshes the authoritative agent state after persistence fails", async () => {
@@ -1073,6 +1321,50 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     expect(unreadEnvironmentIds()).toEqual([]);
   });
 
+  test("uses the previous tmux tab identity when a working tab is removed", async () => {
+    const environment = makeEnvironment("env-tmux", "container-tmux");
+    useEnvironmentStore.getState().setEnvironments([environment]);
+    const stateKey = createClaudeTmuxStateKey(environment.id, "tab-removed");
+    render(<MonitorHarness />);
+
+    act(() => {
+      const store = useClaudeTmuxStore.getState();
+      store.setRunning(stateKey, true, {
+        environmentId: environment.id,
+        sessionId: "session-removed",
+      });
+      store.setBusy(stateKey, true);
+    });
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState(environment.id))
+        .toBe("working");
+    });
+    const activityCallsBeforeRemoval = mockInvoke.mock.calls.filter(
+      ([command]) =>
+        command === "record_environment_activity"
+        || command === "record_environment_completion",
+    ).length;
+
+    act(() => {
+      useClaudeTmuxStore.setState((state) => {
+        const tabs = new Map(state.tabs);
+        tabs.delete(stateKey);
+        return { tabs };
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState(environment.id))
+        .toBe("idle");
+    });
+    expect(mockInvoke.mock.calls.filter(
+      ([command]) =>
+        command === "record_environment_activity"
+        || command === "record_environment_completion",
+    )).toHaveLength(activityCallsBeforeRemoval);
+    expect(unreadEnvironmentIds()).toEqual([]);
+  });
+
   test("uses a tab environmentId when the tmux key is legacy unscoped", async () => {
     render(<MonitorHarness />);
 
@@ -1328,6 +1620,81 @@ describe("useGlobalActivityMonitor terminal activity", () => {
 
     expect(useAgentActivityStore.getState().getContainerState(environment.id))
       .toBe("working");
+  });
+
+  test("leases only renderer state when terminal state determines the aggregate", async () => {
+    const environment = makeEnvironment("env-container", "container-1");
+    const sessionKey = createSessionKey(environment.id, "tab-native");
+    useEnvironmentStore.setState({ environments: [environment] });
+    render(<MonitorHarness />);
+
+    act(() => {
+      useClaudeStore.setState({
+        clients: new Map([[environment.id, {} as any]]),
+        sessions: new Map([[
+          sessionKey,
+          {
+            sessionId: "native-session",
+            messages: [],
+            isLoading: true,
+          } as any,
+        ]]),
+      });
+    });
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState(environment.id))
+        .toBe("working");
+    });
+
+    act(() => {
+      eventCallbacks.get("claude-state-container-1")?.({
+        payload: {
+          container_id: "container-1",
+          state: "waiting",
+          occurred_at: new Date().toISOString(),
+        },
+      });
+    });
+    mockInvoke.mockClear();
+    mockInvoke.mockImplementation((
+      command: string,
+      args?: Record<string, unknown>,
+    ) => {
+      if (command === "set_environment_agent_activity") {
+        return Promise.resolve({
+          ...environment,
+          agentActivityState: "waiting",
+          agentActivityUpdatedAt: args?.occurredAt,
+        });
+      }
+      if (
+        command === "record_environment_activity"
+        || command === "record_environment_completion"
+      ) {
+        return Promise.resolve({
+          ...environment,
+          lastActivityAt: args?.occurredAt,
+        });
+      }
+      return Promise.resolve();
+    });
+
+    act(() => {
+      useClaudeStore.getState().setSessionLoading(sessionKey, false);
+    });
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "set_environment_agent_activity",
+        expect.objectContaining({
+          environmentId: environment.id,
+          state: "idle",
+          observerId: expect.any(String),
+        }),
+      );
+      expect(useAgentActivityStore.getState().getContainerState(environment.id))
+        .toBe("waiting");
+    });
   });
 
   test("applies newer backend terminal activity events to the live environment list", async () => {

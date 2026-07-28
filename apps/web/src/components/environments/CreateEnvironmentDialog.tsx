@@ -41,6 +41,7 @@ import {
   X,
 } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { OpenCodeModelSelect } from "@/components/opencode/OpenCodeModelSelect";
 import { cn } from "@/lib/utils";
 import { readImage } from "@/lib/native/clipboard";
 import {
@@ -70,9 +71,44 @@ import { useClaudeStore } from "@/stores/claudeStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
+import {
+  getCachedOpenCodeModelCatalog,
+  getOpencodeModelPreferences,
+  type CachedOpenCodeModel,
+  type OpenCodeModelPreferences,
+} from "@/lib/backend";
+import {
+  EMPTY_OPENCODE_MODEL_PREFERENCES,
+  openCodeModelRefToId,
+} from "@/lib/opencode-model-preferences";
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
+function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.filter((candidate): candidate is CachedOpenCodeModel => {
+    if (typeof candidate !== "object" || candidate === null) return false;
+    const record = candidate as Record<string, unknown>;
+    return (
+      typeof record.id === "string" &&
+      record.id.trim().length > 0 &&
+      typeof record.name === "string" &&
+      record.name.trim().length > 0 &&
+      typeof record.provider === "string" &&
+      record.provider.trim().length > 0 &&
+      (
+        record.variants === undefined ||
+        (
+          Array.isArray(record.variants) &&
+          record.variants.every(
+            (variant) =>
+              typeof variant === "string" && variant.trim().length > 0,
+          )
+        )
+      )
+    );
+  });
+}
 
 /**
  * Resolves the effective agent defaults by applying project-level overrides
@@ -179,6 +215,11 @@ export function CreateEnvironmentDialog({
   const claudeModels = useClaudeStore((state) => state.models);
   const codexModels = useCodexStore((state) => state.models);
   const openCodeModels = useOpenCodeStore((state) => state.models);
+  const [cachedOpenCodeModels, setCachedOpenCodeModels] = useState<
+    CachedOpenCodeModel[]
+  >([]);
+  const [openCodeModelPreferences, setOpenCodeModelPreferences] =
+    useState<OpenCodeModelPreferences>(EMPTY_OPENCODE_MODEL_PREFERENCES);
   const configuredOpenCodeModel =
     (configDefaultAgent === "opencode" ? repoConfig?.defaultModel : undefined)
     ?? config.global.opencodeModel;
@@ -193,13 +234,30 @@ export function CreateEnvironmentDialog({
    * OpenCode model preferences. Claude's `"default"` is a real catalog id and
    * must keep flowing through untouched.
    */
-  const hasLiveOpenCodeModels = useMemo(
-    () => Array.from(openCodeModels.values()).some((models) => models.length > 0),
-    [openCodeModels],
+  const hasAvailableOpenCodeModels = useMemo(
+    () =>
+      cachedOpenCodeModels.length > 0 ||
+      Array.from(openCodeModels.values()).some((models) => models.length > 0),
+    [cachedOpenCodeModels, openCodeModels],
   );
   const modelCatalog = useMemo(
     () => {
-      const catalog = buildReviewModelCatalog(undefined);
+      const liveCatalog = buildReviewModelCatalog(undefined);
+      const hasLiveCatalog = Array.from(openCodeModels.values()).some(
+        (models) => models.length > 0,
+      );
+      const catalog =
+        !hasLiveCatalog && cachedOpenCodeModels.length > 0
+          ? {
+              ...liveCatalog,
+              opencode: cachedOpenCodeModels.map((candidate) => ({
+                id: candidate.id,
+                name: candidate.name,
+                description: candidate.provider,
+                reasoningEfforts: [...(candidate.variants ?? [])],
+              })),
+            }
+          : liveCatalog;
       if (!configuredOpenCodeModel) return catalog;
 
       const configuredModel = catalog.opencode.find(
@@ -245,12 +303,24 @@ export function CreateEnvironmentDialog({
     },
     [
       claudeModels,
+      cachedOpenCodeModels,
       codexModels,
       configuredOpenCodeEffort,
       configuredOpenCodeModel,
       openCodeModels,
     ],
   );
+  const favoriteOpenCodeModelIds = useMemo(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const favorite of openCodeModelPreferences.favorite) {
+      const id = openCodeModelRefToId(favorite);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+    return ids;
+  }, [openCodeModelPreferences.favorite]);
 
   const getInitialAgentSelection = useCallback(
     (nextAgent: AgentType) => {
@@ -321,6 +391,65 @@ export function CreateEnvironmentDialog({
   const formRef = useRef<HTMLFormElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const promptPasteRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!open) {
+      setCachedOpenCodeModels([]);
+      setOpenCodeModelPreferences(EMPTY_OPENCODE_MODEL_PREFERENCES);
+      return;
+    }
+    let cancelled = false;
+
+    // Clear data from the previous project/open cycle synchronously. An empty,
+    // rejected, malformed, or late response must not leave another project's
+    // model catalog or preferences visible in this dialog.
+    setCachedOpenCodeModels([]);
+    setOpenCodeModelPreferences(EMPTY_OPENCODE_MODEL_PREFERENCES);
+
+    const normalizedProjectId = projectId?.trim();
+    if (normalizedProjectId) {
+      void getCachedOpenCodeModelCatalog(normalizedProjectId)
+        .then((snapshot) => {
+          const models = normalizeCachedOpenCodeModels(snapshot?.models);
+          if (
+            !cancelled &&
+            snapshot &&
+            snapshot.projectId === normalizedProjectId &&
+            models
+          ) {
+            setCachedOpenCodeModels(models);
+          }
+        })
+        .catch((error) => {
+          console.warn(
+            "[CreateEnvironmentDialog] Failed to load cached OpenCode models:",
+            error,
+          );
+        });
+    }
+
+    void getOpencodeModelPreferences()
+      .then((preferences) => {
+        if (
+          !cancelled &&
+          preferences &&
+          Array.isArray(preferences.favorite) &&
+          Array.isArray(preferences.recent)
+        ) {
+          setOpenCodeModelPreferences(preferences);
+        }
+      })
+      .catch((error) => {
+        console.warn(
+          "[CreateEnvironmentDialog] Failed to load OpenCode model preferences:",
+          error,
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, projectId]);
 
   // Restore draft prompt when dialog opens, focus the textarea
   useEffect(() => {
@@ -643,7 +772,7 @@ export function CreateEnvironmentDialog({
           opencodeMode,
           codexMode,
           model:
-            agentType === "opencode" && model === "default" && !hasLiveOpenCodeModels
+            agentType === "opencode" && model === "default" && !hasAvailableOpenCodeModels
               ? undefined
               : model,
           reasoningEffort:
@@ -664,7 +793,7 @@ export function CreateEnvironmentDialog({
         console.error("Failed to create environment:", err);
       }
     },
-    [environmentType, environmentName, launchAgent, agentType, claudeMode, opencodeMode, codexMode, model, hasLiveOpenCodeModels, reasoningEffort, initialPrompt, initialPromptAttachments, networkAccessMode, portMappings, onCreate, resetForm, onOpenChange, projectId, validatePortMappings]
+    [environmentType, environmentName, launchAgent, agentType, claudeMode, opencodeMode, codexMode, model, hasAvailableOpenCodeModels, reasoningEffort, initialPrompt, initialPromptAttachments, networkAccessMode, portMappings, onCreate, resetForm, onOpenChange, projectId, validatePortMappings]
   );
 
   const handlePromptKeyDown = useCallback(
@@ -696,7 +825,7 @@ export function CreateEnvironmentDialog({
       >
         <DialogHeader>
           <DialogTitle>
-            Create Ork (Environment){projectName ? ` ${projectName}` : ""}
+            Create Ork (Environment){projectName ? ` - ${projectName}` : ""}
           </DialogTitle>
           <DialogDescription>
             Configure a new Ork environment with an optional initial prompt.
@@ -920,10 +1049,28 @@ export function CreateEnvironmentDialog({
               !launchAgent && "opacity-50",
             )}
           >
-            <Label className="text-sm">Default Agent</Label>
-            <div className="grid grid-cols-1 gap-3 rounded-xl border border-border/70 bg-zinc-950/45 p-3 sm:grid-cols-[auto_minmax(0,1fr)_minmax(9rem,0.55fr)] sm:items-end">
-              <div className="space-y-1.5">
-                <span className="block text-xs text-muted-foreground">Agent</span>
+            <div className="flex min-h-5 items-center justify-between gap-4">
+              <Label className="text-sm">Default Agent</Label>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="use-tui"
+                  checked={selectedMode === "terminal"}
+                  onCheckedChange={setUseTui}
+                  disabled={isLoading || !launchAgent}
+                />
+                <Label
+                  htmlFor="use-tui"
+                  className="cursor-pointer text-sm font-normal"
+                >
+                  Use TUI
+                </Label>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-3 rounded-xl border border-border/70 bg-zinc-950/45 p-3 sm:grid-cols-[10rem_minmax(0,1fr)_minmax(9rem,0.55fr)]">
+              <div className="grid grid-rows-[1rem_2.25rem] gap-1.5">
+                <Label className="text-xs font-normal leading-4 text-muted-foreground">
+                  Agent
+                </Label>
                 <div
                   role="radiogroup"
                   aria-label="Default Agent"
@@ -968,32 +1115,43 @@ export function CreateEnvironmentDialog({
                 </div>
               </div>
 
-              <div className="min-w-0 space-y-1.5">
-                <Label htmlFor="agent-model" className="text-xs font-normal text-muted-foreground">
+              <div className="grid min-w-0 grid-rows-[1rem_2.25rem] gap-1.5">
+                <Label htmlFor="agent-model" className="text-xs font-normal leading-4 text-muted-foreground">
                   Model
                 </Label>
-                <Select
-                  value={model}
-                  onValueChange={selectModel}
-                  disabled={isLoading || !launchAgent}
-                >
-                  <SelectTrigger id="agent-model" className="w-full">
-                    <SelectValue placeholder="Select model" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableModels.map((option) => (
-                      <SelectItem key={option.id} value={option.id}>
-                        {option.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {agentType === "opencode" ? (
+                  <OpenCodeModelSelect
+                    id="agent-model"
+                    value={model}
+                    options={availableModels}
+                    favoriteModelIds={favoriteOpenCodeModelIds}
+                    onValueChange={selectModel}
+                    disabled={isLoading || !launchAgent}
+                  />
+                ) : (
+                  <Select
+                    value={model}
+                    onValueChange={selectModel}
+                    disabled={isLoading || !launchAgent}
+                  >
+                    <SelectTrigger id="agent-model" className="w-full">
+                      <SelectValue placeholder="Select model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableModels.map((option) => (
+                        <SelectItem key={option.id} value={option.id}>
+                          {option.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
 
-              <div className="min-w-0 space-y-1.5">
+              <div className="grid min-w-0 grid-rows-[1rem_2.25rem] gap-1.5">
                 <Label
                   htmlFor="agent-reasoning-effort"
-                  className="text-xs font-normal text-muted-foreground"
+                  className="text-xs font-normal leading-4 text-muted-foreground"
                 >
                   Reasoning effort
                 </Label>
@@ -1019,18 +1177,6 @@ export function CreateEnvironmentDialog({
                   </SelectContent>
                 </Select>
               </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="use-tui"
-                checked={selectedMode === "terminal"}
-                onCheckedChange={setUseTui}
-                disabled={isLoading || !launchAgent}
-              />
-              <Label htmlFor="use-tui" className="cursor-pointer text-sm font-normal">
-                Use TUI
-              </Label>
             </div>
           </div>
             </TabsContent>

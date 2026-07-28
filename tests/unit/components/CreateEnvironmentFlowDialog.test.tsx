@@ -205,7 +205,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     );
     expect(
       screen.getByRole("heading", {
-        name: "Create Ork (Environment) Stored Project",
+        name: "Create Ork (Environment) - Stored Project",
       }),
     ).toBeTruthy();
 
@@ -220,7 +220,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     );
     expect(
       screen.getByRole("heading", {
-        name: "Create Ork (Environment) Explicit Project",
+        name: "Create Ork (Environment) - Explicit Project",
       }),
     ).toBeTruthy();
   });

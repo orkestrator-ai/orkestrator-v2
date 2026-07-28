@@ -141,6 +141,7 @@ import {
 } from "../../../apps/web/src/components/environments/EnvironmentItem";
 import { useAgentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
 import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
+import { useEnvironmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 
@@ -231,6 +232,7 @@ beforeEach(() => {
   });
   useUIStore.setState({ selectedEnvironmentId: null });
   useEnvironmentStore.setState({ deletingEnvironments: new Set<string>() });
+  useEnvironmentDiffStore.setState({ stats: new Map() });
   useBuildPipelineStore.setState({ buildEnvironmentIds: new Set<string>() });
 });
 
@@ -589,6 +591,49 @@ describe("EnvironmentItem tooltip port display", () => {
     const html = document.body.innerHTML;
     expect(html).not.toContain("Port:");
     expect(html).not.toContain("3000/tcp");
+  });
+});
+
+describe("EnvironmentItem diff stats", () => {
+  test("marks truncated line counts as approximate in the badge and tooltip", async () => {
+    useEnvironmentDiffStore.setState({
+      stats: new Map([["env-1", {
+        additions: 12,
+        deletions: 3,
+        filesChanged: 4,
+        truncated: true,
+      }]]),
+    });
+
+    const { container } = renderItem(makeEnvironment());
+
+    const badge = Array.from(container.querySelectorAll("span")).find(
+      (element) => element.textContent === "~+12-3",
+    );
+    expect(badge).not.toBeUndefined();
+
+    await showTooltip(container);
+    expect(document.body.textContent).toContain(
+      "Line counts are approximate: too many untracked files to count them all.",
+    );
+  });
+
+  test("does not mark exact line counts as approximate", async () => {
+    useEnvironmentDiffStore.setState({
+      stats: new Map([["env-1", {
+        additions: 12,
+        deletions: 3,
+        filesChanged: 4,
+        truncated: false,
+      }]]),
+    });
+
+    const { container } = renderItem(makeEnvironment());
+    expect(container.textContent).toContain("+12-3");
+    expect(container.textContent).not.toContain("~");
+
+    await showTooltip(container);
+    expect(document.body.textContent).not.toContain("Line counts are approximate:");
   });
 });
 

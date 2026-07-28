@@ -202,3 +202,332 @@ describe("session buffer deletion", () => {
     });
   });
 });
+
+describe("OpenCode model catalogue cache", () => {
+  const projectId = "project-a";
+  const models = [
+    {
+      id: "openrouter/openai/gpt-5",
+      name: "GPT-5",
+      provider: "openrouter",
+      variants: ["low", "high"],
+      contextWindow: 400_000,
+    },
+    {
+      id: "anthropic/claude-sonnet",
+      name: "Claude Sonnet",
+      provider: "anthropic",
+    },
+  ];
+
+  test("persists a normalized catalogue in the application config folder", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const snapshot = await storage.cacheOpenCodeModelCatalog(projectId, models);
+
+      expect(snapshot.schemaVersion).toBe(2);
+      expect(snapshot.projectId).toBe(projectId);
+      expect(snapshot.models.map((model) => model.id)).toEqual([
+        "anthropic/claude-sonnet",
+        "openrouter/openai/gpt-5",
+      ]);
+      expect(await storage.getOpenCodeModelCatalog(projectId)).toEqual(snapshot);
+      expect(
+        JSON.parse(
+          await fs.readFile(
+            path.join(dataDir, "opencode-model-catalog.json"),
+            "utf8",
+          ),
+        ),
+      ).toEqual({
+        schemaVersion: 2,
+        catalogs: { [projectId]: snapshot },
+      });
+    });
+  });
+
+  test("keeps cache versions stable per project until its discovered models change", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const initial = await storage.cacheOpenCodeModelCatalog(projectId, models);
+      const unchanged = await storage.cacheOpenCodeModelCatalog(
+        projectId,
+        [...models].reverse(),
+      );
+      expect(unchanged).toEqual(initial);
+
+      const updated = await storage.cacheOpenCodeModelCatalog(
+        projectId,
+        [
+          ...models,
+          {
+            id: "openrouter/google/gemini",
+            name: "Gemini",
+            provider: "openrouter",
+          },
+        ],
+      );
+      expect(updated.catalogVersion).not.toBe(initial.catalogVersion);
+      expect(updated.models).toHaveLength(3);
+    });
+  });
+
+  test("isolates project catalogues in one scoped store", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const first = await storage.cacheOpenCodeModelCatalog("project-a", models);
+      const second = await storage.cacheOpenCodeModelCatalog("project-b", [{
+        id: "local/model",
+        name: "Local",
+        provider: "local",
+      }]);
+
+      expect(await storage.getOpenCodeModelCatalog("project-a")).toEqual(first);
+      expect(await storage.getOpenCodeModelCatalog("project-b")).toEqual(second);
+      expect(await storage.getOpenCodeModelCatalog("project-c")).toBeNull();
+
+      const prototypeNamed = await storage.cacheOpenCodeModelCatalog(
+        "constructor",
+        models,
+      );
+      expect(await storage.getOpenCodeModelCatalog("constructor")).toEqual(
+        prototypeNamed,
+      );
+    });
+  });
+
+  test("normalizes whitespace, variants, duplicates, and optional numeric boundaries", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const snapshot = await storage.cacheOpenCodeModelCatalog(projectId, [
+        {
+          id: " provider/model ",
+          name: " Model ",
+          provider: " provider ",
+          variants: [" high ", "", "low", "high", "   "],
+          inputCost: 0,
+          outputCost: Number.MAX_VALUE,
+          contextWindow: Number.MAX_SAFE_INTEGER,
+        },
+        {
+          id: "provider/model",
+          name: "Z model",
+          provider: "provider",
+          inputCost: -1,
+          outputCost: Number.POSITIVE_INFINITY,
+          contextWindow: 1.5,
+        },
+        {
+          id: "provider/invalid-numerics",
+          name: "Invalid numerics",
+          provider: "provider",
+          variants: [" ", ""],
+          inputCost: -1,
+          outputCost: Number.POSITIVE_INFINITY,
+          contextWindow: 1.5,
+        },
+        ...([
+          null,
+          {},
+          { id: "blank/name", name: " ", provider: "provider" },
+          { id: "blank/provider", name: "Name", provider: " " },
+        ] as unknown as typeof models),
+      ]);
+
+      expect(snapshot.models).toEqual([
+        {
+          id: "provider/invalid-numerics",
+          name: "Invalid numerics",
+          provider: "provider",
+        },
+        {
+          id: "provider/model",
+          name: "Model",
+          provider: "provider",
+          variants: ["high", "low"],
+          inputCost: 0,
+          outputCost: Number.MAX_VALUE,
+          contextWindow: Number.MAX_SAFE_INTEGER,
+        },
+      ]);
+    });
+  });
+
+  test("rejects blank scopes and empty or all-invalid catalogues", async () => {
+    await withTemporaryStorage(async (storage) => {
+      await expect(storage.getOpenCodeModelCatalog(" \t")).rejects.toThrow(
+        "projectId must be a non-blank string",
+      );
+      await expect(
+        storage.cacheOpenCodeModelCatalog("", models),
+      ).rejects.toThrow("projectId must be a non-blank string");
+      await expect(
+        storage.cacheOpenCodeModelCatalog(projectId, []),
+      ).rejects.toThrow("must contain at least one model");
+      await expect(
+        storage.cacheOpenCodeModelCatalog(
+          projectId,
+          [{ id: "", name: "", provider: "" }],
+        ),
+      ).rejects.toThrow("must contain at least one model");
+    });
+  });
+
+  test("repairs stored dates, versions, and normalized model data while reading", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await fs.writeFile(
+        path.join(dataDir, "opencode-model-catalog.json"),
+        JSON.stringify({
+          schemaVersion: 2,
+          catalogs: {
+            " project-a ": {
+              schemaVersion: 999,
+              projectId: "wrong-project",
+              catalogVersion: "not-the-content-digest",
+              updatedAt: "not-a-date",
+              models: [{
+                id: " provider/model ",
+                name: " Model ",
+                provider: " provider ",
+                variants: ["z", "a", "z"],
+              }],
+            },
+            malformed: { models: [{ id: "missing-fields" }] },
+          },
+        }),
+      );
+
+      const snapshot = await storage.getOpenCodeModelCatalog(projectId);
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.schemaVersion).toBe(2);
+      expect(snapshot?.projectId).toBe(projectId);
+      expect(snapshot?.updatedAt).toBe(new Date(0).toISOString());
+      expect(snapshot?.catalogVersion).toHaveLength(64);
+      expect(snapshot?.catalogVersion).not.toBe("not-the-content-digest");
+      expect(snapshot?.models).toEqual([{
+        id: "provider/model",
+        name: "Model",
+        provider: "provider",
+        variants: ["a", "z"],
+      }]);
+      expect(await storage.getOpenCodeModelCatalog("malformed")).toBeNull();
+    });
+  });
+
+  test("does not assign the legacy host-global cache to a requesting project", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const legacy = {
+        schemaVersion: 1,
+        catalogVersion: "legacy",
+        updatedAt: new Date().toISOString(),
+        models,
+      };
+      const file = path.join(dataDir, "opencode-model-catalog.json");
+      await fs.writeFile(file, JSON.stringify(legacy));
+
+      expect(await storage.getOpenCodeModelCatalog(projectId)).toBeNull();
+      expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual(legacy);
+
+      const scoped = await storage.cacheOpenCodeModelCatalog(projectId, models);
+      expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({
+        schemaVersion: 2,
+        catalogs: { [projectId]: scoped },
+        legacyUnscoped: legacy,
+      });
+    });
+  });
+
+  test("serializes overlapping writes and preserves every project", async () => {
+    await withTemporaryStorage(async (storage) => {
+      await Promise.all(
+        Array.from({ length: 12 }, (_, index) =>
+          storage.cacheOpenCodeModelCatalog(`project-${index}`, [{
+            id: `provider/model-${index}`,
+            name: `Model ${index}`,
+            provider: "provider",
+          }])
+        ),
+      );
+
+      for (let index = 0; index < 12; index += 1) {
+        expect(
+          (await storage.getOpenCodeModelCatalog(`project-${index}`))?.models[0]?.id,
+        ).toBe(`provider/model-${index}`);
+      }
+    });
+  });
+
+  test("recovers the mutation queue after a failed write", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const internals = storage as unknown as {
+        saveJson: (filePath: string, value: unknown) => Promise<void>;
+      };
+      const saveJson = internals.saveJson.bind(storage);
+      let failNext = true;
+      internals.saveJson = async (filePath, value) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error("injected cache write failure");
+        }
+        await saveJson(filePath, value);
+      };
+
+      await expect(
+        storage.cacheOpenCodeModelCatalog("project-failed", models),
+      ).rejects.toThrow("injected cache write failure");
+      const recovered = await storage.cacheOpenCodeModelCatalog(
+        "project-recovered",
+        models,
+      );
+      expect(recovered.projectId).toBe("project-recovered");
+      expect(await storage.getOpenCodeModelCatalog("project-failed")).toBeNull();
+    });
+  });
+
+  test("a read concurrent with a write sees one coherent snapshot", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const first = await storage.cacheOpenCodeModelCatalog(projectId, models);
+
+      // Reads deliberately skip the mutation lock, so they rely on the write
+      // being atomic. A torn read would surface as a null or a partial model
+      // list rather than one of the two whole snapshots.
+      const [, ...reads] = await Promise.all([
+        storage.cacheOpenCodeModelCatalog(projectId, [
+          ...models,
+          { id: "provider/added", name: "Added", provider: "provider" },
+        ]),
+        ...Array.from({ length: 24 }, () =>
+          storage.getOpenCodeModelCatalog(projectId)
+        ),
+      ]);
+
+      const second = await storage.getOpenCodeModelCatalog(projectId);
+      expect(second?.models).toHaveLength(3);
+      for (const read of reads) {
+        expect(read).not.toBeNull();
+        expect([first.catalogVersion, second?.catalogVersion]).toContain(
+          read?.catalogVersion,
+        );
+        expect(read?.models).toEqual(
+          read?.catalogVersion === first.catalogVersion
+            ? first.models
+            : second!.models,
+        );
+      }
+    });
+  });
+
+  test("serializes separate StorageService instances sharing a data directory", async () => {
+    await withTemporaryStorage(async (first, dataDir) => {
+      const second = new StorageService(dataDir);
+      await second.init();
+      await Promise.all([
+        first.cacheOpenCodeModelCatalog("project-a", models),
+        second.cacheOpenCodeModelCatalog("project-b", [{
+          id: "provider/second",
+          name: "Second",
+          provider: "provider",
+        }]),
+      ]);
+
+      expect(await first.getOpenCodeModelCatalog("project-a")).not.toBeNull();
+      expect(await first.getOpenCodeModelCatalog("project-b")).not.toBeNull();
+    });
+  });
+});

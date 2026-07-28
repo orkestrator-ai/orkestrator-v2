@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { useFilesPanelStore, useConfigStore } from "@/stores";
 import { useUIStore, useEnvironmentStore } from "@/stores";
 import * as backend from "@/lib/backend";
+import { resolveComparisonRef } from "@/lib/diff-baseline";
 
 // Auto-refresh interval in milliseconds (5 seconds)
 const AUTO_REFRESH_INTERVAL = 5000;
@@ -44,9 +45,10 @@ export function useFilesPanel() {
     : selectedEnvironment?.status === "running" && !!containerId;
 
   // Prefer the commit captured when the environment was created. Older
-  // environments fall back to the repository PR base branch.
+  // environments fall back to the repository PR base branch, then its default
+  // branch. Shared with the sidebar badge so both report the same numbers.
   const repoConfig = projectId ? getRepositoryConfig(projectId) : null;
-  const comparisonRef = selectedEnvironment?.createdFromCommit || repoConfig?.prBaseBranch || "main";
+  const comparisonRef = resolveComparisonRef(selectedEnvironment?.createdFromCommit, repoConfig);
   const environmentSnapshotKey = [
     selectedEnvironmentId ?? "",
     containerId ?? "",

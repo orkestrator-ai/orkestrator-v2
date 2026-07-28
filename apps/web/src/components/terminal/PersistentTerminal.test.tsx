@@ -27,6 +27,8 @@ let terminalInputDisposables: Array<{ dispose: ReturnType<typeof mock> }> = [];
 let terminalKeyHandler: ((event: KeyboardEvent) => boolean) | undefined;
 type MockUseTerminalOptions = {
   onData?: (data: Uint8Array) => void;
+  onReplay?: (data: Uint8Array) => void;
+  terminalKey?: string;
   user?: string;
   existingSessionId?: string | null;
   replayOutputBuffer?: boolean;
@@ -641,6 +643,8 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => {
       expect(lastUseTerminalOptions?.trackEnvironmentActivity).toBe(expected);
+      expect(lastUseTerminalOptions?.terminalKey).toBe("tab-1");
+      expect(lastUseTerminalOptions?.replayOutputBuffer).toBe(true);
     });
   });
 

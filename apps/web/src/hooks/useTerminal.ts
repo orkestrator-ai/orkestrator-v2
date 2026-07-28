@@ -13,6 +13,10 @@ interface UseTerminalOptions {
   cols?: number;
   rows?: number;
   onData?: (data: Uint8Array) => void;
+  /** Replace the client view with an authoritative backend buffer snapshot. */
+  onReplay?: (data: Uint8Array) => void;
+  /** Stable tab identity used by the backend to make session creation idempotent. */
+  terminalKey?: string;
   /** Existing session ID to reconnect to (for tab moves between panes) */
   existingSessionId?: string | null;
   /** If true, don't close the session on unmount (session persists for tab moves) */
@@ -45,6 +49,8 @@ export function useTerminal({
   cols = 80,
   rows = 24,
   onData,
+  onReplay,
+  terminalKey,
   existingSessionId,
   persistSession = false,
   user,
@@ -59,6 +65,7 @@ export function useTerminal({
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const onDataRef = useRef(onData);
+  const onReplayRef = useRef(onReplay);
   const isConnectedRef = useRef(false);
   const isConnectingRef = useRef(false);
   const connectGenerationRef = useRef(0);
@@ -68,6 +75,10 @@ export function useTerminal({
   useEffect(() => {
     onDataRef.current = onData;
   }, [onData]);
+
+  useEffect(() => {
+    onReplayRef.current = onReplay;
+  }, [onReplay]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -95,11 +106,15 @@ export function useTerminal({
       connectGenerationRef.current += 1;
       // Clean up event listener
       cleanupEventListener();
-      // Detach terminal (use appropriate method based on isLocal)
-      if (isLocalRef.current) {
-        backend.closeLocalTerminalSession(sessionId).catch(() => {});
-      } else {
-        backend.detachTerminal(sessionId).catch(() => {});
+      // A renderer-side environment refresh can temporarily change this prop.
+      // Persistent sessions are backend-owned, so changing views only removes
+      // this listener; explicit tab close is responsible for terminating the PTY.
+      if (!persistSession) {
+        if (isLocalRef.current) {
+          backend.closeLocalTerminalSession(sessionId).catch(() => {});
+        } else {
+          backend.detachTerminal(sessionId).catch(() => {});
+        }
       }
       // Clear ref immediately to prevent stale writes
       sessionIdRef.current = null;
@@ -111,7 +126,7 @@ export function useTerminal({
       setError(null);
     }
     previousContainerIdRef.current = containerId;
-  }, [containerId, sessionId, cleanupEventListener]);
+  }, [containerId, sessionId, persistSession, cleanupEventListener]);
 
   // Track sessionId in a ref for cleanup on unmount
   const sessionIdRef = useRef<string | null>(null);
@@ -232,17 +247,37 @@ export function useTerminal({
           shouldStartSession = false;
         } else if (isLocal && environmentId) {
           console.log("[useTerminal] Existing terminal session is stale, creating a new local session");
-          targetSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows, trackEnvironmentActivity);
+          targetSessionId = await backend.createLocalTerminalSession(
+            environmentId,
+            cols,
+            rows,
+            trackEnvironmentActivity,
+            terminalKey,
+          );
           console.log("[useTerminal] Got replacement local sessionId:", targetSessionId);
         } else {
           console.log("[useTerminal] Existing terminal session is stale, creating a new container session");
-          targetSessionId = await backend.createTerminalSession(containerId!, cols, rows, user, trackEnvironmentActivity);
+          targetSessionId = await backend.createTerminalSession(
+            containerId!,
+            cols,
+            rows,
+            user,
+            trackEnvironmentActivity,
+            environmentId,
+            terminalKey,
+          );
           console.log("[useTerminal] Got replacement sessionId:", targetSessionId);
         }
       } else if (isLocal && environmentId) {
         // Create new local session
         console.log("[useTerminal] Creating local terminal session for environment:", environmentId);
-        targetSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows, trackEnvironmentActivity);
+        targetSessionId = await backend.createLocalTerminalSession(
+          environmentId,
+          cols,
+          rows,
+          trackEnvironmentActivity,
+          terminalKey,
+        );
         if (!isCurrentConnect()) {
           await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
           return;
@@ -251,7 +286,15 @@ export function useTerminal({
       } else {
         // Create new container session
         console.log("[useTerminal] Calling createTerminalSession...");
-        targetSessionId = await backend.createTerminalSession(containerId!, cols, rows, user, trackEnvironmentActivity);
+        targetSessionId = await backend.createTerminalSession(
+          containerId!,
+          cols,
+          rows,
+          user,
+          trackEnvironmentActivity,
+          environmentId,
+          terminalKey,
+        );
         if (!isCurrentConnect()) {
           await backend.detachTerminal(targetSessionId).catch(() => {});
           return;
@@ -289,45 +332,20 @@ export function useTerminal({
           attachExistingOnly,
         });
       }
-      // Replay the backend's bounded output buffer BEFORE attaching the live
-      // listener. The backend appends to its buffer before emitting live, so
-      // attaching first would deliver already-buffered bytes twice (once live,
-      // once via replay) and out of order. Output produced in the small window
-      // between the snapshot and listener registration is rare for setup
-      // sessions and self-corrects as the stream continues.
-      if (replayOutputBuffer) {
-        const bufferedOutput = await backend.getTerminalOutputBuffer(targetSessionId).catch((err) => {
-          console.warn("[useTerminal] Failed to replay terminal output buffer:", err);
-          return "";
-        });
-        if (attachExistingOnly || targetSessionId.endsWith(":setup")) {
-          console.info("[setup-terminal] replay buffer fetched", {
-            environmentId: environmentId ?? null,
-            sessionId: targetSessionId,
-            bufferChars: bufferedOutput.length,
-          });
-        }
-        if (!isCurrentConnect()) {
-          // No live listener registered yet; only tear down a session we created.
-          if (shouldStartSession) {
-            if (isLocal) {
-              await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
-            } else {
-              await backend.detachTerminal(targetSessionId).catch(() => {});
-            }
-          }
+      type TerminalOutputEventPayload =
+        | number[]
+        | { data: number[]; revision: number };
+      const pendingLiveOutput: Array<{ data: Uint8Array; revision: number | null }> = [];
+      let snapshotPending = replayOutputBuffer;
+      const unlisten = await listen<TerminalOutputEventPayload>(eventName, (event) => {
+        const payload = event.payload;
+        const data = new Uint8Array(Array.isArray(payload) ? payload : payload.data);
+        const revision = Array.isArray(payload) ? null : payload.revision;
+        if (snapshotPending) {
+          pendingLiveOutput.push({ data, revision });
           return;
         }
-        if (bufferedOutput && onDataRef.current) {
-          onDataRef.current(new TextEncoder().encode(bufferedOutput));
-        }
-      }
-
-      const unlisten = await listen<number[]>(eventName, (event) => {
-        const data = new Uint8Array(event.payload);
-        if (onDataRef.current) {
-          onDataRef.current(data);
-        }
+        onDataRef.current?.(data);
       });
       if (!isCurrentConnect()) {
         unlisten();
@@ -342,6 +360,40 @@ export function useTerminal({
       }
 
       unlistenRef.current = unlisten;
+
+      if (replayOutputBuffer) {
+        const snapshot = await backend.getTerminalOutputSnapshot(targetSessionId).catch((err) => {
+          console.warn("[useTerminal] Failed to replay terminal output snapshot:", err);
+          return { output: "", revision: 0 };
+        });
+        if (attachExistingOnly || targetSessionId.endsWith(":setup")) {
+          console.info("[setup-terminal] replay buffer fetched", {
+            environmentId: environmentId ?? null,
+            sessionId: targetSessionId,
+            bufferChars: snapshot.output.length,
+            revision: snapshot.revision,
+          });
+        }
+        if (!isCurrentConnect()) {
+          unlisten();
+          if (shouldStartSession) {
+            if (isLocal) {
+              await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
+            } else {
+              await backend.detachTerminal(targetSessionId).catch(() => {});
+            }
+          }
+          return;
+        }
+        onReplayRef.current?.(new TextEncoder().encode(snapshot.output));
+        snapshotPending = false;
+        for (const pending of pendingLiveOutput) {
+          if (pending.revision === null || pending.revision > snapshot.revision) {
+            onDataRef.current?.(pending.data);
+          }
+        }
+        pendingLiveOutput.length = 0;
+      }
 
       if (attachExistingOnly && targetSessionId && existingSessionRunning === false) {
         console.info("[setup-terminal] backend-owned session is not running after attach", {
@@ -421,13 +473,27 @@ export function useTerminal({
         let newSessionId: string | null = null;
         try {
           if (isLocal && environmentId) {
-            newSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows, trackEnvironmentActivity);
+            newSessionId = await backend.createLocalTerminalSession(
+              environmentId,
+              cols,
+              rows,
+              trackEnvironmentActivity,
+              terminalKey,
+            );
             if (!isCurrentConnect()) {
               await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
               return;
             }
           } else {
-            newSessionId = await backend.createTerminalSession(containerId!, cols, rows, user, trackEnvironmentActivity);
+            newSessionId = await backend.createTerminalSession(
+              containerId!,
+              cols,
+              rows,
+              user,
+              trackEnvironmentActivity,
+              environmentId,
+              terminalKey,
+            );
             if (!isCurrentConnect()) {
               await backend.detachTerminal(newSessionId).catch(() => {});
               return;
@@ -442,32 +508,20 @@ export function useTerminal({
 
           const eventName = `terminal-output-${newSessionId}`;
 
-          // Replay any buffered output before attaching the live listener so
-          // already-buffered bytes are not delivered twice (see the primary
-          // attach path above for the rationale).
-          if (replayOutputBuffer) {
-            const bufferedOutput = await backend.getTerminalOutputBuffer(newSessionId).catch((err) => {
-              console.warn("[useTerminal] Failed to replay fallback terminal output buffer:", err);
-              return "";
-            });
-            if (!isCurrentConnect()) {
-              if (isLocal) {
-                await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
-              } else {
-                await backend.detachTerminal(newSessionId).catch(() => {});
-              }
+          type TerminalOutputEventPayload =
+            | number[]
+            | { data: number[]; revision: number };
+          const pendingLiveOutput: Array<{ data: Uint8Array; revision: number | null }> = [];
+          let snapshotPending = replayOutputBuffer;
+          const unlisten = await listen<TerminalOutputEventPayload>(eventName, (event) => {
+            const payload = event.payload;
+            const data = new Uint8Array(Array.isArray(payload) ? payload : payload.data);
+            const revision = Array.isArray(payload) ? null : payload.revision;
+            if (snapshotPending) {
+              pendingLiveOutput.push({ data, revision });
               return;
             }
-            if (bufferedOutput && onDataRef.current) {
-              onDataRef.current(new TextEncoder().encode(bufferedOutput));
-            }
-          }
-
-          const unlisten = await listen<number[]>(eventName, (event) => {
-            const data = new Uint8Array(event.payload);
-            if (onDataRef.current) {
-              onDataRef.current(data);
-            }
+            onDataRef.current?.(data);
           });
           if (!isCurrentConnect()) {
             unlisten();
@@ -479,6 +533,30 @@ export function useTerminal({
             return;
           }
           unlistenRef.current = unlisten;
+
+          if (replayOutputBuffer) {
+            const snapshot = await backend.getTerminalOutputSnapshot(newSessionId).catch((err) => {
+              console.warn("[useTerminal] Failed to replay fallback terminal output snapshot:", err);
+              return { output: "", revision: 0 };
+            });
+            if (!isCurrentConnect()) {
+              unlisten();
+              if (isLocal) {
+                await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
+              } else {
+                await backend.detachTerminal(newSessionId).catch(() => {});
+              }
+              return;
+            }
+            onReplayRef.current?.(new TextEncoder().encode(snapshot.output));
+            snapshotPending = false;
+            for (const pending of pendingLiveOutput) {
+              if (pending.revision === null || pending.revision > snapshot.revision) {
+                onDataRef.current?.(pending.data);
+              }
+            }
+            pendingLiveOutput.length = 0;
+          }
 
           if (isLocal) {
             await backend.startLocalTerminalSession(newSessionId);
@@ -553,7 +631,7 @@ export function useTerminal({
         setIsConnecting(false);
       }
     }
-  }, [containerId, environmentId, isLocal, cols, rows, existingSessionId, user, replayOutputBuffer, attachExistingOnly, trackEnvironmentActivity, cleanupEventListener]);
+  }, [containerId, environmentId, isLocal, cols, rows, existingSessionId, user, replayOutputBuffer, attachExistingOnly, trackEnvironmentActivity, terminalKey, cleanupEventListener]);
 
   const disconnect = useCallback(async () => {
     if (!sessionId) return;

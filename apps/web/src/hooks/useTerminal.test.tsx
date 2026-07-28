@@ -5,12 +5,12 @@ import * as realBackend from "@/lib/backend";
 import { mockToastError as toastErrorMock } from "../../../../tests/mocks/sonner";
 
 const getTerminalSessionMock = mock(async (_sessionId: string) => ({ id: "session-old", running: true }));
-const createLocalTerminalSessionMock = mock(async (_environmentId: string, _cols: number, _rows: number) => "session-new-local");
+const createLocalTerminalSessionMock = mock(async (_environmentId: string, _cols: number, _rows: number, _track?: boolean, _terminalKey?: string) => "session-new-local");
 const startLocalTerminalSessionMock = mock(async (_sessionId: string) => undefined);
 const closeLocalTerminalSessionMock = mock(async (_sessionId: string) => undefined);
-const createTerminalSessionMock = mock(async (_containerId: string, _cols: number, _rows: number, _user?: string) => "session-new-container");
+const createTerminalSessionMock = mock(async (_containerId: string, _cols: number, _rows: number, _user?: string, _track?: boolean, _environmentId?: string, _terminalKey?: string) => "session-new-container");
 const startTerminalSessionMock = mock(async (_sessionId: string) => undefined);
-const getTerminalOutputBufferMock = mock(async (_sessionId: string) => "");
+const getTerminalOutputSnapshotMock = mock(async (_sessionId: string) => ({ output: "", revision: 0 }));
 const detachTerminalMock = mock(async (_sessionId: string) => undefined);
 const resizeLocalTerminalMock = mock(async (_sessionId: string, _cols: number, _rows: number) => undefined);
 const resizeTerminalMock = mock(async (_sessionId: string, _cols: number, _rows: number) => undefined);
@@ -25,7 +25,7 @@ mock.module("@/lib/backend", () => ({
   closeLocalTerminalSession: closeLocalTerminalSessionMock,
   createTerminalSession: createTerminalSessionMock,
   startTerminalSession: startTerminalSessionMock,
-  getTerminalOutputBuffer: getTerminalOutputBufferMock,
+  getTerminalOutputSnapshot: getTerminalOutputSnapshotMock,
   detachTerminal: detachTerminalMock,
   resizeLocalTerminal: resizeLocalTerminalMock,
   resizeTerminal: resizeTerminalMock,
@@ -51,7 +51,7 @@ describe("useTerminal reconnect behavior", () => {
     closeLocalTerminalSessionMock.mockClear();
     createTerminalSessionMock.mockClear();
     startTerminalSessionMock.mockClear();
-    getTerminalOutputBufferMock.mockClear();
+    getTerminalOutputSnapshotMock.mockClear();
     detachTerminalMock.mockClear();
     resizeLocalTerminalMock.mockClear();
     resizeTerminalMock.mockClear();
@@ -67,7 +67,7 @@ describe("useTerminal reconnect behavior", () => {
     closeLocalTerminalSessionMock.mockImplementation(async () => undefined);
     createTerminalSessionMock.mockImplementation(async () => "session-new-container");
     startTerminalSessionMock.mockImplementation(async () => undefined);
-    getTerminalOutputBufferMock.mockImplementation(async () => "");
+    getTerminalOutputSnapshotMock.mockImplementation(async () => ({ output: "", revision: 0 }));
     detachTerminalMock.mockImplementation(async () => undefined);
     resizeLocalTerminalMock.mockImplementation(async () => undefined);
     resizeTerminalMock.mockImplementation(async () => undefined);
@@ -119,6 +119,7 @@ describe("useTerminal reconnect behavior", () => {
           attachExistingOnly: true,
           replayOutputBuffer: true,
           onData: (data) => received.push(data),
+          onReplay: (data) => received.push(data),
         }),
       { initialProps: { existingSessionId: undefined as string | undefined } },
     );
@@ -132,7 +133,10 @@ describe("useTerminal reconnect behavior", () => {
     expect(listenMock).not.toHaveBeenCalled();
 
     getTerminalSessionMock.mockResolvedValue({ id: "env-1:setup", running: true });
-    getTerminalOutputBufferMock.mockResolvedValue("[orkestrator] Starting environment setup\r\n");
+    getTerminalOutputSnapshotMock.mockResolvedValue({
+      output: "[orkestrator] Starting environment setup\r\n",
+      revision: 1,
+    });
 
     rerender({ existingSessionId: "env-1:setup" });
     await act(async () => {
@@ -146,8 +150,8 @@ describe("useTerminal reconnect behavior", () => {
     expect(createTerminalSessionMock).not.toHaveBeenCalled();
     expect(startTerminalSessionMock).not.toHaveBeenCalled();
     expect(getTerminalSessionMock).toHaveBeenCalledTimes(1);
-    expect(getTerminalOutputBufferMock).toHaveBeenCalledTimes(1);
-    expect(getTerminalOutputBufferMock).toHaveBeenCalledWith("env-1:setup");
+    expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(getTerminalOutputSnapshotMock).toHaveBeenCalledWith("env-1:setup");
     expect(listenMock).toHaveBeenCalledTimes(1);
     expect(listenMock).toHaveBeenCalledWith(
       "terminal-output-env-1:setup",
@@ -176,7 +180,7 @@ describe("useTerminal reconnect behavior", () => {
     expect(result.current.isConnected).toBe(true);
     expect(result.current.error).toBeNull();
     expect(getTerminalSessionMock).toHaveBeenCalledTimes(1);
-    expect(getTerminalOutputBufferMock).toHaveBeenCalledTimes(1);
+    expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(1);
     expect(listenMock).toHaveBeenCalledTimes(1);
     expect(unlistenMock).not.toHaveBeenCalled();
   });
@@ -201,7 +205,7 @@ describe("useTerminal reconnect behavior", () => {
 
     await waitFor(() => expect(result.current.sessionId).toBe("session-new-local"));
     expect(getTerminalSessionMock).toHaveBeenCalledWith("session-old");
-    expect(createLocalTerminalSessionMock).toHaveBeenCalledWith("env-1", 80, 24, false);
+    expect(createLocalTerminalSessionMock).toHaveBeenCalledWith("env-1", 80, 24, false, undefined);
     expect(startLocalTerminalSessionMock).toHaveBeenCalledWith("session-new-local");
     expect(listenMock).toHaveBeenCalledWith("terminal-output-session-new-local", expect.any(Function));
   });
@@ -243,7 +247,7 @@ describe("useTerminal reconnect behavior", () => {
     await act(async () => {
       await local.result.current.connect();
     });
-    expect(createLocalTerminalSessionMock).toHaveBeenCalledWith("env-local", 80, 24, true);
+    expect(createLocalTerminalSessionMock).toHaveBeenCalledWith("env-local", 80, 24, true, undefined);
     local.unmount();
 
     const container = renderHook(() =>
@@ -265,6 +269,8 @@ describe("useTerminal reconnect behavior", () => {
       24,
       undefined,
       true,
+      "env-container",
+      undefined,
     );
     container.unmount();
   });
@@ -290,7 +296,7 @@ describe("useTerminal reconnect behavior", () => {
       await local.result.current.connect();
     });
     expect(getTerminalSessionMock).toHaveBeenCalledWith("session-stale-local");
-    expect(createLocalTerminalSessionMock).toHaveBeenCalledWith("env-local", 80, 24, true);
+    expect(createLocalTerminalSessionMock).toHaveBeenCalledWith("env-local", 80, 24, true, undefined);
     local.unmount();
 
     const container = renderHook(() =>
@@ -314,6 +320,8 @@ describe("useTerminal reconnect behavior", () => {
       24,
       undefined,
       true,
+      "env-container",
+      undefined,
     );
     container.unmount();
   });
@@ -465,12 +473,12 @@ describe("useTerminal reconnect behavior", () => {
     expect(closeLocalTerminalSessionMock).toHaveBeenCalledWith("session-new-local");
   });
 
-  it("replays the buffer before attaching the listener on an attach-only session", async () => {
+  it("attaches the listener before replaying an authoritative snapshot", async () => {
     const callOrder: string[] = [];
     getTerminalSessionMock.mockResolvedValue({ id: "env-1:setup", running: true });
-    getTerminalOutputBufferMock.mockImplementation(async () => {
-      callOrder.push("getBuffer");
-      return "replayed setup output";
+    getTerminalOutputSnapshotMock.mockImplementation(async () => {
+      callOrder.push("getSnapshot");
+      return { output: "replayed setup output", revision: 1 };
     });
     listenMock.mockImplementation(async () => {
       callOrder.push("listen");
@@ -486,7 +494,7 @@ describe("useTerminal reconnect behavior", () => {
         persistSession: true,
         attachExistingOnly: true,
         replayOutputBuffer: true,
-        onData: (data) => received.push(data),
+        onReplay: (data) => received.push(data),
       }),
     );
 
@@ -495,16 +503,69 @@ describe("useTerminal reconnect behavior", () => {
     });
 
     await waitFor(() => expect(result.current.sessionId).toBe("env-1:setup"));
-    // Buffer replay must happen before the live listener is attached so already
-    // buffered bytes are not delivered twice.
-    expect(callOrder).toEqual(["getBuffer", "listen"]);
-    expect(getTerminalOutputBufferMock).toHaveBeenCalledWith("env-1:setup");
+    expect(callOrder).toEqual(["listen", "getSnapshot"]);
+    expect(getTerminalOutputSnapshotMock).toHaveBeenCalledWith("env-1:setup");
     expect(new TextDecoder().decode(received[0])).toBe("replayed setup output");
+  });
+
+  it("deduplicates live output emitted while a second client fetches its snapshot", async () => {
+    let liveHandler: ((event: { payload: { data: number[]; revision: number } }) => void) | undefined;
+    listenMock.mockImplementation(async (_event, handler) => {
+      liveHandler = handler;
+      return unlistenMock;
+    });
+    getTerminalOutputSnapshotMock.mockImplementation(async () => {
+      liveHandler?.({
+        payload: {
+          data: Array.from(new TextEncoder().encode("already in snapshot")),
+          revision: 1,
+        },
+      });
+      liveHandler?.({
+        payload: {
+          data: Array.from(new TextEncoder().encode("new live output")),
+          revision: 2,
+        },
+      });
+      return { output: "authoritative buffer", revision: 1 };
+    });
+    const replayed: string[] = [];
+    const received: string[] = [];
+
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: null,
+        environmentId: "env-1",
+        isLocal: true,
+        terminalKey: "plain-tab",
+        persistSession: true,
+        replayOutputBuffer: true,
+        onReplay: (data) => replayed.push(new TextDecoder().decode(data)),
+        onData: (data) => received.push(new TextDecoder().decode(data)),
+      }),
+    );
+
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    expect(createLocalTerminalSessionMock).toHaveBeenCalledWith(
+      "env-1",
+      80,
+      24,
+      false,
+      "plain-tab",
+    );
+    expect(replayed).toEqual(["authoritative buffer"]);
+    expect(received).toEqual(["new live output"]);
   });
 
   it("surfaces an error when an attach-only session is not running", async () => {
     getTerminalSessionMock.mockResolvedValue({ id: "env-1:setup", running: false });
-    getTerminalOutputBufferMock.mockResolvedValue("partial setup output");
+    getTerminalOutputSnapshotMock.mockResolvedValue({
+      output: "partial setup output",
+      revision: 1,
+    });
 
     const { result } = renderHook(() =>
       useTerminal({
@@ -527,13 +588,16 @@ describe("useTerminal reconnect behavior", () => {
     expect(createTerminalSessionMock).not.toHaveBeenCalled();
     expect(startTerminalSessionMock).not.toHaveBeenCalled();
     // The buffer is still replayed and the listener attached before the guard.
-    expect(getTerminalOutputBufferMock).toHaveBeenCalledWith("env-1:setup");
+    expect(getTerminalOutputSnapshotMock).toHaveBeenCalledWith("env-1:setup");
     expect(listenMock).toHaveBeenCalledWith("terminal-output-env-1:setup", expect.any(Function));
   });
 
   it("replays the buffer for the replacement session on the reconnect fallback", async () => {
     getTerminalSessionMock.mockResolvedValue({ id: "session-old", running: true });
-    getTerminalOutputBufferMock.mockResolvedValue("fallback replay output");
+    getTerminalOutputSnapshotMock.mockResolvedValue({
+      output: "fallback replay output",
+      revision: 1,
+    });
     createTerminalSessionMock.mockResolvedValue("session-new-container");
     let listenCalls = 0;
     listenMock.mockImplementation(async () => {
@@ -560,11 +624,11 @@ describe("useTerminal reconnect behavior", () => {
     await waitFor(() => expect(result.current.sessionId).toBe("session-new-container"));
     expect(createTerminalSessionMock).toHaveBeenCalled();
     expect(startTerminalSessionMock).toHaveBeenCalledWith("session-new-container");
-    expect(getTerminalOutputBufferMock).toHaveBeenCalledWith("session-new-container");
+    expect(getTerminalOutputSnapshotMock).toHaveBeenCalledWith("session-new-container");
     expect(listenMock).toHaveBeenCalledWith("terminal-output-session-new-container", expect.any(Function));
   });
 
-  it("detaches the previous session when the container id changes", async () => {
+  it("does not terminate a backend-owned persistent session when renderer props change", async () => {
     const { result, rerender } = renderHook(
       ({ containerId }) =>
         useTerminal({
@@ -582,9 +646,8 @@ describe("useTerminal reconnect behavior", () => {
 
     rerender({ containerId: "container-2" });
 
-    await waitFor(() => {
-      expect(detachTerminalMock).toHaveBeenCalledWith("session-new-container");
-    });
+    await waitFor(() => expect(unlistenMock).toHaveBeenCalledTimes(1));
+    expect(detachTerminalMock).not.toHaveBeenCalled();
     expect(unlistenMock).toHaveBeenCalledTimes(1);
     expect(result.current.sessionId).toBeNull();
   });

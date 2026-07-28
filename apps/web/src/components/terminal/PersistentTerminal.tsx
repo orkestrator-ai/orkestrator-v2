@@ -186,11 +186,10 @@ export function PersistentTerminal({
   const existingHasLaunchedCommand = existingSession?.hasLaunchedCommand ?? false;
   const isReconnecting = !!existingSessionId;
   const isBackendManagedSetupTab = !!isSetupTab && (!initialCommands || initialCommands.length === 0);
-  // Backend-managed setup tabs must use the backend transcript as authority.
-  // A frontend serialized xterm buffer can be blank if the tab mounted before
-  // the backend setup PTY was bound.
-  const shouldReplayBackendOutputBuffer =
-    isBackendManagedSetupTab || (!!isSetupTab && !existingSession?.serializedBuffer);
+  // Every terminal view rehydrates from the backend-owned transcript. The
+  // serialized frontend buffer remains useful as durable setup metadata, but it
+  // is never the authority for reconnecting to a live PTY.
+  const shouldReplayBackendOutputBuffer = true;
 
   // Track if there was an existing session when component mounted (genuine reconnection)
   // This distinguishes between:
@@ -457,6 +456,14 @@ export function PersistentTerminal({
     [terminal, isFirstTab, isLocalEnvironment, isEnvironmentReady, tabId, onReady]
   );
 
+  const handleReplay = useCallback((data: Uint8Array) => {
+    dataBufferRef.current = "";
+    terminal.clear();
+    terminal.write("\x1b[2J\x1b[H");
+    handleData(data);
+    terminal.scrollToBottom();
+  }, [handleData, terminal]);
+
   // Register an invisible OSC escape handler for setup completion detection.
   // When the setup command finishes, it emits an OSC sequence that xterm.js
   // intercepts without rendering — no visible marker in the terminal.
@@ -492,6 +499,8 @@ export function PersistentTerminal({
       environmentId,
       isLocal: isLocalEnvironment,
       onData: handleData,
+      onReplay: handleReplay,
+      terminalKey: tabId,
       existingSessionId,
       persistSession: true,
       user: terminalUser,
@@ -663,33 +672,9 @@ export function PersistentTerminal({
     };
   }, [updateSessionActivity]);
 
-  // When reconnecting, restore terminal buffer
+  // When reconnecting, restore metadata after the backend transcript replay.
   useEffect(() => {
     if (isReconnecting && isConnected && !hasReconnected) {
-      if (serializedBuffer) {
-        // Clear terminal first to prevent duplicate content from preserved xterm instance
-        terminal.clear();
-        terminal.write(serializedBuffer);
-        terminal.scrollToBottom();
-        // Force a refresh to ensure the canvas is repainted
-        terminal.refresh(0, terminal.rows - 1);
-
-        // Also fit to ensure dimensions are correct
-        fitAddon.fit();
-
-        // Schedule additional refreshes to ensure canvas renders after layout
-        requestAnimationFrame(() => {
-          fitAddon.fit();
-          terminal.refresh(0, terminal.rows - 1);
-        });
-
-        // Final delayed refresh as fallback for slow layout settling
-        setTimeout(() => {
-          fitAddon.fit();
-          terminal.refresh(0, terminal.rows - 1);
-        }, 100);
-      }
-
       // Mark initial restoration as complete - cleanup can now safely serialize
       initialRestorationCompleteRef.current = true;
       setHasReconnected(true);

@@ -1843,7 +1843,9 @@ exit 0
       expect(ptySpawn.mock.calls[0]?.[1].at(-1)).toContain("flock");
       const setupOutput = emitted
         .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
-        .map((entry) => Buffer.from(entry.payload as number[]).toString("utf8"))
+        .map((entry) => Buffer.from(
+          (entry.payload as { data: number[] }).data,
+        ).toString("utf8"))
         .join("");
       expect(setupOutput).toContain("[orkestrator] Starting environment setup");
       expect(setupOutput).toContain("/usr/local/bin/workspace-setup.sh");
@@ -5255,7 +5257,9 @@ exit 0
 
       const setupOutput = emitted
         .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
-        .map((entry) => Buffer.from(entry.payload as number[]).toString("utf8"))
+        .map((entry) => Buffer.from(
+          (entry.payload as { data: number[] }).data,
+        ).toString("utf8"))
         .join("");
       // Preparation performs the clone, so its announcement and output have to
       // reach the terminal before the setup commands are even known.
@@ -9077,7 +9081,13 @@ exit 0
 
     ptyProcesses[0]?.emitData("ready\r\n");
     expect(emitted).toEqual([
-      { event: `terminal-output-${sessionId}`, payload: Array.from(Buffer.from("ready\r\n", "utf8")) },
+      {
+        event: `terminal-output-${sessionId}`,
+        payload: {
+          data: Array.from(Buffer.from("ready\r\n", "utf8")),
+          revision: 1,
+        },
+      },
     ]);
 
     await commands.get("local_terminal_write")?.({ sessionId, data: "pwd\r" }, context);
@@ -9088,6 +9098,61 @@ exit 0
     await commands.get("close_local_terminal_session")?.({ sessionId }, context);
     expect(ptyProcesses[0]?.kill).toHaveBeenCalled();
     expect(commands.get("get_terminal_session")?.({ sessionId }, context)).toEqual({ id: sessionId, running: false });
+  });
+
+  test("reattaches a stable terminal tab to the same backend PTY and buffer", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-reattach-");
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const args = {
+      environmentId: environment.id,
+      terminalKey: "plain-tab-1",
+      cols: 80,
+      rows: 24,
+    };
+
+    const firstSessionId = await commands.get("create_local_terminal_session")?.(
+      args,
+      context,
+    ) as string;
+    await commands.get("start_local_terminal_session")?.(
+      { sessionId: firstSessionId },
+      context,
+    );
+    ptyProcesses[0]?.emitData("dev server listening on 3000\r\n");
+
+    // A second renderer (or a remount after project refresh) has only the
+    // durable environment + tab identity. Ensuring that identity must return
+    // the original running PTY, and starting it again must remain idempotent.
+    const reattachedSessionId = await commands.get("create_local_terminal_session")?.(
+      args,
+      context,
+    ) as string;
+    await commands.get("start_local_terminal_session")?.(
+      { sessionId: reattachedSessionId },
+      context,
+    );
+
+    expect(reattachedSessionId).toBe(firstSessionId);
+    expect(ptySpawn).toHaveBeenCalledTimes(1);
+    expect(commands.get("get_terminal_output_snapshot")?.(
+      { sessionId: reattachedSessionId },
+      context,
+    )).toEqual({
+      output: "dev server listening on 3000\r\n",
+      revision: 1,
+    });
+
+    await commands.get("close_local_terminal_session")?.(
+      { sessionId: firstSessionId },
+      context,
+    );
+    const replacementSessionId = await commands.get("create_local_terminal_session")?.(
+      args,
+      context,
+    ) as string;
+    expect(replacementSessionId).not.toBe(firstSessionId);
   });
 
   test("records prompt and settled-output activity for tracked local agent terminals", async () => {
@@ -9879,16 +9944,40 @@ exit 0
   });
 
   test("starts container terminal sessions through docker exec in a PTY", async () => {
-    const { context } = createContext(createEnvironment());
+    const environment = createEnvironment({
+      id: "env-container-terminal",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
     const commands = createCommandRegistry();
+    const createArgs = {
+      containerId: "container-1",
+      environmentId: environment.id,
+      terminalKey: "root-tab",
+      cols: 100,
+      rows: 32,
+      user: "node",
+    };
 
     const sessionId = await commands.get("create_terminal_session")?.(
-      { containerId: "container-1", cols: 100, rows: 32, user: "node" },
+      createArgs,
       context,
     ) as string;
     await commands.get("start_terminal_session")?.({ sessionId }, context);
+    const reattachedSessionId = await commands.get("create_terminal_session")?.(
+      createArgs,
+      context,
+    ) as string;
+    await commands.get("start_terminal_session")?.(
+      { sessionId: reattachedSessionId },
+      context,
+    );
 
     const spawnCall = ptySpawn.mock.calls[0];
+    expect(reattachedSessionId).toBe(sessionId);
+    expect(ptySpawn).toHaveBeenCalledTimes(1);
     expect(spawnCall?.[0]).toBe("docker");
     expect(spawnCall?.[1]).toEqual(["exec", "-it", "--user", "node", "container-1", "zsh", "-l"]);
     expect(spawnCall?.[2]).toMatchObject({

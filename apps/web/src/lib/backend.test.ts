@@ -524,7 +524,7 @@ describe("backend setup wrappers", () => {
 
   test("creates environment-tracked local and container terminal sessions", async () => {
     invokeMock.mockResolvedValueOnce("local-session");
-    await expect(createLocalTerminalSession("env-local", 100, 30, true))
+    await expect(createLocalTerminalSession("env-local", 100, 30, true, "tab-local"))
       .resolves.toBe("local-session");
 
     invokeMock.mockResolvedValueOnce("container-session");
@@ -534,6 +534,8 @@ describe("backend setup wrappers", () => {
       40,
       undefined,
       true,
+      "env-container",
+      "tab-container",
     )).resolves.toBe("container-session");
 
     expect(invokeMock.mock.calls).toEqual([
@@ -542,6 +544,7 @@ describe("backend setup wrappers", () => {
         cols: 100,
         rows: 30,
         trackEnvironmentActivity: true,
+        terminalKey: "tab-local",
       }],
       ["create_terminal_session", {
         containerId: "container-1",
@@ -549,6 +552,8 @@ describe("backend setup wrappers", () => {
         rows: 40,
         user: undefined,
         trackEnvironmentActivity: true,
+        environmentId: "env-container",
+        terminalKey: "tab-container",
       }],
     ]);
   });

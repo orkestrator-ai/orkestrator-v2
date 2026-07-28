@@ -628,6 +628,11 @@ function readTurnId(payload: unknown): string | undefined {
   return undefined;
 }
 
+function readTurnModel(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  return asNonEmptyString((payload as Record<string, unknown>).model);
+}
+
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value
@@ -788,13 +793,18 @@ export async function hydrateMessagesFromPersistedSession(
    * message ("fork from here") silently became impossible.
    */
   let currentTurnId: string | undefined;
+  let currentTurnModel: string | undefined;
   let currentAssistantMessage: NormalizedMessage | undefined;
 
   for (const record of records) {
     const recordTurnId = readTurnId(record.payload);
     if (recordTurnId && recordTurnId !== currentTurnId) {
       currentTurnId = recordTurnId;
+      currentTurnModel = undefined;
       currentAssistantMessage = undefined;
+    }
+    if (record.type === "turn_context") {
+      currentTurnModel = readTurnModel(record.payload) ?? currentTurnModel;
     }
 
     if (record.type !== "response_item" || !record.payload) {
@@ -815,6 +825,7 @@ export async function hydrateMessagesFromPersistedSession(
         content: "",
         parts: [],
         createdAt: timestamp,
+        ...(currentTurnModel ? { modelId: currentTurnModel } : {}),
         ...(currentTurnId ? { turnId: currentTurnId } : {}),
       };
       messages.push(currentAssistantMessage);

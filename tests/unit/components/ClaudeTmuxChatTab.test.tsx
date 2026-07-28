@@ -65,6 +65,21 @@ const getClaudeModelCatalogMock = mock(async (environmentId: string) => ({
   fetchedAt: "2026-07-25T12:00:00.000Z",
   stale: false,
 }));
+const claimPromptQueueHeadMock = mock(async (
+  queueKey: string,
+  environmentId: string,
+  _expectedMessageId: string,
+  candidateMessages: Array<{ id: string }>,
+) => ({
+  claimed: candidateMessages[0] ?? null,
+  queue: {
+    queueKey,
+    environmentId,
+    messages: candidateMessages.slice(1),
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    revision: 1,
+  },
+}));
 
 const startSessionMock = mock(async () => ({
   tab_id: "tab-1",
@@ -176,21 +191,7 @@ mock.module("@/components/claude/ClaudeTmuxInteractiveTerminal", () => ({
 }));
 
 mock.module("@/lib/backend", () => ({
-  claimPromptQueueHead: mock(async (
-    queueKey: string,
-    environmentId: string,
-    _expectedMessageId: string,
-    candidateMessages: Array<{ id: string }>,
-  ) => ({
-    claimed: candidateMessages[0] ?? null,
-    queue: {
-      queueKey,
-      environmentId,
-      messages: candidateMessages.slice(1),
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      revision: 1,
-    },
-  })),
+  claimPromptQueueHead: claimPromptQueueHeadMock,
   getFileTree: getFileTreeMock,
   getLocalFileTree: getLocalFileTreeMock,
   writeContainerFile: writeContainerFileMock,
@@ -437,6 +438,22 @@ describe("ClaudeTmuxChatTab", () => {
       fetchedAt: "2026-07-25T12:00:00.000Z",
       stale: false,
     }));
+    claimPromptQueueHeadMock.mockReset();
+    claimPromptQueueHeadMock.mockImplementation(async (
+      queueKey: string,
+      environmentId: string,
+      _expectedMessageId: string,
+      candidateMessages: Array<{ id: string }>,
+    ) => ({
+      claimed: candidateMessages[0] ?? null,
+      queue: {
+        queueKey,
+        environmentId,
+        messages: candidateMessages.slice(1),
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        revision: 1,
+      },
+    }));
     startSessionMock.mockClear();
     getStatusMock.mockClear();
     getStatusMock.mockImplementation(async () => null);
@@ -517,6 +534,42 @@ describe("ClaudeTmuxChatTab", () => {
     });
     useUIStore.setState({ selectedEnvironmentId: "env-1" });
     seedPane("Run the audit");
+  });
+
+  test("renders a friendly catalog label for the transcript-confirmed assistant model", async () => {
+    const catalogModel: ClaudeModel = {
+      id: "sonnet",
+      resolvedModel: "claude-sonnet-5",
+      name: "Claude Sonnet",
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "medium", "high"],
+    };
+    useClaudeStore.setState({ models: [catalogModel], modelCatalogs: new Map() });
+    seedPane();
+    mockRunningTmuxStatus();
+    getTranscriptMock.mockResolvedValue([
+      {
+        type: "assistant",
+        uuid: "assistant-with-model",
+        timestamp: "2026-07-28T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: "Catalog-attributed tmux response",
+          model: "claude-sonnet-5",
+        },
+      },
+    ]);
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByTitle("Claude Sonnet")).toBeTruthy();
+    expect(screen.queryByText("claude-sonnet-5")).toBeNull();
   });
 
   test("jumps to the bottom when reactivated after an environment switch", async () => {
@@ -915,6 +968,80 @@ describe("ClaudeTmuxChatTab", () => {
 
     expect(screen.queryByTestId("tmux-interactive-terminal")).toBeNull();
     expect(screen.getByRole("button", { name: /terminal/i })).toBeTruthy();
+  });
+
+  test("captures transcript search only for the focused native chat", async () => {
+    mockRunningTmuxStatus();
+    const view = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        ownsGlobalShortcuts
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        (screen.getByRole("button", { name: /terminal/i }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
+    });
+
+    fireEvent.keyDown(document, {
+      key: "f",
+      code: "KeyF",
+      metaKey: true,
+    });
+    expect(screen.getByRole("search", { name: "Find in agent chat" })).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("search", { name: "Find in agent chat" })).toBeNull();
+
+    view.rerender(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        ownsGlobalShortcuts={false}
+      />,
+    );
+    fireEvent.keyDown(document, {
+      key: "f",
+      code: "KeyF",
+      metaKey: true,
+    });
+    expect(screen.queryByRole("search", { name: "Find in agent chat" })).toBeNull();
+
+    view.rerender(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive={false}
+      />,
+    );
+    fireEvent.keyDown(document, {
+      key: "f",
+      code: "KeyF",
+      metaKey: true,
+    });
+    expect(screen.queryByRole("search", { name: "Find in agent chat" })).toBeNull();
+
+    view.rerender(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        ownsGlobalShortcuts
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /terminal/i }));
+    expect(screen.getByTestId("tmux-interactive-terminal")).toBeTruthy();
+    fireEvent.keyDown(document, {
+      key: "f",
+      code: "KeyF",
+      metaKey: true,
+    });
+    expect(screen.queryByRole("search", { name: "Find in agent chat" })).toBeNull();
   });
 
   test("surfaces Claude tmux agent tokens in native rows", async () => {
@@ -2435,7 +2562,7 @@ Running 1 Explore agent...
     expect(textarea.value).toBe("/compact ");
   });
 
-  test("supports slash command keyboard selection and Escape dismissal", async () => {
+  test("supports slash command keyboard navigation, Tab selection, and Escape dismissal", async () => {
     useClaudeTmuxStore
       .getState()
       .setRunning("tab-1", true, {
@@ -2459,6 +2586,24 @@ Running 1 Explore agent...
     await screen.findByText("Slash Commands");
     fireEvent.keyDown(textarea, { key: "ArrowDown" });
     fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(textarea.value).toBe("/bug ");
+
+    fireEvent.change(textarea, { target: { value: "/" } });
+    await screen.findByText("Slash Commands");
+    fireEvent.keyDown(textarea, { key: "ArrowDown" });
+    await waitFor(() => {
+      expect(screen.getByText("/clear").closest("button")?.className).toContain(
+        "bg-zinc-800/80",
+      );
+    });
+    fireEvent.keyDown(textarea, { key: "ArrowUp" });
+    await waitFor(() => {
+      expect(screen.getByText("/bug").closest("button")?.className).toContain(
+        "bg-zinc-800/80",
+      );
+    });
+    fireEvent.keyDown(textarea, { key: "Tab" });
 
     expect(textarea.value).toBe("/bug ");
 
@@ -3654,6 +3799,32 @@ Running 1 Explore agent...
     expect(screen.queryByText("Opus (1M context)")).toBeNull();
   });
 
+  test("keeps the bundled model catalog when authoritative rehydration fails", async () => {
+    seedPane();
+    getClaudeModelCatalogMock.mockRejectedValueOnce(
+      new Error("model catalog unavailable"),
+    );
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+    await waitFor(() => {
+      expect(getClaudeModelCatalogMock).toHaveBeenCalledWith("env-1", false);
+    });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Sonnet/ }));
+    expect(await screen.findByText("Opus (1M context)")).toBeTruthy();
+    expect(screen.getByText("Fable")).toBeTruthy();
+    expect(screen.queryByText(/model catalog unavailable/i)).toBeNull();
+    expect(useClaudeStore.getState().getModelCatalog("env-1")).toBeUndefined();
+  });
+
   test("prefers the live SDK model list and prepends the Default sentinel when missing", async () => {
     seedPane();
     const sdkModels: ClaudeModel[] = [
@@ -4472,6 +4643,41 @@ Running 1 Explore agent...
 
     expect(await screen.findByText("Error: tmux unavailable")).toBeTruthy();
     expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey)).toEqual([]);
+    expect(useClaudeTmuxStore.getState().getTab(stateKey).busy).toBe(false);
+  });
+
+  test("keeps a queued tmux prompt and reports an atomic claim failure", async () => {
+    claimPromptQueueHeadMock.mockRejectedValueOnce(new Error("queue storage unavailable"));
+    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    const store = useClaudeTmuxStore.getState();
+    store.setRunning(stateKey, true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    store.addToQueue(stateKey, {
+      id: "queue-claim-fail",
+      text: "retry after storage recovers",
+      attachments: [],
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        "Failed to send queued prompt: queue storage unavailable",
+      ),
+    ).toBeTruthy();
+    expect(claimPromptQueueHeadMock).toHaveBeenCalledTimes(1);
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(
+      useClaudeTmuxStore.getState().getQueuedMessages(stateKey).map((message) => message.id),
+    ).toEqual(["queue-claim-fail"]);
     expect(useClaudeTmuxStore.getState().getTab(stateKey).busy).toBe(false);
   });
 

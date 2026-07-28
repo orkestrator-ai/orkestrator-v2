@@ -46,6 +46,8 @@ export interface NormalizedMessage {
   content: string;
   parts: NormalizedPart[];
   createdAt: string;
+  /** Model confirmed by app-server or the persisted turn context. */
+  modelId?: string;
   planReview?: boolean;
   /** Native turn boundary used for lossless "fork from here". */
   turnId?: string;

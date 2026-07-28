@@ -27,6 +27,7 @@ export interface ActiveFeatureConversation {
   phase: "dispatching" | "running" | "persisting" | "unavailable";
   error?: string;
   responseContent?: string;
+  responseModelId?: string;
 }
 
 export type FeatureConversationIdentity = Pick<
@@ -37,7 +38,7 @@ export type FeatureConversationIdentity = Pick<
 type FeatureConversationUpdates = Partial<
   Pick<
     ActiveFeatureConversation,
-    "userMessageId" | "startedAt" | "phase" | "error" | "responseContent"
+    "userMessageId" | "startedAt" | "phase" | "error" | "responseContent" | "responseModelId"
   >
 >;
 
@@ -78,6 +79,7 @@ interface FeaturePlanState {
     role: FeaturePlanMessage["role"],
     content: string,
     stateApplication?: FeaturePlanMessage["stateApplication"],
+    modelId?: string,
   ) => Promise<FeaturePlan | undefined>;
   appendStoryMessage: (
     featureId: string,
@@ -85,6 +87,7 @@ interface FeaturePlanState {
     role: FeaturePlanMessage["role"],
     content: string,
     stateApplication?: FeaturePlanMessage["stateApplication"],
+    modelId?: string,
   ) => Promise<FeaturePlan | undefined>;
   setChatDraft: (chatId: string, text: string) => void;
   getChatDraft: (chatId: string) => string;
@@ -98,6 +101,7 @@ interface FeaturePlanState {
   claimConversationPersistence: (
     expected: FeatureConversationIdentity,
     responseContent: string,
+    responseModelId?: string,
   ) => boolean;
   settleConversation: (expected: FeatureConversationIdentity) => boolean;
 }
@@ -163,13 +167,14 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
     }
   },
 
-  appendMessage: async (featureId, role, content, stateApplication) => {
+  appendMessage: async (featureId, role, content, stateApplication, modelId) => {
     try {
       const feature = await appendFeaturePlanMessage(
         featureId,
         role,
         content,
         stateApplication,
+        modelId,
       );
       set((state) => ({ features: upsertFeature(state.features, feature) }));
       return feature;
@@ -179,7 +184,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
     }
   },
 
-  appendStoryMessage: async (featureId, storyId, role, content, stateApplication) => {
+  appendStoryMessage: async (featureId, storyId, role, content, stateApplication, modelId) => {
     try {
       const feature = await appendFeatureStoryMessage(
         featureId,
@@ -187,6 +192,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
         role,
         content,
         stateApplication,
+        modelId,
       );
       set((state) => ({ features: upsertFeature(state.features, feature) }));
       return feature;
@@ -234,6 +240,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
         && updated.phase === current.phase
         && updated.error === current.error
         && updated.responseContent === current.responseContent
+        && updated.responseModelId === current.responseModelId
       ) {
         return state;
       }
@@ -294,7 +301,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
     return resumed;
   },
 
-  claimConversationPersistence: (expected, responseContent) => {
+  claimConversationPersistence: (expected, responseContent, responseModelId) => {
     let claimed = false;
     set((state) => {
       const current = state.activeConversations.get(expected.featureId);
@@ -311,6 +318,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
         phase: "persisting",
         error: undefined,
         responseContent,
+        responseModelId,
       });
       claimed = true;
       return { activeConversations };

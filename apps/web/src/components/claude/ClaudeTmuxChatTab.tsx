@@ -29,6 +29,7 @@ import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
+import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import {
   Dialog,
   DialogContent,
@@ -98,6 +99,7 @@ import {
   type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import {
   applyTmuxAgentUsageSummaries,
@@ -123,6 +125,8 @@ interface Props {
   tabId: string;
   data: ClaudeTmuxData;
   isActive: boolean;
+  /** Whether this pane currently owns document-level shortcuts. */
+  ownsGlobalShortcuts?: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
   initialAgentModel?: string;
@@ -314,6 +318,7 @@ export function ClaudeTmuxChatTab({
   tabId,
   data,
   isActive,
+  ownsGlobalShortcuts = isActive,
   initialPrompt,
   isReviewTab = false,
   initialAgentModel,
@@ -368,6 +373,10 @@ export function ClaudeTmuxChatTab({
   );
   const setModelCatalog = useClaudeStore((s) => s.setModelCatalog);
   const availableModels = useMemo(() => tmuxModelList(sdkModels), [sdkModels]);
+  const resolveModelLabel = useCallback(
+    (modelId: string) => resolveCatalogModelLabel(modelId, availableModels),
+    [availableModels],
+  );
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
@@ -1477,6 +1486,7 @@ export function ClaudeTmuxChatTab({
                   previousMessage={previousMessage}
                   assistantLabel="Claude"
                   containerId={containerId}
+                  resolveModelLabel={resolveModelLabel}
                 />
               )}
               emptyState={
@@ -1597,6 +1607,10 @@ export function ClaudeTmuxChatTab({
               }
               scrollProps={scrollProps}
               virtuosoRef={virtuosoRef}
+              find={{
+                isActive: ownsGlobalShortcuts && !interactiveMode,
+                getSearchText: getNativeMessageSearchText,
+              }}
             />
 
           </div>

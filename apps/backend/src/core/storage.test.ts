@@ -329,7 +329,7 @@ describe("environment completion and unread state", () => {
   test("records a newer completion and ignores stale completion timestamps", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
-      const previousActivityAt = environment.lastActivityAt;
+      const previousActivityAt = environment.lastActivityAt!;
       const newer = new Date(
         new Date(previousActivityAt).getTime() + 1,
       ).toISOString();
@@ -356,7 +356,7 @@ describe("environment completion and unread state", () => {
   test("clears unread only when the expected activity token still matches", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
-      const previousActivityAt = environment.lastActivityAt;
+      const previousActivityAt = environment.lastActivityAt!;
       const activityAt = new Date(
         new Date(previousActivityAt).getTime() + 1,
       ).toISOString();

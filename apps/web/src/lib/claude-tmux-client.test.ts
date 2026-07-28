@@ -49,6 +49,7 @@ import {
   detachInteractiveTerminal,
   getPendingHooks,
   getStatus,
+  getTaskList,
   getTranscript,
   interruptSession,
   listPreviousSessions,
@@ -150,6 +151,18 @@ describe("claude-tmux-client invoke wrappers", () => {
   test("getPendingHooks invokes the pending hooks command with tabId and environmentId", async () => {
     await getPendingHooks("tab-1", "env-1");
     expect(calls[0]!.cmd).toBe("claude_tmux_pending_hooks");
+    expect(calls[0]!.args).toEqual({ tabId: "tab-1", environmentId: "env-1" });
+  });
+
+  test("getTaskList returns the backend snapshot for the scoped tab", async () => {
+    const snapshot: Awaited<ReturnType<typeof getTaskList>> = {
+      items: [{ id: "task-1", subject: "Verify coverage", status: "in_progress" }],
+      complete: true,
+    };
+    invokeResult = snapshot;
+
+    await expect(getTaskList("tab-1", "env-1")).resolves.toEqual(snapshot);
+    expect(calls[0]!.cmd).toBe("claude_tmux_tasks");
     expect(calls[0]!.args).toEqual({ tabId: "tab-1", environmentId: "env-1" });
   });
 

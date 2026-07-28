@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   buildTranscriptCatalog,
@@ -15,9 +15,12 @@ import {
   createSharedTranscriptMetaLoader,
   extractPersistedMessageText,
   findTranscriptPath,
+  getCodexHomeDir,
   getPersistedSessionMeta,
   getSessionMetaFromTranscriptPath,
   hydrateMessagesFromPersistedSession,
+  getWorkingDirectory,
+  listTranscriptPaths,
   listPersistedSessionsForCwd,
   listPersistedSessionsWithTitlesForCwd,
   mergePersistedSessionMeta,
@@ -85,6 +88,49 @@ afterEach(async () => {
 });
 
 describe("rollout public helpers", () => {
+  test("resolves Codex home and working-directory overrides with fallbacks", () => {
+    const previousHome = process.env.CODEX_HOME;
+    const previousCwd = process.env.CWD;
+    try {
+      process.env.CODEX_HOME = "/tmp/codex-home-override";
+      process.env.CWD = "/tmp/codex-cwd-override";
+      expect(getCodexHomeDir()).toBe("/tmp/codex-home-override");
+      expect(getWorkingDirectory()).toBe("/tmp/codex-cwd-override");
+      expect(getWorkingDirectory("/tmp/explicit-cwd")).toBe("/tmp/explicit-cwd");
+
+      delete process.env.CODEX_HOME;
+      delete process.env.CWD;
+      expect(getCodexHomeDir()).toBe(join(homedir(), ".codex"));
+      expect(getWorkingDirectory()).toBe(process.cwd());
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+    }
+  });
+
+  test("lists nested active and archived JSONL transcripts only", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-list-"));
+    temporaryDirectories.push(root);
+    const active = join(root, "sessions", "2026", "active.jsonl");
+    const archived = join(root, "archived_sessions", "archived.jsonl");
+    await mkdir(dirname(active), { recursive: true });
+    await mkdir(dirname(archived), { recursive: true });
+    await writeFile(active, "{}\n", "utf8");
+    await writeFile(archived, "{}\n", "utf8");
+    await writeFile(join(root, "sessions", "ignored.txt"), "not a rollout", "utf8");
+
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+    try {
+      expect((await listTranscriptPaths()).sort()).toEqual([active, archived].sort());
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
   test("finds supplied transcript paths without scanning global state", async () => {
     expect(await findTranscriptPath("thread-2", ["/a/thread-1.jsonl", "/b/thread-2.jsonl"]))
       .toBe("/b/thread-2.jsonl");
@@ -937,6 +983,108 @@ describe("rollout public helpers (continued)", () => {
       if (previousCwd === undefined) delete process.env.CWD;
       else process.env.CWD = previousCwd;
     }
+  });
+
+  test("rehydrates the model Codex persisted in each turn context", async () => {
+    const hydrated = await hydrateRollout("thread-model", [
+      sessionMeta("thread-model"),
+      {
+        type: "turn_context",
+        payload: {
+          turn_id: "turn-1",
+          cwd: "/workspace",
+          model: "gpt-5.6-sol",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Done" }],
+        },
+      },
+    ]);
+
+    expect(hydrated.messages[0]).toMatchObject({
+      role: "assistant",
+      modelId: "gpt-5.6-sol",
+      turnId: "turn-1",
+    });
+  });
+
+  test("scopes changing models to their turn and never attributes user messages", async () => {
+    const hydrated = await hydrateRollout("thread-models", [
+      sessionMeta("thread-models"),
+      {
+        type: "turn_context",
+        payload: { turn_id: "turn-1", cwd: "/workspace", model: "gpt-one" },
+      },
+      // A repeated context without a model must not erase the value already
+      // observed for this same turn.
+      {
+        type: "turn_context",
+        payload: { turn_id: "turn-1", cwd: "/workspace" },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "First" }],
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "One" }],
+        },
+      },
+      {
+        type: "turn_context",
+        payload: { turn_id: "turn-2", cwd: "/workspace", model: "gpt-two" },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Two" }],
+        },
+      },
+    ]);
+
+    expect(hydrated.messages.map((message) => ({
+      role: message.role,
+      turnId: message.turnId,
+      modelId: message.modelId,
+    }))).toEqual([
+      { role: "user", turnId: "turn-1", modelId: undefined },
+      { role: "assistant", turnId: "turn-1", modelId: "gpt-one" },
+      { role: "assistant", turnId: "turn-2", modelId: "gpt-two" },
+    ]);
+  });
+
+  test("does not retroactively apply a turn context that arrives after output", async () => {
+    const hydrated = await hydrateRollout("thread-late-model", [
+      sessionMeta("thread-late-model"),
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Before context" }],
+        },
+      },
+      {
+        type: "turn_context",
+        payload: { turn_id: "turn-1", cwd: "/workspace", model: "gpt-late" },
+      },
+    ]);
+
+    expect(hydrated.messages[0]?.modelId).toBeUndefined();
   });
 
   /**

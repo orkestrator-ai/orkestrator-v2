@@ -30,6 +30,10 @@ import type {
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import {
+  isRootAssistantRecord,
+  normalizeBackendModelId,
+} from "@orkestrator/protocol/model-id";
+import {
   structuredOutputFailure,
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
@@ -948,7 +952,8 @@ function parseMcpToolName(
 
 /** Check if a tool name is a Task tool (subagent) */
 function isTaskToolName(toolName: string): boolean {
-  return toolName.toLowerCase() === "task";
+  const normalized = toolName.toLowerCase();
+  return normalized === "task" || normalized === "agent";
 }
 
 /**
@@ -1009,6 +1014,7 @@ function parseMessageContent(
         type: "text",
         value: block.text || "",
         messageUuid,
+        parentTaskUseId: explicitParentTaskUseId,
         blockOffset,
       });
     } else if (block.type === "thinking") {
@@ -1016,12 +1022,14 @@ function parseMessageContent(
       thinkingParts.push({
         type: "thinking",
         content: thinkingContent,
+        parentTaskUseId: explicitParentTaskUseId,
       });
       // Track order: add thinking entry
       orderedParts.push({
         type: "thinking",
         value: thinkingContent,
         messageUuid,
+        parentTaskUseId: explicitParentTaskUseId,
         blockOffset,
       });
     } else if (block.type === "tool_use" && toolTracker) {
@@ -1160,6 +1168,7 @@ function buildMessageParts(
         content: entry.value,
         timestamp: entry.timestamp,
         _messageUuid: entry.messageUuid,
+        parentTaskUseId: entry.parentTaskUseId,
       });
     } else if (entry.type === "tool-ref") {
       const tool = toolTracker.getTool(entry.value);
@@ -1172,6 +1181,7 @@ function buildMessageParts(
         content: entry.value,
         timestamp: entry.timestamp,
         _messageUuid: entry.messageUuid,
+        parentTaskUseId: entry.parentTaskUseId,
       });
     }
   }
@@ -1186,6 +1196,7 @@ function normalizePersistedSessionMessages(
     session_id: string;
     message: unknown;
     parent_tool_use_id: string | null;
+    isSidechain?: boolean;
   }>,
 ): { messages: NormalizedMessage[]; taskRegistry: TaskRegistry } {
   const toolTracker = new ToolTracker();
@@ -1229,12 +1240,24 @@ function normalizePersistedSessionMessages(
       typeof rawTimestamp === "string"
         ? rawTimestamp
         : new Date(now + index).toISOString();
+    const isRootAssistant =
+      entry.raw.type === "assistant"
+      && isRootAssistantRecord(
+        entry.raw.parent_tool_use_id,
+        entry.raw.isSidechain,
+      );
+    const modelId = isRootAssistant
+      && entry.raw.message
+      && typeof entry.raw.message === "object"
+      ? normalizeBackendModelId((entry.raw.message as { model?: unknown }).model)
+      : undefined;
     messages.push({
       id: entry.raw.uuid || generateMessageId(),
       role: entry.raw.type,
       content: entry.content,
       parts,
       timestamp,
+      ...(modelId ? { modelId } : {}),
       // Recorded explicitly rather than inferred from `id`: a record with no
       // uuid falls back to a generated id, which must never be mistaken for a
       // transcript uuid by `resolvePersistedMessageId`.
@@ -1919,6 +1942,7 @@ function settleBackgroundTask(
     session.backgroundTaskControls = undefined;
   }
   closeQueryControlIfUnused(session, owner);
+  session.finishTurnInputIfSettled?.();
   return true;
 }
 
@@ -2065,7 +2089,10 @@ function isSamePublishedPart(
   if (published === next) return true;
   if (!published || published.type !== next.type) return false;
   if (next.type === "text" || next.type === "thinking") {
-    return published.content === next.content;
+    return (
+      published.content === next.content
+      && published.parentTaskUseId === next.parentTaskUseId
+    );
   }
   return false;
 }
@@ -2450,6 +2477,64 @@ async function buildSdkPrompt(
   return singleMessage();
 }
 
+interface HeldSdkPrompt {
+  prompt: AsyncIterable<SDKUserMessage>;
+  close: () => void;
+}
+
+/**
+ * Convert every prompt to streaming-input mode and keep that input open until
+ * the bridge knows the whole turn (including background agents) is settled.
+ *
+ * The Agent SDK closes stdin on the first `result` for string prompts. An
+ * AsyncIterable avoids that single-turn path, but only while the iterable
+ * itself remains open; a one-message generator still closes at the first
+ * result because `canUseTool` makes the SDK wait there before ending input.
+ */
+function holdSdkPromptOpen(
+  sdkPrompt: string | AsyncIterable<SDKUserMessage>,
+  signal: AbortSignal,
+): HeldSdkPrompt {
+  let closed = false;
+  let resolveClosed!: () => void;
+  const closedPromise = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    signal.removeEventListener("abort", close);
+    resolveClosed();
+  };
+  signal.addEventListener("abort", close, { once: true });
+  if (signal.aborted) close();
+
+  async function* stream(): AsyncIterable<SDKUserMessage> {
+    try {
+      if (typeof sdkPrompt === "string") {
+        yield {
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: sdkPrompt }],
+          },
+          parent_tool_use_id: null,
+        };
+      } else {
+        for await (const message of sdkPrompt) {
+          yield message;
+        }
+      }
+      await closedPromise;
+    } finally {
+      close();
+    }
+  }
+
+  return { prompt: stream(), close };
+}
+
 /**
  * How often streamed deltas are folded into a published message snapshot.
  *
@@ -2645,6 +2730,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   let earlyWarningTimeout: ReturnType<typeof setTimeout> | null = null;
   let streamEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
   let queryIteratorControl: SessionState["queryControl"];
+  let closeSdkInput: (() => void) | undefined;
+  let finishTurnInputForThisTurn: (() => void) | undefined;
   // Hoisted out of the `try` so the error path can still publish whatever the
   // coalescing window was holding. Null until the streaming state it closes
   // over exists, which is everything before the SDK query is created.
@@ -2697,8 +2784,20 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       cwd,
       testHooks?.afterAttachmentInitialValidation,
     );
+    const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal);
+    closeSdkInput = heldSdkPrompt.close;
+    let receivedResult = false;
+    const finishTurnInputIfSettled = () => {
+      if (!receivedResult) return;
+      const hasLiveTask = Object.values(session.backgroundTasks ?? {}).some((task) =>
+        LIVE_BACKGROUND_TASK_STATUSES.has(task.status)
+      );
+      if (!hasLiveTask) heldSdkPrompt.close();
+    };
+    finishTurnInputForThisTurn = finishTurnInputIfSettled;
+    session.finishTurnInputIfSettled = finishTurnInputIfSettled;
     const queryIterator = query({
-      prompt: sdkPrompt,
+      prompt: heldSdkPrompt.prompt,
       options: {
         cwd,
         ...claudeExecutableOptions(),
@@ -2721,6 +2820,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // redacted text). Opt back into "summarized" so thinking content renders in the UI.
         thinking: { type: "adaptive", display: "summarized" },
         includePartialMessages: true,
+        // Preserve the full nested transcript. Every forwarded subagent block
+        // carries parent_tool_use_id and is rendered inside its Agent card.
+        forwardSubagentText: true,
         allowedTools: [
           "Read",
           "Edit",
@@ -2732,6 +2834,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           "WebFetch",
           "AskUserQuestion",
           "Task",
+          "Agent",
           // Allow all MCP tools
           "mcp:*",
         ],
@@ -3021,6 +3124,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // large index therefore cannot create a huge sparse array whose iteration
     // stalls the bridge; the small set of received indices is sorted on flush.
     const blocksByApiMessage = new Map<string, Map<number, OrderedPartEntry>>();
+    // Streaming deltas do not consistently repeat their parent relationship.
+    // Remember it from whichever frame supplies it so subagent thinking/text
+    // does not briefly render as parent-agent output before the final block
+    // replaces the stream.
+    const parentTaskByApiMessage = new Map<string, string>();
     // Blocks of each API message already reconciled from non-streaming `assistant`
     // messages. Those messages don't carry the stream's block index, but they
     // arrive in block order, so the running count is the index of the next block.
@@ -3112,6 +3220,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // text/thinking parts are rebuilt from scratch each time.
     let publishedParts: NormalizedPart[] = [];
     let publishedMessageId: string | null = null;
+    let publishedModelId: string | undefined;
 
     const emitCurrentAssistantMessage = () => {
       if (!currentAssistantMessage) return;
@@ -3122,8 +3231,25 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       if (publishedMessageId !== currentAssistantMessage.id) {
         publishedMessageId = currentAssistantMessage.id;
         publishedParts = parts.slice();
+        publishedModelId = currentAssistantMessage.modelId;
         // Stamped on the message itself, before it is serialized, so both this
         // frame and any REST read of the transcript agree on the revision.
+        currentAssistantMessage.revision = (currentAssistantMessage.revision ?? 0) + 1;
+        eventEmitter.emit({
+          type: "message.updated",
+          sessionId,
+          data: { message: currentAssistantMessage },
+        });
+        return;
+      }
+
+      // Model metadata is message-level, not part-level. If the authoritative
+      // SDK response resolves after streamed parts have already been published,
+      // send one full frame so live subscribers learn the same model REST
+      // hydration will return.
+      if (publishedModelId !== currentAssistantMessage.modelId) {
+        publishedParts = parts.slice();
+        publishedModelId = currentAssistantMessage.modelId;
         currentAssistantMessage.revision = (currentAssistantMessage.revision ?? 0) + 1;
         eventEmitter.emit({
           type: "message.updated",
@@ -3168,6 +3294,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // full-message emit) happens at most once per STREAM_EVENT_COALESCE_MS.
     let streamEventsDirty = false;
     let lastStreamMessageKey: string | null = null;
+    let lastStreamModelId: string | undefined;
 
     const flushStreamedAssistantMessage = () => {
       if (streamEventFlushTimer) {
@@ -3189,6 +3316,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           content,
           parts: finalParts,
           timestamp: new Date().toISOString(),
+          ...(lastStreamModelId ? { modelId: lastStreamModelId } : {}),
         };
         session.messages.push(currentAssistantMessage);
       } else {
@@ -3213,6 +3341,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     const applyPartialAssistantMessage = (partialMessage: any): boolean => {
       const streamEvent = partialMessage.event;
       const eventType = streamEvent?.type;
+      const explicitParentTaskUseId =
+        typeof partialMessage.parent_tool_use_id === "string"
+        && partialMessage.parent_tool_use_id.length > 0
+          ? partialMessage.parent_tool_use_id
+          : undefined;
 
       // `message_start` is the only stream event carrying the API message id;
       // every later event for the same message must inherit it.
@@ -3221,8 +3354,19 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           ? streamEvent.message.id
           : undefined;
         currentStreamApiMessageId = apiMessageId ?? null;
+        const isRootAssistant = isRootAssistantRecord(
+          partialMessage.parent_tool_use_id,
+          partialMessage.isSidechain,
+        );
+        const modelId = isRootAssistant
+          ? normalizeBackendModelId(streamEvent.message?.model)
+          : undefined;
+        if (modelId) lastStreamModelId = modelId;
         if (apiMessageId) {
           getBlocksForMessage(apiMessageId);
+          if (explicitParentTaskUseId) {
+            parentTaskByApiMessage.set(apiMessageId, explicitParentTaskUseId);
+          }
         }
         return false;
       }
@@ -3248,6 +3392,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       if (!messageKey) {
         return false;
       }
+      const parentTaskUseId =
+        explicitParentTaskUseId ?? parentTaskByApiMessage.get(messageKey);
+      if (explicitParentTaskUseId) {
+        parentTaskByApiMessage.set(messageKey, explicitParentTaskUseId);
+      }
 
       const entriesForMessage = getBlocksForMessage(messageKey);
       let entry = entriesForMessage.get(blockIndex);
@@ -3261,6 +3410,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         chunk: string,
       ): OrderedPartEntry => {
         if (entry?.type === type) {
+          entry.parentTaskUseId ??= parentTaskUseId;
           (entry.pendingChunks ??= []).push(chunk);
           return entry;
         }
@@ -3270,6 +3420,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           value: `${entry?.value ?? ""}${chunk}`,
           timestamp: entry?.timestamp ?? new Date().toISOString(),
           messageUuid: messageKey,
+          parentTaskUseId: entry?.parentTaskUseId ?? parentTaskUseId,
         };
       };
 
@@ -3281,6 +3432,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             value: typeof contentBlock.text === "string" ? contentBlock.text : "",
             timestamp: entry?.timestamp ?? new Date().toISOString(),
             messageUuid: messageKey,
+            parentTaskUseId,
           };
         } else if (contentBlock?.type === "thinking") {
           entry = {
@@ -3288,6 +3440,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             value: typeof contentBlock.thinking === "string" ? contentBlock.thinking : "",
             timestamp: entry?.timestamp ?? new Date().toISOString(),
             messageUuid: messageKey,
+            parentTaskUseId,
           };
         } else {
           return false;
@@ -3632,6 +3785,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           }
           emitBackgroundTasks();
         }
+        finishTurnInputIfSettled();
 
         // Emit generic system event for other subtypes
         if (sysMsg.subtype && sysMsg.subtype !== "init") {
@@ -3704,6 +3858,19 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // transcript record; the latest is the inclusive end of this message,
         // which is what a fork boundary must point at.
         const sdkMessageUuid = (message as { uuid?: unknown }).uuid;
+        const observedModel = (
+          message as { message?: { model?: unknown } }
+        ).message?.model;
+        const parentToolUseId = (
+          message as { parent_tool_use_id?: unknown }
+        ).parent_tool_use_id;
+        const isRootAssistant = isRootAssistantRecord(
+          parentToolUseId,
+          (message as { isSidechain?: unknown }).isSidechain,
+        );
+        const modelId = isRootAssistant
+          ? normalizeBackendModelId(observedModel)
+          : undefined;
         if (!currentAssistantMessage) {
           currentAssistantMessage = {
             id: messageKey,
@@ -3711,6 +3878,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             content: accumulatedContent,
             parts: finalParts,
             timestamp: new Date().toISOString(),
+            ...(modelId ? { modelId } : {}),
             ...(typeof sdkMessageUuid === "string" ? { sdkUuid: sdkMessageUuid } : {}),
           };
           session.messages.push(currentAssistantMessage);
@@ -3721,6 +3889,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         } else {
           currentAssistantMessage.content = accumulatedContent;
           currentAssistantMessage.parts = finalParts;
+          if (modelId) {
+            currentAssistantMessage.modelId = modelId;
+          }
           if (typeof sdkMessageUuid === "string") {
             currentAssistantMessage.sdkUuid = sdkMessageUuid;
           }
@@ -3788,6 +3959,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       } else if (isSdkResultMessage(message as SdkMessageBase)) {
         // Query completed - log full result for debugging
         const resultMsg = message as SdkResultMessage;
+        receivedResult = true;
         console.log("[session-manager] Query result", {
           sessionId,
           subtype: resultMsg.subtype,
@@ -3850,6 +4022,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             });
           }
           console.log("[session-manager] Query completed successfully", { sessionId });
+          finishTurnInputIfSettled();
         } else {
           console.error("[session-manager] Query error:", resultMsg.subtype, { sessionId });
           const resultError = resultMsg.errors?.filter(Boolean).join("\n")
@@ -4056,6 +4229,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     }
     throw error;
   } finally {
+    closeSdkInput?.();
+    if (session.finishTurnInputIfSettled === finishTurnInputForThisTurn) {
+      session.finishTurnInputIfSettled = undefined;
+    }
     // The loop above is the only consumer of this iterator, and it ends either
     // exhausted or through an abrupt exit — which invokes `return()`, i.e. the
     // SDK's `cleanup()` → `transport.close()`. So the handle is dead either

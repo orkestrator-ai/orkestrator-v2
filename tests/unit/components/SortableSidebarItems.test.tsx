@@ -372,7 +372,10 @@ describe("sortable sidebar items", () => {
 
     expect(onDeleteProject).toHaveBeenCalledTimes(1);
     expect(onDeleteProject).toHaveBeenCalledWith("project-1");
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    // confirmDelete awaits the deletion callback, so flush that continuation
+    // with act. Avoid waitFor here: Radix's focus-restoration timers can make an
+    // already-closed portal consume most of Bun's per-test timeout under load.
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   test("SortableProjectGroup keeps the delete confirmation open after deletion fails", async () => {

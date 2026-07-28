@@ -110,6 +110,7 @@ export function normalizeClaudePart(part: ClaudeMessagePart): NativeMessagePart 
         content: part.content ?? "",
         ...(part.timestamp ? { createdAt: part.timestamp } : {}),
         sourcePartId: part._messageUuid,
+        parentTaskUseId: part.parentTaskUseId,
       };
     case "thinking":
       return {
@@ -117,6 +118,7 @@ export function normalizeClaudePart(part: ClaudeMessagePart): NativeMessagePart 
         content: part.content ?? "",
         ...(part.timestamp ? { createdAt: part.timestamp } : {}),
         sourcePartId: part._messageUuid,
+        parentTaskUseId: part.parentTaskUseId,
       };
     case "file":
       return { type: "file", content: part.content ?? "" };
@@ -142,6 +144,15 @@ function groupClaudeTaskParts(parts: NativeMessagePart[]): NativeMessagePart[] {
   let currentTask: NativeTaskGroupPart | null = null;
 
   for (const part of parts) {
+    const explicitParent = part.parentTaskUseId
+      ? taskGroups.get(part.parentTaskUseId)
+      : undefined;
+    if (explicitParent && !(part.type === "tool-invocation" && isTaskTool(part.toolName))) {
+      explicitParent.childTools.push(part);
+      currentTask = explicitParent;
+      continue;
+    }
+
     if (part.type === "text" || part.type === "file") {
       currentTask = null;
       result.push(part);
@@ -176,10 +187,7 @@ function groupClaudeTaskParts(parts: NativeMessagePart[]): NativeMessagePart[] {
       continue;
     }
 
-    let parentTask = part.parentTaskUseId
-      ? taskGroups.get(part.parentTaskUseId)
-      : undefined;
-    parentTask ??= currentTask ?? undefined;
+    const parentTask = currentTask ?? undefined;
 
     if (parentTask) {
       parentTask.childTools.push(part);
@@ -398,6 +406,7 @@ function normalizeClaudeMessageUncached(message: ClaudeMessage): NativeMessage {
       ),
     ),
     createdAt: message.timestamp,
+    ...(message.modelId ? { modelId: message.modelId } : {}),
   };
 }
 

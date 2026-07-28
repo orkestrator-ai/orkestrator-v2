@@ -134,6 +134,8 @@ export interface CodexMessage {
   content: string;
   parts: NativeMessagePart[];
   createdAt: string;
+  /** Model confirmed by the Codex app-server/rollout for this turn. */
+  modelId?: string;
   planReview?: boolean;
   turnId?: string;
 }

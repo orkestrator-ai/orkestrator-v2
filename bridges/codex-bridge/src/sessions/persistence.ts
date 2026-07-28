@@ -47,6 +47,8 @@ export interface PersistedBridgeSession {
   lastAcceptedRequestId?: string;
   structuredOutputRequestId?: string;
   structuredOutput?: StructuredOutputResult;
+  /** Sparse turn -> model overlay for reroutes absent from Codex rollouts. */
+  confirmedModelsByTurn?: Record<string, string>;
   lastAccessed: string;
 }
 
@@ -151,6 +153,22 @@ function isPersistedBridgeSession(
   if (
     session.structuredOutput !== undefined
     && !isStructuredOutputResult(session.structuredOutput)
+  ) {
+    return false;
+  }
+  if (
+    session.confirmedModelsByTurn !== undefined
+    && (
+      !session.confirmedModelsByTurn
+      || typeof session.confirmedModelsByTurn !== "object"
+      || Array.isArray(session.confirmedModelsByTurn)
+      || Object.entries(session.confirmedModelsByTurn).some(
+        ([turnId, modelId]) =>
+          turnId.trim().length === 0
+          || typeof modelId !== "string"
+          || modelId.trim().length === 0,
+      )
+    )
   ) {
     return false;
   }
@@ -437,6 +455,7 @@ export class BridgeSessionStore {
     lastAcceptedRequestId?: string;
     structuredOutputRequestId?: string;
     structuredOutput?: StructuredOutputResult;
+    confirmedModelsByTurn?: Record<string, string>;
   }): PersistedBridgeSession {
     return {
       bridgeSessionId: options.bridgeSessionId,
@@ -448,6 +467,7 @@ export class BridgeSessionStore {
       lastAcceptedRequestId: options.lastAcceptedRequestId,
       structuredOutputRequestId: options.structuredOutputRequestId,
       structuredOutput: options.structuredOutput,
+      confirmedModelsByTurn: options.confirmedModelsByTurn,
       lastAccessed: new Date(this.now()).toISOString(),
     };
   }

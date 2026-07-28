@@ -13,6 +13,7 @@ import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { TURN_STOPPED_BY_USER } from "@/lib/chat/client-only-messages";
 import {useClaudeStore} from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -107,6 +108,8 @@ interface ClaudeChatTabProps {
   tabId: string;
   data: ClaudeNativeData;
   isActive: boolean;
+  /** Whether this pane currently owns document-level shortcuts. */
+  ownsGlobalShortcuts?: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
   initialAgentModel?: string;
@@ -131,6 +134,7 @@ export function ClaudeChatTab({
   tabId,
   data,
   isActive,
+  ownsGlobalShortcuts = isActive,
   initialPrompt,
   isReviewTab = false,
   initialAgentModel,
@@ -227,6 +231,10 @@ export function ClaudeChatTab({
       (state) => state.modelCatalogs.get(environmentId)?.models ?? state.models,
       [environmentId],
     ),
+  );
+  const resolveModelLabel = useCallback(
+    (modelId: string) => resolveCatalogModelLabel(modelId, models),
+    [models],
   );
 
   const loadAuthoritativeModels = useCallback(
@@ -2113,12 +2121,14 @@ export function ClaudeChatTab({
   return (
     <NativeChatShell
       agentLabel="Claude"
+      isActive={ownsGlobalShortcuts}
       containerId={containerId}
       connectionState={connectionState}
       errorMessage={errorMessage}
       serverLog={serverLog}
       onRetry={handleRetry}
       messages={displayMessages}
+      resolveModelLabel={resolveModelLabel}
       isLoading={session?.isLoading ?? false}
       elapsedSeconds={elapsedSeconds}
       finalElapsedSeconds={finalElapsedSeconds}

@@ -11,6 +11,7 @@ import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import {
   OPTIMISTIC_MESSAGE_PREFIX,
   TURN_STOPPED_BY_USER,
@@ -105,6 +106,8 @@ interface OpenCodeChatTabProps {
   tabId: string;
   data: OpenCodeNativeData;
   isActive: boolean;
+  /** Whether this pane currently owns document-level shortcuts. */
+  ownsGlobalShortcuts?: boolean;
   /** Initial prompt to send after session creation */
   initialPrompt?: string;
   isReviewTab?: boolean;
@@ -178,6 +181,7 @@ export function OpenCodeChatTab({
   tabId,
   data,
   isActive,
+  ownsGlobalShortcuts = isActive,
   initialPrompt,
   isReviewTab = false,
   initialAgentModel,
@@ -514,6 +518,10 @@ export function OpenCodeChatTab({
       (state) => state.models.get(environmentId) ?? EMPTY_MODELS,
       [environmentId],
     ),
+  );
+  const resolveModelLabel = useCallback(
+    (modelId: string) => resolveCatalogModelLabel(modelId, models),
+    [models],
   );
 
   // Rehydrate a last-known-good catalogue before a server finishes starting.
@@ -2458,12 +2466,14 @@ export function OpenCodeChatTab({
   return (
     <NativeChatShell
       agentLabel="OpenCode"
+      isActive={ownsGlobalShortcuts}
       containerId={containerId}
       connectionState={connectionState}
       errorMessage={errorMessage}
       serverLog={serverLog}
       onRetry={handleRetry}
       messages={displayMessages}
+      resolveModelLabel={resolveModelLabel}
       isLoading={session?.isLoading ?? false}
       elapsedSeconds={elapsedSeconds}
       finalElapsedSeconds={finalElapsedSeconds}

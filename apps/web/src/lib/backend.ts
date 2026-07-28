@@ -224,20 +224,45 @@ export async function attachTerminal(
   return invoke<string>("attach_terminal", { containerId, cols, rows });
 }
 
+export interface TerminalSessionCreateResult {
+  sessionId: string;
+  created: boolean;
+}
+
+function parseTerminalSessionCreateResult(
+  value: unknown,
+): TerminalSessionCreateResult {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as { sessionId?: unknown }).sessionId !== "string" ||
+    (value as { sessionId: string }).sessionId.length === 0 ||
+    typeof (value as { created?: unknown }).created !== "boolean"
+  ) {
+    throw new Error("Backend returned an invalid terminal session result");
+  }
+  return value as TerminalSessionCreateResult;
+}
+
 export async function createTerminalSession(
   containerId: string,
   cols: number,
   rows: number,
   user?: string,
   trackEnvironmentActivity = false,
-): Promise<string> {
-  return invoke<string>("create_terminal_session", {
+  environmentId?: string,
+  terminalKey?: string,
+): Promise<TerminalSessionCreateResult> {
+  const result = await invoke<unknown>("create_terminal_session", {
     containerId,
     cols,
     rows,
     user,
     trackEnvironmentActivity,
+    environmentId,
+    terminalKey,
   });
+  return parseTerminalSessionCreateResult(result);
 }
 
 export async function startTerminalSession(sessionId: string): Promise<void> {
@@ -260,14 +285,44 @@ export async function getTerminalOutputBuffer(sessionId: string): Promise<string
 }
 
 export interface TerminalOutputSnapshot {
-  text: string;
-  sequence: number;
+  output: string;
+  revision: number;
+  generation: number;
+  truncated: boolean;
+}
+
+export interface TerminalOutputEvent {
+  bytesBase64: string;
+  revision: number;
+  generation: number;
 }
 
 export async function getTerminalOutputSnapshot(
   sessionId: string,
 ): Promise<TerminalOutputSnapshot> {
-  return invoke<TerminalOutputSnapshot>("get_terminal_output_snapshot", { sessionId });
+  const value = await invoke<unknown>("get_terminal_output_snapshot", { sessionId });
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as { output?: unknown }).output !== "string" ||
+    !Number.isSafeInteger((value as { revision?: unknown }).revision) ||
+    (value as { revision: number }).revision < 0 ||
+    !Number.isSafeInteger((value as { generation?: unknown }).generation) ||
+    (value as { generation: number }).generation < 0 ||
+    (
+      (value as { truncated?: unknown }).truncated !== undefined &&
+      typeof (value as { truncated?: unknown }).truncated !== "boolean"
+    )
+  ) {
+    throw new Error("Backend returned an invalid terminal output snapshot");
+  }
+  return {
+    output: (value as { output: string }).output,
+    revision: (value as { revision: number }).revision,
+    generation: (value as { generation: number }).generation,
+    // Accept older desktop backends during rolling upgrades.
+    truncated: (value as { truncated?: boolean }).truncated ?? false,
+  };
 }
 
 export async function getEnvironmentSetupSession(
@@ -1809,13 +1864,16 @@ export async function createLocalTerminalSession(
   cols: number,
   rows: number,
   trackEnvironmentActivity = false,
-): Promise<string> {
-  return invoke<string>("create_local_terminal_session", {
+  terminalKey?: string,
+): Promise<TerminalSessionCreateResult> {
+  const result = await invoke<unknown>("create_local_terminal_session", {
     environmentId,
     cols,
     rows,
     trackEnvironmentActivity,
+    terminalKey,
   });
+  return parseTerminalSessionCreateResult(result);
 }
 
 /** Start a local terminal session and begin forwarding output */
@@ -1911,6 +1969,8 @@ export interface FeaturePlanMessage {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt: string;
+  /** Backend-confirmed model that produced this assistant response. */
+  modelId?: string;
   /** Durable recovery marker for assistant responses that carry plan/story state. */
   stateApplication?: "pending" | "applied" | "superseded";
 }
@@ -2033,12 +2093,14 @@ export async function appendFeaturePlanMessage(
   role: FeaturePlanMessage["role"],
   content: string,
   stateApplication?: FeaturePlanMessage["stateApplication"],
+  modelId?: string,
 ): Promise<FeaturePlan> {
   return invoke<FeaturePlan>("append_feature_plan_message", {
     featureId,
     role,
     content,
     stateApplication,
+    modelId,
   });
 }
 
@@ -2048,6 +2110,7 @@ export async function appendFeatureStoryMessage(
   role: FeaturePlanMessage["role"],
   content: string,
   stateApplication?: FeaturePlanMessage["stateApplication"],
+  modelId?: string,
 ): Promise<FeaturePlan> {
   return invoke<FeaturePlan>("append_feature_story_message", {
     featureId,
@@ -2055,5 +2118,6 @@ export async function appendFeatureStoryMessage(
     role,
     content,
     stateApplication,
+    modelId,
   });
 }

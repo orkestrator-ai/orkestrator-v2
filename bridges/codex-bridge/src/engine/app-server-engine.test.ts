@@ -179,6 +179,47 @@ describe("startup and capabilities", () => {
 });
 
 describe("thread lifecycle", () => {
+  test("returns the model resolved by app-server rather than echoing request intent", async () => {
+    const h = harness({
+      "thread/start": () => ({
+        thread: thread("t1"),
+        model: "gpt-5.6-terra",
+      }),
+    });
+    await h.engine.start();
+
+    const started = await h.engine.startThread({ config: BUILD });
+
+    expect(BUILD.model).toBe("gpt-5.6-sol");
+    expect(started.model).toBe("gpt-5.6-terra");
+  });
+
+  test("ignores a blank response-envelope model", async () => {
+    const h = harness({
+      "thread/start": () => ({
+        thread: thread("t1", { model: "untrusted-raw-model" }),
+        model: "   ",
+      }),
+    });
+    await h.engine.start();
+
+    expect((await h.engine.startThread({ config: BUILD })).model).toBeUndefined();
+  });
+
+  test("ignores a non-string response-envelope model", async () => {
+    const h = harness({
+      "thread/resume": () => ({
+        thread: thread("t1", { model: "untrusted-raw-model" }),
+        model: 42,
+      }),
+    });
+    await h.engine.start();
+
+    expect(
+      (await h.engine.resumeThread("t1", { config: BUILD })).model,
+    ).toBeUndefined();
+  });
+
   test("thread/start passes explicit policy and clears the service tier", async () => {
     const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
     await h.engine.start();
@@ -229,6 +270,19 @@ describe("thread lifecycle", () => {
     expect(resumed.turns![0]).toMatchObject({ id: "turn-1", clientId: "req-1" });
     // Unix seconds are converted to ISO for the bridge's own model.
     expect(resumed.turns![0]!.startedAt).toBe("2023-11-14T22:13:20.000Z");
+  });
+
+  test("resume reads the model from the response envelope, not the raw thread", async () => {
+    const h = harness({
+      "thread/resume": () => ({
+        thread: thread("t1", { model: "unreachable-raw-model" }),
+        model: "gpt-resumed",
+      }),
+    });
+    await h.engine.start();
+
+    const resumed = await h.engine.resumeThread("t1", { config: BUILD });
+    expect(resumed.model).toBe("gpt-resumed");
   });
 
   test("an unmaterialized thread reads as empty turns, not an error", async () => {
@@ -885,7 +939,12 @@ describe("server requests", () => {
 
 describe("thread operations behind the new session routes", () => {
   test("forkThread forwards lastTurnId and binds the returned thread", async () => {
-    const h = harness({ "thread/fork": () => ({ thread: thread("fork-1") }) });
+    const h = harness({
+      "thread/fork": () => ({
+        thread: thread("fork-1", { model: "unreachable-raw-model" }),
+        model: "gpt-forked",
+      }),
+    });
     await h.engine.start();
 
     const forked = await h.engine.forkThread("t1", BUILD, "turn-3");
@@ -894,6 +953,7 @@ describe("thread operations behind the new session routes", () => {
     // A handle is what every later call addresses; a fork with none would be
     // unusable even though the RPC succeeded.
     expect(forked.handle).toBeTruthy();
+    expect(forked.model).toBe("gpt-forked");
     expect(h.child().requests.find((entry) => entry.method === "thread/fork")?.params)
       .toMatchObject({ threadId: "t1", lastTurnId: "turn-3" });
   });

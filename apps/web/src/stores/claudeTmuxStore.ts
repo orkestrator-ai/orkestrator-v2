@@ -23,6 +23,10 @@ import {
   type ToolDiffMetadata,
 } from "@/lib/claude-client";
 import type { FileMention } from "@/types";
+import {
+  isRootAssistantRecord,
+  normalizeBackendModelId,
+} from "@orkestrator/protocol/model-id";
 
 export function createClaudeTmuxStateKey(environmentId: string, tabId: string): string {
   return `env:${environmentId}:tab:${tabId}`;
@@ -603,12 +607,20 @@ function applyLine(state: TmuxTabState, line: TranscriptLine): TmuxTabState {
     return state;
   }
 
+  const parentToolUseId = line.parent_tool_use_id;
+  const isRootAssistant =
+    role === "assistant"
+    && isRootAssistantRecord(parentToolUseId, line.isSidechain);
+  const modelId = isRootAssistant
+    ? normalizeBackendModelId(line.message?.model)
+    : undefined;
   const newMessage: ClaudeMessage = {
     id,
     role,
     content: textOfParts(parts),
     parts,
     timestamp,
+    ...(modelId ? { modelId } : {}),
   };
 
   const existingIdx = state.messages.findIndex((m) => m.id === id);
@@ -811,6 +823,7 @@ export function compactConsecutiveAssistantMessages(
         ...previous,
         content: textOfParts(parts),
         parts,
+        ...(message.modelId ? { modelId: message.modelId } : {}),
       };
     } else {
       compacted.push(message);
@@ -897,6 +910,7 @@ function mergeMessage(prev: ClaudeMessage, next: ClaudeMessage): ClaudeMessage {
     content: textOfParts(parts),
     parts,
     timestamp: next.timestamp || prev.timestamp,
+    ...(next.modelId ? { modelId: next.modelId } : {}),
   };
 }
 

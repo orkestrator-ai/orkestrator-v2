@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, jest, mock, test } from "bun:tes
 import { EventEmitter } from "node:events";
 import * as realChildProcess from "node:child_process";
 import * as realFs from "node:fs";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -3746,6 +3746,37 @@ describe("getClaudeRuntimeVersions", () => {
       expect(versions.cliVersion).toBe(manifest.claudeCodeVersion);
     });
   });
+
+  test("a real slow executable times out without blocking the event loop", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-version-timeout-"));
+    const executable = join(directory, "slow-claude");
+    await writeFile(executable, "#!/bin/sh\nexec /bin/sleep 30\n");
+    await chmod(executable, 0o755);
+    mockExecFile.mockImplementation(originalExecFile);
+
+    try {
+      await withClaudeCliPath(executable, async () => {
+        let timerFired = false;
+        setTimeout(() => {
+          timerFired = true;
+        }, 25);
+        const startedAt = Date.now();
+        const versionsPromise = getClaudeRuntimeVersions();
+
+        await waitFor(() => timerFired, 500);
+        expect(timerFired).toBe(true);
+
+        const manifest = await readBundledManifest();
+        const versions = await versionsPromise;
+        const elapsedMs = Date.now() - startedAt;
+        expect(elapsedMs).toBeGreaterThanOrEqual(4_500);
+        expect(elapsedMs).toBeLessThan(10_000);
+        expect(versions.cliVersion).toBe(manifest.claudeCodeVersion);
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 12_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -4381,6 +4412,57 @@ describe("evictIdleHydratedTranscripts", () => {
     expect(evictIdleHydratedTranscripts()).toEqual([]);
     expect(controlled.messages.length).toBeGreaterThan(0);
     expect(running.messages.length).toBeGreaterThan(0);
+  });
+
+  test("keeps a transcript referenced by a pending question", async () => {
+    const state = await hydratedIdleSession();
+    markStale(state);
+    const promptPromise = sendPrompt(state.id, "ask");
+    const call = await nextQueryCall();
+    const toolPromise = call.options.canUseTool!("AskUserQuestion", {
+      questions: [{ question: "Keep this transcript?" }],
+    });
+    await waitFor(() => getPendingQuestions(state.id).length === 1);
+
+    // Isolate the interaction guard from the running-turn guards. Production
+    // normally has all of these at once, but each is independently required
+    // because cleanup ordering can clear the control fields first.
+    state.status = "idle";
+    state.abortController = undefined;
+    state.queryControl = undefined;
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(state.messages.length).toBeGreaterThan(0);
+
+    const [question] = getPendingQuestions(state.id);
+    expect(dismissQuestion(question!.id)).toBe(true);
+    expect((await toolPromise).behavior).toBe("deny");
+    call.finish();
+    await promptPromise;
+  });
+
+  test("keeps a transcript referenced by a pending plan approval", async () => {
+    const state = await hydratedIdleSession();
+    markStale(state);
+    const promptPromise = sendPrompt(state.id, "plan", {
+      permissionMode: "plan",
+    });
+    const call = await nextQueryCall();
+    const toolPromise = call.options.canUseTool!("ExitPlanMode", {
+      plan: "Keep this transcript",
+    });
+    await waitFor(() => getPendingPlanApprovals(state.id).length === 1);
+
+    state.status = "idle";
+    state.abortController = undefined;
+    state.queryControl = undefined;
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(state.messages.length).toBeGreaterThan(0);
+
+    const [approval] = getPendingPlanApprovals(state.id);
+    expect(respondToPlanApproval(approval!.id, true)).toBe(true);
+    expect((await toolPromise).behavior).toBe("allow");
+    call.finish();
+    await promptPromise;
   });
 
   test("does not mark an already-empty hydrated session for rehydration", async () => {

@@ -259,9 +259,22 @@ description: First description
 ---`,
     );
 
-    expect(await discoverSlashCommands(cwd)).toContain("/deploy - First description");
-    // Second discovery is served from the description cache; same answer.
-    expect(await discoverSlashCommands(cwd)).toContain("/deploy - First description");
+    let frontmatterReads = 0;
+    const testHooks = {
+      onFrontmatterRead: () => {
+        frontmatterReads += 1;
+      },
+    };
+    expect(await discoverSlashCommands(cwd, testHooks)).toContain(
+      "/deploy - First description",
+    );
+    expect(frontmatterReads).toBe(1);
+    // Second discovery is served from the description cache without reopening
+    // the command file.
+    expect(await discoverSlashCommands(cwd, testHooks)).toContain(
+      "/deploy - First description",
+    );
+    expect(frontmatterReads).toBe(1);
 
     // An on-disk edit changes the file's fingerprint (size differs even when
     // the mtime granularity is coarse), so the cache must re-read it.
@@ -271,9 +284,10 @@ description: First description
 description: Second, longer description
 ---`,
     );
-    expect(await discoverSlashCommands(cwd)).toContain(
+    expect(await discoverSlashCommands(cwd, testHooks)).toContain(
       "/deploy - Second, longer description",
     );
+    expect(frontmatterReads).toBe(2);
   });
 
   test("parses the description of a command with a large body without choking", async () => {

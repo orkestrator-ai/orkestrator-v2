@@ -65,6 +65,17 @@ describe("configStore", () => {
     expect(state.config).toEqual(newConfig);
   });
 
+  test("setConfig preserves state and config identity for equal data", () => {
+    const before = useConfigStore.getState();
+    const equalConfig = JSON.parse(JSON.stringify(before.config));
+
+    before.setConfig(equalConfig);
+
+    const after = useConfigStore.getState();
+    expect(after).toBe(before);
+    expect(after.config).toBe(before.config);
+  });
+
   test("updateGlobalConfig partially updates global config", () => {
     useConfigStore.getState().updateGlobalConfig({
       containerResources: {

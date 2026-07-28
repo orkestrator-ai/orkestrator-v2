@@ -19,6 +19,8 @@ import {
 const sortByOrder = (sessions: Session[]): Session[] =>
   [...sessions].sort((a, b) => a.order - b.order);
 
+const activeSessionLoadRequests = new Map<string, object>();
+
 interface SessionState {
   // State
   /** All sessions keyed by session ID */
@@ -93,6 +95,8 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
 
   // Actions
   loadSessionsForEnvironment: async (environmentId) => {
+    const requestToken = {};
+    activeSessionLoadRequests.set(environmentId, requestToken);
     set((state) => ({
       loadingEnvironments: new Set(state.loadingEnvironments).add(environmentId),
       error: null,
@@ -100,6 +104,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
 
     try {
       const sessions = await getSessionsByEnvironment(environmentId);
+      if (activeSessionLoadRequests.get(environmentId) !== requestToken) return;
       set((state) => {
         const existing = [...state.sessions.values()].filter(
           (session) => session.environmentId === environmentId,
@@ -145,6 +150,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
         };
       });
     } catch (error) {
+      if (activeSessionLoadRequests.get(environmentId) !== requestToken) return;
       set((state) => {
         const newLoading = new Set(state.loadingEnvironments);
         newLoading.delete(environmentId);
@@ -153,6 +159,10 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
           loadingEnvironments: newLoading,
         };
       });
+    } finally {
+      if (activeSessionLoadRequests.get(environmentId) === requestToken) {
+        activeSessionLoadRequests.delete(environmentId);
+      }
     }
   },
 

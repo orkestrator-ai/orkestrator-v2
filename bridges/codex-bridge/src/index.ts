@@ -161,9 +161,29 @@ const codexPathOverride = process.env.CODEX_PATH || "codex";
  */
 const BRIDGE_VERSION = "1.0.0";
 const execFile = promisify(execFileCallback);
-const subscribers = new Set<(event: SseEvent, revision: number) => Promise<void> | void>();
-/** Retains recent events so a reconnecting client can replay instead of resyncing. */
-const eventRing = new EventRing<SseEvent>();
+type SseSubscriber = (
+  event: SseEvent,
+  revision: number,
+  serializedData: string,
+) => Promise<void> | void;
+const subscribers = new Set<SseSubscriber>();
+export const MAX_REPLAY_SSE_BYTES = 32 * 1024 * 1024;
+interface RetainedSseEvent {
+  type: SseEvent["type"];
+  sessionId?: string;
+  serializedData: string;
+  bytes: number;
+}
+/**
+ * Retains immutable wire payloads rather than mutable message objects.
+ *
+ * The byte limit matters more than the frame count for growing message snapshots:
+ * 512 cumulative multi-megabyte strings would otherwise consume gigabytes.
+ */
+const eventRing = new EventRing<RetainedSseEvent>(undefined, {
+  maxBytes: MAX_REPLAY_SSE_BYTES,
+  measureBytes: (event) => event.bytes,
+});
 /** Interval for the idle-thread sweep. */
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const codexRawLogDir = normalizeOptionalEnvPath("ORKESTRATOR_CODEX_RAW_LOG_DIR");
@@ -438,34 +458,26 @@ const FALLBACK_MODELS: BridgeModel[] = [
  * tell what it has already seen. Fan-out stays fire-and-forget: a slow browser
  * must never back-pressure the reducer that called this.
  */
-/**
- * Serialized `data:` payload per event object, computed on first use.
- *
- * Every subscriber used to `JSON.stringify` the same payload independently, and
- * a ring replay stringified it again — for `message.updated` that is a full
- * message snapshot per subscriber per frame. The ring retains the same event
- * object it fanned out, so keying by identity lets live fan-out and replays
- * share one string. (Filtered subscribers never serialize at all: their
- * cursor-only frames carry a constant `"{}"`.)
- */
-const serializedSseEventData = new WeakMap<SseEvent, string>();
-
 function serializeSseEventData(event: SseEvent): string {
-  const cached = serializedSseEventData.get(event);
-  if (cached !== undefined) return cached;
-  const data = JSON.stringify({
+  return JSON.stringify({
     sessionId: event.sessionId,
     ...(event.data ?? {}),
   });
-  serializedSseEventData.set(event, data);
-  return data;
 }
 
 function emit(event: SseEvent): void {
-  const revision = eventRing.append(event);
+  // Serialize once, synchronously, before a canonical message object can mutate.
+  // Both live subscribers and replay use this exact immutable snapshot.
+  const serializedData = serializeSseEventData(event);
+  const revision = eventRing.append({
+    type: event.type,
+    sessionId: event.sessionId,
+    serializedData,
+    bytes: Buffer.byteLength(serializedData, "utf8"),
+  });
   for (const subscriber of subscribers) {
     try {
-      void Promise.resolve(subscriber(event, revision)).catch((error) => {
+      void Promise.resolve(subscriber(event, revision, serializedData)).catch((error) => {
         console.error("[codex-bridge] Failed to notify SSE subscriber:", error);
       });
     } catch (error) {
@@ -711,9 +723,7 @@ export const __testing = {
   startSelectedEngineForTesting: startSelectedEngine,
   startSseKeepaliveForTesting: startSseKeepalive,
   sweepIdleThreadsForTesting: sweepIdleThreads,
-  subscribeForTesting: (
-    subscriber: (event: SseEvent, revision: number) => Promise<void> | void,
-  ) => {
+  subscribeForTesting: (subscriber: SseSubscriber) => {
     subscribers.add(subscriber);
     return () => subscribers.delete(subscriber);
   },
@@ -1294,7 +1304,11 @@ app.get("/event/subscribe", (c) => {
       { onOverflow: () => failSlowSubscriber("write backlog exceeded its cap") },
     );
 
-    const frameFor = (event: SseEvent, revision: number) => {
+    const frameFor = (
+      event: Pick<SseEvent, "type" | "sessionId">,
+      revision: number,
+      serializedData: string,
+    ) => {
       // A tab only renders its own session. Preserve the bridge-wide cursor for
       // unrelated events, but do not serialize and transmit their potentially
       // megabyte-sized message snapshots to every other tab.
@@ -1310,7 +1324,7 @@ app.get("/event/subscribe", (c) => {
         // The `id:` is what makes replay possible at all — it is the cursor the
         // client echoes back on its next connection.
         id: String(revision),
-        data: serializeSseEventData(event),
+        data: serializedData,
       };
     };
 
@@ -1325,10 +1339,14 @@ app.get("/event/subscribe", (c) => {
     // Snapshot the fresh-client anchor before subscribing. These statements are
     // synchronous, so no event can land between the snapshot and registration.
     const anchorRevision = cursor ?? eventRing.latestRevision;
-    let buffered: Array<{ event: SseEvent; revision: number }> | null = [];
+    let buffered: Array<{
+      event: Pick<SseEvent, "type" | "sessionId">;
+      revision: number;
+      serializedData: string;
+    }> | null = [];
     let highestSent = anchorRevision;
 
-    const listener = async (event: SseEvent, revision: number) => {
+    const listener: SseSubscriber = async (event, revision, serializedData) => {
       if (buffered) {
         if (
           buffered.length
@@ -1337,12 +1355,16 @@ app.get("/event/subscribe", (c) => {
           failSlowSubscriber("replay buffer overflowed");
           return;
         }
-        buffered.push({ event, revision });
+        buffered.push({
+          event: { type: event.type, sessionId: event.sessionId },
+          revision,
+          serializedData,
+        });
         return;
       }
       if (revision <= highestSent) return;
       highestSent = revision;
-      await writeWhileOpen(frameFor(event, revision));
+      await writeWhileOpen(frameFor(event, revision, serializedData));
     };
     subscribers.add(listener);
 
@@ -1394,7 +1416,9 @@ app.get("/event/subscribe", (c) => {
       } else if (replay) {
         for (const entry of replay.events) {
           highestSent = Math.max(highestSent, entry.revision);
-          await writeWhileOpen(frameFor(entry.event, entry.revision));
+          await writeWhileOpen(
+            frameFor(entry.event, entry.revision, entry.event.serializedData),
+          );
         }
       }
 
@@ -1414,7 +1438,9 @@ app.get("/event/subscribe", (c) => {
         if (sseRouteTestHooks?.beforeBufferedWrite) {
           await sseRouteTestHooks.beforeBufferedWrite(entry.revision);
         }
-        await writeWhileOpen(frameFor(entry.event, entry.revision));
+        await writeWhileOpen(
+          frameFor(entry.event, entry.revision, entry.serializedData),
+        );
       }
       buffered = null;
 

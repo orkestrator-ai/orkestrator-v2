@@ -21,6 +21,7 @@ import {
   newestJsonlInDir,
   paneHash,
   parseFreshJsonlFindOutput,
+  parsePollSnapshotExecOutput,
   parsePollSnapshotOutput,
   parseTranscriptHeadOutput,
   pollSnapshotScript,
@@ -2594,6 +2595,30 @@ describe("TranscriptTail incremental reads", () => {
     expect(reads).toHaveLength(1);
   });
 
+  test("keeps its byte offset when the size read fails transiently", async () => {
+    const first = jsonl({ n: 1 });
+    const second = jsonl({ n: 2 });
+    const file = { bytes: Buffer.from(first, "utf8") };
+    const { backend, reads } = fakeBackend(file);
+    const tail = new TranscriptTail("/transcript.jsonl");
+
+    await expect(tail.readNew(backend)).resolves.toEqual([{ n: 1 }]);
+    const unavailable = {
+      ...backend,
+      fileSize: async () => {
+        throw new Error("combined poll unavailable");
+      },
+    } as Backend;
+    await expect(tail.readNew(unavailable)).rejects.toThrow("combined poll unavailable");
+
+    file.bytes = Buffer.from(first + second, "utf8");
+    await expect(tail.readNew(backend)).resolves.toEqual([{ n: 2 }]);
+    expect(reads.at(-1)).toEqual({
+      offset: Buffer.byteLength(first),
+      length: Buffer.byteLength(second),
+    });
+  });
+
   test("rejoins a multi-byte character split across two reads", async () => {
     // Reading from an offset means a chunk can end in the middle of a UTF-8
     // sequence. Decoding each chunk on its own would turn the split character
@@ -2783,10 +2808,22 @@ describe("poll snapshot", () => {
     });
   });
 
-  test("survives a listing that failed and produced nothing", () => {
-    expect(parsePollSnapshotOutput("__ork_pending__\n__ork_timeout__\n__ork_size__\nnot-a-number\n"))
-      .toEqual({ pending: [], timeouts: [], transcriptSize: 0 });
-    expect(parsePollSnapshotOutput("")).toEqual({ pending: [], timeouts: [], transcriptSize: 0 });
+  test("rejects malformed or incomplete output instead of inventing an empty snapshot", () => {
+    expect(() => parsePollSnapshotOutput(
+      "__ork_pending__\n__ork_timeout__\n__ork_size__\nnot-a-number\n",
+    )).toThrow("Malformed tmux poll snapshot transcript size");
+    expect(() => parsePollSnapshotOutput("")).toThrow("Incomplete tmux poll snapshot");
+    expect(() => parsePollSnapshotOutput(
+      "__ork_pending__\n__ork_timeout__\n__ork_size__\n",
+    )).toThrow("Incomplete tmux poll snapshot");
+  });
+
+  test("rejects a failed combined poll before its empty stdout can reset a tail", () => {
+    expect(() => parsePollSnapshotExecOutput({
+      status: 1,
+      stdout: "",
+      stderr: "docker exec failed",
+    })).toThrow("docker exec failed");
   });
 
   test("checks liveness on a slower cadence than the hook and transcript reads", () => {

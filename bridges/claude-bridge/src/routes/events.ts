@@ -4,8 +4,6 @@ import { streamSSE } from "hono/streaming";
 import { eventEmitter } from "../services/event-emitter.js";
 import type { SSEEvent } from "../types/index.js";
 
-const events = new Hono();
-
 /**
  * Serialized frame payload per event object, shared across subscribers.
  *
@@ -62,8 +60,60 @@ interface ReplayCursor {
 
 export const MAX_REPLAY_SSE_FRAMES = 512;
 export const MAX_REPLAY_SSE_BYTES = 32 * 1024 * 1024;
-const replayFrames: ReplayFrame[] = [];
-let replayBytes = 0;
+
+export function createReplayBuffer(
+  limits: { maxFrames?: number; maxBytes?: number } = {},
+) {
+  const maxFrames = limits.maxFrames ?? MAX_REPLAY_SSE_FRAMES;
+  const maxBytes = limits.maxBytes ?? MAX_REPLAY_SSE_BYTES;
+  const frames: ReplayFrame[] = [];
+  let bytes = 0;
+
+  return {
+    append(event: SSEEvent, revision: number, generation: string): void {
+      const data = serializeEventData(event);
+      const frame: ReplayFrame = {
+        revision,
+        id: `${generation}:${revision}`,
+        event: event.type,
+        data,
+        bytes: Buffer.byteLength(data) + Buffer.byteLength(event.type),
+      };
+      frames.push(frame);
+      bytes += frame.bytes;
+      while (frames.length > maxFrames || bytes > maxBytes) {
+        const removed = frames.shift();
+        if (!removed) break;
+        bytes -= removed.bytes;
+      }
+    },
+    getFrames(
+      since: ReplayCursor,
+      through: number,
+      generation: string,
+    ): { frames: ReplayFrame[]; resetRequired: boolean } {
+      if (since.generation !== generation || since.revision > through) {
+        return { frames: [], resetRequired: true };
+      }
+      const oldest = frames[0]?.revision;
+      const resetRequired =
+        since.revision < through
+        && (oldest === undefined || since.revision < oldest - 1);
+      return {
+        frames: resetRequired
+          ? []
+          : frames.filter(
+              (frame) =>
+                frame.revision > since.revision
+                && frame.revision <= through,
+            ),
+        resetRequired,
+      };
+    },
+  };
+}
+
+const replayBuffer = createReplayBuffer();
 
 function formatReplayCursor(revision: number): string {
   return `${eventEmitter.generation}:${revision}`;
@@ -75,24 +125,7 @@ function formatReplayCursor(revision: number): string {
  * mutable SDK message objects.
  */
 eventEmitter.subscribe((event, revision) => {
-  const data = serializeEventData(event);
-  const frame: ReplayFrame = {
-    revision,
-    id: formatReplayCursor(revision),
-    event: event.type,
-    data,
-    bytes: Buffer.byteLength(data) + Buffer.byteLength(event.type),
-  };
-  replayFrames.push(frame);
-  replayBytes += frame.bytes;
-  while (
-    replayFrames.length > MAX_REPLAY_SSE_FRAMES
-    || replayBytes > MAX_REPLAY_SSE_BYTES
-  ) {
-    const removed = replayFrames.shift();
-    if (!removed) break;
-    replayBytes -= removed.bytes;
-  }
+  replayBuffer.append(event, revision, eventEmitter.generation);
 });
 
 export function parseReplayCursor(value: string | undefined): ReplayCursor | null {
@@ -114,26 +147,7 @@ export function getReplayFrames(
   since: ReplayCursor,
   through: number,
 ): { frames: ReplayFrame[]; resetRequired: boolean } {
-  if (
-    since.generation !== eventEmitter.generation
-    || since.revision > through
-  ) {
-    return { frames: [], resetRequired: true };
-  }
-  const oldest = replayFrames[0]?.revision;
-  const resetRequired =
-    since.revision < through
-    && (oldest === undefined || since.revision < oldest - 1);
-  return {
-    frames: resetRequired
-      ? []
-      : replayFrames.filter(
-          (frame) =>
-            frame.revision > since.revision
-            && frame.revision <= through,
-        ),
-    resetRequired,
-  };
+  return replayBuffer.getFrames(since, through, eventEmitter.generation);
 }
 
 /**
@@ -181,6 +195,15 @@ export function createBoundedSseWriter(
     return attempt;
   };
 }
+
+export function createEventsRouter(
+  limits: { maxPendingFrames?: number; maxPendingBytes?: number } = {},
+): Hono {
+  const events = new Hono();
+  const maxPendingFrames =
+    limits.maxPendingFrames ?? MAX_PENDING_SSE_FRAMES;
+  const maxPendingBytes =
+    limits.maxPendingBytes ?? MAX_PENDING_SSE_BYTES;
 
 events.get("/subscribe", (c) => {
   const origin = c.req.header("origin");
@@ -234,6 +257,7 @@ events.get("/subscribe", (c) => {
         if (!isOpen) throw new Error("SSE request aborted");
       },
       () => closeConnection("write backlog exceeded its cap"),
+      { maxPendingFrames, maxPendingBytes },
     );
 
     const requestedCursorValue =
@@ -262,8 +286,8 @@ events.get("/subscribe", (c) => {
         };
         if (replaying) {
           if (
-            pendingLiveFrames.length >= MAX_PENDING_SSE_FRAMES
-            || pendingLiveBytes + frame.bytes > MAX_PENDING_SSE_BYTES
+            pendingLiveFrames.length >= maxPendingFrames
+            || pendingLiveBytes + frame.bytes > maxPendingBytes
           ) {
             closeConnection("handshake backlog exceeded its cap");
             return;
@@ -353,5 +377,10 @@ events.get("/subscribe", (c) => {
     }
   });
 });
+
+  return events;
+}
+
+const events = createEventsRouter();
 
 export default events;

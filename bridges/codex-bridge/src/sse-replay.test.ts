@@ -23,7 +23,7 @@ process.env.CODEX_BRIDGE_NO_ENGINE = "1";
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
 process.env.CODEX_BRIDGE_AUTH_DISABLED_FOR_TESTING = "1";
 
-const { app, __testing } = await import("./index.js");
+const { app, __testing, MAX_REPLAY_SSE_BYTES } = await import("./index.js");
 
 interface Frame {
   event: string;
@@ -273,7 +273,7 @@ describe("/event/subscribe", () => {
     ).toBe(false);
   });
 
-  test("an event's payload is serialized once and shared by subscribers and replays", async () => {
+  test("an event's payload is serialized once and shared by live subscribers and replays", async () => {
     // The getter counts how many times the payload is walked. One live fan-out
     // plus two replays must serialize exactly once — per-subscriber and
     // per-replay stringification of megabyte message snapshots is what this
@@ -291,10 +291,14 @@ describe("/event/subscribe", () => {
     };
 
     const cursor = __testing.eventRingForTesting().latestRevision;
-    __testing.emitForTesting(event);
-
-    expect(__testing.serializeSseEventDataForTesting(event))
-      .toBe(__testing.serializeSseEventDataForTesting(event));
+    const removeFirst = __testing.subscribeForTesting(() => undefined);
+    const removeSecond = __testing.subscribeForTesting(() => undefined);
+    try {
+      __testing.emitForTesting(event);
+    } finally {
+      removeFirst();
+      removeSecond();
+    }
 
     for (let replay = 0; replay < 2; replay += 1) {
       const frames = await collect(`?since=${cursor}`, () => undefined);
@@ -304,6 +308,26 @@ describe("/event/subscribe", () => {
       expect(frame?.data.message).toEqual({ content: "memoized" });
     }
     expect(reads).toBe(1);
+  });
+
+  test("growing serialized snapshots stay inside the replay byte budget", () => {
+    const cursor = __testing.eventRingForTesting().latestRevision;
+    const chunk = "x".repeat(1024 * 1024);
+    for (let index = 0; index < 36; index += 1) {
+      __testing.emitForTesting({
+        type: "message.updated",
+        sessionId: "byte-budget",
+        data: { message: { content: chunk, index } },
+      });
+    }
+
+    const stats = __testing.eventRingForTesting().getStats();
+    expect(stats.maxBytes).toBe(MAX_REPLAY_SSE_BYTES);
+    expect(stats.retainedBytes).toBeLessThanOrEqual(MAX_REPLAY_SSE_BYTES);
+    expect(stats.retained).toBeLessThan(36);
+    // Some of the requested immutable snapshots were evicted, so replay must
+    // demand an authoritative reconcile rather than return a partial history.
+    expect(__testing.eventRingForTesting().since(cursor).complete).toBe(false);
   });
 
   test("a caught-up cursor replays nothing", async () => {

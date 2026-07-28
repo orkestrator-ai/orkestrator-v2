@@ -822,6 +822,18 @@ describe("renderTurn", () => {
       });
 
       await writeFile(path, "one\ntwo\n", "utf8");
+      const firstAgain = await renderTurn(firstTurn, {
+        threadId: "thread-1",
+        cwd,
+        state: firstState,
+        loadSubagentParts: async () => [],
+      });
+      // A completed file-change item is immutable. Re-rendering because a newer
+      // item streamed must reuse its original normalized diff rather than read
+      // the file's newer contents and silently rewrite history.
+      expect(firstAgain.parts[0]).toBe(added.parts[0]);
+      expect(firstAgain.parts[0]?.toolDiff?.after).toBe("one\n");
+
       const secondTurn = turn();
       secondTurn.onItemCompleted({
         id: "update",

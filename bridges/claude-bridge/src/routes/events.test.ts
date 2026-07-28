@@ -16,6 +16,8 @@ globalThis.TransformStream = TransformStream as typeof globalThis.TransformStrea
 
 import events, {
   createBoundedSseWriter,
+  createEventsRouter,
+  createReplayBuffer,
   getReplayFrames,
   parseReplayCursor,
   serializeEventData,
@@ -325,6 +327,40 @@ describe("SSE replay ring", () => {
     }, eventEmitter.currentRevision);
     expect(replay).toEqual({ frames: [], resetRequired: true });
   });
+
+  test("evicts by encoded-byte weight independently of the frame cap", () => {
+    const generation = "byte-window";
+    const secondEvent = {
+      type: "session.idle" as const,
+      sessionId: "second",
+      data: { value: "retained" },
+    };
+    const secondBytes =
+      Buffer.byteLength(serializeEventData(secondEvent))
+      + Buffer.byteLength(secondEvent.type);
+    const replay = createReplayBuffer({
+      maxFrames: 10,
+      maxBytes: secondBytes,
+    });
+
+    replay.append({
+      type: "session.updated",
+      sessionId: "first",
+      data: { value: "evicted" },
+    }, 1, generation);
+    replay.append(secondEvent, 2, generation);
+
+    expect(replay.getFrames(
+      { generation, revision: 0 },
+      2,
+      generation,
+    )).toEqual({ frames: [], resetRequired: true });
+    expect(replay.getFrames(
+      { generation, revision: 1 },
+      2,
+      generation,
+    ).frames.map((frame) => frame.revision)).toEqual([2]);
+  });
 });
 
 describe("GET /subscribe (SSE)", () => {
@@ -616,5 +652,40 @@ describe("GET /subscribe (SSE)", () => {
     } finally {
       mutableEmitter.generation = originalGeneration;
     }
+  });
+
+  test("route-level live backlog overflow closes and removes the subscriber", async () => {
+    const boundedApp = new Hono();
+    boundedApp.route("/", createEventsRouter({ maxPendingFrames: 1 }));
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const response = await boundedApp.request("/subscribe");
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+
+    try {
+      await readUntil(reader!, (buffer) => buffer.includes("event: connected"));
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore + 1);
+
+      eventEmitter.emit({ type: "session.updated", sessionId: "live-overflow-1" });
+      eventEmitter.emit({ type: "session.updated", sessionId: "live-overflow-2" });
+
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    } finally {
+      await reader?.cancel().catch(() => {});
+    }
+  });
+
+  test("route-level handshake backlog overflow closes and removes the subscriber", async () => {
+    const boundedApp = new Hono();
+    boundedApp.route("/", createEventsRouter({ maxPendingFrames: 1 }));
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const response = await boundedApp.request("/subscribe");
+
+    await waitFor(() => eventEmitter.subscriberCount === subscribersBefore + 1);
+    eventEmitter.emit({ type: "session.updated", sessionId: "handshake-overflow-1" });
+    eventEmitter.emit({ type: "session.updated", sessionId: "handshake-overflow-2" });
+
+    await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    await response.body?.cancel().catch(() => {});
   });
 });

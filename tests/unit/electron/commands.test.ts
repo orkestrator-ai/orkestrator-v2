@@ -936,6 +936,7 @@ afterEach(async () => {
     shutdownDiffStatsTracking();
     commandTesting.resetLocalServerLifecycle();
     commandTesting.resetDockerContainerStateCache();
+    commandTesting.resetTerminalOutputBuffers();
     await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
     showOpenDialog.mockClear();
     ptySpawn.mockClear();
@@ -2475,7 +2476,7 @@ exit 0
     });
   }, ASYNC_TEST_BUDGET_MS);
 
-  test("frees a non-setup terminal output buffer when the session exits", async () => {
+  test("retains an exited terminal snapshot long enough for desync recovery", async () => {
     const worktreePath = await createTempDir("ork-electron-terminal-buffer-");
     const environment = createEnvironment({
       id: "env-local-terminal-buffer",
@@ -2498,11 +2499,63 @@ exit 0
     const buffer = await commands.get("get_terminal_output_buffer")?.({ sessionId }, context) as string;
     expect(buffer).toContain("hello from shell");
 
-    // One-shot terminal buffers must be freed on exit so they do not leak for
-    // the lifetime of the main process.
+    const beforeExit = await commands.get("get_terminal_output_snapshot")?.(
+      { sessionId },
+      context,
+    );
     ptyProcesses[0]?.emitExit({ exitCode: 0 });
-    const afterExit = await commands.get("get_terminal_output_buffer")?.({ sessionId }, context) as string;
-    expect(afterExit).toBe("");
+    expect(
+      await commands.get("get_terminal_output_snapshot")?.({ sessionId }, context),
+    ).toEqual(beforeExit);
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(1);
+
+    // Retention is bounded in time; pin the expiry result without making the
+    // suite sleep for the production recovery window.
+    commandTesting.deleteRetainedTerminalOutputBuffer(sessionId);
+    expect(
+      await commands.get("get_terminal_output_snapshot")?.({ sessionId }, context),
+    ).toEqual({ text: "", sequence: 0 });
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("bounds retained exited terminal snapshots and evicts the oldest", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-retention-cap-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-retention-cap",
+      environmentType: "local",
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const sessionIds: string[] = [];
+
+    for (let index = 0; index < 33; index += 1) {
+      const sessionId = await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ) as string;
+      sessionIds.push(sessionId);
+      await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+      const process = ptyProcesses.at(-1)!;
+      process.emitData(`snapshot-${index}`);
+      process.emitExit({ exitCode: 0 });
+    }
+
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(32);
+    expect(
+      await commands.get("get_terminal_output_snapshot")?.(
+        { sessionId: sessionIds[0] },
+        context,
+      ),
+    ).toEqual({ text: "", sequence: 0 });
+    expect(
+      await commands.get("get_terminal_output_snapshot")?.(
+        { sessionId: sessionIds.at(-1) },
+        context,
+      ),
+    ).toEqual({ text: "snapshot-32", sequence: 1 });
   }, ASYNC_TEST_BUDGET_MS);
 
   test("caps the terminal output buffer at the maximum size", async () => {

@@ -115,6 +115,7 @@ import {
   updateGlobalConfig,
 } from "@/lib/backend";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { getClaudeTmuxCapturePolling } from "@/lib/claude-tmux-polling";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 import type { FileCandidate, FileMention } from "@/types";
 
@@ -902,7 +903,8 @@ export function ClaudeTmuxChatTab({
   // 3. Raw TUI snapshot polling. The snapshot powers both the optional debug
   //    pane and the interactive controls for Claude Code's in-TUI prompts.
   useEffect(() => {
-    if (!showTui && !running) {
+    const polling = getClaudeTmuxCapturePolling(showTui, running);
+    if (!polling.enabled) {
       setTuiSnapshot("");
       return;
     }
@@ -921,7 +923,7 @@ export function ClaudeTmuxChatTab({
     // per-second `tmux capture-pane` across every background environment adds
     // up. The poll itself must stay: in-TUI prompts are still detected while
     // the pane is hidden, just up to 3s later.
-    const id = setInterval(tick, showTui ? 500 : 3000);
+    const id = setInterval(tick, polling.intervalMs);
     return () => {
       cancelled = true;
       clearInterval(id);

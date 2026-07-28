@@ -435,6 +435,14 @@ export class AppServerRuntime {
   private readonly lastPersistedAccess = new Map<string, number>();
   /** In-flight registry writes that graceful shutdown must not abandon. */
   private readonly pendingSessionWrites = new Set<Promise<void>>();
+  /**
+   * Terminal notification work intentionally runs off the transport read loop.
+   *
+   * Tracking it separately preserves that non-blocking transport contract while
+   * giving shutdown and deterministic callers a way to wait for journal,
+   * rendering, persistence, and terminal SSE publication to finish.
+   */
+  private readonly pendingFinalizations = new Set<Promise<void>>();
   /** Serializes and exposes generation recovery to request paths. */
   private generationRecovery: Promise<void> = Promise.resolve();
   /**
@@ -824,12 +832,42 @@ export class AppServerRuntime {
     this.sweepTimer = null;
     for (const timer of this.recoveryBackstops.values()) clearTimeout(timer);
     this.recoveryBackstops.clear();
-    for (const threadId of [...this.threadState.keys()]) this.releaseThreadRuntimeState(threadId);
     // Nothing will report terminal after this, so release the drain rather than
     // holding shutdown for its full deadline.
     this.notifyThreadActivity();
-    await Promise.allSettled([...this.pendingSessionWrites]);
+    // Stop the transport first so no new terminal notifications can arrive,
+    // then settle work already handed off from its read loop before releasing
+    // the render state that work still needs.
     await this.options.engine.stop();
+    await this.drainPendingWork();
+    await Promise.allSettled([...this.pendingSessionWrites]);
+    for (const threadId of [...this.threadState.keys()]) this.releaseThreadRuntimeState(threadId);
+  }
+
+  /**
+   * Waits for every terminal-event finalization currently queued, including work
+   * enqueued by another finalization before it settles.
+   *
+   * The app-server stdout loop must never await this. It is for graceful
+   * shutdown and test/embedding synchronization only.
+   */
+  async drainPendingWork(): Promise<void> {
+    // Generation/dispatch recovery is also launched from transport callbacks.
+    // Settle it before flushing render coalescers because recovery may create or
+    // finalize turns and schedule a final snapshot.
+    await Promise.allSettled([this.generationRecovery, this.dispatchRecovery]);
+    for (const state of this.threadState.values()) {
+      await state.coalescer.flushNow();
+    }
+    while (
+      this.pendingFinalizations.size > 0
+      || this.pendingSessionWrites.size > 0
+    ) {
+      await Promise.allSettled([
+        ...this.pendingFinalizations,
+        ...this.pendingSessionWrites,
+      ]);
+    }
   }
 
   getRegistry(): ThreadRegistry {
@@ -1430,7 +1468,12 @@ export class AppServerRuntime {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
         turn.complete(event.status, event.error);
-        void this.finalizeTurn(context, turn);
+        void this.runFinalization(context, turn).catch((error) => {
+          console.error(
+            `[codex-bridge] Failed to finalize turn ${turn.turnId}:`,
+            error instanceof Error ? error.message : error,
+          );
+        });
         return;
       }
       default:
@@ -1527,7 +1570,7 @@ export class AppServerRuntime {
           );
           if (reviewOutcome.result === "terminal") {
             turn.complete(reviewOutcome.status);
-            await this.finalizeTurn(context, turn);
+            await this.runFinalization(context, turn);
             continue;
           }
           if (reviewOutcome.result === "running") {
@@ -1554,7 +1597,7 @@ export class AppServerRuntime {
 
         if (outcome.result === "terminal") {
           turn.complete(outcome.status ?? "completed");
-          await this.finalizeTurn(context, turn);
+          await this.runFinalization(context, turn);
           continue;
         }
         if (outcome.result === "attach") {
@@ -1678,6 +1721,19 @@ export class AppServerRuntime {
         data: { title: session?.title, phase: context.phase },
       });
     }
+  }
+
+  private runFinalization(
+    context: ThreadContext,
+    turn: TurnAccumulator,
+  ): Promise<void> {
+    const work = this.finalizeTurn(context, turn);
+    this.pendingFinalizations.add(work);
+    work.then(
+      () => this.pendingFinalizations.delete(work),
+      () => this.pendingFinalizations.delete(work),
+    );
+    return work;
   }
 
   /** Re-renders the streaming assistant message and pushes a full snapshot. */
@@ -3383,7 +3439,7 @@ export class AppServerRuntime {
       // case where escalation resolved it without one.
       if (context.activeTurn === turn && !turn.isTerminal()) {
         turn.complete(status === "unknown" ? "interrupted" : status);
-        await this.finalizeTurn(context, turn);
+        await this.runFinalization(context, turn);
       }
     })().catch(async (error) => {
       // The only rejection after waitForTurnTerminal's internal catches is a
@@ -3391,7 +3447,7 @@ export class AppServerRuntime {
       // generation, so the turn is definitively no longer executing.
       if (context.activeTurn === turn && !turn.isTerminal()) {
         turn.complete("interrupted");
-        await this.finalizeTurn(context, turn);
+        await this.runFinalization(context, turn);
       }
       const message =
         error instanceof Error ? error.message : "Failed to restart Codex after cancellation";

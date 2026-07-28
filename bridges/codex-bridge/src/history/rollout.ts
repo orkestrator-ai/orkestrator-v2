@@ -298,19 +298,39 @@ export const TRANSCRIPT_CATALOG_TTL_MS = 2_000;
 
 interface CachedTranscriptCatalog {
   codexHome: string;
-  builtAt: number;
+  /** Undefined while the shared scan is still in flight. */
+  settledAt?: number;
   catalog: Promise<TranscriptCatalog>;
 }
 
 let cachedTranscriptCatalog: CachedTranscriptCatalog | null = null;
 let catalogTtlMs = TRANSCRIPT_CATALOG_TTL_MS;
+let catalogNow = Date.now;
+let catalogInvalidations = 0;
+let transcriptCatalogBuilder: () => Promise<TranscriptCatalog> =
+  () => buildTranscriptCatalog();
 
 export function setTranscriptCatalogTtlForTesting(ttlMs?: number): void {
   catalogTtlMs = ttlMs ?? TRANSCRIPT_CATALOG_TTL_MS;
 }
 
+export function setTranscriptCatalogNowForTesting(now?: () => number): void {
+  catalogNow = now ?? Date.now;
+}
+
+export function setTranscriptCatalogBuilderForTesting(
+  builder?: () => Promise<TranscriptCatalog>,
+): void {
+  transcriptCatalogBuilder = builder ?? (() => buildTranscriptCatalog());
+}
+
 export function invalidateTranscriptCatalogCache(): void {
   cachedTranscriptCatalog = null;
+  catalogInvalidations += 1;
+}
+
+export function getTranscriptCatalogInvalidationCountForTesting(): number {
+  return catalogInvalidations;
 }
 
 function buildTranscriptCatalogCached(): Promise<TranscriptCatalog> {
@@ -319,18 +339,33 @@ function buildTranscriptCatalogCached(): Promise<TranscriptCatalog> {
   if (
     cached
     && cached.codexHome === codexHome
-    && Date.now() - cached.builtAt < catalogTtlMs
+    && (
+      cached.settledAt === undefined
+      || catalogNow() - cached.settledAt < catalogTtlMs
+    )
   ) {
     return cached.catalog;
   }
 
-  const catalog = buildTranscriptCatalog();
-  const entry: CachedTranscriptCatalog = { codexHome, builtAt: Date.now(), catalog };
+  const catalog = transcriptCatalogBuilder();
+  const entry: CachedTranscriptCatalog = { codexHome, catalog };
   cachedTranscriptCatalog = entry;
-  catalog.catch(() => {
-    if (cachedTranscriptCatalog === entry) cachedTranscriptCatalog = null;
-  });
+  catalog.then(
+    () => {
+      // Start the freshness window only after the expensive scan is complete.
+      // Any number of callers continue sharing the promise while it is pending.
+      entry.settledAt = catalogNow();
+    },
+    () => {
+      if (cachedTranscriptCatalog === entry) cachedTranscriptCatalog = null;
+    },
+  );
   return catalog;
+}
+
+/** Test seam for pending-scan coalescing and TTL semantics. */
+export function buildTranscriptCatalogCachedForTesting(): Promise<TranscriptCatalog> {
+  return buildTranscriptCatalogCached();
 }
 
 export async function buildTranscriptCatalog(): Promise<TranscriptCatalog> {

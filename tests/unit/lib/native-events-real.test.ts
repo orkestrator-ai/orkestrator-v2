@@ -58,7 +58,9 @@ describe("native event wrapper", () => {
     expect(eventStreamReady).toHaveBeenCalledWith("terminal-output-session-1");
 
     resolveReady?.();
-    expect(await pending).toBe(unlisten);
+    const returnedUnlisten = await pending;
+    returnedUnlisten();
+    expect(unlisten).toHaveBeenCalledTimes(1);
   });
 
   test("unsubscribes when dedicated event stream setup fails", async () => {
@@ -74,6 +76,26 @@ describe("native event wrapper", () => {
     await expect(
       listen("terminal-output-session-1", mock(() => undefined)),
     ).rejects.toThrow("stream unavailable");
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  test("cancels a listener while dedicated stream readiness is still pending", async () => {
+    const { listen } = await loadNativeEvents();
+    const unlisten = mock(() => undefined);
+    window.orkestrator = {
+      listen: mock(() => unlisten),
+      eventStreamReady: mock(() => new Promise<void>(() => {})),
+    } as never;
+    const controller = new AbortController();
+
+    const pending = listen(
+      "terminal-output-session-1",
+      mock(() => undefined),
+      { signal: controller.signal },
+    );
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
 });

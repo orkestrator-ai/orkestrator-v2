@@ -4,9 +4,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   buildTranscriptCatalog,
+  buildTranscriptCatalogCachedForTesting,
   clearTranscriptPathCache,
   getTranscriptPathCacheStats,
   invalidateTranscriptCatalogCache,
+  setTranscriptCatalogBuilderForTesting,
+  setTranscriptCatalogNowForTesting,
   setTranscriptCatalogTtlForTesting,
   setTranscriptPathCacheLimitsForTesting,
   createSharedTranscriptMetaLoader,
@@ -73,6 +76,8 @@ afterEach(async () => {
   clearTranscriptCache();
   setTranscriptPathCacheLimitsForTesting();
   invalidateTranscriptCatalogCache();
+  setTranscriptCatalogBuilderForTesting();
+  setTranscriptCatalogNowForTesting();
   setTranscriptCatalogTtlForTesting();
   await Promise.all(
     temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
@@ -324,6 +329,62 @@ describe("rollout public helpers (continued)", () => {
       setTranscriptCatalogTtlForTesting(0);
       await writeRollout("cache-thread-3");
       expect(await listPersistedSessionsForCwd("/workspace")).toHaveLength(3);
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test("an in-flight catalog scan stays coalesced beyond the TTL and expires after success", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-catalog-inflight-"));
+    temporaryDirectories.push(root);
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+
+    let now = 1_000;
+    let builds = 0;
+    let resolveBuild!: (catalog: Awaited<ReturnType<typeof buildTranscriptCatalog>>) => void;
+    const firstBuild = new Promise<Awaited<ReturnType<typeof buildTranscriptCatalog>>>(
+      (resolve) => {
+        resolveBuild = resolve;
+      },
+    );
+    setTranscriptCatalogTtlForTesting(2_000);
+    setTranscriptCatalogNowForTesting(() => now);
+    setTranscriptCatalogBuilderForTesting(() => {
+      builds += 1;
+      if (builds === 1) return firstBuild;
+      return Promise.resolve({
+        metas: [],
+        metaByPath: new Map(),
+        transcriptPathByThreadId: new Map(),
+      });
+    });
+
+    try {
+      const first = buildTranscriptCatalogCachedForTesting();
+      expect(builds).toBe(1);
+
+      // The scan is still pending well beyond its nominal TTL. It must remain
+      // the single shared scan rather than multiplying whole-home walks.
+      now = 10_000;
+      const second = buildTranscriptCatalogCachedForTesting();
+      expect(builds).toBe(1);
+
+      resolveBuild({
+        metas: [],
+        metaByPath: new Map(),
+        transcriptPathByThreadId: new Map(),
+      });
+      await Promise.all([first, second]);
+
+      now = 11_999;
+      await buildTranscriptCatalogCachedForTesting();
+      expect(builds).toBe(1);
+
+      now = 12_000;
+      await buildTranscriptCatalogCachedForTesting();
+      expect(builds).toBe(2);
     } finally {
       if (previousHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousHome;

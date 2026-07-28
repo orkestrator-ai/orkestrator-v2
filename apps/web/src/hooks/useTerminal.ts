@@ -116,6 +116,7 @@ export function useTerminal({
   const [error, setError] = useState<string | null>(null);
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
+  const listenAbortControllerRef = useRef<AbortController | null>(null);
   const onDataRef = useRef(onData);
   const isConnectedRef = useRef(false);
   const isConnectingRef = useRef(false);
@@ -145,6 +146,8 @@ export function useTerminal({
   }, []);
 
   const cleanupEventListener = useCallback(() => {
+    listenAbortControllerRef.current?.abort();
+    listenAbortControllerRef.current = null;
     const unlisten = unlistenRef.current;
     if (unlisten) {
       unlisten();
@@ -207,7 +210,7 @@ export function useTerminal({
   }, []);
 
   const listenForTerminalOutput = useCallback(
-    (targetSessionId: string): Promise<UnlistenFn> =>
+    (targetSessionId: string, signal: AbortSignal): Promise<UnlistenFn> =>
       listen<TerminalOutputPayload>(`terminal-output-${targetSessionId}`, (event) => {
         const data = decodeTerminalOutputPayload(event.payload);
         if (data === null) {
@@ -222,10 +225,16 @@ export function useTerminal({
             recovery.queued.set(sequence, data);
             return;
           }
+          if (sequence > lastOutputSequenceRef.current + 1) {
+            const recoveryPromise = resyncFromOutputBuffer(targetSessionId);
+            outputRecoveryRef.current?.queued.set(sequence, data);
+            void recoveryPromise;
+            return;
+          }
           lastOutputSequenceRef.current = sequence;
         }
         if (data.length > 0) onDataRef.current?.(data);
-      }),
+      }, { signal }),
     [resyncFromOutputBuffer],
   );
 
@@ -436,9 +445,17 @@ export function useTerminal({
           attachExistingOnly,
         });
       }
-      const unlisten = await listenForTerminalOutput(targetSessionId);
+      const listenAbortController = new AbortController();
+      listenAbortControllerRef.current = listenAbortController;
+      const unlisten = await listenForTerminalOutput(
+        targetSessionId,
+        listenAbortController.signal,
+      );
       if (!isCurrentConnect()) {
         unlisten();
+        if (listenAbortControllerRef.current === listenAbortController) {
+          listenAbortControllerRef.current = null;
+        }
         if (shouldStartSession) {
           if (isLocal) {
             await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
@@ -568,9 +585,17 @@ export function useTerminal({
 
           cleanupEventListener();
 
-          const unlisten = await listenForTerminalOutput(newSessionId);
+          const listenAbortController = new AbortController();
+          listenAbortControllerRef.current = listenAbortController;
+          const unlisten = await listenForTerminalOutput(
+            newSessionId,
+            listenAbortController.signal,
+          );
           if (!isCurrentConnect()) {
             unlisten();
+            if (listenAbortControllerRef.current === listenAbortController) {
+              listenAbortControllerRef.current = null;
+            }
             if (isLocal) {
               await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
             } else {

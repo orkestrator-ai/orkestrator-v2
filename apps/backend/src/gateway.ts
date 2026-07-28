@@ -663,7 +663,10 @@ type GatewayEventClient = {
    * also serialized to a remote browser that is looking at another environment.
    */
   prefixes: string[] | null;
-  /** Extra prefixes allowed even when they also match an excluded prefix. */
+  /**
+   * Extra prefixes allowed even when excluded. With no base `prefixes`, this
+   * also becomes the stream's restrictive allow-list.
+   */
   includedPrefixes: string[] | null;
   /** Prefixes omitted unless explicitly restored by `includedPrefixes`. */
   excludedPrefixes: string[] | null;
@@ -686,6 +689,11 @@ export function eventMatchesSubscription(
 ): boolean {
   if (includedPrefixes?.some((prefix) => event.startsWith(prefix))) return true;
   if (excludedPrefixes?.some((prefix) => event.startsWith(prefix))) return false;
+  // `includeEvents` makes an otherwise unscoped stream restrictive. This is
+  // what lets one terminal connection opt one session back in after excluding
+  // the terminal namespace without also receiving every authoritative event
+  // already carried by the main stream.
+  if (prefixes === null && includedPrefixes !== null) return false;
   if (prefixes === null) return true;
   return prefixes.some((prefix) => event.startsWith(prefix));
 }
@@ -711,6 +719,15 @@ export class OrkestratorGateway {
   private token = "";
   private authFile = "";
   private clients = new Map<ServerResponse, GatewayEventClient>();
+  /**
+   * Latest full-pane tmux frame dropped for each lagging client/session.
+   *
+   * Interactive tmux output is already a complete repaint, not an incremental
+   * byte stream. Keeping only the newest refused frame makes recovery exact
+   * without retaining an unbounded history or requiring the renderer to call
+   * the ordinary PTY snapshot API.
+   */
+  private droppedTmuxFrames = new WeakMap<ServerResponse, Map<string, string>>();
   private proxyRequests = new Set<ReturnType<typeof http.request>>();
   private sockets = new Set<Socket>();
   private keepalive: ReturnType<typeof setInterval> | null = null;
@@ -973,7 +990,7 @@ export class OrkestratorGateway {
         droppable
         && client.writableLength + messageBytes > SSE_CLIENT_SOFT_BUFFER_BYTES
       ) {
-        state.desyncedSessions.add(event.slice(DROPPABLE_EVENT_PREFIX.length));
+        this.markTerminalFrameDropped(client, state, event, message);
         continue;
       }
       if (
@@ -991,11 +1008,34 @@ export class OrkestratorGateway {
       // A desync notice may itself consume the last available soft-limit
       // space. Re-check droppable frames after flushing it.
       if (droppable && projectedBytes > SSE_CLIENT_SOFT_BUFFER_BYTES) {
-        state.desyncedSessions.add(event.slice(DROPPABLE_EVENT_PREFIX.length));
+        this.markTerminalFrameDropped(client, state, event, message);
         continue;
       }
       client.write(message);
     }
+  }
+
+  private markTerminalFrameDropped(
+    client: ServerResponse,
+    state: GatewayEventClient,
+    event: string,
+    message: string,
+  ): void {
+    const sessionId = event.slice(DROPPABLE_EVENT_PREFIX.length);
+    state.desyncedSessions.add(sessionId);
+    if (
+      !sessionId.startsWith("tmux:")
+      || !state.includedPrefixes?.includes(event)
+    ) return;
+    let frames = this.droppedTmuxFrames.get(client);
+    if (!frames) {
+      frames = new Map();
+      this.droppedTmuxFrames.set(client, frames);
+    }
+    // A terminal-specific SSE subscribes to one tmux session, so this retains
+    // exactly one frame per client. Broader/legacy streams receive the ordinary
+    // desync notice instead of accumulating one pane per active session.
+    frames.set(sessionId, message);
   }
 
   private dropBufferedClient(client: ServerResponse, projectedBytes: number): void {
@@ -1021,13 +1061,20 @@ export class OrkestratorGateway {
   ): boolean {
     for (const sessionId of [...state.desyncedSessions]) {
       const event = `${DROPPABLE_EVENT_PREFIX}${sessionId}`;
-      const notice = `data: ${JSON.stringify({ event, payload: { desynced: true } })}\n\n`;
-      const projectedBytes = client.writableLength + Buffer.byteLength(notice);
+      const retainedTmuxFrame = this.droppedTmuxFrames.get(client)?.get(sessionId);
+      const recoveryFrame = retainedTmuxFrame
+        ?? `data: ${JSON.stringify({ event, payload: { desynced: true } })}\n\n`;
+      const projectedBytes = client.writableLength + Buffer.byteLength(recoveryFrame);
       if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
         this.dropBufferedClient(client, projectedBytes);
         return false;
       }
-      client.write(notice);
+      client.write(recoveryFrame);
+      if (retainedTmuxFrame) {
+        const retained = this.droppedTmuxFrames.get(client);
+        retained?.delete(sessionId);
+        if (retained?.size === 0) this.droppedTmuxFrames.delete(client);
+      }
       state.desyncedSessions.delete(sessionId);
     }
     return true;

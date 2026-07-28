@@ -39,16 +39,31 @@ export interface ReplayResult<T> {
   latestRevision: number;
 }
 
+export interface EventRingOptions<T> {
+  /** Maximum encoded payload bytes retained across all replayable events. */
+  maxBytes?: number;
+  /** Returns the retained byte cost for one event. Required with `maxBytes`. */
+  measureBytes?: (event: T) => number;
+}
+
 export class EventRing<T> {
   private readonly capacity: number;
+  private readonly maxBytes: number;
+  private readonly measureBytes: (event: T) => number;
   private readonly buffer: RingEvent<T>[] = [];
   private revision = 0;
   private droppedEvents = 0;
+  private retainedBytes = 0;
 
-  constructor(capacity: number = DEFAULT_RING_CAPACITY) {
+  constructor(
+    capacity: number = DEFAULT_RING_CAPACITY,
+    options: EventRingOptions<T> = {},
+  ) {
     // A zero-capacity ring would report every reconnect as needing reconciliation,
     // which is correct but pointless; guard against a misconfigured 0.
     this.capacity = Math.max(1, capacity);
+    this.maxBytes = Math.max(0, options.maxBytes ?? Number.POSITIVE_INFINITY);
+    this.measureBytes = options.measureBytes ?? (() => 0);
   }
 
   get latestRevision(): number {
@@ -60,21 +75,36 @@ export class EventRing<T> {
     return this.buffer[0]?.revision ?? 0;
   }
 
-  getStats(): { retained: number; capacity: number; latestRevision: number; dropped: number } {
+  getStats(): {
+    retained: number;
+    capacity: number;
+    latestRevision: number;
+    dropped: number;
+    retainedBytes: number;
+    maxBytes: number | null;
+  } {
     return {
       retained: this.buffer.length,
       capacity: this.capacity,
       latestRevision: this.revision,
       dropped: this.droppedEvents,
+      retainedBytes: this.retainedBytes,
+      maxBytes: Number.isFinite(this.maxBytes) ? this.maxBytes : null,
     };
   }
 
   /** Assigns the next revision and retains the event. */
   append(event: T): number {
     this.revision += 1;
+    this.retainedBytes += Math.max(0, this.measureBytes(event));
     this.buffer.push({ revision: this.revision, event });
-    if (this.buffer.length > this.capacity) {
-      this.buffer.shift();
+    while (
+      this.buffer.length > this.capacity
+      || this.retainedBytes > this.maxBytes
+    ) {
+      const removed = this.buffer.shift();
+      if (!removed) break;
+      this.retainedBytes -= Math.max(0, this.measureBytes(removed.event));
       this.droppedEvents += 1;
     }
     return this.revision;
@@ -115,6 +145,7 @@ export class EventRing<T> {
 
   clear(): void {
     this.buffer.length = 0;
+    this.retainedBytes = 0;
   }
 }
 

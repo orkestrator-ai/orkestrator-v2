@@ -288,17 +288,50 @@ export function pollSnapshotScript(
 export function parsePollSnapshotOutput(stdout: string): TmuxPollSnapshot {
   const snapshot: TmuxPollSnapshot = { pending: [], timeouts: [], transcriptSize: 0 };
   let section: "none" | "pending" | "timeouts" | "size" = "none";
+  let sawPending = false;
+  let sawTimeouts = false;
+  let sawSize = false;
+  let parsedSize = false;
   for (const raw of stdout.split("\n")) {
     const line = raw.trim();
     if (!line) continue;
-    if (line === POLL_SNAPSHOT_PENDING_MARKER) { section = "pending"; continue; }
-    if (line === POLL_SNAPSHOT_TIMEOUT_MARKER) { section = "timeouts"; continue; }
-    if (line === POLL_SNAPSHOT_SIZE_MARKER) { section = "size"; continue; }
+    if (line === POLL_SNAPSHOT_PENDING_MARKER) {
+      sawPending = true;
+      section = "pending";
+      continue;
+    }
+    if (line === POLL_SNAPSHOT_TIMEOUT_MARKER) {
+      sawTimeouts = true;
+      section = "timeouts";
+      continue;
+    }
+    if (line === POLL_SNAPSHOT_SIZE_MARKER) {
+      sawSize = true;
+      section = "size";
+      continue;
+    }
     if (section === "pending") snapshot.pending.push(line);
     else if (section === "timeouts") snapshot.timeouts.push(line);
-    else if (section === "size") snapshot.transcriptSize = Number.parseInt(line, 10) || 0;
+    else if (section === "size") {
+      const size = Number(line);
+      if (!Number.isSafeInteger(size) || size < 0 || parsedSize) {
+        throw new Error("Malformed tmux poll snapshot transcript size");
+      }
+      snapshot.transcriptSize = size;
+      parsedSize = true;
+    }
+  }
+  if (!sawPending || !sawTimeouts || !sawSize || !parsedSize) {
+    throw new Error("Incomplete tmux poll snapshot");
   }
   return snapshot;
+}
+
+export function parsePollSnapshotExecOutput(output: ExecOutput): TmuxPollSnapshot {
+  if (output.status !== 0) {
+    throw new Error(output.stderr || "tmux poll snapshot command failed");
+  }
+  return parsePollSnapshotOutput(output.stdout);
 }
 
 /**
@@ -583,7 +616,7 @@ class TmuxBackend {
       "-c",
       pollSnapshotScript(paths.pendingDir, paths.timeoutDir, transcriptPath),
     ]);
-    return parsePollSnapshotOutput(out.stdout);
+    return parsePollSnapshotExecOutput(out);
   }
 
   /** Every `.jsonl` in `dirPath` as `{ path, mtime }`, newest first. */

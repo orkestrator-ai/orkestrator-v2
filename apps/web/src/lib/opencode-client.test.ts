@@ -4,6 +4,7 @@ import {
   carryOverOpenCodeSubagentHydration,
   abortSession,
   compactOpenCodeSession,
+  collectOpenCodeSubagentIds,
   createClient,
   createSession,
   deleteSession,
@@ -1944,6 +1945,40 @@ describe("opencode-client normalizeOpenCodeMessage", () => {
 });
 
 describe("OpenCode subagent transcript hydration", () => {
+  test("collects nested ids once, deduplicates them, and caches by transcript identity", () => {
+    const messages = [{
+      id: "message-1",
+      role: "assistant",
+      content: "",
+      parts: [{
+        type: "subagent",
+        subagentId: "child",
+        content: "child",
+        subagentActions: [
+          {
+            type: "subagent",
+            subagentId: "grandchild",
+            content: "grandchild",
+            subagentActions: [],
+          },
+          {
+            type: "subagent",
+            subagentId: "child",
+            content: "duplicate",
+            subagentActions: [],
+          },
+        ],
+      }],
+      createdAt: "2026-07-28T00:00:00.000Z",
+    }] as OpenCodeMessage[];
+
+    const first = collectOpenCodeSubagentIds(messages);
+    const second = collectOpenCodeSubagentIds(messages);
+
+    expect([...first].sort()).toEqual(["child", "grandchild"]);
+    expect(second).toBe(first);
+  });
+
   test("loads child messages and exposes their tool calls as agent actions", async () => {
     const client = {
       session: {

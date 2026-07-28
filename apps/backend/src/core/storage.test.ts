@@ -329,7 +329,10 @@ describe("environment completion and unread state", () => {
   test("records a newer completion and ignores stale completion timestamps", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
-      const newer = "2026-07-28T12:00:00.000Z";
+      const previousActivityAt = environment.lastActivityAt;
+      const newer = new Date(
+        new Date(previousActivityAt).getTime() + 1,
+      ).toISOString();
       const completed = await storage.recordEnvironmentCompletion(environment.id, newer);
       expect(completed).toMatchObject({
         lastActivityAt: newer,
@@ -339,7 +342,7 @@ describe("environment completion and unread state", () => {
       await storage.setEnvironmentUnread(environment.id, false, newer);
       const stale = await storage.recordEnvironmentCompletion(
         environment.id,
-        "2026-07-28T11:59:59.000Z",
+        previousActivityAt,
       );
       expect(stale).toMatchObject({
         lastActivityAt: newer,
@@ -353,13 +356,16 @@ describe("environment completion and unread state", () => {
   test("clears unread only when the expected activity token still matches", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
-      const activityAt = "2026-07-28T12:00:00.000Z";
+      const previousActivityAt = environment.lastActivityAt;
+      const activityAt = new Date(
+        new Date(previousActivityAt).getTime() + 1,
+      ).toISOString();
       await storage.recordEnvironmentCompletion(environment.id, activityAt);
 
       const staleClear = await storage.setEnvironmentUnread(
         environment.id,
         false,
-        "2026-07-28T11:00:00.000Z",
+        previousActivityAt,
       );
       expect(staleClear.hasUnreadWork).toBe(true);
 

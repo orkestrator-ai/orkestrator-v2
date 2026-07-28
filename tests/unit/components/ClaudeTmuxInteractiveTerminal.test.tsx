@@ -92,7 +92,11 @@ class MockFitAddon {
   }
 }
 
-const listenMock = mock(async (_eventName: string, handler: OutputHandler) => {
+const listenMock = mock(async (
+  _eventName: string,
+  handler: OutputHandler,
+  _options?: { signal?: AbortSignal },
+) => {
   outputHandler = handler;
   return unlistenMock;
 });
@@ -509,12 +513,22 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     expect(detachInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
   });
 
-  test("does not start a session if the component unmounts while listener setup is pending", async () => {
-    let resolveListen: ((unlisten: () => void) => void) | null = null;
-    listenMock.mockImplementationOnce((_eventName, handler: OutputHandler) => {
+  test("cancels pending listener setup and detaches when the component unmounts", async () => {
+    let listenSignal: AbortSignal | undefined;
+    listenMock.mockImplementationOnce((
+      _eventName,
+      handler: OutputHandler,
+      options?: { signal?: AbortSignal },
+    ) => {
       outputHandler = handler;
-      return new Promise((resolve) => {
-        resolveListen = resolve;
+      listenSignal = options?.signal;
+      return new Promise((_resolve, reject) => {
+        listenSignal?.addEventListener("abort", () => {
+          unlistenMock();
+          const error = new Error("cancelled");
+          error.name = "AbortError";
+          reject(error);
+        }, { once: true });
       });
     });
 
@@ -529,13 +543,12 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     await waitFor(() => expect(listenMock).toHaveBeenCalledTimes(1));
     unmount();
 
-    await act(async () => {
-      resolveListen?.(unlistenMock);
-      await Promise.resolve();
+    await waitFor(() => {
+      expect(listenSignal?.aborted).toBe(true);
+      expect(unlistenMock).toHaveBeenCalledTimes(1);
+      expect(detachInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
     });
 
     expect(startInteractiveTerminalMock).not.toHaveBeenCalled();
-    expect(unlistenMock).toHaveBeenCalledTimes(1);
-    expect(detachInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
   });
 });

@@ -140,7 +140,7 @@ describe("remote gateway", () => {
       null,
       ["terminal-output-one"],
       ["terminal-output-"],
-    )).toBe(true);
+    )).toBe(false);
     expect(eventMatchesSubscription(
       "terminal-output-one",
       null,
@@ -188,9 +188,8 @@ describe("remote gateway", () => {
     gateway.emit("menu-zoom", "in");
     gateway.emit("terminal-output-one", { bytesBase64: "b25l" });
 
-    expect(writes).toHaveLength(2);
-    expect(writes[0]).toContain('"event":"menu-zoom"');
-    expect(writes[1]).toContain('"event":"terminal-output-one"');
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain('"event":"terminal-output-one"');
   });
 
   test("drops projected soft-limit terminal frames and flushes a desync notice on drain", async () => {
@@ -243,6 +242,60 @@ describe("remote gateway", () => {
     expect(state.desyncedSessions.size).toBe(0);
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain('"desynced":true');
+  });
+
+  test("retains only the latest refused tmux repaint and flushes it on drain", async () => {
+    const dataDir = await createTempDir("ork-gateway-tmux-soft-limit-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir,
+      rendererRoot,
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger: createLogger(),
+    });
+    const writes: string[] = [];
+    const client = {
+      writableLength: 1024 * 1024,
+      write: mock((message: string) => {
+        writes.push(message);
+        return false;
+      }),
+      destroy: mock(() => undefined),
+    };
+    const state = {
+      prefixes: null,
+      includedPrefixes: ["terminal-output-tmux:env:tab:one"],
+      excludedPrefixes: ["terminal-output-"],
+      desyncedSessions: new Set<string>(),
+    };
+    const clients = (
+      gateway as unknown as { clients: Map<object, typeof state> }
+    ).clients;
+    clients.set(client, state);
+
+    gateway.emit("terminal-output-tmux:env:tab:one", {
+      bytesBase64: Buffer.from("old pane").toString("base64"),
+    });
+    gateway.emit("terminal-output-tmux:env:tab:one", {
+      bytesBase64: Buffer.from("latest pane").toString("base64"),
+    });
+    gateway.emit("environment-changed", { id: "env" });
+    expect(writes).toEqual([]);
+
+    client.writableLength = 0;
+    const flushed = (
+      gateway as unknown as {
+        flushDesyncNotices(client: object, state: typeof state): boolean;
+      }
+    ).flushDesyncNotices(client, state);
+
+    expect(flushed).toBe(true);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain(Buffer.from("latest pane").toString("base64"));
+    expect(writes[0]).not.toContain(Buffer.from("old pane").toString("base64"));
+    expect(writes[0]).not.toContain('"desynced":true');
+    expect(state.desyncedSessions.size).toBe(0);
   });
 
   test("disconnects before a current frame would exceed the hard buffer limit", async () => {

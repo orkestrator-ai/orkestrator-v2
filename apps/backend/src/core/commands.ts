@@ -142,6 +142,10 @@ type TerminalSessionConfig =
 const terminalProcesses = new Map<string, PtyProcess>();
 const terminalSessionConfigs = new Map<string, TerminalSessionConfig>();
 const terminalOutputBuffers = new Map<string, TerminalOutputBuffer>();
+const terminalOutputRetentionTimers = new Map<
+  string,
+  ReturnType<typeof setTimeout>
+>();
 const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalActivityArmed = new Set<string>();
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
@@ -192,6 +196,10 @@ const SETUP_FAILED_OSC_SEQUENCE = "\u001b]9999;setup_failed\u0007";
 const SETUP_DONE_PRINTF_CMD = "printf '\\033]9999;setup_done\\007'";
 const SETUP_FAILED_PRINTF_CMD = "printf '\\033]9999;setup_failed\\007'";
 const MAX_TERMINAL_OUTPUT_BUFFER_CHARS = 500 * 1024;
+/** Keep exited PTY snapshots long enough for a lagging SSE client to recover. */
+const TERMINAL_OUTPUT_RETENTION_MS = 5 * 60_000;
+/** Bound worst-case retained output to 32 × 500 KB. */
+const MAX_RETAINED_TERMINAL_OUTPUT_BUFFERS = 32;
 const TERMINAL_ACTIVITY_SETTLE_MS = 750;
 export function buildContainerSafeBase64Reader(
   testMutation?: "append" | "replace",
@@ -2228,6 +2236,37 @@ function terminalOutputBufferLength(sessionId: string): number {
   return terminalOutputBuffers.get(sessionId)?.length ?? 0;
 }
 
+function deleteRetainedTerminalOutputBuffer(sessionId: string): void {
+  const timer = terminalOutputRetentionTimers.get(sessionId);
+  if (timer) clearTimeout(timer);
+  terminalOutputRetentionTimers.delete(sessionId);
+  terminalOutputBuffers.delete(sessionId);
+}
+
+function resetTerminalOutputBuffers(): void {
+  for (const timer of terminalOutputRetentionTimers.values()) clearTimeout(timer);
+  terminalOutputRetentionTimers.clear();
+  terminalOutputBuffers.clear();
+}
+
+function retainTerminalOutputBuffer(sessionId: string): void {
+  const previous = terminalOutputRetentionTimers.get(sessionId);
+  if (previous) clearTimeout(previous);
+  const timer = setTimeout(
+    () => deleteRetainedTerminalOutputBuffer(sessionId),
+    TERMINAL_OUTPUT_RETENTION_MS,
+  );
+  timer.unref?.();
+  // Delete + set refreshes insertion order for the bounded FIFO.
+  terminalOutputRetentionTimers.delete(sessionId);
+  terminalOutputRetentionTimers.set(sessionId, timer);
+  while (terminalOutputRetentionTimers.size > MAX_RETAINED_TERMINAL_OUTPUT_BUFFERS) {
+    const oldest = terminalOutputRetentionTimers.keys().next().value;
+    if (oldest === undefined) break;
+    deleteRetainedTerminalOutputBuffer(oldest);
+  }
+}
+
 function compactTerminalOutputBuffer(buffer: TerminalOutputBuffer): string {
   if (buffer.length === 0) {
     buffer.chunks = [];
@@ -2426,13 +2465,12 @@ function cleanupTerminalSession(id: string): void {
   terminalActivityArmed.delete(id);
   terminalProcesses.delete(id);
   terminalSessionConfigs.delete(id);
-  // Setup-session buffers are retained intentionally so the renderer can replay
-  // setup output after the PTY exits / on reattach (cleared when the setup
-  // session is superseded or the environment is removed). Every other session
-  // is keyed by a one-shot UUID, so its buffer would otherwise leak for the
-  // lifetime of the main process.
-  if (!isSetupTerminalSessionId(id)) {
-    terminalOutputBuffers.delete(id);
+  // Setup-session buffers are retained until the environment is removed.
+  // Ordinary one-shot PTYs keep a bounded, short-lived recovery snapshot: an
+  // SSE client may have been told to refetch after dropping output and can
+  // drain only after the process itself has already exited.
+  if (!isSetupTerminalSessionId(id) && terminalOutputBuffers.has(id)) {
+    retainTerminalOutputBuffer(id);
   }
 }
 
@@ -6886,6 +6924,11 @@ export const __testing = {
       sequence: buffer?.sequence ?? 0,
     };
   },
+  deleteRetainedTerminalOutputBuffer,
+  retainedTerminalOutputBufferCount(): number {
+    return terminalOutputRetentionTimers.size;
+  },
+  resetTerminalOutputBuffers,
   CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER,
   CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL,
   CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL,

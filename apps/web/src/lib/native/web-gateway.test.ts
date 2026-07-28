@@ -588,6 +588,28 @@ describe("web gateway browser API", () => {
     expect(firstSource.closed).toBe(true);
   });
 
+  test("aborts a terminal stream that never becomes ready when its listener leaves", async () => {
+    let requestSignal: AbortSignal | undefined;
+    globalThis.fetch = mock(async (_input, init) => {
+      requestSignal = init?.signal ?? undefined;
+      return new Promise<Response>(() => {});
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+    });
+
+    const unsubscribe = api.listen("terminal-output-stuck", () => undefined);
+    const ready = api.eventStreamReady("terminal-output-stuck");
+    await Promise.resolve();
+    expect(requestSignal?.aborted).toBe(false);
+
+    unsubscribe();
+
+    expect(requestSignal?.aborted).toBe(true);
+    await expect(ready).resolves.toBeUndefined();
+  });
+
   test("adding a second terminal never interrupts output for the first", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi();

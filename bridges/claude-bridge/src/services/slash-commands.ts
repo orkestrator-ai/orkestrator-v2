@@ -54,7 +54,11 @@ function hasCompleteFrontmatter(content: string): boolean {
   return /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.test(content);
 }
 
-async function readFileFrontmatter(filePath: string): Promise<string> {
+async function readFileFrontmatter(
+  filePath: string,
+  testHooks?: { onFrontmatterRead?: (filePath: string) => void },
+): Promise<string> {
+  testHooks?.onFrontmatterRead?.(filePath);
   const handle = await open(filePath, "r");
   try {
     const decoder = new StringDecoder("utf8");
@@ -95,13 +99,18 @@ async function readFileFrontmatter(filePath: string): Promise<string> {
  * Resolve a command file's description, serving repeats from the cache until
  * the file changes on disk.
  */
-async function readCommandDescription(filePath: string): Promise<string | undefined> {
+async function readCommandDescription(
+  filePath: string,
+  testHooks?: { onFrontmatterRead?: (filePath: string) => void },
+): Promise<string | undefined> {
   const fingerprint = fingerprintOf(await stat(filePath));
   const cached = commandDescriptions.get(filePath);
   if (cached && cached.fingerprint === fingerprint) {
     return cached.description;
   }
-  const description = parseDescription(await readFileFrontmatter(filePath));
+  const description = parseDescription(
+    await readFileFrontmatter(filePath, testHooks),
+  );
   commandDescriptions.set(filePath, { fingerprint, description });
   return description;
 }
@@ -162,6 +171,7 @@ function parseDescription(content: string): string | undefined {
 async function scanCommandsDir(
   commandsDir: string,
   prefix: string,
+  testHooks?: { onFrontmatterRead?: (filePath: string) => void },
 ): Promise<string[]> {
   let entries: string[];
   try {
@@ -184,7 +194,7 @@ async function scanCommandsDir(
 
     let description: string | undefined;
     try {
-      description = await readCommandDescription(commandPath);
+      description = await readCommandDescription(commandPath, testHooks);
     } catch {
       // File unreadable, include command without description
     }
@@ -202,7 +212,10 @@ async function scanCommandsDir(
  * @param cwd - The working directory (project root)
  * @returns Array of command strings in "/name - description" format
  */
-export async function discoverSlashCommands(cwd: string): Promise<string[]> {
+export async function discoverSlashCommands(
+  cwd: string,
+  testHooks?: { onFrontmatterRead?: (filePath: string) => void },
+): Promise<string[]> {
   const seen = new Set<string>();
   const result: string[] = [];
 
@@ -216,7 +229,11 @@ export async function discoverSlashCommands(cwd: string): Promise<string[]> {
   };
 
   // 1. Scan repo-scoped commands (highest priority)
-  const repoCommands = await scanCommandsDir(join(cwd, ".claude", "commands"), "");
+  const repoCommands = await scanCommandsDir(
+    join(cwd, ".claude", "commands"),
+    "",
+    testHooks,
+  );
   for (const cmd of repoCommands) addCommand(cmd);
 
   // 2. Scan plugin commands
@@ -227,7 +244,11 @@ export async function discoverSlashCommands(cwd: string): Promise<string[]> {
       const manifest = await readPluginManifest(plugin.path);
       const pluginName = manifest?.name || plugin.path.split("/").pop() || "unknown";
       const commandsDir = join(plugin.path, "commands");
-      const pluginCommands = await scanCommandsDir(commandsDir, `${pluginName}:`);
+      const pluginCommands = await scanCommandsDir(
+        commandsDir,
+        `${pluginName}:`,
+        testHooks,
+      );
       for (const cmd of pluginCommands) addCommand(cmd);
     }
   } catch (error) {

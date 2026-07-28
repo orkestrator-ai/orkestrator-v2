@@ -55,7 +55,16 @@ const mockCheckHealth = mock(() => Promise.resolve(true));
 const mockGetModels = mock(() => Promise.resolve([]));
 const mockSubscribeToEvents = mock(() => (async function* () {})());
 const mockCreateSession = mock(() => Promise.resolve({ sessionId: "session-1" }));
+const mockGetSession = mock(() => Promise.resolve({
+  id: SESSION_ID,
+  title: "Build Session",
+  status: "idle" as const,
+  createdAt: "2026-06-22T00:00:00.000Z",
+  lastActivity: "2026-06-22T00:00:01.000Z",
+}));
 const mockGetSessionMessages = mock(() => Promise.resolve([] as ClaudeMessage[]));
+const mockGetPendingQuestions = mock(() => Promise.resolve([]));
+const mockGetPendingPlanApprovals = mock(() => Promise.resolve([]));
 const mockSendPrompt = mock(() => Promise.resolve(true));
 const mockAbortSession = mock(() => Promise.resolve(true));
 const mockGetStructuredOutput = mock(() =>
@@ -67,7 +76,10 @@ mock.module("@/lib/claude-client", () => ({
   checkHealth: mockCheckHealth,
   getModels: mockGetModels,
   createSession: mockCreateSession,
+  getSession: mockGetSession,
   getSessionMessages: mockGetSessionMessages,
+  getPendingQuestions: mockGetPendingQuestions,
+  getPendingPlanApprovals: mockGetPendingPlanApprovals,
   sendPrompt: mockSendPrompt,
   abortSession: mockAbortSession,
   getStructuredOutput: mockGetStructuredOutput,
@@ -498,7 +510,10 @@ describe("BuildChatTab", () => {
     mockGetModels.mockClear();
     mockSubscribeToEvents.mockClear();
     mockCreateSession.mockClear();
+    mockGetSession.mockClear();
     mockGetSessionMessages.mockClear();
+    mockGetPendingQuestions.mockClear();
+    mockGetPendingPlanApprovals.mockClear();
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
     mockGetStructuredOutput.mockClear();
@@ -518,7 +533,16 @@ describe("BuildChatTab", () => {
     );
     mockCheckHealth.mockImplementation(() => Promise.resolve(true));
     mockGetModels.mockImplementation(() => Promise.resolve([]));
+    mockGetSession.mockImplementation(() => Promise.resolve({
+      id: SESSION_ID,
+      title: "Build Session",
+      status: "idle" as const,
+      createdAt: "2026-06-22T00:00:00.000Z",
+      lastActivity: "2026-06-22T00:00:01.000Z",
+    }));
     mockGetSessionMessages.mockImplementation(() => Promise.resolve([]));
+    mockGetPendingQuestions.mockImplementation(() => Promise.resolve([]));
+    mockGetPendingPlanApprovals.mockImplementation(() => Promise.resolve([]));
     mockSendPrompt.mockImplementation(() => Promise.resolve(true));
     mockAbortSession.mockImplementation(() => Promise.resolve(true));
     mockGetStructuredOutput.mockImplementation(() =>
@@ -1310,6 +1334,106 @@ describe("BuildChatTab", () => {
   // -----------------------------------------------------------------------
 
   describe("event stream disconnection", () => {
+    test("authoritatively reconciles a replay gap and advances an idle build", async () => {
+      const reconciledMessage: ClaudeMessage = {
+        id: "reconciled-message",
+        role: "assistant",
+        content: "Build finished while the tab was away",
+        parts: [{ type: "text", content: "Build finished while the tab was away" }],
+        timestamp: "2026-06-22T00:00:01.000Z",
+      };
+      const pendingQuestion = {
+        id: "question-live",
+        sessionId: SESSION_ID,
+        questions: [],
+      };
+      const pendingApproval = {
+        id: "approval-live",
+        sessionId: SESSION_ID,
+      };
+      mockGetSessionMessages.mockResolvedValueOnce([reconciledMessage]);
+      mockGetPendingQuestions.mockResolvedValueOnce([pendingQuestion] as never);
+      mockGetPendingPlanApprovals.mockResolvedValueOnce([pendingApproval] as never);
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield { type: "replay.required", data: {} } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("building", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+      useClaudeStore.setState({
+        pendingQuestions: new Map([[
+          "question-stale",
+          { id: "question-stale", sessionId: SESSION_ID, questions: [] } as never,
+        ]]),
+        pendingPlanApprovals: new Map([[
+          "approval-stale",
+          { id: "approval-stale", sessionId: SESSION_ID } as never,
+        ]]),
+      });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockGetSession).toHaveBeenCalledWith(
+          { baseUrl: "http://127.0.0.1:9999" },
+          SESSION_ID,
+        );
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+          messages: [reconciledMessage],
+          isLoading: false,
+          title: "Build Session",
+        });
+        expect(useClaudeStore.getState().pendingQuestions.has("question-live")).toBe(true);
+        expect(useClaudeStore.getState().pendingQuestions.has("question-stale")).toBe(false);
+        expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-live")).toBe(true);
+        expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-stale")).toBe(false);
+      });
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.sessions[0]?.status).toBe("idle");
+        expect(pipeline?.sessions.some((session) => session.phase === "review")).toBe(true);
+      });
+    });
+
+    test("restores idle status when an optional interaction endpoint fails", async () => {
+      const pendingApproval = {
+        id: "approval-live",
+        sessionId: SESSION_ID,
+      };
+      mockGetPendingQuestions.mockRejectedValueOnce(new Error("questions unavailable"));
+      mockGetPendingPlanApprovals.mockResolvedValueOnce([pendingApproval] as never);
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield { type: "replay.required", data: {} } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+      useClaudeStore.setState({
+        pendingQuestions: new Map([[
+          "question-preserved",
+          { id: "question-preserved", sessionId: SESSION_ID, questions: [] } as never,
+        ]]),
+        pendingPlanApprovals: new Map([[
+          "approval-stale",
+          { id: "approval-stale", sessionId: SESSION_ID } as never,
+        ]]),
+      });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+        expect(useClaudeStore.getState().pendingQuestions.has("question-preserved")).toBe(true);
+        expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-live")).toBe(true);
+        expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-stale")).toBe(false);
+      });
+    });
+
     test("waits for final reconciliation and ignores an older fallback response", async () => {
       let resolveFallback!: (messages: ClaudeMessage[]) => void;
       const fallback = new Promise<ClaudeMessage[]>((resolve) => {

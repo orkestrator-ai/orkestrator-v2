@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { memo, useEffect, useState } from "react";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
@@ -63,5 +63,36 @@ describe("TerminalContext", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Create browser" }));
     expect(createTab).toHaveBeenCalledWith("browser", "http://localhost:3000/");
+  });
+
+  test("keeps context consumers stable when only the provider parent rerenders", () => {
+    let consumerRenders = 0;
+    const Consumer = memo(function Consumer() {
+      useTerminalContext();
+      consumerRenders += 1;
+      return <span>consumer</span>;
+    });
+
+    function Parent() {
+      const [parentRender, setParentRender] = useState(0);
+      return (
+        <>
+          <button type="button" onClick={() => setParentRender((value) => value + 1)}>
+            Parent render {parentRender}
+          </button>
+          <TerminalProvider>
+            <Consumer />
+          </TerminalProvider>
+        </>
+      );
+    }
+
+    render(<Parent />);
+    expect(consumerRenders).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Parent render 0" }));
+
+    expect(screen.getByRole("button", { name: "Parent render 1" })).toBeDefined();
+    expect(consumerRenders).toBe(1);
   });
 });

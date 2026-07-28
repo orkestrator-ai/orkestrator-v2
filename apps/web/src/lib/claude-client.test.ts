@@ -973,6 +973,71 @@ describe("claude-client", () => {
       await second.return?.();
     });
 
+    test("retains and URL-encodes an opaque generation cursor", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const cursorClient = {
+        ...client,
+        baseUrl: "http://127.0.0.1:9877",
+      };
+      const first = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
+      MockEventSource.latest!.emit("keepalive", { timestamp: "now" }, "generation-A:42");
+      await first.next();
+      await first.return?.();
+
+      const second = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
+      expect(MockEventSource.latest?.url).toBe(
+        "http://127.0.0.1:9877/event/subscribe?since=generation-A%3A42",
+      );
+      await second.return?.();
+    });
+
+    test("ignores invalid cursors instead of reflecting them into the URL", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const cursorClient = {
+        ...client,
+        baseUrl: "http://127.0.0.1:9878",
+      };
+      const first = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
+      MockEventSource.latest!.emit("keepalive", { timestamp: "now" }, "bad cursor?value");
+      await first.next();
+      await first.return?.();
+
+      const second = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
+      expect(MockEventSource.latest?.url).toBe(
+        "http://127.0.0.1:9878/event/subscribe",
+      );
+      await second.return?.();
+    });
+
+    test("an already-aborted signal does not open EventSource", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      MockEventSource.latest = null;
+      const controller = new AbortController();
+      controller.abort();
+
+      const iterator = subscribeToEvents(client, controller.signal)[Symbol.asyncIterator]();
+      await expect(iterator.next()).resolves.toMatchObject({ done: true });
+      expect(MockEventSource.latest).toBeNull();
+    });
+
+    test("drops malformed event JSON and keeps the subscription usable", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+      const source = MockEventSource.latest!;
+      (source as unknown as { listeners: Map<string, (event: MessageEvent) => void> })
+        .listeners.get("keepalive")?.({
+          type: "keepalive",
+          data: "{not-json",
+          lastEventId: "10",
+        } as MessageEvent);
+      source.emit("keepalive", { timestamp: "valid" }, "11");
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: "keepalive", data: { timestamp: "valid" } },
+      });
+      await iterator.return?.();
+    });
+
     test("yields a patch frame with its revision intact", async () => {
       globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
       const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();

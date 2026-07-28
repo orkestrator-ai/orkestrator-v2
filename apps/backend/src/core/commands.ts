@@ -2181,9 +2181,12 @@ function findEnvironmentByContainerId(environments: Environment[], containerId: 
  * up to four wire characters (`"104,"`) and an eight-byte heap slot in every
  * process that parses it; base64 costs 1.33 characters per byte and one string.
  */
-function terminalOutputPayload(data: string | Buffer): { bytesBase64: string } {
+function terminalOutputPayload(
+  data: string | Buffer,
+  sequence: number,
+): { bytesBase64: string; sequence: number } {
   const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8");
-  return { bytesBase64: buffer.toString("base64") };
+  return { bytesBase64: buffer.toString("base64"), sequence };
 }
 
 /**
@@ -2197,51 +2200,99 @@ function terminalOutputPayload(data: string | Buffer): { bytesBase64: string } {
  */
 type TerminalOutputBuffer = {
   chunks: string[];
-  /** Characters of `chunks[0]` that have already been trimmed away. */
+  /** Index of the first retained chunk; avoids O(n) Array.shift(). */
+  headIndex: number;
+  /** Characters of `chunks[headIndex]` that have already been trimmed away. */
   headOffset: number;
   /** Retained characters, i.e. total chunk length minus `headOffset`. */
   length: number;
+  /** Last output frame included in this snapshot. */
+  sequence: number;
 };
 
+const MAX_TERMINAL_OUTPUT_BUFFER_CHUNKS = 1_024;
+
 function createTerminalOutputBuffer(): TerminalOutputBuffer {
-  return { chunks: [], headOffset: 0, length: 0 };
+  return { chunks: [], headIndex: 0, headOffset: 0, length: 0, sequence: 0 };
 }
 
 function resetTerminalOutputBuffer(sessionId: string): void {
-  terminalOutputBuffers.set(sessionId, createTerminalOutputBuffer());
+  const previousSequence = terminalOutputBuffers.get(sessionId)?.sequence ?? 0;
+  terminalOutputBuffers.set(sessionId, {
+    ...createTerminalOutputBuffer(),
+    sequence: previousSequence,
+  });
 }
 
 function terminalOutputBufferLength(sessionId: string): number {
   return terminalOutputBuffers.get(sessionId)?.length ?? 0;
 }
 
-function readTerminalOutputBuffer(sessionId: string): string {
-  const buffer = terminalOutputBuffers.get(sessionId);
-  if (!buffer || buffer.length === 0) return "";
-  if (buffer.chunks.length === 1 && buffer.headOffset === 0) return buffer.chunks[0]!;
-  const [head, ...rest] = buffer.chunks;
-  const joined = `${head!.slice(buffer.headOffset)}${rest.join("")}`;
+function compactTerminalOutputBuffer(buffer: TerminalOutputBuffer): string {
+  if (buffer.length === 0) {
+    buffer.chunks = [];
+    buffer.headIndex = 0;
+    buffer.headOffset = 0;
+    return "";
+  }
+  if (
+    buffer.chunks.length - buffer.headIndex === 1
+    && buffer.headOffset === 0
+  ) {
+    return buffer.chunks[buffer.headIndex]!;
+  }
+  const retained = buffer.chunks.slice(buffer.headIndex);
+  retained[0] = retained[0]!.slice(buffer.headOffset);
+  const joined = retained.join("");
   // Compact so repeated reads (and the next trim) work against one chunk.
   buffer.chunks = [joined];
+  buffer.headIndex = 0;
   buffer.headOffset = 0;
   buffer.length = joined.length;
   return joined;
 }
 
-function appendTerminalOutputBuffer(sessionId: string, data: string | Buffer): void {
+function readTerminalOutputBuffer(sessionId: string): string {
+  const buffer = terminalOutputBuffers.get(sessionId);
+  return buffer ? compactTerminalOutputBuffer(buffer) : "";
+}
+
+function readTerminalOutputSnapshot(sessionId: string): {
+  text: string;
+  sequence: number;
+} {
+  const text = readTerminalOutputBuffer(sessionId);
+  return {
+    text,
+    sequence: terminalOutputBuffers.get(sessionId)?.sequence ?? 0,
+  };
+}
+
+function appendTerminalOutputBuffer(sessionId: string, data: string | Buffer): number {
   const text = Buffer.isBuffer(data) ? data.toString("utf8") : data;
-  if (!text) return;
+  if (!text) return terminalOutputBuffers.get(sessionId)?.sequence ?? 0;
   let buffer = terminalOutputBuffers.get(sessionId);
   if (!buffer) {
     buffer = createTerminalOutputBuffer();
     terminalOutputBuffers.set(sessionId, buffer);
   }
+
+  // Tiny PTY callbacks can otherwise retain hundreds of thousands of string
+  // and array slots even though their text is capped. Compact at a fixed slot
+  // count; the amortized work is bounded and trimming never shifts the array.
+  if (
+    buffer.chunks.length - buffer.headIndex
+    >= MAX_TERMINAL_OUTPUT_BUFFER_CHUNKS
+  ) {
+    compactTerminalOutputBuffer(buffer);
+  }
   buffer.chunks.push(text);
   buffer.length += text.length;
+  buffer.sequence += 1;
 
   let excess = buffer.length - MAX_TERMINAL_OUTPUT_BUFFER_CHARS;
   while (excess > 0) {
-    const head = buffer.chunks[0];
+    const head = buffer.chunks[buffer.headIndex];
     if (head === undefined) break;
     const available = head.length - buffer.headOffset;
     if (available > excess) {
@@ -2249,16 +2300,20 @@ function appendTerminalOutputBuffer(sessionId: string, data: string | Buffer): v
       buffer.length -= excess;
       break;
     }
-    buffer.chunks.shift();
+    buffer.headIndex += 1;
     buffer.headOffset = 0;
     buffer.length -= available;
     excess -= available;
   }
+  if (buffer.headIndex >= MAX_TERMINAL_OUTPUT_BUFFER_CHUNKS) {
+    compactTerminalOutputBuffer(buffer);
+  }
+  return buffer.sequence;
 }
 
 function emitTerminalOutput(sessionId: string, data: string | Buffer, emit: BackendEmit): void {
-  appendTerminalOutputBuffer(sessionId, data);
-  emit(`terminal-output-${sessionId}`, terminalOutputPayload(data));
+  const sequence = appendTerminalOutputBuffer(sessionId, data);
+  emit(`terminal-output-${sessionId}`, terminalOutputPayload(data, sequence));
 }
 
 function logSetupTerminal(message: string, details: Record<string, unknown> = {}): void {
@@ -6442,6 +6497,10 @@ export function createCommandRegistry(
     }
     return buffer;
   });
+  register("get_terminal_output_snapshot", ({ sessionId }) => {
+    const id = asString(sessionId, "sessionId");
+    return readTerminalOutputSnapshot(id);
+  });
 
   register("create_local_terminal_session", ({ environmentId, cols, rows, trackEnvironmentActivity }) => {
     const id = `${asString(environmentId, "environmentId")}:${randomUUID()}`;
@@ -6814,6 +6873,18 @@ export const __testing = {
   },
   trackedDiffStatsIds(): string[] {
     return diffStatsService.trackedIds();
+  },
+  terminalOutputBufferStats(sessionId: string): {
+    chars: number;
+    chunks: number;
+    sequence: number;
+  } {
+    const buffer = terminalOutputBuffers.get(sessionId);
+    return {
+      chars: buffer?.length ?? 0,
+      chunks: buffer ? buffer.chunks.length - buffer.headIndex : 0,
+      sequence: buffer?.sequence ?? 0,
+    };
   },
   CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER,
   CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL,

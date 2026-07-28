@@ -1185,6 +1185,76 @@ describe("ClaudeChatTab", () => {
   });
 
   describe("shared SSE event handling", () => {
+    test("rehydrates transcript, status, questions, and approvals after a replay gap", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockImplementation(() => channel.stream);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      const replayedMessage: ClaudeMessageType = {
+        id: "replayed-message",
+        role: "assistant",
+        content: "Recovered from snapshot",
+        parts: [{ type: "text", content: "Recovered from snapshot" }],
+        timestamp: "2026-07-20T12:00:00.000Z",
+      };
+      mockGetSession.mockReset();
+      mockGetSession.mockResolvedValue({
+        sessionId: "session-1",
+        status: "running",
+        title: "Recovered session",
+      });
+      mockGetSessionMessages.mockReset();
+      mockGetSessionMessages.mockResolvedValue([replayedMessage]);
+      mockGetPendingQuestions.mockReset();
+      mockGetPendingQuestions.mockResolvedValue([{
+        id: "fresh-question",
+        sessionId: "session-1",
+        questions: [],
+      }]);
+      mockGetPendingPlanApprovals.mockReset();
+      mockGetPendingPlanApprovals.mockResolvedValue([{
+        id: "fresh-approval",
+        sessionId: "session-1",
+      }]);
+      act(() => {
+        useClaudeStore.getState().addPendingQuestion({
+          id: "stale-question",
+          sessionId: "session-1",
+          questions: [],
+        });
+        useClaudeStore.getState().addPendingPlanApproval({
+          id: "stale-approval",
+          sessionId: "session-1",
+        });
+      });
+
+      channel.push({ type: "replay.required", data: {} });
+
+      await waitFor(() => {
+        const state = useClaudeStore.getState();
+        expect(state.sessions.get(SESSION_KEY)).toMatchObject({
+          messages: [replayedMessage],
+          isLoading: true,
+          title: "Recovered session",
+        });
+        expect(state.pendingQuestions.has("fresh-question")).toBe(true);
+        expect(state.pendingQuestions.has("stale-question")).toBe(false);
+        expect(state.pendingPlanApprovals.has("fresh-approval")).toBe(true);
+        expect(state.pendingPlanApprovals.has("stale-approval")).toBe(false);
+      });
+      expect(mockGetSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+      expect(mockGetSessionMessages).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        { throwOnError: true },
+      );
+
+      useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
     test("applies assistant updates, titles, usage, idle refreshes, and error payloads", async () => {
       const channel = eventChannel();
       const originalError = console.error;

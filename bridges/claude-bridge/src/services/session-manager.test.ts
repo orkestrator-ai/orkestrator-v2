@@ -330,6 +330,7 @@ const {
   getAvailableModels,
   getClaudeRuntimeVersions,
   MAX_IMAGE_ATTACHMENT_BYTES,
+  MAX_STREAM_CONTENT_BLOCK_INDEX,
   reconcilePersistedSessions,
   ensurePersistedSession,
   hydratePersistedSessionMessages,
@@ -1843,6 +1844,8 @@ describe("sendPrompt", () => {
       1.5,
       Number.NaN,
       Number.POSITIVE_INFINITY,
+      MAX_STREAM_CONTENT_BLOCK_INDEX + 1,
+      1_000_000_000,
     ].map((index) => ({
       type: "stream_event",
       uuid: "bad-stream",
@@ -1868,6 +1871,34 @@ describe("sendPrompt", () => {
     ]);
 
     expect(session.messages.filter((message) => message.role === "assistant")).toHaveLength(0);
+  });
+
+  test("keeps streamed block ordering sparse-safe at the accepted index boundary", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "stream_event",
+        uuid: "bounded-stream",
+        event: {
+          type: "content_block_delta",
+          index: MAX_STREAM_CONTENT_BLOCK_INDEX,
+          delta: { type: "text_delta", text: "last" },
+        },
+      },
+      {
+        type: "stream_event",
+        uuid: "bounded-stream",
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "first" },
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    const assistant = session.messages.find((message) => message.role === "assistant");
+    expect(assistant?.content).toBe("firstlast");
+    expect(assistant?.parts.map((part) => part.content)).toEqual(["first", "last"]);
   });
 
   test("uses a stream uuid fallback when no message_start arrives", async () => {
@@ -4249,9 +4280,16 @@ describe("hydratePersistedSessionMessages", () => {
 });
 
 describe("evictIdleHydratedTranscripts", () => {
+  let hydratedSessionSequence = 0;
+
   async function hydratedIdleSession() {
     mockSdkGetSessionMessages.mockImplementation(async () => transcriptWithToolResult());
-    const state = await materializePersistedSession();
+    hydratedSessionSequence += 1;
+    const state = await materializePersistedSession({
+      sessionId: `11111111-2222-4333-8444-${hydratedSessionSequence
+        .toString(16)
+        .padStart(12, "0")}`,
+    });
     await hydratePersistedSessionMessages(state.id);
     return state;
   }
@@ -4289,6 +4327,70 @@ describe("evictIdleHydratedTranscripts", () => {
     markStale(state);
     getSessionMessages(state.id);
     expect(evictIdleHydratedTranscripts()).toEqual([]);
+  });
+
+  test("falls back to last activity when an older session has no access clock", async () => {
+    const state = await hydratedIdleSession();
+    state.lastAccessedAt = undefined;
+    state.lastActivity = new Date(Date.now() - IDLE_TRANSCRIPT_EVICTION_MS - 1);
+
+    expect(evictIdleHydratedTranscripts()).toEqual([state.id]);
+  });
+
+  test("keeps sessions claimed by destructive or hydration work", async () => {
+    const deleting = await hydratedIdleSession();
+    markStale(deleting);
+    deleting.deleting = true;
+
+    const rewinding = await hydratedIdleSession();
+    markStale(rewinding);
+    rewinding.rewindInProgress = true;
+
+    const abortable = await hydratedIdleSession();
+    markStale(abortable);
+    abortable.abortController = new AbortController();
+
+    const hydrating = await hydratedIdleSession();
+    markStale(hydrating);
+    hydrating.persistedHydration = new Promise(() => {});
+
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(deleting.messages.length).toBeGreaterThan(0);
+    expect(rewinding.messages.length).toBeGreaterThan(0);
+    expect(abortable.messages.length).toBeGreaterThan(0);
+    expect(hydrating.messages.length).toBeGreaterThan(0);
+  });
+
+  test("keeps sessions with live background task state or controls", async () => {
+    const controlled = await hydratedIdleSession();
+    markStale(controlled);
+    controlled.backgroundTaskControls = new Map([
+      ["task-controlled", { close: () => undefined }],
+    ]);
+
+    const running = await hydratedIdleSession();
+    markStale(running);
+    running.backgroundTasks = {
+      "task-running": {
+        id: "task-running",
+        status: "running",
+        startedAt: Date.now(),
+      },
+    };
+
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(controlled.messages.length).toBeGreaterThan(0);
+    expect(running.messages.length).toBeGreaterThan(0);
+  });
+
+  test("does not mark an already-empty hydrated session for rehydration", async () => {
+    const state = await hydratedIdleSession();
+    markStale(state);
+    state.messages = [];
+    state.taskRegistry = undefined;
+
+    expect(evictIdleHydratedTranscripts()).toEqual([]);
+    expect(state.persistedMessagesLoaded).toBe(true);
   });
 
   test("never evicts a running session", async () => {

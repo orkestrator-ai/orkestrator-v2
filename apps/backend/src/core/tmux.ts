@@ -336,9 +336,70 @@ export function parseTranscriptHeadOutput(stdout: string): { head: string; lineC
   };
 }
 
-/** Lists every `.jsonl` in `dirPath` newest-first as `<mtime> <path>` lines. */
+/** How many sessions the resume dialog offers. */
+const MAX_PREVIOUS_SESSIONS = 50;
+/** Maximum local `stat` calls used while ranking transcript candidates. */
+export const PREVIOUS_SESSION_STAT_CONCURRENCY = 8;
+
+/** Lists every `.jsonl` in `dirPath` newest-first as NUL-terminated `<mtime> <path>` records. */
 export function jsonlByMtimeFindCommand(dirPath: string): string {
-  return `find ${shellArg(dirPath)}/ -mindepth 1 -maxdepth 1 -type f -name '*.jsonl' -printf '%T@ %p\\n' 2>/dev/null | sort -rn`;
+  return `find ${shellArg(dirPath)}/ -mindepth 1 -maxdepth 1 -type f -name '*.jsonl' -printf '%T@ %p\\0' 2>/dev/null | sort -z -rn`;
+}
+
+/**
+ * Whether a discovered path is a direct `.jsonl` child of `dirPath`.
+ *
+ * Container discovery output crosses a shell/process boundary. NUL framing
+ * prevents filenames containing newlines from creating additional records,
+ * while this independent check ensures even malformed output can never turn
+ * into an out-of-directory read.
+ */
+export function isDirectJsonlChild(dirPath: string, candidatePath: string): boolean {
+  if (!candidatePath || candidatePath.includes("\0")) return false;
+  const normalizedDir = path.posix.normalize(dirPath);
+  const normalizedCandidate = path.posix.normalize(candidatePath);
+  return path.posix.isAbsolute(normalizedCandidate) === path.posix.isAbsolute(normalizedDir)
+    && path.posix.dirname(normalizedCandidate) === normalizedDir
+    && normalizedCandidate === candidatePath
+    && path.posix.basename(normalizedCandidate).endsWith(".jsonl");
+}
+
+/**
+ * Rank local transcript names with bounded filesystem concurrency.
+ *
+ * All names still need metadata to identify the newest files, but a directory
+ * containing thousands of rollouts must not issue thousands of simultaneous
+ * `stat` calls. Only the rows the resume dialog can consume are retained.
+ */
+export async function listLocalJsonlByMtime(
+  dirPath: string,
+  names: readonly string[],
+  fileMtimeUnix: (filePath: string) => Promise<number>,
+  limit = MAX_PREVIOUS_SESSIONS,
+  concurrency = PREVIOUS_SESSION_STAT_CONCURRENCY,
+): Promise<Array<{ path: string; mtime: number }>> {
+  const candidates = names
+    .filter((name) => name.endsWith(".jsonl"))
+    .map((name) => path.join(dirPath, name))
+    .filter((candidatePath) => isDirectJsonlChild(dirPath, candidatePath));
+  const entries: Array<{ path: string; mtime: number }> = [];
+  let nextIndex = 0;
+  const workerCount = Math.min(
+    candidates.length,
+    Math.max(1, Math.floor(concurrency)),
+  );
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < candidates.length) {
+      const candidatePath = candidates[nextIndex++]!;
+      entries.push({
+        path: candidatePath,
+        mtime: await fileMtimeUnix(candidatePath),
+      });
+    }
+  }));
+  return entries
+    .sort((a, b) => b.mtime - a.mtime)
+    .slice(0, Math.max(0, Math.floor(limit)));
 }
 
 class TmuxBackend {
@@ -529,15 +590,16 @@ class TmuxBackend {
   async listJsonlByMtime(dirPath: string): Promise<Array<{ path: string; mtime: number }>> {
     if (this.kind === "container") {
       const out = await this.exec(["sh", "-c", jsonlByMtimeFindCommand(dirPath)]);
-      return parseFreshJsonlFindOutput(out.stdout);
+      return parseFreshJsonlFindOutput(out.stdout)
+        .filter((candidate) => isDirectJsonlChild(dirPath, candidate.path))
+        .slice(0, MAX_PREVIOUS_SESSIONS);
     }
 
-    const names = (await this.listDir(dirPath)).filter((name) => name.endsWith(".jsonl"));
-    const entries = await Promise.all(names.map(async (name) => {
-      const fullPath = `${dirPath}/${name}`;
-      return { path: fullPath, mtime: await this.fileMtimeUnix(fullPath) };
-    }));
-    return entries.sort((a, b) => b.mtime - a.mtime);
+    return listLocalJsonlByMtime(
+      dirPath,
+      await this.listDir(dirPath),
+      (filePath) => this.fileMtimeUnix(filePath),
+    );
   }
 
   /**
@@ -972,27 +1034,31 @@ async function findTranscriptPath(
 
 /**
  * Builds the shell command that lists fresh `.jsonl` files in `dirPath` newest-first,
- * emitting `<mtime> <path>` lines. Relies on GNU `find` (`-printf`/`-newermt`), which is
+ * emitting NUL-terminated `<mtime> <path>` records. Relies on GNU `find`
+ * (`-printf`/`-newermt`) and GNU `sort -z`, which are
  * available inside the Linux container backend.
  */
 export function newestJsonlFindCommand(dirPath: string, minMtimeUnix: number): string {
-  return `find ${shellArg(dirPath)}/ -mindepth 1 -maxdepth 1 -type f -name '*.jsonl' -newermt @${minMtimeUnix} -printf '%T@ %p\\n' 2>/dev/null | sort -rn`;
+  return `find ${shellArg(dirPath)}/ -mindepth 1 -maxdepth 1 -type f -name '*.jsonl' -newermt @${minMtimeUnix} -printf '%T@ %p\\0' 2>/dev/null | sort -z -rn`;
 }
 
 /**
- * Parses `find -printf '%T@ %p'` output into `{ path, mtime }` records, skipping lines
- * that lack a path or a finite mtime. Shared by the container and local discovery paths.
+ * Parses NUL-terminated `find -printf '%T@ %p\0'` output into records.
+ *
+ * An unterminated final record is ignored. Treating newlines as ordinary
+ * filename bytes is essential: splitting on them would let one filename forge
+ * another path record.
  */
 export function parseFreshJsonlFindOutput(findOutput: string): Array<{ path: string; mtime: number }> {
+  if (!findOutput.endsWith("\0")) return [];
   return findOutput
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .flatMap((line) => {
-      const firstSpace = line.indexOf(" ");
+    .split("\0")
+    .slice(0, -1)
+    .flatMap((record) => {
+      const firstSpace = record.indexOf(" ");
       if (firstSpace < 0) return [];
-      const mtime = Number.parseFloat(line.slice(0, firstSpace));
-      const candidatePath = line.slice(firstSpace + 1).trim();
+      const mtime = Number.parseFloat(record.slice(0, firstSpace));
+      const candidatePath = record.slice(firstSpace + 1);
       if (!Number.isFinite(mtime) || candidatePath.length === 0) return [];
       return [{ path: candidatePath, mtime }];
     });
@@ -1012,13 +1078,15 @@ export async function newestJsonlInDir(
   let candidates: Array<{ path: string; mtime: number }>;
   if (backend.kind === "container") {
     const out = await backend.exec(["sh", "-c", newestJsonlFindCommand(dirPath, minMtimeUnix)]);
-    candidates = parseFreshJsonlFindOutput(out.stdout);
+    candidates = parseFreshJsonlFindOutput(out.stdout)
+      .filter((candidate) => isDirectJsonlChild(dirPath, candidate.path));
   } else {
     const names = await backend.listDir(dirPath);
     candidates = [];
     for (const name of names) {
       if (!name.endsWith(".jsonl")) continue;
-      const fullPath = `${dirPath}/${name}`;
+      const fullPath = path.join(dirPath, name);
+      if (!isDirectJsonlChild(dirPath, fullPath)) continue;
       const mtime = await backend.fileMtimeUnix(fullPath);
       if (mtime < minMtimeUnix) continue;
       candidates.push({ path: fullPath, mtime });
@@ -1081,8 +1149,6 @@ function jsonContainsSessionId(value: unknown, sessionId: string): boolean {
   return Object.values(record).some((item) => jsonContainsSessionId(item, sessionId));
 }
 
-/** How many sessions the resume dialog offers. */
-const MAX_PREVIOUS_SESSIONS = 50;
 /**
  * How much of a transcript the listing reads. The title is the first user
  * message, which is within the first few lines of every real transcript; a
@@ -1184,6 +1250,14 @@ export class TranscriptTail {
    */
   async readNew(backend: TmuxBackend, knownSize?: number): Promise<unknown[]> {
     const size = knownSize ?? await backend.fileSize(this.filePath);
+    // A transcript path may be truncated or replaced when Claude resumes or
+    // rotates its writer. The previous byte offset is meaningless for the new
+    // shorter file, and carrying its partial line would corrupt the first new
+    // record.
+    if (size < this.offset) {
+      this.offset = 0;
+      this.partial = Buffer.alloc(0);
+    }
     if (size <= this.offset) return [];
 
     const chunk = await backend.readFileBytesFrom(this.filePath, this.offset);
@@ -2125,7 +2199,7 @@ export const INTERACTIVE_SNAPSHOT_MAX_MS = 1_000;
 type InteractiveTerminalSession = {
   id: string;
   tmux: TmuxSession;
-  timer?: NodeJS.Timeout;
+  timer?: unknown;
   lastSnapshot?: string;
   cols: number;
   rows: number;
@@ -2134,8 +2208,20 @@ type InteractiveTerminalSession = {
   context?: CommandContext;
 };
 
-class InteractiveTmuxTerminalManager {
+export type InteractiveTmuxTerminalManagerOptions = {
+  schedule?: (callback: () => void, delayMs: number) => unknown;
+  cancel?: (timer: unknown) => void;
+};
+
+export class InteractiveTmuxTerminalManager {
   private readonly terminals = new Map<string, InteractiveTerminalSession>();
+  private readonly scheduleTimeout: (callback: () => void, delayMs: number) => unknown;
+  private readonly cancelTimeout: (timer: unknown) => void;
+
+  constructor(options: InteractiveTmuxTerminalManagerOptions = {}) {
+    this.scheduleTimeout = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+    this.cancelTimeout = options.cancel ?? ((timer) => clearTimeout(timer as NodeJS.Timeout));
+  }
 
   create(tmux: TmuxSession, cols: number, rows: number): string {
     const id = `tmux:${tmux.environmentId}:${tmux.tabId}:${randomUUID()}`;
@@ -2155,7 +2241,7 @@ class InteractiveTmuxTerminalManager {
     const terminal = this.require(id);
     // Input is about to produce output, so undo any backoff before it lands.
     terminal.intervalMs = INTERACTIVE_SNAPSHOT_MIN_MS;
-    if (terminal.timer) this.schedule(terminal);
+    if (terminal.timer !== undefined) this.schedule(terminal);
     await terminal.tmux.writeInteractive(data);
   }
 
@@ -2169,7 +2255,7 @@ class InteractiveTmuxTerminalManager {
   detach(id: string): void {
     const terminal = this.terminals.get(id);
     if (!terminal) return;
-    if (terminal.timer) clearTimeout(terminal.timer);
+    if (terminal.timer !== undefined) this.cancelTimeout(terminal.timer);
     terminal.timer = undefined;
     this.terminals.delete(id);
   }
@@ -2186,8 +2272,8 @@ class InteractiveTmuxTerminalManager {
    * capture that runs long cannot stack up behind itself.
    */
   private schedule(terminal: InteractiveTerminalSession): void {
-    if (terminal.timer) clearTimeout(terminal.timer);
-    terminal.timer = setTimeout(() => {
+    if (terminal.timer !== undefined) this.cancelTimeout(terminal.timer);
+    terminal.timer = this.scheduleTimeout(() => {
       const context = terminal.context;
       if (!context || this.terminals.get(terminal.id) !== terminal) return;
       void this.emitSnapshot(terminal, context, false)
@@ -2202,6 +2288,9 @@ class InteractiveTmuxTerminalManager {
 
   private async emitSnapshot(terminal: InteractiveTerminalSession, context: CommandContext, force: boolean): Promise<void> {
     const snapshot = await terminal.tmux.capturePane({ ansi: true, joinWrapped: false });
+    // Detach can happen while capture-pane is in flight. Never emit the late
+    // snapshot or revive its timer after the terminal has been removed.
+    if (this.terminals.get(terminal.id) !== terminal) return;
     if (!force && snapshot === terminal.lastSnapshot) {
       terminal.intervalMs = Math.min(INTERACTIVE_SNAPSHOT_MAX_MS, terminal.intervalMs * 2);
       return;
@@ -2305,6 +2394,7 @@ export type ClaudeStatePollManagerOptions = {
   schedule?: (callback: () => void) => unknown;
   cancel?: (timer: unknown) => void;
   now?: () => string;
+  nowMs?: () => number;
 };
 
 /** How long the agent has to answer before a state read is abandoned. */
@@ -2342,6 +2432,7 @@ export class ClaudeStatePollManager {
   private readonly schedule: (callback: () => void) => unknown;
   private readonly cancel: (timer: unknown) => void;
   private readonly now: () => string;
+  private readonly nowMs: () => number;
 
   constructor(options: ClaudeStatePollManagerOptions = {}) {
     this.readState = options.readState ?? (async (containerId) => {
@@ -2353,6 +2444,7 @@ export class ClaudeStatePollManager {
       ?? ((callback) => setInterval(callback, CLAUDE_STATE_POLL_INTERVAL_MS));
     this.cancel = options.cancel ?? ((timer) => clearInterval(timer as NodeJS.Timeout));
     this.now = options.now ?? (() => new Date().toISOString());
+    this.nowMs = options.nowMs ?? (() => Date.now());
   }
 
   start(
@@ -2455,7 +2547,7 @@ export class ClaudeStatePollManager {
    */
   private isRetirementCheckDue(poll: ClaudeStatePoll): boolean {
     return poll.lastRetirementCheckAt === undefined
-      || Date.now() - poll.lastRetirementCheckAt >= CLAUDE_STATE_RETIREMENT_CHECK_MS;
+      || this.nowMs() - poll.lastRetirementCheckAt >= CLAUDE_STATE_RETIREMENT_CHECK_MS;
   }
 
   private async poll(containerId: string, poll: ClaudeStatePoll): Promise<void> {
@@ -2475,7 +2567,7 @@ export class ClaudeStatePollManager {
       (candidate) => candidate.containerId === containerId,
     );
     if (!this.isCurrent(containerId, poll)) return;
-    poll.lastRetirementCheckAt = Date.now();
+    poll.lastRetirementCheckAt = this.nowMs();
     if (!environment || environment.status !== "running") {
       this.deactivate(containerId, poll);
       return;

@@ -11,6 +11,7 @@ const closeLocalTerminalSessionMock = mock(async (_sessionId: string) => undefin
 const createTerminalSessionMock = mock(async (_containerId: string, _cols: number, _rows: number, _user?: string) => "session-new-container");
 const startTerminalSessionMock = mock(async (_sessionId: string) => undefined);
 const getTerminalOutputBufferMock = mock(async (_sessionId: string) => "");
+const getTerminalOutputSnapshotMock = mock(async (_sessionId: string) => ({ text: "", sequence: 0 }));
 const detachTerminalMock = mock(async (_sessionId: string) => undefined);
 const resizeLocalTerminalMock = mock(async (_sessionId: string, _cols: number, _rows: number) => undefined);
 const resizeTerminalMock = mock(async (_sessionId: string, _cols: number, _rows: number) => undefined);
@@ -26,6 +27,7 @@ mock.module("@/lib/backend", () => ({
   createTerminalSession: createTerminalSessionMock,
   startTerminalSession: startTerminalSessionMock,
   getTerminalOutputBuffer: getTerminalOutputBufferMock,
+  getTerminalOutputSnapshot: getTerminalOutputSnapshotMock,
   detachTerminal: detachTerminalMock,
   resizeLocalTerminal: resizeLocalTerminalMock,
   resizeTerminal: resizeTerminalMock,
@@ -36,7 +38,7 @@ mock.module("@/lib/backend", () => ({
 const listenMock = listen as ReturnType<typeof mock>;
 const unlistenMock = mock(() => undefined);
 
-const { useTerminal } = await import("./useTerminal");
+const { decodeTerminalOutputPayload, useTerminal } = await import("./useTerminal");
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
@@ -52,6 +54,7 @@ describe("useTerminal reconnect behavior", () => {
     createTerminalSessionMock.mockClear();
     startTerminalSessionMock.mockClear();
     getTerminalOutputBufferMock.mockClear();
+    getTerminalOutputSnapshotMock.mockClear();
     detachTerminalMock.mockClear();
     resizeLocalTerminalMock.mockClear();
     resizeTerminalMock.mockClear();
@@ -68,6 +71,7 @@ describe("useTerminal reconnect behavior", () => {
     createTerminalSessionMock.mockImplementation(async () => "session-new-container");
     startTerminalSessionMock.mockImplementation(async () => undefined);
     getTerminalOutputBufferMock.mockImplementation(async () => "");
+    getTerminalOutputSnapshotMock.mockImplementation(async () => ({ text: "", sequence: 0 }));
     detachTerminalMock.mockImplementation(async () => undefined);
     resizeLocalTerminalMock.mockImplementation(async () => undefined);
     resizeTerminalMock.mockImplementation(async () => undefined);
@@ -123,7 +127,10 @@ describe("useTerminal reconnect behavior", () => {
     expect(listenMock).not.toHaveBeenCalled();
 
     getTerminalSessionMock.mockResolvedValue({ id: "env-1:setup", running: true });
-    getTerminalOutputBufferMock.mockResolvedValue("[orkestrator] Starting environment setup\r\n");
+    getTerminalOutputSnapshotMock.mockResolvedValue({
+      text: "[orkestrator] Starting environment setup\r\n",
+      sequence: 4,
+    });
 
     rerender({ existingSessionId: "env-1:setup" });
     await act(async () => {
@@ -134,7 +141,7 @@ describe("useTerminal reconnect behavior", () => {
     expect(createTerminalSessionMock).not.toHaveBeenCalled();
     expect(startTerminalSessionMock).not.toHaveBeenCalled();
     expect(listenMock).toHaveBeenCalledWith("terminal-output-env-1:setup", expect.any(Function));
-    expect(getTerminalOutputBufferMock).toHaveBeenCalledWith("env-1:setup");
+    expect(getTerminalOutputSnapshotMock).toHaveBeenCalledWith("env-1:setup");
   });
 
   it("replaces a stale existing local terminal session and starts the replacement", async () => {
@@ -421,12 +428,12 @@ describe("useTerminal reconnect behavior", () => {
     expect(closeLocalTerminalSessionMock).toHaveBeenCalledWith("session-new-local");
   });
 
-  it("replays the buffer before attaching the listener on an attach-only session", async () => {
+  it("attaches the listener before replaying an authoritative snapshot", async () => {
     const callOrder: string[] = [];
     getTerminalSessionMock.mockResolvedValue({ id: "env-1:setup", running: true });
-    getTerminalOutputBufferMock.mockImplementation(async () => {
-      callOrder.push("getBuffer");
-      return "replayed setup output";
+    getTerminalOutputSnapshotMock.mockImplementation(async () => {
+      callOrder.push("getSnapshot");
+      return { text: "replayed setup output", sequence: 7 };
     });
     listenMock.mockImplementation(async () => {
       callOrder.push("listen");
@@ -451,16 +458,154 @@ describe("useTerminal reconnect behavior", () => {
     });
 
     await waitFor(() => expect(result.current.sessionId).toBe("env-1:setup"));
-    // Buffer replay must happen before the live listener is attached so already
-    // buffered bytes are not delivered twice.
-    expect(callOrder).toEqual(["getBuffer", "listen"]);
-    expect(getTerminalOutputBufferMock).toHaveBeenCalledWith("env-1:setup");
-    expect(new TextDecoder().decode(received[0])).toBe("replayed setup output");
+    expect(callOrder).toEqual(["listen", "getSnapshot"]);
+    expect(getTerminalOutputSnapshotMock).toHaveBeenCalledWith("env-1:setup");
+    expect(new TextDecoder().decode(received[0])).toBe(
+      "\u001b[H\u001b[2J\u001b[3Jreplayed setup output",
+    );
+  });
+
+  it("applies sequenced live frames that arrive while the snapshot is pending", async () => {
+    let resolveSnapshot: ((snapshot: { text: string; sequence: number }) => void) | undefined;
+    getTerminalOutputSnapshotMock.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveSnapshot = resolve;
+      }),
+    );
+    let outputHandler: ((event: { payload: unknown }) => void) | undefined;
+    listenMock.mockImplementation(async (_event: string, handler: typeof outputHandler) => {
+      outputHandler = handler;
+      return unlistenMock;
+    });
+    const received: string[] = [];
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        replayOutputBuffer: true,
+        onData: (data) => received.push(new TextDecoder().decode(data)),
+      }),
+    );
+
+    let connectPromise: Promise<void>;
+    act(() => {
+      connectPromise = result.current.connect();
+    });
+    await waitFor(() => expect(getTerminalOutputSnapshotMock).toHaveBeenCalled());
+
+    act(() => {
+      outputHandler?.({
+        payload: {
+          bytesBase64: btoa("live-after-snapshot"),
+          sequence: 11,
+        },
+      });
+      resolveSnapshot?.({ text: "authoritative", sequence: 10 });
+    });
+    await act(async () => {
+      await connectPromise!;
+    });
+
+    expect(received).toEqual([
+      "\u001b[H\u001b[2J\u001b[3Jauthoritative",
+      "live-after-snapshot",
+    ]);
+  });
+
+  it("keeps visible output and flushes queued live frames when recovery fails", async () => {
+    getTerminalOutputSnapshotMock.mockResolvedValueOnce({
+      text: "initial",
+      sequence: 5,
+    });
+    let rejectRecovery: ((error: Error) => void) | undefined;
+    let outputHandler: ((event: { payload: unknown }) => void) | undefined;
+    listenMock.mockImplementation(async (_event: string, handler: typeof outputHandler) => {
+      outputHandler = handler;
+      return unlistenMock;
+    });
+    const received: string[] = [];
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        replayOutputBuffer: true,
+        onData: (data) => received.push(new TextDecoder().decode(data)),
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+    received.length = 0;
+    getTerminalOutputSnapshotMock.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => {
+        rejectRecovery = reject;
+      }),
+    );
+
+    act(() => {
+      outputHandler?.({ payload: { desynced: true } });
+    });
+    await waitFor(() => expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(2));
+    act(() => {
+      outputHandler?.({
+        payload: {
+          bytesBase64: btoa("still-visible"),
+          sequence: 6,
+        },
+      });
+      rejectRecovery?.(new Error("snapshot unavailable"));
+    });
+    await waitFor(() => expect(received).toEqual(["still-visible"]));
+  });
+
+  it("ignores queued frames already represented by the authoritative snapshot", async () => {
+    let resolveSnapshot: ((snapshot: { text: string; sequence: number }) => void) | undefined;
+    getTerminalOutputSnapshotMock.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveSnapshot = resolve;
+      }),
+    );
+    let outputHandler: ((event: { payload: unknown }) => void) | undefined;
+    listenMock.mockImplementation(async (_event: string, handler: typeof outputHandler) => {
+      outputHandler = handler;
+      return unlistenMock;
+    });
+    const received: string[] = [];
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        replayOutputBuffer: true,
+        onData: (data) => received.push(new TextDecoder().decode(data)),
+      }),
+    );
+
+    let connectPromise: Promise<void>;
+    act(() => {
+      connectPromise = result.current.connect();
+    });
+    await waitFor(() => expect(getTerminalOutputSnapshotMock).toHaveBeenCalled());
+    act(() => {
+      outputHandler?.({
+        payload: {
+          bytesBase64: btoa("duplicate"),
+          sequence: 9,
+        },
+      });
+      resolveSnapshot?.({ text: "snapshot-includes-duplicate", sequence: 9 });
+    });
+    await act(async () => {
+      await connectPromise!;
+    });
+
+    expect(received).toEqual([
+      "\u001b[H\u001b[2J\u001b[3Jsnapshot-includes-duplicate",
+    ]);
   });
 
   it("surfaces an error when an attach-only session is not running", async () => {
     getTerminalSessionMock.mockResolvedValue({ id: "env-1:setup", running: false });
-    getTerminalOutputBufferMock.mockResolvedValue("partial setup output");
+    getTerminalOutputSnapshotMock.mockResolvedValue({
+      text: "partial setup output",
+      sequence: 3,
+    });
 
     const { result } = renderHook(() =>
       useTerminal({
@@ -483,13 +628,16 @@ describe("useTerminal reconnect behavior", () => {
     expect(createTerminalSessionMock).not.toHaveBeenCalled();
     expect(startTerminalSessionMock).not.toHaveBeenCalled();
     // The buffer is still replayed and the listener attached before the guard.
-    expect(getTerminalOutputBufferMock).toHaveBeenCalledWith("env-1:setup");
+    expect(getTerminalOutputSnapshotMock).toHaveBeenCalledWith("env-1:setup");
     expect(listenMock).toHaveBeenCalledWith("terminal-output-env-1:setup", expect.any(Function));
   });
 
   it("replays the buffer for the replacement session on the reconnect fallback", async () => {
     getTerminalSessionMock.mockResolvedValue({ id: "session-old", running: true });
-    getTerminalOutputBufferMock.mockResolvedValue("fallback replay output");
+    getTerminalOutputSnapshotMock.mockResolvedValue({
+      text: "fallback replay output",
+      sequence: 5,
+    });
     createTerminalSessionMock.mockResolvedValue("session-new-container");
     let listenCalls = 0;
     listenMock.mockImplementation(async () => {
@@ -516,7 +664,7 @@ describe("useTerminal reconnect behavior", () => {
     await waitFor(() => expect(result.current.sessionId).toBe("session-new-container"));
     expect(createTerminalSessionMock).toHaveBeenCalled();
     expect(startTerminalSessionMock).toHaveBeenCalledWith("session-new-container");
-    expect(getTerminalOutputBufferMock).toHaveBeenCalledWith("session-new-container");
+    expect(getTerminalOutputSnapshotMock).toHaveBeenCalledWith("session-new-container");
     expect(listenMock).toHaveBeenCalledWith("terminal-output-session-new-container", expect.any(Function));
   });
 
@@ -543,5 +691,14 @@ describe("useTerminal reconnect behavior", () => {
     });
     expect(unlistenMock).toHaveBeenCalledTimes(1);
     expect(result.current.sessionId).toBeNull();
+  });
+});
+
+describe("decodeTerminalOutputPayload", () => {
+  it("supports base64, legacy byte arrays, and desync notices", () => {
+    expect(new TextDecoder().decode(decodeTerminalOutputPayload(btoa("base64"))!)).toBe("base64");
+    expect([...decodeTerminalOutputPayload([0, 127, 255])!]).toEqual([0, 127, 255]);
+    expect([...decodeTerminalOutputPayload({ bytes: [1, 2, 3] })!]).toEqual([1, 2, 3]);
+    expect(decodeTerminalOutputPayload({ desynced: true })).toBeNull();
   });
 });

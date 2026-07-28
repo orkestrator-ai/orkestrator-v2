@@ -444,31 +444,41 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         const lastReloadTimeBySession = new Map<string, number>();
         const DEBOUNCE_MS = 200;
         const pendingReloads = new Map<string, NodeJS.Timeout>();
+        const reloadGenerations = new Map<string, number>();
 
         const fetchMessagesDebounced = (sessionId: string, sessionKey: string, immediate = false) => {
-          const pendingTimeout = pendingReloads.get(sessionId);
+          const reloadKey = `${sessionId}:${sessionKey}`;
+          const generation = (reloadGenerations.get(reloadKey) ?? 0) + 1;
+          reloadGenerations.set(reloadKey, generation);
+          const pendingTimeout = pendingReloads.get(reloadKey);
           if (pendingTimeout) {
             clearTimeout(pendingTimeout);
-            pendingReloads.delete(sessionId);
+            pendingReloads.delete(reloadKey);
           }
 
           const doFetch = async () => {
+            pendingReloads.delete(reloadKey);
             lastReloadTimeBySession.set(sessionId, Date.now());
             const messages = await getSessionMessages(bridgeClient, sessionId);
+            if (reloadGenerations.get(reloadKey) !== generation) return false;
+            const currentSession = useClaudeStore.getState().sessions.get(sessionKey);
+            if (currentSession?.sessionId !== sessionId) return false;
             setMessages(sessionKey, messages);
+            return true;
           };
 
           if (immediate) {
-            doFetch();
+            return doFetch();
           } else {
             const now = Date.now();
             const lastTime = lastReloadTimeBySession.get(sessionId) || 0;
             if (now - lastTime > DEBOUNCE_MS) {
-              doFetch();
+              void doFetch();
             } else {
-              const timeout = setTimeout(doFetch, DEBOUNCE_MS);
-              pendingReloads.set(sessionId, timeout);
+              const timeout = setTimeout(() => void doFetch(), DEBOUNCE_MS);
+              pendingReloads.set(reloadKey, timeout);
             }
+            return undefined;
           }
         };
 
@@ -535,7 +545,24 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
                 fetchMessagesDebounced(eventSessionId, sessionTabId);
               }
             } else if (isFinalEvent) {
-              fetchMessagesDebounced(eventSessionId, sessionTabId, true);
+              try {
+                const reconciled = await fetchMessagesDebounced(
+                  eventSessionId,
+                  sessionTabId,
+                  true,
+                );
+                if (reconciled) {
+                  setSessionLoading(sessionTabId, false);
+                }
+              } catch (error) {
+                setPipelineError(
+                  pipelineId,
+                  error instanceof Error
+                    ? `Failed to reconcile Claude transcript: ${error.message}`
+                    : "Failed to reconcile Claude transcript",
+                  null,
+                );
+              }
             }
 
             if (usageFromEvent) {
@@ -543,10 +570,6 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
                 ...usageFromEvent,
                 modelId: usageFromEvent.modelId ?? undefined,
               });
-            }
-
-            if (isFinalEvent) {
-              setSessionLoading(sessionTabId, false);
             }
 
             if (eventType === "session.error") {
@@ -576,7 +599,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         setEventStream(environmentId, null);
       }
     },
-    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setContextUsage, addMessage]
+    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setContextUsage, addMessage, pipelineId, setPipelineError]
   );
 
   // Check if a session ended with an error, avoiding re-handling of already-processed errors

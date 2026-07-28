@@ -349,6 +349,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
 
         const lastReloadTimeBySession = new Map<string, number>();
         const pendingReloads = new Map<string, number>();
+        const reloadGenerations = new Map<string, number>();
         const DEBOUNCE_MS = 200;
 
         // Final events (`immediate`) fetch the fully hydrated transcript,
@@ -357,20 +358,25 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
         // hydration for cost; already-hydrated Agent rows are carried over so
         // they do not blank until the final reconcile.
         const fetchMessagesDebounced = (sessionId: string, sessionKey: string, immediate = false) => {
-          const timeout = pendingReloads.get(sessionId);
+          const reloadKey = `${sessionId}:${sessionKey}`;
+          const generation = (reloadGenerations.get(reloadKey) ?? 0) + 1;
+          reloadGenerations.set(reloadKey, generation);
+          const timeout = pendingReloads.get(reloadKey);
           if (timeout) {
             window.clearTimeout(timeout);
-            pendingReloads.delete(sessionId);
+            pendingReloads.delete(reloadKey);
           }
 
           const includeSubagents = immediate;
           const doFetch = async () => {
+            pendingReloads.delete(reloadKey);
             lastReloadTimeBySession.set(sessionId, Date.now());
             const messages = await getSessionMessages(activeClient, sessionId, {
               ...(includeSubagents ? {} : { includeSubagents: false }),
             });
+            if (reloadGenerations.get(reloadKey) !== generation) return false;
             const currentSession = useOpenCodeStore.getState().sessions.get(sessionKey);
-            if (currentSession && currentSession.sessionId !== sessionId) return;
+            if (currentSession?.sessionId !== sessionId) return false;
             setMessages(
               sessionKey,
               includeSubagents || !currentSession
@@ -380,11 +386,11 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
                     messages,
                   ),
             );
+            return true;
           };
 
           if (immediate) {
-            void doFetch();
-            return;
+            return doFetch();
           }
 
           const now = Date.now();
@@ -395,8 +401,9 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
             const nextTimeout = window.setTimeout(() => {
               void doFetch();
             }, DEBOUNCE_MS);
-            pendingReloads.set(sessionId, nextTimeout);
+            pendingReloads.set(reloadKey, nextTimeout);
           }
+          return undefined;
         };
 
         /**
@@ -500,7 +507,24 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
             // final reconcile, instead of running at ~5Hz for every turn.
             if (isFinalEvent) {
               partStreamHealthyBySession.delete(sessionKey);
-              fetchMessagesDebounced(eventSessionId, sessionKey, true);
+              try {
+                const reconciled = await fetchMessagesDebounced(
+                  eventSessionId,
+                  sessionKey,
+                  true,
+                );
+                if (reconciled) {
+                  setSessionLoading(sessionKey, false);
+                }
+              } catch (error) {
+                setPipelineError(
+                  pipelineId,
+                  error instanceof Error
+                    ? `Failed to reconcile OpenCode transcript: ${error.message}`
+                    : "Failed to reconcile OpenCode transcript",
+                  null,
+                );
+              }
             } else if (eventType === "message.part.updated") {
               if (
                 !applyPartUpdate(
@@ -526,10 +550,6 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
                 ...usageFromEvent,
                 modelId: usageFromEvent.modelId ?? undefined,
               });
-            }
-
-            if (isFinalEvent) {
-              setSessionLoading(sessionKey, false);
             }
 
             if (eventType === "session.error") {

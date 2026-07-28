@@ -259,6 +259,17 @@ export async function getTerminalOutputBuffer(sessionId: string): Promise<string
   return invoke<string>("get_terminal_output_buffer", { sessionId });
 }
 
+export interface TerminalOutputSnapshot {
+  text: string;
+  sequence: number;
+}
+
+export async function getTerminalOutputSnapshot(
+  sessionId: string,
+): Promise<TerminalOutputSnapshot> {
+  return invoke<TerminalOutputSnapshot>("get_terminal_output_snapshot", { sessionId });
+}
+
 export async function getEnvironmentSetupSession(
   environmentId: string
 ): Promise<EnvironmentSetupSession | null> {

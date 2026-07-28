@@ -564,9 +564,12 @@ describe("App background processing mounts", () => {
       expect(screen.getByTestId("terminal-env-background")).toBeTruthy();
     });
 
-    expect(
-      screen.getByTestId("background-terminal-host").className.split(/\s+/)
-    ).not.toContain("hidden");
+    const backgroundHostClasses = screen
+      .getByTestId("background-terminal-host")
+      .className
+      .split(/\s+/);
+    expect(backgroundHostClasses).toContain("invisible");
+    expect(backgroundHostClasses).not.toContain("hidden");
     expect(screen.getByTestId("terminal-env-visible").getAttribute("data-active")).toBe("true");
     expect(screen.getByTestId("terminal-env-background").getAttribute("data-active")).toBe("false");
   });

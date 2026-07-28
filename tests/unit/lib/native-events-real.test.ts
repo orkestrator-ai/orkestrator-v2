@@ -32,4 +32,48 @@ describe("native event wrapper", () => {
     const unlisten = await listen("event", mock(() => undefined));
     expect(unlisten()).toBeUndefined();
   });
+
+  test("waits until a dedicated event stream is ready before resolving", async () => {
+    const { listen } = await loadNativeEvents();
+    const unlisten = mock(() => undefined);
+    let resolveReady: (() => void) | undefined;
+    const eventStreamReady = mock(
+      () => new Promise<void>((resolve) => {
+        resolveReady = resolve;
+      }),
+    );
+    window.orkestrator = {
+      listen: mock(() => unlisten),
+      eventStreamReady,
+    } as never;
+
+    let settled = false;
+    const pending = listen("terminal-output-session-1", mock(() => undefined))
+      .then((value) => {
+        settled = true;
+        return value;
+      });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(eventStreamReady).toHaveBeenCalledWith("terminal-output-session-1");
+
+    resolveReady?.();
+    expect(await pending).toBe(unlisten);
+  });
+
+  test("unsubscribes when dedicated event stream setup fails", async () => {
+    const { listen } = await loadNativeEvents();
+    const unlisten = mock(() => undefined);
+    window.orkestrator = {
+      listen: mock(() => unlisten),
+      eventStreamReady: mock(async () => {
+        throw new Error("stream unavailable");
+      }),
+    } as never;
+
+    await expect(
+      listen("terminal-output-session-1", mock(() => undefined)),
+    ).rejects.toThrow("stream unavailable");
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
 });

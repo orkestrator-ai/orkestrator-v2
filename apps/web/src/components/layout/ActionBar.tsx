@@ -211,14 +211,26 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const setProjectBoardNotesOpen = useUIStore(
     (state) => state.setProjectBoardNotesOpen,
   );
-  const { getEnvironmentById, updateEnvironment, isWorkspaceReady, isSetupScriptsRunning, setEnvironmentPR } = useEnvironmentStore(
+  const { updateEnvironment, setEnvironmentPR } = useEnvironmentStore(
     useShallow((state) => ({
-      getEnvironmentById: state.getEnvironmentById,
       updateEnvironment: state.updateEnvironment,
-      isWorkspaceReady: state.isWorkspaceReady,
-      isSetupScriptsRunning: state.isSetupScriptsRunning,
       setEnvironmentPR: state.setEnvironmentPR,
     }))
+  );
+  const selectedEnvironment = useEnvironmentStore((state) =>
+    selectedEnvironmentId
+      ? state.environments.find((environment) => environment.id === selectedEnvironmentId)
+      : undefined
+  );
+  const workspaceReady = useEnvironmentStore((state) =>
+    selectedEnvironmentId
+      ? state.workspaceReadyEnvironments.has(selectedEnvironmentId)
+      : false
+  );
+  const setupRunning = useEnvironmentStore((state) =>
+    selectedEnvironmentId
+      ? state.setupScriptsRunning.has(selectedEnvironmentId)
+      : false
   );
   const getProjectById = useProjectStore((state) => state.getProjectById);
   const { updateProject } = useProjects();
@@ -255,9 +267,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const [startX, setStartX] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
 
-  const selectedEnvironment = selectedEnvironmentId
-    ? getEnvironmentById(selectedEnvironmentId)
-    : null;
   const selectedProject = selectedProjectId
     ? getProjectById(selectedProjectId)
     : null;
@@ -267,8 +276,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const isLocalEnvironment = selectedEnvironment?.environmentType === "local";
   const isLocalReady = isLocalEnvironment && !!selectedEnvironment?.worktreePath;
   const isRunning = isLocalReady || selectedEnvironment?.status === "running";
-  const workspaceReady = selectedEnvironmentId ? isWorkspaceReady(selectedEnvironmentId) : false;
-  const setupRunning = selectedEnvironmentId ? isSetupScriptsRunning(selectedEnvironmentId) : false;
 
   const {
     prUrl,

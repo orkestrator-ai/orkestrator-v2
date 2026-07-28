@@ -21,7 +21,14 @@ export async function listen<T>(
     return () => {};
   }
 
-  return window.orkestrator.listen<T>(event, (payload) => {
+  const unlisten = window.orkestrator.listen<T>(event, (payload) => {
     handler({ payload });
   });
+  try {
+    await window.orkestrator.eventStreamReady?.(event);
+  } catch (error) {
+    unlisten();
+    throw error;
+  }
+  return unlisten;
 }

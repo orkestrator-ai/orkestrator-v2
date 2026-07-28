@@ -9,6 +9,13 @@ type EventCallback = (event: SSEEvent, revision: number) => void;
 class EventEmitter {
   private subscribers: Set<EventCallback> = new Set();
   private revision = 0;
+  /**
+   * Revisions are process-local, so a cursor must also identify the process
+   * generation that assigned it. Otherwise a reconnect after a bridge restart
+   * can mistake an old, larger revision for a current cursor and silently skip
+   * events emitted by the replacement process.
+   */
+  readonly generation = crypto.randomUUID();
 
   /**
    * Subscribe to SSE events
@@ -56,6 +63,11 @@ class EventEmitter {
   /** Monotonic cursor assigned before each synchronous fan-out. */
   get currentRevision(): number {
     return this.revision;
+  }
+
+  /** Opaque SSE cursor for the current process generation and revision. */
+  get currentCursor(): string {
+    return `${this.generation}:${this.revision}`;
   }
 }
 

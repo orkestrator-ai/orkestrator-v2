@@ -26,6 +26,29 @@ describe("deepEqualJson", () => {
     expect(deepEqualJson(null, {})).toBe(false);
     expect(deepEqualJson(undefined, undefined)).toBe(true);
   });
+
+  test("handles deeply nested model output without overflowing the stack", () => {
+    let left: Record<string, unknown> = {};
+    let right: Record<string, unknown> = {};
+    const leftRoot = left;
+    const rightRoot = right;
+    for (let index = 0; index < 20_000; index += 1) {
+      left.next = {};
+      right.next = {};
+      left = left.next as Record<string, unknown>;
+      right = right.next as Record<string, unknown>;
+    }
+
+    expect(deepEqualJson(leftRoot, rightRoot)).toBe(true);
+    right.value = "different";
+    expect(deepEqualJson(leftRoot, rightRoot)).toBe(false);
+  });
+
+  test("treats payloads beyond the comparison budget as changed", () => {
+    const left = Array.from({ length: 100_001 }, () => ({ value: 1 }));
+    const right = Array.from({ length: 100_001 }, () => ({ value: 1 }));
+    expect(deepEqualJson(left, right)).toBe(false);
+  });
 });
 
 describe("preserveMessageIdentities", () => {
@@ -79,5 +102,17 @@ describe("preserveMessageIdentities", () => {
     const next = [message("m-9", "nine")];
 
     expect(preserveMessageIdentities(existing, next)).toBe(next);
+  });
+
+  test("matches duplicate ids one-to-one instead of aliasing one old object", () => {
+    const existing = [message("duplicate", "one"), message("duplicate", "two")];
+    const next = [message("duplicate", "one"), message("duplicate", "two")];
+
+    const result = preserveMessageIdentities(existing, next);
+
+    expect(result).toBe(existing);
+    expect(result[0]).toBe(existing[0]);
+    expect(result[1]).toBe(existing[1]);
+    expect(result[0]).not.toBe(result[1]);
   });
 });

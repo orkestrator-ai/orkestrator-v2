@@ -12,7 +12,8 @@
  */
 
 import { open, readdir, stat } from "node:fs/promises";
-import { join, basename } from "node:path";
+import { StringDecoder } from "node:string_decoder";
+import { join, basename, dirname } from "node:path";
 import { getMergedPlugins, readPluginManifest } from "./plugin-config.js";
 
 /**
@@ -31,12 +32,12 @@ interface CommandDescriptionCacheEntry {
 const commandDescriptions = new Map<string, CommandDescriptionCacheEntry>();
 
 /**
- * Frontmatter lives at the head of the file; nothing past this is read even on
- * a cache miss, so a command file with a large body costs one small read. A
- * truncated trailing multi-byte character cannot break the parse — the
- * frontmatter block the regex needs is complete long before the cut.
+ * Frontmatter is normally tiny, so reads stay chunked. A larger valid block is
+ * read until its closing delimiter, subject to a safety cap so a malformed
+ * command cannot make discovery read an unbounded file.
  */
-const FRONTMATTER_READ_BYTES = 8 * 1024;
+const FRONTMATTER_READ_CHUNK_BYTES = 8 * 1024;
+const MAX_FRONTMATTER_READ_BYTES = 256 * 1024;
 
 function fingerprintOf(stats: {
   mtimeMs: number;
@@ -49,12 +50,42 @@ function fingerprintOf(stats: {
   return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}`;
 }
 
-async function readFileHead(filePath: string): Promise<string> {
+function hasCompleteFrontmatter(content: string): boolean {
+  return /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.test(content);
+}
+
+async function readFileFrontmatter(filePath: string): Promise<string> {
   const handle = await open(filePath, "r");
   try {
-    const buffer = Buffer.alloc(FRONTMATTER_READ_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, FRONTMATTER_READ_BYTES, 0);
-    return buffer.toString("utf-8", 0, bytesRead);
+    const decoder = new StringDecoder("utf8");
+    let content = "";
+    let position = 0;
+
+    while (position < MAX_FRONTMATTER_READ_BYTES) {
+      const readLength = Math.min(
+        FRONTMATTER_READ_CHUNK_BYTES,
+        MAX_FRONTMATTER_READ_BYTES - position,
+      );
+      const buffer = Buffer.allocUnsafe(readLength);
+      const { bytesRead } = await handle.read(buffer, 0, readLength, position);
+      if (bytesRead === 0) break;
+
+      position += bytesRead;
+      content += decoder.write(buffer.subarray(0, bytesRead));
+
+      // Once the first chunk proves there is no frontmatter, the body cannot
+      // change that fact. Otherwise continue only until the closing delimiter.
+      if (
+        (position >= FRONTMATTER_READ_CHUNK_BYTES
+          && !content.startsWith("---\n")
+          && !content.startsWith("---\r\n"))
+        || hasCompleteFrontmatter(content)
+      ) {
+        break;
+      }
+    }
+
+    return content + decoder.end();
   } finally {
     await handle.close();
   }
@@ -70,9 +101,20 @@ async function readCommandDescription(filePath: string): Promise<string | undefi
   if (cached && cached.fingerprint === fingerprint) {
     return cached.description;
   }
-  const description = parseDescription(await readFileHead(filePath));
+  const description = parseDescription(await readFileFrontmatter(filePath));
   commandDescriptions.set(filePath, { fingerprint, description });
   return description;
+}
+
+function pruneCommandDescriptionCache(
+  commandsDir: string,
+  livePaths: ReadonlySet<string>,
+): void {
+  for (const cachedPath of commandDescriptions.keys()) {
+    if (dirname(cachedPath) === commandsDir && !livePaths.has(cachedPath)) {
+      commandDescriptions.delete(cachedPath);
+    }
+  }
 }
 
 /**
@@ -125,20 +167,24 @@ async function scanCommandsDir(
   try {
     entries = await readdir(commandsDir);
   } catch {
+    pruneCommandDescriptionCache(commandsDir, new Set());
     return [];
   }
 
   const commands: string[] = [];
+  const livePaths = new Set<string>();
 
   for (const entry of entries) {
     if (!entry.endsWith(".md")) continue;
 
     const name = basename(entry, ".md");
     const fullName = prefix ? `/${prefix}${name}` : `/${name}`;
+    const commandPath = join(commandsDir, entry);
+    livePaths.add(commandPath);
 
     let description: string | undefined;
     try {
-      description = await readCommandDescription(join(commandsDir, entry));
+      description = await readCommandDescription(commandPath);
     } catch {
       // File unreadable, include command without description
     }
@@ -146,6 +192,7 @@ async function scanCommandsDir(
     commands.push(description ? `${fullName} - ${description}` : fullName);
   }
 
+  pruneCommandDescriptionCache(commandsDir, livePaths);
   return commands;
 }
 

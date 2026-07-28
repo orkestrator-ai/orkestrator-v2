@@ -2527,10 +2527,31 @@ exit 0
 
     ptyProcesses[0]?.emitData("A".repeat(maxChars));
     ptyProcesses[0]?.emitData("B".repeat(1024));
+    for (let index = 0; index < 2_048; index += 1) {
+      ptyProcesses[0]?.emitData("x");
+    }
+    expect(commandTesting.terminalOutputBufferStats(sessionId)).toMatchObject({
+      chars: maxChars,
+      sequence: 2_050,
+      chunks: expect.any(Number),
+    });
+    expect(commandTesting.terminalOutputBufferStats(sessionId).chunks)
+      .toBeLessThanOrEqual(1_024);
     const buffer = await commands.get("get_terminal_output_buffer")?.({ sessionId }, context) as string;
     expect(buffer.length).toBe(maxChars);
-    expect(buffer.endsWith("B".repeat(1024))).toBe(true);
+    expect(buffer.endsWith(`${"B".repeat(1024)}${"x".repeat(2_048)}`)).toBe(true);
     expect(buffer.startsWith("A")).toBe(true);
+    expect(commandTesting.terminalOutputBufferStats(sessionId)).toEqual({
+      chars: maxChars,
+      chunks: 1,
+      sequence: 2_050,
+    });
+    expect(
+      await commands.get("get_terminal_output_snapshot")?.({ sessionId }, context),
+    ).toEqual({
+      text: buffer,
+      sequence: 2_050,
+    });
   }, ASYNC_TEST_BUDGET_MS);
 
   // The renderer calls this *after* setup ran, so a HEAD read here could already
@@ -8792,7 +8813,10 @@ exit 0
     expect(emitted).toEqual([
       {
         event: `terminal-output-${sessionId}`,
-        payload: { bytesBase64: Buffer.from("ready\r\n", "utf8").toString("base64") },
+        payload: {
+          bytesBase64: Buffer.from("ready\r\n", "utf8").toString("base64"),
+          sequence: 1,
+        },
       },
     ]);
 
@@ -9954,6 +9978,70 @@ exit 1
       const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
       expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
       expect(log.some((line) => line.startsWith("inspect"))).toBe(false);
+    });
+    expect(updates).toHaveLength(0);
+  });
+
+  test("refreshes the docker ps snapshot after its cache expires", async () => {
+    const environment = createEnvironment({
+      id: "env-cache-expiry",
+      environmentType: "containerized",
+      containerId: "container-cache-expiry",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf 'container-cache-expiry\\trunning\\n'
+  exit 0
+fi
+exit 1
+`, async ({ all }) => {
+      await withFixedDate("2026-07-28T12:00:00.000Z", () =>
+        commands.get("get_environments")?.({ projectId: environment.projectId }, context)
+      );
+      await withFixedDate("2026-07-28T12:00:03.001Z", () =>
+        commands.get("get_environments")?.({ projectId: environment.projectId }, context)
+      );
+
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      expect(log.filter((line) => line.startsWith("ps -a"))).toHaveLength(2);
+    });
+  });
+
+  test("falls back to per-container inspect when the shared docker scan fails", async () => {
+    const environment = createEnvironment({
+      id: "env-cache-failure",
+      environmentType: "containerized",
+      containerId: "container-cache-failure",
+      status: "running",
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  exit 1
+fi
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+exit 1
+`, async ({ all }) => {
+      await commands.get("get_environments")?.(
+        { projectId: environment.projectId },
+        context,
+      );
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      expect(log.filter((line) => line.startsWith("ps -a"))).toHaveLength(1);
+      expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
+        "inspect -f {{.State.Status}} container-cache-failure",
+      ]);
     });
     expect(updates).toHaveLength(0);
   });

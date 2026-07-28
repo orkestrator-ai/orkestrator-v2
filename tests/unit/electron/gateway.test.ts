@@ -155,6 +155,160 @@ describe("remote gateway", () => {
     )).toBe(false);
   });
 
+  test("applies event filters before writing to connected clients", async () => {
+    const dataDir = await createTempDir("ork-gateway-filter-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir,
+      rendererRoot,
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger: createLogger(),
+    });
+    const writes: string[] = [];
+    const client = {
+      writableLength: 0,
+      write: mock((message: string) => {
+        writes.push(message);
+        return true;
+      }),
+      destroy: mock(() => undefined),
+    };
+    const clients = (
+      gateway as unknown as { clients: Map<object, unknown> }
+    ).clients;
+    clients.set(client, {
+      prefixes: null,
+      includedPrefixes: ["terminal-output-one"],
+      excludedPrefixes: ["terminal-output-"],
+      desyncedSessions: new Set<string>(),
+    });
+
+    gateway.emit("terminal-output-two", { bytesBase64: "dHdv" });
+    gateway.emit("menu-zoom", "in");
+    gateway.emit("terminal-output-one", { bytesBase64: "b25l" });
+
+    expect(writes).toHaveLength(2);
+    expect(writes[0]).toContain('"event":"menu-zoom"');
+    expect(writes[1]).toContain('"event":"terminal-output-one"');
+  });
+
+  test("drops projected soft-limit terminal frames and flushes a desync notice on drain", async () => {
+    const dataDir = await createTempDir("ork-gateway-soft-limit-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir,
+      rendererRoot,
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger: createLogger(),
+    });
+    const writes: string[] = [];
+    const client = {
+      writableLength: 1024 * 1024 - 20,
+      write: mock((message: string) => {
+        writes.push(message);
+        return false;
+      }),
+      destroy: mock(() => undefined),
+    };
+    const state = {
+      prefixes: null,
+      includedPrefixes: null,
+      excludedPrefixes: null,
+      desyncedSessions: new Set<string>(),
+    };
+    const clients = (
+      gateway as unknown as { clients: Map<object, typeof state> }
+    ).clients;
+    clients.set(client, state);
+
+    gateway.emit("terminal-output-session-a", {
+      bytesBase64: "eA==",
+      sequence: 1,
+    });
+    expect(writes).toEqual([]);
+    expect(state.desyncedSessions).toEqual(new Set(["session-a"]));
+
+    // Node emits "drain" only after writableLength returns below the
+    // high-water mark. Invoke the same private callback target to pin that the
+    // pending session becomes an authoritative recovery notice.
+    client.writableLength = 0;
+    const flushed = (
+      gateway as unknown as {
+        flushDesyncNotices(client: object, state: typeof state): boolean;
+      }
+    ).flushDesyncNotices(client, state);
+    expect(flushed).toBe(true);
+    expect(state.desyncedSessions.size).toBe(0);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain('"desynced":true');
+  });
+
+  test("disconnects before a current frame would exceed the hard buffer limit", async () => {
+    const dataDir = await createTempDir("ork-gateway-hard-limit-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const logger = createLogger();
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir,
+      rendererRoot,
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger,
+    });
+    const client = {
+      writableLength: 8 * 1024 * 1024 - 10,
+      write: mock(() => true),
+      destroy: mock(() => undefined),
+    };
+    const clients = (
+      gateway as unknown as { clients: Map<object, unknown> }
+    ).clients;
+    clients.set(client, {
+      prefixes: null,
+      includedPrefixes: null,
+      excludedPrefixes: null,
+      desyncedSessions: new Set<string>(),
+    });
+
+    gateway.emit("environment-changed", { id: "environment-a" });
+    expect(client.write).not.toHaveBeenCalled();
+    expect(client.destroy).toHaveBeenCalledTimes(1);
+    expect(clients.has(client)).toBe(false);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  test("disconnects instead of retaining one oversized authoritative frame", async () => {
+    const dataDir = await createTempDir("ork-gateway-oversized-frame-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir,
+      rendererRoot,
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger: createLogger(),
+    });
+    const client = {
+      writableLength: 0,
+      write: mock(() => true),
+      destroy: mock(() => undefined),
+    };
+    const clients = (
+      gateway as unknown as { clients: Map<object, unknown> }
+    ).clients;
+    clients.set(client, {
+      prefixes: null,
+      includedPrefixes: null,
+      excludedPrefixes: null,
+      desyncedSessions: new Set<string>(),
+    });
+
+    gateway.emit("authoritative-snapshot", "x".repeat(8 * 1024 * 1024));
+    expect(client.write).not.toHaveBeenCalled();
+    expect(client.destroy).toHaveBeenCalledTimes(1);
+    expect(clients.has(client)).toBe(false);
+  });
+
   test("rewrites browser-preview asset paths into their isolated proxy namespace", () => {
     const prefix = "/__orkestrator/browser/loopback/3000";
     const target = new URL("http://127.0.0.1:3000/");

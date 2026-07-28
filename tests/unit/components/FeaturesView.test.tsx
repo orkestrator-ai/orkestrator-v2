@@ -1615,10 +1615,14 @@ describe("FeaturesView lifecycle and navigation", () => {
     ];
 
     try {
-      for (const scenario of cases) {
+      for (const [scenarioIndex, scenario] of cases.entries()) {
+        const scenarioSessionId = `unreachable-session-${scenarioIndex}`;
         await drainReconcileMonitors();
         useEnvironmentStore.setState({ environments: scenario.environment ? [scenario.environment] : [] });
-        seedStores(chatFeature({ messages: [pendingUser()] }));
+        seedStores(chatFeature({
+          codexSessionId: scenarioSessionId,
+          messages: [pendingUser()],
+        }));
         getEnvironmentMock.mockClear();
         getEnvironmentMock.mockImplementation(async () => scenario.backendEnvironment ?? null);
         getCodexServerStatusMock.mockClear();
@@ -1642,10 +1646,14 @@ describe("FeaturesView lifecycle and navigation", () => {
           featureId: "feature-1",
           phase: "unavailable",
         });
-        // Safe as an absolute count: both spies are cleared inside this loop
-        // iteration, immediately before the render above, so nothing an earlier
-        // test leaked can reach these assertions.
-        expect(getSessionStatusMock).not.toHaveBeenCalled();
+        // An aborted monitor from the preceding iteration may finish an
+        // already-issued call after cleanup on a heavily loaded runner. Scope
+        // this assertion to the session owned by the current scenario.
+        expect(
+          getSessionStatusMock.mock.calls.some(
+            ([, sessionId]) => sessionId === scenarioSessionId,
+          ),
+        ).toBe(false);
         expect(createClientMock).not.toHaveBeenCalled();
       }
     } finally {

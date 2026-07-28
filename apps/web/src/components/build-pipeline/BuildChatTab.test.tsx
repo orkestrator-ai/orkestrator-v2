@@ -1310,6 +1310,66 @@ describe("BuildChatTab", () => {
   // -----------------------------------------------------------------------
 
   describe("event stream disconnection", () => {
+    test("waits for final reconciliation and ignores an older fallback response", async () => {
+      let resolveFallback!: (messages: ClaudeMessage[]) => void;
+      const fallback = new Promise<ClaudeMessage[]>((resolve) => {
+        resolveFallback = resolve;
+      });
+      const authoritative: ClaudeMessage = {
+        id: "authoritative",
+        role: "assistant",
+        content: "Final snapshot",
+        parts: [{ type: "text", content: "Final snapshot" }],
+        timestamp: "2026-06-22T00:00:02.000Z",
+      };
+      let call = 0;
+      mockGetSessionMessages.mockImplementation(() => {
+        call += 1;
+        return call === 1 ? fallback : Promise.resolve([authoritative]);
+      });
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield {
+            type: "message.updated",
+            sessionId: SESSION_ID,
+            data: {},
+          } as any;
+          yield {
+            type: "session.idle",
+            sessionId: SESSION_ID,
+            data: {},
+          } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockGetSessionMessages).toHaveBeenCalledTimes(2);
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+          messages: [authoritative],
+          isLoading: false,
+        });
+      });
+
+      const stale: ClaudeMessage = {
+        ...authoritative,
+        id: "stale",
+        content: "Stale fallback",
+        parts: [{ type: "text", content: "Stale fallback" }],
+      };
+      resolveFallback([stale]);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages)
+        .toEqual([authoritative]);
+    });
+
     test("refreshes messages on session.idle and records context usage from session events", async () => {
       const refreshedMessage: ClaudeMessage = {
         id: "refreshed-message",

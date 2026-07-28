@@ -17,6 +17,7 @@ globalThis.TransformStream = TransformStream as typeof globalThis.TransformStrea
 import events, {
   createBoundedSseWriter,
   getReplayFrames,
+  parseReplayCursor,
   serializeEventData,
 } from "./events.js";
 import { eventEmitter } from "../services/event-emitter.js";
@@ -271,7 +272,10 @@ describe("SSE replay ring", () => {
     });
     const through = eventEmitter.currentRevision;
 
-    const replay = getReplayFrames(before, through);
+    const replay = getReplayFrames({
+      generation: eventEmitter.generation,
+      revision: before,
+    }, through);
     expect(replay.resetRequired).toBe(false);
     expect(replay.frames.map((frame) => frame.revision)).toEqual([
       before + 1,
@@ -281,6 +285,45 @@ describe("SSE replay ring", () => {
       "session.updated",
       "session.idle",
     ]);
+  });
+
+  test("requires a reset for stale-generation and future cursors", () => {
+    const through = eventEmitter.currentRevision;
+    expect(getReplayFrames({
+      generation: "dead-bridge-generation",
+      revision: through,
+    }, through)).toEqual({ frames: [], resetRequired: true });
+    expect(getReplayFrames({
+      generation: eventEmitter.generation,
+      revision: through + 1,
+    }, through)).toEqual({ frames: [], resetRequired: true });
+  });
+
+  test("parses only bounded generation-aware cursors", () => {
+    expect(parseReplayCursor(`${eventEmitter.generation}:42`)).toEqual({
+      generation: eventEmitter.generation,
+      revision: 42,
+    });
+    expect(parseReplayCursor("42")).toBeNull();
+    expect(parseReplayCursor("generation:-1")).toBeNull();
+    expect(parseReplayCursor("generation:9007199254740992")).toBeNull();
+    expect(parseReplayCursor("bad/generation:1")).toBeNull();
+  });
+
+  test("requires a reset once a cursor falls outside the retained frame window", () => {
+    const before = eventEmitter.currentRevision;
+    for (let index = 0; index <= 512; index += 1) {
+      eventEmitter.emit({
+        type: "session.updated",
+        sessionId: `replay-window-${index}`,
+        data: { status: "running" },
+      });
+    }
+    const replay = getReplayFrames({
+      generation: eventEmitter.generation,
+      revision: before,
+    }, eventEmitter.currentRevision);
+    expect(replay).toEqual({ frames: [], resetRequired: true });
   });
 });
 
@@ -376,6 +419,202 @@ describe("GET /subscribe (SSE)", () => {
         secondReader?.cancel().catch(() => {}),
       ]);
       await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    }
+  });
+
+  test("replays retained frames from a query cursor", async () => {
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const before = eventEmitter.currentRevision;
+    eventEmitter.emit({
+      type: "session.updated",
+      sessionId: "query-replay-session",
+      data: { status: "running" },
+    });
+    const controller = new AbortController();
+    const cursor = encodeURIComponent(`${eventEmitter.generation}:${before}`);
+    const response = await app.request(`/subscribe?since=${cursor}`, {
+      signal: controller.signal,
+    });
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+
+    try {
+      const frames = await readUntil(
+        reader!,
+        (buffer) => buffer.includes('"sessionId":"query-replay-session"'),
+      );
+      expect(frames).toContain(`id: ${eventEmitter.generation}:${before}`);
+      expect(frames).toContain("event: connected");
+      expect(frames).toContain("event: session.updated");
+      expect(frames).not.toContain("event: replay.required");
+    } finally {
+      controller.abort();
+      await reader?.cancel().catch(() => {});
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    }
+  });
+
+  test("prefers Last-Event-ID and requires reset for a stale generation", async () => {
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const controller = new AbortController();
+    const currentCursor = encodeURIComponent(eventEmitter.currentCursor);
+    const response = await app.request(`/subscribe?since=${currentCursor}`, {
+      headers: { "Last-Event-ID": "stale-generation:7" },
+      signal: controller.signal,
+    });
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+
+    try {
+      const frames = await readUntil(
+        reader!,
+        (buffer) => buffer.includes("event: replay.required"),
+      );
+      expect(frames).toContain("id: stale-generation:7");
+      expect(frames).toContain('"resetRequired":true');
+      expect(frames).toContain(`"through":"${eventEmitter.currentCursor}"`);
+    } finally {
+      controller.abort();
+      await reader?.cancel().catch(() => {});
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    }
+  });
+
+  test("requires reset for malformed and future cursors", async () => {
+    for (const cursor of [
+      "legacy-numeric-cursor",
+      `${eventEmitter.generation}:${eventEmitter.currentRevision + 100}`,
+    ]) {
+      const subscribersBefore = eventEmitter.subscriberCount;
+      const controller = new AbortController();
+      const response = await app.request(
+        `/subscribe?since=${encodeURIComponent(cursor)}`,
+        { signal: controller.signal },
+      );
+      const reader = response.body?.getReader();
+      try {
+        const frames = await readUntil(
+          reader!,
+          (buffer) => buffer.includes("event: replay.required"),
+        );
+        expect(frames).toContain('"resetRequired":true');
+      } finally {
+        controller.abort();
+        await reader?.cancel().catch(() => {});
+        await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+      }
+    }
+  });
+
+  test("requires authoritative rehydration when a route cursor is outside the window", async () => {
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const before = eventEmitter.currentRevision;
+    for (let index = 0; index <= 512; index += 1) {
+      eventEmitter.emit({
+        type: "session.updated",
+        sessionId: `route-window-${index}`,
+        data: { status: "running" },
+      });
+    }
+    const controller = new AbortController();
+    const response = await app.request(
+      `/subscribe?since=${encodeURIComponent(
+        `${eventEmitter.generation}:${before}`,
+      )}`,
+      { signal: controller.signal },
+    );
+    const reader = response.body?.getReader();
+
+    try {
+      const frames = await readUntil(
+        reader!,
+        (buffer) => buffer.includes("event: replay.required"),
+      );
+      expect(frames).toContain('"resetRequired":true');
+      expect(frames).not.toContain(`"sessionId":"route-window-0"`);
+    } finally {
+      controller.abort();
+      await reader?.cancel().catch(() => {});
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    }
+  });
+
+  test("delivers events emitted while retained replay is flushing", async () => {
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const before = eventEmitter.currentRevision;
+    for (let index = 0; index < 100; index += 1) {
+      eventEmitter.emit({
+        type: "session.updated",
+        sessionId: `replay-backlog-${index}`,
+        data: { status: "running" },
+      });
+    }
+    const controller = new AbortController();
+    const response = await app.request(
+      `/subscribe?since=${encodeURIComponent(
+        `${eventEmitter.generation}:${before}`,
+      )}`,
+      { signal: controller.signal },
+    );
+    const reader = response.body?.getReader();
+
+    try {
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore + 1);
+      eventEmitter.emit({
+        type: "session.idle",
+        sessionId: "emitted-during-replay",
+      });
+      const frames = await readUntil(
+        reader!,
+        (buffer) => buffer.includes('"sessionId":"emitted-during-replay"'),
+      );
+      expect(frames.match(/"sessionId":"emitted-during-replay"/g)).toHaveLength(1);
+    } finally {
+      controller.abort();
+      await reader?.cancel().catch(() => {});
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    }
+  });
+
+  test("aborting without draining a replay handshake removes the subscriber", async () => {
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const before = eventEmitter.currentRevision;
+    const payload = "x".repeat(256 * 1024);
+    for (let index = 0; index < 80; index += 1) {
+      eventEmitter.emit({
+        type: "message.updated",
+        sessionId: `stalled-replay-${index}`,
+        data: { message: { payload, index } },
+      });
+    }
+    const controller = new AbortController();
+    const response = await app.request(
+      `/subscribe?since=${encodeURIComponent(
+        `${eventEmitter.generation}:${before}`,
+      )}`,
+      { signal: controller.signal },
+    );
+
+    await waitFor(() => eventEmitter.subscriberCount === subscribersBefore + 1);
+    controller.abort();
+    await response.body?.cancel().catch(() => {});
+    await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+  });
+
+  test("a rejected handshake write removes the subscriber", async () => {
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const mutableEmitter = eventEmitter as unknown as { generation: string };
+    const originalGeneration = mutableEmitter.generation;
+    // Hono rejects an SSE id containing a newline before writing it. Changing
+    // the otherwise opaque generation gives the real route a deterministic
+    // handshake-write failure without replacing Hono internals.
+    mutableEmitter.generation = "invalid\ngeneration";
+    try {
+      const response = await app.request("/subscribe");
+      await response.text();
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    } finally {
+      mutableEmitter.generation = originalGeneration;
     }
   });
 });

@@ -951,6 +951,7 @@ export class OrkestratorGateway {
     if (this.clients.size === 0) return;
     const droppable = event.startsWith(DROPPABLE_EVENT_PREFIX);
     let message: string | null = null;
+    let messageBytes = 0;
     for (const [client, state] of this.clients) {
       if (!eventMatchesSubscription(
         event,
@@ -958,25 +959,51 @@ export class OrkestratorGateway {
         state.includedPrefixes,
         state.excludedPrefixes,
       )) continue;
+      if (message === null) {
+        message = `data: ${JSON.stringify({ event, payload })}\n\n`;
+        messageBytes = Buffer.byteLength(message);
+      }
 
-      const buffered = client.writableLength;
-      if (buffered > SSE_CLIENT_HARD_BUFFER_BYTES) {
-        this.logger.warn(
-          `[RemoteGateway] Dropping an event-stream client buffering ${buffered} bytes; it will reconnect and refetch`,
-        );
-        this.clients.delete(client);
-        client.destroy();
+      if (client.writableLength > SSE_CLIENT_HARD_BUFFER_BYTES) {
+        this.dropBufferedClient(client, client.writableLength);
         continue;
       }
-      if (droppable && buffered > SSE_CLIENT_SOFT_BUFFER_BYTES) {
+
+      if (
+        droppable
+        && client.writableLength + messageBytes > SSE_CLIENT_SOFT_BUFFER_BYTES
+      ) {
         state.desyncedSessions.add(event.slice(DROPPABLE_EVENT_PREFIX.length));
         continue;
       }
-      if (state.desyncedSessions.size > 0) this.flushDesyncNotices(client, state);
+      if (
+        state.desyncedSessions.size > 0
+        && !this.flushDesyncNotices(client, state)
+      ) {
+        continue;
+      }
 
-      message ??= `data: ${JSON.stringify({ event, payload })}\n\n`;
+      const projectedBytes = client.writableLength + messageBytes;
+      if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
+        this.dropBufferedClient(client, projectedBytes);
+        continue;
+      }
+      // A desync notice may itself consume the last available soft-limit
+      // space. Re-check droppable frames after flushing it.
+      if (droppable && projectedBytes > SSE_CLIENT_SOFT_BUFFER_BYTES) {
+        state.desyncedSessions.add(event.slice(DROPPABLE_EVENT_PREFIX.length));
+        continue;
+      }
       client.write(message);
     }
+  }
+
+  private dropBufferedClient(client: ServerResponse, projectedBytes: number): void {
+    this.logger.warn(
+      `[RemoteGateway] Dropping an event-stream client buffering ${projectedBytes} bytes; it will reconnect and refetch`,
+    );
+    this.clients.delete(client);
+    client.destroy();
   }
 
   /**
@@ -988,13 +1015,22 @@ export class OrkestratorGateway {
    * rides the session's own event rather than a second event name so consumers
    * need no extra subscription and existing filters keep working.
    */
-  private flushDesyncNotices(client: ServerResponse, state: GatewayEventClient): void {
-    const sessions = [...state.desyncedSessions];
-    state.desyncedSessions.clear();
-    for (const sessionId of sessions) {
+  private flushDesyncNotices(
+    client: ServerResponse,
+    state: GatewayEventClient,
+  ): boolean {
+    for (const sessionId of [...state.desyncedSessions]) {
       const event = `${DROPPABLE_EVENT_PREFIX}${sessionId}`;
-      client.write(`data: ${JSON.stringify({ event, payload: { desynced: true } })}\n\n`);
+      const notice = `data: ${JSON.stringify({ event, payload: { desynced: true } })}\n\n`;
+      const projectedBytes = client.writableLength + Buffer.byteLength(notice);
+      if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
+        this.dropBufferedClient(client, projectedBytes);
+        return false;
+      }
+      client.write(notice);
+      state.desyncedSessions.delete(sessionId);
     }
+    return true;
   }
 
   private authenticated(request: IncomingMessage): boolean {

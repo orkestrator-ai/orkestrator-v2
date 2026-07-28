@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   buildOpenCodeMessageFromPart,
+  carryOverOpenCodeSubagentHydration,
   abortSession,
   compactOpenCodeSession,
   createClient,
@@ -21,6 +22,7 @@ import {
   hasOpenCodeSubagentSession,
   listSessions,
   lookupSessionStatus,
+  mergeOpenCodeMessageInfo,
   mergeOpenCodeSubagentTranscript,
   normalizeOpenCodeMessage,
   normalizeOpenCodePart,
@@ -2512,6 +2514,123 @@ describe("opencode-client buildOpenCodeMessageFromPart", () => {
 
     expect(updated.parts).toHaveLength(2);
     expect(updated.content).toBe("Hello again");
+  });
+
+  test("preserves message-level error and usage metadata across part updates", () => {
+    const existing: OpenCodeMessage = {
+      id: "message-1",
+      role: "assistant",
+      content: "Hello",
+      parts: [{ type: "text", content: "Hello", sourcePartId: "p1", sourceMessageId: "message-1" }],
+      createdAt: new Date(0).toISOString(),
+      hasError: true,
+      providerUsage: {
+        cost: 0.01,
+        inputTokens: 10,
+        outputTokens: 5,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 15,
+        modelId: "openai/gpt-5",
+      },
+    };
+
+    const updated = buildOpenCodeMessageFromPart(existing, "message-1", {
+      type: "text",
+      content: "Hello world",
+      sourcePartId: "p1",
+      sourceMessageId: "message-1",
+    });
+
+    expect(updated.hasError).toBe(true);
+    expect(updated.providerUsage).toEqual(existing.providerUsage);
+  });
+});
+
+describe("opencode-client incremental message helpers", () => {
+  test("merges message info without discarding existing parts", () => {
+    const existing: OpenCodeMessage = {
+      id: "message-1",
+      role: "assistant",
+      content: "streamed",
+      parts: [{ type: "text", content: "streamed" }],
+      createdAt: "2026-04-15T00:00:00.000Z",
+    };
+
+    expect(mergeOpenCodeMessageInfo(existing, {
+      id: "message-1",
+      role: "assistant",
+      error: { name: "ProviderError" },
+      tokens: { input: 4, output: 6 },
+    })).toMatchObject({
+      content: "streamed",
+      parts: existing.parts,
+      hasError: true,
+    });
+    expect(mergeOpenCodeMessageInfo(existing, null)).toBeNull();
+    expect(mergeOpenCodeMessageInfo(existing, {})).toBeNull();
+  });
+
+  test("preserves hydrated child actions and terminal state during a cheap refresh", () => {
+    const previous: OpenCodeMessage[] = [{
+      id: "parent",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-04-15T00:00:00.000Z",
+      parts: [{
+        type: "subagent",
+        content: "Worker",
+        subagentId: "child",
+        toolState: "success",
+        subagentActionCount: 1,
+        subagentActions: [{ type: "text", content: "done" }],
+      }],
+    }];
+    const next: OpenCodeMessage[] = [{
+      ...previous[0]!,
+      parts: [{
+        type: "subagent",
+        content: "Worker",
+        subagentId: "child",
+        toolState: "pending",
+      }],
+    }];
+
+    expect(carryOverOpenCodeSubagentHydration(previous, next)[0]?.parts[0])
+      .toMatchObject({
+        toolState: "success",
+        subagentActionCount: 1,
+        subagentActions: [{ type: "text", content: "done" }],
+      });
+  });
+
+  test("keeps an authoritative newly hydrated child instead of carrying stale actions", () => {
+    const previous: OpenCodeMessage[] = [{
+      id: "parent",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-04-15T00:00:00.000Z",
+      parts: [{
+        type: "subagent",
+        content: "Worker",
+        subagentId: "child",
+        toolState: "success",
+        subagentActions: [{ type: "text", content: "old" }],
+      }],
+    }];
+    const next: OpenCodeMessage[] = [{
+      ...previous[0]!,
+      parts: [{
+        type: "subagent",
+        content: "Worker",
+        subagentId: "child",
+        toolState: "failure",
+        subagentActions: [{ type: "text", content: "new" }],
+      }],
+    }];
+
+    expect(carryOverOpenCodeSubagentHydration(previous, next)).toBe(next);
   });
 });
 

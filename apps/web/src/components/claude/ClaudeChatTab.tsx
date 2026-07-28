@@ -1244,20 +1244,28 @@ export function ClaudeChatTab({
         const lastReloadTimeBySession = new Map<string, number>();
         const DEBOUNCE_MS = 200;
         const pendingReloads = new Map<string, NodeJS.Timeout>();
+        const reloadGenerations = new Map<string, number>();
 
         // Note: sessionKey is the session key from the sessions Map (e.g., "env-{envId}:{tabId}")
         const fetchMessagesDebounced = (sessionId: string, sessionKey: string, immediate = false) => {
-          const pendingTimeout = pendingReloads.get(sessionId);
+          const reloadKey = `${sessionId}:${sessionKey}`;
+          const generation = (reloadGenerations.get(reloadKey) ?? 0) + 1;
+          reloadGenerations.set(reloadKey, generation);
+          const pendingTimeout = pendingReloads.get(reloadKey);
           if (pendingTimeout) {
             clearTimeout(pendingTimeout);
-            pendingReloads.delete(sessionId);
+            pendingReloads.delete(reloadKey);
           }
 
           const doFetch = async () => {
+            pendingReloads.delete(reloadKey);
             const now = Date.now();
             lastReloadTimeBySession.set(sessionId, now);
             console.debug("[ClaudeChatTab] Fetching session messages", { sessionId, sessionKey });
             const messages = await getSessionMessages(bridgeClient, sessionId);
+            if (reloadGenerations.get(reloadKey) !== generation) return;
+            const currentSession = useClaudeStore.getState().sessions.get(sessionKey);
+            if (currentSession?.sessionId !== sessionId) return;
             setMessages(sessionKey, messages);
           };
 
@@ -1267,11 +1275,68 @@ export function ClaudeChatTab({
             const now = Date.now();
             const lastTime = lastReloadTimeBySession.get(sessionId) || 0;
             if (now - lastTime > DEBOUNCE_MS) {
-              doFetch();
+              void doFetch();
             } else {
-              const timeout = setTimeout(doFetch, DEBOUNCE_MS);
-              pendingReloads.set(sessionId, timeout);
+              const timeout = setTimeout(() => void doFetch(), DEBOUNCE_MS);
+              pendingReloads.set(reloadKey, timeout);
             }
+          }
+        };
+
+        const reconcileAuthoritativeSession = async (
+          sessionId: string,
+          sessionTabId: string,
+        ) => {
+          const reloadKey = `${sessionId}:${sessionTabId}`;
+          const generation = (reloadGenerations.get(reloadKey) ?? 0) + 1;
+          reloadGenerations.set(reloadKey, generation);
+          const pendingTimeout = pendingReloads.get(reloadKey);
+          if (pendingTimeout) {
+            clearTimeout(pendingTimeout);
+            pendingReloads.delete(reloadKey);
+          }
+
+          const [serverSession, messages, questions, approvals] = await Promise.all([
+            getSession(bridgeClient, sessionId),
+            getSessionMessages(bridgeClient, sessionId, { throwOnError: true }),
+            getPendingQuestions(bridgeClient, sessionId, { throwOnError: true }),
+            getPendingPlanApprovals(bridgeClient, sessionId, { throwOnError: true }),
+          ]);
+          if (reloadGenerations.get(reloadKey) !== generation || !serverSession) return;
+
+          const state = useClaudeStore.getState();
+          const currentSession = state.sessions.get(sessionTabId);
+          if (currentSession?.sessionId !== sessionId) return;
+
+          const existingQuestionIds = Array.from(state.pendingQuestions.values())
+            .filter((question) => question.sessionId === sessionId)
+            .map((question) => question.id);
+          const existingApprovalIds = Array.from(state.pendingPlanApprovals.values())
+            .filter((approval) => approval.sessionId === sessionId)
+            .map((approval) => approval.id);
+
+          setMessages(sessionTabId, messages);
+          applyServerSessionMetadata(sessionTabId, serverSession);
+          setSessionLoading(sessionTabId, serverSession.status === "running");
+          setSessionError(
+            sessionTabId,
+            serverSession.status === "error"
+              ? serverSession.error?.trim() || "Claude session failed"
+              : undefined,
+          );
+          if (serverSession.title?.trim()) {
+            setSessionTitle(sessionTabId, serverSession.title);
+          }
+
+          const nextQuestionIds = new Set(questions.map((question) => question.id));
+          for (const question of questions) addPendingQuestion(question);
+          for (const questionId of existingQuestionIds) {
+            if (!nextQuestionIds.has(questionId)) removePendingQuestion(questionId);
+          }
+          const nextApprovalIds = new Set(approvals.map((approval) => approval.id));
+          for (const approval of approvals) addPendingPlanApproval(approval);
+          for (const approvalId of existingApprovalIds) {
+            if (!nextApprovalIds.has(approvalId)) removePendingPlanApproval(approvalId);
           }
         };
 
@@ -1308,17 +1373,25 @@ export function ClaudeChatTab({
             // The cursor fell behind the bridge's bounded replay window.
             // Rehydrate every Claude session owned by this environment; live
             // events then resume as incremental updates against that snapshot.
+            const reconciles: Promise<void>[] = [];
             for (const [sessionTabId, sessionState] of useClaudeStore.getState().sessions) {
               if (
                 !sessionTabId.startsWith(`env-${environmentId}:`)
                 || !sessionState.sessionId
               ) continue;
-              fetchMessagesDebounced(
-                sessionState.sessionId,
-                sessionTabId,
-                true,
+              reconciles.push(
+                reconcileAuthoritativeSession(
+                  sessionState.sessionId,
+                  sessionTabId,
+                ).catch((error) => {
+                  console.warn(
+                    "[ClaudeChatTab] Failed to reconcile replay gap:",
+                    error,
+                  );
+                }),
               );
             }
+            await Promise.all(reconciles);
             continue;
           }
 
@@ -1619,7 +1692,7 @@ export function ClaudeChatTab({
         }
       }
     },
-    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setSessionTitle, setContextUsage, setPromptSuggestion, setBackgroundTasks, addMessage, addPendingQuestion, removePendingQuestion, addPendingPlanApproval, removePendingPlanApproval, setPlanMode, getSessionKeyBySdkSessionId]
+    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setSessionError, setSessionTitle, setContextUsage, setPromptSuggestion, setBackgroundTasks, applyServerSessionMetadata, addMessage, addPendingQuestion, removePendingQuestion, addPendingPlanApproval, removePendingPlanApproval, setPlanMode, getSessionKeyBySdkSessionId]
   );
   startSharedEventSubscriptionRef.current = startSharedEventSubscription;
 

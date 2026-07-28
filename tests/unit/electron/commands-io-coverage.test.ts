@@ -156,7 +156,10 @@ describe("backend command I/O coverage", () => {
     expect(emitted).toEqual([
       {
         event: `terminal-output-${sessionId}`,
-        payload: { bytesBase64: Buffer.from("ready\r\n").toString("base64") },
+        payload: {
+          bytesBase64: Buffer.from("ready\r\n").toString("base64"),
+          sequence: 1,
+        },
       },
     ]);
 
@@ -214,6 +217,34 @@ describe("backend command I/O coverage", () => {
       context,
     )).rejects.toThrow("File payload is not valid base64");
   });
+
+  test("caps a local file tree at exactly 5000 nodes", async () => {
+    const root = await createTempDir("ork-commands-io-local-cap-");
+    for (let offset = 0; offset < 5_001; offset += 250) {
+      await Promise.all(
+        Array.from(
+          { length: Math.min(250, 5_001 - offset) },
+          (_, index) => fs.writeFile(
+            path.join(root, `file-${String(offset + index).padStart(4, "0")}.txt`),
+            "",
+          ),
+        ),
+      );
+    }
+    const commands = createCommandRegistry();
+    const tree = await commands.get("get_local_file_tree")?.(
+      { worktreePath: root },
+      createContext(),
+    ) as Array<{ children?: unknown[] }>;
+    const countNodes = (nodes: Array<{ children?: unknown[] }>): number =>
+      nodes.reduce(
+        (total, node) =>
+          total + 1 + countNodes((node.children ?? []) as Array<{ children?: unknown[] }>),
+        0,
+      );
+
+    expect(countNodes(tree)).toBe(5_000);
+  }, 15_000);
 
   test("reads base64 only from regular files in workspace storage", async () => {
     const workspaceStorage = path.join(os.homedir(), APP_SLUG, "workspaces");
@@ -380,6 +411,28 @@ esac
       const dockerLog = await fs.readFile(logPath, "utf8");
       expect(dockerLog).toContain("-type l -prune");
       expect(dockerLog).toContain("exec -i container-1 bash -lc base64 -d > '/workspace/generated/out.bin'");
+    });
+  });
+
+  test("returns exactly the configured 5000-file container tree boundary", async () => {
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+i=1
+while [ "$i" -le 5000 ]; do
+  printf 'generated/file-%s.ts\\n' "$i"
+  i=$((i + 1))
+done
+`, async ({ logPath }) => {
+      const commands = createCommandRegistry();
+      const files = await commands.get("get_file_tree")?.(
+        { containerId: "container-tree-cap" },
+        createContext(),
+      ) as Array<{ path: string }>;
+
+      expect(files).toHaveLength(5_000);
+      expect(files[0]?.path).toBe("generated/file-1.ts");
+      expect(files.at(-1)?.path).toBe("generated/file-5000.ts");
+      expect(await fs.readFile(logPath, "utf8")).toContain("head -5000");
     });
   });
 

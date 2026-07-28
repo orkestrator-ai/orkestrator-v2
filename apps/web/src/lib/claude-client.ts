@@ -1346,7 +1346,11 @@ export async function getSlashCommands(
  * Subscribe to SSE events from the server
  * Returns an async iterator for events
  */
-const claudeEventCursorByBaseUrl = new Map<string, number>();
+const claudeEventCursorByBaseUrl = new Map<string, string>();
+
+// Cursors are opaque bridge-issued identifiers. Keep the accepted character
+// set deliberately narrow before reflecting one into a query parameter.
+const VALID_CLAUDE_EVENT_CURSOR = /^[A-Za-z0-9._~-]+(?::[A-Za-z0-9._~-]+)*$/;
 
 export function subscribeToEvents(
   client: ClaudeClient,
@@ -1363,9 +1367,9 @@ export function subscribeToEvents(
       const handleEvent = (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data);
-          const revision = Number.parseInt(event.lastEventId, 10);
-          if (Number.isSafeInteger(revision) && revision >= 0) {
-            claudeEventCursorByBaseUrl.set(client.baseUrl, revision);
+          const cursor = event.lastEventId;
+          if (cursor && VALID_CLAUDE_EVENT_CURSOR.test(cursor)) {
+            claudeEventCursorByBaseUrl.set(client.baseUrl, cursor);
           }
           // Guarded rather than passed through `rendererDebugLog`: this runs on
           // every frame of every running turn, so the object literal would be
@@ -1432,7 +1436,7 @@ export function subscribeToEvents(
       // Create EventSource
       const cursor = claudeEventCursorByBaseUrl.get(client.baseUrl);
       const eventUrl = `${client.baseUrl}/event/subscribe${
-        cursor === undefined ? "" : `?since=${cursor}`
+        cursor === undefined ? "" : `?since=${encodeURIComponent(cursor)}`
       }`;
       eventSource = new EventSource(eventUrl);
       eventSource.onopen = () => {

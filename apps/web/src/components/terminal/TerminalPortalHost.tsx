@@ -2,7 +2,10 @@ import { memo, useCallback, useLayoutEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { usePaneLayoutStore, getAllLeaves } from "@/stores/paneLayoutStore";
 import { useConfigStore, useEnvironmentStore } from "@/stores";
-import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
+import {
+  createPortalTargetKey,
+  useTerminalPortalStore,
+} from "@/stores/terminalPortalStore";
 import { PersistentTerminal } from "./PersistentTerminal";
 import type { TabInfo, PaneLeaf } from "@/types/paneLayout";
 import type { TerminalTabType } from "@/contexts";
@@ -56,9 +59,11 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
   const root = currentEnvState?.root ?? DEFAULT_ROOT;
   const activePaneId = currentEnvState?.activePaneId ?? "default";
 
-  // Terminals map reactively (portals render from it); actions via stable refs.
+  // Both maps participate in rendering. In particular, a pane host can mount
+  // after its terminal already exists; selecting only the stable getter would
+  // leave that terminal detached until an unrelated terminal mutation.
   const terminals = useTerminalPortalStore((state) => state.terminals);
-  const getPaneHost = useTerminalPortalStore((state) => state.getPaneHost);
+  const paneHosts = useTerminalPortalStore((state) => state.paneHosts);
 
   // Get workspace ready and setup scripts running setters from environment store
   const setWorkspaceReady = useEnvironmentStore((state) => state.setWorkspaceReady);
@@ -192,7 +197,7 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
     }
 
     const { tab, paneId } = tabInfo;
-    const portalTarget = getPaneHost(environmentId, paneId);
+    const portalTarget = paneHosts.get(createPortalTargetKey(environmentId, paneId));
     if (!portalTarget) {
       continue;
     }

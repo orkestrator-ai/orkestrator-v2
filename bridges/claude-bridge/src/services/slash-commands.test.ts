@@ -1,5 +1,15 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  rename,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -280,5 +290,122 @@ ${"body ".repeat(10_000)}`,
 
     // Only the head of the file is read; the frontmatter is complete there.
     expect(await discoverSlashCommands(cwd)).toContain("/big - Big command");
+  });
+
+  test("reads valid frontmatter whose closing delimiter is beyond 8 KiB", async () => {
+    const cwd = await makeTempDir();
+    const commandsDir = join(cwd, ".claude", "commands");
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(
+      join(commandsDir, "large-frontmatter.md"),
+      `---
+notes: ${"x".repeat(12 * 1024)}
+description: Found after the old read limit
+---
+# Body`,
+    );
+
+    expect(await discoverSlashCommands(cwd)).toContain(
+      "/large-frontmatter - Found after the old read limit",
+    );
+  });
+
+  test("stops at the frontmatter safety cap when no closing delimiter is present", async () => {
+    const cwd = await makeTempDir();
+    const commandsDir = join(cwd, ".claude", "commands");
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(
+      join(commandsDir, "unterminated.md"),
+      `---
+notes: ${"x".repeat(300 * 1024)}
+description: Must not be parsed without a closing delimiter`,
+    );
+
+    const commands = await discoverSlashCommands(cwd);
+    expect(commands).toContain("/unterminated");
+    expect(commands.some((command) => command.startsWith("/unterminated - "))).toBe(false);
+  });
+
+  test("invalidates the cache after an atomic replacement with matching size and mtime", async () => {
+    const cwd = await makeTempDir();
+    const commandsDir = join(cwd, ".claude", "commands");
+    await mkdir(commandsDir, { recursive: true });
+    const commandPath = join(commandsDir, "replace.md");
+    const replacementPath = join(commandsDir, "replacement.tmp");
+    const original = `---
+description: Alpha value
+---`;
+    const replacement = `---
+description: Bravo value
+---`;
+    expect(Buffer.byteLength(original)).toBe(Buffer.byteLength(replacement));
+
+    const fixedTime = new Date("2026-07-01T00:00:00.000Z");
+    await writeFile(commandPath, original);
+    await utimes(commandPath, fixedTime, fixedTime);
+    expect(await discoverSlashCommands(cwd)).toContain("/replace - Alpha value");
+    const originalStats = await stat(commandPath);
+
+    await writeFile(replacementPath, replacement);
+    await utimes(replacementPath, fixedTime, fixedTime);
+    await rename(replacementPath, commandPath);
+    const replacementStats = await stat(commandPath);
+    expect(replacementStats.size).toBe(originalStats.size);
+    expect(replacementStats.mtimeMs).toBe(originalStats.mtimeMs);
+    expect(replacementStats.ino).not.toBe(originalStats.ino);
+
+    expect(await discoverSlashCommands(cwd)).toContain("/replace - Bravo value");
+  });
+
+  test("recovers after a command file read failure", async () => {
+    const cwd = await makeTempDir();
+    const commandsDir = join(cwd, ".claude", "commands");
+    await mkdir(commandsDir, { recursive: true });
+    const commandPath = join(commandsDir, "broken.md");
+    await symlink(join(commandsDir, "missing-target.md"), commandPath);
+
+    expect(await discoverSlashCommands(cwd)).toContain("/broken");
+
+    await unlink(commandPath);
+    await writeFile(
+      commandPath,
+      `---
+description: Recovered command
+---`,
+    );
+    expect(await discoverSlashCommands(cwd)).toContain(
+      "/broken - Recovered command",
+    );
+  });
+
+  test("drops deleted command entries and accepts a later recreation", async () => {
+    const cwd = await makeTempDir();
+    const commandsDir = join(cwd, ".claude", "commands");
+    await mkdir(commandsDir, { recursive: true });
+    const commandPath = join(commandsDir, "temporary.md");
+    await writeFile(
+      commandPath,
+      `---
+description: Before deletion
+---`,
+    );
+    expect(await discoverSlashCommands(cwd)).toContain(
+      "/temporary - Before deletion",
+    );
+
+    await unlink(commandPath);
+    expect((await discoverSlashCommands(cwd)).some(
+      (command) => command.startsWith("/temporary"),
+    )).toBe(false);
+
+    await writeFile(
+      commandPath,
+      `---
+description: After recreation
+---`,
+    );
+    expect(await discoverSlashCommands(cwd)).toContain(
+      "/temporary - After recreation",
+    );
   });
 });

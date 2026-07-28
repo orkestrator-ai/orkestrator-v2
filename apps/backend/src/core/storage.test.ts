@@ -232,7 +232,7 @@ describe("hot store read caching", () => {
     });
   });
 
-  test("skips backup rotation for volatile activity writes but keeps it for structural ones", async () => {
+  test("refreshes one recovery backup for volatile writes without rotating history", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
       const backupPath = path.join(dataDir, "environments.json.bak.1");
@@ -248,14 +248,64 @@ describe("hot store read caching", () => {
         environment.id,
         new Date(Date.now() + 2_000).toISOString(),
       );
-      // Activity-only writes rotate no backups: they change nothing a backup
-      // restore needs, and they are the write loop that runs every ~10s.
-      await expect(fs.access(backupPath)).rejects.toThrow();
+      // Activity-only writes keep one current recovery point without shifting
+      // five timestamp-only copies through the historical backup chain.
+      await fs.access(backupPath);
+      await expect(fs.access(path.join(dataDir, "environments.json.bak.2")))
+        .rejects.toThrow();
 
       // A structural mutation still pays for the rotation.
       await storage.updateEnvironment(environment.id, { name: "renamed" });
-      // Resolves only if the backup now exists.
-      await fs.access(backupPath);
+      await fs.access(path.join(dataDir, "environments.json.bak.2"));
+    });
+  });
+
+  test("recovers the latest structural state after later activity-only writes", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      await storage.updateEnvironment(environment.id, { name: "structurally-renamed" });
+      const occurredAt = new Date(Date.now() + 1_000).toISOString();
+      await storage.recordEnvironmentActivity(environment.id, occurredAt);
+
+      await fs.writeFile(path.join(dataDir, "environments.json"), "{corrupt", "utf8");
+      const recovered = await new StorageService(dataDir).getEnvironment(environment.id);
+      expect(recovered).toMatchObject({
+        id: environment.id,
+        name: "structurally-renamed",
+        lastActivityAt: occurredAt,
+      });
+    });
+  });
+
+  test("invalidates project and config caches after external writes", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await storage.addProject({
+        id: "project-cache",
+        name: "Before",
+        gitUrl: "https://example.invalid/cache.git",
+        localPath: null,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      });
+      const config = defaultConfig();
+      await storage.saveConfig(config);
+      await storage.loadProjects();
+      await storage.loadConfig();
+
+      const projectsPath = path.join(dataDir, "projects.json");
+      const projects = JSON.parse(await fs.readFile(projectsPath, "utf8")) as Array<{
+        name: string;
+      }>;
+      projects[0]!.name = "After!";
+      await fs.writeFile(projectsPath, `${JSON.stringify(projects)}\n`, "utf8");
+
+      const configPath = path.join(dataDir, "config.json");
+      const foreignConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as AppConfig;
+      foreignConfig.global.webClientEnabled = false;
+      await fs.writeFile(configPath, `${JSON.stringify(foreignConfig)}\n`, "utf8");
+
+      expect((await storage.loadProjects())[0]!.name).toBe("After!");
+      expect((await storage.loadConfig()).global.webClientEnabled).toBe(false);
     });
   });
 
@@ -271,6 +321,58 @@ describe("hot store read caching", () => {
       } finally {
         await fs.rm(lockPath, { force: true });
       }
+    });
+  });
+});
+
+describe("environment completion and unread state", () => {
+  test("records a newer completion and ignores stale completion timestamps", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const newer = "2026-07-28T12:00:00.000Z";
+      const completed = await storage.recordEnvironmentCompletion(environment.id, newer);
+      expect(completed).toMatchObject({
+        lastActivityAt: newer,
+        hasUnreadWork: true,
+      });
+
+      await storage.setEnvironmentUnread(environment.id, false, newer);
+      const stale = await storage.recordEnvironmentCompletion(
+        environment.id,
+        "2026-07-28T11:59:59.000Z",
+      );
+      expect(stale).toMatchObject({
+        lastActivityAt: newer,
+        hasUnreadWork: false,
+      });
+      await expect(storage.recordEnvironmentCompletion(environment.id, "invalid"))
+        .rejects.toThrow("occurredAt must be a valid ISO timestamp");
+    });
+  });
+
+  test("clears unread only when the expected activity token still matches", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const activityAt = "2026-07-28T12:00:00.000Z";
+      await storage.recordEnvironmentCompletion(environment.id, activityAt);
+
+      const staleClear = await storage.setEnvironmentUnread(
+        environment.id,
+        false,
+        "2026-07-28T11:00:00.000Z",
+      );
+      expect(staleClear.hasUnreadWork).toBe(true);
+
+      const cleared = await storage.setEnvironmentUnread(
+        environment.id,
+        false,
+        activityAt,
+      );
+      expect(cleared.hasUnreadWork).toBe(false);
+      expect((await storage.getEnvironment(environment.id))!.hasUnreadWork).toBe(false);
+      await expect(
+        storage.setEnvironmentUnread(environment.id, true, 123 as never),
+      ).rejects.toThrow("expectedLastActivityAt must be a string or null");
     });
   });
 });

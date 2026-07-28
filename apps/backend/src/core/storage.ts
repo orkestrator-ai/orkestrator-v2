@@ -1042,12 +1042,35 @@ export class StorageService {
     await fs.mkdir(this.dataDir, { recursive: true });
   }
 
-  private async writeAtomic(filePath: string, contents: string, makeBackup = true, mode?: number): Promise<void> {
+  private async writeAtomic(
+    filePath: string,
+    contents: string,
+    makeBackup = true,
+    mode?: number,
+    refreshRecoveryBackup = false,
+  ): Promise<void> {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`);
+    const recoveryTempPath = refreshRecoveryBackup
+      ? path.join(
+        path.dirname(filePath),
+        `.${path.basename(filePath)}.recovery.${randomUUID()}.tmp`,
+      )
+      : null;
 
     await this.enqueueWrite(async () => {
       await fs.writeFile(tempPath, contents, mode === undefined ? undefined : { mode });
+      if (recoveryTempPath) {
+        // Volatile environment updates deliberately do not rotate five
+        // historical backups, but they still need one current, valid recovery
+        // point. Write the same validated snapshot to .bak.1 before publishing
+        // the primary so corruption cannot roll structural fields back.
+        await fs.writeFile(
+          recoveryTempPath,
+          contents,
+          mode === undefined ? undefined : { mode },
+        );
+      }
       if (mode !== undefined) {
         await fs.chmod(tempPath, mode);
       }
@@ -1058,6 +1081,9 @@ export class StorageService {
       if (makeBackup && await exists(filePath)) {
         await this.rotateBackups(filePath);
       }
+      if (recoveryTempPath) {
+        await fs.rename(recoveryTempPath, this.backupPath(filePath, 1));
+      }
       await fs.rename(tempPath, filePath);
       // The next read must re-validate against the file we just renamed in.
       this.jsonReadCache.delete(filePath);
@@ -1065,8 +1091,9 @@ export class StorageService {
         await fs.chmod(filePath, mode);
       }
     }).catch(async (error) => {
-      if (await exists(tempPath)) {
-        await fs.rm(tempPath, { force: true });
+      await fs.rm(tempPath, { force: true }).catch(() => undefined);
+      if (recoveryTempPath) {
+        await fs.rm(recoveryTempPath, { force: true }).catch(() => undefined);
       }
       throw error;
     });
@@ -1306,7 +1333,7 @@ export class StorageService {
       this.jsonReadCache.delete(filePath);
       return fallback();
     }
-    const fingerprint = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+    const fingerprint = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
     const cached = this.jsonReadCache.get(filePath);
     if (cached && cached.fingerprint === fingerprint) {
       return structuredClone(cached.value) as T;
@@ -1333,6 +1360,8 @@ export class StorageService {
       filePath,
       `${JSON.stringify(value, null, 2)}\n`,
       options.backup ?? true,
+      undefined,
+      options.backup === false,
     );
   }
 

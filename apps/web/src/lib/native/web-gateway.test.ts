@@ -552,7 +552,7 @@ describe("web gateway browser API", () => {
     expect(source.closed).toBe(true);
   });
 
-  test("requests only terminal streams with active browser listeners", async () => {
+  test("keeps the authoritative stream stable and gives each active terminal its own stream", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi();
 
@@ -564,22 +564,56 @@ describe("web gateway browser API", () => {
       "terminal-output-session:one",
       () => undefined,
     );
-    await Promise.resolve();
 
-    expect(firstSource.closed).toBe(true);
+    expect(firstSource.closed).toBe(false);
     expect(MockEventSource.instances).toHaveLength(2);
     expect(MockEventSource.instances[1]?.url).toBe(
       "/__orkestrator/events?excludeEvents=terminal-output-&includeEvents=terminal-output-session%3Aone",
     );
+    let ready = false;
+    const readyPromise = api.eventStreamReady("terminal-output-session:one")
+      .then(() => { ready = true; });
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    MockEventSource.instances[1]?.onopen?.();
+    await readyPromise;
+    expect(ready).toBe(true);
 
     unsubscribeTerminal();
-    await Promise.resolve();
-    expect(MockEventSource.instances).toHaveLength(3);
-    expect(MockEventSource.instances[2]?.url).toBe(
-      "/__orkestrator/events?excludeEvents=terminal-output-",
-    );
+    expect(MockEventSource.instances).toHaveLength(2);
+    expect(MockEventSource.instances[1]?.closed).toBe(true);
+    expect(firstSource.closed).toBe(false);
 
     unsubscribeMenu();
+    expect(firstSource.closed).toBe(true);
+  });
+
+  test("adding a second terminal never interrupts output for the first", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+    const firstOutput = mock(() => undefined);
+    const secondOutput = mock(() => undefined);
+
+    const stopFirst = api.listen("terminal-output-one", firstOutput);
+    const firstSource = MockEventSource.instances[0]!;
+    firstSource.onopen?.();
+    await api.eventStreamReady("terminal-output-one");
+
+    const stopSecond = api.listen("terminal-output-two", secondOutput);
+    const secondSource = MockEventSource.instances[1]!;
+    expect(firstSource.closed).toBe(false);
+    firstSource.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({ event: "terminal-output-one", payload: "YQ==" }),
+    }));
+    expect(firstOutput).toHaveBeenCalledWith("YQ==");
+    expect(secondOutput).not.toHaveBeenCalled();
+
+    secondSource.onopen?.();
+    await api.eventStreamReady("terminal-output-two");
+    stopSecond();
+    expect(secondSource.closed).toBe(true);
+    expect(firstSource.closed).toBe(false);
+    stopFirst();
   });
 
   test("uses browser fallbacks for unavailable native-only APIs", async () => {

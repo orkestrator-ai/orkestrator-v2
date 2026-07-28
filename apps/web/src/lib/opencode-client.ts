@@ -726,7 +726,14 @@ export function carryOverOpenCodeSubagentHydration(
         ...part,
         subagentActions: hydrated.subagentActions,
         subagentActionCount: hydrated.subagentActionCount,
-        toolState: part.toolState ?? hydrated.toolState,
+        // A cheap parent-only refresh often reports a still-running Task part
+        // even though the hydrated child snapshot already proved it terminal.
+        // Do not regress a completed child to pending until the authoritative
+        // final hydration replaces it.
+        toolState:
+          hydrated.toolState === "success" || hydrated.toolState === "failure"
+            ? hydrated.toolState
+            : part.toolState ?? hydrated.toolState,
       };
     });
     if (!mapped.changed) return message;
@@ -1082,6 +1089,7 @@ export function buildOpenCodeMessageFromPart(
     .join("");
 
   return {
+    ...existing,
     id: messageId,
     role: existing?.role ?? "assistant",
     content,

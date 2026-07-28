@@ -10,33 +10,56 @@
  * unchanged snapshot can be turned into a store no-op.
  */
 
-/** Structural equality over JSON-shaped data (plain objects, arrays, primitives). */
+const MAX_DEEP_EQUAL_NODES = 100_000;
+
+/**
+ * Structural equality over JSON-shaped data (plain objects, arrays,
+ * primitives).
+ *
+ * Model/tool payloads are untrusted and may be extremely deeply nested. Keep
+ * this iterative so an otherwise-valid payload cannot overflow the renderer's
+ * call stack, and stop after a generous work budget. Exceeding the budget is
+ * deliberately treated as "changed": identity reuse is only an optimization.
+ */
 export function deepEqualJson(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true;
-  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) {
-    return false;
-  }
+  const pending: Array<[unknown, unknown]> = [[a, b]];
+  let visited = 0;
 
-  const aIsArray = Array.isArray(a);
-  if (aIsArray !== Array.isArray(b)) return false;
-  if (aIsArray) {
-    const arrayA = a as unknown[];
-    const arrayB = b as unknown[];
-    if (arrayA.length !== arrayB.length) return false;
-    for (let index = 0; index < arrayA.length; index += 1) {
-      if (!deepEqualJson(arrayA[index], arrayB[index])) return false;
+  while (pending.length > 0) {
+    if (visited >= MAX_DEEP_EQUAL_NODES) return false;
+    visited += 1;
+
+    const [left, right] = pending.pop()!;
+    if (Object.is(left, right)) continue;
+    if (
+      typeof left !== "object"
+      || typeof right !== "object"
+      || left === null
+      || right === null
+    ) {
+      return false;
     }
-    return true;
-  }
 
-  const recordA = a as Record<string, unknown>;
-  const recordB = b as Record<string, unknown>;
-  const keysA = Object.keys(recordA);
-  const keysB = Object.keys(recordB);
-  if (keysA.length !== keysB.length) return false;
-  for (const key of keysA) {
-    if (!Object.prototype.hasOwnProperty.call(recordB, key)) return false;
-    if (!deepEqualJson(recordA[key], recordB[key])) return false;
+    const leftIsArray = Array.isArray(left);
+    if (leftIsArray !== Array.isArray(right)) return false;
+    if (leftIsArray) {
+      const leftArray = left as unknown[];
+      const rightArray = right as unknown[];
+      if (leftArray.length !== rightArray.length) return false;
+      for (let index = 0; index < leftArray.length; index += 1) {
+        pending.push([leftArray[index], rightArray[index]]);
+      }
+      continue;
+    }
+
+    const leftRecord = left as Record<string, unknown>;
+    const rightRecord = right as Record<string, unknown>;
+    const leftKeys = Object.keys(leftRecord);
+    if (leftKeys.length !== Object.keys(rightRecord).length) return false;
+    for (const key of leftKeys) {
+      if (!Object.prototype.hasOwnProperty.call(rightRecord, key)) return false;
+      pending.push([leftRecord[key], rightRecord[key]]);
+    }
   }
   return true;
 }
@@ -74,15 +97,16 @@ export function preserveMessageIdentities<TMessage extends { id: string }>(
   if (existing === next) return existing;
   if (existing.length === 0) return next;
 
-  const existingById = new Map<string, TMessage>();
+  const existingById = new Map<string, TMessage[]>();
   for (const message of existing) {
-    // First occurrence wins, mirroring findIndex-based lookups elsewhere.
-    if (!existingById.has(message.id)) existingById.set(message.id, message);
+    const matches = existingById.get(message.id);
+    if (matches) matches.push(message);
+    else existingById.set(message.id, [message]);
   }
 
   let changedAnything = false;
   const result = next.map((incoming) => {
-    const previous = existingById.get(incoming.id);
+    const previous = existingById.get(incoming.id)?.shift();
     if (!previous) return incoming;
     if (previous === incoming) return previous;
     if (cheaplyDiffers(previous as MessageLike, incoming as MessageLike)) {

@@ -2462,6 +2462,16 @@ async function buildSdkPrompt(
 const STREAM_EVENT_COALESCE_MS = 100;
 
 /**
+ * Highest content-block index accepted from a streamed SDK event.
+ *
+ * Real assistant responses use a small, dense sequence of content blocks.
+ * Treat a larger index as malformed instead of retaining attacker-controlled
+ * sparse state for the rest of the turn. The map-based storage below also
+ * keeps iteration proportional to the number of blocks actually received.
+ */
+export const MAX_STREAM_CONTENT_BLOCK_INDEX = 4_095;
+
+/**
  * Send a prompt to a session and process the response
  */
 export async function sendPrompt(
@@ -3007,10 +3017,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     //     by `uuid` appends a duplicate copy of already-streamed content.
     // Grouping by (api message id, block index) makes deltas collapse onto the
     // block they belong to and makes the final block overwrite what it streamed.
-    // Each message's blocks live in an array indexed by block index (possibly
-    // sparse while blocks are in flight), so iteration is already in block
-    // order and the per-flush rebuild never has to sort.
-    const blocksByApiMessage = new Map<string, OrderedPartEntry[]>();
+    // Each message's blocks live in a map keyed by block index. A malformed
+    // large index therefore cannot create a huge sparse array whose iteration
+    // stalls the bridge; the small set of received indices is sorted on flush.
+    const blocksByApiMessage = new Map<string, Map<number, OrderedPartEntry>>();
     // Blocks of each API message already reconciled from non-streaming `assistant`
     // messages. Those messages don't carry the stream's block index, but they
     // arrive in block order, so the running count is the index of the next block.
@@ -3023,10 +3033,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // Flattened view of `blocksByApiMessage`, in message order then block order.
     let accumulatedOrderedParts: OrderedPartEntry[] = [];
 
-    const getBlocksForMessage = (messageKey: string): OrderedPartEntry[] => {
+    const getBlocksForMessage = (messageKey: string): Map<number, OrderedPartEntry> => {
       let blocks = blocksByApiMessage.get(messageKey);
       if (!blocks) {
-        blocks = [];
+        blocks = new Map();
         blocksByApiMessage.set(messageKey, blocks);
       }
       return blocks;
@@ -3043,9 +3053,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     const rebuildAccumulatedOrderedParts = () => {
       const parts: OrderedPartEntry[] = [];
       // Map iteration is insertion-ordered, which is API message arrival order;
-      // each block array is indexed by block index, which is block order.
+      // block indices may arrive out of order, so sort only the received keys.
       for (const blocks of blocksByApiMessage.values()) {
-        for (const entry of blocks) {
+        const blockIndices = Array.from(blocks.keys()).sort((a, b) => a - b);
+        for (const blockIndex of blockIndices) {
+          const entry = blocks.get(blockIndex);
           if (!entry) continue;
           materializeEntryValue(entry);
           parts.push(entry);
@@ -3220,7 +3232,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         return false;
       }
 
-      const blockIndex = Number.isInteger(streamEvent?.index) && streamEvent.index >= 0
+      const blockIndex = Number.isInteger(streamEvent?.index)
+        && streamEvent.index >= 0
+        && streamEvent.index <= MAX_STREAM_CONTENT_BLOCK_INDEX
         ? streamEvent.index
         : undefined;
       if (blockIndex === undefined) {
@@ -3236,7 +3250,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       }
 
       const entriesForMessage = getBlocksForMessage(messageKey);
-      let entry = entriesForMessage[blockIndex];
+      let entry = entriesForMessage.get(blockIndex);
 
       // Append a streamed delta without rebuilding the block's string: chunks
       // are buffered on the entry and joined once per flush. A delta whose
@@ -3297,7 +3311,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         return false;
       }
 
-      entriesForMessage[blockIndex] = entry;
+      entriesForMessage.set(blockIndex, entry);
       lastStreamMessageKey = messageKey;
       scheduleStreamedAssistantMessageFlush();
       return true;
@@ -3667,12 +3681,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         const blockIndexBase = finalizedBlockCountByApiMessage.get(messageKey) ?? 0;
         for (const part of orderedParts) {
           const blockIndex = blockIndexBase + (part.blockOffset ?? 0);
-          const streamedPart = blocks[blockIndex];
-          blocks[blockIndex] = {
+          const streamedPart = blocks.get(blockIndex);
+          blocks.set(blockIndex, {
             ...part,
             timestamp: streamedPart?.timestamp ?? new Date().toISOString(),
             messageUuid: messageKey,
-          };
+          });
         }
         finalizedBlockCountByApiMessage.set(messageKey, blockIndexBase + contentBlockCount);
         rebuildAccumulatedOrderedParts();

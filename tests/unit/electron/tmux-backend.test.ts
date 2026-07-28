@@ -10,7 +10,12 @@ import {
   ClaudeStatePollManager,
   claudeStateReadCommand,
   containerExecArgs,
+  InteractiveTmuxTerminalManager,
+  INTERACTIVE_SNAPSHOT_MAX_MS,
+  INTERACTIVE_SNAPSHOT_MIN_MS,
+  isDirectJsonlChild,
   jsonlByMtimeFindCommand,
+  listLocalJsonlByMtime,
   LIVENESS_CHECK_EVERY_TICKS,
   newestJsonlFindCommand,
   newestJsonlInDir,
@@ -20,8 +25,10 @@ import {
   parseTranscriptHeadOutput,
   pollSnapshotScript,
   probeThinkingDisplaySupport,
+  PREVIOUS_SESSION_STAT_CONCURRENCY,
   registerTmuxBackendCommands,
   RUNTIME_ROOT_PREFIX,
+  shutdownClaudeStatePolling,
   tailFromOffsetCommand,
   thinkingDisplayProbeArgs,
   thinkingDisplayProbeIndicatesSupport,
@@ -1595,6 +1602,7 @@ describe("ClaudeStatePollManager", () => {
     readState?: (containerId: string) => Promise<string>;
     environments?: Environment[];
     loadEnvironments?: () => Promise<Environment[]>;
+    nowMs?: () => number;
     persist?: (
       environmentId: string,
       state: "idle" | "working" | "waiting",
@@ -1656,6 +1664,7 @@ describe("ClaudeStatePollManager", () => {
         cancelled.add(timer);
       },
       now: () => fixedNow,
+      nowMs: options.nowMs,
     });
     return {
       manager,
@@ -2083,6 +2092,37 @@ describe("ClaudeStatePollManager", () => {
     harness.manager.shutdown("container-poll");
   });
 
+  test("rechecks and retires an unchanged poll after fifteen seconds", async () => {
+    let currentMs = 10_000;
+    let loadCount = 0;
+    const environment = createEnvironment("/worktree", "env-poll");
+    environment.containerId = "container-poll";
+    const harness = createPollHarness({
+      readState: async () => "working",
+      nowMs: () => currentMs,
+      loadEnvironments: async () => {
+        loadCount += 1;
+        return [environment];
+      },
+    });
+
+    harness.manager.start("container-poll", harness.context);
+    await waitFor(() => harness.emitted.length === 1);
+    expect(loadCount).toBe(1);
+
+    currentMs += 14_999;
+    harness.scheduled[0]!();
+    await delay(0);
+    expect(loadCount).toBe(1);
+
+    environment.status = "stopped";
+    currentMs += 1;
+    harness.scheduled[0]!();
+    await waitFor(() => harness.cancelled.size === 1);
+    expect(loadCount).toBe(2);
+    expect(harness.persisted).toHaveLength(1);
+  });
+
   test("still retires a poll whose container never reports a usable state", async () => {
     // The storage read the unchanged path skips is also the retirement check.
     // A container that answers with nothing at all never takes the changed
@@ -2155,6 +2195,11 @@ describe("ClaudeStatePollManager", () => {
     await delay(CLAUDE_STATE_POLL_INTERVAL_MS * 1.5);
     expect(readCount).toBe(readsAtShutdown);
   }, 10_000);
+
+  test("the exported lifecycle shutdown is idempotent for an unknown container", () => {
+    expect(() => shutdownClaudeStatePolling("container-never-started")).not.toThrow();
+    expect(() => shutdownClaudeStatePolling("container-never-started")).not.toThrow();
+  });
 });
 
 describe("container transcript discovery helpers", () => {
@@ -2163,27 +2208,30 @@ describe("container transcript discovery helpers", () => {
     expect(command).toContain("'/home/node/.claude/projects/-workspace'/");
     expect(command).toContain("-name '*.jsonl'");
     expect(command).toContain("-newermt @1700000000");
-    expect(command).toContain("-printf '%T@ %p\\n'");
-    expect(command).toContain("sort -rn");
+    expect(command).toContain("-printf '%T@ %p\\0'");
+    expect(command).toContain("sort -z -rn");
   });
 
-  test("parses a single find line into a path/mtime record", () => {
-    const output = "1700000002.5 /home/node/.claude/projects/p/new.jsonl\n";
+  test("parses a single NUL-framed find record into a path/mtime record", () => {
+    const output = "1700000002.5 /home/node/.claude/projects/p/new.jsonl\0";
     expect(parseFreshJsonlFindOutput(output)).toEqual([
       { path: "/home/node/.claude/projects/p/new.jsonl", mtime: 1700000002.5 },
     ]);
   });
 
-  test("returns no records for empty or whitespace-only output", () => {
+  test("returns no records for empty, legacy newline, or unterminated output", () => {
     expect(parseFreshJsonlFindOutput("")).toEqual([]);
     expect(parseFreshJsonlFindOutput("\n  \n")).toEqual([]);
+    expect(parseFreshJsonlFindOutput(
+      "1700000002 /home/node/.claude/projects/p/new.jsonl",
+    )).toEqual([]);
   });
 
-  test("parses every candidate when output is ambiguous (more than one line)", () => {
-    const output = [
+  test("parses every candidate when output contains multiple NUL records", () => {
+    const output = `${[
       "1700000003 /home/node/.claude/projects/p/b.jsonl",
       "1700000002 /home/node/.claude/projects/p/a.jsonl",
-    ].join("\n");
+    ].join("\0")}\0`;
     expect(parseFreshJsonlFindOutput(output)).toEqual([
       { path: "/home/node/.claude/projects/p/b.jsonl", mtime: 1700000003 },
       { path: "/home/node/.claude/projects/p/a.jsonl", mtime: 1700000002 },
@@ -2191,23 +2239,64 @@ describe("container transcript discovery helpers", () => {
   });
 
   test("preserves spaces in the parsed path", () => {
-    const output = "1700000002 /home/node/.claude/projects/p/with space.jsonl\n";
+    const output = "1700000002 /home/node/.claude/projects/p/with space.jsonl\0";
     expect(parseFreshJsonlFindOutput(output)).toEqual([
       { path: "/home/node/.claude/projects/p/with space.jsonl", mtime: 1700000002 },
     ]);
   });
 
-  test("skips lines lacking a path field or with a non-finite mtime", () => {
-    expect(parseFreshJsonlFindOutput("1700000002")).toEqual([]);
-    expect(parseFreshJsonlFindOutput("notanumber /home/node/.claude/projects/p/x.jsonl")).toEqual([]);
-    const mixed = [
+  test("preserves newlines inside a filename rather than forging another record", () => {
+    const pathWithNewline =
+      "/home/node/.claude/projects/p/real.jsonl\n1700000999 outside.jsonl";
+    expect(parseFreshJsonlFindOutput(`1700000002 ${pathWithNewline}\0`)).toEqual([
+      { path: pathWithNewline, mtime: 1700000002 },
+    ]);
+  });
+
+  test("skips records lacking a path field or with a non-finite mtime", () => {
+    expect(parseFreshJsonlFindOutput("1700000002\0")).toEqual([]);
+    expect(parseFreshJsonlFindOutput("notanumber /home/node/.claude/projects/p/x.jsonl\0")).toEqual([]);
+    const mixed = `${[
       "1700000003 /home/node/.claude/projects/p/good.jsonl",
       "1700000002", // no path
       "bad /home/node/.claude/projects/p/skip.jsonl", // non-finite mtime
-    ].join("\n");
+    ].join("\0")}\0`;
     expect(parseFreshJsonlFindOutput(mixed)).toEqual([
       { path: "/home/node/.claude/projects/p/good.jsonl", mtime: 1700000003 },
     ]);
+  });
+
+  test("accepts only normalized direct jsonl children", () => {
+    const dir = "/home/node/.claude/projects/p";
+    expect(isDirectJsonlChild(dir, `${dir}/session.jsonl`)).toBe(true);
+    expect(isDirectJsonlChild(dir, `${dir}/with\nnewline.jsonl`)).toBe(true);
+    expect(isDirectJsonlChild(dir, `${dir}/nested/session.jsonl`)).toBe(false);
+    expect(isDirectJsonlChild(dir, `${dir}/../outside.jsonl`)).toBe(false);
+    expect(isDirectJsonlChild(dir, "outside.jsonl")).toBe(false);
+    expect(isDirectJsonlChild(dir, `${dir}/session.txt`)).toBe(false);
+  });
+
+  test("bounds local stat concurrency and returns only the newest fifty jsonl files", async () => {
+    const names = Array.from({ length: 100 }, (_, index) => `session-${index}.jsonl`);
+    names.push("ignore.txt");
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const entries = await listLocalJsonlByMtime(
+      "/tmp/transcripts",
+      names,
+      async (filePath) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await delay(1);
+        inFlight -= 1;
+        return Number(filePath.match(/(\d+)\.jsonl$/)?.[1] ?? 0);
+      },
+    );
+
+    expect(maxInFlight).toBeLessThanOrEqual(PREVIOUS_SESSION_STAT_CONCURRENCY);
+    expect(entries).toHaveLength(50);
+    expect(entries[0]?.path).toEndWith("session-99.jsonl");
+    expect(entries.at(-1)?.path).toEndWith("session-50.jsonl");
   });
 });
 
@@ -2272,10 +2361,10 @@ describe("newestJsonlInDir container backend", () => {
   }
 
   test("resolves the single container jsonl owned by the session", async () => {
-    const findStdout = [
+    const findStdout = `${[
       "1700000003 /home/node/.claude/projects/p/other.jsonl",
       "1700000002 /home/node/.claude/projects/p/owned.jsonl",
-    ].join("\n");
+    ].join("\0")}\0`;
     const { backend } = makeContainerBackend(findStdout, {
       "/home/node/.claude/projects/p/other.jsonl": `${JSON.stringify({ sessionId: "other" })}\n`,
       "/home/node/.claude/projects/p/owned.jsonl": `${JSON.stringify({ sessionId: "mine" })}\n`,
@@ -2286,7 +2375,7 @@ describe("newestJsonlInDir container backend", () => {
   });
 
   test("returns undefined when no container jsonl claims the session", async () => {
-    const findStdout = "1700000003 /home/node/.claude/projects/p/other.jsonl\n";
+    const findStdout = "1700000003 /home/node/.claude/projects/p/other.jsonl\0";
     const { backend } = makeContainerBackend(findStdout, {
       "/home/node/.claude/projects/p/other.jsonl": `${JSON.stringify({ sessionId: "other" })}\n`,
     });
@@ -2296,10 +2385,10 @@ describe("newestJsonlInDir container backend", () => {
   });
 
   test("returns undefined when multiple container jsonls claim the same session", async () => {
-    const findStdout = [
+    const findStdout = `${[
       "1700000003 /home/node/.claude/projects/p/a.jsonl",
       "1700000002 /home/node/.claude/projects/p/b.jsonl",
-    ].join("\n");
+    ].join("\0")}\0`;
     const { backend } = makeContainerBackend(findStdout, {
       "/home/node/.claude/projects/p/a.jsonl": `${JSON.stringify({ sessionId: "mine" })}\n`,
       "/home/node/.claude/projects/p/b.jsonl": `${JSON.stringify({ sessionId: "mine" })}\n`,
@@ -2307,6 +2396,31 @@ describe("newestJsonlInDir container backend", () => {
     await expect(
       newestJsonlInDir(backend, "/home/node/.claude/projects/p", 1700000000, "mine"),
     ).resolves.toBeUndefined();
+  });
+
+  test("never turns a newline filename into an out-of-directory read", async () => {
+    const dir = "/home/node/.claude/projects/p";
+    const findStdout = `${[
+      `1700000005 ${dir}/safe.jsonl\n1700000999 outside.jsonl`,
+      `1700000004 ${dir}/nested/owned.jsonl`,
+      `1700000003 ${dir}/../outside.jsonl`,
+      "1700000002 relative.jsonl",
+      `1700000001 ${dir}/owned.txt`,
+      `1700000000 ${dir}/owned.jsonl`,
+    ].join("\0")}\0`;
+    const { backend, readPaths } = makeContainerBackend(findStdout, {
+      [`${dir}/owned.jsonl`]: `${JSON.stringify({ sessionId: "mine" })}\n`,
+    });
+
+    await expect(
+      newestJsonlInDir(backend, dir, 1700000000, "mine"),
+    ).resolves.toBe(`${dir}/owned.jsonl`);
+    expect(readPaths).toEqual([
+      `${dir}/safe.jsonl\n1700000999 outside.jsonl`,
+      `${dir}/owned.jsonl`,
+    ]);
+    expect(readPaths).not.toContain("outside.jsonl");
+    expect(readPaths.every((readPath) => path.posix.dirname(readPath) === dir)).toBe(true);
   });
 });
 
@@ -2513,6 +2627,21 @@ describe("TranscriptTail incremental reads", () => {
     await expect(tail.readNew(backend)).resolves.toEqual([{ n: 7 }]);
   });
 
+  test("restarts from byte zero and discards stale partial data after truncation or rotation", async () => {
+    const original = `${jsonl({ old: 1 })}${JSON.stringify({ stale: true }).slice(0, 8)}`;
+    const file = { bytes: Buffer.from(original, "utf8") };
+    const { backend, reads } = fakeBackend(file);
+    const tail = new TranscriptTail("/transcript.jsonl");
+
+    await expect(tail.readNew(backend)).resolves.toEqual([{ old: 1 }]);
+
+    const replacement = jsonl({ fresh: 2 });
+    expect(Buffer.byteLength(replacement)).toBeLessThan(Buffer.byteLength(original));
+    file.bytes = Buffer.from(replacement, "utf8");
+    await expect(tail.readNew(backend)).resolves.toEqual([{ fresh: 2 }]);
+    expect(reads.at(-1)).toEqual({ offset: 0, length: Buffer.byteLength(replacement) });
+  });
+
   test("skips malformed lines without losing the ones around them", async () => {
     const content = `${JSON.stringify({ n: 1 })}\nnot json\n${JSON.stringify({ n: 2 })}\n`;
     const file = { bytes: Buffer.from(content, "utf8") };
@@ -2530,6 +2659,93 @@ describe("TranscriptTail incremental reads", () => {
       .toContain("tail -c +1 '/home/node/.claude/t.jsonl'");
     expect(tailFromOffsetCommand("/home/node/.claude/t.jsonl", 40))
       .toContain("tail -c +41 '/home/node/.claude/t.jsonl'");
+  });
+});
+
+describe("interactive tmux terminal snapshots", () => {
+  function createInteractiveHarness(captures: Array<string | Promise<string>>) {
+    const scheduled: Array<{ callback: () => void; delayMs: number; timer: object }> = [];
+    const cancelled = new Set<unknown>();
+    const emitted: Array<{ event: string; payload: unknown }> = [];
+    let captureIndex = 0;
+    let writes = 0;
+    const tmux = {
+      environmentId: "env-interactive",
+      tabId: "tab-interactive",
+      resize: async () => undefined,
+      writeInteractive: async () => {
+        writes += 1;
+      },
+      capturePane: async () => {
+        const capture = captures[captureIndex++];
+        if (capture === undefined) throw new Error("unexpected capture");
+        return await capture;
+      },
+    };
+    const manager = new InteractiveTmuxTerminalManager({
+      schedule: (callback, delayMs) => {
+        const timer = {};
+        scheduled.push({ callback, delayMs, timer });
+        return timer;
+      },
+      cancel: (timer) => {
+        cancelled.add(timer);
+      },
+    });
+    const id = manager.create(tmux as never, 120, 40);
+    const context = {
+      emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+    } as unknown as CommandContext;
+    return {
+      manager,
+      id,
+      context,
+      scheduled,
+      cancelled,
+      emitted,
+      captureCount: () => captureIndex,
+      writeCount: () => writes,
+    };
+  }
+
+  test("backs off on unchanged panes and resets on output or input", async () => {
+    const harness = createInteractiveHarness(["same", "same", "changed"]);
+    await harness.manager.start(harness.id, harness.context);
+
+    expect(harness.emitted).toHaveLength(1);
+    expect(harness.scheduled[0]?.delayMs).toBe(INTERACTIVE_SNAPSHOT_MIN_MS);
+
+    harness.scheduled[0]!.callback();
+    await waitFor(() => harness.scheduled.length === 2);
+    expect(harness.emitted).toHaveLength(1);
+    expect(harness.scheduled[1]?.delayMs).toBe(
+      Math.min(INTERACTIVE_SNAPSHOT_MAX_MS, INTERACTIVE_SNAPSHOT_MIN_MS * 2),
+    );
+
+    harness.scheduled[1]!.callback();
+    await waitFor(() => harness.scheduled.length === 3);
+    expect(harness.emitted).toHaveLength(2);
+    expect(harness.scheduled[2]?.delayMs).toBe(INTERACTIVE_SNAPSHOT_MIN_MS);
+
+    await harness.manager.write(harness.id, "x");
+    expect(harness.writeCount()).toBe(1);
+    expect(harness.scheduled.at(-1)?.delayMs).toBe(INTERACTIVE_SNAPSHOT_MIN_MS);
+  });
+
+  test("detach suppresses an in-flight capture and prevents rescheduling", async () => {
+    const pending = deferred<string>();
+    const harness = createInteractiveHarness(["initial", pending.promise]);
+    await harness.manager.start(harness.id, harness.context);
+
+    harness.scheduled[0]!.callback();
+    await waitFor(() => harness.captureCount() === 2);
+    harness.manager.detach(harness.id);
+    expect(harness.cancelled).toContain(harness.scheduled[0]!.timer);
+
+    pending.resolve("too late");
+    await delay(0);
+    expect(harness.emitted).toHaveLength(1);
+    expect(harness.scheduled).toHaveLength(1);
   });
 });
 
@@ -2602,8 +2818,8 @@ describe("previous-session metadata reads", () => {
   test("lists jsonl files newest-first without reading any of them", () => {
     const command = jsonlByMtimeFindCommand("/home/node/.claude/projects/p");
     expect(command).toContain("-name '*.jsonl'");
-    expect(command).toContain("-printf '%T@ %p\\n'");
-    expect(command).toContain("sort -rn");
+    expect(command).toContain("-printf '%T@ %p\\0'");
+    expect(command).toContain("sort -z -rn");
   });
 });
 

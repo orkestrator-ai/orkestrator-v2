@@ -15,7 +15,12 @@ import * as backend from "@/lib/backend";
 export type TerminalOutputPayload =
   | number[]
   | string
-  | { bytesBase64?: string; bytes?: number[]; desynced?: boolean };
+  | {
+      bytesBase64?: string;
+      bytes?: number[];
+      desynced?: boolean;
+      sequence?: number;
+    };
 
 /** Clears the screen and the scrollback before an authoritative replay. */
 const TERMINAL_RESET_SEQUENCE = "\u001b[H\u001b[2J\u001b[3J";
@@ -42,6 +47,19 @@ export function decodeTerminalOutputPayload(payload: TerminalOutputPayload): Uin
   if (Array.isArray(payload.bytes)) return new Uint8Array(payload.bytes);
   if (payload.desynced) return null;
   return new Uint8Array(0);
+}
+
+function terminalOutputSequence(payload: TerminalOutputPayload): number | null {
+  if (
+    !payload
+    || typeof payload !== "object"
+    || Array.isArray(payload)
+    || !Number.isSafeInteger(payload.sequence)
+    || (payload.sequence ?? 0) < 0
+  ) {
+    return null;
+  }
+  return payload.sequence ?? null;
 }
 
 interface UseTerminalOptions {
@@ -103,6 +121,16 @@ export function useTerminal({
   const isConnectingRef = useRef(false);
   const connectGenerationRef = useRef(0);
   const isMountedRef = useRef(false);
+  const lastOutputSequenceRef = useRef(0);
+  const outputRecoveryRef = useRef<{
+    sessionId: string;
+    queued: Map<number, Uint8Array>;
+    promise: Promise<void>;
+  } | null>(null);
+  const resetOutputTracking = useCallback(() => {
+    lastOutputSequenceRef.current = 0;
+    outputRecoveryRef.current = null;
+  }, []);
 
   // Keep onData ref up to date
   useEffect(() => {
@@ -132,13 +160,50 @@ export function useTerminal({
    * the buffer alone would duplicate scrollback, so the screen is reset first
    * and the buffer becomes the whole visible history again.
    */
-  const resyncFromOutputBuffer = useCallback(async (targetSessionId: string) => {
-    const bufferedOutput = await backend.getTerminalOutputBuffer(targetSessionId).catch((err) => {
-      console.warn("[useTerminal] Failed to resynchronize terminal output buffer:", err);
-      return "";
-    });
-    if (sessionIdRef.current !== targetSessionId || !onDataRef.current) return;
-    onDataRef.current(textEncoder.encode(`${TERMINAL_RESET_SEQUENCE}${bufferedOutput}`));
+  const resyncFromOutputBuffer = useCallback((targetSessionId: string): Promise<void> => {
+    const existing = outputRecoveryRef.current;
+    if (existing?.sessionId === targetSessionId) return existing.promise;
+
+    const queued = new Map<number, Uint8Array>();
+    const recovery = {
+      sessionId: targetSessionId,
+      queued,
+      promise: Promise.resolve(),
+    };
+    recovery.promise = (async () => {
+      try {
+        const snapshot = await backend.getTerminalOutputSnapshot(targetSessionId);
+        if (sessionIdRef.current !== targetSessionId || !onDataRef.current) return;
+
+        onDataRef.current(
+          textEncoder.encode(`${TERMINAL_RESET_SEQUENCE}${snapshot.text}`),
+        );
+        lastOutputSequenceRef.current = snapshot.sequence;
+
+        for (const [sequence, bytes] of [...queued].sort(([a], [b]) => a - b)) {
+          if (sequence <= lastOutputSequenceRef.current) continue;
+          onDataRef.current(bytes);
+          lastOutputSequenceRef.current = sequence;
+        }
+      } catch (err) {
+        // A failed recovery must not erase output the user can still see. Live
+        // frames received while the snapshot was pending remain usable and are
+        // flushed in sequence; the next desync notice can retry the snapshot.
+        console.warn("[useTerminal] Failed to resynchronize terminal output buffer:", err);
+        if (sessionIdRef.current !== targetSessionId || !onDataRef.current) return;
+        for (const [sequence, bytes] of [...queued].sort(([a], [b]) => a - b)) {
+          if (sequence <= lastOutputSequenceRef.current) continue;
+          onDataRef.current(bytes);
+          lastOutputSequenceRef.current = sequence;
+        }
+      } finally {
+        if (outputRecoveryRef.current === recovery) {
+          outputRecoveryRef.current = null;
+        }
+      }
+    })();
+    outputRecoveryRef.current = recovery;
+    return recovery.promise;
   }, []);
 
   const listenForTerminalOutput = useCallback(
@@ -148,6 +213,16 @@ export function useTerminal({
         if (data === null) {
           void resyncFromOutputBuffer(targetSessionId);
           return;
+        }
+        const sequence = terminalOutputSequence(event.payload);
+        if (sequence !== null) {
+          if (sequence <= lastOutputSequenceRef.current) return;
+          const recovery = outputRecoveryRef.current;
+          if (recovery?.sessionId === targetSessionId) {
+            recovery.queued.set(sequence, data);
+            return;
+          }
+          lastOutputSequenceRef.current = sequence;
         }
         if (data.length > 0) onDataRef.current?.(data);
       }),
@@ -173,6 +248,7 @@ export function useTerminal({
       }
       // Clear ref immediately to prevent stale writes
       sessionIdRef.current = null;
+      resetOutputTracking();
       isConnectedRef.current = false;
       isConnectingRef.current = false;
       setSessionId(null);
@@ -181,7 +257,7 @@ export function useTerminal({
       setError(null);
     }
     previousContainerIdRef.current = containerId;
-  }, [containerId, sessionId, cleanupEventListener]);
+  }, [containerId, sessionId, cleanupEventListener, resetOutputTracking]);
 
   // Track sessionId in a ref for cleanup on unmount
   const sessionIdRef = useRef<string | null>(null);
@@ -341,6 +417,7 @@ export function useTerminal({
       }
 
       // Update ref immediately so write() can use it right away
+      if (sessionIdRef.current !== targetSessionId) resetOutputTracking();
       sessionIdRef.current = targetSessionId;
       setSessionId(targetSessionId);
 
@@ -359,40 +436,6 @@ export function useTerminal({
           attachExistingOnly,
         });
       }
-      // Replay the backend's bounded output buffer BEFORE attaching the live
-      // listener. The backend appends to its buffer before emitting live, so
-      // attaching first would deliver already-buffered bytes twice (once live,
-      // once via replay) and out of order. Output produced in the small window
-      // between the snapshot and listener registration is rare for setup
-      // sessions and self-corrects as the stream continues.
-      if (replayOutputBuffer) {
-        const bufferedOutput = await backend.getTerminalOutputBuffer(targetSessionId).catch((err) => {
-          console.warn("[useTerminal] Failed to replay terminal output buffer:", err);
-          return "";
-        });
-        if (attachExistingOnly || targetSessionId.endsWith(":setup")) {
-          console.info("[setup-terminal] replay buffer fetched", {
-            environmentId: environmentId ?? null,
-            sessionId: targetSessionId,
-            bufferChars: bufferedOutput.length,
-          });
-        }
-        if (!isCurrentConnect()) {
-          // No live listener registered yet; only tear down a session we created.
-          if (shouldStartSession) {
-            if (isLocal) {
-              await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
-            } else {
-              await backend.detachTerminal(targetSessionId).catch(() => {});
-            }
-          }
-          return;
-        }
-        if (bufferedOutput && onDataRef.current) {
-          onDataRef.current(textEncoder.encode(bufferedOutput));
-        }
-      }
-
       const unlisten = await listenForTerminalOutput(targetSessionId);
       if (!isCurrentConnect()) {
         unlisten();
@@ -407,6 +450,25 @@ export function useTerminal({
       }
 
       unlistenRef.current = unlisten;
+
+      // Subscribe before taking the authoritative snapshot. Sequenced live
+      // frames that race the read are queued by resyncFromOutputBuffer and
+      // replayed only when newer than the snapshot, eliminating both gaps and
+      // duplicates during background reattachment.
+      if (replayOutputBuffer) {
+        await resyncFromOutputBuffer(targetSessionId);
+        if (!isCurrentConnect()) {
+          cleanupEventListener();
+          if (shouldStartSession) {
+            if (isLocal) {
+              await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
+            } else {
+              await backend.detachTerminal(targetSessionId).catch(() => {});
+            }
+          }
+          return;
+        }
+      }
 
       if (attachExistingOnly && targetSessionId && existingSessionRunning === false) {
         console.info("[setup-terminal] backend-owned session is not running after attach", {
@@ -500,31 +562,11 @@ export function useTerminal({
           }
           console.log("[useTerminal] Created fallback session:", newSessionId);
 
+          if (sessionIdRef.current !== newSessionId) resetOutputTracking();
           sessionIdRef.current = newSessionId;
           setSessionId(newSessionId);
 
           cleanupEventListener();
-
-          // Replay any buffered output before attaching the live listener so
-          // already-buffered bytes are not delivered twice (see the primary
-          // attach path above for the rationale).
-          if (replayOutputBuffer) {
-            const bufferedOutput = await backend.getTerminalOutputBuffer(newSessionId).catch((err) => {
-              console.warn("[useTerminal] Failed to replay fallback terminal output buffer:", err);
-              return "";
-            });
-            if (!isCurrentConnect()) {
-              if (isLocal) {
-                await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
-              } else {
-                await backend.detachTerminal(newSessionId).catch(() => {});
-              }
-              return;
-            }
-            if (bufferedOutput && onDataRef.current) {
-              onDataRef.current(textEncoder.encode(bufferedOutput));
-            }
-          }
 
           const unlisten = await listenForTerminalOutput(newSessionId);
           if (!isCurrentConnect()) {
@@ -537,6 +579,19 @@ export function useTerminal({
             return;
           }
           unlistenRef.current = unlisten;
+
+          if (replayOutputBuffer) {
+            await resyncFromOutputBuffer(newSessionId);
+            if (!isCurrentConnect()) {
+              cleanupEventListener();
+              if (isLocal) {
+                await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
+              } else {
+                await backend.detachTerminal(newSessionId).catch(() => {});
+              }
+              return;
+            }
+          }
 
           if (isLocal) {
             await backend.startLocalTerminalSession(newSessionId);
@@ -611,7 +666,7 @@ export function useTerminal({
         setIsConnecting(false);
       }
     }
-  }, [containerId, environmentId, isLocal, cols, rows, existingSessionId, user, replayOutputBuffer, attachExistingOnly, trackEnvironmentActivity, cleanupEventListener, listenForTerminalOutput]);
+  }, [containerId, environmentId, isLocal, cols, rows, existingSessionId, user, replayOutputBuffer, attachExistingOnly, trackEnvironmentActivity, cleanupEventListener, listenForTerminalOutput, resetOutputTracking, resyncFromOutputBuffer]);
 
   const disconnect = useCallback(async () => {
     if (!sessionId) return;
@@ -632,12 +687,13 @@ export function useTerminal({
     } finally {
       // Clear ref immediately to prevent stale writes
       sessionIdRef.current = null;
+      resetOutputTracking();
       isConnectedRef.current = false;
       isConnectingRef.current = false;
       setSessionId(null);
       setIsConnected(false);
     }
-  }, [sessionId, cleanupEventListener]);
+  }, [sessionId, cleanupEventListener, resetOutputTracking]);
 
   const resize = useCallback(
     async (newCols: number, newRows: number) => {

@@ -38,8 +38,10 @@ export function usePullRequest({
 }: UsePullRequestOptions): UsePullRequestReturn {
   const [error, setError] = useState<string | null>(null);
 
-  const { getEnvironmentById, setEnvironmentPR } = useEnvironmentStore();
-  const { setMonitoringMode, getMonitoringState } = usePrMonitorStore();
+  const getEnvironmentById = useEnvironmentStore((state) => state.getEnvironmentById);
+  const setEnvironmentPR = useEnvironmentStore((state) => state.setEnvironmentPR);
+  const setMonitoringMode = usePrMonitorStore((state) => state.setMonitoringMode);
+  const getMonitoringState = usePrMonitorStore((state) => state.getMonitoringState);
 
   // Get PR state from environment store
   const environment = environmentId ? getEnvironmentById(environmentId) : null;

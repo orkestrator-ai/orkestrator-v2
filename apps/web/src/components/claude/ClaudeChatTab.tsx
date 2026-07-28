@@ -170,46 +170,64 @@ export function ClaudeChatTab({
   const resumeSequenceRef = useRef(0);
   const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => Promise<void>) | null>(null);
 
-  const {
-    setClient,
-    models: fallbackModels,
-    modelCatalogs,
-    setModels,
-    setModelCatalog,
-    setSession,
-    addMessage,
-    removeMessage,
-    setMessages,
-    upsertMessage,
-    patchMessage,
-    setSessionLoading,
-    setSessionError,
-    setServerStatus,
-    getSelectedModel,
-    setSelectedModel,
-    addPendingQuestion,
-    removePendingQuestion,
-    setSessionTitle,
-    setContextUsage,
-    setPromptSuggestion,
-    setBackgroundTasks,
-    addPendingPlanApproval,
-    removePendingPlanApproval,
-    getOrCreateEventSubscription,
-    setEventStream,
-    hasActiveEventSubscription,
-    getEffort,
-    isPlanMode,
-    setPlanMode,
-    isFastMode,
-    getSessionKeyBySdkSessionId,
-    addToQueue,
-    clients: clientsMap,
-    sessions: sessionsMap,
-    pendingQuestions: pendingQuestionsMap,
-    pendingPlanApprovals: pendingPlanApprovalsMap,
-  } = useClaudeStore();
-  const models = modelCatalogs.get(environmentId)?.models ?? fallbackModels;
+  // Narrow, per-key subscriptions (mirrors CodexChatTab): store actions are
+  // referentially stable, and value reads are scoped so unrelated store writes
+  // (other environments, other sessions) no longer re-render this tab.
+  const setClient = useClaudeStore((state) => state.setClient);
+  const setModels = useClaudeStore((state) => state.setModels);
+  const setModelCatalog = useClaudeStore((state) => state.setModelCatalog);
+  const setSession = useClaudeStore((state) => state.setSession);
+  const addMessage = useClaudeStore((state) => state.addMessage);
+  const removeMessage = useClaudeStore((state) => state.removeMessage);
+  const setMessages = useClaudeStore((state) => state.setMessages);
+  const upsertMessage = useClaudeStore((state) => state.upsertMessage);
+  const patchMessage = useClaudeStore((state) => state.patchMessage);
+  const setSessionLoading = useClaudeStore((state) => state.setSessionLoading);
+  const setSessionError = useClaudeStore((state) => state.setSessionError);
+  const setServerStatus = useClaudeStore((state) => state.setServerStatus);
+  const getSelectedModel = useClaudeStore((state) => state.getSelectedModel);
+  const setSelectedModel = useClaudeStore((state) => state.setSelectedModel);
+  const addPendingQuestion = useClaudeStore((state) => state.addPendingQuestion);
+  const removePendingQuestion = useClaudeStore(
+    (state) => state.removePendingQuestion,
+  );
+  const setSessionTitle = useClaudeStore((state) => state.setSessionTitle);
+  const setContextUsage = useClaudeStore((state) => state.setContextUsage);
+  const setPromptSuggestion = useClaudeStore((state) => state.setPromptSuggestion);
+  const setBackgroundTasks = useClaudeStore((state) => state.setBackgroundTasks);
+  const addPendingPlanApproval = useClaudeStore(
+    (state) => state.addPendingPlanApproval,
+  );
+  const removePendingPlanApproval = useClaudeStore(
+    (state) => state.removePendingPlanApproval,
+  );
+  const getOrCreateEventSubscription = useClaudeStore(
+    (state) => state.getOrCreateEventSubscription,
+  );
+  const setEventStream = useClaudeStore((state) => state.setEventStream);
+  const hasActiveEventSubscription = useClaudeStore(
+    (state) => state.hasActiveEventSubscription,
+  );
+  const getEffort = useClaudeStore((state) => state.getEffort);
+  const isPlanMode = useClaudeStore((state) => state.isPlanMode);
+  const setPlanMode = useClaudeStore((state) => state.setPlanMode);
+  const isFastMode = useClaudeStore((state) => state.isFastMode);
+  const getSessionKeyBySdkSessionId = useClaudeStore(
+    (state) => state.getSessionKeyBySdkSessionId,
+  );
+  const addToQueue = useClaudeStore((state) => state.addToQueue);
+  // Pending-request maps stay map-level subscriptions: the filtered views below
+  // need to react to any entry for this session appearing or disappearing.
+  const pendingQuestionsMap = useClaudeStore((state) => state.pendingQuestions);
+  const pendingPlanApprovalsMap = useClaudeStore(
+    (state) => state.pendingPlanApprovals,
+  );
+  const models = useClaudeStore(
+    useCallback(
+      (state) => state.modelCatalogs.get(environmentId)?.models ?? state.models,
+      [environmentId],
+    ),
+  );
 
   const loadAuthoritativeModels = useCallback(
     async (
@@ -237,11 +255,15 @@ export function ClaudeChatTab({
   );
 
   // Pane layout store - for clearing initialPrompt after it's been sent
-  const {
-    clearTabInitialPrompt,
-    clearTabAgentHandoff,
-    updateTabNativeSessionId,
-  } = usePaneLayoutStore();
+  const clearTabInitialPrompt = usePaneLayoutStore(
+    (state) => state.clearTabInitialPrompt,
+  );
+  const clearTabAgentHandoff = usePaneLayoutStore(
+    (state) => state.clearTabAgentHandoff,
+  );
+  const updateTabNativeSessionId = usePaneLayoutStore(
+    (state) => state.updateTabNativeSessionId,
+  );
 
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
@@ -285,8 +307,12 @@ export function ClaudeChatTab({
     return enabled;
   }, [sessionKey]);
 
-  const client = useMemo(() => clientsMap.get(environmentId), [clientsMap, environmentId]);
-  const session = useMemo(() => sessionsMap.get(sessionKey), [sessionsMap, sessionKey]);
+  const client = useClaudeStore(
+    useCallback((state) => state.clients.get(environmentId), [environmentId]),
+  );
+  const session = useClaudeStore(
+    useCallback((state) => state.sessions.get(sessionKey), [sessionKey]),
+  );
   const promptSuggestion = useClaudeStore(
     useCallback(
       (state) => state.promptSuggestions.get(sessionKey),
@@ -792,7 +818,7 @@ export function ClaudeChatTab({
 
           // Reuse models from store if available, otherwise fetch
           let resolvedModels = models;
-          if (!modelCatalogs.has(environmentId)) {
+          if (!useClaudeStore.getState().modelCatalogs.has(environmentId)) {
             resolvedModels = await loadAuthoritativeModels(bridgeClient);
             if (!mounted) return;
           }
@@ -1277,6 +1303,24 @@ export function ClaudeChatTab({
             || hasExactSessionUsage
             ? null
             : extractContextUsage(event.data);
+
+          if (eventType === "replay.required") {
+            // The cursor fell behind the bridge's bounded replay window.
+            // Rehydrate every Claude session owned by this environment; live
+            // events then resume as incremental updates against that snapshot.
+            for (const [sessionTabId, sessionState] of useClaudeStore.getState().sessions) {
+              if (
+                !sessionTabId.startsWith(`env-${environmentId}:`)
+                || !sessionState.sessionId
+              ) continue;
+              fetchMessagesDebounced(
+                sessionState.sessionId,
+                sessionTabId,
+                true,
+              );
+            }
+            continue;
+          }
 
           if (!eventSessionId && !["question.asked", "question.answered", "plan.enter-requested", "plan.exit-requested", "plan.approval-requested", "plan.approval-responded"].includes(eventType || "")) {
             continue;

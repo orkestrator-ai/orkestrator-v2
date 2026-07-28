@@ -27,6 +27,7 @@ import {
   hashCwd,
 } from "./sessions/persistence.js";
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
+import { persistSessionTitle } from "./session-titles.js";
 import type { EngineEvent } from "./engine/types.js";
 
 /**
@@ -3803,6 +3804,24 @@ describe("history", () => {
     });
     // No rollouts exist in the temp home, but the call must not throw.
     await expect(h.runtime.listSessions()).resolves.toMatchObject({ sessions: [] });
+  });
+
+  test("a bridge-generated title overrides a native preview via the listing's title map", async () => {
+    // The listing already parsed the generated-title index; listSessions must
+    // apply it to native-only threads without re-reading the file.
+    await persistSessionTitle(codexHome, "native-titled", "Bridge title", {
+      source: "generated",
+    });
+    const h = await harness({
+      "thread/list": () => ({
+        data: [threadPayload("native-titled")],
+        nextCursor: null,
+      }),
+    });
+
+    const { sessions } = await h.runtime.listSessions();
+    expect(sessions.find((session) => session.id === "native-titled")!.title)
+      .toBe("Bridge title");
   });
 });
 

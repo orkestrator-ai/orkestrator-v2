@@ -128,6 +128,13 @@ export class JsonlRpcClient {
   private readonly now: () => number;
 
   private buffer = "";
+  /**
+   * Where the next newline scan starts. The buffered tail has already been
+   * scanned and contains no newline, so only bytes appended after this offset
+   * can complete a line. Without it, a multi-MB single line (a `thread/read`
+   * response) re-scans the whole accumulated buffer on every chunk — O(n²).
+   */
+  private bufferScannedTo = 0;
   private nextId = 0;
   private closed = false;
   private closeError: Error | null = null;
@@ -186,12 +193,29 @@ export class JsonlRpcClient {
     if (this.closed) return;
     this.buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
 
-    let newlineIndex: number;
-    while ((newlineIndex = this.buffer.indexOf("\n")) >= 0) {
-      // Slice off `\r` too so CRLF framing does not corrupt the JSON tail.
-      const raw = this.buffer.slice(0, newlineIndex).replace(/\r$/, "");
-      this.buffer = this.buffer.slice(newlineIndex + 1);
-      this.dispatchLine(raw);
+    // Consume every complete line before slicing the buffer once, rather than
+    // re-copying the remainder per line.
+    let lineStart = 0;
+    let scanExhausted = false;
+    try {
+      let newlineIndex: number;
+      while ((newlineIndex = this.buffer.indexOf("\n", this.bufferScannedTo)) >= 0) {
+        // Slice off `\r` too so CRLF framing does not corrupt the JSON tail.
+        const raw = this.buffer
+          .slice(lineStart, newlineIndex)
+          .replace(/\r$/, "");
+        lineStart = newlineIndex + 1;
+        this.bufferScannedTo = lineStart;
+        this.dispatchLine(raw);
+      }
+      scanExhausted = true;
+    } finally {
+      // Runs even if a dispatch handler throws, so consumed lines are never
+      // re-dispatched on the next chunk. Only a completed scan proved the
+      // remainder holds no newline; after a mid-loop throw the remainder must
+      // be rescanned from the start or a line boundary would be lost for good.
+      if (lineStart > 0) this.buffer = this.buffer.slice(lineStart);
+      this.bufferScannedTo = scanExhausted ? this.buffer.length : 0;
     }
 
     if (this.buffer.length > this.maxInboundLineBytes) {
@@ -203,6 +227,7 @@ export class JsonlRpcClient {
         "",
       );
       this.buffer = "";
+      this.bufferScannedTo = 0;
     }
   }
 

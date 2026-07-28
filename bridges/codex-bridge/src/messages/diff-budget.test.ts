@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import {
+  BaselineMap,
   MAX_BASELINE_ENTRIES,
   MAX_DIFF_CACHE_ENTRIES,
   MAX_INLINE_FILE_BYTES,
@@ -15,7 +16,7 @@ import {
 import type { FileChangeDiffContext, ToolDiffMetadata } from "./types.js";
 
 function context(): FileChangeDiffContext {
-  return { baselines: new Map(), cache: new Map() };
+  return { baselines: new BaselineMap(), cache: new Map() };
 }
 
 const big = "x".repeat(MAX_INLINE_FILE_BYTES + 1);
@@ -149,6 +150,87 @@ describe("per-turn cache", () => {
     }
     beginTurn(ctx);
     expect(ctx.baselines.size).toBe(MAX_BASELINE_ENTRIES);
+  });
+});
+
+describe("BaselineMap byte accounting", () => {
+  /**
+   * The running total is what makes every budget check O(1); it must stay equal
+   * to what a full recount would report through every kind of mutation.
+   */
+  const recount = (map: BaselineMap): number => {
+    let total = 0;
+    for (const value of map.values()) {
+      total += value === undefined ? 0 : Buffer.byteLength(value, "utf8");
+    }
+    return total;
+  };
+
+  test("tracks set, overwrite, delete, and clear", () => {
+    const map = new BaselineMap();
+    expect(map.totalBytes).toBe(0);
+
+    map.set("a.ts", "12345");
+    map.set("b.ts", "1234567890");
+    expect(map.totalBytes).toBe(15);
+
+    // Overwriting replaces the old value's bytes rather than adding to them.
+    map.set("a.ts", "1");
+    expect(map.totalBytes).toBe(11);
+
+    map.delete("b.ts");
+    expect(map.totalBytes).toBe(1);
+    // Deleting a missing key changes nothing.
+    map.delete("missing.ts");
+    expect(map.totalBytes).toBe(1);
+
+    map.clear();
+    expect(map.totalBytes).toBe(0);
+    expect(map.totalBytes).toBe(recount(map));
+  });
+
+  test("counts UTF-8 bytes, not string length", () => {
+    const map = new BaselineMap();
+    map.set("unicode.ts", "héllo");
+    expect(map.totalBytes).toBe(Buffer.byteLength("héllo", "utf8"));
+    expect(map.totalBytes).toBe(recount(map));
+  });
+
+  test("undefined values (deleted files) count as zero bytes", () => {
+    const map = new BaselineMap();
+    map.set("deleted.ts", undefined);
+    map.set("kept.ts", "abc");
+    map.set("kept.ts", undefined);
+    expect(map.totalBytes).toBe(0);
+    expect(map.totalBytes).toBe(recount(map));
+  });
+
+  test("constructor entries are counted", () => {
+    const map = new BaselineMap([
+      ["a.ts", "1234"],
+      ["b.ts", undefined],
+    ]);
+    expect(map.totalBytes).toBe(4);
+    expect(map.totalBytes).toBe(recount(map));
+  });
+
+  test("touchBaseline preserves the total while reordering", () => {
+    const map = new BaselineMap();
+    map.set("a.ts", "12345");
+    map.set("b.ts", "678");
+    touchBaseline(map, "a.ts");
+    expect(map.totalBytes).toBe(8);
+    expect([...map.keys()]).toEqual(["b.ts", "a.ts"]);
+  });
+
+  test("the total stays exact through pruning", () => {
+    const map = new BaselineMap();
+    for (let index = 0; index < 40; index += 1) {
+      map.set(`file-${index}.ts`, "z".repeat(1024 * 1024));
+    }
+    pruneBaselines(map);
+    expect(map.totalBytes).toBe(recount(map));
+    expect(map.totalBytes).toBeLessThanOrEqual(32 * 1024 * 1024);
   });
 });
 

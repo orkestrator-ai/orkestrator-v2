@@ -202,7 +202,7 @@ export function CreateEnvironmentDialog({
   projectName,
   defaultPortMappings = EMPTY_PORT_MAPPINGS,
 }: CreateEnvironmentDialogProps) {
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const repoConfig = projectId ? config.repositories[projectId] : undefined;
 
   // Resolve effective defaults: project-level overrides > app-level

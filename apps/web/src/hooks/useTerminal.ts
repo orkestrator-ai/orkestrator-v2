@@ -4,6 +4,46 @@ import { listen, UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
 import * as backend from "@/lib/backend";
 
+/**
+ * Wire shape of a `terminal-output-<sessionId>` event.
+ *
+ * `bytesBase64` is what the backend emits today. The legacy `number[]` forms
+ * remain accepted during rolling upgrades, and `desynced` is the gateway
+ * telling this client that frames were dropped for it under backpressure and
+ * the authoritative buffer must be replayed.
+ */
+export type TerminalOutputPayload =
+  | number[]
+  | string
+  | { bytesBase64?: string; bytes?: number[]; desynced?: boolean };
+
+/** Clears the screen and the scrollback before an authoritative replay. */
+const TERMINAL_RESET_SEQUENCE = "\u001b[H\u001b[2J\u001b[3J";
+
+// Hoisted: a terminal produces one of these per output frame, and constructing
+// a fresh encoder per chunk is pure allocation churn on the hottest UI path.
+const textEncoder = new TextEncoder();
+
+function decodeBase64Bytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+/** Returns the frame's bytes, or `null` when it is a desync notice. */
+export function decodeTerminalOutputPayload(payload: TerminalOutputPayload): Uint8Array | null {
+  if (typeof payload === "string") return decodeBase64Bytes(payload);
+  if (Array.isArray(payload)) return new Uint8Array(payload);
+  if (!payload || typeof payload !== "object") return new Uint8Array(0);
+  if (typeof payload.bytesBase64 === "string") return decodeBase64Bytes(payload.bytesBase64);
+  if (Array.isArray(payload.bytes)) return new Uint8Array(payload.bytes);
+  if (payload.desynced) return null;
+  return new Uint8Array(0);
+}
+
 interface UseTerminalOptions {
   containerId: string | null;
   /** Environment ID - required for local environments */
@@ -83,6 +123,36 @@ export function useTerminal({
       unlistenRef.current = null;
     }
   }, []);
+
+  /**
+   * Re-render from the backend's authoritative output buffer.
+   *
+   * The gateway drops terminal frames for a client that has fallen far enough
+   * behind to threaten backend memory, and says so on the same event. Appending
+   * the buffer alone would duplicate scrollback, so the screen is reset first
+   * and the buffer becomes the whole visible history again.
+   */
+  const resyncFromOutputBuffer = useCallback(async (targetSessionId: string) => {
+    const bufferedOutput = await backend.getTerminalOutputBuffer(targetSessionId).catch((err) => {
+      console.warn("[useTerminal] Failed to resynchronize terminal output buffer:", err);
+      return "";
+    });
+    if (sessionIdRef.current !== targetSessionId || !onDataRef.current) return;
+    onDataRef.current(textEncoder.encode(`${TERMINAL_RESET_SEQUENCE}${bufferedOutput}`));
+  }, []);
+
+  const listenForTerminalOutput = useCallback(
+    (targetSessionId: string): Promise<UnlistenFn> =>
+      listen<TerminalOutputPayload>(`terminal-output-${targetSessionId}`, (event) => {
+        const data = decodeTerminalOutputPayload(event.payload);
+        if (data === null) {
+          void resyncFromOutputBuffer(targetSessionId);
+          return;
+        }
+        if (data.length > 0) onDataRef.current?.(data);
+      }),
+    [resyncFromOutputBuffer],
+  );
 
   // Track previous containerId to detect changes
   const previousContainerIdRef = useRef<string | null>(null);
@@ -319,16 +389,11 @@ export function useTerminal({
           return;
         }
         if (bufferedOutput && onDataRef.current) {
-          onDataRef.current(new TextEncoder().encode(bufferedOutput));
+          onDataRef.current(textEncoder.encode(bufferedOutput));
         }
       }
 
-      const unlisten = await listen<number[]>(eventName, (event) => {
-        const data = new Uint8Array(event.payload);
-        if (onDataRef.current) {
-          onDataRef.current(data);
-        }
-      });
+      const unlisten = await listenForTerminalOutput(targetSessionId);
       if (!isCurrentConnect()) {
         unlisten();
         if (shouldStartSession) {
@@ -440,8 +505,6 @@ export function useTerminal({
 
           cleanupEventListener();
 
-          const eventName = `terminal-output-${newSessionId}`;
-
           // Replay any buffered output before attaching the live listener so
           // already-buffered bytes are not delivered twice (see the primary
           // attach path above for the rationale).
@@ -459,16 +522,11 @@ export function useTerminal({
               return;
             }
             if (bufferedOutput && onDataRef.current) {
-              onDataRef.current(new TextEncoder().encode(bufferedOutput));
+              onDataRef.current(textEncoder.encode(bufferedOutput));
             }
           }
 
-          const unlisten = await listen<number[]>(eventName, (event) => {
-            const data = new Uint8Array(event.payload);
-            if (onDataRef.current) {
-              onDataRef.current(data);
-            }
-          });
+          const unlisten = await listenForTerminalOutput(newSessionId);
           if (!isCurrentConnect()) {
             unlisten();
             if (isLocal) {
@@ -553,7 +611,7 @@ export function useTerminal({
         setIsConnecting(false);
       }
     }
-  }, [containerId, environmentId, isLocal, cols, rows, existingSessionId, user, replayOutputBuffer, attachExistingOnly, trackEnvironmentActivity, cleanupEventListener]);
+  }, [containerId, environmentId, isLocal, cols, rows, existingSessionId, user, replayOutputBuffer, attachExistingOnly, trackEnvironmentActivity, cleanupEventListener, listenForTerminalOutput]);
 
   const disconnect = useCallback(async () => {
     if (!sessionId) return;

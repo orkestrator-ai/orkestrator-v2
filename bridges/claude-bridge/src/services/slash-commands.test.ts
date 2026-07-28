@@ -236,4 +236,49 @@ description: Plugin help
     const commands = await discoverSlashCommands(cwd);
     expect(commands.some((c) => c.startsWith("/help"))).toBe(true);
   });
+
+  test("serves repeat discoveries from cache and picks up an edited description", async () => {
+    const cwd = await makeTempDir();
+    const commandsDir = join(cwd, ".claude", "commands");
+    await mkdir(commandsDir, { recursive: true });
+    const commandPath = join(commandsDir, "deploy.md");
+    await writeFile(
+      commandPath,
+      `---
+description: First description
+---`,
+    );
+
+    expect(await discoverSlashCommands(cwd)).toContain("/deploy - First description");
+    // Second discovery is served from the description cache; same answer.
+    expect(await discoverSlashCommands(cwd)).toContain("/deploy - First description");
+
+    // An on-disk edit changes the file's fingerprint (size differs even when
+    // the mtime granularity is coarse), so the cache must re-read it.
+    await writeFile(
+      commandPath,
+      `---
+description: Second, longer description
+---`,
+    );
+    expect(await discoverSlashCommands(cwd)).toContain(
+      "/deploy - Second, longer description",
+    );
+  });
+
+  test("parses the description of a command with a large body without choking", async () => {
+    const cwd = await makeTempDir();
+    const commandsDir = join(cwd, ".claude", "commands");
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(
+      commandsDir + "/big.md",
+      `---
+description: Big command
+---
+${"body ".repeat(10_000)}`,
+    );
+
+    // Only the head of the file is read; the frontmatter is complete there.
+    expect(await discoverSlashCommands(cwd)).toContain("/big - Big command");
+  });
 });

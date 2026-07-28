@@ -4,20 +4,30 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+  CAPTURE_PANE_CACHE_MS,
   CLAUDE_STATE_POLL_INTERVAL_MS,
   CLAUDE_STATE_READ_TIMEOUT_MS,
   ClaudeStatePollManager,
   claudeStateReadCommand,
   containerExecArgs,
+  jsonlByMtimeFindCommand,
+  LIVENESS_CHECK_EVERY_TICKS,
   newestJsonlFindCommand,
   newestJsonlInDir,
+  paneHash,
   parseFreshJsonlFindOutput,
+  parsePollSnapshotOutput,
+  parseTranscriptHeadOutput,
+  pollSnapshotScript,
   probeThinkingDisplaySupport,
   registerTmuxBackendCommands,
   RUNTIME_ROOT_PREFIX,
+  tailFromOffsetCommand,
   thinkingDisplayProbeArgs,
   thinkingDisplayProbeIndicatesSupport,
+  TranscriptTail,
   transcriptContainsSessionId,
+  transcriptHeadCommand,
   tmuxSessionName,
   type ExecOutput,
 } from "../../../apps/backend/src/core/tmux";
@@ -2032,6 +2042,63 @@ describe("ClaudeStatePollManager", () => {
     harness.manager.shutdown("container-poll");
   });
 
+  test("reads no storage at all on a tick that observed no change", async () => {
+    // The read is a full parse of the environments file, once per second per
+    // running container. A tick whose state matches the last one has nothing to
+    // persist and nothing to emit, so it must not pay for it.
+    let loadCount = 0;
+    let readCount = 0;
+    const environment = createEnvironment("/worktree", "env-poll");
+    environment.containerId = "container-poll";
+    const harness = createPollHarness({
+      readState: async () => {
+        readCount += 1;
+        return readCount >= 4 ? "idle" : "working";
+      },
+      loadEnvironments: async () => {
+        loadCount += 1;
+        return [environment];
+      },
+    });
+
+    harness.manager.start("container-poll", harness.context);
+    await waitFor(() => harness.emitted.length === 1);
+    // The first tick is a change, and it also establishes that the environment
+    // is running.
+    expect(loadCount).toBe(1);
+
+    for (const expectedReads of [2, 3]) {
+      harness.scheduled[0]!();
+      await waitFor(() => readCount === expectedReads);
+      await delay(5);
+      expect(loadCount).toBe(1);
+      expect(harness.emitted).toHaveLength(1);
+    }
+
+    // A real transition still consults storage immediately.
+    harness.scheduled[0]!();
+    await waitFor(() => harness.emitted.length === 2);
+    expect(loadCount).toBe(2);
+    expect(harness.persisted.map((entry) => entry.state)).toEqual(["working", "idle"]);
+    harness.manager.shutdown("container-poll");
+  });
+
+  test("still retires a poll whose container never reports a usable state", async () => {
+    // The storage read the unchanged path skips is also the retirement check.
+    // A container that answers with nothing at all never takes the changed
+    // branch, so the first tick has to check anyway — otherwise a container
+    // that is already gone would be polled forever with nothing to notice it.
+    const harness = createPollHarness({
+      readState: async () => "",
+      environments: [],
+    });
+
+    harness.manager.start("container-poll", harness.context);
+    await waitFor(() => harness.cancelled.size === 1);
+    expect(harness.persisted).toHaveLength(0);
+    expect(harness.emitted).toHaveLength(0);
+  });
+
   test("reads container state with a bounded docker exec", () => {
     // Every test above injects readState, so without this the real argv and
     // timeout are unverified — and a typo there degrades to "always idle".
@@ -2348,5 +2415,321 @@ describe("thinking display capability probe", () => {
     await expect(probeThinkingDisplaySupport(async () => {
       throw missingBinary;
     }, "claude")).resolves.toBe(false);
+  });
+});
+
+describe("TranscriptTail incremental reads", () => {
+  type Backend = Parameters<TranscriptTail["readNew"]>[0];
+
+  /**
+   * A backend whose file can be replaced between reads, recording the offset of
+   * every read so "only the appended bytes were fetched" is assertable.
+   */
+  function fakeBackend(file: { bytes: Buffer }): {
+    backend: Backend;
+    reads: Array<{ offset: number; length: number }>;
+  } {
+    const reads: Array<{ offset: number; length: number }> = [];
+    const backend = {
+      async fileSize() {
+        return file.bytes.length;
+      },
+      async readFileBytesFrom(_filePath: string, offset: number) {
+        const slice = Buffer.from(file.bytes.subarray(offset));
+        reads.push({ offset, length: slice.length });
+        return slice;
+      },
+      async readFile() {
+        throw new Error("the tail must never read the whole transcript");
+      },
+    } as unknown as Backend;
+    return { backend, reads };
+  }
+
+  const jsonl = (value: unknown) => `${JSON.stringify(value)}\n`;
+
+  test("fetches only what was appended since the previous read", async () => {
+    const first = jsonl({ n: 1 });
+    const second = jsonl({ n: 2 });
+    const file = { bytes: Buffer.from(first, "utf8") };
+    const { backend, reads } = fakeBackend(file);
+    const tail = new TranscriptTail("/transcript.jsonl");
+
+    await expect(tail.readNew(backend)).resolves.toEqual([{ n: 1 }]);
+    expect(reads).toEqual([{ offset: 0, length: Buffer.byteLength(first) }]);
+
+    file.bytes = Buffer.from(first + second, "utf8");
+    await expect(tail.readNew(backend)).resolves.toEqual([{ n: 2 }]);
+    expect(reads[1]).toEqual({
+      offset: Buffer.byteLength(first),
+      length: Buffer.byteLength(second),
+    });
+  });
+
+  test("does not read at all when the known size says nothing was appended", async () => {
+    const line = jsonl({ n: 1 });
+    const file = { bytes: Buffer.from(line, "utf8") };
+    const { backend, reads } = fakeBackend(file);
+    const tail = new TranscriptTail("/transcript.jsonl");
+
+    await tail.readNew(backend, Buffer.byteLength(line));
+    expect(reads).toHaveLength(1);
+    // The poll loop already stat'd the file in its snapshot; an unchanged size
+    // must cost neither a second stat nor a read.
+    await expect(tail.readNew(backend, Buffer.byteLength(line))).resolves.toEqual([]);
+    expect(reads).toHaveLength(1);
+  });
+
+  test("rejoins a multi-byte character split across two reads", async () => {
+    // Reading from an offset means a chunk can end in the middle of a UTF-8
+    // sequence. Decoding each chunk on its own would turn the split character
+    // into two U+FFFD replacements and the line would no longer parse.
+    const full = Buffer.from(jsonl({ text: "£100 — done" }), "utf8");
+    const poundStart = full.indexOf(0xc2);
+    expect(poundStart).toBeGreaterThan(0);
+    const splitAt = poundStart + 1;
+
+    const file = { bytes: Buffer.from(full.subarray(0, splitAt)) };
+    const { backend, reads } = fakeBackend(file);
+    const tail = new TranscriptTail("/transcript.jsonl");
+
+    // No newline yet, so nothing is emitted and the half character is carried.
+    await expect(tail.readNew(backend)).resolves.toEqual([]);
+
+    file.bytes = full;
+    await expect(tail.readNew(backend)).resolves.toEqual([{ text: "£100 — done" }]);
+    expect(reads[1]!.offset).toBe(splitAt);
+  });
+
+  test("carries an unterminated line until its newline arrives", async () => {
+    const line = jsonl({ n: 7 });
+    const partialAt = line.length - 3;
+    const file = { bytes: Buffer.from(line.slice(0, partialAt), "utf8") };
+    const { backend } = fakeBackend(file);
+    const tail = new TranscriptTail("/transcript.jsonl");
+
+    await expect(tail.readNew(backend)).resolves.toEqual([]);
+    file.bytes = Buffer.from(line, "utf8");
+    await expect(tail.readNew(backend)).resolves.toEqual([{ n: 7 }]);
+  });
+
+  test("skips malformed lines without losing the ones around them", async () => {
+    const content = `${JSON.stringify({ n: 1 })}\nnot json\n${JSON.stringify({ n: 2 })}\n`;
+    const file = { bytes: Buffer.from(content, "utf8") };
+    const { backend } = fakeBackend(file);
+
+    await expect(new TranscriptTail("/transcript.jsonl").readNew(backend))
+      .resolves.toEqual([{ n: 1 }, { n: 2 }]);
+  });
+
+  test("reads from the byte after the offset in container mode", () => {
+    // `tail -c +N` is 1-based: +1 is the whole file, so the first unread byte
+    // of a 40-byte prefix is +41. An off-by-one here duplicates or drops a byte
+    // of every append.
+    expect(tailFromOffsetCommand("/home/node/.claude/t.jsonl", 0))
+      .toContain("tail -c +1 '/home/node/.claude/t.jsonl'");
+    expect(tailFromOffsetCommand("/home/node/.claude/t.jsonl", 40))
+      .toContain("tail -c +41 '/home/node/.claude/t.jsonl'");
+  });
+});
+
+describe("poll snapshot", () => {
+  const paths = { pendingDir: "/tmp/run/pending", timeoutDir: "/tmp/run/timeout" };
+
+  test("asks for both hook listings and the transcript size in one script", () => {
+    const script = pollSnapshotScript(paths.pendingDir, paths.timeoutDir, "/home/node/t.jsonl");
+    expect(script).toContain(`ls -1 '${paths.pendingDir}'`);
+    expect(script).toContain(`ls -1 '${paths.timeoutDir}'`);
+    expect(script).toContain("stat -c %s '/home/node/t.jsonl'");
+  });
+
+  test("reports a zero size before the transcript has been discovered", () => {
+    const script = pollSnapshotScript(paths.pendingDir, paths.timeoutDir, undefined);
+    expect(script).not.toContain("stat -c %s");
+    expect(parsePollSnapshotOutput("__ork_pending__\n__ork_timeout__\n__ork_size__\n0\n"))
+      .toEqual({ pending: [], timeouts: [], transcriptSize: 0 });
+  });
+
+  test("partitions the combined output back into its three sections", () => {
+    expect(parsePollSnapshotOutput([
+      "__ork_pending__",
+      "PreToolUse-1.json",
+      "Stop-2.json",
+      "__ork_timeout__",
+      "PermissionRequest-3.json",
+      "__ork_size__",
+      "4096",
+      "",
+    ].join("\n"))).toEqual({
+      pending: ["PreToolUse-1.json", "Stop-2.json"],
+      timeouts: ["PermissionRequest-3.json"],
+      transcriptSize: 4096,
+    });
+  });
+
+  test("survives a listing that failed and produced nothing", () => {
+    expect(parsePollSnapshotOutput("__ork_pending__\n__ork_timeout__\n__ork_size__\nnot-a-number\n"))
+      .toEqual({ pending: [], timeouts: [], transcriptSize: 0 });
+    expect(parsePollSnapshotOutput("")).toEqual({ pending: [], timeouts: [], transcriptSize: 0 });
+  });
+
+  test("checks liveness on a slower cadence than the hook and transcript reads", () => {
+    // Every check is its own process spawn (a `docker exec` in container mode)
+    // and can only report a session that has already ended.
+    expect(LIVENESS_CHECK_EVERY_TICKS).toBe(8);
+  });
+});
+
+describe("previous-session metadata reads", () => {
+  test("asks for the line count and only the head of a transcript", () => {
+    const command = transcriptHeadCommand("/home/node/.claude/projects/p/a.jsonl", 65536);
+    expect(command).toContain("wc -l < '/home/node/.claude/projects/p/a.jsonl'");
+    expect(command).toContain("head -c 65536 '/home/node/.claude/projects/p/a.jsonl'");
+    expect(command).not.toContain("cat ");
+  });
+
+  test("parses the count and head back out of the combined output", () => {
+    expect(parseTranscriptHeadOutput("  12 \n__ork_head__\n{\"a\":1}\n{\"b\":2}\n")).toEqual({
+      lineCount: 12,
+      head: "{\"a\":1}\n{\"b\":2}\n",
+    });
+  });
+
+  test("degrades to empty rather than guessing when the marker is missing", () => {
+    expect(parseTranscriptHeadOutput("")).toEqual({ lineCount: 0, head: "" });
+  });
+
+  test("lists jsonl files newest-first without reading any of them", () => {
+    const command = jsonlByMtimeFindCommand("/home/node/.claude/projects/p");
+    expect(command).toContain("-name '*.jsonl'");
+    expect(command).toContain("-printf '%T@ %p\\n'");
+    expect(command).toContain("sort -rn");
+  });
+});
+
+describe("live session read paths", () => {
+  test("coalesces rapid pane captures and answers an unchanged pane with a marker", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const tabId = "tab-capture-cache";
+      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+
+      const captureCount = async () => (await fs.readFile(log, "utf8"))
+        .split("\n")
+        .filter((line) => line.startsWith("capture-pane"))
+        .length;
+      const before = await captureCount();
+
+      // Two renderers polling the same session inside one window share a spawn.
+      const [first, second] = await Promise.all([
+        invoke(handlers, "claude_tmux_capture_pane", { tabId, environmentId: environment.id }),
+        invoke(handlers, "claude_tmux_capture_pane", { tabId, environmentId: environment.id }),
+      ]) as [string, string];
+      expect(typeof first).toBe("string");
+      expect(second).toBe(first);
+      expect(await captureCount()).toBe(before + 1);
+
+      // A caller that supplies no hash keeps getting the plain pane text, which
+      // is what the renderer does today.
+      await delay(CAPTURE_PANE_CACHE_MS + 50);
+      await expect(invoke(
+        handlers,
+        "claude_tmux_capture_pane",
+        { tabId, environmentId: environment.id },
+      )).resolves.toBe(first);
+
+      await delay(CAPTURE_PANE_CACHE_MS + 50);
+      await expect(invoke(
+        handlers,
+        "claude_tmux_capture_pane",
+        { tabId, environmentId: environment.id, knownHash: paneHash(first) },
+      )).resolves.toEqual({ unchanged: true, hash: paneHash(first) });
+
+      await delay(CAPTURE_PANE_CACHE_MS + 50);
+      await expect(invoke(
+        handlers,
+        "claude_tmux_capture_pane",
+        { tabId, environmentId: environment.id, knownHash: "stale" },
+      )).resolves.toEqual({ unchanged: false, hash: paneHash(first), text: first });
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  }, 15_000);
+
+  test("still reports a tmux session that ended, on the slower liveness cadence", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, alive }) => {
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const tabId = "tab-liveness";
+      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+
+      // Claude exits and tmux tears the session down; nothing else tells the
+      // poll loop, so the periodic has-session check is the only signal.
+      await fs.rm(path.join(alive, tmuxSessionName(environment.id, tabId)), { force: true });
+
+      await waitFor(() => emitted.some((item) =>
+        item.event === "claude-tmux:event"
+        && (item.payload as { kind?: string }).kind === "stopped"
+      ), 8_000);
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  }, 15_000);
+
+  test("lists previous sessions without reading whole transcripts", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ worktree, home, environment }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
+      await fs.mkdir(transcriptDir, { recursive: true });
+      const jsonl = (value: unknown) => `${JSON.stringify(value)}\n`;
+
+      // The title lives in the first line; the bulk of the file is well past
+      // the head the listing is allowed to read.
+      await fs.writeFile(
+        path.join(transcriptDir, "session-a.jsonl"),
+        jsonl({ type: "user", message: { role: "user", content: "First prompt" } })
+          + jsonl({ type: "assistant", message: { role: "assistant", content: "x".repeat(200_000) } }),
+      );
+      await fs.writeFile(
+        path.join(transcriptDir, "session-b.jsonl"),
+        jsonl({ type: "summary", summary: "no user message" }),
+      );
+
+      const sessions = await invoke(
+        handlers,
+        "claude_tmux_list_previous_sessions",
+        { environmentId: environment.id },
+        context,
+      ) as Array<{ session_id: string; title: string | null; message_count: number; transcript_path: string }>;
+
+      const byId = new Map(sessions.map((session) => [session.session_id, session]));
+      expect(byId.get("session-a")).toMatchObject({
+        title: "First prompt",
+        message_count: 2,
+        transcript_path: path.join(transcriptDir, "session-a.jsonl"),
+      });
+      expect(byId.get("session-b")).toMatchObject({ title: null, message_count: 1 });
+    });
   });
 });

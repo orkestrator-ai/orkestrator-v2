@@ -273,6 +273,39 @@ describe("/event/subscribe", () => {
     ).toBe(false);
   });
 
+  test("an event's payload is serialized once and shared by subscribers and replays", async () => {
+    // The getter counts how many times the payload is walked. One live fan-out
+    // plus two replays must serialize exactly once — per-subscriber and
+    // per-replay stringification of megabyte message snapshots is what this
+    // memoization removes.
+    let reads = 0;
+    const event = {
+      type: "message.updated" as const,
+      sessionId: "memo-target",
+      data: {
+        get message() {
+          reads += 1;
+          return { content: "memoized" };
+        },
+      },
+    };
+
+    const cursor = __testing.eventRingForTesting().latestRevision;
+    __testing.emitForTesting(event);
+
+    expect(__testing.serializeSseEventDataForTesting(event))
+      .toBe(__testing.serializeSseEventDataForTesting(event));
+
+    for (let replay = 0; replay < 2; replay += 1) {
+      const frames = await collect(`?since=${cursor}`, () => undefined);
+      const frame = frames.find(
+        (f) => f.event === "message.updated" && f.data.sessionId === "memo-target",
+      );
+      expect(frame?.data.message).toEqual({ content: "memoized" });
+    }
+    expect(reads).toBe(1);
+  });
+
   test("a caught-up cursor replays nothing", async () => {
     const cursor = __testing.eventRingForTesting().latestRevision;
     const frames = await collect(`?since=${cursor}`, () => undefined);

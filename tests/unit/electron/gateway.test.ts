@@ -5,9 +5,11 @@ import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
+  eventMatchesSubscription,
   isTailscaleAddress,
   loadOrCreateGatewayToken,
   OrkestratorGateway,
+  parseEventSubscriptionFilter,
   rewriteBrowserPreviewBody,
   selectTailscaleBindAddress,
 } from "../../../apps/backend/src/gateway";
@@ -128,6 +130,31 @@ afterEach(async () => {
 });
 
 describe("remote gateway", () => {
+  test("filters terminal prefixes while restoring explicitly subscribed sessions", () => {
+    expect(parseEventSubscriptionFilter(" terminal-output-one, menu- ")).toEqual([
+      "terminal-output-one",
+      "menu-",
+    ]);
+    expect(eventMatchesSubscription(
+      "menu-zoom",
+      null,
+      ["terminal-output-one"],
+      ["terminal-output-"],
+    )).toBe(true);
+    expect(eventMatchesSubscription(
+      "terminal-output-one",
+      null,
+      ["terminal-output-one"],
+      ["terminal-output-"],
+    )).toBe(true);
+    expect(eventMatchesSubscription(
+      "terminal-output-two",
+      null,
+      ["terminal-output-one"],
+      ["terminal-output-"],
+    )).toBe(false);
+  });
+
   test("rewrites browser-preview asset paths into their isolated proxy namespace", () => {
     const prefix = "/__orkestrator/browser/loopback/3000";
     const target = new URL("http://127.0.0.1:3000/");

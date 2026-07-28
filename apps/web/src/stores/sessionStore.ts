@@ -101,6 +101,26 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     try {
       const sessions = await getSessionsByEnvironment(environmentId);
       set((state) => {
+        const existing = [...state.sessions.values()].filter(
+          (session) => session.environmentId === environmentId,
+        );
+        const existingById = new Map(existing.map((session) => [session.id, session]));
+        const unchanged =
+          existing.length === sessions.length
+          && sessions.every((session) => {
+            const current = existingById.get(session.id);
+            return current !== undefined
+              && JSON.stringify(current) === JSON.stringify(session);
+          });
+        const newLoading = new Set(state.loadingEnvironments);
+        newLoading.delete(environmentId);
+        if (unchanged) {
+          return {
+            loadingEnvironments: newLoading,
+            ...(state.error === null ? {} : { error: null }),
+          };
+        }
+
         const newSessions = new Map(state.sessions);
         // Clear existing sessions for this environment first
         for (const [id, session] of newSessions) {
@@ -110,11 +130,19 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
         }
         // Add loaded sessions
         for (const session of sessions) {
-          newSessions.set(session.id, session);
+          const current = existingById.get(session.id);
+          newSessions.set(
+            session.id,
+            current && JSON.stringify(current) === JSON.stringify(session)
+              ? current
+              : session,
+          );
         }
-        const newLoading = new Set(state.loadingEnvironments);
-        newLoading.delete(environmentId);
-        return { sessions: newSessions, loadingEnvironments: newLoading };
+        return {
+          sessions: newSessions,
+          loadingEnvironments: newLoading,
+          ...(state.error === null ? {} : { error: null }),
+        };
       });
     } catch (error) {
       set((state) => {

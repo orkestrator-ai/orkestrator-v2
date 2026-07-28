@@ -39,7 +39,7 @@ export function NetworkWhitelistDialog({
   environment,
   onUpdate,
 }: NetworkWhitelistDialogProps) {
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const globalDomains = config.global.allowedDomains || [];
 
   const [useGlobalDefaults, setUseGlobalDefaults] = useState(

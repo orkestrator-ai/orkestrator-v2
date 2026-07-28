@@ -4,6 +4,10 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
+import {
+  decodeTerminalOutputPayload,
+  type TerminalOutputPayload,
+} from "@/hooks/useTerminal";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import {
   createInteractiveTerminal,
@@ -237,10 +241,11 @@ export function ClaudeTmuxInteractiveTerminal({
         }
 
         sessionIdRef.current = sessionId;
-        activeUnlisten = await listen<number[]>(
+        activeUnlisten = await listen<TerminalOutputPayload>(
           `terminal-output-${sessionId}`,
           (event) => {
-            terminal.write(new Uint8Array(event.payload));
+            const bytes = decodeTerminalOutputPayload(event.payload);
+            if (bytes?.length) terminal.write(bytes);
           },
         );
         if (cancelled) {

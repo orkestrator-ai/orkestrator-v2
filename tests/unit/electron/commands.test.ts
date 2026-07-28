@@ -935,6 +935,7 @@ afterEach(async () => {
   } finally {
     shutdownDiffStatsTracking();
     commandTesting.resetLocalServerLifecycle();
+    commandTesting.resetDockerContainerStateCache();
     await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
     showOpenDialog.mockClear();
     ptySpawn.mockClear();
@@ -1843,7 +1844,7 @@ exit 0
       expect(ptySpawn.mock.calls[0]?.[1].at(-1)).toContain("flock");
       const setupOutput = emitted
         .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
-        .map((entry) => Buffer.from(entry.payload as number[]).toString("utf8"))
+        .map((entry) => Buffer.from((entry.payload as { bytesBase64: string }).bytesBase64, "base64").toString("utf8"))
         .join("");
       expect(setupOutput).toContain("[orkestrator] Starting environment setup");
       expect(setupOutput).toContain("/usr/local/bin/workspace-setup.sh");
@@ -5075,7 +5076,7 @@ exit 0
 
       const setupOutput = emitted
         .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
-        .map((entry) => Buffer.from(entry.payload as number[]).toString("utf8"))
+        .map((entry) => Buffer.from((entry.payload as { bytesBase64: string }).bytesBase64, "base64").toString("utf8"))
         .join("");
       // Preparation performs the clone, so its announcement and output have to
       // reach the terminal before the setup commands are even known.
@@ -8789,7 +8790,10 @@ exit 0
 
     ptyProcesses[0]?.emitData("ready\r\n");
     expect(emitted).toEqual([
-      { event: `terminal-output-${sessionId}`, payload: Array.from(Buffer.from("ready\r\n", "utf8")) },
+      {
+        event: `terminal-output-${sessionId}`,
+        payload: { bytesBase64: Buffer.from("ready\r\n", "utf8").toString("base64") },
+      },
     ]);
 
     await commands.get("local_terminal_write")?.({ sessionId, data: "pwd\r" }, context);
@@ -9875,6 +9879,119 @@ exit 1
       await expect(commands.get("sync_all_environments_with_docker")?.({}, context)).resolves.toEqual(["env-missing"]);
     });
     expect(updates).toContainEqual({ status: "stopped", containerId: null });
+  });
+
+  test("reconciles container statuses from one labelled docker ps snapshot", async () => {
+    const agreeing = createEnvironment({
+      id: "env-agree",
+      environmentType: "containerized",
+      containerId: "container-agree",
+      status: "running",
+    });
+    const transitioned = createEnvironment({
+      id: "env-transitioned",
+      environmentType: "containerized",
+      containerId: "container-transitioned",
+      status: "running",
+    });
+    const { context, updates } = createContext([agreeing, transitioned]);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf 'container-agree\\trunning\\n'
+  printf 'container-transitioned\\texited\\n'
+  exit 0
+fi
+if [ "$1" = "inspect" ]; then
+  printf 'exited\\n'
+  exit 0
+fi
+exit 0
+`, async ({ all }) => {
+      await commands.get("get_environments")?.({ projectId: agreeing.projectId }, context);
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      // The whole batch shares one labelled `docker ps` instead of one
+      // `docker inspect` per environment.
+      expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
+      // Only the container whose snapshot state disagrees with storage is
+      // confirmed with a fresh inspect before anything is rewritten.
+      expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
+        "inspect -f {{.State.Status}} container-transitioned",
+      ]);
+    });
+
+    expect(updates).toEqual([{ status: "stopped" }]);
+    expect(agreeing.status).toBe("running");
+    expect(transitioned.status).toBe("stopped");
+  });
+
+  test("reuses one docker ps snapshot across a burst of status refreshes", async () => {
+    const environment = createEnvironment({
+      id: "env-burst",
+      environmentType: "containerized",
+      containerId: "container-burst",
+      status: "running",
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf 'container-burst\\trunning\\n'
+  exit 0
+fi
+exit 1
+`, async ({ all }) => {
+      await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
+      await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
+      await expect(commands.get("get_environment_status")?.(
+        { environmentId: environment.id },
+        context,
+      )).resolves.toBe("running");
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
+      expect(log.some((line) => line.startsWith("inspect"))).toBe(false);
+    });
+    expect(updates).toHaveLength(0);
+  });
+
+  test("only probes containers missing from the labelled snapshot during full sync", async () => {
+    const listed = createEnvironment({
+      id: "env-listed",
+      environmentType: "containerized",
+      containerId: "container-listed",
+      status: "running",
+    });
+    const missing = createEnvironment({
+      id: "env-absent",
+      environmentType: "containerized",
+      containerId: "container-absent",
+      status: "running",
+    });
+    const { context, updates } = createContext([listed, missing]);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf 'container-listed\\trunning\\n'
+  exit 0
+fi
+printf 'Error: No such object: container-absent\\n' >&2
+exit 1
+`, async ({ all }) => {
+      await expect(commands.get("sync_all_environments_with_docker")?.({}, context))
+        .resolves.toEqual([missing.id]);
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
+      expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
+        "inspect -f {{.State.Status}} container-absent",
+      ]);
+    });
+    expect(updates).toEqual([{ status: "stopped", containerId: null }]);
   });
 
   test("stops local and container environments and treats recreation without a container as a no-op", async () => {

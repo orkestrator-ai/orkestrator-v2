@@ -213,6 +213,15 @@ export interface SessionState {
   taskRegistry?: TaskRegistry;
   /** True once the persisted SDK transcript has been normalized on demand. */
   persistedMessagesLoaded?: boolean;
+  /**
+   * Epoch millis of the last read or hydration of this session's state.
+   *
+   * Drives idle transcript eviction. Deliberately separate from
+   * `lastActivity`: that field is user-facing and rewritten from on-disk
+   * metadata by every reconcile, so it says when the *session* last changed,
+   * not when anyone in this process last looked at it.
+   */
+  lastAccessedAt?: number;
   /** Latest provider-reported context, token, cost, and rate-limit snapshot. */
   usage?: SessionUsageSnapshot;
   /** Predicted next prompt emitted by the SDK after a completed turn. */
@@ -354,6 +363,7 @@ export interface PlanApprovalRequest {
 
 /** SSE event types */
 export type SSEEventType =
+  | "replay.required"
   | "session.updated"
   | "session.idle"
   | "session.error"

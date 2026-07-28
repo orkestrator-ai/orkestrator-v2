@@ -589,6 +589,7 @@ export interface ClaudeEvent {
   type:
     | "connected"
     | "keepalive"
+    | "replay.required"
     | "session.updated"
     | "session.idle"
     | "session.error"
@@ -623,6 +624,7 @@ export const USAGE_SCAN_EXEMPT_EVENT_TYPES: ReadonlySet<string> = new Set([
   "message.patched",
   "keepalive",
   "connected",
+  "replay.required",
 ]);
 
 /** Attachment for prompts */
@@ -1344,6 +1346,8 @@ export async function getSlashCommands(
  * Subscribe to SSE events from the server
  * Returns an async iterator for events
  */
+const claudeEventCursorByBaseUrl = new Map<string, number>();
+
 export function subscribeToEvents(
   client: ClaudeClient,
   signal?: AbortSignal
@@ -1359,6 +1363,10 @@ export function subscribeToEvents(
       const handleEvent = (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data);
+          const revision = Number.parseInt(event.lastEventId, 10);
+          if (Number.isSafeInteger(revision) && revision >= 0) {
+            claudeEventCursorByBaseUrl.set(client.baseUrl, revision);
+          }
           // Guarded rather than passed through `rendererDebugLog`: this runs on
           // every frame of every running turn, so the object literal would be
           // allocated per frame only to be dropped.
@@ -1388,6 +1396,10 @@ export function subscribeToEvents(
 
       const cleanup = () => {
         done = true;
+        // Detach from the (often long-lived) AbortSignal so a closed
+        // subscription does not keep leaking listeners onto it. `once` below
+        // covers the abort-triggered path; this covers every other exit.
+        signal?.removeEventListener("abort", cleanup);
         if (eventSource) {
           eventSource.close();
           eventSource = null;
@@ -1397,11 +1409,32 @@ export function subscribeToEvents(
         }
       };
 
-      // Handle abort signal
-      signal?.addEventListener("abort", cleanup);
+      // Handle abort signal. An already-aborted signal never fires the
+      // listener, so short-circuit instead of opening a doomed EventSource.
+      if (signal?.aborted) {
+        done = true;
+        return {
+          next: () =>
+            Promise.resolve({
+              value: undefined as unknown as ClaudeEvent,
+              done: true,
+            }),
+          return: () =>
+            Promise.resolve({
+              value: undefined as unknown as ClaudeEvent,
+              done: true,
+            }),
+          throw: (error: Error) => Promise.reject(error),
+        };
+      }
+      signal?.addEventListener("abort", cleanup, { once: true });
 
       // Create EventSource
-      eventSource = new EventSource(`${client.baseUrl}/event/subscribe`);
+      const cursor = claudeEventCursorByBaseUrl.get(client.baseUrl);
+      const eventUrl = `${client.baseUrl}/event/subscribe${
+        cursor === undefined ? "" : `?since=${cursor}`
+      }`;
+      eventSource = new EventSource(eventUrl);
       eventSource.onopen = () => {
         console.debug("[claude-client] SSE connection opened");
       };
@@ -1410,6 +1443,7 @@ export function subscribeToEvents(
       const eventTypes = [
         "connected",
         "keepalive",
+        "replay.required",
         "session.updated",
         "session.idle",
         "session.error",

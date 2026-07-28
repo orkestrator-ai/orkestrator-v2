@@ -1,6 +1,5 @@
 import { memo, useCallback, useLayoutEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { useShallow } from "zustand/react/shallow";
 import { usePaneLayoutStore, getAllLeaves } from "@/stores/paneLayoutStore";
 import { useConfigStore, useEnvironmentStore } from "@/stores";
 import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
@@ -45,27 +44,21 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
 }: TerminalPortalHostProps) {
   // Get pane layout state for THIS environment (not the globally active one)
   // This is critical: each TerminalPortalHost must use its own environment's tabs,
-  // otherwise all environments would share the same terminal tab structure
-  const { environments, activeEnvironmentId } = usePaneLayoutStore(
-    useShallow((state) => ({
-      environments: state.environments,
-      activeEnvironmentId: state.activeEnvironmentId,
-    }))
+  // otherwise all environments would share the same terminal tab structure.
+  // The per-environment record has a stable reference, so selecting it directly
+  // avoids rerendering this host when other environments' layouts change.
+  const currentEnvState = usePaneLayoutStore(
+    (state) => state.environments.get(environmentId)
   );
+  const activeEnvironmentId = usePaneLayoutStore((state) => state.activeEnvironmentId);
 
   // Get THIS environment's root and active pane (not the global active environment's)
-  const currentEnvState = environments.get(environmentId);
   const root = currentEnvState?.root ?? DEFAULT_ROOT;
   const activePaneId = currentEnvState?.activePaneId ?? "default";
 
-  // Get terminal store functions
-  const {
-    terminals,
-    createTerminal,
-    disposeTerminal,
-    hasTerminal,
-    getPaneHost,
-  } = useTerminalPortalStore();
+  // Terminals map reactively (portals render from it); actions via stable refs.
+  const terminals = useTerminalPortalStore((state) => state.terminals);
+  const getPaneHost = useTerminalPortalStore((state) => state.getPaneHost);
 
   // Get workspace ready and setup scripts running setters from environment store
   const setWorkspaceReady = useEnvironmentStore((state) => state.setWorkspaceReady);
@@ -116,8 +109,10 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
   }, [environmentId, setSetupScriptsRunning]);
 
   // Build a map of tabId -> paneId for all terminal tabs
-  // Memoize to prevent new Map on every render
-  const leaves = getAllLeaves(root);
+  // Memoize to prevent new Map on every render. getAllLeaves must be memoized
+  // too: a fresh leaves array each render invalidated the map memo below and
+  // defeated the stable-key design entirely.
+  const leaves = useMemo(() => getAllLeaves(root), [root]);
   const terminalTabsMap = useMemo(() => {
     const map = new Map<string, { tab: TabInfo; paneId: string }>();
     for (const leaf of leaves) {
@@ -142,13 +137,18 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
       .join(",");
   }, [terminalTabsMap]);
 
-  // Create terminals for new tabs, dispose terminals for removed tabs
+  // Create terminals for new tabs, dispose terminals for removed tabs.
+  // Deliberately keyed on the stable `terminalTabsKey` rather than the map or
+  // the terminals Map: the create/dispose pass reads the freshest store state
+  // via getState(), and its own writes must not retrigger the effect.
   useLayoutEffect(() => {
+    const store = useTerminalPortalStore.getState();
+
     // Create terminals for new tabs
     for (const [tabId] of terminalTabsMap) {
-      if (!hasTerminal(environmentId, tabId)) {
+      if (!store.hasTerminal(environmentId, tabId)) {
         console.debug("[TerminalPortalHost] Creating terminal for tab:", tabId, "in env:", environmentId);
-        createTerminal({
+        store.createTerminal({
           tabId,
           containerId,
           environmentId,
@@ -159,25 +159,20 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
     }
 
     // Dispose terminals for removed tabs (only check terminals in this environment)
-    for (const [, terminalData] of terminals) {
+    for (const [, terminalData] of store.terminals) {
       // Only consider terminals belonging to this environment
       if (terminalData.environmentId !== environmentId) continue;
 
       if (!terminalTabsMap.has(terminalData.tabId)) {
         console.debug("[TerminalPortalHost] Disposing terminal for removed tab:", terminalData.tabId, "in env:", environmentId);
-        disposeTerminal(environmentId, terminalData.tabId);
+        store.disposeTerminal(environmentId, terminalData.tabId);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- terminalTabsMap is derived 1:1 from terminalTabsKey
   }, [
-    activeEnvironmentId,
     containerId,
     environmentId,
-    terminalTabsKey, // Use stable key instead of Map reference
-    terminalTabsMap, // Still need the map for the logic
-    terminals,
-    hasTerminal,
-    createTerminal,
-    disposeTerminal,
+    terminalTabsKey, // Stable key stands in for terminalTabsMap
     terminalAppearanceResolved,
     terminalScrollback,
   ]);

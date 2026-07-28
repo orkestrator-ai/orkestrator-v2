@@ -4,10 +4,11 @@
 import type { SSEEvent } from "../types/index.js";
 import { debugLog, isDebugLoggingEnabled } from "./logger.js";
 
-type EventCallback = (event: SSEEvent) => void;
+type EventCallback = (event: SSEEvent, revision: number) => void;
 
 class EventEmitter {
   private subscribers: Set<EventCallback> = new Set();
+  private revision = 0;
 
   /**
    * Subscribe to SSE events
@@ -25,6 +26,7 @@ class EventEmitter {
    * Broadcast an event to all subscribers
    */
   emit(event: SSEEvent): void {
+    const revision = ++this.revision;
     // Guarded rather than passed through `debugLog`: this runs on every
     // streamed frame, and the object literal would otherwise be allocated
     // per emit only to be dropped.
@@ -37,7 +39,7 @@ class EventEmitter {
     }
     for (const callback of this.subscribers) {
       try {
-        callback(event);
+        callback(event, revision);
       } catch (error) {
         console.error("[event-emitter] Error in subscriber callback:", error);
       }
@@ -49,6 +51,11 @@ class EventEmitter {
    */
   get subscriberCount(): number {
     return this.subscribers.size;
+  }
+
+  /** Monotonic cursor assigned before each synchronous fan-out. */
+  get currentRevision(): number {
+    return this.revision;
   }
 }
 

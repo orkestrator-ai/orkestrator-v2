@@ -79,10 +79,47 @@ export function isBaselineWorthKeeping(content: string | undefined): boolean {
   return byteLength(content) <= MAX_INLINE_FILE_BYTES;
 }
 
-function totalBaselineBytes(baselines: Map<string, string | undefined>): number {
-  let total = 0;
-  for (const value of baselines.values()) total += byteLength(value);
-  return total;
+/**
+ * The baseline map, with a running byte total maintained on every mutation.
+ *
+ * Recomputing `Buffer.byteLength` over every retained baseline made each budget
+ * check O(total bytes) — and the check runs per `pruneBaselines` call, per
+ * evicted entry, and on every polled `/global/health` read. Tracking the total
+ * as entries change makes all of those O(1) without touching eviction order or
+ * thresholds.
+ */
+export class BaselineMap extends Map<string, string | undefined> {
+  private bytes: number;
+
+  constructor(entries?: Iterable<readonly [string, string | undefined]>) {
+    // The entries are inserted through `set` after `bytes` is initialized;
+    // passing them to `super` would invoke the override before the field exists.
+    super();
+    this.bytes = 0;
+    if (entries) {
+      for (const [key, value] of entries) this.set(key, value);
+    }
+  }
+
+  get totalBytes(): number {
+    return this.bytes;
+  }
+
+  override set(key: string, value: string | undefined): this {
+    if (super.has(key)) this.bytes -= byteLength(super.get(key));
+    this.bytes += byteLength(value);
+    return super.set(key, value);
+  }
+
+  override delete(key: string): boolean {
+    if (super.has(key)) this.bytes -= byteLength(super.get(key));
+    return super.delete(key);
+  }
+
+  override clear(): void {
+    this.bytes = 0;
+    super.clear();
+  }
 }
 
 /**
@@ -92,7 +129,7 @@ function totalBaselineBytes(baselines: Map<string, string | undefined>): number 
  * taken against git HEAD instead of the previous turn — the pre-baseline
  * behaviour, and still a correct diff.
  */
-export function pruneBaselines(baselines: Map<string, string | undefined>): number {
+export function pruneBaselines(baselines: BaselineMap): number {
   let evicted = 0;
   while (baselines.size > MAX_BASELINE_ENTRIES) {
     const oldest = baselines.keys().next().value;
@@ -101,10 +138,10 @@ export function pruneBaselines(baselines: Map<string, string | undefined>): numb
     evicted += 1;
   }
   // Byte budget is checked after the entry budget so the cheap check runs first.
-  if (totalBaselineBytes(baselines) <= MAX_BASELINE_BYTES) return evicted;
-  for (const key of [...baselines.keys()]) {
-    if (totalBaselineBytes(baselines) <= MAX_BASELINE_BYTES) break;
-    baselines.delete(key);
+  while (baselines.totalBytes > MAX_BASELINE_BYTES) {
+    const oldest = baselines.keys().next().value;
+    if (oldest === undefined) break;
+    baselines.delete(oldest);
     evicted += 1;
   }
   return evicted;
@@ -129,7 +166,7 @@ export function pruneDiffCache(cache: Map<string, ToolDiffMetadata>): number {
  * makes "oldest key" mean "least recently used".
  */
 export function touchBaseline(
-  baselines: Map<string, string | undefined>,
+  baselines: BaselineMap,
   path: string,
 ): void {
   if (!baselines.has(path)) return;
@@ -159,7 +196,7 @@ export interface DiffBudgetStats {
 export function describeDiffBudget(context: FileChangeDiffContext): DiffBudgetStats {
   return {
     baselineEntries: context.baselines.size,
-    baselineBytes: totalBaselineBytes(context.baselines),
+    baselineBytes: context.baselines.totalBytes,
     cacheEntries: context.cache.size,
   };
 }

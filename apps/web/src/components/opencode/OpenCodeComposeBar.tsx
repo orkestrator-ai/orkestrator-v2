@@ -155,23 +155,18 @@ export function OpenCodeComposeBar({
   const pendingAttachmentSnapshotsRef = useRef(0);
   const mountedRef = useRef(true);
 
-  const {
-    getAttachments,
-    addAttachment,
-    removeAttachment,
-    getDraftText,
-    setDraftText,
-    getDraftMentions,
-    setDraftMentions,
-    getSelectedModel,
-    setSelectedModel,
-    getSelectedVariant,
-    setSelectedVariant,
-    getSelectedMode,
-    setSelectedMode,
-    removeQueueItem,
-    moveQueueItem,
-  } = useOpenCodeStore();
+  // Narrow store subscriptions (mirrors CodexComposeBar): actions are stable
+  // references, and per-key value selectors keep unrelated store writes (other
+  // sessions' drafts, transcripts, event bookkeeping) from re-rendering the bar.
+  const addAttachment = useOpenCodeStore((state) => state.addAttachment);
+  const removeAttachment = useOpenCodeStore((state) => state.removeAttachment);
+  const setDraftText = useOpenCodeStore((state) => state.setDraftText);
+  const setDraftMentions = useOpenCodeStore((state) => state.setDraftMentions);
+  const setSelectedModel = useOpenCodeStore((state) => state.setSelectedModel);
+  const setSelectedVariant = useOpenCodeStore((state) => state.setSelectedVariant);
+  const setSelectedMode = useOpenCodeStore((state) => state.setSelectedMode);
+  const removeQueueItem = useOpenCodeStore((state) => state.removeQueueItem);
+  const moveQueueItem = useOpenCodeStore((state) => state.moveQueueItem);
 
   // Use session key so tab-scoped state (draft, attachments, mode) is isolated per tab
   const sessionKey = createSessionKey(environmentId, tabId);
@@ -187,12 +182,26 @@ export function OpenCodeComposeBar({
     )
   );
 
-  const attachments = getAttachments(sessionKey);
-  const text = getDraftText(sessionKey);
-  const mentions = getDraftMentions(sessionKey);
-  const selectedModel = getSelectedModel(sessionKey);
-  const selectedVariant = getSelectedVariant(sessionKey);
-  const selectedMode = getSelectedMode(sessionKey);
+  // Store getters return stable empties for absent keys, so their results are
+  // safe as selector outputs (no per-render churn for untouched sessions).
+  const attachments = useOpenCodeStore(
+    useCallback((state) => state.getAttachments(sessionKey), [sessionKey]),
+  );
+  const text = useOpenCodeStore(
+    useCallback((state) => state.getDraftText(sessionKey), [sessionKey]),
+  );
+  const mentions = useOpenCodeStore(
+    useCallback((state) => state.getDraftMentions(sessionKey), [sessionKey]),
+  );
+  const selectedModel = useOpenCodeStore(
+    useCallback((state) => state.getSelectedModel(sessionKey), [sessionKey]),
+  );
+  const selectedVariant = useOpenCodeStore(
+    useCallback((state) => state.getSelectedVariant(sessionKey), [sessionKey]),
+  );
+  const selectedMode = useOpenCodeStore(
+    useCallback((state) => state.getSelectedMode(sessionKey), [sessionKey]),
+  );
 
   const [modelSearch, setModelSearch] = useState("");
   const isMobile = useMediaQuery("(max-width: 767px)");

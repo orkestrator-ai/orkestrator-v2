@@ -110,7 +110,11 @@ export const useConfigStore = create<ConfigState>()((set, get) => ({
   error: null,
 
   // Actions
-  setConfig: (config) => set({ config }),
+  setConfig: (config) =>
+    set((state) =>
+      JSON.stringify(state.config) === JSON.stringify(config)
+        ? state
+        : { config }),
 
   updateGlobalConfig: (updates) =>
     set((state) => {

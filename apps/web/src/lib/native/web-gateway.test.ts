@@ -512,7 +512,9 @@ describe("web gateway browser API", () => {
     expect(MockEventSource.instances).toHaveLength(1);
     const source = MockEventSource.instances[0];
     if (!source) throw new Error("EventSource was not created");
-    expect(source.url).toBe("/__orkestrator/events");
+    expect(source.url).toBe(
+      "/__orkestrator/events?excludeEvents=terminal-output-",
+    );
     expect(source.options).toEqual({ withCredentials: true });
 
     const connectedCallback = mock(() => undefined);
@@ -548,6 +550,36 @@ describe("web gateway browser API", () => {
     unsubscribe();
 
     expect(source.closed).toBe(true);
+  });
+
+  test("requests only terminal streams with active browser listeners", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+
+    const unsubscribeMenu = api.listen("menu-zoom", () => undefined);
+    const firstSource = MockEventSource.instances[0];
+    if (!firstSource) throw new Error("EventSource was not created");
+
+    const unsubscribeTerminal = api.listen(
+      "terminal-output-session:one",
+      () => undefined,
+    );
+    await Promise.resolve();
+
+    expect(firstSource.closed).toBe(true);
+    expect(MockEventSource.instances).toHaveLength(2);
+    expect(MockEventSource.instances[1]?.url).toBe(
+      "/__orkestrator/events?excludeEvents=terminal-output-&includeEvents=terminal-output-session%3Aone",
+    );
+
+    unsubscribeTerminal();
+    await Promise.resolve();
+    expect(MockEventSource.instances).toHaveLength(3);
+    expect(MockEventSource.instances[2]?.url).toBe(
+      "/__orkestrator/events?excludeEvents=terminal-output-",
+    );
+
+    unsubscribeMenu();
   });
 
   test("uses browser fallbacks for unavailable native-only APIs", async () => {

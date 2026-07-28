@@ -43,8 +43,9 @@ export function DraggableTabBar({
   dragOverPaneId,
   isPaneFocused = false,
 }: DraggableTabBarProps) {
-  const { removeTab } = usePaneLayoutStore();
-  const { isDirty, clearDirty } = useFileDirtyStore();
+  const removeTab = usePaneLayoutStore((state) => state.removeTab);
+  const isDirty = useFileDirtyStore((state) => state.isDirty);
+  const clearDirty = useFileDirtyStore((state) => state.clearDirty);
 
   // State for unsaved changes confirmation dialog
   const [pendingCloseTabIds, setPendingCloseTabIds] = useState<string[]>([]);

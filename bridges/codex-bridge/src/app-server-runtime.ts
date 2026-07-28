@@ -75,7 +75,8 @@ import {
 import {
   getWorkingDirectory,
   hydrateMessagesFromPersistedSession,
-  listPersistedSessionsForCwd,
+  invalidateTranscriptCatalogCache,
+  listPersistedSessionsWithTitlesForCwd,
   type PersistedSessionMeta,
 } from "./history/rollout.js";
 import {
@@ -1766,6 +1767,11 @@ export class AppServerRuntime {
         : null;
     if (!threadId) return null;
 
+    // A resume often follows on-disk changes made outside this process, and both
+    // hydration paths below may consult the cwd listing; do not serve them a
+    // catalog cached from before those changes.
+    invalidateTranscriptCatalogCache();
+
     const config = this.toEngineConfig(body);
     const sessionId = createSessionId();
     const session = this.registry.createSession({
@@ -1877,6 +1883,9 @@ export class AppServerRuntime {
       return { outcome: "unavailable" };
     }
     if (!fork.id) return { outcome: "unavailable" };
+    // The fork's rollout was just born; a catalog cached before it existed must
+    // not answer the hydration or the next /session/list.
+    invalidateTranscriptCatalogCache();
     const child = this.registry.createSession({
       id: createSessionId(),
       threadId: null,
@@ -2662,6 +2671,9 @@ export class AppServerRuntime {
     if (!context) {
       const thread = await this.options.engine.startThread({ config: session.config });
       if (!thread.id) return { ok: false, status: 503, error: "Codex did not return a thread id" };
+      // A new thread means a new rollout on disk; the next /session/list must
+      // not answer from a catalog scanned before it existed.
+      invalidateTranscriptCatalogCache();
       context = this.registry.attach(session.id, thread.id, {
         engineHandle: thread.handle,
         engineGeneration: this.options.engine.info().generation,
@@ -3453,8 +3465,13 @@ export class AppServerRuntime {
     }
 
     let persisted: PersistedSessionMeta[] = [];
+    // The listing already read and parsed the generated-title index; reuse its
+    // map instead of paying a second read + line parse per request.
+    let generatedTitles: Map<string, { title: string }> | null = null;
     try {
-      persisted = await listPersistedSessionsForCwd(cwd);
+      const listing = await listPersistedSessionsWithTitlesForCwd(cwd);
+      persisted = listing.sessions;
+      generatedTitles = listing.generatedTitles;
     } catch {
       persisted = [];
     }
@@ -3470,7 +3487,8 @@ export class AppServerRuntime {
 
     // Generated titles are the bridge's own, and win over a preview.
     try {
-      const generated = await readPersistedSessionTitleEntries(this.options.codexHome);
+      const generated =
+        generatedTitles ?? await readPersistedSessionTitleEntries(this.options.codexHome);
       for (const session of merged.values()) {
         const entry = generated.get(session.id);
         if (entry) session.title = entry.title;

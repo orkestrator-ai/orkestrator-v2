@@ -9,6 +9,7 @@ import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 
 const GATEWAY_PREFIX = "/__orkestrator";
 const EVENT_RECONNECT_DELAY_MS = 2_000;
+const TERMINAL_OUTPUT_EVENT_PREFIX = "terminal-output-";
 
 type EventCallback<T> = (payload: T) => void;
 type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
@@ -59,6 +60,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let eventSource: EventSource | null = null;
   let streamAbortController: AbortController | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let subscriptionRefreshQueued = false;
+  let terminalSubscriptionKey = "";
   let bearerToken = options.token?.trim() || undefined;
   const baseUrl = normalizedBaseUrl(options.baseUrl);
   const apiUrl = (pathname: string): string =>
@@ -71,6 +74,25 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   const credentials = bearerToken || baseUrl ? "omit" as const : "same-origin" as const;
+
+  /**
+   * Receive every authoritative state event, but only terminal byte streams
+   * this browser currently consumes. Terminal events are namespaced by session,
+   * so a remote tab looking at one environment no longer downloads output from
+   * every terminal in every other environment.
+   */
+  const eventStreamPath = () => {
+    const terminalEvents = [...listeners.keys()]
+      .filter((event) => event.startsWith(TERMINAL_OUTPUT_EVENT_PREFIX))
+      .sort();
+    const params = new URLSearchParams({
+      excludeEvents: TERMINAL_OUTPUT_EVENT_PREFIX,
+    });
+    if (terminalEvents.length > 0) {
+      params.set("includeEvents", terminalEvents.join(","));
+    }
+    return `${GATEWAY_PREFIX}/events?${params.toString()}`;
+  };
 
   const dispatchMessage = (data: string) => {
     let parsed: { event?: unknown; payload?: unknown };
@@ -109,7 +131,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
     void (async () => {
       try {
-        const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/events`), {
+        const response = await fetch(apiUrl(eventStreamPath()), {
           credentials,
           headers: requestHeaders(),
           signal: controller.signal,
@@ -152,7 +174,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       return;
     }
 
-    eventSource = new EventSource(apiUrl(`${GATEWAY_PREFIX}/events`), {
+    eventSource = new EventSource(apiUrl(eventStreamPath()), {
       withCredentials: true,
     });
     eventSource.onopen = announceEventStreamConnected;
@@ -170,6 +192,31 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     streamAbortController = null;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = null;
+  };
+
+  const refreshTerminalEventSubscription = () => {
+    const nextKey = [...listeners.keys()]
+      .filter((event) => event.startsWith(TERMINAL_OUTPUT_EVENT_PREFIX))
+      .sort()
+      .join("\n");
+    if (nextKey === terminalSubscriptionKey) return;
+    terminalSubscriptionKey = nextKey;
+    if ((!eventSource && !streamAbortController) || subscriptionRefreshQueued) {
+      return;
+    }
+    subscriptionRefreshQueued = true;
+    queueMicrotask(() => {
+      subscriptionRefreshQueued = false;
+      if (listeners.size === 0) return;
+      eventSource?.close();
+      eventSource = null;
+      const controller = streamAbortController;
+      streamAbortController = null;
+      controller?.abort();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      ensureEventStream();
+    });
   };
 
   const readGatewayResponse = async <T>(response: Response, fallback: string): Promise<T> => {
@@ -194,10 +241,12 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       const callbackSet = listeners.get(event) ?? new Set<EventCallback<unknown>>();
       listeners.set(event, callbackSet);
       callbackSet.add(callback as EventCallback<unknown>);
+      refreshTerminalEventSubscription();
       ensureEventStream();
       return () => {
         callbackSet.delete(callback as EventCallback<unknown>);
         if (callbackSet.size === 0) listeners.delete(event);
+        refreshTerminalEventSubscription();
         closeEventStreamIfIdle();
       };
     },

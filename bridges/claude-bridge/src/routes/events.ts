@@ -2,8 +2,36 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { eventEmitter } from "../services/event-emitter.js";
+import type { SSEEvent } from "../types/index.js";
 
 const events = new Hono();
+
+/**
+ * Serialized frame payload per event object, shared across subscribers.
+ *
+ * The emitter hands every subscriber the same event object, and each one
+ * previously ran its own `JSON.stringify` over a payload that can be a
+ * multi-hundred-KB message snapshot — the cost scaled with subscriber count.
+ * The first subscriber serializes (synchronously, inside `emit`, so the
+ * snapshot is taken before the payload can mutate) and the rest reuse it. A
+ * WeakMap keyed on the event object means the cache lives exactly as long as
+ * the event does.
+ *
+ * Exported for tests.
+ */
+const serializedEventData = new WeakMap<SSEEvent, string>();
+
+export function serializeEventData(event: SSEEvent): string {
+  let data = serializedEventData.get(event);
+  if (data === undefined) {
+    data = JSON.stringify({
+      sessionId: event.sessionId,
+      ...(event.data as object),
+    });
+    serializedEventData.set(event, data);
+  }
+  return data;
+}
 
 /**
  * A subscriber that cannot drain this backlog is closed instead of queued
@@ -19,6 +47,67 @@ export const MAX_PENDING_SSE_BYTES = 16 * 1024 * 1024;
 interface SseFrame {
   event: string;
   data: string;
+  id?: string;
+}
+
+interface ReplayFrame extends SseFrame {
+  revision: number;
+  bytes: number;
+}
+
+export const MAX_REPLAY_SSE_FRAMES = 512;
+export const MAX_REPLAY_SSE_BYTES = 32 * 1024 * 1024;
+const replayFrames: ReplayFrame[] = [];
+let replayBytes = 0;
+
+/**
+ * Record the normalized wire frame once, independent of live subscribers.
+ * This gives short disconnects a bounded cursor replay without retaining raw,
+ * mutable SDK message objects.
+ */
+eventEmitter.subscribe((event, revision) => {
+  const data = serializeEventData(event);
+  const frame: ReplayFrame = {
+    revision,
+    id: String(revision),
+    event: event.type,
+    data,
+    bytes: Buffer.byteLength(data) + Buffer.byteLength(event.type),
+  };
+  replayFrames.push(frame);
+  replayBytes += frame.bytes;
+  while (
+    replayFrames.length > MAX_REPLAY_SSE_FRAMES
+    || replayBytes > MAX_REPLAY_SSE_BYTES
+  ) {
+    const removed = replayFrames.shift();
+    if (!removed) break;
+    replayBytes -= removed.bytes;
+  }
+});
+
+function parseReplayCursor(value: string | undefined): number | null {
+  if (!value || !/^\d+$/.test(value)) return null;
+  const cursor = Number(value);
+  return Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : null;
+}
+
+export function getReplayFrames(
+  since: number,
+  through: number,
+): { frames: ReplayFrame[]; resetRequired: boolean } {
+  const oldest = replayFrames[0]?.revision;
+  const resetRequired =
+    since < through
+    && (oldest === undefined || since < oldest - 1);
+  return {
+    frames: resetRequired
+      ? []
+      : replayFrames.filter(
+          (frame) => frame.revision > since && frame.revision <= through,
+        ),
+    resetRequired,
+  };
 }
 
 /**
@@ -42,7 +131,9 @@ export function createBoundedSseWriter(
   let overflowed = false;
   return (frame) => {
     if (overflowed) return Promise.resolve();
-    const frameBytes = frame.data.length;
+    // Bytes on the wire, not UTF-16 code units: a transcript full of non-ASCII
+    // text can weigh up to 3x what `frame.data.length` reports.
+    const frameBytes = Buffer.byteLength(frame.data);
     if (
       pendingFrames > 0 &&
       (pendingFrames >= maxPendingFrames ||
@@ -78,6 +169,22 @@ events.get("/subscribe", (c) => {
     const connectionClosed = new Promise<void>((resolve) => {
       resolveConnectionClosed = resolve;
     });
+    let resolveRequestAborted!: () => void;
+    const requestAborted = new Promise<void>((resolve) => {
+      resolveRequestAborted = resolve;
+    });
+    const onRequestAbort = () => {
+      console.debug("[events] SSE connection aborted by client");
+      resolveRequestAborted();
+    };
+    if (c.req.raw.signal.aborted) {
+      resolveRequestAborted();
+    } else {
+      // Register before the first awaited write. A client can consume
+      // `connected` and abort while replay is still flushing; attaching this
+      // listener afterwards loses that edge and leaks the subscription.
+      c.req.raw.signal.addEventListener("abort", onRequestAbort, { once: true });
+    }
     const closeConnection = (reason: string) => {
       if (!isOpen) return;
       isOpen = false;
@@ -93,25 +200,77 @@ events.get("/subscribe", (c) => {
       () => closeConnection("write backlog exceeded its cap"),
     );
 
-    await writeFrame({
-      event: "connected",
-      data: JSON.stringify({ status: "connected", timestamp: connectedAt }),
-    });
+    const requestedCursor =
+      parseReplayCursor(c.req.header("last-event-id"))
+      ?? parseReplayCursor(c.req.query("since"));
+    const pendingLiveFrames: ReplayFrame[] = [];
+    let pendingLiveBytes = 0;
+    let replaying = true;
 
-    // Subscribe to events
-    const unsubscribe = eventEmitter.subscribe((event) => {
+    // Subscribe before choosing the replay ceiling. Anything emitted during
+    // the handshake is buffered and flushed after the retained replay, closing
+    // the otherwise unavoidable replay/subscribe race.
+    const unsubscribe = eventEmitter.subscribe((event, revision) => {
       if (!isOpen) return;
-      void writeFrame({
+      const data = serializeEventData(event);
+      const frame: ReplayFrame = {
+        revision,
+        id: String(revision),
         event: event.type,
-        data: JSON.stringify({
-          sessionId: event.sessionId,
-          ...(event.data as object),
-        }),
-      }).catch((error) => {
+        data,
+        bytes: Buffer.byteLength(data) + Buffer.byteLength(event.type),
+      };
+      if (replaying) {
+        if (
+          pendingLiveFrames.length >= MAX_PENDING_SSE_FRAMES
+          || pendingLiveBytes + frame.bytes > MAX_PENDING_SSE_BYTES
+        ) {
+          closeConnection("handshake backlog exceeded its cap");
+          return;
+        }
+        pendingLiveFrames.push(frame);
+        pendingLiveBytes += frame.bytes;
+        return;
+      }
+      void writeFrame(frame).catch((error) => {
         console.error("[events] Error writing SSE:", error);
         closeConnection("write failed");
       });
     });
+
+    const replayCeiling = eventEmitter.currentRevision;
+    const cursor = requestedCursor ?? replayCeiling;
+    const replay = getReplayFrames(cursor, replayCeiling);
+
+    // Echo the client's own cursor. Setting this frame to the latest revision
+    // would make EventSource skip replay frames if the connection died halfway
+    // through the handshake.
+    await writeFrame({
+      id: String(cursor),
+      event: "connected",
+      data: JSON.stringify({
+        status: "connected",
+        timestamp: connectedAt,
+        replayed: replay.frames.length,
+        resetRequired: replay.resetRequired,
+      }),
+    });
+    if (replay.resetRequired) {
+      await writeFrame({
+        id: String(replayCeiling),
+        event: "replay.required",
+        data: JSON.stringify({ through: replayCeiling }),
+      });
+    } else {
+      for (const frame of replay.frames) await writeFrame(frame);
+    }
+    replaying = false;
+    for (const frame of pendingLiveFrames) {
+      if (frame.revision <= replayCeiling) continue;
+      await writeFrame(frame);
+    }
+    pendingLiveFrames.length = 0;
+    pendingLiveBytes = 0;
 
     // Send keepalive every 30 seconds to prevent connection timeout
     const keepaliveInterval = setInterval(() => {
@@ -133,16 +292,12 @@ events.get("/subscribe", (c) => {
     try {
       await Promise.race([
         connectionClosed,
-        new Promise((resolve) => {
-          c.req.raw.signal.addEventListener("abort", () => {
-            console.debug("[events] SSE connection aborted by client");
-            resolve(undefined);
-          });
-        }),
+        requestAborted,
       ]);
     } finally {
       console.debug("[events] SSE connection cleanup");
       isOpen = false;
+      c.req.raw.signal.removeEventListener("abort", onRequestAbort);
       clearInterval(keepaliveInterval);
       unsubscribe();
     }

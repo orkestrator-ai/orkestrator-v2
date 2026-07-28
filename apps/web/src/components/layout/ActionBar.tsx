@@ -204,7 +204,13 @@ interface ActionBarProps {
 
 export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const isGrid = presentation === "grid";
-  const { selectedEnvironmentId, selectedProjectId, projectBoardTab, setProjectBoardTab, setProjectBoardNotesOpen } = useUIStore();
+  const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const selectedProjectId = useUIStore((state) => state.selectedProjectId);
+  const projectBoardTab = useUIStore((state) => state.projectBoardTab);
+  const setProjectBoardTab = useUIStore((state) => state.setProjectBoardTab);
+  const setProjectBoardNotesOpen = useUIStore(
+    (state) => state.setProjectBoardNotesOpen,
+  );
   const { getEnvironmentById, updateEnvironment, isWorkspaceReady, isSetupScriptsRunning, setEnvironmentPR } = useEnvironmentStore(
     useShallow((state) => ({
       getEnvironmentById: state.getEnvironmentById,
@@ -214,11 +220,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       setEnvironmentPR: state.setEnvironmentPR,
     }))
   );
-  const { getProjectById } = useProjectStore();
+  const getProjectById = useProjectStore((state) => state.getProjectById);
   const { updateProject } = useProjects();
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const { createTab, selectTab, closeActiveTab, tabCount } = useTerminalContext();
-  const { isOpen: filesPanelOpen, togglePanel: toggleFilesPanel, changes } = useFilesPanelStore();
+  const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
+  const toggleFilesPanel = useFilesPanelStore((state) => state.togglePanel);
+  const changes = useFilesPanelStore((state) => state.changes);
 
   const [repoSettingsOpen, setRepoSettingsOpen] = useState(false);
   const [globalSettingsOpen, setGlobalSettingsOpen] = useState(false);

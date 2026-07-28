@@ -438,6 +438,29 @@ const FALLBACK_MODELS: BridgeModel[] = [
  * tell what it has already seen. Fan-out stays fire-and-forget: a slow browser
  * must never back-pressure the reducer that called this.
  */
+/**
+ * Serialized `data:` payload per event object, computed on first use.
+ *
+ * Every subscriber used to `JSON.stringify` the same payload independently, and
+ * a ring replay stringified it again — for `message.updated` that is a full
+ * message snapshot per subscriber per frame. The ring retains the same event
+ * object it fanned out, so keying by identity lets live fan-out and replays
+ * share one string. (Filtered subscribers never serialize at all: their
+ * cursor-only frames carry a constant `"{}"`.)
+ */
+const serializedSseEventData = new WeakMap<SseEvent, string>();
+
+function serializeSseEventData(event: SseEvent): string {
+  const cached = serializedSseEventData.get(event);
+  if (cached !== undefined) return cached;
+  const data = JSON.stringify({
+    sessionId: event.sessionId,
+    ...(event.data ?? {}),
+  });
+  serializedSseEventData.set(event, data);
+  return data;
+}
+
 function emit(event: SseEvent): void {
   const revision = eventRing.append(event);
   for (const subscriber of subscribers) {
@@ -679,6 +702,7 @@ export const __testing = {
   },
   isTrustedBridgeOriginForTesting: isTrustedBridgeOrigin,
   sanitizeLogFileComponentForTesting: sanitizeLogFileComponent,
+  serializeSseEventDataForTesting: serializeSseEventData,
   setSessionTitleGeneratorForTesting,
   setSseRouteTestHooksForTesting: (hooks: SseRouteTestHooks | null) => {
     sseRouteTestHooks = hooks;
@@ -1286,10 +1310,7 @@ app.get("/event/subscribe", (c) => {
         // The `id:` is what makes replay possible at all — it is the cursor the
         // client echoes back on its next connection.
         id: String(revision),
-        data: JSON.stringify({
-          sessionId: event.sessionId,
-          ...(event.data ?? {}),
-        }),
+        data: serializeSseEventData(event),
       };
     };
 

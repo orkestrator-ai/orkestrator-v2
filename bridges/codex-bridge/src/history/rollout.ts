@@ -18,6 +18,7 @@ import { readCachedTranscript, readTranscriptHead } from "../transcript-cache.js
 import {
   buildFallbackSessionTitle,
   readPersistedSessionTitleEntries,
+  type PersistedSessionTitle,
   type PersistedSessionTitleSource,
 } from "../session-titles.js";
 import {
@@ -280,6 +281,58 @@ export async function getSessionMetaFromTranscriptPath(
   };
 }
 
+/**
+ * Short-lived cache for the whole-home catalog scan.
+ *
+ * `/session/list` polls and rapid re-attaches both rebuild the catalog, and each
+ * rebuild is a stat + open + head read of **every** rollout on disk. A few
+ * seconds of reuse removes that cost without letting the listing go stale: the
+ * runtime invalidates it whenever this process creates, resumes, or forks a
+ * thread, and the TTL covers rollouts written by anything else.
+ *
+ * Keyed by Codex home so a changed `CODEX_HOME` can never serve another store's
+ * catalog. The promise is cached (not the value) so concurrent callers share one
+ * scan; a rejected scan is evicted immediately rather than pinned for the TTL.
+ */
+export const TRANSCRIPT_CATALOG_TTL_MS = 2_000;
+
+interface CachedTranscriptCatalog {
+  codexHome: string;
+  builtAt: number;
+  catalog: Promise<TranscriptCatalog>;
+}
+
+let cachedTranscriptCatalog: CachedTranscriptCatalog | null = null;
+let catalogTtlMs = TRANSCRIPT_CATALOG_TTL_MS;
+
+export function setTranscriptCatalogTtlForTesting(ttlMs?: number): void {
+  catalogTtlMs = ttlMs ?? TRANSCRIPT_CATALOG_TTL_MS;
+}
+
+export function invalidateTranscriptCatalogCache(): void {
+  cachedTranscriptCatalog = null;
+}
+
+function buildTranscriptCatalogCached(): Promise<TranscriptCatalog> {
+  const codexHome = getCodexHomeDir();
+  const cached = cachedTranscriptCatalog;
+  if (
+    cached
+    && cached.codexHome === codexHome
+    && Date.now() - cached.builtAt < catalogTtlMs
+  ) {
+    return cached.catalog;
+  }
+
+  const catalog = buildTranscriptCatalog();
+  const entry: CachedTranscriptCatalog = { codexHome, builtAt: Date.now(), catalog };
+  cachedTranscriptCatalog = entry;
+  catalog.catch(() => {
+    if (cachedTranscriptCatalog === entry) cachedTranscriptCatalog = null;
+  });
+  return catalog;
+}
+
 export async function buildTranscriptCatalog(): Promise<TranscriptCatalog> {
   const metas: PersistedSessionMeta[] = [];
   const metaByPath = new Map<string, PersistedSessionMeta>();
@@ -392,11 +445,27 @@ export function createSharedTranscriptMetaLoader(
   return async (threadId) => loadMeta(threadId, listPathsOnce);
 }
 
+export interface PersistedSessionListing {
+  sessions: PersistedSessionMeta[];
+  /**
+   * The generated-title index this listing already read and parsed, exposed so a
+   * caller that also needs it does not read and line-parse the file a second
+   * time per request.
+   */
+  generatedTitles: Map<string, PersistedSessionTitle>;
+}
+
 export async function listPersistedSessionsForCwd(cwd: string): Promise<PersistedSessionMeta[]> {
+  return (await listPersistedSessionsWithTitlesForCwd(cwd)).sessions;
+}
+
+export async function listPersistedSessionsWithTitlesForCwd(
+  cwd: string,
+): Promise<PersistedSessionListing> {
   const indexPath = join(getCodexHomeDir(), "session_index.jsonl");
   const lines = await readTranscriptLines(indexPath);
   const sessions = new Map<string, PersistedSessionMeta>();
-  const transcriptCatalog = await buildTranscriptCatalog();
+  const transcriptCatalog = await buildTranscriptCatalogCached();
 
   for (const line of lines) {
     let entry: PersistedSessionIndexEntry;
@@ -441,9 +510,12 @@ export async function listPersistedSessionsForCwd(cwd: string): Promise<Persiste
     }
   }
 
-  return Array.from(sessions.values()).sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-  );
+  return {
+    sessions: Array.from(sessions.values()).sort(
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    ),
+    generatedTitles,
+  };
 }
 
 export function mergePersistedSessionMeta(
@@ -587,6 +659,64 @@ function persistedOutputState(
   return payloadType === "custom_tool_call_output" ? (part.toolState ?? null) : null;
 }
 
+/**
+ * The last `session_index.jsonl` entry for one thread, mirroring the
+ * map-overwrite in the full listing where a later line for the same id wins.
+ */
+async function findSessionIndexEntry(
+  threadId: string,
+): Promise<{ threadName?: string; updatedAt?: string } | null> {
+  const lines = await readTranscriptLines(join(getCodexHomeDir(), "session_index.jsonl"));
+  let match: { threadName?: string; updatedAt?: string } | null = null;
+  for (const line of lines) {
+    let entry: PersistedSessionIndexEntry;
+    try {
+      entry = JSON.parse(line) as PersistedSessionIndexEntry;
+    } catch {
+      continue;
+    }
+    if (entry.id !== threadId) continue;
+    match = {
+      threadName: typeof entry.thread_name === "string" ? entry.thread_name : undefined,
+      updatedAt: typeof entry.updated_at === "string" ? entry.updated_at : undefined,
+    };
+  }
+  return match;
+}
+
+/**
+ * Meta for one thread without the whole-home catalog scan the cwd listing pays.
+ *
+ * Reads only the two small index files plus one head read resolved through the
+ * bounded per-thread path cache, and applies the same title precedence as the
+ * listing: an indexed `thread_name` counts as a Codex title, and a generated
+ * title overrides anything that is not.
+ *
+ * Returns null when the rollout cannot be located this way — a rollout whose
+ * filename does not embed the thread id is only findable through the catalog,
+ * so the caller falls back to the listing on a miss.
+ */
+async function resolvePersistedSessionMetaForThread(
+  threadId: string,
+): Promise<PersistedSessionMeta | null> {
+  const indexed = await findSessionIndexEntry(threadId);
+  const meta = await getPersistedSessionMeta(
+    threadId,
+    indexed?.threadName,
+    indexed?.updatedAt,
+  );
+  if (!meta?.transcriptPath) return null;
+
+  if (meta.titleSource !== "codex") {
+    const generated = (await readPersistedSessionTitleEntries(getCodexHomeDir())).get(threadId);
+    if (generated) {
+      meta.title = generated.title;
+      meta.titleSource = generated.source;
+    }
+  }
+  return meta;
+}
+
 export async function hydrateMessagesFromPersistedSession(
   threadId: string,
 ): Promise<{
@@ -594,9 +724,12 @@ export async function hydrateMessagesFromPersistedSession(
   title?: string;
   titleSource?: PersistedSessionMeta["titleSource"];
 }> {
-  const meta = (await listPersistedSessionsForCwd(getWorkingDirectory()))
-    .find((session) => session.id === threadId)
-    ?? await getPersistedSessionMeta(threadId);
+  // Direct per-thread lookup first: hydration runs on every re-attach, and the
+  // cwd listing behind the fallback rebuilds the whole transcript catalog — one
+  // head read per rollout on disk — to answer for a single thread.
+  const meta = await resolvePersistedSessionMetaForThread(threadId)
+    ?? (await listPersistedSessionsForCwd(getWorkingDirectory()))
+      .find((session) => session.id === threadId);
   if (!meta?.transcriptPath) {
     return { messages: [], title: meta?.title, titleSource: meta?.titleSource };
   }

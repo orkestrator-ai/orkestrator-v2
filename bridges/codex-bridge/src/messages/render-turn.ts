@@ -22,7 +22,7 @@ import {
 import { deriveTranscriptSubagentPartsForTurn } from "../subagent-transcript-parts.js";
 import { readCachedTranscript } from "../transcript-cache.js";
 import { createSharedTranscriptMetaLoader } from "../history/rollout.js";
-import { beginTurn } from "./diff-budget.js";
+import { BaselineMap, beginTurn } from "./diff-budget.js";
 import { hasVisibleText, itemToParts } from "./normalization.js";
 import type { FileChangeDiffContext, NormalizedPart } from "./types.js";
 import type { EngineItem } from "../engine/types.js";
@@ -34,6 +34,15 @@ export const TRUNCATION_NOTICE = "\n… output truncated";
 export interface TurnRenderState {
   /** Interleaved item + sub-agent keys, preserved across renders for stability. */
   timelineOrder: string[];
+  /**
+   * Completed items are immutable by the app-server contract. Retain their
+   * normalized parts so a streaming update to the newest item does not rebuild
+   * every older text/tool/diff object in the turn.
+   */
+  completedItemParts: Map<
+    string,
+    { source: EngineItem | null; parts: NormalizedPart[] }
+  >;
   subagentParts: Map<string, NormalizedPart>;
   subagentFingerprints: Map<string, string>;
   /** When the rollout-transcript probe for sub-agent activity last ran. */
@@ -56,10 +65,11 @@ export const SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS = 2_000;
 export function createTurnRenderState(): TurnRenderState {
   return {
     timelineOrder: [],
+    completedItemParts: new Map(),
     subagentParts: new Map(),
     subagentFingerprints: new Map(),
     subagentProbedAt: 0,
-    fileChange: { baselines: new Map(), cache: new Map() },
+    fileChange: { baselines: new BaselineMap(), cache: new Map() },
   };
 }
 
@@ -82,6 +92,7 @@ export function beginTurnRenderState(previous: TurnRenderState | undefined): Tur
 /** Frees a thread's render state; recoverable, since the rollout is authoritative. */
 export function releaseTurnRenderState(state: TurnRenderState): void {
   state.timelineOrder.length = 0;
+  state.completedItemParts.clear();
   state.subagentParts.clear();
   state.subagentFingerprints.clear();
   state.subagentProbedAt = 0;
@@ -226,10 +237,12 @@ export interface RenderedTurn {
 function collectTurnItems(turn: TurnAccumulator): {
   items: EngineItem[];
   itemsByKey: Map<string, EngineItem>;
+  accumulatorsByKey: Map<string, ItemAccumulator>;
   itemKeys: string[];
 } {
   const items: EngineItem[] = [];
   const itemsByKey = new Map<string, EngineItem>();
+  const accumulatorsByKey = new Map<string, ItemAccumulator>();
   const itemKeys: string[] = [];
 
   for (const accumulator of turn.ordered()) {
@@ -237,20 +250,20 @@ function collectTurnItems(turn: TurnAccumulator): {
     // an unrenderable delta. If item/started arrives later, the row materializes
     // at its original position rather than being appended after newer activity.
     itemKeys.push(`${CODEX_TIMELINE_ITEM_PREFIX}${accumulator.id}`);
+    accumulatorsByKey.set(accumulator.id, accumulator);
     const item = effectiveItem(turn, accumulator);
     if (!item) continue;
     items.push(item);
     itemsByKey.set(accumulator.id, item);
   }
 
-  return { items, itemsByKey, itemKeys };
+  return { items, itemsByKey, accumulatorsByKey, itemKeys };
 }
 
 export async function renderTurn(
   turn: TurnAccumulator,
   options: RenderTurnOptions,
 ): Promise<RenderedTurn> {
-  const loadSnapshot = collectTurnItems(turn);
   const load = options.loadSubagentParts ?? loadSubagentPartsFromTranscripts;
   const probeIntervalMs = options.subagentProbeIntervalMs ?? 0;
   const shouldProbe =
@@ -259,6 +272,10 @@ export async function renderTurn(
     Date.now() - options.state.subagentProbedAt >= probeIntervalMs;
   let subagentParts: NormalizedPart[] | undefined;
   if (shouldProbe) {
+    // Collected only here: streaming renders arrive ~10x/second while the probe
+    // runs every couple of seconds, so a snapshot taken unconditionally would be
+    // built and thrown away on the vast majority of renders.
+    const loadSnapshot = collectTurnItems(turn);
     options.state.subagentProbedAt = Date.now();
     try {
       subagentParts = await load({
@@ -275,7 +292,8 @@ export async function renderTurn(
   // The loader performs filesystem I/O. Parent events can arrive while it is
   // awaited, so take the render snapshot only after it settles. This prevents a
   // newer sub-agent fingerprint from being committed against stale parent keys.
-  const { items, itemsByKey, itemKeys } = collectTurnItems(turn);
+  const { items, itemsByKey, accumulatorsByKey, itemKeys } =
+    collectTurnItems(turn);
 
   // Reconcile the authoritative item set without rebuilding its order around
   // the sub-agent entries. New parent items belong at the end of the timeline;
@@ -310,7 +328,32 @@ export async function renderTurn(
   for (const key of timelineOrder) {
     if (key.startsWith(CODEX_TIMELINE_ITEM_PREFIX)) {
       const item = itemsByKey.get(key.slice(CODEX_TIMELINE_ITEM_PREFIX.length));
-      if (item) parts.push(...(await itemToParts(item, options.cwd, options.state.fileChange)));
+      if (item) {
+        const itemId = key.slice(CODEX_TIMELINE_ITEM_PREFIX.length);
+        const accumulator = accumulatorsByKey.get(itemId);
+        const cached = options.state.completedItemParts.get(itemId);
+        if (
+          accumulator?.completed
+          && cached?.source === accumulator.item
+        ) {
+          parts.push(...cached.parts);
+        } else {
+          const itemParts = await itemToParts(
+            item,
+            options.cwd,
+            options.state.fileChange,
+          );
+          if (accumulator?.completed) {
+            options.state.completedItemParts.set(itemId, {
+              source: accumulator.item,
+              parts: itemParts,
+            });
+          } else {
+            options.state.completedItemParts.delete(itemId);
+          }
+          parts.push(...itemParts);
+        }
+      }
       continue;
     }
     const subagentPart = options.state.subagentParts.get(key);

@@ -50,7 +50,12 @@ export function useAgentStateCallbacks({
   onBecomeWaiting,
   onStateChange,
 }: UseAgentStateCallbacksOptions): void {
-  const { registerStateCallback, unregisterStateCallback } = useAgentActivityStore();
+  const registerStateCallback = useAgentActivityStore(
+    (state) => state.registerStateCallback,
+  );
+  const unregisterStateCallback = useAgentActivityStore(
+    (state) => state.unregisterStateCallback,
+  );
   const callbackIdRef = useRef<string | null>(null);
 
   // Store callbacks in refs to avoid re-registering on every render

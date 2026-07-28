@@ -141,7 +141,7 @@ type TerminalSessionConfig =
 
 const terminalProcesses = new Map<string, PtyProcess>();
 const terminalSessionConfigs = new Map<string, TerminalSessionConfig>();
-const terminalOutputBuffers = new Map<string, string>();
+const terminalOutputBuffers = new Map<string, TerminalOutputBuffer>();
 const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalActivityArmed = new Set<string>();
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
@@ -2173,24 +2173,92 @@ function findEnvironmentByContainerId(environments: Environment[], containerId: 
   return environments.find((environment) => environment.containerId && containerIdMatches(environment.containerId, containerId));
 }
 
-function bytesPayload(data: string | Buffer): number[] {
-  return Array.from(Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8"));
+/**
+ * Terminal bytes travel as base64 rather than as a JSON array of numbers.
+ *
+ * The payload is serialized four times on its way to xterm.js (backend event →
+ * gateway SSE → Electron main → renderer IPC). As an array, one byte becomes
+ * up to four wire characters (`"104,"`) and an eight-byte heap slot in every
+ * process that parses it; base64 costs 1.33 characters per byte and one string.
+ */
+function terminalOutputPayload(data: string | Buffer): { bytesBase64: string } {
+  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8");
+  return { bytesBase64: buffer.toString("base64") };
+}
+
+/**
+ * A rolling character window kept as chunks plus an offset into the first one.
+ *
+ * Concatenating into a single string trimmed to the cap made every PTY chunk
+ * copy the whole 500 KB window once the buffer was full. Chunks are appended in
+ * O(1); trimming drops whole chunks from the head and advances `headOffset`
+ * into the survivor, so the exact character-level cap boundary is preserved
+ * without rewriting the retained text.
+ */
+type TerminalOutputBuffer = {
+  chunks: string[];
+  /** Characters of `chunks[0]` that have already been trimmed away. */
+  headOffset: number;
+  /** Retained characters, i.e. total chunk length minus `headOffset`. */
+  length: number;
+};
+
+function createTerminalOutputBuffer(): TerminalOutputBuffer {
+  return { chunks: [], headOffset: 0, length: 0 };
+}
+
+function resetTerminalOutputBuffer(sessionId: string): void {
+  terminalOutputBuffers.set(sessionId, createTerminalOutputBuffer());
+}
+
+function terminalOutputBufferLength(sessionId: string): number {
+  return terminalOutputBuffers.get(sessionId)?.length ?? 0;
+}
+
+function readTerminalOutputBuffer(sessionId: string): string {
+  const buffer = terminalOutputBuffers.get(sessionId);
+  if (!buffer || buffer.length === 0) return "";
+  if (buffer.chunks.length === 1 && buffer.headOffset === 0) return buffer.chunks[0]!;
+  const [head, ...rest] = buffer.chunks;
+  const joined = `${head!.slice(buffer.headOffset)}${rest.join("")}`;
+  // Compact so repeated reads (and the next trim) work against one chunk.
+  buffer.chunks = [joined];
+  buffer.headOffset = 0;
+  buffer.length = joined.length;
+  return joined;
 }
 
 function appendTerminalOutputBuffer(sessionId: string, data: string | Buffer): void {
   const text = Buffer.isBuffer(data) ? data.toString("utf8") : data;
-  const combined = `${terminalOutputBuffers.get(sessionId) ?? ""}${text}`;
-  terminalOutputBuffers.set(
-    sessionId,
-    combined.length > MAX_TERMINAL_OUTPUT_BUFFER_CHARS
-      ? combined.slice(combined.length - MAX_TERMINAL_OUTPUT_BUFFER_CHARS)
-      : combined,
-  );
+  if (!text) return;
+  let buffer = terminalOutputBuffers.get(sessionId);
+  if (!buffer) {
+    buffer = createTerminalOutputBuffer();
+    terminalOutputBuffers.set(sessionId, buffer);
+  }
+  buffer.chunks.push(text);
+  buffer.length += text.length;
+
+  let excess = buffer.length - MAX_TERMINAL_OUTPUT_BUFFER_CHARS;
+  while (excess > 0) {
+    const head = buffer.chunks[0];
+    if (head === undefined) break;
+    const available = head.length - buffer.headOffset;
+    if (available > excess) {
+      buffer.headOffset += excess;
+      buffer.length -= excess;
+      break;
+    }
+    buffer.chunks.shift();
+    buffer.headOffset = 0;
+    buffer.length -= available;
+    excess -= available;
+  }
 }
 
 function emitTerminalOutput(sessionId: string, data: string | Buffer, emit: BackendEmit): void {
   appendTerminalOutputBuffer(sessionId, data);
-  emit(`terminal-output-${sessionId}`, bytesPayload(data));
+  emit(`terminal-output-${sessionId}`, terminalOutputPayload(data));
 }
 
 function logSetupTerminal(message: string, details: Record<string, unknown> = {}): void {
@@ -2367,7 +2435,7 @@ function spawnTerminalProcess(
         sessionId: id,
         exitCode,
         signal,
-        bufferChars: terminalOutputBuffers.get(id)?.length ?? 0,
+        bufferChars: terminalOutputBufferLength(id),
       });
     }
     hooks.onExit?.();
@@ -2397,6 +2465,59 @@ async function getDockerStatus(containerId: string): Promise<EnvironmentStatus> 
   return parseDockerStatus(stdout);
 }
 
+/**
+ * How long one `docker ps` snapshot may serve status reads. A multi-project
+ * refresh fans out one `get_environments` per project almost simultaneously;
+ * without this, each of them would run its own `docker ps`.
+ */
+const DOCKER_CONTAINER_STATE_CACHE_MS = 3_000;
+
+let dockerContainerStateCache: {
+  fetchedAt: number;
+  states: Promise<Map<string, EnvironmentStatus> | null>;
+} | null = null;
+
+/**
+ * One `docker ps -a` over the orkestrator label instead of one `docker
+ * inspect` per environment. Returns null when Docker is unreachable so
+ * callers fall back to their existing per-container handling.
+ */
+async function listOrkestratorContainerStates(): Promise<Map<string, EnvironmentStatus> | null> {
+  try {
+    const { stdout } = await runCommand("docker", [
+      "ps",
+      "-a",
+      "--no-trunc",
+      "--filter",
+      `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
+      "--format",
+      "{{.ID}}\t{{.State}}",
+    ], { timeoutMs: 10_000 });
+    const states = new Map<string, EnvironmentStatus>();
+    for (const line of stdout.split("\n")) {
+      const [id, state] = line.split("\t");
+      const containerId = id?.trim();
+      if (containerId) states.set(containerId, parseDockerStatus(state ?? ""));
+    }
+    return states;
+  } catch {
+    return null;
+  }
+}
+
+function getOrkestratorContainerStates(): Promise<Map<string, EnvironmentStatus> | null> {
+  const now = Date.now();
+  if (
+    dockerContainerStateCache
+    && now - dockerContainerStateCache.fetchedAt < DOCKER_CONTAINER_STATE_CACHE_MS
+  ) {
+    return dockerContainerStateCache.states;
+  }
+  const states = listOrkestratorContainerStates();
+  dockerContainerStateCache = { fetchedAt: now, states };
+  return states;
+}
+
 async function isContainerRunning(containerId: string): Promise<boolean> {
   try {
     return await getDockerStatus(containerId) === "running";
@@ -2418,7 +2539,11 @@ async function getHostPort(containerId: string, containerPort: number, protocol 
   }
 }
 
-async function syncStoredEnvironmentStatus(environment: Environment, storage: StorageService): Promise<Environment> {
+async function syncStoredEnvironmentStatus(
+  environment: Environment,
+  storage: StorageService,
+  knownContainerStates?: Map<string, EnvironmentStatus> | null,
+): Promise<Environment> {
   if (environment.environmentType === "local") {
     return environment;
   }
@@ -2427,6 +2552,17 @@ async function syncStoredEnvironmentStatus(environment: Environment, storage: St
     if (environment.status !== "stopped") {
       return storage.updateEnvironment(environment.id, { status: "stopped" });
     }
+    return environment;
+  }
+
+  // Fast path from a shared `docker ps` snapshot — but only when it agrees
+  // with the stored status. The snapshot can be a few seconds stale, so a
+  // disagreement (or an unlisted container, e.g. one created before the label
+  // existed or removed entirely) is always confirmed with a fresh per-container
+  // inspect before anything is rewritten. Steady state therefore costs zero
+  // inspects; a real transition costs one.
+  const knownState = knownContainerStates?.get(environment.containerId);
+  if (knownState !== undefined && knownState === environment.status) {
     return environment;
   }
 
@@ -2613,7 +2749,7 @@ function toTerminalText(output: string): string {
  */
 function beginSetupPreparationSession(environment: Environment, context: CommandContext): string {
   const sessionId = setupTerminalSessionId(environment.id);
-  terminalOutputBuffers.set(sessionId, "");
+  resetTerminalOutputBuffer(sessionId);
   environmentSetupSessions.set(environment.id, {
     environmentId: environment.id,
     sessionId,
@@ -2703,7 +2839,7 @@ async function spawnSetupTerminal(
     : undefined;
   // A retry starts a clean buffer; a run that already streamed its preparation
   // output into this session keeps it, so the clone log stays visible.
-  if (!existingSession) terminalOutputBuffers.set(sessionId, "");
+  if (!existingSession) resetTerminalOutputBuffer(sessionId);
   environmentSetupSessions.set(environment.id, {
     environmentId: environment.id,
     sessionId,
@@ -2757,7 +2893,7 @@ async function spawnSetupTerminal(
   logSetupTerminal("emitted setup intro", {
     environmentId: environment.id,
     sessionId,
-    bufferChars: terminalOutputBuffers.get(sessionId)?.length ?? 0,
+    bufferChars: terminalOutputBufferLength(sessionId),
   });
 
   context.emit("environment-setup-started", {
@@ -2781,7 +2917,7 @@ async function completeEnvironmentSetup(
   logSetupTerminal("setup completed", {
     environmentId: environment.id,
     sessionId: session?.sessionId ?? null,
-    bufferChars: session?.sessionId ? terminalOutputBuffers.get(session.sessionId)?.length ?? 0 : 0,
+    bufferChars: session?.sessionId ? terminalOutputBufferLength(session.sessionId) : 0,
   });
   if (session) {
     environmentSetupSessions.set(environment.id, {
@@ -2814,7 +2950,7 @@ async function failEnvironmentSetup(environmentId: string, error: unknown, conte
     environmentId,
     sessionId: session?.sessionId ?? null,
     error: message,
-    bufferChars: session?.sessionId ? terminalOutputBuffers.get(session.sessionId)?.length ?? 0 : 0,
+    bufferChars: session?.sessionId ? terminalOutputBufferLength(session.sessionId) : 0,
   });
   if (session) {
     environmentSetupSessions.set(environmentId, {
@@ -2920,7 +3056,7 @@ async function startEnvironmentSetupAfterPreparation(
       environmentId: current.id,
       sessionId: existingSession.sessionId,
       terminalRunning: terminalProcesses.has(existingSession.sessionId),
-      bufferChars: terminalOutputBuffers.get(existingSession.sessionId)?.length ?? 0,
+      bufferChars: terminalOutputBufferLength(existingSession.sessionId),
     });
     return {
       setupCommands: [],
@@ -3711,11 +3847,35 @@ async function allocateLocalPort(): Promise<number> {
   });
 }
 
-async function buildFileTree(rootPath: string, relativePath = ""): Promise<Array<{ name: string; path: string; isDirectory: boolean; children?: unknown[]; extension?: string }>> {
+const MAX_LOCAL_FILE_TREE_NODES = 5_000;
+
+type FileTreeNode = {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  children?: FileTreeNode[];
+  extension?: string;
+};
+
+/**
+ * Build a bounded local file tree.
+ *
+ * The container equivalent already stops at 5,000 files. Without the shared
+ * budget here, opening the files panel on a generated or dependency-heavy
+ * worktree recursively read every directory and retained an unbounded response
+ * object before any bytes crossed IPC.
+ */
+async function buildFileTree(
+  rootPath: string,
+  relativePath = "",
+  budget: { remaining: number } = { remaining: MAX_LOCAL_FILE_TREE_NODES },
+): Promise<FileTreeNode[]> {
+  if (budget.remaining <= 0) return [];
   const fullPath = path.join(rootPath, relativePath);
   const entries = await fs.readdir(fullPath, { withFileTypes: true });
-  const nodes = [];
+  const nodes: FileTreeNode[] = [];
   for (const entry of entries) {
+    if (budget.remaining <= 0) break;
     // Workspace symlinks are not valid picker targets. In addition to keeping
     // the tree inside its declared root, skipping them here prevents recursive
     // traversal if platform Dirent semantics ever change.
@@ -3724,13 +3884,14 @@ async function buildFileTree(rootPath: string, relativePath = ""): Promise<Array
       || entry.name === "node_modules"
       || entry.isSymbolicLink()
     ) continue;
+    budget.remaining -= 1;
     const childRelativePath = path.join(relativePath, entry.name);
     if (entry.isDirectory()) {
       nodes.push({
         name: entry.name,
         path: childRelativePath,
         isDirectory: true,
-        children: await buildFileTree(rootPath, childRelativePath),
+        children: await buildFileTree(rootPath, childRelativePath, budget),
       });
     } else {
       nodes.push({
@@ -5233,8 +5394,17 @@ export function createCommandRegistry(
   register("get_environments", async ({ projectId }, context) => {
     const { storage } = context;
     const environments = await storage.getEnvironmentsByProject(asString(projectId, "projectId"));
+    // One shared `docker ps` snapshot for the whole batch instead of one
+    // `docker inspect` per containerized environment.
+    const knownContainerStates = environments.some(
+      (environment) => environment.environmentType !== "local" && environment.containerId,
+    )
+      ? await getOrkestratorContainerStates()
+      : null;
     const synced = await Promise.all(
-      environments.map((environment) => syncStoredEnvironmentStatus(environment, storage)),
+      environments.map((environment) =>
+        syncStoredEnvironmentStatus(environment, storage, knownContainerStates)
+      ),
     );
     // Rehydration is also the recovery path after a backend restart. If startup
     // completed before the process exited, resume any persisted rename intent
@@ -5303,19 +5473,33 @@ export function createCommandRegistry(
   register("get_environment_status", async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    return (await syncStoredEnvironmentStatus(environment, storage)).status;
+    const knownContainerStates = environment.environmentType !== "local" && environment.containerId
+      ? await getOrkestratorContainerStates()
+      : null;
+    return (await syncStoredEnvironmentStatus(environment, storage, knownContainerStates)).status;
   });
   register("sync_environment_status", async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    return syncStoredEnvironmentStatus(environment, storage);
+    const knownContainerStates = environment.environmentType !== "local" && environment.containerId
+      ? await getOrkestratorContainerStates()
+      : null;
+    return syncStoredEnvironmentStatus(environment, storage, knownContainerStates);
   });
   register("sync_all_environments_with_docker", async (_args, { storage }) => {
     const cleared: string[] = [];
-    for (const environment of await storage.loadEnvironments()) {
-      if (!environment.containerId) continue;
+    const environments = (await storage.loadEnvironments()).filter(
+      (environment) => environment.containerId,
+    );
+    if (environments.length === 0) return cleared;
+    // A container listed by the labelled `docker ps -a` definitely still
+    // exists; only unlisted ones need the per-container existence probe, which
+    // also covers containers created without the label.
+    const knownContainerStates = await getOrkestratorContainerStates();
+    for (const environment of environments) {
+      if (knownContainerStates?.has(environment.containerId!)) continue;
       try {
-        await getDockerStatus(environment.containerId);
+        await getDockerStatus(environment.containerId!);
       } catch {
         await storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
         cleared.push(environment.id);
@@ -5540,7 +5724,7 @@ export function createCommandRegistry(
       running: session.running,
       terminalRunning: payload.terminalRunning,
       success: session.success ?? null,
-      bufferChars: terminalOutputBuffers.get(session.sessionId)?.length ?? 0,
+      bufferChars: terminalOutputBufferLength(session.sessionId),
     });
     return payload;
   });
@@ -6241,14 +6425,14 @@ export function createCommandRegistry(
       logSetupTerminal("renderer checked terminal session", {
         sessionId: id,
         running,
-        bufferChars: terminalOutputBuffers.get(id)?.length ?? 0,
+        bufferChars: terminalOutputBufferLength(id),
       });
     }
     return { id, running };
   });
   register("get_terminal_output_buffer", ({ sessionId }) => {
     const id = asString(sessionId, "sessionId");
-    const buffer = terminalOutputBuffers.get(id) ?? "";
+    const buffer = readTerminalOutputBuffer(id);
     if (isSetupTerminalSessionId(id)) {
       logSetupTerminal("renderer requested output buffer", {
         sessionId: id,
@@ -6612,6 +6796,9 @@ export function createCommandRegistry(
 
 export const __testing = {
   createExtensionCommandRunner,
+  resetDockerContainerStateCache(): void {
+    dockerContainerStateCache = null;
+  },
   parseGitFileChanges,
   parseContainerUntrackedStats,
   parseContainerGitStatusResponse,

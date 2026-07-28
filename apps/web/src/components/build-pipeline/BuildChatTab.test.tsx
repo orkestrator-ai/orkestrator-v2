@@ -1310,7 +1310,7 @@ describe("BuildChatTab", () => {
   // -----------------------------------------------------------------------
 
   describe("event stream disconnection", () => {
-    test("refreshes messages and records context usage from session events", async () => {
+    test("refreshes messages on session.idle and records context usage from session events", async () => {
       const refreshedMessage: ClaudeMessage = {
         id: "refreshed-message",
         role: "assistant",
@@ -1321,6 +1321,7 @@ describe("BuildChatTab", () => {
       mockGetSessionMessages.mockResolvedValueOnce([refreshedMessage]);
       mockSubscribeToEvents.mockImplementationOnce(() =>
         (async function* () {
+          // Metadata-only frame: applied incrementally (usage), no refetch.
           yield {
             type: "session.updated",
             sessionId: SESSION_ID,
@@ -1328,6 +1329,12 @@ describe("BuildChatTab", () => {
               model: "anthropic/claude-sonnet",
               contextUsage: { usedTokens: 2_500, totalContextTokens: 10_000 },
             },
+          } as any;
+          // Final frame: the authoritative full-transcript reconcile.
+          yield {
+            type: "session.idle",
+            sessionId: SESSION_ID,
+            data: {},
           } as any;
         })() as unknown as AsyncGenerator<never, void, unknown>,
       );
@@ -1364,6 +1371,65 @@ describe("BuildChatTab", () => {
           "usedTokens",
         ]);
         expect(Number.isNaN(Date.parse(usage?.updatedAt ?? ""))).toBe(false);
+      });
+      // Only the final event refetched; the metadata frame was applied in place.
+      expect(mockGetSessionMessages).toHaveBeenCalledTimes(1);
+    });
+
+    test("applies message.updated payloads in place and refetches only on unappliable patches", async () => {
+      const streamedMessage: ClaudeMessage = {
+        id: "streamed-message",
+        role: "assistant",
+        content: "Streamed via event payload",
+        parts: [{ type: "text", content: "Streamed via event payload" }],
+        timestamp: "2026-06-22T00:00:01.000Z",
+        revision: 1,
+      } as ClaudeMessage;
+      const refetchedMessage: ClaudeMessage = {
+        id: "streamed-message",
+        role: "assistant",
+        content: "Authoritative transcript",
+        parts: [{ type: "text", content: "Authoritative transcript" }],
+        timestamp: "2026-06-22T00:00:02.000Z",
+        revision: 7,
+      } as ClaudeMessage;
+      mockGetSessionMessages.mockResolvedValue([refetchedMessage]);
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          // Full message payload: upserted directly, no refetch.
+          yield {
+            type: "message.updated",
+            sessionId: SESSION_ID,
+            data: { message: streamedMessage },
+          } as any;
+          // Patch that skips revisions: cannot apply, must refetch.
+          yield {
+            type: "message.patched",
+            sessionId: SESSION_ID,
+            data: {
+              messageId: "streamed-message",
+              partCount: 1,
+              changedParts: [
+                { index: 0, part: { type: "text", content: "lost frame" } },
+              ],
+              timestamp: "2026-06-22T00:00:03.000Z",
+              revision: 5,
+            },
+          } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "idle");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        // The out-of-order patch forced exactly one authoritative refetch.
+        expect(mockGetSessionMessages).toHaveBeenCalledTimes(1);
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+          refetchedMessage,
+        ]);
       });
     });
 

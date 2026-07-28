@@ -10,7 +10,9 @@ interface ChangesViewProps {
 }
 
 export function ChangesView({ onRevert, onDelete }: ChangesViewProps = {}) {
-  const { changes, isLoadingChanges, closePanel } = useFilesPanelStore();
+  const changes = useFilesPanelStore((state) => state.changes);
+  const isLoadingChanges = useFilesPanelStore((state) => state.isLoadingChanges);
+  const closePanel = useFilesPanelStore((state) => state.closePanel);
   const { createFileTab } = useTerminalContext();
   const isMobile = useMediaQuery("(max-width: 767px)");
 

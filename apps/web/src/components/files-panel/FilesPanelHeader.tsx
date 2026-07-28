@@ -14,8 +14,12 @@ interface FilesPanelHeaderProps {
 }
 
 export function FilesPanelHeader({ onRefresh }: FilesPanelHeaderProps) {
-  const { activeTab, setActiveTab, changes, closePanel, isLoadingChanges, isLoadingTree } =
-    useFilesPanelStore();
+  const activeTab = useFilesPanelStore((state) => state.activeTab);
+  const setActiveTab = useFilesPanelStore((state) => state.setActiveTab);
+  const changes = useFilesPanelStore((state) => state.changes);
+  const closePanel = useFilesPanelStore((state) => state.closePanel);
+  const isLoadingChanges = useFilesPanelStore((state) => state.isLoadingChanges);
+  const isLoadingTree = useFilesPanelStore((state) => state.isLoadingTree);
   const changesCount = changes.length;
   const isLoading = activeTab === "changes" ? isLoadingChanges : isLoadingTree;
 

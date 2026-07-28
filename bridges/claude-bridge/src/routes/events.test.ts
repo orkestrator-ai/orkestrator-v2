@@ -14,7 +14,11 @@ import { TransformStream } from "node:stream/web";
 // (which implies --isolate) that leakage is gone and the test fails on its own.
 globalThis.TransformStream = TransformStream as typeof globalThis.TransformStream;
 
-import events, { createBoundedSseWriter } from "./events.js";
+import events, {
+  createBoundedSseWriter,
+  getReplayFrames,
+  serializeEventData,
+} from "./events.js";
 import { eventEmitter } from "../services/event-emitter.js";
 
 const app = new Hono();
@@ -135,6 +139,22 @@ describe("createBoundedSseWriter", () => {
     expect(written).toEqual(["12345"]);
   });
 
+  test("accounts backlog in encoded bytes, not UTF-16 code units", async () => {
+    const { write, overflowReasons, releaseFirst } = stallingWriter({
+      maxPendingBytes: 8,
+    });
+
+    // "1234" is 4 bytes pending; "ééé" is 3 code units but 6 UTF-8 bytes, so
+    // the true backlog is 10 bytes. Counting `.length` (7) would let a stalled
+    // consumer keep queueing multi-byte transcripts past the cap.
+    const first = write({ event: "a", data: "1234" });
+    await write({ event: "a", data: "ééé" });
+
+    expect(overflowReasons).toHaveLength(1);
+    releaseFirst();
+    await first;
+  });
+
   test("accepts a single oversized frame when idle", async () => {
     const written: string[] = [];
     let overflowed = 0;
@@ -209,6 +229,58 @@ describe("createBoundedSseWriter", () => {
       await write({ event: "a", data: `f${index}` }).catch(() => undefined);
     }
     expect(overflowed).toBe(0);
+  });
+});
+
+describe("serializeEventData", () => {
+  test("serializes an event once and reuses the string for later subscribers", () => {
+    const event = {
+      type: "message.updated" as const,
+      sessionId: "s-1",
+      data: { message: { id: "m-1" } },
+    };
+
+    const first = serializeEventData(event);
+    expect(first).toBe('{"sessionId":"s-1","message":{"id":"m-1"}}');
+
+    // The payload mutating after the first serialization must not change what
+    // later subscribers send: the frame was snapshotted at emit time.
+    event.data.message.id = "mutated";
+    expect(serializeEventData(event)).toBe(first);
+  });
+
+  test("serializes each event object independently", () => {
+    const first = serializeEventData({ type: "session.idle", sessionId: "a", data: {} });
+    const second = serializeEventData({ type: "session.idle", sessionId: "b", data: {} });
+    expect(first).toBe('{"sessionId":"a"}');
+    expect(second).toBe('{"sessionId":"b"}');
+  });
+});
+
+describe("SSE replay ring", () => {
+  test("returns frames after a cursor through the requested ceiling", () => {
+    const before = eventEmitter.currentRevision;
+    eventEmitter.emit({
+      type: "session.updated",
+      sessionId: "replay-one",
+      data: { status: "running" },
+    });
+    eventEmitter.emit({
+      type: "session.idle",
+      sessionId: "replay-two",
+    });
+    const through = eventEmitter.currentRevision;
+
+    const replay = getReplayFrames(before, through);
+    expect(replay.resetRequired).toBe(false);
+    expect(replay.frames.map((frame) => frame.revision)).toEqual([
+      before + 1,
+      before + 2,
+    ]);
+    expect(replay.frames.map((frame) => frame.event)).toEqual([
+      "session.updated",
+      "session.idle",
+    ]);
   });
 });
 

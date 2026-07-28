@@ -916,7 +916,12 @@ export function ClaudeTmuxChatTab({
       }
     };
     void tick();
-    const id = setInterval(tick, showTui ? 500 : 1000);
+    // 500ms keeps the visible TUI responsive; when the pane is hidden the
+    // capture only feeds prompt detection, which tolerates a slower 3s poll —
+    // per-second `tmux capture-pane` across every background environment adds
+    // up. The poll itself must stay: in-TUI prompts are still detected while
+    // the pane is hidden, just up to 3s later.
+    const id = setInterval(tick, showTui ? 500 : 3000);
     return () => {
       cancelled = true;
       clearInterval(id);

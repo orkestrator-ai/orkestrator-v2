@@ -29,6 +29,7 @@ describe("turn render state", () => {
   test("begins the first turn with empty render state", () => {
     const state = beginTurnRenderState(undefined);
     expect(state.timelineOrder).toEqual([]);
+    expect(state.completedItemParts.size).toBe(0);
     expect(state.subagentParts.size).toBe(0);
     expect(state.subagentFingerprints.size).toBe(0);
     expect(state.fileChange.baselines.size).toBe(0);
@@ -38,6 +39,7 @@ describe("turn render state", () => {
   test("begins a new turn with baselines retained and per-item state cleared", () => {
     const previous = createTurnRenderState();
     previous.timelineOrder.push("item:old");
+    previous.completedItemParts.set("old", { source: null, parts: [] });
     previous.subagentParts.set("agent:old", { type: "subagent", content: "old" });
     previous.subagentFingerprints.set("agent:old", "old");
     previous.fileChange.baselines.set("a.ts", "before");
@@ -45,6 +47,7 @@ describe("turn render state", () => {
 
     const next = beginTurnRenderState(previous);
     expect(next.timelineOrder).toEqual([]);
+    expect(next.completedItemParts.size).toBe(0);
     expect(next.subagentParts.size).toBe(0);
     expect(next.subagentFingerprints.size).toBe(0);
     expect(next.fileChange.baselines.get("a.ts")).toBe("before");
@@ -54,12 +57,14 @@ describe("turn render state", () => {
   test("release clears all retained render memory", () => {
     const state = createTurnRenderState();
     state.timelineOrder.push("x");
+    state.completedItemParts.set("x", { source: null, parts: [] });
     state.subagentParts.set("a", { type: "subagent", content: "x" });
     state.subagentFingerprints.set("a", "fingerprint");
     state.fileChange.baselines.set("a.ts", "x");
     state.fileChange.cache.set("a", { filePath: "a.ts" });
     releaseTurnRenderState(state);
     expect(state.timelineOrder).toEqual([]);
+    expect(state.completedItemParts.size).toBe(0);
     expect(state.subagentParts.size).toBe(0);
     expect(state.subagentFingerprints.size).toBe(0);
     expect(state.fileChange.baselines.size).toBe(0);
@@ -223,6 +228,30 @@ describe("effectiveItem", () => {
 });
 
 describe("renderTurn", () => {
+  test("reuses normalized parts for immutable completed items", async () => {
+    const accumulator = turn();
+    accumulator.onItemCompleted({
+      id: "completed",
+      type: "agent_message",
+      text: "stable",
+    });
+    const state = createTurnRenderState();
+    const render = () => renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state,
+      loadSubagentParts: async () => [],
+    });
+
+    const first = await render();
+    accumulator.onTextDelta("streaming", "new");
+    const second = await render();
+
+    expect(second.parts[0]).toBe(first.parts[0]);
+    expect(second.parts[1]).not.toBe(first.parts[0]);
+    expect(state.completedItemParts.size).toBe(1);
+  });
+
   test("omits reasoning items with no visible content", async () => {
     const accumulator = turn();
     accumulator.onItemCompleted({ id: "reasoning", type: "reasoning", text: "" });

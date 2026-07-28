@@ -11,10 +11,14 @@ import { useConfigStore, useEnvironmentStore } from "@/stores";
 import type { BuildPhase, PipelineSession } from "@/stores/buildPipelineStore";
 import {
   abortSession,
+  buildOpenCodeMessageFromPart,
+  carryOverOpenCodeSubagentHydration,
   createClient,
   createSession,
   getSessionMessages,
   getStructuredOutput,
+  mergeOpenCodeMessageInfo,
+  normalizeOpenCodePart,
   replyToPermission,
   rejectQuestion,
   sendPrompt,
@@ -206,39 +210,46 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
   const jumpInTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(pipelineId));
-  const { config } = useConfigStore();
-  const {
-    setPhase,
-    addSession: addPipelineSession,
-    markSessionIdle,
-    markSessionRunning,
-    setVerificationResult,
-    beginStructuredReview,
-    setStructuredReview,
-    incrementIteration,
-    setPipelineError,
-    pausePipeline,
-    resumePipeline,
-  } = useBuildPipelineStore();
+  const config = useConfigStore((state) => state.config);
+  const setPhase = useBuildPipelineStore((state) => state.setPhase);
+  const addPipelineSession = useBuildPipelineStore((state) => state.addSession);
+  const markSessionIdle = useBuildPipelineStore((state) => state.markSessionIdle);
+  const markSessionRunning = useBuildPipelineStore((state) => state.markSessionRunning);
+  const setVerificationResult = useBuildPipelineStore((state) => state.setVerificationResult);
+  const beginStructuredReview = useBuildPipelineStore((state) => state.beginStructuredReview);
+  const setStructuredReview = useBuildPipelineStore((state) => state.setStructuredReview);
+  const incrementIteration = useBuildPipelineStore((state) => state.incrementIteration);
+  const setPipelineError = useBuildPipelineStore((state) => state.setPipelineError);
+  const pausePipeline = useBuildPipelineStore((state) => state.pausePipeline);
+  const resumePipeline = useBuildPipelineStore((state) => state.resumePipeline);
   const isPipelinePaused = useCallback(
     () => useBuildPipelineStore.getState().pipelines.get(pipelineId)?.phase === "paused",
     [pipelineId],
   );
-  const {
-    setServerStatus,
-    setClient,
-    setSession,
-    addMessage,
-    setMessages,
-    setSessionLoading,
-    setEventStream,
-    setContextUsage,
-    getOrCreateEventSubscription,
-    hasActiveEventSubscription,
-    clients: clientsMap,
-    sessions: sessionsMap,
-  } = useOpenCodeStore();
-  const client = useMemo(() => clientsMap.get(environmentId), [clientsMap, environmentId]);
+  // Narrow store subscriptions: actions are stable references, and the client
+  // read is per-environment, so unrelated openCodeStore writes no longer
+  // re-render the whole pipeline tab. `sessions` stays a map-level
+  // subscription — the transcript view and idle-detection effects below need
+  // to react to every pipeline session's messages.
+  const setServerStatus = useOpenCodeStore((state) => state.setServerStatus);
+  const setClient = useOpenCodeStore((state) => state.setClient);
+  const setSession = useOpenCodeStore((state) => state.setSession);
+  const addMessage = useOpenCodeStore((state) => state.addMessage);
+  const setMessages = useOpenCodeStore((state) => state.setMessages);
+  const upsertMessage = useOpenCodeStore((state) => state.upsertMessage);
+  const setSessionLoading = useOpenCodeStore((state) => state.setSessionLoading);
+  const setEventStream = useOpenCodeStore((state) => state.setEventStream);
+  const setContextUsage = useOpenCodeStore((state) => state.setContextUsage);
+  const getOrCreateEventSubscription = useOpenCodeStore(
+    (state) => state.getOrCreateEventSubscription,
+  );
+  const hasActiveEventSubscription = useOpenCodeStore(
+    (state) => state.hasActiveEventSubscription,
+  );
+  const sessionsMap = useOpenCodeStore((state) => state.sessions);
+  const client = useOpenCodeStore(
+    useCallback((state) => state.clients.get(environmentId), [environmentId]),
+  );
 
   const setupScriptsRunning = useEnvironmentStore((state) => state.setupScriptsRunning.has(environmentId));
   const setupCommandsResolved = useEnvironmentStore((state) => state.setupCommandsResolved.has(environmentId));
@@ -340,6 +351,11 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
         const pendingReloads = new Map<string, number>();
         const DEBOUNCE_MS = 200;
 
+        // Final events (`immediate`) fetch the fully hydrated transcript,
+        // subagents included — they are the authoritative reconcile point.
+        // Streaming-triggered fallback refetches skip the recursive subagent
+        // hydration for cost; already-hydrated Agent rows are carried over so
+        // they do not blank until the final reconcile.
         const fetchMessagesDebounced = (sessionId: string, sessionKey: string, immediate = false) => {
           const timeout = pendingReloads.get(sessionId);
           if (timeout) {
@@ -347,10 +363,23 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
             pendingReloads.delete(sessionId);
           }
 
+          const includeSubagents = immediate;
           const doFetch = async () => {
             lastReloadTimeBySession.set(sessionId, Date.now());
-            const messages = await getSessionMessages(activeClient, sessionId);
-            setMessages(sessionKey, messages);
+            const messages = await getSessionMessages(activeClient, sessionId, {
+              ...(includeSubagents ? {} : { includeSubagents: false }),
+            });
+            const currentSession = useOpenCodeStore.getState().sessions.get(sessionKey);
+            if (currentSession && currentSession.sessionId !== sessionId) return;
+            setMessages(
+              sessionKey,
+              includeSubagents || !currentSession
+                ? messages
+                : carryOverOpenCodeSubagentHydration(
+                    currentSession.messages,
+                    messages,
+                  ),
+            );
           };
 
           if (immediate) {
@@ -368,6 +397,57 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
             }, DEBOUNCE_MS);
             pendingReloads.set(sessionId, nextTimeout);
           }
+        };
+
+        /**
+         * Sessions whose `message.part.updated` frames are currently applying
+         * cleanly; while streaming via parts, `message.updated` and
+         * `session.updated` frames carry nothing the parts don't, so the full
+         * refetch is reserved for failures and final events.
+         */
+        const partStreamHealthyBySession = new Set<string>();
+
+        const applyPartUpdate = (
+          sessionKey: string,
+          rawPart: unknown,
+          delta?: string,
+        ) => {
+          const part = normalizeOpenCodePart(rawPart);
+          if (!part?.sourceMessageId) {
+            partStreamHealthyBySession.delete(sessionKey);
+            return null;
+          }
+          const sessionState = useOpenCodeStore.getState().sessions.get(sessionKey);
+          const existingMessage = sessionState?.messages.find(
+            (message) => message.id === part.sourceMessageId,
+          );
+          upsertMessage(
+            sessionKey,
+            buildOpenCodeMessageFromPart(
+              existingMessage,
+              part.sourceMessageId,
+              part,
+              delta,
+            ),
+          );
+          partStreamHealthyBySession.add(sessionKey);
+          return part;
+        };
+
+        const applyMessageInfoUpdate = (
+          sessionKey: string,
+          rawInfo: unknown,
+        ): boolean => {
+          const sessionState = useOpenCodeStore.getState().sessions.get(sessionKey);
+          const info = rawInfo as { id?: unknown } | null | undefined;
+          const messageId = typeof info?.id === "string" ? info.id : undefined;
+          const existingMessage = messageId
+            ? sessionState?.messages.find((message) => message.id === messageId)
+            : undefined;
+          const merged = mergeOpenCodeMessageInfo(existingMessage, rawInfo);
+          if (!merged) return false;
+          upsertMessage(sessionKey, merged);
+          return true;
         };
 
         for await (const event of eventStream) {
@@ -414,13 +494,31 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
               eventType === "session.idle"
               || (eventType === "session.status" && props?.status?.type === "idle");
 
-            if (
-              eventType === "message.part.updated"
-              || eventType === "message.updated"
-              || eventType === "session.updated"
-              || isFinalEvent
-            ) {
-              fetchMessagesDebounced(eventSessionId, sessionKey, isFinalEvent);
+            // Apply streamed parts and message metadata incrementally (same
+            // shape as OpenCodeChatTab); a full-transcript refetch is reserved
+            // for frames that cannot be applied and for the authoritative
+            // final reconcile, instead of running at ~5Hz for every turn.
+            if (isFinalEvent) {
+              partStreamHealthyBySession.delete(sessionKey);
+              fetchMessagesDebounced(eventSessionId, sessionKey, true);
+            } else if (eventType === "message.part.updated") {
+              if (
+                !applyPartUpdate(
+                  sessionKey,
+                  props?.part,
+                  typeof props?.delta === "string" ? props.delta : undefined,
+                )
+              ) {
+                fetchMessagesDebounced(eventSessionId, sessionKey, false);
+              }
+            } else if (eventType === "message.updated") {
+              if (!applyMessageInfoUpdate(sessionKey, props?.info)) {
+                fetchMessagesDebounced(eventSessionId, sessionKey, false);
+              }
+            } else if (eventType === "session.updated") {
+              if (!partStreamHealthyBySession.has(sessionKey)) {
+                fetchMessagesDebounced(eventSessionId, sessionKey, false);
+              }
             }
 
             if (usageFromEvent) {
@@ -455,7 +553,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
         setEventStream(environmentId, null);
       }
     },
-    [addMessage, environmentId, getOrCreateEventSubscription, hasActiveEventSubscription, pipelineId, setContextUsage, setEventStream, setMessages, setPipelineError, setSessionLoading],
+    [addMessage, environmentId, getOrCreateEventSubscription, hasActiveEventSubscription, pipelineId, setContextUsage, setEventStream, setMessages, upsertMessage, setPipelineError, setSessionLoading],
   );
 
   useEffect(() => {

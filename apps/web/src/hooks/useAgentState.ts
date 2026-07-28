@@ -25,7 +25,8 @@ export function useAgentState(
   containerId: string | null,
   tabId: string
 ): void {
-  const { setTabState, removeTabState } = useAgentActivityStore();
+  const setTabState = useAgentActivityStore((state) => state.setTabState);
+  const removeTabState = useAgentActivityStore((state) => state.removeTabState);
   const unlistenRef = useRef<UnlistenFn | null>(null);
 
   useEffect(() => {

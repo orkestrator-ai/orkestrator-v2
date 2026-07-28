@@ -47,7 +47,9 @@ export function ClaudeQuestionCard({
   onDismiss,
   hideDismiss = false,
 }: ClaudeQuestionCardProps) {
-  const { removePendingQuestion } = useClaudeStore();
+  const removePendingQuestion = useClaudeStore(
+    (state) => state.removePendingQuestion,
+  );
 
   const questions = useMemo<QuestionCardQuestion[]>(
     () =>

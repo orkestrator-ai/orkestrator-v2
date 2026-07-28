@@ -883,10 +883,11 @@ describe("claude-client", () => {
         return [...this.listeners.keys()];
       }
 
-      emit(type: string, data: unknown) {
+      emit(type: string, data: unknown, lastEventId = "") {
         this.listeners.get(type)?.({
           type,
           data: JSON.stringify(data),
+          lastEventId,
         } as MessageEvent);
       }
     }
@@ -930,6 +931,7 @@ describe("claude-client", () => {
       for (const type of [
         "connected",
         "keepalive",
+        "replay.required",
         "session.updated",
         "session.idle",
         "session.error",
@@ -951,6 +953,24 @@ describe("claude-client", () => {
       }
 
       await iterator.return?.();
+    });
+
+    test("resumes a replacement subscription from the last received cursor", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const cursorClient = {
+        ...client,
+        baseUrl: "http://127.0.0.1:9876",
+      };
+      const first = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
+      MockEventSource.latest!.emit("keepalive", { timestamp: "now" }, "42");
+      await first.next();
+      await first.return?.();
+
+      const second = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
+      expect(MockEventSource.latest?.url).toBe(
+        "http://127.0.0.1:9876/event/subscribe?since=42",
+      );
+      await second.return?.();
     });
 
     test("yields a patch frame with its revision intact", async () => {

@@ -24,6 +24,13 @@ type BackendKind = "local" | "container";
 
 const CLAUDE_TMUX_EVENT = "claude-tmux:event";
 const POLL_INTERVAL_MS = 250;
+/**
+ * How many poll ticks pass between `tmux has-session` checks. Hooks and
+ * transcript appends still arrive every tick; only the liveness probe — which
+ * costs its own process spawn and can only ever report a session that has
+ * already stopped — runs on this slower cadence.
+ */
+export const LIVENESS_CHECK_EVERY_TICKS = 8;
 const HOOK_TIMEOUT_SECS = 600;
 const COMMAND_IDLE_TIMEOUT_MS = 8_000;
 const COMMAND_NO_HOOK_SETTLE_MS = 2_000;
@@ -151,15 +158,48 @@ function pathDirname(kind: BackendKind, filePath: string): string {
   return kind === "container" ? path.posix.dirname(filePath) : path.dirname(filePath);
 }
 
-function bytesPayload(text: string): number[] {
-  return Array.from(Buffer.from(text, "utf8"));
+function bytesPayload(text: string): { bytesBase64: string } {
+  return { bytesBase64: Buffer.from(text, "utf8").toString("base64") };
 }
+
+function countNewlines(buffer: Buffer): number {
+  let count = 0;
+  let index = buffer.indexOf(0x0a);
+  while (index >= 0) {
+    count += 1;
+    index = buffer.indexOf(0x0a, index + 1);
+  }
+  return count;
+}
+
+/** Like {@link ExecOutput}, but with stdout still in bytes. */
+type RawExecOutput = {
+  status: number;
+  stdout: Buffer;
+  stderr: string;
+};
 
 async function execWithOutput(
   command: string,
   args: string[],
   options: { cwd?: string; env?: NodeJS.ProcessEnv; stdin?: string; timeoutMs?: number } = {},
 ): Promise<ExecOutput> {
+  const raw = await execWithRawOutput(command, args, options);
+  return { status: raw.status, stdout: raw.stdout.toString(), stderr: raw.stderr };
+}
+
+/**
+ * The spawn primitive, keeping stdout as bytes.
+ *
+ * Callers that read a *slice* of a file need the raw bytes: decoding a chunk
+ * that starts or ends mid multi-byte character would replace the split
+ * character with U+FFFD before the caller ever gets to rejoin the halves.
+ */
+async function execWithRawOutput(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; stdin?: string; timeoutMs?: number } = {},
+): Promise<RawExecOutput> {
   return await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -188,7 +228,7 @@ async function execWithOutput(
       const stderrText = Buffer.concat(stderr).toString();
       resolve({
         status: timedOut ? -1 : code ?? -1,
-        stdout: Buffer.concat(stdout).toString(),
+        stdout: Buffer.concat(stdout),
         stderr: timedOut ? `${stderrText}\nCommand timed out`.trim() : stderrText,
       });
     });
@@ -198,6 +238,107 @@ async function execWithOutput(
     }
     child.stdin.end();
   });
+}
+
+/** Everything one poll tick needs from the filesystem, gathered in one round trip. */
+export type TmuxPollSnapshot = {
+  /** Filenames in the session's pending-hook directory. */
+  pending: string[];
+  /** Filenames in the session's timed-out-hook directory. */
+  timeouts: string[];
+  /** Size of the transcript in bytes, or 0 when it has not been discovered yet. */
+  transcriptSize: number;
+};
+
+/**
+ * Section markers for the combined poll script. Hook files are always named
+ * `<EventKind>-<id>.json`, so no listing entry can collide with one of these.
+ */
+const POLL_SNAPSHOT_PENDING_MARKER = "__ork_pending__";
+const POLL_SNAPSHOT_TIMEOUT_MARKER = "__ork_timeout__";
+const POLL_SNAPSHOT_SIZE_MARKER = "__ork_size__";
+
+/**
+ * One shell script that answers a whole poll tick: both hook directories and
+ * the transcript size.
+ *
+ * Container mode pays a `docker exec` per backend operation, so the three
+ * separate calls this replaces cost three process spawns every 250ms per open
+ * tab — even with Claude completely idle.
+ */
+export function pollSnapshotScript(
+  pendingDir: string,
+  timeoutDir: string,
+  transcriptPath: string | undefined,
+): string {
+  const size = transcriptPath
+    ? `stat -c %s ${shellArg(transcriptPath)} 2>/dev/null || echo 0`
+    : "echo 0";
+  return [
+    `echo ${POLL_SNAPSHOT_PENDING_MARKER}`,
+    `ls -1 ${shellArg(pendingDir)} 2>/dev/null || true`,
+    `echo ${POLL_SNAPSHOT_TIMEOUT_MARKER}`,
+    `ls -1 ${shellArg(timeoutDir)} 2>/dev/null || true`,
+    `echo ${POLL_SNAPSHOT_SIZE_MARKER}`,
+    size,
+  ].join("; ");
+}
+
+/** Parses {@link pollSnapshotScript} output back into a snapshot. */
+export function parsePollSnapshotOutput(stdout: string): TmuxPollSnapshot {
+  const snapshot: TmuxPollSnapshot = { pending: [], timeouts: [], transcriptSize: 0 };
+  let section: "none" | "pending" | "timeouts" | "size" = "none";
+  for (const raw of stdout.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line === POLL_SNAPSHOT_PENDING_MARKER) { section = "pending"; continue; }
+    if (line === POLL_SNAPSHOT_TIMEOUT_MARKER) { section = "timeouts"; continue; }
+    if (line === POLL_SNAPSHOT_SIZE_MARKER) { section = "size"; continue; }
+    if (section === "pending") snapshot.pending.push(line);
+    else if (section === "timeouts") snapshot.timeouts.push(line);
+    else if (section === "size") snapshot.transcriptSize = Number.parseInt(line, 10) || 0;
+  }
+  return snapshot;
+}
+
+/**
+ * Reads `filePath` from `offset` to EOF. `tail -c +N` is 1-based, so the first
+ * unread byte is `offset + 1`.
+ */
+export function tailFromOffsetCommand(filePath: string, offset: number): string {
+  return `tail -c +${Math.max(0, Math.floor(offset)) + 1} ${shellArg(filePath)} 2>/dev/null || true`;
+}
+
+/** Separates the line count from the head bytes in {@link transcriptHeadCommand} output. */
+const TRANSCRIPT_HEAD_MARKER = "__ork_head__";
+
+/**
+ * Line count plus the first `maxBytes` of a transcript, in one round trip.
+ *
+ * Session listings only need a title (from the first user message) and a count.
+ * Reading whole rollout files to derive metadata is the anti-pattern AGENTS.md
+ * calls out for the codex bridge; these files reach many megabytes and there
+ * are up to fifty of them.
+ */
+export function transcriptHeadCommand(filePath: string, maxBytes: number): string {
+  const quoted = shellArg(filePath);
+  return `wc -l < ${quoted} 2>/dev/null || echo 0; echo ${TRANSCRIPT_HEAD_MARKER}; head -c ${Math.floor(maxBytes)} ${quoted} 2>/dev/null || true`;
+}
+
+/** Parses {@link transcriptHeadCommand} output. */
+export function parseTranscriptHeadOutput(stdout: string): { head: string; lineCount: number } {
+  const marker = `${TRANSCRIPT_HEAD_MARKER}\n`;
+  const index = stdout.indexOf(marker);
+  if (index < 0) return { head: "", lineCount: 0 };
+  return {
+    lineCount: Number.parseInt(stdout.slice(0, index).trim(), 10) || 0,
+    head: stdout.slice(index + marker.length),
+  };
+}
+
+/** Lists every `.jsonl` in `dirPath` newest-first as `<mtime> <path>` lines. */
+export function jsonlByMtimeFindCommand(dirPath: string): string {
+  return `find ${shellArg(dirPath)}/ -mindepth 1 -maxdepth 1 -type f -name '*.jsonl' -printf '%T@ %p\\n' 2>/dev/null | sort -rn`;
 }
 
 class TmuxBackend {
@@ -235,6 +376,15 @@ class TmuxBackend {
       containerExecArgs(this.containerId, args, stdin !== undefined),
       { stdin, timeoutMs },
     );
+  }
+
+  private async execRaw(args: string[], timeoutMs = 60_000): Promise<RawExecOutput> {
+    if (args.length === 0) throw new Error("cannot execute empty command");
+    if (this.kind === "local") {
+      return execWithRawOutput(args[0]!, args.slice(1), { cwd: this.cwd, timeoutMs });
+    }
+    if (!this.containerId) throw new Error("container backend has no container id");
+    return execWithRawOutput("docker", containerExecArgs(this.containerId, args, false), { timeoutMs });
   }
 
   async readFile(filePath: string): Promise<string | undefined> {
@@ -317,6 +467,113 @@ class TmuxBackend {
 
     const out = await this.exec(["sh", "-c", `stat -c %s ${shellArg(filePath)} 2>/dev/null || echo 0`]);
     return Number.parseInt(out.stdout.trim(), 10) || 0;
+  }
+
+  /**
+   * The bytes of `filePath` from `offset` to EOF.
+   *
+   * Appends are read as appends: re-reading the whole transcript on every
+   * 250ms tick made the tail cost O(size²) over a session, and in container
+   * mode piped every megabyte back through `docker exec` each time.
+   */
+  async readFileBytesFrom(filePath: string, offset: number): Promise<Buffer> {
+    const start = Math.max(0, Math.floor(offset));
+    if (this.kind === "local") {
+      let handle: Awaited<ReturnType<typeof fs.open>>;
+      try {
+        handle = await fs.open(filePath, "r");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return Buffer.alloc(0);
+        throw error;
+      }
+      try {
+        const length = Math.max(0, (await handle.stat()).size - start);
+        if (length === 0) return Buffer.alloc(0);
+        const buffer = Buffer.allocUnsafe(length);
+        const { bytesRead } = await handle.read(buffer, 0, length, start);
+        return buffer.subarray(0, bytesRead);
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
+    }
+
+    const out = await this.execRaw(["sh", "-c", tailFromOffsetCommand(filePath, start)]);
+    return out.stdout;
+  }
+
+  /**
+   * Both hook directories and the transcript size for one poll tick.
+   *
+   * Local reads are three cheap syscalls issued together; container reads
+   * collapse into a single `docker exec`.
+   */
+  async pollSnapshot(paths: SessionHookPaths, transcriptPath: string | undefined): Promise<TmuxPollSnapshot> {
+    if (this.kind === "local") {
+      const [pending, timeouts, transcriptSize] = await Promise.all([
+        this.listDir(paths.pendingDir),
+        this.listDir(paths.timeoutDir),
+        transcriptPath ? this.fileSize(transcriptPath) : Promise.resolve(0),
+      ]);
+      return { pending, timeouts, transcriptSize };
+    }
+
+    const out = await this.exec([
+      "sh",
+      "-c",
+      pollSnapshotScript(paths.pendingDir, paths.timeoutDir, transcriptPath),
+    ]);
+    return parsePollSnapshotOutput(out.stdout);
+  }
+
+  /** Every `.jsonl` in `dirPath` as `{ path, mtime }`, newest first. */
+  async listJsonlByMtime(dirPath: string): Promise<Array<{ path: string; mtime: number }>> {
+    if (this.kind === "container") {
+      const out = await this.exec(["sh", "-c", jsonlByMtimeFindCommand(dirPath)]);
+      return parseFreshJsonlFindOutput(out.stdout);
+    }
+
+    const names = (await this.listDir(dirPath)).filter((name) => name.endsWith(".jsonl"));
+    const entries = await Promise.all(names.map(async (name) => {
+      const fullPath = `${dirPath}/${name}`;
+      return { path: fullPath, mtime: await this.fileMtimeUnix(fullPath) };
+    }));
+    return entries.sort((a, b) => b.mtime - a.mtime);
+  }
+
+  /**
+   * The first `maxBytes` of a transcript plus its line count, without ever
+   * materialising the whole file.
+   */
+  async transcriptHead(filePath: string, maxBytes: number): Promise<{ head: string; lineCount: number }> {
+    if (this.kind === "container") {
+      const out = await this.exec(["sh", "-c", transcriptHeadCommand(filePath, maxBytes)]);
+      return parseTranscriptHeadOutput(out.stdout);
+    }
+
+    let handle: Awaited<ReturnType<typeof fs.open>>;
+    try {
+      handle = await fs.open(filePath, "r");
+    } catch {
+      return { head: "", lineCount: 0 };
+    }
+    try {
+      const buffer = Buffer.allocUnsafe(maxBytes);
+      const first = await handle.read(buffer, 0, maxBytes, 0);
+      const head = buffer.subarray(0, first.bytesRead).toString("utf8");
+      let lineCount = countNewlines(buffer.subarray(0, first.bytesRead));
+      // Counting the tail streams past it rather than retaining it: the count
+      // is cosmetic, but it still has to cover the whole file.
+      let position = first.bytesRead;
+      while (first.bytesRead === maxBytes) {
+        const next = await handle.read(buffer, 0, maxBytes, position);
+        if (next.bytesRead === 0) break;
+        lineCount += countNewlines(buffer.subarray(0, next.bytesRead));
+        position += next.bytesRead;
+      }
+      return { head, lineCount };
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
   }
 
   async fileMtimeUnix(filePath: string): Promise<number> {
@@ -584,8 +841,12 @@ async function ensureSessionDirs(backend: TmuxBackend, paths: SessionHookPaths):
   await backend.ensureDir(paths.timeoutDir);
 }
 
-async function drainTimeouts(backend: TmuxBackend, paths: SessionHookPaths): Promise<Array<{ kind: string; id: string }>> {
-  const names = await backend.listDir(paths.timeoutDir);
+/** `names` comes from the tick's {@link TmuxPollSnapshot}, not a fresh listing. */
+async function drainTimeouts(
+  backend: TmuxBackend,
+  paths: SessionHookPaths,
+  names: string[],
+): Promise<Array<{ kind: string; id: string }>> {
   const out: Array<{ kind: string; id: string }> = [];
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
@@ -596,12 +857,14 @@ async function drainTimeouts(backend: TmuxBackend, paths: SessionHookPaths): Pro
   return out;
 }
 
+/** `pendingNames` comes from the tick's {@link TmuxPollSnapshot}, not a fresh listing. */
 async function drainPending(
   backend: TmuxBackend,
   paths: SessionHookPaths,
+  pendingNames: string[],
   alreadyEmitted: Set<string>,
 ): Promise<PendingHookEvent[]> {
-  const names = (await backend.listDir(paths.pendingDir)).filter((name) => name.endsWith(".json")).sort();
+  const names = pendingNames.filter((name) => name.endsWith(".json")).sort();
   const stillPresent = new Set(names.map((name) => parseEventFilename(name).id));
   for (const id of Array.from(alreadyEmitted)) {
     if (!stillPresent.has(id)) alreadyEmitted.delete(id);
@@ -774,16 +1037,35 @@ export async function newestJsonlInDir(
 
 export function transcriptContainsSessionId(content: string, sessionId: string): boolean {
   if (!content || !sessionId) return false;
+  // Claude writes the owning session id at the top level of every record, so
+  // the shallow pass answers effectively every real transcript after one line.
+  // The deep scan is kept as a fallback for shapes that nest it, but it walks
+  // every value of every line and must not be the common path.
+  return scanTranscriptForSessionId(content, sessionId, false)
+    || scanTranscriptForSessionId(content, sessionId, true);
+}
+
+function scanTranscriptForSessionId(content: string, sessionId: string, deep: boolean): boolean {
   for (const raw of content.split("\n")) {
     const trimmed = raw.trim();
     if (!trimmed) continue;
+    let value: unknown;
     try {
-      if (jsonContainsSessionId(JSON.parse(trimmed), sessionId)) return true;
+      value = JSON.parse(trimmed);
     } catch {
       continue;
     }
+    if (deep ? jsonContainsSessionId(value, sessionId) : topLevelSessionIdMatches(value, sessionId)) {
+      return true;
+    }
   }
   return false;
+}
+
+function topLevelSessionIdMatches(value: unknown, sessionId: string): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return record.sessionId === sessionId || record.session_id === sessionId;
 }
 
 function jsonContainsSessionId(value: unknown, sessionId: string): boolean {
@@ -799,49 +1081,51 @@ function jsonContainsSessionId(value: unknown, sessionId: string): boolean {
   return Object.values(record).some((item) => jsonContainsSessionId(item, sessionId));
 }
 
+/** How many sessions the resume dialog offers. */
+const MAX_PREVIOUS_SESSIONS = 50;
+/**
+ * How much of a transcript the listing reads. The title is the first user
+ * message, which is within the first few lines of every real transcript; a
+ * session whose opening prompt somehow exceeds this is listed untitled rather
+ * than costing a multi-megabyte read.
+ */
+export const TRANSCRIPT_HEAD_BYTES = 64 * 1024;
+
 async function listPreviousSessions(
   backend: TmuxBackend,
   claudeHome: string,
   cwd: string,
 ): Promise<Array<{ session_id: string; title: string | null; last_activity_unix: number; message_count: number; transcript_path: string }>> {
   const projectDir = `${claudeHome}/projects/${encodeCwd(cwd)}`;
-  const names = await backend.listDir(projectDir);
-  const candidates: Array<{ mtime: number; fullPath: string; sessionId: string }> = [];
-  for (const name of names) {
-    if (!name.endsWith(".jsonl")) continue;
-    const sessionId = name.slice(0, -6);
-    const fullPath = `${projectDir}/${name}`;
-    candidates.push({
-      mtime: await backend.fileMtimeUnix(fullPath),
-      fullPath,
-      sessionId,
-    });
-  }
+  const candidates = (await backend.listJsonlByMtime(projectDir)).slice(0, MAX_PREVIOUS_SESSIONS);
 
-  candidates.sort((a, b) => b.mtime - a.mtime);
   const out = [];
-  for (const candidate of candidates.slice(0, 50)) {
-    const content = await backend.readFile(candidate.fullPath) ?? "";
-    const summary = summarizeTranscript(content);
+  for (const candidate of candidates) {
+    const { head, lineCount } = await backend.transcriptHead(candidate.path, TRANSCRIPT_HEAD_BYTES);
+    const name = candidate.path.slice(candidate.path.lastIndexOf("/") + 1);
     out.push({
-      session_id: candidate.sessionId,
-      title: summary.title,
-      last_activity_unix: candidate.mtime,
-      message_count: summary.messageCount,
-      transcript_path: candidate.fullPath,
+      session_id: name.endsWith(".jsonl") ? name.slice(0, -6) : name,
+      title: titleFromTranscriptHead(head, head.length >= TRANSCRIPT_HEAD_BYTES),
+      last_activity_unix: Math.floor(candidate.mtime),
+      message_count: lineCount,
+      transcript_path: candidate.path,
     });
   }
   return out;
 }
 
-function summarizeTranscript(content: string): { title: string | null; messageCount: number } {
-  let messageCount = 0;
-  let title: string | null = null;
-  for (const line of content.split("\n")) {
+/**
+ * The first user message in the head of a transcript.
+ *
+ * When the head was truncated its final line is a fragment — possibly cut mid
+ * multi-byte character — so it is dropped rather than parsed.
+ */
+function titleFromTranscriptHead(head: string, truncated: boolean): string | null {
+  const lines = head.split("\n");
+  if (truncated) lines.pop();
+  for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    messageCount += 1;
-    if (title !== null) continue;
 
     let value: unknown;
     try {
@@ -858,9 +1142,9 @@ function summarizeTranscript(content: string): { title: string | null; messageCo
     if (role !== "user") continue;
     const contentField = message?.content ?? record.content;
     const text = extractTextContent(contentField);
-    if (text?.trim()) title = truncateTitle(text.trim(), 80);
+    if (text?.trim()) return truncateTitle(text.trim(), 80);
   }
-  return { title, messageCount };
+  return null;
 }
 
 function extractTextContent(content: unknown): string | undefined {
@@ -879,28 +1163,47 @@ function truncateTitle(value: string, maxChars: number): string {
   return Array.from(singleLine).length <= maxChars ? singleLine : `${Array.from(singleLine).slice(0, maxChars).join("")}...`;
 }
 
-class TranscriptTail {
+export class TranscriptTail {
   private offset = 0;
-  private partial = "";
+  /**
+   * The bytes after the last newline of the previous read: an unterminated
+   * line, which may also stop mid multi-byte character. Held as bytes, not as
+   * a string, so a character split across two reads is decoded once from the
+   * rejoined halves instead of twice as two U+FFFD replacements.
+   */
+  private partial: Buffer = Buffer.alloc(0);
 
-  constructor(private readonly filePath: string) {}
+  constructor(readonly filePath: string) {}
 
-  async readNew(backend: TmuxBackend): Promise<unknown[]> {
-    const size = await backend.fileSize(this.filePath);
+  /**
+   * Parses whatever has been appended since the last call.
+   *
+   * `knownSize` lets a caller that already stat'd the file (the poll loop gets
+   * it in its snapshot) skip a second stat. Only the appended bytes are read:
+   * transcripts reach many megabytes and this runs every 250ms.
+   */
+  async readNew(backend: TmuxBackend, knownSize?: number): Promise<unknown[]> {
+    const size = knownSize ?? await backend.fileSize(this.filePath);
     if (size <= this.offset) return [];
-    const full = await backend.readFile(this.filePath) ?? "";
-    const bytes = Buffer.from(full, "utf8");
-    const newChunk = bytes.subarray(this.offset).toString("utf8");
-    this.offset = Buffer.byteLength(full);
-    const combined = `${this.partial}${newChunk}`;
-    this.partial = "";
+
+    const chunk = await backend.readFileBytesFrom(this.filePath, this.offset);
+    if (chunk.length === 0) return [];
+    this.offset += chunk.length;
+
+    const combined = this.partial.length === 0 ? chunk : Buffer.concat([this.partial, chunk]);
+    const lastNewline = combined.lastIndexOf(0x0a);
+    if (lastNewline < 0) {
+      // Copied, not a view: a subarray would pin the whole read buffer.
+      this.partial = Buffer.from(combined);
+      return [];
+    }
+    this.partial = Buffer.from(combined.subarray(lastNewline + 1));
 
     const lines: unknown[] = [];
-    let lastNewline = 0;
-    for (let index = 0; index < combined.length; index += 1) {
-      if (combined.charCodeAt(index) !== 10) continue;
-      const line = combined.slice(lastNewline, index).trim();
-      lastNewline = index + 1;
+    // A newline byte never appears inside a UTF-8 multi-byte sequence, so
+    // everything up to the last one is a complete, decodable run of lines.
+    for (const raw of combined.subarray(0, lastNewline).toString("utf8").split("\n")) {
+      const line = raw.trim();
       if (!line) continue;
       try {
         lines.push(JSON.parse(line));
@@ -908,7 +1211,6 @@ class TranscriptTail {
         // Ignore malformed JSONL fragments.
       }
     }
-    if (lastNewline < combined.length) this.partial = combined.slice(lastNewline);
     return lines;
   }
 }
@@ -942,6 +1244,22 @@ function permissionModeFromPane(snapshot: string): string | undefined {
   if (normalized.includes("ask before edits on") || normalized.includes("manual mode on")) return "default";
   if (normalized.includes("don't ask on") || normalized.includes("dont ask on")) return "dontAsk";
   return undefined;
+}
+
+/**
+ * How long a pane capture may be reused. Long enough that several renderers
+ * polling the same session share one spawn, short enough that nobody sees a
+ * pane that is visibly behind.
+ */
+export const CAPTURE_PANE_CACHE_MS = 200;
+
+/** What `claude_tmux_capture_pane` answers when the caller supplied a hash. */
+export type PaneCaptureResult =
+  | { unchanged: true; hash: string }
+  | { unchanged: false; hash: string; text: string };
+
+export function paneHash(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 32);
 }
 
 /** The `exec` surface the thinking-display probe needs, so it can be tested without a backend. */
@@ -1031,6 +1349,8 @@ class TmuxSession {
   private taskTracker = new TranscriptTaskTracker();
   private busy = false;
   private permissionMode = "bypassPermissions";
+  private paneCache: { text: string; hash: string; capturedAt: number } | undefined;
+  private paneCaptureInFlight: Promise<{ text: string; hash: string; capturedAt: number }> | undefined;
   private readonly inputMutex = new AsyncMutex();
 
   constructor(
@@ -1280,36 +1600,17 @@ class TmuxSession {
     const emittedBlockingIds = new Set<string>();
     let tail: TranscriptTail | undefined;
 
+    let tick = 0;
+
     void (async () => {
       try {
         while (!this.stopRequested) {
           await delay(POLL_INTERVAL_MS);
           if (this.stopRequested) break;
+          tick += 1;
 
-          try {
-            const events = await drainPending(this.backend, this.sessionHookPaths, emittedBlockingIds);
-            for (const event of events) this.emitHook(context, event);
-          } catch (error) {
-            console.warn("[tmux] drainPending failed", error);
-          }
-
-          try {
-            const timeouts = await drainTimeouts(this.backend, this.sessionHookPaths);
-            for (const timeout of timeouts) {
-              emittedBlockingIds.delete(timeout.id);
-              context.emit(CLAUDE_TMUX_EVENT, {
-                kind: "hook-timed-out",
-                tab_id: this.tabId,
-                environment_id: this.environmentId,
-                session_id: this.sessionId,
-                event_kind: timeout.kind,
-                event_id: timeout.id,
-              });
-            }
-          } catch (error) {
-            console.warn("[tmux] drainTimeouts failed", error);
-          }
-
+          // Discovered before the snapshot so the same round trip can carry the
+          // transcript size.
           if (!tail) {
             try {
               const transcriptPath = await this.discoverTranscriptPath();
@@ -1319,25 +1620,67 @@ class TmuxSession {
             }
           }
 
-          if (tail) {
+          let snapshot: TmuxPollSnapshot | undefined;
+          try {
+            snapshot = await this.backend.pollSnapshot(this.sessionHookPaths, tail?.filePath);
+          } catch (error) {
+            console.warn("[tmux] poll snapshot failed", error);
+          }
+
+          if (snapshot) {
             try {
-              const lines = await tail.readNew(this.backend);
-              for (const line of lines) {
-                const permissionMode = permissionModeFromTranscriptLine(line);
-                if (permissionMode) this.setPermissionMode(permissionMode, context);
+              const events = await drainPending(
+                this.backend,
+                this.sessionHookPaths,
+                snapshot.pending,
+                emittedBlockingIds,
+              );
+              for (const event of events) this.emitHook(context, event);
+            } catch (error) {
+              console.warn("[tmux] drainPending failed", error);
+            }
+
+            try {
+              const timeouts = await drainTimeouts(this.backend, this.sessionHookPaths, snapshot.timeouts);
+              for (const timeout of timeouts) {
+                emittedBlockingIds.delete(timeout.id);
                 context.emit(CLAUDE_TMUX_EVENT, {
-                  kind: "transcript-line",
+                  kind: "hook-timed-out",
                   tab_id: this.tabId,
                   environment_id: this.environmentId,
                   session_id: this.sessionId,
-                  line: this.withTaskSnapshot(line, this.taskTracker),
+                  event_kind: timeout.kind,
+                  event_id: timeout.id,
                 });
               }
             } catch (error) {
-              console.warn("[tmux] transcript tail failed", error);
+              console.warn("[tmux] drainTimeouts failed", error);
+            }
+
+            if (tail) {
+              try {
+                const lines = await tail.readNew(this.backend, snapshot.transcriptSize);
+                for (const line of lines) {
+                  const permissionMode = permissionModeFromTranscriptLine(line);
+                  if (permissionMode) this.setPermissionMode(permissionMode, context);
+                  context.emit(CLAUDE_TMUX_EVENT, {
+                    kind: "transcript-line",
+                    tab_id: this.tabId,
+                    environment_id: this.environmentId,
+                    session_id: this.sessionId,
+                    line: this.withTaskSnapshot(line, this.taskTracker),
+                  });
+                }
+              } catch (error) {
+                console.warn("[tmux] transcript tail failed", error);
+              }
             }
           }
 
+          // Liveness is a whole extra process spawn (a `docker exec` in
+          // container mode) and a session that ends stays ended, so it is
+          // checked on a slower cadence than the hook and transcript reads.
+          if (tick % LIVENESS_CHECK_EVERY_TICKS !== 0) continue;
           if (!await this.tmuxAlive().catch(() => false)) {
             context.emit(CLAUDE_TMUX_EVENT, {
               kind: "stopped",
@@ -1562,6 +1905,47 @@ class TmuxSession {
     return out.stdout;
   }
 
+  /**
+   * The capture served to `claude_tmux_capture_pane`.
+   *
+   * Renderers poll this every 500-3000ms and several tabs can be watching one
+   * session, so identical captures are coalesced inside a short window rather
+   * than spawning `tmux capture-pane` per caller. A caller that remembers the
+   * hash of what it already has gets an `unchanged` answer instead of the full
+   * pane text; callers that pass nothing keep receiving the plain string.
+   *
+   * Deliberately not used by the internal capture paths: the mode-switch wait
+   * loop polls at 100ms and must never see a cached pane.
+   */
+  async capturePaneForRequest(knownHash?: string): Promise<string | PaneCaptureResult> {
+    const captured = await this.recentPaneCapture();
+    if (knownHash === undefined) return captured.text;
+    return knownHash === captured.hash
+      ? { unchanged: true, hash: captured.hash }
+      : { unchanged: false, hash: captured.hash, text: captured.text };
+  }
+
+  /**
+   * The cached capture, or one shared spawn if it is stale. Concurrent callers
+   * join the in-flight capture rather than each starting their own.
+   */
+  private async recentPaneCapture(): Promise<{ text: string; hash: string; capturedAt: number }> {
+    const cached = this.paneCache;
+    if (cached && Date.now() - cached.capturedAt <= CAPTURE_PANE_CACHE_MS) return cached;
+    if (!this.paneCaptureInFlight) {
+      this.paneCaptureInFlight = this.capturePane()
+        .then((text) => {
+          const entry = { text, hash: paneHash(text), capturedAt: Date.now() };
+          this.paneCache = entry;
+          return entry;
+        })
+        .finally(() => {
+          this.paneCaptureInFlight = undefined;
+        });
+    }
+    return await this.paneCaptureInFlight;
+  }
+
   async resize(cols: number, rows: number): Promise<void> {
     const out = await this.backend.exec([
       this.tmuxCommand,
@@ -1733,13 +2117,21 @@ async function killOrphanSession(context: CommandContext, environmentId: string,
   }
 }
 
+/** Cadence while the pane is producing output — what the user's typing feels like. */
+export const INTERACTIVE_SNAPSHOT_MIN_MS = 250;
+/** Cadence a pane backs off to while nothing at all changes. */
+export const INTERACTIVE_SNAPSHOT_MAX_MS = 1_000;
+
 type InteractiveTerminalSession = {
   id: string;
   tmux: TmuxSession;
-  interval?: NodeJS.Timeout;
+  timer?: NodeJS.Timeout;
   lastSnapshot?: string;
   cols: number;
   rows: number;
+  /** Current gap between captures; doubles while the pane is static. */
+  intervalMs: number;
+  context?: CommandContext;
 };
 
 class InteractiveTmuxTerminalManager {
@@ -1747,24 +2139,24 @@ class InteractiveTmuxTerminalManager {
 
   create(tmux: TmuxSession, cols: number, rows: number): string {
     const id = `tmux:${tmux.environmentId}:${tmux.tabId}:${randomUUID()}`;
-    this.terminals.set(id, { id, tmux, cols, rows });
+    this.terminals.set(id, { id, tmux, cols, rows, intervalMs: INTERACTIVE_SNAPSHOT_MIN_MS });
     return id;
   }
 
   async start(id: string, context: CommandContext): Promise<void> {
     const terminal = this.require(id);
+    terminal.context = context;
     await terminal.tmux.resize(terminal.cols, terminal.rows);
     await this.emitSnapshot(terminal, context, true);
-    if (terminal.interval) clearInterval(terminal.interval);
-    terminal.interval = setInterval(() => {
-      void this.emitSnapshot(terminal, context, false).catch((error) => {
-        console.debug("[tmux] interactive snapshot failed", error);
-      });
-    }, 250);
+    this.schedule(terminal);
   }
 
   async write(id: string, data: string): Promise<void> {
-    await this.require(id).tmux.writeInteractive(data);
+    const terminal = this.require(id);
+    // Input is about to produce output, so undo any backoff before it lands.
+    terminal.intervalMs = INTERACTIVE_SNAPSHOT_MIN_MS;
+    if (terminal.timer) this.schedule(terminal);
+    await terminal.tmux.writeInteractive(data);
   }
 
   async resize(id: string, cols: number, rows: number): Promise<void> {
@@ -1777,7 +2169,8 @@ class InteractiveTmuxTerminalManager {
   detach(id: string): void {
     const terminal = this.terminals.get(id);
     if (!terminal) return;
-    if (terminal.interval) clearInterval(terminal.interval);
+    if (terminal.timer) clearTimeout(terminal.timer);
+    terminal.timer = undefined;
     this.terminals.delete(id);
   }
 
@@ -1787,9 +2180,34 @@ class InteractiveTmuxTerminalManager {
     return terminal;
   }
 
+  /**
+   * Self-rescheduling rather than a fixed interval, so a pane nobody is looking
+   * at costs one `tmux capture-pane` per second instead of four — and so a
+   * capture that runs long cannot stack up behind itself.
+   */
+  private schedule(terminal: InteractiveTerminalSession): void {
+    if (terminal.timer) clearTimeout(terminal.timer);
+    terminal.timer = setTimeout(() => {
+      const context = terminal.context;
+      if (!context || this.terminals.get(terminal.id) !== terminal) return;
+      void this.emitSnapshot(terminal, context, false)
+        .catch((error) => {
+          console.debug("[tmux] interactive snapshot failed", error);
+        })
+        .finally(() => {
+          if (this.terminals.get(terminal.id) === terminal) this.schedule(terminal);
+        });
+    }, terminal.intervalMs);
+  }
+
   private async emitSnapshot(terminal: InteractiveTerminalSession, context: CommandContext, force: boolean): Promise<void> {
     const snapshot = await terminal.tmux.capturePane({ ansi: true, joinWrapped: false });
-    if (!force && snapshot === terminal.lastSnapshot) return;
+    if (!force && snapshot === terminal.lastSnapshot) {
+      terminal.intervalMs = Math.min(INTERACTIVE_SNAPSHOT_MAX_MS, terminal.intervalMs * 2);
+      return;
+    }
+    // Any change snaps the cadence back: output usually arrives in bursts.
+    terminal.intervalMs = INTERACTIVE_SNAPSHOT_MIN_MS;
     terminal.lastSnapshot = snapshot;
     context.emit(`terminal-output-${terminal.id}`, bytesPayload(`\x1b[H\x1b[2J${snapshot.replaceAll("\n", "\r\n")}`));
   }
@@ -1797,7 +2215,8 @@ class InteractiveTmuxTerminalManager {
 
 const interactiveTerminals = new InteractiveTmuxTerminalManager();
 
-const INTERACTIVE_KEY_SEQUENCES = new Map<string, string[]>([
+/** A list, not a Map: it is scanned per character, so it must not be rebuilt per character. */
+const INTERACTIVE_KEY_SEQUENCES: ReadonlyArray<readonly [string, string[]]> = [
   ["\x1b[A", ["Up"]],
   ["\x1b[B", ["Down"]],
   ["\x1b[C", ["Right"]],
@@ -1807,7 +2226,7 @@ const INTERACTIVE_KEY_SEQUENCES = new Map<string, string[]>([
   ["\x1b[1~", ["Home"]],
   ["\x1b[F", ["End"]],
   ["\x1b[4~", ["End"]],
-]);
+];
 
 async function sendInteractiveData(
   data: string,
@@ -1824,7 +2243,7 @@ async function sendInteractiveData(
   };
 
   while (index < data.length) {
-    const matched = Array.from(INTERACTIVE_KEY_SEQUENCES.entries()).find(([sequence]) => data.startsWith(sequence, index));
+    const matched = INTERACTIVE_KEY_SEQUENCES.find(([sequence]) => data.startsWith(sequence, index));
     if (matched) {
       await flushLiteral();
       await sendKeys(matched[1]);
@@ -1877,6 +2296,8 @@ type ClaudeStatePoll = {
   pollRequested: boolean;
   inFlight?: Promise<void>;
   context: CommandContext;
+  /** When storage last confirmed the environment still owns a running container. */
+  lastRetirementCheckAt?: number;
 };
 
 export type ClaudeStatePollManagerOptions = {
@@ -1890,6 +2311,13 @@ export type ClaudeStatePollManagerOptions = {
 export const CLAUDE_STATE_READ_TIMEOUT_MS = 5_000;
 /** Gap between state reads. Each tick coalesces behind any in-flight read. */
 export const CLAUDE_STATE_POLL_INTERVAL_MS = 1_000;
+/**
+ * How often a poll that observed *no* change still asks storage whether its
+ * environment is still running. A changed state consults storage immediately;
+ * this bounds how long a poll can outlive the environment it belongs to, for
+ * the case where nothing else retired it.
+ */
+export const CLAUDE_STATE_RETIREMENT_CHECK_MS = 15_000;
 
 /**
  * The command that reads the agent's self-reported state out of a container.
@@ -2021,19 +2449,38 @@ export class ClaudeStatePollManager {
     return poll.active && this.polls.get(containerId) === poll;
   }
 
+  /**
+   * Whether an unchanged tick should still confirm the environment is running.
+   * Undefined means it never has, which is why the first tick always checks.
+   */
+  private isRetirementCheckDue(poll: ClaudeStatePoll): boolean {
+    return poll.lastRetirementCheckAt === undefined
+      || Date.now() - poll.lastRetirementCheckAt >= CLAUDE_STATE_RETIREMENT_CHECK_MS;
+  }
+
   private async poll(containerId: string, poll: ClaudeStatePoll): Promise<void> {
     const state = (await this.readState(containerId).catch(() => "")).trim();
     if (!this.isCurrent(containerId, poll)) return;
+
+    const known = state === "working" || state === "waiting" || state === "idle";
+    const changed = known && state !== poll.lastState;
+    // A tick that observed nothing new must cost nothing beyond the state read.
+    // Loading environments here parses the whole environments file, once per
+    // second per running container, to answer a question whose answer has not
+    // changed. The retirement check below is what that read is *for*, and it
+    // only has to be timely enough to stop polling a container that has gone.
+    if (!changed && !this.isRetirementCheckDue(poll)) return;
+
     const environment = (await poll.context.storage.loadEnvironments()).find(
       (candidate) => candidate.containerId === containerId,
     );
     if (!this.isCurrent(containerId, poll)) return;
+    poll.lastRetirementCheckAt = Date.now();
     if (!environment || environment.status !== "running") {
       this.deactivate(containerId, poll);
       return;
     }
-    if (state !== "working" && state !== "waiting" && state !== "idle") return;
-    if (state === poll.lastState) return;
+    if (!changed) return;
     const occurredAt = this.now();
     const persisted = await poll.context.storage.setEnvironmentAgentActivity(
       environment.id,
@@ -2175,8 +2622,11 @@ export function registerTmuxBackendCommands(
       context,
     ),
   );
-  register("claude_tmux_capture_pane", ({ tabId, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).capturePane(),
+  // `knownHash` is optional: without it the answer is the plain pane text a
+  // caller has always received, so an older renderer keeps working unchanged.
+  register("claude_tmux_capture_pane", ({ tabId, environmentId, knownHash }) =>
+    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId"))
+      .capturePaneForRequest(asOptionalString(knownHash)),
   );
   register("claude_tmux_resize", ({ tabId, cols, rows, environmentId }) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).resize(

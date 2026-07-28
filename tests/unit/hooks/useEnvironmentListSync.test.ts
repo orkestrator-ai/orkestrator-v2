@@ -28,18 +28,26 @@ afterEach(() => {
 });
 
 describe("useEnvironmentListSync", () => {
-  test("refreshes every current project with the latest callback on resync and cleans up", async () => {
-    let intervalCallback: (() => void) | null = null;
-    const clearIntervalMock = mock(() => {});
+  test("does not register its own interval (resource-sync owns the periodic resync)", () => {
+    // The hook used to run a second 60s interval on top of resource-sync's own
+    // resync timer, refreshing every project twice per tick.
+    const setIntervalMock = mock(((() => 1) as unknown) as typeof setInterval);
+    globalThis.setInterval = setIntervalMock as typeof setInterval;
+    globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
+
+    const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
+    const { unmount } = renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+    unmount();
+
+    const resyncIntervals = setIntervalMock.mock.calls.filter(
+      ([, timeout]) => timeout === ENVIRONMENT_LIST_RESYNC_INTERVAL_MS,
+    );
+    expect(resyncIntervals).toHaveLength(0);
+  });
+
+  test("refreshes every current project with the latest callback on resync", async () => {
     const firstRefreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
     const nextRefreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
-
-    globalThis.setInterval = ((callback: TimerHandler, timeout?: number) => {
-      expect(timeout).toBe(ENVIRONMENT_LIST_RESYNC_INTERVAL_MS);
-      intervalCallback = callback as () => void;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    }) as typeof setInterval;
-    globalThis.clearInterval = clearIntervalMock as typeof clearInterval;
 
     const { rerender, unmount } = renderHook(
       ({ projectIds, refreshProject }) => useEnvironmentListSync(projectIds, refreshProject),
@@ -49,13 +57,15 @@ describe("useEnvironmentListSync", () => {
     expect(firstRefreshProject).not.toHaveBeenCalled();
 
     await act(async () => {
-      intervalCallback?.();
+      requestResourceResync();
+      await Promise.resolve();
     });
     expect(firstRefreshProject.mock.calls.map(([projectId]) => projectId)).toEqual(["project-1"]);
 
     rerender({ projectIds: ["project-1", "project-2"], refreshProject: nextRefreshProject });
     await act(async () => {
-      intervalCallback?.();
+      requestResourceResync();
+      await Promise.resolve();
     });
     expect(firstRefreshProject).toHaveBeenCalledTimes(1);
     expect(nextRefreshProject.mock.calls.map(([projectId]) => projectId)).toEqual([
@@ -63,7 +73,11 @@ describe("useEnvironmentListSync", () => {
     ]);
 
     unmount();
-    expect(clearIntervalMock).toHaveBeenCalledWith(1);
+    await act(async () => {
+      requestResourceResync();
+      await Promise.resolve();
+    });
+    expect(nextRefreshProject).toHaveBeenCalledTimes(2);
   });
 
   test("refreshes when the backend announces an environment change", async () => {
@@ -182,25 +196,18 @@ describe("useEnvironmentListSync", () => {
   });
 
   test("does nothing when there are no projects", async () => {
-    let intervalCallback: (() => void) | null = null;
     const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
-
-    globalThis.setInterval = ((callback: TimerHandler) => {
-      intervalCallback = callback as () => void;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    }) as typeof setInterval;
-    globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
     renderHook(() => useEnvironmentListSync([], refreshProject));
     await act(async () => {
-      intervalCallback?.();
+      requestResourceResync();
+      await Promise.resolve();
     });
 
     expect(refreshProject).not.toHaveBeenCalled();
   });
 
   test("isolates in-flight work per project so one stalled refresh does not block others", async () => {
-    let intervalCallback: (() => void) | null = null;
     let finishRefresh: (() => void) | undefined;
     const refreshProject = mock<(projectId: string) => Promise<void>>(
       (projectId) => projectId === "project-1"
@@ -210,22 +217,16 @@ describe("useEnvironmentListSync", () => {
         : Promise.resolve(),
     );
 
-    globalThis.setInterval = ((callback: TimerHandler) => {
-      intervalCallback = callback as () => void;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    }) as typeof setInterval;
-    globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
-
     renderHook(() => useEnvironmentListSync(["project-1", "project-2"], refreshProject));
 
     act(() => {
-      intervalCallback?.();
+      requestResourceResync();
     });
     await act(async () => {
       await Promise.resolve();
     });
     act(() => {
-      intervalCallback?.();
+      requestResourceResync();
     });
     expect(refreshProject.mock.calls.map(([projectId]) => projectId)).toEqual([
       "project-1", "project-2", "project-2",
@@ -236,7 +237,8 @@ describe("useEnvironmentListSync", () => {
     });
 
     await act(async () => {
-      intervalCallback?.();
+      requestResourceResync();
+      await Promise.resolve();
     });
     expect(refreshProject.mock.calls.filter(([projectId]) => projectId === "project-1")).toHaveLength(2);
   });
@@ -339,24 +341,19 @@ describe("useEnvironmentListSync", () => {
   });
 
   test("retries a project after a rejected refresh settles", async () => {
-    let intervalCallback: (() => void) | null = null;
     const refreshProject = mock<(projectId: string) => Promise<void>>()
       .mockImplementationOnce(() => Promise.reject(new Error("temporary failure")))
       .mockImplementation(() => Promise.resolve());
 
-    globalThis.setInterval = ((callback: TimerHandler) => {
-      intervalCallback = callback as () => void;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    }) as typeof setInterval;
-    globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
-
     renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
 
     await act(async () => {
-      intervalCallback?.();
+      requestResourceResync();
+      await Promise.resolve();
     });
     await act(async () => {
-      intervalCallback?.();
+      requestResourceResync();
+      await Promise.resolve();
     });
 
     expect(refreshProject).toHaveBeenCalledTimes(2);

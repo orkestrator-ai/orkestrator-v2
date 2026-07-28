@@ -98,7 +98,9 @@ export function ClaudePlanApprovalCard({
   sessionId,
   messages,
 }: ClaudePlanApprovalCardProps) {
-  const { removePendingPlanApproval } = useClaudeStore();
+  const removePendingPlanApproval = useClaudeStore(
+    (state) => state.removePendingPlanApproval,
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedback, setFeedback] = useState("");

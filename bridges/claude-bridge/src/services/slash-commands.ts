@@ -11,9 +11,69 @@
  * already handles.
  */
 
-import { readFile, readdir } from "node:fs/promises";
+import { open, readdir, stat } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { getMergedPlugins, readPluginManifest } from "./plugin-config.js";
+
+/**
+ * Cached frontmatter `description` per command file, validated against the
+ * file's identity and mtime (same fingerprint shape as `json-file-cache.ts`).
+ *
+ * `GET /plugins/commands` re-runs discovery on every call, and without this
+ * each call read every plugin command file in full. A stale entry is detected
+ * by the stat, so an edited command re-parses on the next discovery.
+ */
+interface CommandDescriptionCacheEntry {
+  fingerprint: string;
+  description: string | undefined;
+}
+
+const commandDescriptions = new Map<string, CommandDescriptionCacheEntry>();
+
+/**
+ * Frontmatter lives at the head of the file; nothing past this is read even on
+ * a cache miss, so a command file with a large body costs one small read. A
+ * truncated trailing multi-byte character cannot break the parse — the
+ * frontmatter block the regex needs is complete long before the cut.
+ */
+const FRONTMATTER_READ_BYTES = 8 * 1024;
+
+function fingerprintOf(stats: {
+  mtimeMs: number;
+  size: number;
+  ino: number;
+  dev: number;
+}): string {
+  // `ino`/`dev` catch an atomic replace that happens to preserve mtime and
+  // size — the common shape of a file written via rename.
+  return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}`;
+}
+
+async function readFileHead(filePath: string): Promise<string> {
+  const handle = await open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(FRONTMATTER_READ_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, FRONTMATTER_READ_BYTES, 0);
+    return buffer.toString("utf-8", 0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Resolve a command file's description, serving repeats from the cache until
+ * the file changes on disk.
+ */
+async function readCommandDescription(filePath: string): Promise<string | undefined> {
+  const fingerprint = fingerprintOf(await stat(filePath));
+  const cached = commandDescriptions.get(filePath);
+  if (cached && cached.fingerprint === fingerprint) {
+    return cached.description;
+  }
+  const description = parseDescription(await readFileHead(filePath));
+  commandDescriptions.set(filePath, { fingerprint, description });
+  return description;
+}
 
 /**
  * Built-in Claude slash commands (always available)
@@ -78,8 +138,7 @@ async function scanCommandsDir(
 
     let description: string | undefined;
     try {
-      const content = await readFile(join(commandsDir, entry), "utf-8");
-      description = parseDescription(content);
+      description = await readCommandDescription(join(commandsDir, entry));
     } catch {
       // File unreadable, include command without description
     }

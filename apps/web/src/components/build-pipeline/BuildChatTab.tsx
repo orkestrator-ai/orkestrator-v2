@@ -20,6 +20,7 @@ import {
   ERROR_MESSAGE_PREFIX,
   USAGE_SCAN_EXEMPT_EVENT_TYPES,
   type ClaudeMessage as ClaudeMessageType,
+  type ClaudeMessagePatch,
   type ClaudeAttachment,
 } from "@/lib/claude-client";
 import type { TaskSnapshotImage } from "@/prompts";
@@ -182,7 +183,7 @@ function AgentTabLoadingState({ label }: { label: string }) {
 
 export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(data.pipelineId));
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const environmentDefaultAgent = useEnvironmentStore(
     (state) => state.getEnvironmentById(data.environmentId)?.defaultAgent
   );
@@ -229,42 +230,50 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
   const jumpInTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const pipeline = useBuildPipelineStore((s) => s.pipelines.get(pipelineId));
-  const { config } = useConfigStore();
-  const {
-    setPhase,
-    addSession: addPipelineSession,
-    markSessionIdle,
-    markSessionRunning,
-    setVerificationResult,
-    beginStructuredReview,
-    setStructuredReview,
-    incrementIteration,
-    setPipelineError,
-    pausePipeline,
-    resumePipeline,
-  } = useBuildPipelineStore();
+  const config = useConfigStore((state) => state.config);
+  const setPhase = useBuildPipelineStore((state) => state.setPhase);
+  const addPipelineSession = useBuildPipelineStore((state) => state.addSession);
+  const markSessionIdle = useBuildPipelineStore((state) => state.markSessionIdle);
+  const markSessionRunning = useBuildPipelineStore((state) => state.markSessionRunning);
+  const setVerificationResult = useBuildPipelineStore((state) => state.setVerificationResult);
+  const beginStructuredReview = useBuildPipelineStore((state) => state.beginStructuredReview);
+  const setStructuredReview = useBuildPipelineStore((state) => state.setStructuredReview);
+  const incrementIteration = useBuildPipelineStore((state) => state.incrementIteration);
+  const setPipelineError = useBuildPipelineStore((state) => state.setPipelineError);
+  const pausePipeline = useBuildPipelineStore((state) => state.pausePipeline);
+  const resumePipeline = useBuildPipelineStore((state) => state.resumePipeline);
   const isPipelinePaused = useCallback(
     () => useBuildPipelineStore.getState().pipelines.get(pipelineId)?.phase === "paused",
     [pipelineId],
   );
 
-  const {
-    setClient,
-    setModels,
-    setSession,
-    addMessage,
-    setMessages,
-    setSessionLoading,
-    setServerStatus,
-    setContextUsage,
-    getOrCreateEventSubscription,
-    setEventStream,
-    hasActiveEventSubscription,
-    clients: clientsMap,
-    sessions: sessionsMap,
-  } = useClaudeStore();
+  // Narrow store subscriptions: actions are stable references, and the client
+  // read is per-environment, so unrelated claudeStore writes no longer
+  // re-render the whole pipeline tab. `sessions` stays a map-level
+  // subscription — the transcript view and idle-detection effects below need
+  // to react to every pipeline session's messages.
+  const setClient = useClaudeStore((state) => state.setClient);
+  const setModels = useClaudeStore((state) => state.setModels);
+  const setSession = useClaudeStore((state) => state.setSession);
+  const addMessage = useClaudeStore((state) => state.addMessage);
+  const setMessages = useClaudeStore((state) => state.setMessages);
+  const upsertMessage = useClaudeStore((state) => state.upsertMessage);
+  const patchMessage = useClaudeStore((state) => state.patchMessage);
+  const setSessionLoading = useClaudeStore((state) => state.setSessionLoading);
+  const setServerStatus = useClaudeStore((state) => state.setServerStatus);
+  const setContextUsage = useClaudeStore((state) => state.setContextUsage);
+  const getOrCreateEventSubscription = useClaudeStore(
+    (state) => state.getOrCreateEventSubscription,
+  );
+  const setEventStream = useClaudeStore((state) => state.setEventStream);
+  const hasActiveEventSubscription = useClaudeStore(
+    (state) => state.hasActiveEventSubscription,
+  );
+  const sessionsMap = useClaudeStore((state) => state.sessions);
 
-  const client = useMemo(() => clientsMap.get(environmentId), [clientsMap, environmentId]);
+  const client = useClaudeStore(
+    useCallback((state) => state.clients.get(environmentId), [environmentId]),
+  );
 
   // Subscribe to setup script state from environment store
   // Used to gate build start until setup scripts have completed
@@ -477,6 +486,21 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
             ? null
             : extractContextUsage(event.data);
 
+          if (eventType === "replay.required") {
+            for (const [sessionTabId, sessionState] of useClaudeStore.getState().sessions) {
+              if (
+                !sessionTabId.startsWith(`env-${environmentId}:`)
+                || !sessionState.sessionId
+              ) continue;
+              fetchMessagesDebounced(
+                sessionState.sessionId,
+                sessionTabId,
+                true,
+              );
+            }
+            continue;
+          }
+
           if (!eventSessionId) continue;
 
           const sessions = useClaudeStore.getState().sessions;
@@ -486,17 +510,32 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
             const isFinalEvent = eventType === "session.idle";
 
-            // This tab never applies an event payload — it always refetches —
-            // so an incremental patch is just another "something changed"
-            // signal. Without it the transcript would freeze after the first
-            // frame of each message and only catch up at `session.idle`.
-            if (
-              eventType === "message.updated" ||
-              eventType === "message.patched" ||
-              eventType === "session.updated" ||
-              isFinalEvent
-            ) {
-              fetchMessagesDebounced(eventSessionId, sessionTabId, isFinalEvent);
+            // Mirror ClaudeChatTab's delta handling: apply event payloads
+            // incrementally and refetch the authoritative transcript only when
+            // a payload cannot be applied (missing/partial frame, revision
+            // mismatch) or on the final `session.idle` reconcile. The previous
+            // refetch-only handler here sustained ~5 full-transcript fetches
+            // per second for the whole duration of every build turn.
+            if (eventType === "message.updated") {
+              const message = (event.data as { message?: ClaudeMessageType } | undefined)?.message;
+              if (message?.id && message.role === "assistant") {
+                upsertMessage(sessionTabId, message);
+              } else {
+                // Non-assistant payloads and payload-less events fall back to
+                // an authoritative refetch so they still surface promptly.
+                fetchMessagesDebounced(eventSessionId, sessionTabId);
+              }
+            } else if (eventType === "message.patched") {
+              const patch = event.data as ClaudeMessagePatch | undefined;
+              // A patch only applies against the exact revision it extends;
+              // every failure mode (unseen message, missed frames, malformed
+              // payload) recovers via the authoritative transcript, which also
+              // re-establishes a revision the next patch can build on.
+              if (!patch?.messageId || !patchMessage(sessionTabId, patch)) {
+                fetchMessagesDebounced(eventSessionId, sessionTabId);
+              }
+            } else if (isFinalEvent) {
+              fetchMessagesDebounced(eventSessionId, sessionTabId, true);
             }
 
             if (usageFromEvent) {
@@ -537,7 +576,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         setEventStream(environmentId, null);
       }
     },
-    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, setSessionLoading, setContextUsage, addMessage]
+    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setContextUsage, addMessage]
   );
 
   // Check if a session ended with an error, avoiding re-handling of already-processed errors

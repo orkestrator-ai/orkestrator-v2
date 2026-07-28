@@ -19,7 +19,12 @@ const mockSetMonitoringMode = mock(() => {});
 const mockGetMonitoringState = mock(() => null as { checkInProgress: boolean } | null);
 
 mock.module("@/stores/prMonitorStore", () => ({
-  usePrMonitorStore: () => ({
+  usePrMonitorStore: <T,>(
+    selector: (state: {
+      setMonitoringMode: typeof mockSetMonitoringMode;
+      getMonitoringState: typeof mockGetMonitoringState;
+    }) => T,
+  ) => selector({
     setMonitoringMode: mockSetMonitoringMode,
     getMonitoringState: mockGetMonitoringState,
   }),

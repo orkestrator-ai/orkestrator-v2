@@ -2956,10 +2956,13 @@ describe("OpenCodeChatTab", () => {
         properties: { info: { sessionID: "session-1" } },
       });
       await waitFor(() => {
+        // An info payload without a message id cannot be applied in place, so
+        // the tab falls back to a refetch — the cheap streaming variant that
+        // skips recursive subagent hydration.
         expect(mockGetSessionMessages).toHaveBeenCalledWith(
           MOCK_CLIENT,
           "session-1",
-          { throwOnError: true },
+          { throwOnError: true, includeSubagents: false },
         );
       });
 

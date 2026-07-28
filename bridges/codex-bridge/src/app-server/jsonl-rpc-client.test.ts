@@ -80,6 +80,37 @@ describe("JSONL framing", () => {
     expect(h.notifications).toHaveLength(1);
   });
 
+  test("a buffered partial tail is completed by a chunk carrying more lines", async () => {
+    // The scan resumes at the buffered tail's end rather than offset 0, so this
+    // sequence — partial tail, then a chunk that completes it and adds whole
+    // lines plus a new partial — exercises every offset transition.
+    const h = harness();
+    const first = h.client.request("a");
+    const second = h.client.request("b");
+    const note = JSON.stringify({ jsonrpc: "2.0", method: "warning", params: {} });
+
+    const line1 = JSON.stringify({ jsonrpc: "2.0", id: 1, result: "one" });
+    h.stdout.push(line1.slice(0, 12));
+    h.stdout.push(
+      `${line1.slice(12)}\n${JSON.stringify({ jsonrpc: "2.0", id: 2, result: "two" })}\n${note.slice(0, 8)}`,
+    );
+
+    expect(await first).toBe("one");
+    expect(await second).toBe("two");
+    expect(h.notifications).toHaveLength(0);
+
+    h.stdout.push(`${note.slice(8)}\n`);
+    expect(h.notifications).toHaveLength(1);
+  });
+
+  test("CRLF split across chunks still strips the carriage return", async () => {
+    const h = harness();
+    const promise = h.client.request("a");
+    h.stdout.push(`${JSON.stringify({ jsonrpc: "2.0", id: 1, result: "split" })}\r`);
+    h.stdout.push("\n");
+    expect(await promise).toBe("split");
+  });
+
   test("tolerates CRLF framing", async () => {
     const h = harness();
     const promise = h.client.request("a");

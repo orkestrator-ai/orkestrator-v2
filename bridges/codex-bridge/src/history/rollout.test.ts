@@ -6,6 +6,8 @@ import {
   buildTranscriptCatalog,
   clearTranscriptPathCache,
   getTranscriptPathCacheStats,
+  invalidateTranscriptCatalogCache,
+  setTranscriptCatalogTtlForTesting,
   setTranscriptPathCacheLimitsForTesting,
   createSharedTranscriptMetaLoader,
   extractPersistedMessageText,
@@ -14,6 +16,7 @@ import {
   getSessionMetaFromTranscriptPath,
   hydrateMessagesFromPersistedSession,
   listPersistedSessionsForCwd,
+  listPersistedSessionsWithTitlesForCwd,
   mergePersistedSessionMeta,
   readTranscriptLines,
 } from "./rollout.js";
@@ -69,6 +72,8 @@ afterEach(async () => {
   clearTranscriptPathCache();
   clearTranscriptCache();
   setTranscriptPathCacheLimitsForTesting();
+  invalidateTranscriptCatalogCache();
+  setTranscriptCatalogTtlForTesting();
   await Promise.all(
     temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
@@ -277,6 +282,74 @@ describe("rollout public helpers (continued)", () => {
         id: "canonical-thread",
         title: "Generated title",
         titleSource: "generated",
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test("the catalog scan is cached briefly, invalidated explicitly, and expires by TTL", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-catalog-cache-"));
+    temporaryDirectories.push(root);
+    const writeRollout = async (threadId: string) => {
+      const path = join(root, "sessions", `${threadId}.jsonl`);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `${JSON.stringify({
+        type: "session_meta",
+        payload: { id: threadId, cwd: "/workspace", timestamp: "2026-07-25T12:00:00.000Z" },
+      })}\n`, "utf8");
+    };
+    await writeRollout("cache-thread-1");
+
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+    // Generous TTL so a slow runner cannot expire the cache mid-test.
+    setTranscriptCatalogTtlForTesting(60_000);
+    try {
+      expect((await listPersistedSessionsForCwd("/workspace")).map((s) => s.id))
+        .toEqual(["cache-thread-1"]);
+
+      // Within the TTL the listing reuses the previous scan, so a rollout that
+      // appeared afterwards is not visible yet…
+      await writeRollout("cache-thread-2");
+      expect(await listPersistedSessionsForCwd("/workspace")).toHaveLength(1);
+
+      // …until the cache is invalidated, as the runtime does when this process
+      // creates, resumes, or forks a thread.
+      invalidateTranscriptCatalogCache();
+      expect(await listPersistedSessionsForCwd("/workspace")).toHaveLength(2);
+
+      // A zero TTL means every listing rescans.
+      setTranscriptCatalogTtlForTesting(0);
+      await writeRollout("cache-thread-3");
+      expect(await listPersistedSessionsForCwd("/workspace")).toHaveLength(3);
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+  });
+
+  test("the listing exposes the generated-title index it already parsed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-listing-titles-"));
+    temporaryDirectories.push(root);
+    const path = join(root, "sessions", "titled-thread.jsonl");
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${JSON.stringify({
+      type: "session_meta",
+      payload: { id: "titled-thread", cwd: "/workspace", timestamp: "2026-07-25T12:00:00.000Z" },
+    })}\n`, "utf8");
+    await persistSessionTitle(root, "titled-thread", "Generated title", { source: "generated" });
+
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+    try {
+      const listing = await listPersistedSessionsWithTitlesForCwd("/workspace");
+      expect(listing.sessions.map((s) => s.title)).toEqual(["Generated title"]);
+      // The map a caller would otherwise re-read and re-parse per request.
+      expect(listing.generatedTitles.get("titled-thread")).toMatchObject({
+        title: "Generated title",
+        source: "generated",
       });
     } finally {
       if (previousHome === undefined) delete process.env.CODEX_HOME;
@@ -524,6 +597,129 @@ describe("rollout public helpers (continued)", () => {
         },
       ]);
       expect(hydrated.title).toBe("real prompt");
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+    }
+  });
+
+  /**
+   * The direct per-thread lookup replaced a whole-home catalog scan as
+   * hydration's first step; these pin the title semantics the listing used to
+   * provide, so the inversion stays behaviour-equivalent.
+   */
+  test("hydration keeps an indexed thread_name over a generated title", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-hydrate-titles-"));
+    temporaryDirectories.push(root);
+    const path = join(root, "sessions", "thread-named.jsonl");
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${[
+      JSON.stringify(sessionMeta("thread-named")),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Prompt title" }],
+        },
+      }),
+    ].join("\n")}\n`, "utf8");
+    await writeFile(
+      join(root, "session_index.jsonl"),
+      `${JSON.stringify({
+        id: "thread-named",
+        thread_name: "Indexed name",
+        updated_at: "2026-07-25T12:00:00.000Z",
+      })}\n`,
+      "utf8",
+    );
+    // A Codex-owned name outranks the bridge's generated title, exactly as in
+    // the full listing.
+    await persistSessionTitle(root, "thread-named", "Generated title", { source: "generated" });
+
+    const previousHome = process.env.CODEX_HOME;
+    const previousCwd = process.env.CWD;
+    process.env.CODEX_HOME = root;
+    process.env.CWD = "/workspace";
+    try {
+      const hydrated = await hydrateMessagesFromPersistedSession("thread-named");
+      expect(hydrated.title).toBe("Indexed name");
+      expect(hydrated.titleSource).toBe("codex");
+      expect(hydrated.messages).toHaveLength(1);
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+    }
+  });
+
+  test("hydration applies a generated title over the prompt fallback", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-hydrate-generated-"));
+    temporaryDirectories.push(root);
+    const path = join(root, "sessions", "thread-generated.jsonl");
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${[
+      JSON.stringify(sessionMeta("thread-generated")),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Prompt title" }],
+        },
+      }),
+    ].join("\n")}\n`, "utf8");
+    await persistSessionTitle(root, "thread-generated", "Generated title", {
+      source: "generated",
+    });
+
+    const previousHome = process.env.CODEX_HOME;
+    const previousCwd = process.env.CWD;
+    process.env.CODEX_HOME = root;
+    process.env.CWD = "/workspace";
+    try {
+      const hydrated = await hydrateMessagesFromPersistedSession("thread-generated");
+      expect(hydrated.title).toBe("Generated title");
+      expect(hydrated.titleSource).toBe("generated");
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+    }
+  });
+
+  test("hydrates a rollout whose filename does not contain the thread id", async () => {
+    // Only the catalog can find this rollout, so the listing fallback — not the
+    // direct lookup — must carry it.
+    const root = await mkdtemp(join(tmpdir(), "rollout-hydrate-alias-"));
+    temporaryDirectories.push(root);
+    const path = join(root, "sessions", "filename-alias.jsonl");
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${[
+      JSON.stringify(sessionMeta("canonical-hydrate")),
+      JSON.stringify({
+        timestamp: "2026-07-25T12:01:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "aliased prompt" }],
+        },
+      }),
+    ].join("\n")}\n`, "utf8");
+
+    const previousHome = process.env.CODEX_HOME;
+    const previousCwd = process.env.CWD;
+    process.env.CODEX_HOME = root;
+    process.env.CWD = "/workspace";
+    try {
+      const hydrated = await hydrateMessagesFromPersistedSession("canonical-hydrate");
+      expect(hydrated.messages.map((message) => message.content)).toEqual(["aliased prompt"]);
+      expect(hydrated.title).toBe("aliased prompt");
     } finally {
       if (previousHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousHome;

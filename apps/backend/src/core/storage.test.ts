@@ -1,8 +1,9 @@
-import { describe, expect, expectTypeOf, test } from "bun:test";
+import { describe, expect, expectTypeOf, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  createEnvironment,
   defaultConfig,
   defaultRepositoryConfig,
   StorageService,
@@ -182,6 +183,93 @@ describe("Codex max concurrent thread config storage", () => {
         });
         expect(updated.global.codexMaxConcurrentThreads).toBe(value);
         expect((await storage.loadConfig()).global.codexMaxConcurrentThreads).toBe(value);
+      }
+    });
+  });
+});
+
+describe("hot store read caching", () => {
+  test("serves repeated environment reads from the cache and re-validates by stat", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const environmentsPath = path.join(dataDir, "environments.json");
+
+      const readSpy = spyOn(fs, "readFile");
+      const environmentReads = () =>
+        readSpy.mock.calls.filter(([file]) => String(file).endsWith("environments.json")).length;
+      try {
+        await storage.loadEnvironments();
+        const readsAfterFirstLoad = environmentReads();
+
+        // Steady state: no further reads of the file, only stats.
+        await storage.loadEnvironments();
+        await storage.getEnvironment(environment.id);
+        await storage.getEnvironmentsByProject("project-1");
+        expect(environmentReads()).toBe(readsAfterFirstLoad);
+
+        // Mutating a returned value must not poison the cache: reads hand
+        // out clones precisely because every mutation path edits in place.
+        (await storage.loadEnvironments())[0]!.name = "mutated-by-caller";
+        expect((await storage.getEnvironment(environment.id))!.name)
+          .toBe(environment.name);
+
+        // A save through this process invalidates the cached parse.
+        await storage.updateEnvironment(environment.id, { name: "renamed" });
+        expect((await storage.getEnvironment(environment.id))!.name).toBe("renamed");
+
+        // A foreign in-place write (another backend process) is observed via
+        // the stat fingerprint even though this process never wrote.
+        const foreign = JSON.parse(
+          await fs.readFile(environmentsPath, "utf8"),
+        ) as Array<Record<string, unknown>>;
+        foreign[0]!.name = "foreign-writer";
+        await fs.writeFile(environmentsPath, JSON.stringify(foreign));
+        expect((await storage.getEnvironment(environment.id))!.name)
+          .toBe("foreign-writer");
+      } finally {
+        readSpy.mockRestore();
+      }
+    });
+  });
+
+  test("skips backup rotation for volatile activity writes but keeps it for structural ones", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const backupPath = path.join(dataDir, "environments.json.bak.1");
+
+      await storage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        new Date(Date.now() + 1_000).toISOString(),
+        "frontend",
+        "renderer-token",
+      );
+      await storage.recordEnvironmentActivity(
+        environment.id,
+        new Date(Date.now() + 2_000).toISOString(),
+      );
+      // Activity-only writes rotate no backups: they change nothing a backup
+      // restore needs, and they are the write loop that runs every ~10s.
+      await expect(fs.access(backupPath)).rejects.toThrow();
+
+      // A structural mutation still pays for the rotation.
+      await storage.updateEnvironment(environment.id, { name: "renamed" });
+      // Resolves only if the backup now exists.
+      await fs.access(backupPath);
+    });
+  });
+
+  test("skips the lease sweep without the cross-process lock when no leases exist", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await storage.addEnvironment(createEnvironment("project-1"));
+      const lockPath = path.join(dataDir, "environments.json.lock");
+      // A fresh foreign lock blocks the mutation path for its full 20s
+      // timeout; the sweep must not need it when nothing can expire.
+      await fs.writeFile(lockPath, "held-by-another-process");
+      try {
+        await expect(storage.expireFrontendAgentActivityLeases()).resolves.toEqual([]);
+      } finally {
+        await fs.rm(lockPath, { force: true });
       }
     });
   });

@@ -77,7 +77,8 @@ interface GlobalSettingsProps {
 }
 
 export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsProps) {
-  const { config, setConfig } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
+  const setConfig = useConfigStore((state) => state.setConfig);
   const global = config.global;
 
   const [cpuCores, setCpuCores] = useState(global.containerResources.cpuCores);

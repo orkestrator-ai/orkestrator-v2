@@ -29,6 +29,7 @@ import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
+import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import {
   Dialog,
   DialogContent,
@@ -122,14 +123,14 @@ interface Props {
   tabId: string;
   data: ClaudeTmuxData;
   isActive: boolean;
+  /** Whether this pane currently owns document-level shortcuts. */
+  ownsGlobalShortcuts?: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
   refreshRequestId?: number;
 }
-
-const getTmuxMessageSearchText = (message: { content: string }) => message.content;
 
 /**
  * Fallback model list for tmux mode, mirroring what the Claude Agent SDK's
@@ -315,6 +316,7 @@ export function ClaudeTmuxChatTab({
   tabId,
   data,
   isActive,
+  ownsGlobalShortcuts = isActive,
   initialPrompt,
   isReviewTab = false,
   initialAgentModel,
@@ -1593,8 +1595,8 @@ export function ClaudeTmuxChatTab({
               scrollProps={scrollProps}
               virtuosoRef={virtuosoRef}
               find={{
-                isActive: isActive && !interactiveMode,
-                getSearchText: getTmuxMessageSearchText,
+                isActive: ownsGlobalShortcuts && !interactiveMode,
+                getSearchText: getNativeMessageSearchText,
               }}
             />
 

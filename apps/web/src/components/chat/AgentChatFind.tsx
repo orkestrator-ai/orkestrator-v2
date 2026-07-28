@@ -18,6 +18,11 @@ export interface AgentChatFindMatch {
   occurrenceIndex: number;
 }
 
+export interface AgentChatTextMatch {
+  characterIndex: number;
+  length: number;
+}
+
 interface UseAgentChatFindOptions<TItem> {
   items: TItem[];
   getSearchText: (item: TItem) => string;
@@ -37,6 +42,8 @@ interface AgentChatFindBarProps {
   onPrevious: () => void;
   onNext: () => void;
   onClose: () => void;
+  matchHighlightName: string;
+  currentHighlightName: string;
 }
 
 /**
@@ -51,23 +58,41 @@ export function findAgentChatMatches(
   query: string,
 ): AgentChatFindMatch[] {
   if (!query.trim()) return [];
-  const normalizedQuery = query.toLocaleLowerCase();
 
   const matches: AgentChatFindMatch[] = [];
   searchTexts.forEach((searchText, itemIndex) => {
-    const normalizedText = searchText.toLocaleLowerCase();
-    let fromIndex = 0;
     let occurrenceIndex = 0;
-
-    while (fromIndex <= normalizedText.length - normalizedQuery.length) {
-      const characterIndex = normalizedText.indexOf(normalizedQuery, fromIndex);
-      if (characterIndex === -1) break;
-
+    for (const { characterIndex } of findAgentChatTextMatches(searchText, query)) {
       matches.push({ itemIndex, characterIndex, occurrenceIndex });
       occurrenceIndex += 1;
-      fromIndex = characterIndex + normalizedQuery.length;
     }
   });
+
+  return matches;
+}
+
+/**
+ * Finds literal, non-overlapping matches while preserving offsets from the
+ * original UTF-16 string. Unlike indexing into a lowercased copy, these offsets
+ * remain valid DOM Range boundaries when Unicode case folding changes length.
+ */
+export function findAgentChatTextMatches(
+  searchText: string,
+  query: string,
+): AgentChatTextMatch[] {
+  if (!query.trim()) return [];
+
+  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const expression = new RegExp(escapedQuery, "giu");
+  const matches: AgentChatTextMatch[] = [];
+
+  for (const match of searchText.matchAll(expression)) {
+    if (match.index === undefined || match[0].length === 0) continue;
+    matches.push({
+      characterIndex: match.index,
+      length: match[0].length,
+    });
+  }
 
   return matches;
 }
@@ -208,6 +233,8 @@ export function AgentChatFindBar({
   onPrevious,
   onNext,
   onClose,
+  matchHighlightName,
+  currentHighlightName,
 }: AgentChatFindBarProps) {
   if (!isOpen) return null;
 
@@ -225,11 +252,11 @@ export function AgentChatFindBar({
         avoids a misleading production-build warning.
       */}
       <style>{`
-        ::highlight(agent-chat-find-match) {
+        ::highlight(${matchHighlightName}) {
           color: inherit;
           background-color: rgb(250 204 21 / 0.32);
         }
-        ::highlight(agent-chat-find-current) {
+        ::highlight(${currentHighlightName}) {
           color: inherit;
           background-color: rgb(251 146 60 / 0.78);
         }

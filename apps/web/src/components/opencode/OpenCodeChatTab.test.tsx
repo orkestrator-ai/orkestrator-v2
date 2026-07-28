@@ -34,6 +34,7 @@ const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
 const mockScrollToBottom = mock(() => {});
 let mockIsAtBottom = true;
 let lastVirtualizedMessages: any[] = [];
+let lastVirtualizedFind: any = null;
 
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
 const mockSendPrompt = mock<
@@ -345,8 +346,9 @@ mock.module("@/hooks", () => ({
 }));
 
 mock.module("@/components/chat/VirtualizedMessageList", () => ({
-  VirtualizedMessageList: ({ messages, renderMessage, emptyState, footer }: any) => {
+  VirtualizedMessageList: ({ messages, renderMessage, emptyState, footer, find }: any) => {
     lastVirtualizedMessages = messages;
+    lastVirtualizedFind = find;
     return (
       <div>
         {messages.length > 0
@@ -690,6 +692,7 @@ describe("OpenCodeChatTab", () => {
     mockToastError.mockClear();
     mockIsAtBottom = true;
     lastVirtualizedMessages = [];
+    lastVirtualizedFind = null;
     resetStores();
   });
 
@@ -792,6 +795,39 @@ describe("OpenCodeChatTab", () => {
     await waitFor(() => {
       expect(screen.getByTestId("opencode-compose-layout").textContent).toBe("bottom");
     });
+  });
+
+  test("forwards transcript search ownership and OpenCode message content", async () => {
+    const searchableMessage = nativeMessage(
+      "searchable-opencode",
+      "Search the complete OpenCode transcript",
+    );
+    useOpenCodeStore.getState().setMessages(SESSION_KEY, [searchableMessage]);
+
+    const view = render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        ownsGlobalShortcuts={false}
+      />,
+    );
+
+    await waitFor(() => expect(lastVirtualizedFind?.isActive).toBe(false));
+    expect(lastVirtualizedFind.getSearchText(searchableMessage)).toBe(
+      "Search the complete OpenCode transcript",
+    );
+
+    view.rerender(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        ownsGlobalShortcuts
+      />,
+    );
+
+    await waitFor(() => expect(lastVirtualizedFind?.isActive).toBe(true));
   });
 
   test("refresh requests pull the latest transcript, status, and pending prompts", async () => {
@@ -900,6 +936,55 @@ describe("OpenCodeChatTab", () => {
     expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
       currentMessage,
     ]);
+  });
+
+  test("rejects a manual refresh when pending requests change during hydration", async () => {
+    const questions = deferred<QuestionRequest[]>();
+    mockGetPendingQuestions.mockImplementation(() => questions.promise);
+
+    const view = render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+
+    view.rerender(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+    await waitFor(() => expect(mockGetPendingQuestions).toHaveBeenCalled());
+
+    act(() => {
+      useOpenCodeStore.getState().addPendingQuestion({
+        id: "live-question",
+        sessionId: "session-1",
+        questions: [],
+      });
+    });
+    await act(async () => {
+      questions.resolve([]);
+      await questions.promise;
+    });
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Failed to refresh OpenCode tab",
+        expect.objectContaining({
+          description:
+            "OpenCode pending requests changed while refreshing; try again",
+        }),
+      );
+    });
+    expect(useOpenCodeStore.getState().pendingQuestions.has("live-question")).toBe(
+      true,
+    );
   });
 
   test("does not overwrite a live event with an older refresh snapshot", async () => {
@@ -1173,6 +1258,28 @@ describe("OpenCodeChatTab", () => {
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.openCodeNativeData?.sessionId)
         .toBe("session-1");
     });
+  });
+
+  test("surfaces a restored-session transcript failure when no session is stored", async () => {
+    const restoredSessionId = "restored-without-store";
+    useOpenCodeStore.setState((state) => ({ ...state, sessions: new Map() }));
+    seedPaneLayout(restoredSessionId);
+    mockListSessions.mockResolvedValue([
+      { id: restoredSessionId, createdAt: "2026-04-15T10:00:00.000Z" },
+    ]);
+    mockGetSessionMessages.mockRejectedValue(new Error("transcript unavailable"));
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: restoredSessionId })}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByText("Error: transcript unavailable")).toBeTruthy();
+    expect(useOpenCodeStore.getState().sessions.has(SESSION_KEY)).toBe(false);
+    expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
   test("retries a failed cold initialization and writes the created session id", async () => {
@@ -1972,6 +2079,46 @@ describe("OpenCodeChatTab", () => {
         expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
         expect(state.messageQueue.get(SESSION_KEY)).toEqual([]);
         expect(messages.some((message) => message.content === "OpenCode unavailable")).toBe(true);
+      });
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("records a queue-drain rejection and clears the loading state", async () => {
+    const originalError = console.error;
+    console.error = mock(() => {}) as unknown as typeof console.error;
+    mockSendPrompt.mockRejectedValue(new Error("transport rejected"));
+    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-rejection",
+      text: "Queued rejection",
+      attachments: [],
+      model: "openai/gpt-5",
+      mode: "build",
+    });
+
+    try {
+      render(
+        <OpenCodeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={false}
+        />,
+      );
+
+      await waitFor(() => {
+        const state = useOpenCodeStore.getState();
+        expect(state.messageQueue.get(SESSION_KEY)).toEqual([]);
+        expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+        expect(
+          state.sessions
+            .get(SESSION_KEY)
+            ?.messages.some(
+              (message) =>
+                message.content ===
+                "Failed to send queued prompt: transport rejected",
+            ),
+        ).toBe(true);
       });
     } finally {
       console.error = originalError;

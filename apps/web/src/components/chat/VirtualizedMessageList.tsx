@@ -3,12 +3,14 @@ import {
   type RefObject,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
 } from "react";
 import { Virtuoso, type VirtuosoHandle, type StateSnapshot } from "react-virtuoso";
 import {
   AgentChatFindBar,
+  findAgentChatTextMatches,
   useAgentChatFind,
 } from "@/components/chat/AgentChatFind";
 import { cn } from "@/lib/utils";
@@ -40,6 +42,53 @@ interface VirtualizedMessageListProps<TMessage> {
 }
 
 const EMPTY_SEARCH_TEXT = () => "";
+const SEARCH_CONTENT_SELECTOR = "[data-agent-chat-search-content]";
+
+interface TextNodeRun {
+  node: Text;
+  start: number;
+  end: number;
+}
+
+function createSearchRanges(root: HTMLElement, query: string): Range[] {
+  const runs: TextNodeRun[] = [];
+  let combinedText = "";
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let currentNode = walker.nextNode();
+
+  while (currentNode) {
+    if (currentNode instanceof Text && currentNode.data.length > 0) {
+      const start = combinedText.length;
+      combinedText += currentNode.data;
+      runs.push({ node: currentNode, start, end: combinedText.length });
+    }
+    currentNode = walker.nextNode();
+  }
+
+  const boundaryForOffset = (offset: number, isEnd: boolean) => {
+    const run = runs.find(({ start, end }) =>
+      isEnd ? offset > start && offset <= end : offset >= start && offset < end,
+    );
+    if (!run) return null;
+    return {
+      node: run.node,
+      offset: offset - run.start,
+    };
+  };
+
+  const ranges: Range[] = [];
+  for (const match of findAgentChatTextMatches(combinedText, query)) {
+    const start = boundaryForOffset(match.characterIndex, false);
+    const end = boundaryForOffset(match.characterIndex + match.length, true);
+    if (!start || !end) continue;
+
+    const range = root.ownerDocument.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    ranges.push(range);
+  }
+  return ranges;
+}
 
 function FooterWrapper({ children }: { children: ReactNode }) {
   return <div className="min-w-0">{children}</div>;
@@ -75,6 +124,9 @@ export function VirtualizedMessageList<TMessage>({
   find,
 }: VirtualizedMessageListProps<TMessage>) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const findInstanceId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const matchHighlightName = `agent-chat-find-match-${findInstanceId}`;
+  const currentHighlightName = `agent-chat-find-current-${findInstanceId}`;
   const context = useMemo<VirtuosoListContext>(
     () => ({ footer, emptyState }),
     [footer, emptyState]
@@ -119,8 +171,8 @@ export function VirtualizedMessageList<TMessage>({
         : null;
 
     const clearHighlights = () => {
-      cssHighlights?.delete("agent-chat-find-match");
-      cssHighlights?.delete("agent-chat-find-current");
+      cssHighlights?.delete(matchHighlightName);
+      cssHighlights?.delete(currentHighlightName);
     };
 
     if (
@@ -136,39 +188,28 @@ export function VirtualizedMessageList<TMessage>({
 
     let frame = 0;
     let attempts = 0;
-    const normalizedQuery = chatFind.query.toLocaleLowerCase();
 
     const collectRowRanges = (
       row: HTMLElement,
       activeOccurrenceIndex: number | null,
+      expectedMatchCount: number,
     ) => {
       const ranges: Range[] = [];
       let activeRange: Range | null = null;
       let rowOccurrenceIndex = 0;
-      const walker = row.ownerDocument.createTreeWalker(row, NodeFilter.SHOW_TEXT);
-      let textNode = walker.nextNode();
+      const taggedRoots =
+        Array.from(row.querySelectorAll<HTMLElement>(SEARCH_CONTENT_SELECTOR));
+      const searchableRoots = taggedRoots.length > 0 ? taggedRoots : [row];
 
-      while (textNode) {
-        const text = textNode.textContent ?? "";
-        const normalizedText = text.toLocaleLowerCase();
-        let fromIndex = 0;
-
-        while (fromIndex <= normalizedText.length - normalizedQuery.length) {
-          const characterIndex = normalizedText.indexOf(normalizedQuery, fromIndex);
-          if (characterIndex === -1) break;
-
-          const range = row.ownerDocument.createRange();
-          range.setStart(textNode, characterIndex);
-          range.setEnd(textNode, characterIndex + normalizedQuery.length);
+      for (const searchableRoot of searchableRoots) {
+        for (const range of createSearchRanges(searchableRoot, chatFind.query)) {
+          if (rowOccurrenceIndex >= expectedMatchCount) break;
           ranges.push(range);
           if (rowOccurrenceIndex === activeOccurrenceIndex) {
             activeRange = range;
           }
           rowOccurrenceIndex += 1;
-          fromIndex = characterIndex + normalizedQuery.length;
         }
-
-        textNode = walker.nextNode();
       }
 
       return { ranges, activeRange };
@@ -181,6 +222,13 @@ export function VirtualizedMessageList<TMessage>({
       const allRanges: Range[] = [];
       let activeRange: Range | null = null;
       const rows = root.querySelectorAll<HTMLElement>("[data-chat-message-index]");
+      const matchCountsByItem = new Map<number, number>();
+      for (const match of chatFind.matches) {
+        matchCountsByItem.set(
+          match.itemIndex,
+          (matchCountsByItem.get(match.itemIndex) ?? 0) + 1,
+        );
+      }
 
       rows.forEach((row) => {
         const itemIndex = Number(row.dataset.chatMessageIndex);
@@ -188,14 +236,18 @@ export function VirtualizedMessageList<TMessage>({
           chatFind.currentMatch?.itemIndex === itemIndex
             ? chatFind.currentMatch.occurrenceIndex
             : null;
-        const rowRanges = collectRowRanges(row, activeOccurrenceIndex);
+        const rowRanges = collectRowRanges(
+          row,
+          activeOccurrenceIndex,
+          matchCountsByItem.get(itemIndex) ?? 0,
+        );
         allRanges.push(...rowRanges.ranges);
         activeRange ??= rowRanges.activeRange;
       });
 
-      cssHighlights.set("agent-chat-find-match", new Highlight(...allRanges));
+      cssHighlights.set(matchHighlightName, new Highlight(...allRanges));
       cssHighlights.set(
-        "agent-chat-find-current",
+        currentHighlightName,
         new Highlight(...(activeRange ? [activeRange] : [])),
       );
 
@@ -217,6 +269,8 @@ export function VirtualizedMessageList<TMessage>({
     chatFind.matches.length,
     chatFind.query,
     find?.isActive,
+    currentHighlightName,
+    matchHighlightName,
     messages,
   ]);
 
@@ -233,6 +287,8 @@ export function VirtualizedMessageList<TMessage>({
         onPrevious={chatFind.onPrevious}
         onNext={chatFind.onNext}
         onClose={chatFind.onClose}
+        matchHighlightName={matchHighlightName}
+        currentHighlightName={currentHighlightName}
       />
       <Virtuoso
         ref={virtuosoRef}

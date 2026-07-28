@@ -2894,7 +2894,15 @@ async function startEnvironmentSetupOnce(
   try {
     return await startEnvironmentSetupAfterPreparation(current, context, preparationSessionId);
   } catch (error) {
-    if (preparationSessionId) await failEnvironmentSetup(current.id, error, context);
+    // Both a preparation continuation and a retry with an existing baseline can
+    // publish a logical setup session before the PTY is available. Any startup
+    // failure after that point must close the session; otherwise
+    // get_terminal_session keeps reporting an attachable terminal that has no
+    // process behind it. Avoid manufacturing a failure session for errors that
+    // happened before an attempt published one.
+    if (environmentSetupSessions.get(current.id)?.running) {
+      await failEnvironmentSetup(current.id, error, context);
+    }
     throw error;
   }
 }

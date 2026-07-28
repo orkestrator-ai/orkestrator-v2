@@ -100,16 +100,25 @@ describe("useTerminal reconnect behavior", () => {
     expect(listenMock).toHaveBeenCalledWith("terminal-output-session-old", expect.any(Function));
   });
 
-  it("waits for a backend-owned setup session instead of creating a blank replacement terminal", async () => {
+  it("attaches once to a backend-owned setup session while preparation is running before its PTY exists", async () => {
+    const received: Uint8Array[] = [];
+    let emitLiveOutput: ((event: { payload: number[] }) => void) | undefined;
+    listenMock.mockImplementation(async (_eventName, handler) => {
+      emitLiveOutput = handler;
+      return unlistenMock;
+    });
+
     const { result, rerender } = renderHook(
       ({ existingSessionId }: { existingSessionId?: string }) =>
         useTerminal({
           containerId: "container-1",
+          environmentId: "env-1",
           isLocal: false,
           existingSessionId,
           persistSession: true,
           attachExistingOnly: true,
           replayOutputBuffer: true,
+          onData: (data) => received.push(data),
         }),
       { initialProps: { existingSessionId: undefined as string | undefined } },
     );
@@ -130,11 +139,46 @@ describe("useTerminal reconnect behavior", () => {
       await result.current.connect();
     });
 
-    await waitFor(() => expect(result.current.sessionId).toBe("env-1:setup"));
+    await waitFor(() => {
+      expect(result.current.sessionId).toBe("env-1:setup");
+      expect(result.current.isConnected).toBe(true);
+    });
     expect(createTerminalSessionMock).not.toHaveBeenCalled();
     expect(startTerminalSessionMock).not.toHaveBeenCalled();
-    expect(listenMock).toHaveBeenCalledWith("terminal-output-env-1:setup", expect.any(Function));
+    expect(getTerminalSessionMock).toHaveBeenCalledTimes(1);
+    expect(getTerminalOutputBufferMock).toHaveBeenCalledTimes(1);
     expect(getTerminalOutputBufferMock).toHaveBeenCalledWith("env-1:setup");
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(listenMock).toHaveBeenCalledWith(
+      "terminal-output-env-1:setup",
+      expect.any(Function),
+    );
+    expect(new TextDecoder().decode(received[0])).toBe(
+      "[orkestrator] Starting environment setup\r\n",
+    );
+
+    act(() => {
+      emitLiveOutput?.({
+        payload: Array.from(new TextEncoder().encode("Cloning repository...\r\n")),
+      });
+    });
+    expect(new TextDecoder().decode(received[1])).toBe("Cloning repository...\r\n");
+
+    // PersistentTerminal may rerender and re-run its connection effect while
+    // preparation advances. A logically running pre-PTY setup session must
+    // remain connected rather than replaying its buffer and subscribing again.
+    rerender({ existingSessionId: "env-1:setup" });
+    await act(async () => {
+      await result.current.connect();
+      await result.current.connect();
+    });
+
+    expect(result.current.isConnected).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(getTerminalSessionMock).toHaveBeenCalledTimes(1);
+    expect(getTerminalOutputBufferMock).toHaveBeenCalledTimes(1);
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(unlistenMock).not.toHaveBeenCalled();
   });
 
   it("replaces a stale existing local terminal session and starts the replacement", async () => {

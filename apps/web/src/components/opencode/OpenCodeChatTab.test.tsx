@@ -2471,7 +2471,7 @@ describe("OpenCodeChatTab", () => {
     expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
       "assistant-agent",
       "assistant-later",
-      "assistant-agent:active-agent:agent-1",
+      "assistant-agent:active-agents",
     ]);
 
     const completedMessage: NativeMessage = {

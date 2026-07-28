@@ -5051,7 +5051,7 @@ Running 1 Explore agent...
 
     expect((lastVirtuosoProps?.data ?? []).map((message: any) => message.id)).toEqual([
       "assistant-agent",
-      "assistant-agent:active-agent:agent-1",
+      "assistant-agent:active-agents",
     ]);
 
     act(() => {

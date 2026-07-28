@@ -1089,6 +1089,33 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByText("No child actions yet.")).toBeTruthy();
   });
 
+  test("uses the response fallback for a whitespace-only latest text update", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Agent",
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolTitle: "Agent",
+          toolState: "pending",
+        },
+        childTools: [
+          {
+            type: "text",
+            content: "  \n\t  ",
+          },
+        ],
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("Response")).toBeTruthy();
+    expect(screen.queryByText("Waiting for activity.")).toBeNull();
+  });
+
   test("uses external tmux usage counts for agent task rows when available", () => {
     const message = makeMessage([
       {

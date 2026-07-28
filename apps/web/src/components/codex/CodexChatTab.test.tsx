@@ -1936,6 +1936,24 @@ describe("CodexChatTab", () => {
     }
   });
 
+  test("uses the generic message for a non-Error initialization failure", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    mockCreateSession.mockRejectedValueOnce({
+      code: "opaque-create-failure",
+    } as any);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByText("Failed to initialize Codex")).toBeTruthy();
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: /Retry/i })).toBeTruthy();
+    expect(useCodexStore.getState().sessions.has(SESSION_KEY)).toBe(false);
+  });
+
   test("reports local initialization errors without requesting a container log", async () => {
     useCodexStore.setState((state) => ({
       ...state,
@@ -2125,6 +2143,22 @@ describe("CodexChatTab", () => {
 
     expect(await screen.findByText("Codex bridge health check failed")).toBeTruthy();
     expect(mockCheckHealth).toHaveBeenCalledWith(MOCK_CLIENT);
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("reports a rejected cold-start health check before creating a session", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    mockCheckHealth.mockRejectedValueOnce(new Error("health request reset"));
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByText("health request reset")).toBeTruthy();
+    expect(mockCheckHealth).toHaveBeenCalledWith(MOCK_CLIENT);
+    expect(mockGetModels).not.toHaveBeenCalled();
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
@@ -2364,7 +2398,7 @@ describe("CodexChatTab", () => {
     expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
       "assistant-agent",
       "assistant-later",
-      "assistant-agent:active-agent:agent-1",
+      "assistant-agent:active-agents",
     ]);
 
     const completedMessage: TestCodexMessage = {
@@ -4789,9 +4823,18 @@ describe("CodexChatTab", () => {
     });
     expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBeUndefined();
 
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     const firstRequestId = (
       mockSendPrompt.mock.calls[0]?.[3] as { requestId?: string } | undefined
     )?.requestId;
+    expect(
+      useCodexStore.getState().unconfirmedDispatches.get(SESSION_KEY),
+    ).toMatchObject({
+      requestId: firstRequestId,
+      retryable: true,
+    });
     fireEvent.click(screen.getByTestId("codex-send"));
     await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
     expect(

@@ -27,28 +27,6 @@ function isActiveAgentPart(
   return isAgentPart(part) && state !== "success" && state !== "failure";
 }
 
-function getAgentPartKey(part: NativeAgentActivityPart, index: number): string {
-  if (part.type === "task-group") {
-    const stableId = part.task.toolUseId ?? part.task.subagentId;
-    if (stableId) return stableId;
-
-    return (
-      part.task.toolName ??
-      part.content ??
-      "agent"
-    ) + `:${index}`;
-  }
-
-  const stableId = part.subagentId ?? part.toolUseId;
-  if (stableId) return stableId;
-
-  return (
-    part.subagentName ??
-    part.content ??
-    "agent"
-  ) + `:${index}`;
-}
-
 function hasRenderableContent(message: NativeMessage): boolean {
   return message.parts.length > 0 || message.content.trim().length > 0;
 }
@@ -107,9 +85,10 @@ function createPinnedAgentMessage(
 
   return {
     ...source,
-    id: isGroup
-      ? `${source.id}:active-agents`
-      : `${source.id}:active-agent:${getAgentPartKey(parts[0]!, 0)}`,
+    // Keep the virtualized row mounted as the active membership changes. Agent
+    // expansion state lives inside NativeMessage, so a singleton-specific id
+    // would collapse an expanded row as soon as a second agent starts.
+    id: `${source.id}:active-agents`,
     content: "",
     parts: isGroup
       ? [{

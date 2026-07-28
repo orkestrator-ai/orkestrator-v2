@@ -1179,9 +1179,8 @@ export function useGlobalActivityMonitor(): void {
     ],
   );
   // ── Native Codex mode: derive activity from session store ──────────
-  // Codex SSE streams close on unmount, so state may go stale for background
-  // environments. The last-known state is preserved until the component
-  // remounts and reconnects.
+  // The app-level Codex background synchronizer keeps these store snapshots
+  // authoritative even when an environment's own SSE component is unmounted.
   useEffect(
     () =>
       subscribeNativeActivity(

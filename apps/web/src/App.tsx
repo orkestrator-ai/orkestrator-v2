@@ -53,6 +53,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
 import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpencodeCli, checkGithubCli, getAvailableAiCli, getConfig, syncAllEnvironmentsWithDocker } from "@/lib/backend";
 import { usePrMonitorService } from "@/hooks/usePrMonitorService";
+import { useCodexBackgroundSync } from "@/hooks/useCodexBackgroundSync";
 import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
 import { useUnreadEnvironmentSync } from "@/hooks/useUnreadEnvironmentSync";
 import { useEnvironments, useEnvironmentLifecycleService } from "@/hooks";
@@ -89,6 +90,9 @@ function App() {
 
   // Initialize centralized PR monitoring service
   usePrMonitorService();
+  // Keep Codex status/transcripts authoritative even when its environment tree
+  // is unmounted or misses an SSE terminal frame.
+  useCodexBackgroundSync();
   // Monitor agent activity for ALL environments (regardless of selected project)
   useGlobalActivityMonitor();
   // Single registration for setup lifecycle events and resume/reconnect

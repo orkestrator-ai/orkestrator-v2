@@ -49,6 +49,7 @@ gateway = new OrkestratorGateway({
   port: options.port,
   controlBindAddress: options.controlHost,
   controlPort: options.controlPort,
+  compression: options.compression,
   allowNonTailscaleBind: options.allowNonTailscaleBind || options.tailscaleServe || options.desktopWebClient,
   allowedOrigins: options.allowedOrigins,
   webClientControl: managedWebClient ?? undefined,

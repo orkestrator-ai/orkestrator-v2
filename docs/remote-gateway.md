@@ -59,6 +59,7 @@ The gateway supports these environment variables:
 | `ORKESTRATOR_GATEWAY_HOST` | first detected Tailscale address | Overrides the bind address. The address must still be a Tailscale address. |
 | `ORKESTRATOR_GATEWAY_PORT` | `34121` | Overrides the gateway port. |
 | `ORKESTRATOR_GATEWAY_TOKEN` | generated token in `gateway-auth.json` | Sets the login token. Must be at least 16 characters. |
+| `ORKESTRATOR_GATEWAY_COMPRESSION` | `off` | Compression rollout mode. Accepts `off`, `body`, or `on`. In this milestone every response still stays identity; the setting only prepares later milestones and metrics. |
 | `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS` | unset | Comma-separated browser origins allowed to call the gateway directly. Supports entries such as `https://orkestrator.example` and `https://*.vercel.app`. |
 | `ORKESTRATOR_TAILSCALE_SERVE=1` | unset | Makes the backend own a tailnet-only HTTPS listener through `tailscale serve`. The browser listener binds to loopback automatically. |
 | `ORKESTRATOR_TAILSCALE_SERVE_PORT` | `443` | HTTPS port configured by backend-managed Tailscale Serve. |
@@ -75,6 +76,22 @@ Without `ORKESTRATOR_GATEWAY_TOKEN`, the app creates or reuses:
 
 Delete that file and restart the app to rotate a generated token.
 
+The standalone backend also accepts:
+
+```bash
+--compression off|body|on
+```
+
+The CLI flag wins over `ORKESTRATOR_GATEWAY_COMPRESSION`. `off` preserves the
+existing identity behavior and is the default on Tuesday, July 28, 2026.
+`body` and `on` are rollout modes for later efficiency milestones and are kept
+as no-op controls in this milestone so rollback is already wired before
+response encoding changes.
+
+Even when `--tailscale-serve` makes the browser listener bind to loopback, the
+gateway still treats that listener as remote for future compression rollout.
+Electron's separate control listener always remains identity.
+
 ## What The Gateway Proxies
 
 The gateway reserves the `/__orkestrator` path prefix.
@@ -86,6 +103,8 @@ The gateway reserves the `/__orkestrator` path prefix.
 | `/__orkestrator/status` | Small authenticated connection check used by the public client. |
 | `/__orkestrator/invoke` | Authenticated backend command bridge used by the browser renderer. |
 | `/__orkestrator/events` | Server-sent event stream for backend events. |
+| `/__orkestrator/metrics` | Authenticated privacy-safe gateway counters, byte totals, timings, and recent sanitized samples for milestone measurements. |
+| `/__orkestrator/client-metrics` | Authenticated sink for sanitized browser and `WKWebView` boot/resource timing reports. |
 | `/__orkestrator/proxy/loopback/<port>/...` | Authenticated proxy to `http://127.0.0.1:<port>/...` on the desktop host. |
 
 All other authenticated routes serve the React renderer. In development, those routes proxy to the Vite dev server. In production, they serve files from the built renderer bundle.
@@ -137,6 +156,13 @@ These rules allow proxied apps to keep their own sessions without receiving or r
 - The gateway does not log the token value.
 
 Traffic is plain HTTP because it is expected to travel over Tailscale. Do not bind the gateway to a public interface or expose it through a public reverse proxy.
+
+## Measurement Notes
+
+`/__orkestrator/metrics` is intended for milestone work and local diagnostics.
+It records bounded route, command, stream, event, and boot-timing measurements
+without prompts, terminal contents, file contents, attachment data,
+credentials, or tokens.
 
 ## Vercel-hosted public client
 

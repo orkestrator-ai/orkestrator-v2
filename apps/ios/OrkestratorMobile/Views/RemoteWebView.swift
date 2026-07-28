@@ -16,6 +16,21 @@ struct RemoteWebView: UIViewRepresentable {
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.userContentController.add(context.coordinator, name: Coordinator.messageHandlerName)
+        let clientPlatform = switch UIDevice.current.userInterfaceIdiom {
+        case .pad:
+            "ipad-wkwebview"
+        case .phone:
+            "iphone-wkwebview"
+        default:
+            "ios-wkwebview"
+        }
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: "window.__orkestratorClientPlatform = \(Coordinator.quotedJavaScriptString(clientPlatform));",
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
         configuration.userContentController.addUserScript(
             WKUserScript(
                 source: Coordinator.connectionBridgeScript,
@@ -58,6 +73,12 @@ struct RemoteWebView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         static let messageHandlerName = "orkestratorConnections"
+        static func quotedJavaScriptString(_ value: String) -> String {
+            let escaped = value
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            return "\"\(escaped)\""
+        }
         static let connectionBridgeScript = #"""
         (() => {
           const pending = new Map();

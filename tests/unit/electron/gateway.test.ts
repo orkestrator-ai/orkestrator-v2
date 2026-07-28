@@ -11,11 +11,13 @@ import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
+  compressionModeForListener,
   eventMatchesSubscription,
   isTailscaleAddress,
   loadOrCreateGatewayToken,
   OrkestratorGateway,
   parseEventSubscriptionFilter,
+  resolveGatewayCompressionMode,
   rewriteBrowserPreviewBody,
   selectTailscaleBindAddress,
 } from "../../../apps/backend/src/gateway";
@@ -209,6 +211,17 @@ afterEach(async () => {
 });
 
 describe("remote gateway", () => {
+  test("prefers explicit compression configuration over the environment", () => {
+    expect(resolveGatewayCompressionMode("off", {
+      ORKESTRATOR_GATEWAY_COMPRESSION: "on",
+    })).toBe("off");
+    expect(resolveGatewayCompressionMode(undefined, {
+      ORKESTRATOR_GATEWAY_COMPRESSION: "body",
+    })).toBe("body");
+    expect(compressionModeForListener("on", "control")).toBe("off");
+    expect(compressionModeForListener("on", "browser")).toBe("on");
+  });
+
   test("filters terminal prefixes while restoring explicitly subscribed sessions", () => {
     expect(parseEventSubscriptionFilter(" terminal-output-one, menu- ")).toEqual([
       "terminal-output-one",
@@ -842,6 +855,44 @@ describe("remote gateway", () => {
     const browserResponse = await requestUrl(info.browserUrl!, { headers });
     expect(controlResponse.status).toBe(200);
     expect(browserResponse.status).toBe(200);
+  });
+
+  test("treats a loopback browser listener as remote for compression rollout while control stays identity", async () => {
+    const { info } = await startGateway({
+      bindAddress: "127.0.0.1",
+      controlBindAddress: "127.0.0.1",
+      controlPort: 0,
+      compression: "on",
+    });
+    expect(info.browserUrl).toBeTruthy();
+
+    await requestUrl(`${info.url}__orkestrator/status`, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    await requestUrl(`${info.browserUrl!}__orkestrator/status`, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+
+    const metrics = await requestUrl(`${info.url}__orkestrator/metrics`, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    const samples = ((metrics.json() as {
+      recentRouteSamples: Array<{
+        route: string;
+        listenerKind: string;
+        effectiveCompressionMode: string;
+      }>;
+    }).recentRouteSamples)
+      .filter((sample) => sample.route === "status");
+
+    expect(samples).toContainEqual(expect.objectContaining({
+      listenerKind: "control",
+      effectiveCompressionMode: "off",
+    }));
+    expect(samples).toContainEqual(expect.objectContaining({
+      listenerKind: "browser",
+      effectiveCompressionMode: "on",
+    }));
   });
 
   test("allows only the authenticated control listener to manage Electron web access", async () => {

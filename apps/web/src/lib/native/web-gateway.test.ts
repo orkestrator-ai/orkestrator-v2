@@ -12,6 +12,7 @@ import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "./events";
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
 const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+const originalGetEntriesByType = performance.getEntriesByType;
 
 function pngBlob(width: number, height: number): Blob {
   const bytes = new Uint8Array(24);
@@ -80,11 +81,16 @@ afterEach(() => {
   clearDirectGatewayTransport();
   globalThis.fetch = originalFetch;
   globalThis.EventSource = originalEventSource;
+  Object.defineProperty(performance, "getEntriesByType", {
+    configurable: true,
+    value: originalGetEntriesByType,
+  });
   if (originalClipboardDescriptor) {
     Object.defineProperty(navigator, "clipboard", originalClipboardDescriptor);
   } else {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
   }
+  delete window.__orkestratorClientPlatform;
   delete window.orkestrator;
   delete window.orkestratorGateway;
   mock.restore();
@@ -179,6 +185,90 @@ describe("web gateway browser API", () => {
     await expect(api.webClient.getStatus()).resolves.toMatchObject({
       url: "https://workstation.tailnet.ts.net/",
     });
+  });
+
+  test("reports sanitized boot metrics through the gateway", async () => {
+    let metricsPayload: Record<string, unknown> | null = null;
+    globalThis.fetch = mock(async (input, init) => {
+      expect(input).toBe("/__orkestrator/client-metrics");
+      metricsPayload = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      return new Response(JSON.stringify({ ok: true }), { status: 202 });
+    }) as unknown as typeof fetch;
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    Object.defineProperty(performance, "getEntriesByType", {
+      configurable: true,
+      value: mock((entryType: string) => {
+        if (entryType === "navigation") {
+          return [{
+            type: "reload",
+            nextHopProtocol: "http/1.1",
+            transferSize: 321,
+            encodedBodySize: 222,
+            decodedBodySize: 654,
+            domContentLoadedEventEnd: 11,
+            loadEventEnd: 19,
+          }];
+        }
+        if (entryType === "resource") {
+          return [
+            {
+              name: "http://example.test/assets/app.js",
+              initiatorType: "script",
+              transferSize: 123,
+              encodedBodySize: 111,
+              decodedBodySize: 222,
+            },
+            {
+              name: "http://example.test/assets/app.css",
+              initiatorType: "link",
+              transferSize: 45,
+              encodedBodySize: 33,
+              decodedBodySize: 44,
+            },
+          ];
+        }
+        if (entryType === "paint") {
+          return [
+            { name: "first-paint", startTime: 7 },
+            { name: "first-contentful-paint", startTime: 9 },
+          ];
+        }
+        return [];
+      }),
+    });
+    window.__orkestratorClientPlatform = "iphone-wkwebview";
+
+    const api = createBrowserGatewayApi({ reportBootMetrics: true });
+    const stop = api.listen("menu-zoom", () => undefined);
+    window.dispatchEvent(new Event("load"));
+    MockEventSource.instances[0]?.open();
+
+    await new Promise<void>((resolve, reject) => {
+      const deadline = Date.now() + 500;
+      const poll = () => {
+        if (metricsPayload) return resolve();
+        if (Date.now() > deadline) return reject(new Error("Boot metrics were not reported"));
+        setTimeout(poll, 1);
+      };
+      poll();
+    });
+
+    const reportedMetrics = metricsPayload;
+    expect(reportedMetrics).toMatchObject({
+      platform: "iphone-wkwebview",
+      navigationType: "reload",
+      nextHopProtocol: "http/1.1",
+      transferSize: 321,
+      jsTransferSize: 123,
+      cssTransferSize: 45,
+      domContentLoadedMs: 11,
+      loadEventMs: 19,
+      firstPaintMs: 7,
+      firstContentfulPaintMs: 9,
+    });
+    if (!reportedMetrics) throw new Error("Boot metrics were not captured");
+    expect(typeof reportedMetrics["eventStreamConnectedMs"]).toBe("number");
+    stop();
   });
 
   test("authenticates proxied loopback fetches and named event streams", async () => {

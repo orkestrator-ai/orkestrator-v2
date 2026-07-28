@@ -46,6 +46,7 @@ export interface BrowserGatewayOptions {
   replaceExisting?: boolean;
   onTokenChanged?: (token: string) => void;
   eventReconnectDelayMs?: number;
+  reportBootMetrics?: boolean;
   connections?: NonNullable<Window["orkestrator"]>["connections"];
 }
 
@@ -67,6 +68,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let eventSource: EventSource | null = null;
   let streamAbortController: AbortController | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let bootMetricsTimeout: ReturnType<typeof setTimeout> | null = null;
+  let bootMetricsLoadObserved = typeof document === "undefined" || document.readyState === "complete";
+  let bootMetricsReported = false;
+  let bootMetricsEventStreamConnectedMs: number | null = null;
   type TerminalEventStream = {
     event: string;
     /**
@@ -164,6 +169,80 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     for (const callback of callbacks) callback(undefined);
   };
 
+  const sendBootMetrics = async () => {
+    if (bootMetricsReported || !options.reportBootMetrics || typeof performance === "undefined") return;
+    bootMetricsReported = true;
+    if (bootMetricsTimeout) {
+      clearTimeout(bootMetricsTimeout);
+      bootMetricsTimeout = null;
+    }
+
+    const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+    const resources = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
+    const paintEntries = performance.getEntriesByType("paint");
+    const firstPaint = paintEntries.find((entry) => entry.name === "first-paint");
+    const firstContentfulPaint = paintEntries.find((entry) => entry.name === "first-contentful-paint");
+    const payload = {
+      platform: window.__orkestratorClientPlatform
+        ?? ((window as Window & { webkit?: unknown }).webkit ? "ios-wkwebview" : "desktop-browser"),
+      navigationType: navigation?.type ?? "unknown",
+      nextHopProtocol: navigation?.nextHopProtocol ?? null,
+      transferSize: navigation?.transferSize ?? null,
+      encodedBodySize: navigation?.encodedBodySize ?? null,
+      decodedBodySize: navigation?.decodedBodySize ?? null,
+      resourceCount: resources.length,
+      resourceTransferSize: resources.reduce((total, entry) => total + (entry.transferSize ?? 0), 0),
+      resourceEncodedBodySize: resources.reduce((total, entry) => total + (entry.encodedBodySize ?? 0), 0),
+      resourceDecodedBodySize: resources.reduce((total, entry) => total + (entry.decodedBodySize ?? 0), 0),
+      jsTransferSize: resources
+        .filter((entry) => entry.initiatorType === "script")
+        .reduce((total, entry) => total + (entry.transferSize ?? 0), 0),
+      jsDecodedBodySize: resources
+        .filter((entry) => entry.initiatorType === "script")
+        .reduce((total, entry) => total + (entry.decodedBodySize ?? 0), 0),
+      cssTransferSize: resources
+        .filter((entry) => entry.initiatorType === "css" || entry.name.endsWith(".css"))
+        .reduce((total, entry) => total + (entry.transferSize ?? 0), 0),
+      cssDecodedBodySize: resources
+        .filter((entry) => entry.initiatorType === "css" || entry.name.endsWith(".css"))
+        .reduce((total, entry) => total + (entry.decodedBodySize ?? 0), 0),
+      domContentLoadedMs: navigation?.domContentLoadedEventEnd ?? null,
+      loadEventMs: navigation?.loadEventEnd ?? null,
+      firstPaintMs: firstPaint?.startTime ?? null,
+      firstContentfulPaintMs: firstContentfulPaint?.startTime ?? null,
+      eventStreamConnectedMs: bootMetricsEventStreamConnectedMs,
+    };
+
+    void fetch(apiUrl(`${GATEWAY_PREFIX}/client-metrics`), {
+      method: "POST",
+      credentials,
+      headers: requestHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify(payload),
+      keepalive: true,
+    }).catch(() => undefined);
+  };
+
+  const maybeSendBootMetrics = () => {
+    if (!options.reportBootMetrics || bootMetricsReported) return;
+    if (!bootMetricsLoadObserved) return;
+    if (bootMetricsEventStreamConnectedMs === null) return;
+    void sendBootMetrics();
+  };
+
+  const startBootMetricsReporter = () => {
+    if (!options.reportBootMetrics || bootMetricsTimeout) return;
+    if (!bootMetricsLoadObserved) {
+      window.addEventListener("load", () => {
+        bootMetricsLoadObserved = true;
+        maybeSendBootMetrics();
+      }, { once: true });
+    }
+    bootMetricsTimeout = setTimeout(() => {
+      if (bootMetricsReported) return;
+      void sendBootMetrics();
+    }, 15_000);
+  };
+
   const consumeFetchEventStream = async (
     response: Response,
     controller: AbortController,
@@ -195,6 +274,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
   const connectFetchEventStream = () => {
     if (streamAbortController || !hasMainEventListeners()) return;
+    startBootMetricsReporter();
     const controller = new AbortController();
     streamAbortController = controller;
 
@@ -207,6 +287,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         });
         if (!response.ok || !response.body) {
           throw new Error(`Gateway event stream failed with HTTP ${response.status}`);
+        }
+        if (bootMetricsEventStreamConnectedMs === null && typeof performance !== "undefined") {
+          bootMetricsEventStreamConnectedMs = performance.now();
+          maybeSendBootMetrics();
         }
         announceEventStreamConnected();
 
@@ -224,6 +308,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
   const ensureEventStream = () => {
     if (eventSource || streamAbortController || !hasMainEventListeners()) return;
+    startBootMetricsReporter();
     if (bearerToken || baseUrl) {
       connectFetchEventStream();
       return;
@@ -232,7 +317,13 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     eventSource = new EventSource(apiUrl(eventStreamPath()), {
       withCredentials: true,
     });
-    eventSource.onopen = announceEventStreamConnected;
+    eventSource.onopen = () => {
+      if (bootMetricsEventStreamConnectedMs === null && typeof performance !== "undefined") {
+        bootMetricsEventStreamConnectedMs = performance.now();
+        maybeSendBootMetrics();
+      }
+      announceEventStreamConnected();
+    };
     eventSource.onmessage = (message) => dispatchMessage(message.data);
     eventSource.onerror = () => {
       console.warn("[RemoteGateway] Event stream disconnected");
@@ -596,7 +687,7 @@ export function installBrowserGatewayApi(
       configureDirectGatewayTransport(baseUrl, options.token.trim());
     }
     targetWindow.orkestratorGateway = { enabled: true, ...(baseUrl ? { baseUrl } : {}) };
-    targetWindow.orkestrator = createBrowserGatewayApi({ ...options, baseUrl });
+    targetWindow.orkestrator = createBrowserGatewayApi({ ...options, baseUrl, reportBootMetrics: true });
   }
 }
 

@@ -1,6 +1,6 @@
 # Milestone 0 — Baseline, instrumentation, and rollout controls
 
-Status: Not started
+Status: In progress
 
 Depends on: none
 
@@ -44,38 +44,38 @@ Primary files:
 
 ### Privacy-safe instrumentation
 
-- [ ] Add response byte and encoding counters by route.
-- [ ] Add invoke counters by command without recording arguments or results.
-- [ ] Add stream lifecycle and dropped-client counters.
-- [ ] Add compression timing hooks that later milestones can populate.
-- [ ] Add browser boot milestones and resource transfer-size collection.
-- [ ] Confirm no metric contains prompts, terminal output, file contents,
+- [x] Add response byte and encoding counters by route.
+- [x] Add invoke counters by command without recording arguments or results.
+- [x] Add stream lifecycle and dropped-client counters.
+- [x] Add compression timing hooks that later milestones can populate.
+- [x] Add browser boot milestones and resource transfer-size collection.
+- [x] Confirm no metric contains prompts, terminal output, file contents,
       attachment data, credentials, or tokens.
-- [ ] Bound or sample any in-memory metric labels with unbounded cardinality.
+- [x] Bound or sample any in-memory metric labels with unbounded cardinality.
 
 ### Rollout controls
 
-- [ ] Add `compression?: "off" | "body" | "on"` to gateway options.
-- [ ] Resolve constructor configuration before
+- [x] Add `compression?: "off" | "body" | "on"` to gateway options.
+- [x] Resolve constructor configuration before
       `ORKESTRATOR_GATEWAY_COMPRESSION`.
-- [ ] Add `--compression <mode>` to backend CLI parsing.
-- [ ] Default to a mode that leaves existing behavior unchanged in this
+- [x] Add `--compression <mode>` to backend CLI parsing.
+- [x] Default to a mode that leaves existing behavior unchanged in this
       milestone.
-- [ ] Gate future compression on `listenerKind`, never on the bind address.
-- [ ] Ensure the Electron control listener always remains identity.
-- [ ] Reject invalid configuration values with an actionable error.
-- [ ] Document the option, environment variable, defaults, and rollback modes in
+- [x] Gate future compression on `listenerKind`, never on the bind address.
+- [x] Ensure the Electron control listener always remains identity.
+- [x] Reject invalid configuration values with an actionable error.
+- [x] Document the option, environment variable, defaults, and rollback modes in
       `docs/remote-gateway.md`.
 
 ## Required tests
 
-- [ ] Constructor option overrides the environment variable.
-- [ ] CLI parsing accepts `off`, `body`, and `on`.
-- [ ] Invalid compression modes fail clearly.
-- [ ] The control listener resolves to identity in every mode.
-- [ ] A browser listener bound to loopback under Tailscale Serve is still
+- [x] Constructor option overrides the environment variable.
+- [x] CLI parsing accepts `off`, `body`, and `on`.
+- [x] Invalid compression modes fail clearly.
+- [x] The control listener resolves to identity in every mode.
+- [x] A browser listener bound to loopback under Tailscale Serve is still
       treated as remote.
-- [ ] Documentation assertions in
+- [x] Documentation assertions in
       `tests/unit/docs/remote-gateway-docs.test.ts` pass.
 
 ## Manual verification
@@ -120,4 +120,26 @@ Record:
 - any metric intentionally deferred and why;
 - test command results.
 
-No evidence recorded yet.
+Recorded Tuesday, July 28, 2026:
+
+- Implemented privacy-safe gateway counters and recent bounded samples for
+  routes, commands, event frames, stream lifecycle, and client boot/resource
+  timings in `apps/backend/src/gateway.ts`.
+- Added authenticated `GET /__orkestrator/metrics` and
+  `POST /__orkestrator/client-metrics` endpoints for milestone measurements.
+- Added browser boot/resource reporting in
+  `apps/web/src/lib/native/web-gateway.ts` and explicit `WKWebView` platform
+  tagging in `apps/ios/OrkestratorMobile/Views/RemoteWebView.swift`.
+- Added `compression?: "off" | "body" | "on"` to gateway construction, wired
+  `--compression` and `ORKESTRATOR_GATEWAY_COMPRESSION`, and kept the default
+  at `off` so production response encoding remains unchanged.
+- Metric labels are bounded by route classification, terminal event-name
+  normalization, bounded recent samples, and overflow buckets for excess
+  command/event keys.
+- Pending manual work: desktop cold/warm baselines, real iPhone/iPad
+  `WKWebView` baselines, main asset raw/gzip/Brotli measurements, inactive-tab
+  rehydration verification, and final exit-criteria signoff.
+- Test command results:
+  `bun run --cwd apps/backend typecheck`
+  `bun run --cwd apps/web typecheck`
+  `bun test apps/backend/src/options.test.ts tests/unit/electron/gateway.test.ts apps/web/src/lib/native/web-gateway.test.ts tests/unit/docs/remote-gateway-docs.test.ts --parallel`

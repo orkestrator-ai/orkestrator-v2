@@ -4,6 +4,10 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { APP_SLUG } from "./core/constants.js";
+import {
+  parseGatewayCompressionMode,
+  type GatewayCompressionMode,
+} from "./gateway.js";
 
 export const MACOS_TAILSCALE_APP_CLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
 
@@ -19,6 +23,7 @@ export type BackendOptions = {
   port?: number;
   controlHost?: string;
   controlPort?: number;
+  compression?: GatewayCompressionMode;
   allowNonTailscaleBind: boolean;
   allowedOrigins?: string[];
   tailscaleServe: boolean;
@@ -81,6 +86,11 @@ export function parseOptions(
   const portValue = valueAfter(args, "--port") ?? env.ORKESTRATOR_GATEWAY_PORT;
   const port = parsePortOption(portValue, "--port");
   const controlPort = parsePortOption(valueAfter(args, "--control-port"), "--control-port");
+  const cliCompression = valueAfter(args, "--compression");
+  const compression = parseGatewayCompressionMode(
+    cliCompression ?? env.ORKESTRATOR_GATEWAY_COMPRESSION,
+    cliCompression !== undefined ? "--compression" : "ORKESTRATOR_GATEWAY_COMPRESSION",
+  );
   const tailscaleServePort = parsePortOption(
     valueAfter(args, "--tailscale-serve-port") ?? env.ORKESTRATOR_TAILSCALE_SERVE_PORT,
     "--tailscale-serve-port",
@@ -104,6 +114,7 @@ export function parseOptions(
     port,
     controlHost: valueAfter(args, "--control-host"),
     controlPort,
+    compression,
     // "--unsafe-allow-non-tailscale-bind" is the pre-rename spelling; unknown
     // flags are ignored, so dropping it would strand existing service units.
     allowNonTailscaleBind: args.includes("--allow-non-tailscale-bind")

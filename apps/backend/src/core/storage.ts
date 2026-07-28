@@ -1748,6 +1748,8 @@ export class StorageService {
         "createdFromCommit",
         "lastActivityAt",
         "deletionRequestedAt",
+        "cleanupAfterMergeRequestedAt",
+        "cleanupAfterMergeError",
         "lifecycleOperationStartedAt",
       ] as const;
       for (const field of optionalStringFields) {

@@ -367,15 +367,33 @@ describe("Electron StorageService", () => {
     await storage.updateEnvironment(firstEnvironment.id, {
       initialAgentModel: "gpt-5.6-sol",
       initialReasoningEffort: "high",
+      cleanupAfterMergeRequestedAt: "2026-07-28T12:00:00.000Z",
+      cleanupAfterMergeError: "cleanup failed",
+    });
+    expect(await storage.getEnvironment(firstEnvironment.id)).toMatchObject({
+      cleanupAfterMergeRequestedAt: "2026-07-28T12:00:00.000Z",
+      cleanupAfterMergeError: "cleanup failed",
+    });
+    await storage.updateEnvironment(firstEnvironment.id, {
+      cleanupAfterMergeRequestedAt: 42,
+      cleanupAfterMergeError: { invalid: true },
+    });
+    expect(await storage.getEnvironment(firstEnvironment.id)).toMatchObject({
+      cleanupAfterMergeRequestedAt: "2026-07-28T12:00:00.000Z",
+      cleanupAfterMergeError: "cleanup failed",
     });
     await storage.updateEnvironment(firstEnvironment.id, {
       pendingRenamePrompt: undefined,
       initialAgentModel: undefined,
       initialReasoningEffort: undefined,
+      cleanupAfterMergeRequestedAt: null,
+      cleanupAfterMergeError: undefined,
     });
     expect((await storage.getEnvironment(firstEnvironment.id))?.pendingRenamePrompt).toBeUndefined();
     expect((await storage.getEnvironment(firstEnvironment.id))?.initialAgentModel).toBeUndefined();
     expect((await storage.getEnvironment(firstEnvironment.id))?.initialReasoningEffort).toBeUndefined();
+    expect((await storage.getEnvironment(firstEnvironment.id))?.cleanupAfterMergeRequestedAt).toBeUndefined();
+    expect((await storage.getEnvironment(firstEnvironment.id))?.cleanupAfterMergeError).toBeUndefined();
     await expect(storage.updateEnvironment("missing", {})).rejects.toThrow("Environment not found");
     expect((await storage.reorderEnvironments(firstProject.id, [secondEnvironment.id])).map((environment) => environment.id)).toEqual([
       secondEnvironment.id,

@@ -185,6 +185,7 @@ const localServerEnvironmentOperations = new Map<string, Promise<void>>();
 const containerBridgeOperations = new Map<string, Promise<void>>();
 const deletingLocalServerEnvironments = new Set<string>();
 const mergingEnvironments = new Set<string>();
+const mergeCleanupRecoveryTasks = new Map<string, Promise<void>>();
 type LocalServerKind = "opencode" | "claude" | "codex";
 const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = ["opencode", "claude", "codex"];
 // Codex bridge shutdown can spend five seconds draining app-server before its
@@ -551,6 +552,7 @@ export function shutdownDiffStatsTracking(): void {
  */
 let prMonitorEmit: BackendEmit | undefined;
 let prMonitorStorage: StorageService | undefined;
+let prMonitorContext: CommandContext | undefined;
 let prMonitorSyncGeneration = 0;
 let prMonitorSyncQueue: Promise<void> = Promise.resolve();
 
@@ -704,6 +706,9 @@ const prMonitorService = new PrMonitorService({
         prState: detection.state,
         hasMergeConflicts: detection.hasMergeConflicts,
       });
+      if (detection.state === "merged" && prMonitorContext) {
+        scheduleMergeCleanupRecovery(environmentId, prMonitorContext);
+      }
     },
     clearPr: async (environmentId) => {
       await requirePrMonitorStorage().updateEnvironment(environmentId, {
@@ -753,6 +758,7 @@ function invalidatePendingPrMonitorSync(): void {
 async function syncPrMonitorTracking(context: CommandContext): Promise<void> {
   prMonitorEmit = context.emit;
   prMonitorStorage = context.storage;
+  prMonitorContext = context;
   const generation = prMonitorSyncGeneration;
   const operation = prMonitorSyncQueue
     .catch(() => undefined)
@@ -776,6 +782,7 @@ async function syncPrMonitorTracking(context: CommandContext): Promise<void> {
 function probePrMonitorEnvironment(environmentId: string, context: CommandContext): void {
   prMonitorEmit = context.emit;
   prMonitorStorage = context.storage;
+  prMonitorContext = context;
   void (async () => {
     const environment = await context.storage.getEnvironment(environmentId);
     if (!environment) return;
@@ -786,6 +793,29 @@ function probePrMonitorEnvironment(environmentId: string, context: CommandContex
       error instanceof Error ? error.message : error,
     );
   });
+}
+
+async function reconcileConfirmedMerge(
+  environment: Environment,
+  context: CommandContext,
+): Promise<void> {
+  if (!environment.prUrl) return;
+  prMonitorEmit = context.emit;
+  prMonitorStorage = context.storage;
+  prMonitorContext = context;
+  const confirmedEnvironment: Environment = {
+    ...environment,
+    prState: "merged",
+    hasMergeConflicts: false,
+  };
+  await prMonitorService.reconcileTerminal(
+    environmentToPrMonitorTarget(confirmedEnvironment),
+    {
+      url: environment.prUrl,
+      state: "merged",
+      hasMergeConflicts: false,
+    },
+  );
 }
 
 /** Releases every PR polling timer; called on backend shutdown. */
@@ -1486,6 +1516,11 @@ export type PrDetectionResult = {
 
 type MergePrResult = {
   outcome: "merged" | "pending" | "unknown";
+};
+
+type MergeEnvironmentPrResult = MergePrResult & {
+  cleanupOutcome: "not-requested" | "pending" | "completed" | "failed";
+  cleanupError?: string;
 };
 
 type GhPrListEntry = {
@@ -2373,6 +2408,61 @@ async function mergePullRequestInContainer(
   if (state === "MERGED") return { outcome: "merged" };
   if (state === "OPEN") return { outcome: "pending" };
   return { outcome: "unknown" };
+}
+
+async function runStoredEnvironmentMerge<T>(
+  environment: Environment,
+  method: "squash" | "merge" | "rebase",
+  deleteBranch: boolean,
+  context: CommandContext,
+  onResult: (result: MergePrResult) => Promise<T>,
+): Promise<T> {
+  if (environment.deletionRequestedAt || deletingLocalServerEnvironments.has(environment.id)) {
+    throw new Error(`Environment is already being deleted: ${environment.id}`);
+  }
+  if (mergingEnvironments.has(environment.id)) {
+    throw new Error(`Environment is already being merged: ${environment.id}`);
+  }
+  if (environment.environmentType === "local") {
+    if (!environment.worktreePath) {
+      throw new Error("Local environment worktree is not available");
+    }
+    if (!environment.prUrl) {
+      throw new Error("Local environment PR URL is not available");
+    }
+  } else if (!environment.containerId) {
+    throw new Error("Container environment is not available");
+  }
+
+  mergingEnvironments.add(environment.id);
+  try {
+    await context.storage.updateEnvironment(environment.id, {
+      lifecycleOperation: "merging",
+      lifecycleOperationStartedAt: new Date().toISOString(),
+    });
+    const result = environment.environmentType === "local"
+      ? await mergePullRequestViaGitHubApi(
+        environment.prUrl!,
+        method,
+        deleteBranch,
+        environment.worktreePath!,
+      )
+      : await mergePullRequestInContainer(
+        environment.containerId!,
+        method,
+        deleteBranch,
+      );
+    // The callback runs before the merge guard is released. A confirmed
+    // merge-and-cleanup can therefore transition directly into the deletion
+    // tombstone without a user delete racing through the middle.
+    return await onResult(result);
+  } finally {
+    mergingEnvironments.delete(environment.id);
+    await context.storage.updateEnvironment(environment.id, {
+      lifecycleOperation: null,
+      lifecycleOperationStartedAt: null,
+    }).catch(() => undefined);
+  }
 }
 
 function isExpectedPrAbsenceOutput(text: string): boolean {
@@ -4412,9 +4502,13 @@ async function stopLocalServersForEnvironmentUnlocked(
 async function deleteEnvironment(
   environmentId: string,
   context: CommandContext,
+  options: { allowWhileMerging?: boolean } = {},
 ): Promise<void> {
   if (localServerShutdownRequested) {
     throw new Error("Backend is shutting down; environments cannot be deleted");
+  }
+  if (mergingEnvironments.has(environmentId) && !options.allowWhileMerging) {
+    throw new Error(`Environment is currently being merged: ${environmentId}`);
   }
   if (deletingLocalServerEnvironments.has(environmentId)) {
     throw new Error(`Environment is already being deleted: ${environmentId}`);
@@ -4433,6 +4527,7 @@ async function deleteEnvironment(
       // rejected even if cleanup pauses or fails.
       await storage.updateEnvironment(environmentId, {
         deletionRequestedAt: new Date().toISOString(),
+        cleanupAfterMergeError: null,
         lifecycleOperation: "deleting",
         lifecycleOperationStartedAt: new Date().toISOString(),
       });
@@ -4490,9 +4585,58 @@ async function deleteEnvironment(
       prMonitorService.untrack(environmentId);
       if (environment?.worktreePath) gitFetchScheduler.forget(environment.worktreePath);
     });
+  } catch (error) {
+    const environment = await context.storage.getEnvironment(environmentId).catch(() => null);
+    if (environment?.cleanupAfterMergeRequestedAt) {
+      await context.storage.updateEnvironment(environmentId, {
+        cleanupAfterMergeError: cleanupErrorMessage(error),
+      }).catch(() => undefined);
+    }
+    throw error;
   } finally {
     deletingLocalServerEnvironments.delete(environmentId);
   }
+}
+
+/**
+ * Resumes only the unambiguous follow-up half of a persisted merge-and-cleanup
+ * workflow. A backend restart must never resubmit an ambiguous GitHub merge;
+ * exact-URL PR monitoring first establishes `prState: "merged"`, then this
+ * continuation can safely retry deletion.
+ */
+function scheduleMergeCleanupRecovery(
+  environmentId: string,
+  context: CommandContext,
+): void {
+  if (mergeCleanupRecoveryTasks.has(environmentId)) return;
+
+  const task = (async () => {
+    const environment = await context.storage.getEnvironment(environmentId);
+    if (
+      !environment?.cleanupAfterMergeRequestedAt
+      || environment.cleanupAfterMergeError
+      || (
+        environment.prState !== "merged"
+        && !environment.deletionRequestedAt
+      )
+    ) {
+      return;
+    }
+    await deleteEnvironment(environmentId, context);
+  })()
+    .catch((error) => {
+      console.warn(
+        `[backend] Failed to resume merge cleanup for ${environmentId}:`,
+        conciseError(error),
+      );
+    })
+    .finally(() => {
+      if (mergeCleanupRecoveryTasks.get(environmentId) === task) {
+        mergeCleanupRecoveryTasks.delete(environmentId);
+      }
+    });
+
+  mergeCleanupRecoveryTasks.set(environmentId, task);
 }
 
 async function waitForLocalServerEnvironmentOperations(): Promise<void> {
@@ -5877,6 +6021,14 @@ function conciseError(error: unknown): string {
   return message.length > 500 ? `${message.slice(0, 500)}…` : message;
 }
 
+function cleanupErrorMessage(error: unknown): string {
+  if (error instanceof Error) return conciseError(error);
+  if (typeof error === "string" && error.trim()) {
+    return error.length > 500 ? `${error.slice(0, 500)}…` : error;
+  }
+  return "An unexpected error occurred";
+}
+
 async function refreshClaudeModelCatalog(
   environmentId: string,
   context: CommandContext,
@@ -6347,6 +6499,11 @@ export function createCommandRegistry(
         });
       }
     }
+    for (const environment of synced) {
+      if (environment.cleanupAfterMergeRequestedAt) {
+        scheduleMergeCleanupRecovery(environment.id, context);
+      }
+    }
     // Rehydration is also the recovery path after a backend restart. If startup
     // completed before the process exited, resume any persisted rename intent
     // without requiring the user to stop and start the environment again.
@@ -6358,6 +6515,10 @@ export function createCommandRegistry(
     // Same recovery argument for diff watchers: reconciling here re-arms them
     // after a backend restart without waiting for a lifecycle command.
     void syncDiffStatsTracking(context).catch(() => undefined);
+    // Cleanup-after-merge intent also makes exact-URL PR monitoring authoritative
+    // after a restart. The monitor never resubmits the merge; it only confirms a
+    // terminal state so the persisted deletion follow-up can resume safely.
+    void syncPrMonitorTracking(context).catch(() => undefined);
     return synced;
   });
   register("get_environment_snapshots", ({ projectId }, { storage }) =>
@@ -7889,64 +8050,146 @@ export function createCommandRegistry(
     );
     return parsePrDetectionOutput(output, headBranch);
   });
-  register("merge_pr_local", async ({ environmentId, method, deleteBranch }, { storage }) => {
+  register("merge_pr_local", async ({ environmentId, method, deleteBranch }, context) => {
     const id = asString(environmentId, "environmentId");
-    const env = await storage.getEnvironment(id);
-    if (!env?.worktreePath) throw new Error("Local environment worktree is not available");
-    if (!env.prUrl) throw new Error("Local environment PR URL is not available");
-    if (mergingEnvironments.has(id)) throw new Error(`Environment is already being merged: ${id}`);
-    mergingEnvironments.add(id);
-    try {
-      await storage.updateEnvironment(id, {
-        lifecycleOperation: "merging",
-        lifecycleOperationStartedAt: new Date().toISOString(),
-      });
-      return await mergePullRequestViaGitHubApi(
-        env.prUrl,
-        parseMergeMethod(method),
-        asBoolean(deleteBranch, true),
-        env.worktreePath,
-      );
-    } finally {
-      mergingEnvironments.delete(id);
-      await storage.updateEnvironment(id, {
-        lifecycleOperation: null,
-        lifecycleOperationStartedAt: null,
-      }).catch(() => undefined);
-    }
+    const environment = await context.storage.getEnvironment(id);
+    if (!environment?.worktreePath) throw new Error("Local environment worktree is not available");
+    if (!environment.prUrl) throw new Error("Local environment PR URL is not available");
+    return runStoredEnvironmentMerge(
+      environment,
+      parseMergeMethod(method),
+      asBoolean(deleteBranch, true),
+      context,
+      async (result) => result,
+    );
   });
-  register("merge_pr", async ({ containerId, method, deleteBranch }, { storage }) => {
+  register("merge_pr", async ({ containerId, method, deleteBranch }, context) => {
     const resolvedContainerId = asString(containerId, "containerId");
     const environment = findEnvironmentByContainerId(
-      await storage.loadEnvironments(),
+      await context.storage.loadEnvironments(),
       resolvedContainerId,
     );
-    if (environment && mergingEnvironments.has(environment.id)) {
-      throw new Error(`Environment is already being merged: ${environment.id}`);
-    }
-    if (environment) {
-      mergingEnvironments.add(environment.id);
-    }
-    try {
-      if (environment) {
-        await storage.updateEnvironment(environment.id, {
-          lifecycleOperation: "merging",
-          lifecycleOperationStartedAt: new Date().toISOString(),
-        });
-      }
-      return await mergePullRequestInContainer(
+    if (!environment) {
+      return mergePullRequestInContainer(
         resolvedContainerId,
         parseMergeMethod(method),
         asBoolean(deleteBranch, true),
       );
-    } finally {
-      if (environment) {
-        mergingEnvironments.delete(environment.id);
-        await storage.updateEnvironment(environment.id, {
-          lifecycleOperation: null,
-          lifecycleOperationStartedAt: null,
-        }).catch(() => undefined);
+    }
+    return runStoredEnvironmentMerge(
+      environment,
+      parseMergeMethod(method),
+      asBoolean(deleteBranch, true),
+      context,
+      async (result) => result,
+    );
+  });
+  register("merge_environment_pr", async ({
+    environmentId,
+    method,
+    deleteBranch,
+    cleanupAfterMerge,
+  }, context): Promise<MergeEnvironmentPrResult> => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await context.storage.getEnvironment(id);
+    if (!environment) throw new Error(`Environment not found: ${id}`);
+
+    const requestedCleanup = asBoolean(cleanupAfterMerge, false);
+    const cleanupRequested = requestedCleanup
+      || Boolean(environment.cleanupAfterMergeRequestedAt);
+    if (requestedCleanup) {
+      await context.storage.updateEnvironment(id, {
+        cleanupAfterMergeRequestedAt: new Date().toISOString(),
+        cleanupAfterMergeError: null,
+      });
+    }
+
+    const armMergeReconciliation = async (): Promise<void> => {
+      await syncPrMonitorTracking(context);
+      const latest = await context.storage.getEnvironment(id);
+      if (latest) {
+        prMonitorService.requestMode(
+          environmentToPrMonitorTarget(latest),
+          "merge-pending",
+        );
       }
+    };
+
+    try {
+      return await runStoredEnvironmentMerge(
+        environment,
+        parseMergeMethod(method),
+        cleanupRequested ? false : asBoolean(deleteBranch, true),
+        context,
+        async (result): Promise<MergeEnvironmentPrResult> => {
+          if (result.outcome !== "merged") {
+            await armMergeReconciliation();
+            return {
+              ...result,
+              cleanupOutcome: cleanupRequested ? "pending" : "not-requested",
+            };
+          }
+
+          let mergedStatePersisted = true;
+          try {
+            await context.storage.updateEnvironment(id, {
+              prState: "merged",
+              hasMergeConflicts: false,
+            });
+          } catch (error) {
+            mergedStatePersisted = false;
+            // GitHub is already authoritative. A storage outage must not strand
+            // a cleanup the user explicitly requested.
+            console.warn(
+              `[backend] Failed to persist merged PR state for ${id}:`,
+              conciseError(error),
+            );
+          }
+
+          if (!cleanupRequested) {
+            await reconcileConfirmedMerge(environment, context);
+            if (!mergedStatePersisted) {
+              // Reconcile the service back to the still-open stored snapshot,
+              // then immediately verify the exact PR URL so persistence can
+              // be retried without another renderer action.
+              await armMergeReconciliation().catch(() => undefined);
+            }
+            return { ...result, cleanupOutcome: "not-requested" };
+          }
+
+          if (!mergedStatePersisted) {
+            await deleteMergedEnvironmentRemoteBranch({
+              ...environment,
+              prState: "merged",
+            }).catch(() => undefined);
+          }
+
+          // Reconcile the linked task before deletion untracks the environment.
+          // The monitor's task effects are idempotent, so a later authoritative
+          // poll can safely finish a partial reconciliation.
+          await reconcileConfirmedMerge(environment, context);
+
+          try {
+            await deleteEnvironment(id, context, { allowWhileMerging: true });
+            return { ...result, cleanupOutcome: "completed" };
+          } catch (error) {
+            const cleanupError = cleanupErrorMessage(error);
+            await context.storage.updateEnvironment(id, {
+              cleanupAfterMergeError: cleanupError,
+            }).catch(() => undefined);
+            return {
+              ...result,
+              cleanupOutcome: "failed",
+              cleanupError,
+            };
+          }
+        },
+      );
+    } catch (error) {
+      if (cleanupRequested) {
+        await armMergeReconciliation().catch(() => undefined);
+      }
+      throw error;
     }
   });
 

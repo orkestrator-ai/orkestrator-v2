@@ -667,6 +667,30 @@ export interface MergePrResult {
   outcome: "merged" | "pending" | "unknown";
 }
 
+export interface MergeEnvironmentPrResult extends MergePrResult {
+  cleanupOutcome: "not-requested" | "pending" | "completed" | "failed";
+  cleanupError?: string;
+}
+
+/**
+ * Backend-owned merge workflow. The environment id is authoritative for both
+ * local and container execution, and an optional cleanup follow-up is persisted
+ * before GitHub is invoked.
+ */
+export async function mergeEnvironmentPr(
+  environmentId: string,
+  method?: MergeMethod,
+  deleteBranch?: boolean,
+  cleanupAfterMerge?: boolean,
+): Promise<MergeEnvironmentPrResult> {
+  return invoke<MergeEnvironmentPrResult>("merge_environment_pr", {
+    environmentId,
+    method,
+    deleteBranch,
+    cleanupAfterMerge,
+  });
+}
+
 /** Submit and verify the current branch's PR merge from its container */
 export async function mergePr(
   containerId: string,

@@ -211,12 +211,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const setProjectBoardNotesOpen = useUIStore(
     (state) => state.setProjectBoardNotesOpen,
   );
-  const { updateEnvironment, setEnvironmentPR } = useEnvironmentStore(
-    useShallow((state) => ({
-      updateEnvironment: state.updateEnvironment,
-      setEnvironmentPR: state.setEnvironmentPR,
-    }))
-  );
+  const updateEnvironment = useEnvironmentStore((state) => state.updateEnvironment);
   const selectedEnvironment = useEnvironmentStore((state) =>
     selectedEnvironmentId
       ? state.environments.find((environment) => environment.id === selectedEnvironmentId)
@@ -249,6 +244,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const [runCommands, setRunCommands] = useState<string[] | null>(null);
   const [isLoadingRunCommands, setIsLoadingRunCommands] = useState(false);
   const [cleanupDialogOpen, setCleanupDialogOpen] = useState(false);
+  const [cleanupTarget, setCleanupTarget] = useState<{
+    environmentId: string;
+    environmentName: string;
+    isMerged: boolean;
+  } | null>(null);
   const [deletingEnvironmentId, setDeletingEnvironmentId] = useState<string | null>(null);
   const [cleanupError, setCleanupError] = useState<string | null>(null);
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
@@ -271,12 +271,18 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     ? getProjectById(selectedProjectId)
     : null;
   const isProjectBoardView = !!selectedProject && !selectedEnvironment;
-  const isDeleting = Boolean(
-    selectedEnvironmentId
+  const isCleanupTargetDeleting = Boolean(
+    cleanupTarget
     && (
-      deletingEnvironmentId === selectedEnvironmentId
-      || selectedEnvironment?.lifecycleOperation === "deleting"
-      || selectedEnvironment?.deletionRequestedAt
+      deletingEnvironmentId === cleanupTarget.environmentId
+      || (
+        selectedEnvironmentId === cleanupTarget.environmentId
+        && !selectedEnvironment?.cleanupAfterMergeError
+        && (
+          selectedEnvironment?.lifecycleOperation === "deleting"
+          || selectedEnvironment?.deletionRequestedAt
+        )
+      )
     ),
   );
   const isMerging = Boolean(
@@ -298,7 +304,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     hasMergeConflicts,
     viewPR,
     setModeCreatePending,
-    setModeMergePending,
   } = usePullRequest({ environmentId: selectedEnvironmentId });
 
   const { deleteEnvironment } = useEnvironments(selectedProjectId, {
@@ -307,8 +312,17 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   const hasPR = !!prUrl;
   const isPRMerged = prState === "merged";
+  const cleanupTargetIsMerged = cleanupTarget?.isMerged ?? isPRMerged;
   const isPRClosed = prState === "closed";
   const isPRFinished = isPRMerged || isPRClosed;
+  const isSelectedEnvironmentDeleting = Boolean(
+    selectedEnvironment
+    && !selectedEnvironment.cleanupAfterMergeError
+    && (
+      selectedEnvironment.lifecycleOperation === "deleting"
+      || selectedEnvironment.deletionRequestedAt
+    ),
+  );
   const canCreateTab = !!createTab && tabCount < MAX_TABS;
   // For containers, we need containerId; for local environments, we need worktreePath
   const canOpenEditor = isRunning && (
@@ -319,6 +333,22 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const environmentBrowserUrl = getEnvironmentBrowserUrl(selectedEnvironment);
   const browserPreviewSupported = isGatewayBrowserPreviewSupported();
   const canCopyEnvironmentUrl = !!environmentPortAddress;
+
+  useEffect(() => {
+    const error = selectedEnvironment?.cleanupAfterMergeError;
+    if (!selectedEnvironment || !error) return;
+    setCleanupTarget({
+      environmentId: selectedEnvironment.id,
+      environmentName: selectedEnvironment.name,
+      isMerged: true,
+    });
+    setCleanupError(error);
+    setCleanupDialogOpen(true);
+  }, [
+    selectedEnvironment?.cleanupAfterMergeError,
+    selectedEnvironment?.id,
+    selectedEnvironment?.name,
+  ]);
 
   // Handler for opening in editor
   const handleOpenInEditor = useCallback(async () => {
@@ -844,14 +874,18 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   // Handler for cleaning up (deleting) an environment after PR is merged/closed
   const handleCleanup = useCallback(async () => {
-    if (!selectedEnvironmentId) return;
+    const operationEnvironmentId = cleanupTarget?.environmentId ?? selectedEnvironmentId;
+    if (
+      !operationEnvironmentId
+      || deletingEnvironmentId === operationEnvironmentId
+    ) return;
 
-    const operationEnvironmentId = selectedEnvironmentId;
     setDeletingEnvironmentId(operationEnvironmentId);
     setCleanupError(null);
     try {
-      await deleteEnvironment(selectedEnvironmentId);
+      await deleteEnvironment(operationEnvironmentId);
       setCleanupDialogOpen(false);
+      setCleanupTarget(null);
     } catch (err) {
       console.error("[ActionBar] Failed to delete environment:", err);
       const message = err instanceof Error ? err.message : "An unexpected error occurred";
@@ -861,80 +895,77 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         current === operationEnvironmentId ? null : current
       );
     }
-  }, [selectedEnvironmentId, deleteEnvironment]);
+  }, [
+    cleanupTarget?.environmentId,
+    deletingEnvironmentId,
+    selectedEnvironmentId,
+    deleteEnvironment,
+  ]);
 
-  // Handler for merging a PR
-  const handleMergePR = useCallback(async () => {
+  // Handler for merging a PR, optionally deleting its environment after GitHub
+  // confirms that the merge completed.
+  const handleMergePR = useCallback(async (cleanupAfterMerge: boolean) => {
     if (!selectedEnvironmentId || !prUrl) return;
-
-    // For container environments, we need a containerId
-    // For local environments, we use the environmentId
-    if (!isLocalEnvironment && !selectedEnvironment?.containerId) return;
 
     // Close dialog immediately and show spinner on main button
     setMergeDialogOpen(false);
     const operationEnvironmentId = selectedEnvironmentId;
+    const operationEnvironmentName = selectedEnvironment?.name ?? selectedEnvironmentId;
+    const operationBranch = selectedEnvironment?.branch ?? "current branch";
     setMergingEnvironmentId(operationEnvironmentId);
     setMergeError(null);
 
     try {
-      // Use appropriate merge method based on environment type
       console.log("[ActionBar] Starting PR merge...");
-      const mergeResult = isLocalEnvironment
-        ? await backend.mergePrLocal(selectedEnvironmentId, "squash", true)
-        : await backend.mergePr(selectedEnvironment!.containerId!, "squash", true);
+      const mergeResult = await backend.mergeEnvironmentPr(
+        operationEnvironmentId,
+        "squash",
+        true,
+        cleanupAfterMerge,
+      );
       console.log("[ActionBar] Merge command completed successfully");
 
       if (mergeResult.outcome !== "merged") {
         toast.success(mergeResult.outcome === "pending" ? "Merge pending" : "Merge submitted", {
-          description: selectedEnvironment.branch,
-          id: `branch-merge-submitted-${selectedEnvironmentId}`,
+          description: operationBranch,
+          id: `branch-merge-submitted-${operationEnvironmentId}`,
         });
-        setModeMergePending();
-        setMergingEnvironmentId((current) =>
-          current === operationEnvironmentId ? null : current
-        );
         return;
       }
 
       toast.success("Branch merged", {
-        description: selectedEnvironment.branch,
-        id: `branch-merged-${selectedEnvironmentId}`,
+        description: operationBranch,
+        id: `branch-merged-${operationEnvironmentId}`,
       });
 
-      // IMPORTANT: Immediately save the "merged" state after successful merge.
-      // For container environments, `gh pr merge --delete-branch` checks out the base branch
-      // (e.g., main) after deleting the feature branch. This means subsequent `gh pr view`
-      // calls from the monitor service will fail to find the PR (since they're now running
-      // from main branch context). By saving the merged state immediately, we ensure the
-      // cleanup button appears regardless of what the monitor detects afterward.
-      console.log("[ActionBar] Saving merged state immediately...");
-      try {
-        await backend.setEnvironmentPr(selectedEnvironmentId, prUrl, "merged", false);
-        setEnvironmentPR(selectedEnvironmentId, prUrl, "merged", false);
-        console.log("[ActionBar] Merged state saved");
-      } catch (saveErr) {
-        // State save failed but merge succeeded - log warning and continue
-        // The monitor service may still detect the merged state eventually
-        console.warn("[ActionBar] Failed to save merged state:", saveErr);
+      if (mergeResult.cleanupOutcome === "failed") {
+        setCleanupError(
+          mergeResult.cleanupError ?? "An unexpected error occurred",
+        );
+        setCleanupTarget({
+          environmentId: operationEnvironmentId,
+          environmentName: operationEnvironmentName,
+          isMerged: true,
+        });
+        setCleanupDialogOpen(true);
       }
-
-      // Clear the merging spinner
-      setMergingEnvironmentId((current) =>
-        current === operationEnvironmentId ? null : current
-      );
-
     } catch (err) {
       console.error("[ActionBar] Failed to merge PR:", err);
       // backend invoke errors come as strings, not Error objects
       const message = err instanceof Error ? err.message : typeof err === "string" ? err : "An unexpected error occurred";
       setMergeError(message);
       setMergeDialogOpen(true); // Re-open dialog to show error
+    } finally {
       setMergingEnvironmentId((current) =>
         current === operationEnvironmentId ? null : current
       );
     }
-  }, [selectedEnvironment?.branch, selectedEnvironment?.containerId, selectedEnvironmentId, prUrl, isLocalEnvironment, setEnvironmentPR, setModeMergePending]);
+  }, [
+    selectedEnvironment?.branch,
+    selectedEnvironment?.name,
+    selectedEnvironmentId,
+    prUrl,
+  ]);
 
   // Get target branch for PR dialog
   const targetBranch = selectedProjectId
@@ -1562,7 +1593,15 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       variant={isGrid ? "ghost" : "destructive"}
                       size="sm"
                       className="gap-2"
-                      onClick={() => setCleanupDialogOpen(true)}
+                      disabled={isMerging || isSelectedEnvironmentDeleting}
+                      onClick={() => {
+                        setCleanupTarget({
+                          environmentId: selectedEnvironment.id,
+                          environmentName: selectedEnvironment.name,
+                          isMerged: isPRMerged,
+                        });
+                        setCleanupDialogOpen(true);
+                      }}
                     >
                       <Trash2 className="h-4 w-4" />
                       <span className={cn(isGrid && "truncate text-xs")}>Clean Up</span>
@@ -1870,16 +1909,19 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         open={cleanupDialogOpen}
         onOpenChange={(open) => {
           setCleanupDialogOpen(open);
-          if (!open) setCleanupError(null); // Clear error when closing
+          if (!open) {
+            setCleanupError(null);
+            setCleanupTarget(null);
+          }
         }}
       >
         <AlertDialogContent className="max-h-[calc(100vh-2rem)] overflow-hidden">
           <AlertDialogHeader>
             <AlertDialogTitle>Clean Up Environment</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete the environment "{selectedEnvironment?.name}".
-              The PR has been {isPRMerged ? "merged" : "closed"}, so this environment is no longer needed.
-              {isPRMerged ? " The PR's remote branch will also be deleted if it still exists." : ""}
+              This will permanently delete the environment "{cleanupTarget?.environmentName ?? selectedEnvironment?.name}".
+              The PR has been {cleanupTargetIsMerged ? "merged" : "closed"}, so this environment is no longer needed.
+              {cleanupTargetIsMerged ? " The PR's remote branch will also be deleted if it still exists." : ""}
               This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1889,13 +1931,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             </div>
           )}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
+            <AlertDialogCancel disabled={isCleanupTargetDeleting}>Cancel</AlertDialogCancel>
+            <Button
               onClick={handleCleanup}
-              disabled={isDeleting}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={isCleanupTargetDeleting}
+              variant="destructive"
             >
-              {isDeleting ? (
+              {isCleanupTargetDeleting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Deleting...
@@ -1903,7 +1945,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               ) : (
                 "Delete Environment"
               )}
-            </AlertDialogAction>
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -1923,6 +1965,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               This will squash and merge <span className="font-semibold">{sourceBranch}</span> into <span className="font-semibold">{targetBranch}</span>.
               If the pull request is a draft, it will be marked ready for review first.
               The feature branch will be deleted after merging.
+              Merge &amp; Cleanup also permanently deletes this environment, but only after the merge is confirmed successful.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {mergeError && (
@@ -1933,10 +1976,16 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleMergePR}
+              onClick={() => void handleMergePR(false)}
               className="bg-green-600 text-white hover:bg-green-700"
             >
               Merge PR
+            </AlertDialogAction>
+            <AlertDialogAction
+              onClick={() => void handleMergePR(true)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Merge &amp; Cleanup
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

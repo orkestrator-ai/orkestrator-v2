@@ -37,6 +37,10 @@ const realResumeSessionDialogSnapshot = { ...realResumeSessionDialog };
 const mockScrollToBottom = mock(() => {});
 let mockIsAtBottom = true;
 let lastVirtualizedMessages: any[] = [];
+let lastVirtualizedFind: {
+  isActive: boolean;
+  getSearchText: (message: ClaudeMessageType) => string;
+} | null = null;
 // Typed from `createSession`'s real signature rather than inferred from the
 // default factory, so a test that stubs a title is not an excess-property error.
 type MockCreatedSession = { sessionId: string; title?: string } | null;
@@ -121,8 +125,9 @@ mock.module("@/hooks", () => ({
 }));
 
 mock.module("@/components/chat/VirtualizedMessageList", () => ({
-  VirtualizedMessageList: ({ messages, renderMessage, emptyState, footer }: any) => {
+  VirtualizedMessageList: ({ messages, renderMessage, emptyState, footer, find }: any) => {
     lastVirtualizedMessages = messages;
+    lastVirtualizedFind = find;
     return (
       <div>
         {messages.length > 0
@@ -532,6 +537,7 @@ describe("ClaudeChatTab", () => {
     mockToastError.mockClear();
     mockToastWarning.mockClear();
     lastVirtualizedMessages = [];
+    lastVirtualizedFind = null;
   });
 
   test("blocks sending until a restored agent handoff finishes loading", async () => {
@@ -647,6 +653,55 @@ describe("ClaudeChatTab", () => {
     // Gating on readiness rather than depending on the prompt value keeps the
     // effect from tearing down and restarting the moment the load resolves.
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("shows a transcript error and clears loading when an initial prompt is rejected", async () => {
+    const originalError = console.error;
+    const consoleError = mock(() => {});
+    console.error = consoleError as unknown as typeof console.error;
+    useClaudeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    seedPaneLayout(undefined, "Run the initial Claude task");
+    mockSendPrompt.mockResolvedValue(false);
+
+    try {
+      render(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={false}
+          initialPrompt="Run the initial Claude task"
+        />,
+      );
+
+      await waitFor(() => {
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          expect.any(Object),
+          "session-1",
+          "Run the initial Claude task",
+          expect.any(Object),
+        );
+      });
+      await waitFor(() => {
+        const session = useClaudeStore.getState().sessions.get(SESSION_KEY);
+        expect(session?.isLoading).toBe(false);
+        expect(session?.messages).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            role: "assistant",
+            content: "Failed to send message. Please try again.",
+          }),
+        ]));
+      });
+      expect(
+        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.initialPrompt,
+      ).toBeUndefined();
+      expect(screen.getByText("Failed to send message. Please try again.")).toBeTruthy();
+    } finally {
+      console.error = originalError;
+    }
   });
 
   test("keeps a resumed session's bootstrap prompt hidden after the snapshot is deleted", async () => {
@@ -869,6 +924,43 @@ describe("ClaudeChatTab", () => {
 
     expect(screen.getByText("Ready to build!")).toBeTruthy();
     expect(screen.queryByText("No messages yet. Start a conversation with Claude!")).toBeNull();
+  });
+
+  test("forwards transcript search text and dedicated shortcut ownership to the virtualized list", () => {
+    const message: ClaudeMessageType = {
+      id: "searchable-message",
+      role: "assistant",
+      content: "Search the complete Claude transcript",
+      parts: [{ type: "text", content: "Search the complete Claude transcript" }],
+      timestamp: "2026-07-28T10:00:00.000Z",
+    };
+    useClaudeStore.getState().setMessages(SESSION_KEY, [message]);
+
+    const view = render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        ownsGlobalShortcuts={false}
+      />,
+    );
+
+    // A visible split-pane tab must not capture Cmd/Ctrl+F unless its pane
+    // currently owns the document-level shortcuts.
+    expect(lastVirtualizedFind?.isActive).toBe(false);
+    expect(lastVirtualizedFind?.getSearchText(message)).toBe(message.content);
+
+    view.rerender(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        ownsGlobalShortcuts
+      />,
+    );
+
+    expect(lastVirtualizedFind?.isActive).toBe(true);
+    expect(lastVirtualizedFind?.getSearchText(message)).toBe(message.content);
   });
 
   test("refresh requests replace the transcript and reconcile server state", async () => {
@@ -2202,6 +2294,67 @@ describe("ClaudeChatTab", () => {
     }
   });
 
+  test.each([
+    ["missing", null],
+    [
+      "mismatched",
+      {
+        id: "different-claude-session",
+        status: "idle",
+        createdAt: "2026-04-15T10:00:00.000Z",
+        lastActivity: "2026-04-15T10:00:00.000Z",
+      },
+    ],
+  ] as const)(
+    "rejects a %s selected server session without replacing the current session",
+    async (_kind, selectedServerSession) => {
+      const originalError = console.error;
+      const consoleError = mock(() => {});
+      console.error = consoleError as unknown as typeof console.error;
+      mockGetSession.mockImplementation(async (_client, sessionId) =>
+        sessionId === "resumed-claude" ? selectedServerSession : null
+      );
+      mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
+        sessionId === "resumed-claude"
+          ? [{
+              id: "untrusted-resume-message",
+              role: "assistant",
+              content: "Do not publish this transcript",
+              parts: [{ type: "text", content: "Do not publish this transcript" }],
+              timestamp: "2026-04-15T10:00:00.000Z",
+            }]
+          : []
+      );
+
+      try {
+        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        fireEvent.click(screen.getAllByRole("button", { name: "Resume Session" })[0]!);
+        fireEvent.click(await screen.findByTestId("claude-resume-choice"));
+
+        await waitFor(() => {
+          expect(consoleError).toHaveBeenCalledWith(
+            "[ClaudeChatTab] Failed to resume session:",
+            expect.objectContaining({
+              message: "The selected Claude session is no longer available",
+            }),
+          );
+        });
+        expect(screen.getByTestId("claude-resume-choice")).toBeTruthy();
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe("session-1");
+        expect(
+          useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+            (message) => message.id === "untrusted-resume-message",
+          ),
+        ).toBe(false);
+        expect(
+          usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId,
+        ).not.toBe("resumed-claude");
+      } finally {
+        console.error = originalError;
+      }
+    },
+  );
+
   test("review tabs show Address all after messages exist and send the shared prompt", async () => {
     const message: ClaudeMessageType = {
       id: "msg-review-complete",
@@ -2771,6 +2924,59 @@ describe("ClaudeChatTab", () => {
         expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
         expect(state.messageQueue.get(SESSION_KEY)).toEqual([]);
       });
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("records the rejected queued send error and clears the loading state", async () => {
+    const originalError = console.error;
+    const consoleError = mock(() => {});
+    const sendError = new Error("Claude bridge rejected the queued prompt");
+    console.error = consoleError as unknown as typeof console.error;
+    mockSendPrompt.mockRejectedValue(sendError);
+    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-rejection",
+      text: "Queued Claude rejection",
+      attachments: [],
+      effort: "high",
+      planModeEnabled: false,
+      fastModeEnabled: false,
+    });
+
+    try {
+      render(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={false}
+        />,
+      );
+
+      await waitFor(() => {
+        const state = useClaudeStore.getState();
+        const errorMessage = state.sessions.get(SESSION_KEY)?.messages.find(
+          (message) =>
+            message.content
+              === "Failed to send queued message: Claude bridge rejected the queued prompt",
+        );
+        expect(errorMessage).toMatchObject({
+          role: "assistant",
+          parts: [{
+            type: "text",
+            content: "Failed to send queued message: Claude bridge rejected the queued prompt",
+          }],
+        });
+        expect(errorMessage?.id).toMatch(
+          /^error-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+        );
+        expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+        expect(state.messageQueue.get(SESSION_KEY)).toEqual([]);
+      });
+      expect(consoleError).toHaveBeenCalledWith(
+        "[ClaudeChatTab] Failed to send queued prompt:",
+        sendError,
+      );
     } finally {
       console.error = originalError;
     }

@@ -98,13 +98,22 @@ function emptyEventStream(): AsyncIterable<OpenCodeEvent> {
 function eventChannel() {
   let closed = false;
   let wake = deferred<void>();
+  const queue: OpenCodeEvent[] = [];
   const stream = (async function* () {
     while (!closed) {
-      await wake.promise;
+      if (queue.length === 0) await wake.promise;
+      while (queue.length > 0) {
+        yield queue.shift()!;
+      }
     }
   })() as AsyncGenerator<OpenCodeEvent>;
   return {
     stream,
+    push(event: OpenCodeEvent) {
+      queue.push(event);
+      wake.resolve();
+      wake = deferred<void>();
+    },
     close() {
       closed = true;
       wake.resolve();
@@ -507,5 +516,60 @@ describe("OpenCodeChatTab SSE reconnect", () => {
     await waitFor(() => {
       expect(timers.map((timer) => timer.delay)).toEqual([3_000, 6_000, 3_000]);
     });
+  });
+
+  test("a received event resets the reconnect backoff before the next drop", async () => {
+    const firstSubscription = deferred<AsyncIterable<OpenCodeEvent>>();
+    const replacement = eventChannel();
+    const originalConsoleError = console.error;
+    console.error = mock(() => {}) as typeof console.error;
+    mockSubscribeToEvents
+      .mockImplementationOnce(() => firstSubscription.promise)
+      .mockResolvedValueOnce(replacement.stream);
+
+    try {
+      renderChat();
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalledTimes(1));
+      const timers = captureReconnectTimers();
+
+      await act(async () => {
+        firstSubscription.resolve(emptyEventStream());
+        await firstSubscription.promise;
+      });
+      await waitFor(() => expect(timers.map((timer) => timer.delay)).toEqual([3_000]));
+
+      await runTimer(timers[0]!);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalledTimes(2));
+
+      await act(async () => {
+        replacement.push({
+          type: "session.error",
+          properties: {
+            sessionID: "session-reconnect",
+            error: "event confirms connection",
+          },
+        } as OpenCodeEvent);
+      });
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore
+            .getState()
+            .sessions.get(SESSION_KEY)
+            ?.messages.some((message) =>
+              message.content.includes("event confirms connection"),
+            ),
+        ).toBe(true);
+      });
+
+      await act(async () => {
+        replacement.close();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(timers.map((timer) => timer.delay)).toEqual([3_000, 3_000]);
+      });
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 });

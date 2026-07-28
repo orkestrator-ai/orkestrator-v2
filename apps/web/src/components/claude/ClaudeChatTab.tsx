@@ -107,6 +107,8 @@ interface ClaudeChatTabProps {
   tabId: string;
   data: ClaudeNativeData;
   isActive: boolean;
+  /** Whether this pane currently owns document-level shortcuts. */
+  ownsGlobalShortcuts?: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
   initialAgentModel?: string;
@@ -131,6 +133,7 @@ export function ClaudeChatTab({
   tabId,
   data,
   isActive,
+  ownsGlobalShortcuts = isActive,
   initialPrompt,
   isReviewTab = false,
   initialAgentModel,
@@ -1996,6 +1999,7 @@ export function ClaudeChatTab({
   return (
     <NativeChatShell
       agentLabel="Claude"
+      isActive={ownsGlobalShortcuts}
       containerId={containerId}
       connectionState={connectionState}
       errorMessage={errorMessage}

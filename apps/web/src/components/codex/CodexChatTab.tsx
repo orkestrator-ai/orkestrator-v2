@@ -97,6 +97,8 @@ interface CodexChatTabProps {
   tabId: string;
   data: CodexNativeData;
   isActive: boolean;
+  /** Whether this pane currently owns document-level shortcuts. */
+  ownsGlobalShortcuts?: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
   initialAgentModel?: string;
@@ -171,6 +173,7 @@ export function CodexChatTab({
   tabId,
   data,
   isActive,
+  ownsGlobalShortcuts = isActive,
   initialPrompt,
   isReviewTab = false,
   initialAgentModel,
@@ -2255,6 +2258,7 @@ export function CodexChatTab({
   return (
     <NativeChatShell
       agentLabel="Codex"
+      isActive={ownsGlobalShortcuts}
       containerId={containerId}
       connectionState={connectionState}
       errorMessage={errorMessage}

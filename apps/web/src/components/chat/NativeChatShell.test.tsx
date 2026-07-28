@@ -13,14 +13,27 @@ import type { VirtuosoHandle } from "react-virtuoso";
 import * as realVirtualizedMessageList from "./VirtualizedMessageList";
 
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
+let lastVirtualizedMessageListProps: Record<string, any> | null = null;
 
 mock.module("./VirtualizedMessageList", () => ({
-  VirtualizedMessageList: ({ footer, emptyState }: any) => (
-    <div>
-      {emptyState}
-      {footer}
-    </div>
-  ),
+  VirtualizedMessageList: (props: any) => {
+    lastVirtualizedMessageListProps = props;
+    return (
+      <div>
+        {props.emptyState}
+        {props.messages.map((message: any, index: number) => (
+          <div key={message.id}>
+            {props.renderMessage(
+              index,
+              message,
+              index > 0 ? props.messages[index - 1] : null,
+            )}
+          </div>
+        ))}
+        {props.footer}
+      </div>
+    );
+  },
 }));
 
 import { NativeChatShell } from "./NativeChatShell";
@@ -32,6 +45,7 @@ const originalResizeObserver = globalThis.ResizeObserver;
 function shellProps() {
   return {
     agentLabel: "Test",
+    isActive: true,
     connectionState: "connected" as const,
     onRetry: () => {},
     messages: [],
@@ -54,6 +68,7 @@ function shellProps() {
 
 describe("NativeChatShell", () => {
   beforeEach(() => {
+    lastVirtualizedMessageListProps = null;
     resizeCallback = null;
     resizeObserver = null;
     globalThis.ResizeObserver = class ResizeObserver {
@@ -215,6 +230,52 @@ describe("NativeChatShell", () => {
       blockingCard.compareDocumentPosition(accessory)
         & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  test("forwards shortcut ownership and canonical searchable message text", () => {
+    const message = {
+      id: "assistant-1",
+      role: "assistant" as const,
+      content: "provider aggregate",
+      createdAt: "2025-01-01T00:00:00.000Z",
+      parts: [
+        { type: "text" as const, content: "A **visible** answer" },
+        { type: "thinking" as const, content: "hidden thought" },
+      ],
+    };
+    const previousMessage = {
+      id: "user-1",
+      role: "user" as const,
+      content: "Earlier prompt",
+      createdAt: "2025-01-01T00:00:00.000Z",
+      parts: [{ type: "text" as const, content: "Earlier prompt" }],
+    };
+    const messageActions = mock(() => <button type="button">Fork</button>);
+
+    const view = render(
+      <NativeChatShell
+        {...shellProps()}
+        isActive={false}
+        agentLabel="Claude"
+        containerId="container-1"
+        messages={[previousMessage, message]}
+        messageActions={messageActions}
+      />,
+    );
+
+    expect(lastVirtualizedMessageListProps?.find.isActive).toBe(false);
+    expect(lastVirtualizedMessageListProps?.find.getSearchText(message)).toBe(
+      "A visible answer",
+    );
+    expect(messageActions).toHaveBeenCalledWith(previousMessage);
+    expect(messageActions).toHaveBeenCalledWith(message);
+    expect(screen.getByText("Earlier prompt")).toBeTruthy();
+    expect(
+      Array.from(
+        view.container.querySelectorAll("[data-agent-chat-search-content]"),
+      ).map((element) => element.textContent),
+    ).toEqual(["Earlier prompt", "A visible answer"]);
+    expect(screen.getAllByRole("button", { name: "Fork" })).toHaveLength(2);
   });
 
   describe("connection states", () => {

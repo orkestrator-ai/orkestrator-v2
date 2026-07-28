@@ -14,6 +14,7 @@ import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { formatElapsed } from "@/lib/format-elapsed";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
 
@@ -22,6 +23,8 @@ export type NativeConnectionState = "connecting" | "connected" | "error";
 interface NativeChatShellProps<TMessage extends NativeMessageType> {
   /** Rendered as the assistant name and used in copy: "Connecting to {label}…". */
   agentLabel: string;
+  /** Only the focused chat pane owns global keyboard shortcuts. */
+  isActive: boolean;
   /**
    * Container the environment runs in, when Dockerised.
    *
@@ -102,6 +105,7 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
  */
 export function NativeChatShell<TMessage extends NativeMessageType>({
   agentLabel,
+  isActive,
   containerId,
   connectionState,
   errorMessage,
@@ -316,6 +320,10 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           }
           scrollProps={scrollProps}
           virtuosoRef={virtuosoRef}
+          find={{
+            isActive,
+            getSearchText: getNativeMessageSearchText,
+          }}
         />
       </div>
 

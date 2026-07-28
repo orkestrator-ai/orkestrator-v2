@@ -995,6 +995,7 @@ function TextPart({
   return (
     <div className={cn("group", !truncateUserPrompt && "py-1.5")}>
       <div
+        data-agent-chat-search-content="true"
         className={cn(
           "[&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0",
           shouldTruncate && !isExpanded && "overflow-hidden",
@@ -1650,7 +1651,10 @@ export const NativeMessage = memo(function NativeMessage({
     return (
       <div className="px-2 @sm:px-4 py-2">
         <div className="max-w-3xl mx-auto min-w-0">
-          <div className="text-xs text-muted-foreground italic text-center py-1 break-words">
+          <div
+            data-agent-chat-search-content="true"
+            className="text-xs text-muted-foreground italic text-center py-1 break-words"
+          >
             {message.content}
           </div>
         </div>

@@ -24,6 +24,9 @@ import {
   DEFAULT_TERMINAL_SCROLLBACK,
   resolveTerminalBackgroundColor,
 } from "@/constants/terminal";
+import {
+  MobileTerminalKeyBar,
+} from "@/components/terminal/MobileTerminalKeyBar";
 
 interface ClaudeTmuxInteractiveTerminalProps {
   tabId: string;
@@ -173,7 +176,14 @@ export function ClaudeTmuxInteractiveTerminal({
       }
       const sessionId = sessionIdRef.current;
       if (sessionId) {
-        void resizeInteractiveTerminal(sessionId, terminal.cols, terminal.rows);
+        void resizeInteractiveTerminal(sessionId, terminal.cols, terminal.rows).catch(
+          (resizeError) => {
+            console.error(
+              "[ClaudeTmuxInteractiveTerminal] Failed to resize terminal:",
+              resizeError,
+            );
+          },
+        );
       }
     };
 
@@ -312,10 +322,30 @@ export function ClaudeTmuxInteractiveTerminal({
 
   return (
     <div
-      className={cn("relative h-full min-h-0 bg-black", className)}
+      className={cn(
+        "relative h-full min-h-0 bg-black",
+        isMobile && "flex flex-col",
+        className,
+      )}
       style={{ backgroundColor: terminalBackgroundColor }}
     >
-      <div ref={terminalHostRef} className="h-full w-full p-2" />
+      <div
+        ref={terminalHostRef}
+        className={cn("w-full p-2", isMobile ? "min-h-0 flex-1" : "h-full")}
+      />
+      {isMobile && isActive && (
+        <MobileTerminalKeyBar
+          contained
+          onInput={(data) => {
+            // This path is interpreted by the backend and forwarded with
+            // `tmux send-keys`, rather than written to a raw PTY. Keep the
+            // canonical CSI form so the backend can map arrows to named tmux
+            // keys and let tmux encode them for the pane's current mode.
+            void writeToTerminal(data);
+          }}
+          disabled={!connected}
+        />
+      )}
       {(!connected || error) && (
         <div className="pointer-events-none absolute right-3 top-3 rounded border border-border/70 bg-background/90 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
           {error ?? "Attaching tmux..."}

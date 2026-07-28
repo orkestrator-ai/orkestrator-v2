@@ -20,7 +20,7 @@ import {
 
 const resizeMock = mock(async () => {});
 const connectMock = mock(async () => {});
-const writeMock = mock(async () => {});
+const writeMock = mock(async (_data: string) => {});
 let terminalOnData: ((data: Uint8Array) => void) | undefined;
 let terminalInputHandler: ((data: string) => void) | undefined;
 let terminalOscHandler: ((data: string) => boolean) | undefined;
@@ -47,10 +47,14 @@ let lastUseTerminalOptions: MockUseTerminalOptions | undefined;
 let useTerminalOptionsHistory: MockUseTerminalOptions[] = [];
 let useTerminalSessionId: string | null = "session-1";
 let useTerminalIsConnected = true;
-let clipboardImagePasteOptions: { onImageSaved: (filePath: string) => Promise<void> } | undefined;
+let clipboardImagePasteOptions: {
+  onImageSaved: (filePath: string) => Promise<void>;
+  onError: (message: string) => void;
+} | undefined;
 const composeBarPropsMock = mock((_props: {
   environmentId?: string;
   sessionKey: string;
+  className?: string;
 }) => {});
 let composeBarOptions: {
   isOpen: boolean;
@@ -66,6 +70,7 @@ let composeBarOptions: {
   ) => Promise<void>;
   showAddressAll?: boolean;
   onAddressAll?: () => void;
+  className?: string;
 } | undefined;
 
 mock.module("@/hooks/useTerminal", () => ({
@@ -92,7 +97,10 @@ mock.module("@/hooks/useAgentState", () => ({
 
 const realClipboardImagePasteSnapshot = { ...realClipboardImagePaste };
 mock.module("@/hooks/useClipboardImagePaste", () => ({
-  useClipboardImagePaste: (options: { onImageSaved: (filePath: string) => Promise<void> }) => {
+  useClipboardImagePaste: (options: {
+    onImageSaved: (filePath: string) => Promise<void>;
+    onError: (message: string) => void;
+  }) => {
     clipboardImagePasteOptions = options;
   },
 }));
@@ -144,10 +152,19 @@ afterAll(() => {
 });
 
 let storedContainerElement: HTMLDivElement;
+let portalTerminalIsOpened = true;
 
 const portalStoreActions = {
-  markTerminalOpened: mock(() => {}),
-  setTerminalContainer: mock(() => {}),
+  markTerminalOpened: mock(() => {
+    portalTerminalIsOpened = true;
+  }),
+  setTerminalContainer: mock((
+    _environmentId: string,
+    _tabId: string,
+    containerElement: HTMLDivElement,
+  ) => {
+    storedContainerElement = containerElement;
+  }),
   setTerminalPane: mock(() => {}),
   recreateTerminal: mock(() => null),
   clearTerminalsForEnvironment: mock(() => {}),
@@ -158,7 +175,13 @@ const portalStoreActions = {
 const portalStoreState = () => ({
   ...portalStoreActions,
   terminals: new Map([
-    ["env-1::tab-1", { containerElement: storedContainerElement, isOpened: true }],
+    [
+      "env-1::tab-1",
+      {
+        containerElement: storedContainerElement,
+        isOpened: portalTerminalIsOpened,
+      },
+    ],
   ]),
 });
 
@@ -198,6 +221,7 @@ mock.module("@/components/terminal/ComposeBar", () => ({
     onSend,
     showAddressAll,
     onAddressAll,
+    className,
   }: {
     environmentId?: string;
     sessionKey: string;
@@ -214,9 +238,10 @@ mock.module("@/components/terminal/ComposeBar", () => ({
     ) => Promise<void>;
     showAddressAll?: boolean;
     onAddressAll?: () => void;
+    className?: string;
   }) => {
-    composeBarPropsMock({ environmentId, sessionKey });
-    composeBarOptions = { isOpen, onSend, showAddressAll, onAddressAll };
+    composeBarPropsMock({ environmentId, sessionKey, className });
+    composeBarOptions = { isOpen, onSend, showAddressAll, onAddressAll, className };
     return showAddressAll ? (
       <button type="button" onClick={onAddressAll}>
         Address all
@@ -238,6 +263,9 @@ const { PersistentTerminal } = await import("./PersistentTerminal");
 type MockTerminal = {
   cols: number;
   rows: number;
+  modes: {
+    applicationCursorKeysMode: boolean;
+  };
   options: Record<string, unknown>;
   refresh: ReturnType<typeof mock>;
   focus: ReturnType<typeof mock>;
@@ -247,6 +275,7 @@ type MockTerminal = {
   onSelectionChange: ReturnType<typeof mock>;
   onData: ReturnType<typeof mock>;
   attachCustomKeyEventHandler: ReturnType<typeof mock>;
+  open: ReturnType<typeof mock>;
   clear: ReturnType<typeof mock>;
   reset: ReturnType<typeof mock>;
   write: ReturnType<typeof mock>;
@@ -260,6 +289,9 @@ function createMockTerminal(): MockTerminal {
   return {
     cols: 80,
     rows: 24,
+    modes: {
+      applicationCursorKeysMode: false,
+    },
     options: {
       fontSize: 14,
       theme: {},
@@ -281,6 +313,7 @@ function createMockTerminal(): MockTerminal {
     attachCustomKeyEventHandler: mock((handler: (event: KeyboardEvent) => boolean) => {
       terminalKeyHandler = handler;
     }),
+    open: mock(() => {}),
     clear: mock(() => {}),
     reset: mock(() => {}),
     write: mock(() => {}),
@@ -327,6 +360,7 @@ describe("PersistentTerminal", () => {
   beforeEach(() => {
     composeBarPropsMock.mockClear();
     setMobileViewport(false);
+    portalTerminalIsOpened = true;
     cleanup();
     resizeMock.mockClear();
     connectMock.mockClear();
@@ -470,6 +504,62 @@ describe("PersistentTerminal", () => {
     });
   });
 
+  it("opens and registers a fresh xterm container before connecting", async () => {
+    portalTerminalIsOpened = false;
+    const terminalData = createTerminalData();
+    const terminal = terminalData.terminal as unknown as MockTerminal;
+
+    const view = render(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminal.open).toHaveBeenCalledTimes(1);
+      expect(portalStoreActions.markTerminalOpened).toHaveBeenCalledWith("env-1", "tab-1");
+      expect(portalStoreActions.setTerminalContainer)
+        .toHaveBeenCalledWith("env-1", "tab-1", expect.any(HTMLDivElement));
+      expect(connectMock).toHaveBeenCalledTimes(1);
+    });
+    const openedContainer = terminal.open.mock.calls[0]?.[0] as HTMLElement;
+    expect(openedContainer.parentElement).toBe(
+      Array.from(view.container.querySelectorAll("div")).find((element) =>
+        element.className.includes("absolute inset-x-0 top-0")
+      ) ?? null,
+    );
+  });
+
+  it("uses the fallback connection for an already-open disconnected terminal", async () => {
+    useTerminalIsConnected = false;
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
+  });
+
   it("forwards the environment identity to terminal compose draft persistence", () => {
     render(
       <PersistentTerminal
@@ -489,6 +579,7 @@ describe("PersistentTerminal", () => {
     expect(composeBarPropsMock).toHaveBeenCalledWith({
       environmentId: "env-1",
       sessionKey: "container-1:tab-1",
+      className: undefined,
     });
   });
 
@@ -515,6 +606,250 @@ describe("PersistentTerminal", () => {
       expect(terminalData.fitAddon.fit).toHaveBeenCalled();
     });
     expect(terminalData.terminal.focus).not.toHaveBeenCalled();
+  });
+
+  it("shows mobile terminal keys and sends their control sequences to the PTY", async () => {
+    setMobileViewport(true);
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    const expectedKeys = [
+      ["Escape", "\u001b"],
+      ["Tab", "\t"],
+      ["Control C", "\u0003"],
+      ["Up arrow", "\u001b[A"],
+      ["Down arrow", "\u001b[B"],
+      ["Left arrow", "\u001b[D"],
+      ["Right arrow", "\u001b[C"],
+    ] as const;
+
+    for (const [name] of expectedKeys) {
+      fireEvent.click(screen.getByRole("button", { name }));
+    }
+
+    expect(writeMock.mock.calls.map(([data]) => data)).toEqual(
+      expectedKeys.map(([, data]) => data),
+    );
+  });
+
+  it("does not render the terminal key bar on desktop", () => {
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    expect(screen.queryByRole("toolbar", { name: "Terminal keys" })).toBeNull();
+  });
+
+  it("uses application cursor sequences for mobile arrow keys when the terminal requests them", () => {
+    setMobileViewport(true);
+    const terminalData = createTerminalData();
+    Object.defineProperty(terminalData.terminal.modes, "applicationCursorKeysMode", {
+      value: true,
+    });
+
+    render(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    for (const name of ["Up arrow", "Down arrow", "Left arrow", "Right arrow"]) {
+      fireEvent.click(screen.getByRole("button", { name }));
+    }
+
+    expect(writeMock.mock.calls.map(([data]) => data)).toEqual([
+      "\u001bOA",
+      "\u001bOB",
+      "\u001bOD",
+      "\u001bOC",
+    ]);
+  });
+
+  it("hides mobile keys while inactive and disables them while disconnected", () => {
+    setMobileViewport(true);
+    const terminalData = createTerminalData();
+    const view = render(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive={false}
+        isFocused={false}
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    expect(screen.queryByRole("toolbar", { name: "Terminal keys" })).toBeNull();
+
+    useTerminalIsConnected = false;
+    view.rerender(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    const buttons = screen.getAllByRole("button");
+    expect(buttons).toHaveLength(7);
+    expect(buttons.every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+  });
+
+  it("reserves safe-area space and raises the compose bar above mobile keys", () => {
+    setMobileViewport(true);
+    const view = render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    const terminalHost = Array.from(view.container.querySelectorAll("div")).find((element) =>
+      element.className.includes("absolute inset-x-0 top-0")
+    );
+    expect(terminalHost?.className).toContain(
+      "bottom-[calc(3rem+env(safe-area-inset-bottom))]",
+    );
+    expect(composeBarOptions?.className).toBe(
+      "bottom-[calc(3.5rem+env(safe-area-inset-bottom))]",
+    );
+  });
+
+  it("records mobile-key activity once within the throttle window", async () => {
+    setMobileViewport(true);
+    persistentSessionStore.getSessionsByEnvironment = () => [
+      {
+        id: "connected-session",
+        environmentId: "env-1",
+        containerId: "container-1",
+        tabId: "tab-1",
+        sessionType: "plain",
+        status: "connected",
+        hasLaunchedCommand: false,
+      },
+    ];
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Up arrow" })).toBeTruthy()
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Up arrow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Down arrow" }));
+
+    await waitFor(() =>
+      expect(persistentSessionStore.updateSessionActivity)
+        .toHaveBeenCalledWith("connected-session")
+    );
+    expect(persistentSessionStore.updateSessionActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes the write function only for connected terminals", async () => {
+    const onWrite = mock((_write: (data: string) => Promise<void>) => {});
+    const connectedView = render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+        onWrite={onWrite}
+      />,
+    );
+
+    await waitFor(() => expect(onWrite).toHaveBeenCalledTimes(1));
+    connectedView.unmount();
+    onWrite.mockClear();
+    useTerminalIsConnected = false;
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+        onWrite={onWrite}
+      />,
+    );
+
+    await act(async () => {});
+    expect(onWrite).not.toHaveBeenCalled();
   });
 
   it("focuses the terminal when activated on desktop", async () => {
@@ -1631,6 +1966,78 @@ describe("PersistentTerminal", () => {
     });
   });
 
+  it("contains clipboard copy failures", async () => {
+    const terminalData = createTerminalData();
+    const terminal = terminalData.terminal as unknown as MockTerminal;
+    terminal.hasSelection.mockImplementation(() => true);
+    terminal.getSelection.mockImplementation(() => "selected text");
+    mockWriteText.mockRejectedValueOnce(new Error("clipboard unavailable"));
+    const consoleError = mock((_message?: unknown, _error?: unknown) => {});
+    const originalError = console.error;
+    console.error = consoleError as typeof console.error;
+
+    try {
+      render(
+        <PersistentTerminal
+          terminalData={terminalData}
+          tabId="tab-1"
+          tabType="plain"
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible
+          isActive
+          isFocused
+          isFirstTab={false}
+          paneId="pane-1"
+        />,
+      );
+
+      await waitFor(() => expect(terminalKeyHandler).toBeDefined());
+      expect(terminalKeyHandler!(
+        new KeyboardEvent("keydown", { key: "c", metaKey: true }),
+      )).toBe(false);
+      await waitFor(() =>
+        expect(consoleError).toHaveBeenCalledWith(
+          "[PersistentTerminal] Failed to copy selection:",
+          expect.objectContaining({ message: "clipboard unavailable" }),
+        )
+      );
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  it("reports clipboard image errors without throwing", () => {
+    const consoleError = mock((_message?: unknown, _error?: unknown) => {});
+    const originalError = console.error;
+    console.error = consoleError as typeof console.error;
+
+    try {
+      render(
+        <PersistentTerminal
+          terminalData={createTerminalData()}
+          tabId="tab-1"
+          tabType="plain"
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible
+          isActive
+          isFocused
+          isFirstTab={false}
+          paneId="pane-1"
+        />,
+      );
+
+      clipboardImagePasteOptions?.onError("image too large");
+      expect(consoleError).toHaveBeenCalledWith(
+        "[PersistentTerminal] Clipboard image error:",
+        "image too large",
+      );
+    } finally {
+      console.error = originalError;
+    }
+  });
+
   it("handles compose, tab-switch, signal, and modifier keyboard branches", async () => {
     const terminalData = createTerminalData();
     const terminal = terminalData.terminal as unknown as MockTerminal;
@@ -1683,6 +2090,55 @@ describe("PersistentTerminal", () => {
     Object.defineProperty(composePaste, "preventDefault", { value: preventDefault });
     expect(terminalKeyHandler!(composePaste)).toBe(false);
     expect(preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("resets launch readiness when the terminal moves to a replacement container", async () => {
+    const terminalData = createTerminalData();
+    const view = render(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        initialCommands={["echo ready"]}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(() => expect(terminalOnData).toBeDefined());
+    act(() => terminalOnData?.(new TextEncoder().encode("workspace $ ")));
+    await waitFor(
+      () => expect(writeMock).toHaveBeenCalledWith("echo ready\n"),
+      { timeout: 1_000 },
+    );
+
+    writeMock.mockClear();
+    view.rerender(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-2"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        initialCommands={["echo ready"]}
+        paneId="pane-1"
+      />,
+    );
+
+    act(() => terminalOnData?.(new TextEncoder().encode("replacement $ ")));
+    await waitFor(
+      () => expect(writeMock).toHaveBeenCalledWith("echo ready\n"),
+      { timeout: 1_000 },
+    );
   });
 
   it("sends compose images sequentially before normalized single-line text", async () => {
@@ -1814,6 +2270,59 @@ describe("PersistentTerminal", () => {
       expect(terminal.write).toHaveBeenCalledWith("pane-buffer");
       expect(terminal.scrollToBottom).toHaveBeenCalled();
     });
+  });
+
+  it("recovers when pane buffer restoration throws", async () => {
+    const terminalData = createTerminalData({ serializedBuffer: "pane-buffer" });
+    const terminal = terminalData.terminal as unknown as MockTerminal;
+    terminal.write.mockImplementationOnce(() => {
+      throw new Error("parser unavailable");
+    });
+    const consoleError = mock((_message?: unknown, _error?: unknown) => {});
+    const originalError = console.error;
+    console.error = consoleError as typeof console.error;
+
+    try {
+      const view = render(
+        <PersistentTerminal
+          terminalData={terminalData}
+          tabId="tab-1"
+          tabType="plain"
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible
+          isActive
+          isFocused
+          isFirstTab={false}
+          paneId="pane-1"
+        />,
+      );
+
+      view.rerender(
+        <PersistentTerminal
+          terminalData={terminalData}
+          tabId="tab-1"
+          tabType="plain"
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible
+          isActive
+          isFocused
+          isFirstTab={false}
+          paneId="pane-2"
+        />,
+      );
+
+      await waitFor(() => {
+        expect(consoleError).toHaveBeenCalledWith(
+          "[PersistentTerminal] Error restoring buffer for tab:tab-1:",
+          expect.objectContaining({ message: "parser unavailable" }),
+        );
+        expect(terminal.refresh).toHaveBeenCalled();
+      });
+    } finally {
+      console.error = originalError;
+    }
   });
 
   it("recreates the terminal when the persisted container has lost xterm DOM", async () => {
@@ -2387,6 +2896,84 @@ describe("PersistentTerminal", () => {
         "persisted-buffer",
       );
     });
+  });
+
+  it("contains serialization failures during cleanup", async () => {
+    const terminalData = createTerminalData();
+    const serialize = terminalData.serializeAddon.serialize as unknown as ReturnType<typeof mock>;
+    serialize.mockImplementation(() => {
+      throw new Error("serializer unavailable");
+    });
+    const consoleError = mock((_message?: unknown, _error?: unknown) => {});
+    const originalError = console.error;
+    console.error = consoleError as typeof console.error;
+
+    try {
+      const view = render(
+        <PersistentTerminal
+          terminalData={terminalData}
+          tabId="tab-1"
+          tabType="claude"
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible
+          isActive
+          isFocused
+          isFirstTab={false}
+          paneId="pane-1"
+        />,
+      );
+      await waitFor(() => expect(terminalInputHandler).toBeDefined());
+
+      view.unmount();
+
+      expect(consoleError).toHaveBeenCalledWith(
+        "[PersistentTerminal] Cleanup - failed to serialize buffer:",
+        expect.objectContaining({ message: "serializer unavailable" }),
+      );
+      expect(terminalInputDisposables[0]?.dispose).toHaveBeenCalled();
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  it("does not replace a durable buffer with a substantially shorter cleanup snapshot", async () => {
+    const sessionKey = createSessionKey("container-1", "tab-1", "env-1");
+    const durableBuffer = "x".repeat(100);
+    useTerminalSessionStore.setState({
+      sessions: new Map([
+        [
+          sessionKey,
+          {
+            sessionId: "session-existing",
+            serializedBuffer: durableBuffer,
+            hasLaunchedCommand: false,
+          },
+        ],
+      ]),
+    });
+    const view = render(
+      <PersistentTerminal
+        terminalData={createTerminalData({ serializedBuffer: "too-short" })}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(() => expect(persistentSessionStore.createSession).toHaveBeenCalled());
+    view.unmount();
+
+    expect(
+      useTerminalSessionStore.getState().sessions.get(sessionKey)?.serializedBuffer,
+    ).toBe(durableBuffer);
+    expect(persistentSessionStore.saveSessionBuffer).not.toHaveBeenCalled();
   });
 
   it("loads persistent buffer when restoring an existing session", async () => {

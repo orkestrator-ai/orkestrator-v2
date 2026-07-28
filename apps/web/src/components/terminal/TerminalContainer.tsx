@@ -68,6 +68,13 @@ interface TerminalContainerProps {
 }
 
 /**
+ * Backoff between retries of a failed backend setup-session lookup, and the
+ * point at which the tab is given up on and retired instead of retried forever.
+ */
+const SETUP_SESSION_BIND_RETRY_DELAY_MS = 2_000;
+const SETUP_SESSION_BIND_MAX_ATTEMPTS = 3;
+
+/**
  * Check if a collision ID represents a tab bar or tab (not an edge zone).
  */
 const isTabOrTabbar = (collision: Collision): boolean => {
@@ -578,9 +585,31 @@ export function TerminalContainer({
   const isSavingInitialPromptAttachmentsRef = useRef(false);
   const setupPlanFetchInFlightRef = useRef(false);
   const inactiveBackendSetupInFlightRef = useRef(false);
-  const setupSessionBindInFlightRef = useRef(false);
+  const setupSessionBindInFlightRef = useRef(new Set<string>());
+  const setupSessionBindSettledTabsRef = useRef(new Set<string>());
+  const setupSessionBindAttemptsRef = useRef(new Map<string, number>());
+  const setupSessionBindRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const durableLaunchClearInFlightRef = useRef(false);
   const [setupSessionBindNonce, setSetupSessionBindNonce] = useState(0);
+  const [setupSessionBindRetryNonce, setSetupSessionBindRetryNonce] = useState(0);
+
+  // A rejected setup-session lookup leaves the tab neither bound nor settled,
+  // and nothing else re-runs the rebind effect. Without a retry the tab renders
+  // a permanently blank pane: it is backend-managed, so `attachExistingOnly`
+  // suppresses PTY creation and no error surfaces anywhere.
+  const scheduleSetupSessionBindRetry = useCallback(() => {
+    if (setupSessionBindRetryTimerRef.current) return;
+    setupSessionBindRetryTimerRef.current = setTimeout(() => {
+      setupSessionBindRetryTimerRef.current = null;
+      setSetupSessionBindRetryNonce((value) => value + 1);
+    }, SETUP_SESSION_BIND_RETRY_DELAY_MS);
+  }, []);
+
+  useEffect(() => () => {
+    if (!setupSessionBindRetryTimerRef.current) return;
+    clearTimeout(setupSessionBindRetryTimerRef.current);
+    setupSessionBindRetryTimerRef.current = null;
+  }, []);
 
   const setupSessionKeyForTab = useCallback(
     (tabId: string) => createSessionKey(containerId ?? null, tabId, environmentId),
@@ -594,7 +623,11 @@ export function TerminalContainer({
 
   const bindBackendSetupSession = useCallback(
     async (tabId = "default") => {
-      if (setupSessionBindInFlightRef.current) {
+      // Tracked per tab, not globally: a global latch made a second unbound
+      // setup tab return early without ever settling, and a tab that never
+      // settles is skipped by stale-tab cleanup forever — a pane that can
+      // neither connect nor be retired.
+      if (setupSessionBindInFlightRef.current.has(tabId)) {
         const alreadyBound = hasBoundSetupSession(tabId);
         console.info("[setup-terminal] setup session bind skipped: already in flight", {
           environmentId,
@@ -603,7 +636,9 @@ export function TerminalContainer({
         });
         return alreadyBound;
       }
-      setupSessionBindInFlightRef.current = true;
+      setupSessionBindInFlightRef.current.add(tabId);
+      setupSessionBindSettledTabsRef.current.delete(tabId);
+      let lookupSettled = false;
       try {
         console.info("[setup-terminal] requesting backend setup session", {
           environmentId,
@@ -611,6 +646,7 @@ export function TerminalContainer({
           key: setupSessionKeyForTab(tabId),
         });
         const setupSession = await backend.getEnvironmentSetupSession(environmentId);
+        lookupSettled = true;
         if (!setupSession?.sessionId) {
           console.info("[setup-terminal] no backend setup session available", {
             environmentId,
@@ -635,16 +671,39 @@ export function TerminalContainer({
           ...existing,
           sessionId: setupSession.sessionId,
         });
-        setSetupSessionBindNonce((value) => value + 1);
         return true;
       } catch (error) {
         console.error("[TerminalContainer] Failed to bind backend setup session:", error);
+        const attempts = (setupSessionBindAttemptsRef.current.get(tabId) ?? 0) + 1;
+        setupSessionBindAttemptsRef.current.set(tabId, attempts);
+        if (attempts < SETUP_SESSION_BIND_MAX_ATTEMPTS) {
+          scheduleSetupSessionBindRetry();
+        } else {
+          // Out of retries. Settle the tab so stale-tab cleanup can retire this
+          // dead placeholder and the initial-layout effect can seed a working
+          // tab in its place, rather than leaving a pane that never connects.
+          console.warn("[setup-terminal] giving up on backend setup session lookup", {
+            environmentId,
+            tabId,
+            attempts,
+          });
+          setupSessionBindSettledTabsRef.current.add(tabId);
+          setSetupSessionBindNonce((value) => value + 1);
+        }
         return false;
       } finally {
-        setupSessionBindInFlightRef.current = false;
+        setupSessionBindInFlightRef.current.delete(tabId);
+        if (lookupSettled) {
+          setupSessionBindAttemptsRef.current.delete(tabId);
+          setupSessionBindSettledTabsRef.current.add(tabId);
+          // The terminal store update itself rerenders PersistentTerminal. This
+          // local nonce lets stale-tab cleanup distinguish a completed lookup
+          // (including "no session") from the initial empty renderer store.
+          setSetupSessionBindNonce((value) => value + 1);
+        }
       }
     },
-    [environmentId, hasBoundSetupSession, setupSessionKeyForTab],
+    [environmentId, hasBoundSetupSession, scheduleSetupSessionBindRetry, setupSessionKeyForTab],
   );
 
   useEffect(() => {
@@ -654,31 +713,55 @@ export function TerminalContainer({
       .flatMap((leaf) => leaf.tabs)
       .filter((tab) => tab.isSetupTab && (!tab.initialCommands || tab.initialCommands.length === 0));
 
-    const unboundSetupTab = setupTabs.find((tab) => !hasBoundSetupSession(tab.id));
-    if (!unboundSetupTab) return;
+    // Every unbound setup tab, not just the first. Binding one at a time relied
+    // on this effect re-running to reach the next, and a tab it never reaches is
+    // never settled either — which stale-tab cleanup treats as "still looking"
+    // and skips indefinitely.
+    const unboundSetupTabs = setupTabs.filter((tab) => !hasBoundSetupSession(tab.id));
+    if (unboundSetupTabs.length === 0) return;
 
-    console.info("[setup-terminal] found unbound backend-managed setup tab; rebinding", {
+    console.info("[setup-terminal] found unbound backend-managed setup tabs; rebinding", {
       environmentId,
-      tabId: unboundSetupTab.id,
+      tabIds: unboundSetupTabs.map((tab) => tab.id),
       setupScriptsRunning,
       setupScriptsComplete: environment?.setupScriptsComplete ?? false,
       tabCount: setupTabs.length,
     });
-    void bindBackendSetupSession(unboundSetupTab.id);
+    for (const tab of unboundSetupTabs) void bindBackendSetupSession(tab.id);
   }, [
     bindBackendSetupSession,
     currentEnvState,
     environment?.setupScriptsComplete,
     environmentId,
     hasBoundSetupSession,
+    // Re-runs this effect after a failed lookup's backoff elapses. Nothing else
+    // changes when a lookup rejects, so without it a transient network failure
+    // would strand the tab unbound forever.
+    setupSessionBindRetryNonce,
     setupScriptsRunning,
-    setupSessionBindNonce,
   ]);
 
   useEffect(() => {
-    if (!currentEnvState || !environment?.setupScriptsComplete || setupScriptsRunning) {
+    if (
+      !currentEnvState
+      || environment?.pendingAgentLaunch
+      || setupScriptsRunning
+    ) {
       return;
     }
+    // `setupScriptsComplete` is deliberately not required here. Once a lookup
+    // has settled and setup is not running, a backend-managed setup tab with no
+    // `<environmentId>:setup` session to adopt is dead either way: it cannot
+    // create its own PTY (`attachExistingOnly`) and `useTerminal` returns
+    // silently rather than surfacing an error, so the pane just stays blank.
+    // Removing it lets the initial-layout effect seed a working tab, which is
+    // the same self-healing path the completed-setup case already relies on.
+    //
+    // The rebind effect above starts its backend lookup synchronously, but the
+    // result is asynchronous. On a fresh renderer the terminal store is empty,
+    // so treating that temporary absence as stale would remove the restored
+    // setup tab and seed an ordinary PTY before iOS/web can adopt `:setup`.
+    if (setupSessionBindInFlightRef.current.size > 0) return;
 
     const leaves = getAllLeaves(currentEnvState.root);
     for (const leaf of leaves) {
@@ -686,6 +769,7 @@ export function TerminalContainer({
         if (!tab.isSetupTab || (tab.initialCommands && tab.initialCommands.length > 0)) {
           return false;
         }
+        if (!setupSessionBindSettledTabsRef.current.has(tab.id)) return false;
         const session = useTerminalSessionStore.getState().sessions.get(setupSessionKeyForTab(tab.id));
         return session?.sessionId !== `${environmentId}:setup`;
       });
@@ -698,9 +782,11 @@ export function TerminalContainer({
     }
   }, [
     currentEnvState,
+    environment?.pendingAgentLaunch,
     environment?.setupScriptsComplete,
     environmentId,
     removeTab,
+    setupSessionBindNonce,
     setupScriptsRunning,
     setupSessionKeyForTab,
   ]);

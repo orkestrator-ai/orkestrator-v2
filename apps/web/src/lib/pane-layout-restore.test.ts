@@ -74,14 +74,44 @@ describe("reconcilePersistedLayout", () => {
             isLocal: false,
           },
         },
-        { id: "setup", type: "plain" },
+        { id: "setup", type: "plain", isSetupTab: true },
       ],
     });
     const json = JSON.stringify(restored);
     expect(json).not.toContain("initialPrompt");
     expect(json).not.toContain("initialCommands");
     expect(json).not.toContain("hostPort");
-    expect(json).not.toContain("isSetupTab");
+    expect(json).toContain('"isSetupTab":true');
+  });
+
+  test("collapses a setup-marked tab to a plain terminal whatever type it was persisted as", () => {
+    // The setup marker wins over the persisted type: the tab's identity is
+    // "attach to the backend-owned `<environmentId>:setup` PTY", and any agent
+    // surface restored on top of it would spawn its own session instead.
+    const restored = reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane-1",
+      tabs: [
+        {
+          id: "setup-claude",
+          type: "claude-native",
+          isSetupTab: true,
+          claudeNativeData: { environmentId: "env-1", sessionId: "session-1" },
+        },
+        { id: "setup-codex", type: "codex", isSetupTab: true },
+      ],
+      activeTabId: "setup-claude",
+    }), context);
+
+    expect(restored?.root).toMatchObject({
+      kind: "leaf",
+      tabs: [
+        { id: "setup-claude", type: "plain", isSetupTab: true },
+        { id: "setup-codex", type: "plain", isSetupTab: true },
+      ],
+    });
+    // The agent connection data must not survive the collapse.
+    expect(JSON.stringify(restored)).not.toContain("claudeNativeData");
   });
 
   test("restores unconsumed one-shot agent launch options for every agent tab type", () => {

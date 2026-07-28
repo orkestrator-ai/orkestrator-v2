@@ -2807,6 +2807,67 @@ describe("PersistentTerminal", () => {
     expect(onSetupComplete).toHaveBeenCalledWith({ persistSetupComplete: false });
   });
 
+  it("hides the manual setup-complete button once the environment records setup as done", async () => {
+    // `isSetupTab` now survives a pane-layout restore, and `setupCompleteRef` is
+    // only ever set by a live OSC marker — so it resets to false on every mount.
+    // Without the authoritative check, a reload would re-offer "Mark setup
+    // complete" for setup that finished long ago.
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((environment) =>
+        environment.id === "env-1"
+          ? { ...environment, setupScriptsComplete: true }
+          : environment
+      ),
+    }));
+
+    const view = render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={true}
+        paneId="pane-1"
+        isSetupTab={true}
+        onSetupComplete={mock(() => {})}
+      />
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(view.queryByText("Mark setup complete")).toBeNull();
+  });
+
+  it("still offers the manual setup-complete button while setup is unfinished", async () => {
+    const view = render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={true}
+        paneId="pane-1"
+        isSetupTab={true}
+        onSetupComplete={mock(() => {})}
+      />
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(view.queryByText("Mark setup complete")).not.toBeNull();
+  });
+
   it("emits success and failure OSC markers for setup completion", async () => {
     render(
       <PersistentTerminal

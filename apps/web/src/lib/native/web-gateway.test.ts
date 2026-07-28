@@ -28,12 +28,22 @@ type TestGatewayWindow = {
   orkestratorGateway?: Window["orkestratorGateway"];
 };
 
+const EVENT_SOURCE_CONNECTING = 0;
+const EVENT_SOURCE_OPEN = 1;
+const EVENT_SOURCE_CLOSED = 2;
+
 class MockEventSource {
   static instances: MockEventSource[] = [];
   onopen: ((event?: Event) => void) | null = null;
   onmessage: ((message: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
+  /**
+   * Mirrors the real `EventSource`. A browser retries a `CONNECTING` socket on
+   * its own but abandons a `CLOSED` one, and the gateway has to tell those
+   * apart to know whether it must rebuild the shared terminal stream itself.
+   */
+  readyState: number = EVENT_SOURCE_CONNECTING;
 
   constructor(
     public readonly url: string,
@@ -42,8 +52,21 @@ class MockEventSource {
     MockEventSource.instances.push(this);
   }
 
+  /** Drive a successful connection the way the browser would. */
+  open(): void {
+    this.readyState = EVENT_SOURCE_OPEN;
+    this.onopen?.();
+  }
+
+  /** Fail the socket, either recoverably (browser retries) or fatally. */
+  fail(readyState: number = EVENT_SOURCE_CLOSED): void {
+    this.readyState = readyState;
+    this.onerror?.();
+  }
+
   close(): void {
     this.closed = true;
+    this.readyState = EVENT_SOURCE_CLOSED;
   }
 }
 
@@ -552,7 +575,7 @@ describe("web gateway browser API", () => {
     expect(source.closed).toBe(true);
   });
 
-  test("keeps the authoritative stream stable and gives each active terminal its own stream", async () => {
+  test("keeps the authoritative stream stable and uses one filtered browser terminal stream", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi();
 
@@ -564,6 +587,7 @@ describe("web gateway browser API", () => {
       "terminal-output-session:one",
       () => undefined,
     );
+    await Promise.resolve();
 
     expect(firstSource.closed).toBe(false);
     expect(MockEventSource.instances).toHaveLength(2);
@@ -580,6 +604,7 @@ describe("web gateway browser API", () => {
     expect(ready).toBe(true);
 
     unsubscribeTerminal();
+    await Promise.resolve();
     expect(MockEventSource.instances).toHaveLength(2);
     expect(MockEventSource.instances[1]?.closed).toBe(true);
     expect(firstSource.closed).toBe(false);
@@ -610,32 +635,233 @@ describe("web gateway browser API", () => {
     await expect(ready).resolves.toBeUndefined();
   });
 
-  test("adding a second terminal never interrupts output for the first", async () => {
+  test("multiplexes added terminals and resynchronizes existing listeners after the filter changes", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi();
     const firstOutput = mock(() => undefined);
     const secondOutput = mock(() => undefined);
 
     const stopFirst = api.listen("terminal-output-one", firstOutput);
+    await Promise.resolve();
     const firstSource = MockEventSource.instances[0]!;
     firstSource.onopen?.();
     await api.eventStreamReady("terminal-output-one");
 
     const stopSecond = api.listen("terminal-output-two", secondOutput);
+    await Promise.resolve();
     const secondSource = MockEventSource.instances[1]!;
-    expect(firstSource.closed).toBe(false);
-    firstSource.onmessage?.(new MessageEvent("message", {
+    expect(firstSource.closed).toBe(true);
+    expect(secondSource.url).toBe(
+      "/__orkestrator/events?excludeEvents=terminal-output-&includeEvents=terminal-output-one%2Cterminal-output-two",
+    );
+    secondSource.onopen?.();
+    await api.eventStreamReady("terminal-output-two");
+    expect(firstOutput).toHaveBeenCalledWith({ desynced: true });
+    expect(secondOutput).not.toHaveBeenCalled();
+
+    secondSource.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({ event: "terminal-output-one", payload: "YQ==" }),
+    }));
+    expect(firstOutput).toHaveBeenLastCalledWith("YQ==");
+    expect(secondOutput).not.toHaveBeenCalled();
+
+    stopSecond();
+    await Promise.resolve();
+    const thirdSource = MockEventSource.instances[2]!;
+    expect(secondSource.closed).toBe(true);
+    expect(thirdSource.url).toBe(
+      "/__orkestrator/events?excludeEvents=terminal-output-&includeEvents=terminal-output-one",
+    );
+    thirdSource.onopen?.();
+    expect(firstOutput).toHaveBeenLastCalledWith({ desynced: true });
+    stopFirst();
+    await Promise.resolve();
+    expect(thirdSource.closed).toBe(true);
+  });
+
+  test("coalesces many same-origin terminal listeners into one WebKit-safe stream", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+
+    const stops = Array.from({ length: 12 }, (_, index) =>
+      api.listen(`terminal-output-session-${index}`, () => undefined)
+    );
+    await Promise.resolve();
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    const source = MockEventSource.instances[0]!;
+    const url = new URL(source.url, "https://workstation.tailnet.ts.net");
+    expect(url.searchParams.get("includeEvents")?.split(",")).toEqual(
+      Array.from({ length: 12 }, (_, index) => `terminal-output-session-${index}`)
+        .sort(),
+    );
+
+    source.onopen?.();
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        api.eventStreamReady(`terminal-output-session-${index}`)
+      ),
+    );
+
+    for (const stop of stops) stop();
+    await Promise.resolve();
+    expect(source.closed).toBe(true);
+  });
+
+  test("leaves the shared stream alone when a terminal resubscribes the same event", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+    const firstOutput = mock(() => undefined);
+
+    const stopFirst = api.listen("terminal-output-one", firstOutput);
+    const stopSecond = api.listen("terminal-output-two", () => undefined);
+    await Promise.resolve();
+    expect(MockEventSource.instances).toHaveLength(1);
+    const source = MockEventSource.instances[0]!;
+    source.open();
+    await api.eventStreamReady("terminal-output-one");
+    expect(firstOutput).not.toHaveBeenCalled();
+
+    // A terminal reconnecting to the same PTY drops and re-adds the identical
+    // `terminal-output-<sessionId>` event. The filter is unchanged, so tearing
+    // the socket down would desync the *other* terminal for nothing.
+    stopSecond();
+    const stopSecondAgain = api.listen("terminal-output-two", () => undefined);
+    await Promise.resolve();
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    expect(source.closed).toBe(false);
+    expect(firstOutput).not.toHaveBeenCalled();
+
+    // The resubscribed stream still has to become ready: it is riding an
+    // already-open socket, so no further `onopen` is coming for it.
+    await api.eventStreamReady("terminal-output-two");
+
+    source.onmessage?.(new MessageEvent("message", {
       data: JSON.stringify({ event: "terminal-output-one", payload: "YQ==" }),
     }));
     expect(firstOutput).toHaveBeenCalledWith("YQ==");
-    expect(secondOutput).not.toHaveBeenCalled();
 
-    secondSource.onopen?.();
-    await api.eventStreamReady("terminal-output-two");
-    stopSecond();
-    expect(secondSource.closed).toBe(true);
-    expect(firstSource.closed).toBe(false);
     stopFirst();
+    stopSecondAgain();
+    await Promise.resolve();
+    expect(source.closed).toBe(true);
+  });
+
+  test("rebuilds the shared terminal stream only after a fatal disconnect", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const warning = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warning;
+    const api = createBrowserGatewayApi({ eventReconnectDelayMs: 1 });
+    const output = mock(() => undefined);
+
+    try {
+      const stop = api.listen("terminal-output-session-1", output);
+      await Promise.resolve();
+      const source = MockEventSource.instances[0]!;
+      source.open();
+      await api.eventStreamReady("terminal-output-session-1");
+
+      // A CONNECTING socket is one the browser is still retrying itself.
+      // Rebuilding here would race that retry.
+      source.fail(EVENT_SOURCE_CONNECTING);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(MockEventSource.instances).toHaveLength(1);
+      expect(warning).toHaveBeenCalledWith(
+        "[RemoteGateway] Terminal event stream disconnected",
+      );
+
+      // A CLOSED socket is dead. Nothing else rebuilds it, and every browser
+      // terminal now shares this one socket.
+      source.fail(EVENT_SOURCE_CLOSED);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(MockEventSource.instances).toHaveLength(2);
+      const replacement = MockEventSource.instances[1]!;
+      expect(replacement.url).toBe(
+        "/__orkestrator/events?excludeEvents=terminal-output-&includeEvents=terminal-output-session-1",
+      );
+
+      // The rebuilt socket missed whatever the PTY emitted while it was dead,
+      // so the terminal must be told to reconcile rather than resume silently.
+      replacement.open();
+      expect(output).toHaveBeenCalledWith({ desynced: true });
+
+      stop();
+      await Promise.resolve();
+      expect(replacement.closed).toBe(true);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("does not rebuild a dead shared stream once its last listener has left", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const warning = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warning;
+    const api = createBrowserGatewayApi({ eventReconnectDelayMs: 1 });
+
+    try {
+      const stop = api.listen("terminal-output-session-1", () => undefined);
+      await Promise.resolve();
+      const source = MockEventSource.instances[0]!;
+      source.open();
+      await api.eventStreamReady("terminal-output-session-1");
+
+      source.fail(EVENT_SOURCE_CLOSED);
+      // Unsubscribing before the backoff elapses must cancel the pending
+      // rebuild; reconnecting a stream nobody consumes would leak a socket.
+      stop();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(MockEventSource.instances).toHaveLength(1);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("ignores a superseded shared stream that opens or delivers late", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+    const firstOutput = mock(() => undefined);
+
+    const stopFirst = api.listen("terminal-output-one", firstOutput);
+    await Promise.resolve();
+    const staleSource = MockEventSource.instances[0]!;
+    staleSource.open();
+    await api.eventStreamReady("terminal-output-one");
+
+    const stopSecond = api.listen("terminal-output-two", () => undefined);
+    await Promise.resolve();
+    expect(MockEventSource.instances).toHaveLength(2);
+    expect(staleSource.closed).toBe(true);
+
+    // A socket the gateway has already replaced must not be able to dispatch
+    // into the live generation, nor resurrect itself as the current source.
+    staleSource.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({ event: "terminal-output-one", payload: "YQ==" }),
+    }));
+    expect(firstOutput).not.toHaveBeenCalled();
+
+    staleSource.onopen?.();
+    expect(firstOutput).not.toHaveBeenCalled();
+
+    // A late fatal error on the stale socket must not schedule a rebuild of the
+    // live one either.
+    const originalWarn = console.warn;
+    console.warn = mock(() => undefined);
+    try {
+      staleSource.fail(EVENT_SOURCE_CLOSED);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(MockEventSource.instances).toHaveLength(2);
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    stopFirst();
+    stopSecond();
+    await Promise.resolve();
   });
 
   test("tells a reconnected direct terminal stream to resynchronize", async () => {
@@ -702,6 +928,7 @@ describe("web gateway browser API", () => {
     const stop = api.listen("terminal-output-session-1", (payload) => {
       payloads.push(payload);
     });
+    await Promise.resolve();
     const source = MockEventSource.instances[0];
     if (!source) throw new Error("EventSource was not created");
 
@@ -784,6 +1011,7 @@ describe("web gateway browser API", () => {
 
     try {
       const stop = api.listen("terminal-output-session-1", () => undefined);
+      await Promise.resolve();
       let ready = false;
       const readyPromise = api
         .eventStreamReady("terminal-output-session-1")

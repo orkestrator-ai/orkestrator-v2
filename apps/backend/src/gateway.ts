@@ -738,7 +738,9 @@ export class OrkestratorGateway {
    * Interactive tmux output is already a complete repaint, not an incremental
    * byte stream. Keeping only the newest refused frame makes recovery exact
    * without retaining an unbounded history or requiring the renderer to call
-   * the ordinary PTY snapshot API.
+   * the ordinary PTY snapshot API. A remote browser may multiplex several
+   * actively mounted terminals on one filtered stream, so retention is bounded
+   * to one frame per subscribed tmux session rather than one frame per socket.
    */
   private droppedTmuxFrames = new WeakMap<ServerResponse, Map<string, string>>();
   private proxyRequests = new Set<ReturnType<typeof http.request>>();
@@ -1045,9 +1047,10 @@ export class OrkestratorGateway {
       frames = new Map();
       this.droppedTmuxFrames.set(client, frames);
     }
-    // A terminal-specific SSE subscribes to one tmux session, so this retains
-    // exactly one frame per client. Broader/legacy streams receive the ordinary
-    // desync notice instead of accumulating one pane per active session.
+    // A filtered terminal SSE can subscribe to several mounted sessions, so
+    // retain at most the newest full-pane frame for each subscribed tmux
+    // session. Broader/legacy streams receive the ordinary desync notice
+    // instead of accumulating panes for terminals they are not displaying.
     frames.set(sessionId, message);
   }
 

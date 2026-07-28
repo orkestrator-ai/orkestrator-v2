@@ -241,6 +241,14 @@ export function PersistentTerminal({
     (state) => state.getEnvironmentById(environmentId)?.environmentType === "local"
   );
 
+  // The authoritative record of whether setup already finished. `setupCompleteRef`
+  // is only ever set by a live OSC marker, so it resets to false on every mount —
+  // a restored setup tab (whose `isSetupTab` marker is now durable) would
+  // otherwise re-offer "Mark setup complete" for setup that finished long ago.
+  const setupScriptsComplete = useEnvironmentStore(
+    (state) => state.getEnvironmentById(environmentId)?.setupScriptsComplete ?? false
+  );
+
   useEffect(() => {
     if (!isSetupTab) return;
     console.info("[setup-terminal] PersistentTerminal setup attach state", {
@@ -1427,7 +1435,7 @@ export function PersistentTerminal({
           {replayWarning}
         </div>
       )}
-      {isSetupTab && isActive && !manuallyCompleted && !setupCompleteRef.current && (
+      {isSetupTab && isActive && !setupScriptsComplete && !manuallyCompleted && !setupCompleteRef.current && (
         <div className="absolute top-1 right-2 z-10">
           <button
             onClick={handleMarkSetupComplete}

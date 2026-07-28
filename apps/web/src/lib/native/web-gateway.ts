@@ -10,6 +10,13 @@ import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 const GATEWAY_PREFIX = "/__orkestrator";
 const EVENT_RECONNECT_DELAY_MS = 2_000;
 const TERMINAL_OUTPUT_EVENT_PREFIX = "terminal-output-";
+/**
+ * `EventSource.CLOSED`, spelled as the spec's fixed numeric value rather than
+ * read off the constructor: a same-origin browser may have replaced the global,
+ * and the constant is what distinguishes a dead socket from one the browser is
+ * still retrying for us.
+ */
+const EVENT_SOURCE_CLOSED = 2;
 
 type EventCallback<T> = (payload: T) => void;
 type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
@@ -84,6 +91,19 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const terminalEventStreams = new Map<string, TerminalEventStream>();
   let browserTerminalEventSource: EventSource | null = null;
   let browserTerminalRefreshQueued = false;
+  /**
+   * The sorted event list backing `browserTerminalEventSource`. Rebuilding the
+   * socket costs every already-connected terminal a full snapshot reconcile, so
+   * a refresh that resolves to the same filter must not touch the socket.
+   */
+  let browserTerminalSubscribedEvents: string[] | null = null;
+  let browserTerminalReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Whether `browserTerminalEventSource` has actually opened. A stream that
+   * attaches to an already-open shared socket gets no `onopen` of its own, so
+   * this is what tells it to latch readiness instead of waiting forever.
+   */
+  let browserTerminalEventSourceOpen = false;
   let bearerToken = options.token?.trim() || undefined;
   const baseUrl = normalizedBaseUrl(options.baseUrl);
   const apiUrl = (pathname: string): string =>
@@ -256,6 +276,20 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     );
   };
 
+  const clearBrowserTerminalReconnectTimer = () => {
+    if (!browserTerminalReconnectTimer) return;
+    clearTimeout(browserTerminalReconnectTimer);
+    browserTerminalReconnectTimer = null;
+  };
+
+  const scheduleBrowserTerminalReconnect = () => {
+    if (browserTerminalReconnectTimer) return;
+    browserTerminalReconnectTimer = setTimeout(() => {
+      browserTerminalReconnectTimer = null;
+      refreshBrowserTerminalEventSource();
+    }, options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS);
+  };
+
   /**
    * WKWebView enforces a small per-origin allowance for long-lived HTTP
    * requests. One EventSource per mounted terminal can therefore leave later
@@ -267,6 +301,11 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
    * the replacement emits a scoped desync notice for terminals that were
    * already connected, causing their authoritative snapshot reconciliation to
    * cover the brief subscription gap.
+   *
+   * That desync is the reason an unchanged filter must be a no-op. A terminal
+   * that reconnects to the same PTY unsubscribes and resubscribes the same
+   * `terminal-output-<sessionId>` event, and rebuilding the socket for it would
+   * make every *other* mounted terminal refetch its snapshot for nothing.
    */
   const refreshBrowserTerminalEventSource = () => {
     if (browserTerminalRefreshQueued) return;
@@ -274,22 +313,51 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     queueMicrotask(() => {
       browserTerminalRefreshQueued = false;
 
-      browserTerminalEventSource?.close();
-      browserTerminalEventSource = null;
-
       const events = [...terminalEventStreams.values()]
         .filter((stream) => !stream.closed)
         .map((stream) => stream.event)
         .sort();
+
+      // A live socket already carrying exactly this filter needs no work. The
+      // null check matters: a fatal error clears the source but leaves the
+      // event list, and that retry has to be able to rebuild.
+      if (
+        browserTerminalEventSource
+        && browserTerminalSubscribedEvents?.length === events.length
+        && browserTerminalSubscribedEvents.every((event, index) => event === events[index])
+      ) {
+        // The filter is unchanged but a stream object behind it may not be: a
+        // terminal that unsubscribed and resubscribed the same event has a
+        // fresh, unlatched stream riding an already-open socket, and no further
+        // `onopen` is coming for it. Latch it as a first connect — it has not
+        // missed anything it will not pick up in its own initial snapshot.
+        if (browserTerminalEventSourceOpen) {
+          for (const event of events) {
+            const stream = terminalEventStreams.get(event);
+            if (stream && !stream.closed && !stream.readyResolved) {
+              announceTerminalStreamOpen(stream);
+            }
+          }
+        }
+        return;
+      }
+
+      clearBrowserTerminalReconnectTimer();
+      browserTerminalEventSource?.close();
+      browserTerminalEventSource = null;
+      browserTerminalSubscribedEvents = null;
+      browserTerminalEventSourceOpen = false;
       if (events.length === 0) return;
 
       const source = new EventSource(apiUrl(eventStreamPath(events)), {
         withCredentials: true,
       });
       browserTerminalEventSource = source;
+      browserTerminalSubscribedEvents = events;
       const subscribedEvents = new Set(events);
       source.onopen = () => {
         if (browserTerminalEventSource !== source) return;
+        browserTerminalEventSourceOpen = true;
         for (const event of subscribedEvents) {
           const stream = terminalEventStreams.get(event);
           if (stream && !stream.closed) announceTerminalStreamOpen(stream);
@@ -299,9 +367,18 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         if (browserTerminalEventSource === source) dispatchMessage(message.data);
       };
       source.onerror = () => {
-        if (browserTerminalEventSource === source) {
-          console.warn("[RemoteGateway] Terminal event stream disconnected");
-        }
+        if (browserTerminalEventSource !== source) return;
+        console.warn("[RemoteGateway] Terminal event stream disconnected");
+        // A recoverable error leaves the socket CONNECTING and the browser
+        // retries it for us; reconnecting here would race that. A CLOSED socket
+        // is dead and nothing else will rebuild it — and because every browser
+        // terminal now shares this one socket, leaving it dead silently strands
+        // every mounted terminal rather than one.
+        if (source.readyState !== EVENT_SOURCE_CLOSED) return;
+        browserTerminalEventSource = null;
+        browserTerminalSubscribedEvents = null;
+        browserTerminalEventSourceOpen = false;
+        scheduleBrowserTerminalReconnect();
       };
     });
   };

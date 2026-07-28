@@ -377,6 +377,79 @@ describe("remote gateway", () => {
     expect(state.desyncedSessions.size).toBe(0);
   });
 
+  test("retains one latest repaint per session for a multiplexed terminal stream", async () => {
+    // A same-origin browser now multiplexes every mounted terminal onto one
+    // filtered stream, so a lagging client can owe recovery frames for several
+    // tmux sessions at once. Retention is per session, not per socket.
+    const dataDir = await createTempDir("ork-gateway-tmux-multiplexed-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir,
+      rendererRoot,
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger: createLogger(),
+    });
+    const writes: string[] = [];
+    const client = {
+      writableLength: 1024 * 1024,
+      write: mock((message: string) => {
+        writes.push(message);
+        return false;
+      }),
+      destroy: mock(() => undefined),
+    };
+    const state = {
+      prefixes: null,
+      includedPrefixes: [
+        "terminal-output-tmux:env:tab:one",
+        "terminal-output-tmux:env:tab:two",
+      ],
+      excludedPrefixes: ["terminal-output-"],
+      desyncedSessions: new Set<string>(),
+    };
+    const clients = (
+      gateway as unknown as { clients: Map<object, typeof state> }
+    ).clients;
+    clients.set(client, state);
+
+    gateway.emit("terminal-output-tmux:env:tab:one", {
+      bytesBase64: Buffer.from("one old").toString("base64"),
+    });
+    gateway.emit("terminal-output-tmux:env:tab:two", {
+      bytesBase64: Buffer.from("two old").toString("base64"),
+    });
+    gateway.emit("terminal-output-tmux:env:tab:one", {
+      bytesBase64: Buffer.from("one latest").toString("base64"),
+    });
+    gateway.emit("terminal-output-tmux:env:tab:two", {
+      bytesBase64: Buffer.from("two latest").toString("base64"),
+    });
+    expect(writes).toEqual([]);
+    expect(state.desyncedSessions).toEqual(
+      new Set(["tmux:env:tab:one", "tmux:env:tab:two"]),
+    );
+
+    client.writableLength = 0;
+    const flushed = (
+      gateway as unknown as {
+        flushDesyncNotices(client: object, state: typeof state): boolean;
+      }
+    ).flushDesyncNotices(client, state);
+
+    expect(flushed).toBe(true);
+    // One recovery frame per session, each the newest full-pane repaint — not a
+    // single frame for whichever session lagged last.
+    expect(writes).toHaveLength(2);
+    const combined = writes.join("");
+    expect(combined).toContain(Buffer.from("one latest").toString("base64"));
+    expect(combined).toContain(Buffer.from("two latest").toString("base64"));
+    expect(combined).not.toContain(Buffer.from("one old").toString("base64"));
+    expect(combined).not.toContain(Buffer.from("two old").toString("base64"));
+    expect(combined).not.toContain('"desynced":true');
+    expect(state.desyncedSessions.size).toBe(0);
+  });
+
   test("disconnects before a current frame would exceed the hard buffer limit", async () => {
     const dataDir = await createTempDir("ork-gateway-hard-limit-");
     const rendererRoot = await createRendererRoot(dataDir);

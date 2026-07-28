@@ -487,6 +487,199 @@ describe("TerminalContainer", () => {
     ]);
   });
 
+  /**
+   * Restores a layout holding a single backend-managed setup tab (no
+   * `initialCommands`, so `PersistentTerminal` treats it as attach-only).
+   */
+  const restoreBackendSetupTabLayout = (
+    environmentOverrides: Record<string, unknown> = {},
+    extraTabs: Array<Record<string, unknown>> = [],
+  ) => {
+    getPaneLayoutMock.mockResolvedValue({
+      version: 1,
+      environmentId: "env-hidden",
+      containerId: null,
+      activePaneId: "restored-pane",
+      root: {
+        kind: "leaf",
+        id: "restored-pane",
+        tabs: [{ id: "default", type: "plain", isSetupTab: true }, ...extraTabs],
+        activeTabId: "default",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    });
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((environment) =>
+        environment.id === "env-hidden"
+          ? {
+              ...environment,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+              setupScriptsComplete: true,
+              ...environmentOverrides,
+            }
+          : environment
+      ),
+      setupCommandsResolved: new Set(["env-hidden"]),
+      setupScriptsRunning: new Set(),
+    }));
+
+    return render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+  };
+
+  const setupTabIds = () =>
+    usePaneLayoutStore
+      .getState()
+      .getAllTabs("env-hidden")
+      .filter((tab) => tab.isSetupTab)
+      .map((tab) => tab.id);
+
+  test("retries a rejected setup-session lookup instead of stranding the restored tab", async () => {
+    // A backend-managed setup tab cannot create its own PTY, so a tab left
+    // unbound by a transient lookup failure renders a permanently blank pane
+    // with no error anywhere. Nothing else re-runs the rebind effect.
+    getEnvironmentSetupSessionMock.mockRejectedValueOnce(new Error("gateway unreachable"));
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: true,
+    });
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
+    });
+    // The failed lookup must not retire the tab — the retry needs it to exist.
+    expect(setupTabIds()).toEqual(["default"]);
+
+    await waitFor(
+      () => {
+        expect(
+          useTerminalSessionStore.getState().sessions.get(
+            createSessionKey(null, "default", "env-hidden"),
+          )?.sessionId,
+        ).toBe("env-hidden:setup");
+      },
+      { timeout: 8000 },
+    );
+    expect(getEnvironmentSetupSessionMock.mock.calls.length).toBeGreaterThan(1);
+    expect(setupTabIds()).toEqual(["default"]);
+  }, 15000);
+
+  test("binds every restored backend-managed setup tab, not just the first", async () => {
+    // Binding one tab per effect run relied on the run repeating to reach the
+    // next. A tab it never reached was also never settled, and stale-tab
+    // cleanup skips unsettled tabs — so the extra pane could neither attach to
+    // the setup PTY nor be retired.
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: true,
+    });
+
+    restoreBackendSetupTabLayout({}, [{ id: "setup-2", type: "plain", isSetupTab: true }]);
+
+    await waitFor(() => {
+      for (const tabId of ["default", "setup-2"]) {
+        expect(
+          useTerminalSessionStore.getState().sessions.get(
+            createSessionKey(null, tabId, "env-hidden"),
+          )?.sessionId,
+        ).toBe("env-hidden:setup");
+      }
+    });
+    expect(setupTabIds()).toEqual(["default", "setup-2"]);
+  });
+
+  test("retires a restored setup tab with no backend session even when setup never completed", async () => {
+    // `setupScriptsComplete` is false and setup is not running, so there is no
+    // `env-hidden:setup` PTY coming. Keeping the tab would leave a pane that
+    // never connects; removing it lets the initial-layout effect seed a
+    // working one.
+    getEnvironmentSetupSessionMock.mockResolvedValue(null);
+
+    restoreBackendSetupTabLayout({ setupScriptsComplete: false });
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
+    });
+
+    await waitFor(() => {
+      expect(setupTabIds()).toEqual([]);
+    });
+  });
+
+  test("defers stale setup cleanup until a pending agent launch resolves", async () => {
+    getEnvironmentSetupSessionMock.mockResolvedValue(null);
+    // The restored layout already carries the agent tab, so the durable-launch
+    // reconstruction takes its "clear the flag" branch rather than rebuilding
+    // the layout. That isolates the cleanup guard: the setup tab survives only
+    // because `pendingAgentLaunch` defers cleanup.
+    let clearPendingLaunch: (() => void) | undefined;
+    setEnvironmentPendingAgentLaunchMock.mockImplementationOnce(
+      (environmentId: string) =>
+        new Promise((resolve) => {
+          clearPendingLaunch = () => resolve({
+            ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+            pendingAgentLaunch: false,
+          });
+        }),
+    );
+
+    restoreBackendSetupTabLayout(
+      { pendingAgentLaunch: true },
+      [{ id: "agent", type: "claude" }],
+    );
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
+    });
+    await waitFor(() => {
+      expect(clearPendingLaunch).toBeDefined();
+    });
+
+    // The lookup has settled with no session, so the tab is stale by every
+    // other measure — only the pending launch is holding cleanup back.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(setupTabIds()).toEqual(["default"]);
+
+    await act(async () => {
+      clearPendingLaunch?.();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(setupTabIds()).toEqual([]);
+    });
+    // Cleanup must retire only the dead setup placeholder, never the agent tab
+    // the launch just reconstructed.
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-hidden").map((tab) => tab.id),
+    ).toEqual(["agent"]);
+  });
+
   test("reconstructs a looped-review tab only after its authoritative workflow hydrates", async () => {
     const workflowId = useLoopedReviewStore.getState().createWorkflow({
       environmentId: "env-hidden",

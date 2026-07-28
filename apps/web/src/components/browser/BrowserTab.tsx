@@ -28,11 +28,38 @@ interface BrowserTabProps {
 const OPAQUE_PREVIEW_SANDBOX = "allow-forms allow-pointer-lock allow-presentation allow-scripts";
 const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
 const BLOCKING_OVERLAY_SELECTOR = [
-  '[role="dialog"]:not([aria-hidden="true"]):not([data-state="closed"])',
-  '[role="alertdialog"]:not([aria-hidden="true"]):not([data-state="closed"])',
-  '[role="menu"][data-state="open"]',
-  '[role="listbox"][data-state="open"]',
+  '[role="dialog"]',
+  '[role="alertdialog"]',
+  '[role="menu"]',
+  '[role="listbox"]',
 ].join(",");
+
+function isVisuallyPresent(element: Element): boolean {
+  for (let current: Element | null = element; current; current = current.parentElement) {
+    if (current instanceof HTMLElement && current.hidden) return false;
+    const style = window.getComputedStyle(current);
+    if (
+      style.display === "none"
+      || style.visibility === "hidden"
+      || style.visibility === "collapse"
+      || Number.parseFloat(style.opacity) === 0
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isBlockingOverlay(element: Element): boolean {
+  const isClosing =
+    element.getAttribute("aria-hidden") === "true"
+    || element.getAttribute("data-state") === "closed";
+  return !isClosing || isVisuallyPresent(element);
+}
+
+function hasVisuallyBlockingOverlay(): boolean {
+  return Array.from(document.querySelectorAll(BLOCKING_OVERLAY_SELECTOR)).some(isBlockingOverlay);
+}
 
 function displayUrlFromNativePreview(previewUrl: string, currentDisplayUrl: string): string | null {
   if (!previewUrl) return null;
@@ -182,16 +209,46 @@ export function BrowserTab({
 
   useEffect(() => {
     if (!nativeBrowserPreview) return;
-    const update = () => setHasBlockingOverlay(Boolean(document.querySelector(BLOCKING_OVERLAY_SELECTOR)));
+    const update = () => setHasBlockingOverlay(hasVisuallyBlockingOverlay());
+    const updateAfterOverlayMotion = (event: Event) => {
+      if (
+        event.target instanceof Element
+        && event.target.matches(BLOCKING_OVERLAY_SELECTOR)
+      ) {
+        update();
+      }
+    };
     const observer = new MutationObserver(update);
     observer.observe(document.body, {
       attributes: true,
-      attributeFilter: ["aria-hidden", "data-state", "role"],
+      attributeFilter: ["aria-hidden", "data-state", "hidden", "role"],
       childList: true,
       subtree: true,
     });
+    for (const eventName of [
+      "animationcancel",
+      "animationend",
+      "animationstart",
+      "transitioncancel",
+      "transitionend",
+      "transitionrun",
+    ]) {
+      document.addEventListener(eventName, updateAfterOverlayMotion, true);
+    }
     update();
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      for (const eventName of [
+        "animationcancel",
+        "animationend",
+        "animationstart",
+        "transitioncancel",
+        "transitionend",
+        "transitionrun",
+      ]) {
+        document.removeEventListener(eventName, updateAfterOverlayMotion, true);
+      }
+    };
   }, [nativeBrowserPreview]);
 
   const resolved = useMemo(() => {

@@ -2018,6 +2018,168 @@ exit 0
     });
   }, ASYNC_TEST_BUDGET_MS);
 
+  test("closes a retry session when its container is stopped, then allows a healthy retry", async () => {
+    const environment = createEnvironment({
+      id: "env-container-stopped-retry",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      createdFromCommit: "8888888888888888888888888888888888888888",
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const setupSessionId = `${environment.id}:setup`;
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  if [ -f "$FAKE_DOCKER_LOG.healthy" ]; then
+    printf 'running\\n'
+  else
+    printf 'exited\\n'
+  fi
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      await expect(commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("Container is not running");
+
+      expect(
+        await commands.get("get_environment_setup_session")?.(
+          { environmentId: environment.id },
+          context,
+        ),
+      ).toEqual(expect.objectContaining({
+        sessionId: setupSessionId,
+        running: false,
+        terminalRunning: false,
+        success: false,
+      }));
+      expect(
+        commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
+      ).toEqual({ id: setupSessionId, running: false });
+      expect(ptySpawn).not.toHaveBeenCalled();
+
+      await fs.writeFile(`${logs.all}.healthy`, "");
+      const retry = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+      expect(
+        commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
+      ).toEqual({ id: setupSessionId, running: true });
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      await expect(retry).resolves.toMatchObject({ setupScriptsComplete: true });
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("closes a retry session when PTY spawn throws, then allows a healthy retry", async () => {
+    const environment = createEnvironment({
+      id: "env-container-pty-spawn-retry",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      createdFromCommit: "9999999999999999999999999999999999999999",
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const setupSessionId = `${environment.id}:setup`;
+
+    ptySpawn.mockImplementationOnce(() => {
+      throw new Error("PTY spawn unavailable");
+    });
+    await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
+      await expect(commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("PTY spawn unavailable");
+
+      expect(
+        await commands.get("get_environment_setup_session")?.(
+          { environmentId: environment.id },
+          context,
+        ),
+      ).toEqual(expect.objectContaining({
+        sessionId: setupSessionId,
+        running: false,
+        terminalRunning: false,
+        success: false,
+      }));
+      expect(
+        commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
+      ).toEqual({ id: setupSessionId, running: false });
+
+      const retry = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      await expect(retry).resolves.toMatchObject({ setupScriptsComplete: true });
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("closes a retry session when a local worktree disappears before PTY spawn", async () => {
+    const worktreePath = await createTempDir("ork-electron-setup-worktree-race-");
+    const missingWorktreePath = `${worktreePath}-missing`;
+    await fs.writeFile(
+      path.join(worktreePath, "orkestrator-ai.json"),
+      JSON.stringify({ setupLocal: "printf setup" }),
+    );
+    const environment = createEnvironment({
+      id: "env-local-missing-worktree-retry",
+      environmentType: "local",
+      setupScriptsComplete: false,
+      createdFromCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const setupSessionId = `${environment.id}:setup`;
+    let worktreePathReads = 0;
+    // Model a worktree deleted after its setup config was read but before
+    // spawnSetupTerminal performs its final existence check. The setup path
+    // reads this property while selecting and loading the config, then while
+    // logging and validating the PTY target.
+    Object.defineProperty(environment, "worktreePath", {
+      configurable: true,
+      get: () => {
+        worktreePathReads += 1;
+        return worktreePathReads <= 4 ? worktreePath : missingWorktreePath;
+      },
+    });
+
+    await expect(commands.get("run_environment_setup")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow(`Local environment worktree does not exist: ${missingWorktreePath}`);
+
+    expect(
+      await commands.get("get_environment_setup_session")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ).toEqual(expect.objectContaining({
+      sessionId: setupSessionId,
+      running: false,
+      terminalRunning: false,
+      success: false,
+    }));
+    expect(
+      commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
+    ).toEqual({ id: setupSessionId, running: false });
+    expect(ptySpawn).not.toHaveBeenCalled();
+  });
+
   test("a failed baseline storage write blocks setup and succeeds on retry", async () => {
     const environment = createEnvironment({
       id: "env-container-baseline-storage-retry",
@@ -2428,6 +2590,24 @@ exit 0
         success: true,
         terminalRunning: true,
       }));
+
+      ptyProcesses[0]?.emitExit({ exitCode: 0 });
+      expect(
+        await commands.get("get_environment_setup_session")?.(
+          { environmentId: environment.id },
+          context,
+        ),
+      ).toEqual(expect.objectContaining({
+        running: false,
+        success: true,
+        terminalRunning: false,
+      }));
+      expect(
+        commands.get("get_terminal_session")?.(
+          { sessionId: `${environment.id}:setup` },
+          context,
+        ),
+      ).toEqual({ id: `${environment.id}:setup`, running: false });
     });
   }, ASYNC_TEST_BUDGET_MS);
 
@@ -5091,6 +5271,104 @@ exit 0
     });
   }, ASYNC_TEST_BUDGET_MS);
 
+  test("keeps the preparation session attachable before its setup PTY exists", async () => {
+    const environment = createEnvironment({
+      id: "env-container-prepare-attach",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const setupSessionId = `${environment.id}:setup`;
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *ORKESTRATOR_SETUP_CAPABILITIES*)
+      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
+      exit 0
+      ;;
+    *--prepare-only*)
+      touch "$FAKE_DOCKER_LOG.preparing"
+      while [ ! -f "$FAKE_DOCKER_LOG.release" ]; do
+        sleep 0.01
+      done
+      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
+      exit 0
+      ;;
+    *rev-parse*)
+      printf '6767676767676767676767676767676767676767\\n'
+      ;;
+  esac
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      const setupPromise = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      let verificationError: unknown;
+      try {
+        await waitForCondition(
+          () => existsSync(`${logs.all}.preparing`),
+          "workspace preparation to start",
+        );
+
+        // Preparation owns a logical setup session before the PTY is spawned.
+        // It must be attachable so the renderer subscribes once instead of
+        // replaying the intro in a reconnect loop.
+        expect(ptySpawn).not.toHaveBeenCalled();
+        expect(
+          commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
+        ).toEqual({ id: setupSessionId, running: true });
+        expect(
+          await commands.get("get_environment_setup_session")?.(
+            { environmentId: environment.id },
+            context,
+          ),
+        ).toEqual(expect.objectContaining({
+          sessionId: setupSessionId,
+          running: true,
+          terminalRunning: false,
+        }));
+      } catch (error) {
+        verificationError = error;
+      } finally {
+        await fs.writeFile(`${logs.all}.release`, "");
+      }
+
+      await waitForPtyProcessCount(1);
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      await setupPromise;
+      if (verificationError) throw verificationError;
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("does not attach an unknown setup session", async () => {
+    const environment = createEnvironment({ id: "env-known-setup-session" });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const unknownSessionId = "env-unknown-setup-session:setup";
+
+    expect(
+      commands.get("get_terminal_session")?.({ sessionId: unknownSessionId }, context),
+    ).toEqual({ id: unknownSessionId, running: false });
+    expect(
+      await commands.get("get_environment_setup_session")?.(
+        { environmentId: "env-unknown-setup-session" },
+        context,
+      ),
+    ).toBeNull();
+  });
+
   test("closes the setup session when preparation fails", async () => {
     const environment = createEnvironment({
       id: "env-container-prepare-fails",
@@ -5136,6 +5414,12 @@ exit 0
         context,
       ) as { running: boolean; success?: boolean; error?: string };
       expect(session).toMatchObject({ running: false, success: false });
+      expect(
+        commands.get("get_terminal_session")?.(
+          { sessionId: `${environment.id}:setup` },
+          context,
+        ),
+      ).toEqual({ id: `${environment.id}:setup`, running: false });
       expect(session.error).toContain("clone failed");
       expect(emitted.some((entry) => entry.event === "environment-setup-complete"
         && (entry.payload as { success: boolean }).success === false)).toBe(true);
@@ -8786,6 +9070,10 @@ exit 0
       toolchainBinDir,
       packagedBinDir,
     ]);
+    expect(commands.get("get_terminal_session")?.({ sessionId }, context)).toEqual({
+      id: sessionId,
+      running: true,
+    });
 
     ptyProcesses[0]?.emitData("ready\r\n");
     expect(emitted).toEqual([

@@ -2552,6 +2552,21 @@ function isSetupTerminalSessionId(sessionId: string): boolean {
   return sessionId.endsWith(":setup");
 }
 
+/**
+ * A setup session is attachable as soon as preparation starts, before its PTY
+ * exists. The renderer can replay the preparation intro and subscribe to live
+ * output once; treating this window as "not running" makes it reconnect and
+ * replay the same buffer until preparation finishes.
+ */
+function isTerminalSessionAttachable(sessionId: string): boolean {
+  if (terminalProcesses.has(sessionId)) return true;
+  if (!isSetupTerminalSessionId(sessionId)) return false;
+
+  const environmentId = sessionId.slice(0, -":setup".length);
+  const setupSession = environmentSetupSessions.get(environmentId);
+  return setupSession?.sessionId === sessionId && setupSession.running;
+}
+
 // Setup-session buffers are intentionally retained after the PTY exits so the
 // renderer can replay them on reattach. Free them (and the tracked session /
 // task state) when the owning environment is removed.
@@ -2879,7 +2894,15 @@ async function startEnvironmentSetupOnce(
   try {
     return await startEnvironmentSetupAfterPreparation(current, context, preparationSessionId);
   } catch (error) {
-    if (preparationSessionId) await failEnvironmentSetup(current.id, error, context);
+    // Both a preparation continuation and a retry with an existing baseline can
+    // publish a logical setup session before the PTY is available. Any startup
+    // failure after that point must close the session; otherwise
+    // get_terminal_session keeps reporting an attachable terminal that has no
+    // process behind it. Avoid manufacturing a failure session for errors that
+    // happened before an attempt published one.
+    if (environmentSetupSessions.get(current.id)?.running) {
+      await failEnvironmentSetup(current.id, error, context);
+    }
     throw error;
   }
 }
@@ -6236,11 +6259,12 @@ export function createCommandRegistry(
   register("list_terminal_sessions", () => Array.from(terminalProcesses.keys()));
   register("get_terminal_session", ({ sessionId }) => {
     const id = asString(sessionId, "sessionId");
-    const running = terminalProcesses.has(id);
+    const running = isTerminalSessionAttachable(id);
     if (isSetupTerminalSessionId(id)) {
       logSetupTerminal("renderer checked terminal session", {
         sessionId: id,
         running,
+        terminalRunning: terminalProcesses.has(id),
         bufferChars: terminalOutputBuffers.get(id)?.length ?? 0,
       });
     }

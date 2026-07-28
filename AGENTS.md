@@ -18,6 +18,34 @@ When adding or changing background behavior (agent sessions, tmux sessions, term
 4. Test the inactive-environment path: start work, switch to another environment/tab, let the work progress or finish, then return and verify status, messages, pending prompts, and controls are correct.
 5. Avoid cleanup tied only to component unmount unless the user explicitly stopped the work. Unmount often means "not currently visible", not "cancel the background task".
 
+## Efficiency and Transport Invariants
+
+When implementing `docs/efficiency-plan.md` or changing gateway, bridge,
+terminal, streaming, replay, compression, or synchronization behavior, preserve
+these non-negotiable invariants:
+
+1. Long-running state lives in the backend, bridge, persistent store, or
+   external process, not only in mounted React state.
+2. A component unmount or inactive environment does not stop background work.
+3. Live events are incremental updates over authoritative snapshots, never the
+   only source of truth.
+4. Every missed event is detectable through a revision gap, generation change,
+   expired cursor, or explicit reconciliation frame.
+5. Terminal output may be dropped only under bounded backpressure, with an
+   explicit desync signal and exact snapshot recovery.
+6. Authoritative state events must not be silently dropped.
+7. Replay subscribes before it calculates and flushes the replay range.
+8. A connected SSE frame echoes the client's cursor; it must not jump the
+   client to the latest server revision before replay completes.
+9. Codex app-server's stdout loop never awaits rendering, SSE writes, browser
+   work, or other consumers.
+10. Approval timeout, disconnect, malformed answers, and generation death deny
+    rather than approve.
+11. Every queue, replay ring, decoded request, rewritten response, and
+    compression buffer has explicit byte and count bounds.
+12. Metrics and logs never contain prompts, terminal contents, file contents,
+    credentials, tokens, or attachment data.
+
 ## Tech Stack
 
 | Layer    | Technology                                                |

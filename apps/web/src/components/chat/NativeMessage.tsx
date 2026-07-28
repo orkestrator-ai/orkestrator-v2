@@ -1329,7 +1329,10 @@ function TaskGroupPart({
   const displayLabel = buildAgentDisplayLabel(displayName, role);
   const statusLabel = getSubagentStatusLabel(part.task.toolState);
   const childCount = part.childTools.length;
-  const toolCount = part.task.toolUseCount ?? childCount;
+  const capturedToolCount = part.childTools.filter(
+    (child) => child.type === "tool-invocation",
+  ).length;
+  const toolCount = part.task.toolUseCount ?? capturedToolCount;
   const toolCountLabel = hasExternalUsage
     ? `${toolCount} ${toolCount === 1 ? "tool use" : "tool uses"}`
     : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
@@ -1342,6 +1345,12 @@ function TaskGroupPart({
           : "Waiting for activity."
       );
     }
+
+    if (latestChild.type === "thinking") return "Thinking";
+    if (latestChild.type === "text") {
+      return latestChild.content.trim() || "Response";
+    }
+    if (latestChild.type === "file") return latestChild.content;
 
     const command =
       typeof latestChild.toolArgs?.command === "string"
@@ -1429,7 +1438,7 @@ function TaskGroupPart({
           <div className="space-y-1">
             {part.childTools.map((child, index) => (
               <MessagePart
-                key={`task-child-${index}-${child.toolUseId ?? child.toolName ?? child.type}`}
+                key={`task-child-${index}-${child.toolUseId ?? child.sourcePartId ?? child.toolName ?? child.type}`}
                 part={child}
                 containerId={containerId}
                 partKey={partKey ? `${partKey}/task-child-${index}` : undefined}

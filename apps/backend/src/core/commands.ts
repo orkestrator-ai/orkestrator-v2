@@ -128,6 +128,7 @@ type TerminalSessionConfig =
     cols: number;
     rows: number;
     user?: string;
+    environmentId?: string;
     activityEnvironmentId?: string;
     trackEnvironmentActivity?: boolean;
   }
@@ -144,6 +145,7 @@ const terminalSessionConfigs = new Map<string, TerminalSessionConfig>();
 const terminalOutputBuffers = new Map<string, string>();
 const terminalOutputRevisions = new Map<string, number>();
 const terminalOutputGenerations = new Map<string, number>();
+const terminalOutputTruncated = new Set<string>();
 const terminalSessionIdsByStableKey = new Map<string, string>();
 const terminalStableKeysBySessionId = new Map<string, string>();
 const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -2192,12 +2194,26 @@ function appendTerminalOutputBuffer(sessionId: string, data: string | Buffer): v
   ensureTerminalOutputGeneration(sessionId);
   const text = Buffer.isBuffer(data) ? data.toString("utf8") : data;
   const combined = `${terminalOutputBuffers.get(sessionId) ?? ""}${text}`;
-  terminalOutputBuffers.set(
-    sessionId,
-    combined.length > MAX_TERMINAL_OUTPUT_BUFFER_CHARS
-      ? combined.slice(combined.length - MAX_TERMINAL_OUTPUT_BUFFER_CHARS)
-      : combined,
-  );
+  if (combined.length > MAX_TERMINAL_OUTPUT_BUFFER_CHARS) {
+    let start = combined.length - MAX_TERMINAL_OUTPUT_BUFFER_CHARS;
+    // JavaScript indexes UTF-16 code units. Avoid retaining only the low
+    // surrogate when the rolling-window boundary lands inside an astral
+    // character; an invalid transcript is worse than dropping one extra unit.
+    const firstCodeUnit = combined.charCodeAt(start);
+    const precedingCodeUnit = combined.charCodeAt(start - 1);
+    if (
+      firstCodeUnit >= 0xdc00
+      && firstCodeUnit <= 0xdfff
+      && precedingCodeUnit >= 0xd800
+      && precedingCodeUnit <= 0xdbff
+    ) {
+      start += 1;
+    }
+    terminalOutputBuffers.set(sessionId, combined.slice(start));
+    terminalOutputTruncated.add(sessionId);
+  } else {
+    terminalOutputBuffers.set(sessionId, combined);
+  }
   terminalOutputRevisions.set(
     sessionId,
     (terminalOutputRevisions.get(sessionId) ?? 0) + 1,
@@ -2216,6 +2232,7 @@ function emitTerminalOutput(sessionId: string, data: string | Buffer, emit: Back
 function resetTerminalOutputBuffer(sessionId: string): void {
   terminalOutputBuffers.set(sessionId, "");
   terminalOutputRevisions.set(sessionId, 0);
+  terminalOutputTruncated.delete(sessionId);
   terminalOutputGenerations.set(
     sessionId,
     (terminalOutputGenerations.get(sessionId) ?? 0) + 1,
@@ -2294,6 +2311,7 @@ function containerTerminalConfigMatches(
   return config?.kind === "container"
     && containerIdMatches(config.containerId, expected.containerId)
     && config.user === expected.user
+    && config.environmentId === expected.environmentId
     && config.activityEnvironmentId === expected.activityEnvironmentId
     && config.trackEnvironmentActivity === expected.trackEnvironmentActivity;
 }
@@ -2411,6 +2429,7 @@ function cleanupTerminalSession(
     terminalOutputBuffers.delete(id);
     terminalOutputRevisions.delete(id);
     terminalOutputGenerations.delete(id);
+    terminalOutputTruncated.delete(id);
   }
 }
 
@@ -2429,13 +2448,34 @@ function cleanupTerminalSessionsForEnvironment(environmentId: string): void {
   for (const [id, config] of terminalSessionConfigs) {
     if (
       (config.kind === "local" && config.environmentId === environmentId)
-      || (config.kind === "container" && config.activityEnvironmentId === environmentId)
+      || (
+        config.kind === "container"
+        && (
+          config.environmentId === environmentId
+          || config.activityEnvironmentId === environmentId
+        )
+      )
       || terminalStableKeyEnvironmentId(id) === environmentId
     ) {
       sessionIds.add(id);
     }
   }
   for (const id of sessionIds) explicitlyCloseTerminalSession(id);
+}
+
+function assertEnvironmentNotDeleting(environmentId: string | undefined): void {
+  if (environmentId && deletingLocalServerEnvironments.has(environmentId)) {
+    throw new Error(`Environment is being deleted: ${environmentId}`);
+  }
+}
+
+function assertEnvironmentDeletionNotRequested(
+  environment: Environment | null | undefined,
+  environmentId: string,
+): void {
+  if (environment?.deletionRequestedAt) {
+    throw new Error(`Environment is being deleted: ${environmentId}`);
+  }
 }
 
 function spawnTerminalProcess(
@@ -2699,6 +2739,7 @@ function cleanupEnvironmentSetupState(environmentId: string): void {
   terminalOutputBuffers.delete(setupTerminalSessionId(environmentId));
   terminalOutputRevisions.delete(setupTerminalSessionId(environmentId));
   terminalOutputGenerations.delete(setupTerminalSessionId(environmentId));
+  terminalOutputTruncated.delete(setupTerminalSessionId(environmentId));
   environmentSetupSessions.delete(environmentId);
   environmentSetupTasks.delete(environmentId);
   environmentSetupStartTasks.delete(environmentId);
@@ -3746,7 +3787,6 @@ async function deleteEnvironment(
     await enqueueLocalServerEnvironmentOperation(environmentId, async () => {
       const { storage } = context;
       const environment = await storage.getEnvironment(environmentId);
-      cleanupTerminalSessionsForEnvironment(environmentId);
       // Persist the deletion intent before any durable child-state cleanup.
       // Queue/pipeline saves consult this marker while holding their own locks:
       // a write that began earlier is swept by cleanup, and a later write is
@@ -3754,6 +3794,7 @@ async function deleteEnvironment(
       await storage.updateEnvironment(environmentId, {
         deletionRequestedAt: new Date().toISOString(),
       });
+      cleanupTerminalSessionsForEnvironment(environmentId);
       if (environment) await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
       if (environment?.containerId) {
         // Retire state polling before removing the container, or the next tick
@@ -3782,6 +3823,10 @@ async function deleteEnvironment(
       await storage.deleteAgentHandoffsByEnvironment(environmentId);
       await storage.removeEnvironment(environmentId);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);
+      // A terminal start that began before the tombstone may have been awaiting
+      // storage or filesystem I/O during the first sweep. Close anything that
+      // became visible before deletion completed.
+      cleanupTerminalSessionsForEnvironment(environmentId);
       cleanupEnvironmentSetupState(environmentId);
       // Releases the watcher and discards the counts. This is the one case where
       // discarding is right: the worktree they described is gone.
@@ -6324,6 +6369,7 @@ export function createCommandRegistry(
   }, { storage }) => {
     const resolvedContainerId = asString(containerId, "containerId");
     const requestedEnvironmentId = asOptionalString(environmentId);
+    assertEnvironmentNotDeleting(requestedEnvironmentId);
     const requestedTerminalKey = asOptionalString(terminalKey);
     const shouldTrackActivity = asBoolean(trackEnvironmentActivity);
     const matchedEnvironment = shouldTrackActivity || requestedEnvironmentId
@@ -6332,6 +6378,7 @@ export function createCommandRegistry(
           resolvedContainerId,
         )
       : undefined;
+    assertEnvironmentNotDeleting(requestedEnvironmentId ?? matchedEnvironment?.id);
     if (requestedEnvironmentId && matchedEnvironment?.id !== requestedEnvironmentId) {
       throw new Error("Terminal container is not associated with the requested environment");
     }
@@ -6340,6 +6387,11 @@ export function createCommandRegistry(
       : undefined;
     if (shouldTrackActivity && !activityEnvironmentId) {
       throw new Error("Tracked terminal container is not associated with an environment");
+    }
+    if (requestedEnvironmentId) {
+      assertEnvironmentDeletionNotRequested(matchedEnvironment, requestedEnvironmentId);
+    } else if (matchedEnvironment) {
+      assertEnvironmentDeletionNotRequested(matchedEnvironment, matchedEnvironment.id);
     }
 
     const stableKey = stableTerminalKey(
@@ -6353,6 +6405,7 @@ export function createCommandRegistry(
       cols: asTerminalDimension(cols, 80),
       rows: asTerminalDimension(rows, 24),
       user: asOptionalString(user),
+      environmentId: requestedEnvironmentId,
       activityEnvironmentId,
       trackEnvironmentActivity: shouldTrackActivity,
     };
@@ -6382,8 +6435,8 @@ export function createCommandRegistry(
     spawnTerminalProcess(id, "docker", dockerArgs, config, emit);
     return id;
   });
-  register("start_terminal_session", ({ sessionId }, context) => {
-    const { emit } = context;
+  register("start_terminal_session", async ({ sessionId }, context) => {
+    const { emit, storage } = context;
     const id = asString(sessionId, "sessionId");
     const storedConfig = terminalSessionConfigs.get(id);
     const config = storedConfig?.kind === "container" ? storedConfig : {
@@ -6392,6 +6445,19 @@ export function createCommandRegistry(
       cols: 80,
       rows: 24,
     };
+    const environmentId = config.environmentId
+      ?? config.activityEnvironmentId
+      ?? terminalStableKeyEnvironmentId(id)
+      ?? undefined;
+    assertEnvironmentNotDeleting(environmentId);
+    if (environmentId) {
+      const environment = await storage.getEnvironment(environmentId);
+      assertEnvironmentNotDeleting(environmentId);
+      assertEnvironmentDeletionNotRequested(environment, environmentId);
+    }
+    if (storedConfig && terminalSessionConfigs.get(id) !== storedConfig) {
+      throw new Error("Container terminal session is no longer available");
+    }
     const dockerArgs = ["exec", "-it"];
     if (config.user) dockerArgs.push("--user", config.user);
     dockerArgs.push(config.containerId, "zsh", "-l");
@@ -6444,17 +6510,22 @@ export function createCommandRegistry(
       output: terminalOutputBuffers.get(id) ?? "",
       revision: terminalOutputRevisions.get(id) ?? 0,
       generation: terminalOutputGenerations.get(id) ?? 0,
+      truncated: terminalOutputTruncated.has(id),
     };
   });
 
-  register("create_local_terminal_session", ({
+  register("create_local_terminal_session", async ({
     environmentId,
     terminalKey,
     cols,
     rows,
     trackEnvironmentActivity,
-  }) => {
+  }, { storage }) => {
     const resolvedEnvironmentId = asString(environmentId, "environmentId");
+    assertEnvironmentNotDeleting(resolvedEnvironmentId);
+    const environment = await storage.getEnvironment(resolvedEnvironmentId);
+    assertEnvironmentNotDeleting(resolvedEnvironmentId);
+    assertEnvironmentDeletionNotRequested(environment, resolvedEnvironmentId);
     const stableKey = stableTerminalKey(
       "local",
       resolvedEnvironmentId,
@@ -6488,15 +6559,28 @@ export function createCommandRegistry(
       rows: 24,
     };
     const environmentId = config.environmentId;
+    assertEnvironmentNotDeleting(environmentId);
     const env = await storage.getEnvironment(environmentId);
+    assertEnvironmentNotDeleting(environmentId);
+    assertEnvironmentDeletionNotRequested(env, environmentId);
     if (!env?.worktreePath) throw new Error("Local environment worktree is not available");
     if (!await pathExists(env.worktreePath)) throw new Error(`Local environment worktree does not exist: ${env.worktreePath}`);
+    assertEnvironmentNotDeleting(environmentId);
+    const currentEnvironment = await storage.getEnvironment(environmentId);
+    assertEnvironmentNotDeleting(environmentId);
+    assertEnvironmentDeletionNotRequested(currentEnvironment, environmentId);
+    if (!currentEnvironment?.worktreePath || currentEnvironment.worktreePath !== env.worktreePath) {
+      throw new Error("Local environment worktree is no longer available");
+    }
+    if (storedConfig && terminalSessionConfigs.get(id) !== storedConfig) {
+      throw new Error("Local terminal session is no longer available");
+    }
     spawnTerminalProcess(
       id,
       resolveLocalShellPath(),
       ["-l"],
       {
-        cwd: env.worktreePath,
+        cwd: currentEnvironment.worktreePath,
         cols: config.cols,
         rows: config.rows,
         env: envWithManagedBinaries(context),

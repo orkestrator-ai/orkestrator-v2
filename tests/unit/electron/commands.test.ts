@@ -2367,6 +2367,46 @@ exit 1
     });
   });
 
+  test("spawns local setup commands in an interactive login PTY", async () => {
+    const { worktree: worktreePath } = await createGitWorktreeWithOrigin();
+    await fs.writeFile(
+      path.join(worktreePath, "orkestrator-ai.json"),
+      JSON.stringify({ setupLocal: ["bun install", "bun run prepare"] }),
+    );
+    const environment = createEnvironment({
+      id: "env-local-setup-terminal",
+      environmentType: "local",
+      setupScriptsComplete: false,
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const setupPromise = commands.get("run_environment_setup")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<Environment>;
+    await waitForPtyProcessCount(1);
+
+    expect(ptySpawn.mock.calls[0]?.[0]).toBe(expectedLocalShellPath());
+    expect(ptySpawn.mock.calls[0]?.[1]?.[0]).toBe("-ilc");
+    expect(ptySpawn.mock.calls[0]?.[1]?.[1]).toContain(
+      "bun install && bun run prepare",
+    );
+    expect(ptySpawn.mock.calls[0]?.[2]).toMatchObject({
+      cwd: worktreePath,
+      cols: 80,
+      rows: 24,
+    });
+
+    ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+    await expect(setupPromise).resolves.toEqual(
+      expect.objectContaining({ setupScriptsComplete: true }),
+    );
+  }, ASYNC_TEST_BUDGET_MS);
+
   test("emits a failure event when inactive container setup fails", async () => {
     const environment = createEnvironment({
       id: "env-container-setup-fails",
@@ -2630,7 +2670,7 @@ exit 0
     const commands = createCommandRegistry();
     const setupSessionId = `${environment.id}:setup`;
     const retainedStableTerminal = terminalSessionResult(
-      commands.get("create_local_terminal_session")?.(
+      await commands.get("create_local_terminal_session")?.(
         {
           environmentId: environment.id,
           terminalKey: "retained-tab",
@@ -2672,9 +2712,9 @@ exit 0
       expect(commands.get("get_terminal_output_snapshot")?.(
         { sessionId: retainedStableTerminal.sessionId },
         context,
-      )).toEqual({ output: "", revision: 0, generation: 0 });
+      )).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
       const recreated = terminalSessionResult(
-        commands.get("create_local_terminal_session")?.(
+        await commands.get("create_local_terminal_session")?.(
           {
             environmentId: environment.id,
             terminalKey: "retained-tab",
@@ -2749,6 +2789,45 @@ exit 0
     expect(buffer.length).toBe(maxChars);
     expect(buffer.endsWith("B".repeat(1024))).toBe(true);
     expect(buffer.startsWith("A")).toBe(true);
+    expect(commands.get("get_terminal_output_snapshot")?.({ sessionId }, context)).toEqual({
+      output: buffer,
+      revision: 2,
+      generation: 1,
+      truncated: true,
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("does not split a Unicode surrogate pair at the terminal transcript boundary", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-unicode-cap-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-unicode-cap",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const maxChars = 500 * 1024;
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        terminalKey: "unicode-tab",
+        cols: 80,
+        rows: 24,
+      },
+      context,
+    )).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+
+    // The nominal cutoff lands between the high and low surrogate. The backend
+    // drops the complete astral character rather than returning malformed UTF-16.
+    ptyProcesses[0]?.emitData(`😀${"A".repeat(maxChars - 1)}`);
+    const snapshot = commands.get("get_terminal_output_snapshot")?.(
+      { sessionId },
+      context,
+    ) as { output: string; truncated: boolean };
+    expect(snapshot.truncated).toBe(true);
+    expect(snapshot.output).toBe("A".repeat(maxChars - 1));
+    expect(snapshot.output).not.toContain("\ufffd");
+    expect(Buffer.from(snapshot.output, "utf8").toString("utf8")).toBe(snapshot.output);
   }, ASYNC_TEST_BUDGET_MS);
 
   // The renderer calls this *after* setup ran, so a HEAD read here could already
@@ -7933,6 +8012,294 @@ exit 0
     ).resolves.toBeNull();
   }, ASYNC_TEST_BUDGET_MS);
 
+  test("persists deletion intent before closing active terminals and rejects raced terminal operations", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-delete-race-");
+    const environment = createEnvironment({
+      id: "env-terminal-delete-race",
+      environmentType: "containerized",
+      containerId: "container-terminal-delete-race",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const local = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        terminalKey: "local-tab",
+        cols: 80,
+        rows: 24,
+      },
+      context,
+    ));
+    const container = terminalSessionResult(await commands.get("create_terminal_session")?.(
+      {
+        containerId: environment.containerId,
+        environmentId: environment.id,
+        terminalKey: "container-tab",
+        cols: 80,
+        rows: 24,
+      },
+      context,
+    ));
+    await commands.get("start_local_terminal_session")?.(
+      { sessionId: local.sessionId },
+      context,
+    );
+    await commands.get("start_terminal_session")?.(
+      { sessionId: container.sessionId },
+      context,
+    );
+
+    const originalUpdateEnvironment = context.storage.updateEnvironment.bind(context.storage);
+    let releaseDeletionMarker!: () => void;
+    const deletionMarkerGate = new Promise<void>((resolve) => {
+      releaseDeletionMarker = resolve;
+    });
+    let markerWriteStarted = false;
+    context.storage.updateEnvironment = mock(async (environmentId, update) => {
+      if ("deletionRequestedAt" in update) {
+        markerWriteStarted = true;
+        await deletionMarkerGate;
+      }
+      return originalUpdateEnvironment(environmentId, update);
+    });
+
+    const deletePromise = commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<void>;
+    await waitForCondition(() => markerWriteStarted, "the deletion marker write");
+
+    // Destructive cleanup waits for the durable marker.
+    expect(ptyProcesses[0]?.kill).not.toHaveBeenCalled();
+    expect(ptyProcesses[1]?.kill).not.toHaveBeenCalled();
+    await expect(commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        terminalKey: "raced-local-tab",
+        cols: 80,
+        rows: 24,
+      },
+      context,
+    )).rejects.toThrow("Environment is being deleted");
+    await expect(commands.get("create_terminal_session")?.(
+      {
+        containerId: environment.containerId,
+        environmentId: environment.id,
+        terminalKey: "raced-container-tab",
+        cols: 80,
+        rows: 24,
+      },
+      context,
+    )).rejects.toThrow("Environment is being deleted");
+    await expect(commands.get("start_local_terminal_session")?.(
+      { sessionId: local.sessionId },
+      context,
+    )).rejects.toThrow("Environment is being deleted");
+    await expect(commands.get("start_terminal_session")?.(
+      { sessionId: container.sessionId },
+      context,
+    )).rejects.toThrow("Environment is being deleted");
+
+    releaseDeletionMarker();
+    await deletePromise;
+    expect(ptyProcesses[0]?.kill).toHaveBeenCalledTimes(1);
+    expect(ptyProcesses[1]?.kill).toHaveBeenCalledTimes(1);
+    expect(commands.get("get_terminal_output_snapshot")?.(
+      { sessionId: local.sessionId },
+      context,
+    )).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
+    expect(commands.get("get_terminal_output_snapshot")?.(
+      { sessionId: container.sessionId },
+      context,
+    )).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("leaves active terminals intact when persisting deletion intent fails", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-delete-marker-failure-");
+    const environment = createEnvironment({
+      id: "env-terminal-delete-marker-failure",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const session = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        terminalKey: "surviving-tab",
+        cols: 80,
+        rows: 24,
+      },
+      context,
+    ));
+    await commands.get("start_local_terminal_session")?.(
+      { sessionId: session.sessionId },
+      context,
+    );
+    const originalUpdateEnvironment = context.storage.updateEnvironment.bind(context.storage);
+    context.storage.updateEnvironment = mock(async (environmentId, update) => {
+      if ("deletionRequestedAt" in update) {
+        throw new Error("deletion marker storage unavailable");
+      }
+      return originalUpdateEnvironment(environmentId, update);
+    });
+
+    await expect(commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow("deletion marker storage unavailable");
+
+    expect(ptyProcesses[0]?.kill).not.toHaveBeenCalled();
+    expect(commands.get("get_terminal_session")?.(
+      { sessionId: session.sessionId },
+      context,
+    )).toEqual({ id: session.sessionId, running: true });
+    await expect(commands.get("get_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).resolves.toBe(environment);
+    commands.get("close_local_terminal_session")?.(
+      { sessionId: session.sessionId },
+      context,
+    );
+  });
+
+  test("rejects terminal create and start after deletion intent persists but deletion fails", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-durable-delete-marker-");
+    const environment = createEnvironment({
+      id: "env-terminal-durable-delete-marker",
+      environmentType: "containerized",
+      containerId: "container-durable-delete-marker",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const local = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        terminalKey: "local-before-delete",
+        cols: 80,
+        rows: 24,
+      },
+      context,
+    ));
+    const container = terminalSessionResult(await commands.get("create_terminal_session")?.(
+      {
+        containerId: environment.containerId,
+        environmentId: environment.id,
+        terminalKey: "container-before-delete",
+        cols: 80,
+        rows: 24,
+      },
+      context,
+    ));
+    const originalUpdateEnvironment = context.storage.updateEnvironment.bind(context.storage);
+    context.storage.updateEnvironment = mock(async (environmentId, update) => {
+      const updated = await originalUpdateEnvironment(environmentId, update);
+      if ("deletionRequestedAt" in update) {
+        // Model an acknowledged durable write whose caller subsequently sees a
+        // transport/storage failure. The in-memory tombstone is cleared, but the
+        // stored deletion intent must continue blocking terminal operations.
+        throw new Error("deletion failed after marker persistence");
+      }
+      return updated;
+    });
+
+    await expect(commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow("deletion failed after marker persistence");
+    expect(environment.deletionRequestedAt).toBeString();
+
+    await expect(commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        terminalKey: "local-after-delete",
+        cols: 80,
+        rows: 24,
+      },
+      context,
+    )).rejects.toThrow("Environment is being deleted");
+    await expect(commands.get("create_terminal_session")?.(
+      {
+        containerId: environment.containerId,
+        environmentId: environment.id,
+        terminalKey: "container-after-delete",
+        cols: 80,
+        rows: 24,
+      },
+      context,
+    )).rejects.toThrow("Environment is being deleted");
+    await expect(commands.get("start_local_terminal_session")?.(
+      { sessionId: local.sessionId },
+      context,
+    )).rejects.toThrow("Environment is being deleted");
+    await expect(commands.get("start_terminal_session")?.(
+      { sessionId: container.sessionId },
+      context,
+    )).rejects.toThrow("Environment is being deleted");
+    expect(ptySpawn).not.toHaveBeenCalled();
+
+    commands.get("close_local_terminal_session")?.(
+      { sessionId: local.sessionId },
+      context,
+    );
+    commands.get("detach_terminal")?.(
+      { sessionId: container.sessionId },
+      context,
+    );
+  });
+
+  test("does not spawn a local PTY after its environment is deleted during lookup", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-start-delete-race-");
+    const environment = createEnvironment({
+      id: "env-terminal-start-delete-race",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const session = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        terminalKey: "pending-tab",
+        cols: 80,
+        rows: 24,
+      },
+      context,
+    ));
+    const originalGetEnvironment = context.storage.getEnvironment.bind(context.storage);
+    let releaseLookup!: () => void;
+    const lookupGate = new Promise<void>((resolve) => {
+      releaseLookup = resolve;
+    });
+    let firstLookupStarted = false;
+    context.storage.getEnvironment = mock(async (environmentId) => {
+      if (!firstLookupStarted) {
+        firstLookupStarted = true;
+        await lookupGate;
+        return environment;
+      }
+      return originalGetEnvironment(environmentId);
+    });
+
+    const startPromise = commands.get("start_local_terminal_session")?.(
+      { sessionId: session.sessionId },
+      context,
+    ) as Promise<void>;
+    await waitForCondition(() => firstLookupStarted, "the terminal environment lookup");
+    await commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    );
+    // Recreate the path to prove the final storage revalidation, not merely the
+    // filesystem-existence check, prevents the stale start.
+    await fs.mkdir(worktreePath, { recursive: true });
+    releaseLookup();
+
+    await expect(startPromise).rejects.toThrow("Environment is being deleted");
+    expect(ptySpawn).not.toHaveBeenCalled();
+  }, ASYNC_TEST_BUDGET_MS);
+
   test("waits for an in-flight start before global shutdown and rejects future starts", async () => {
     const appRoot = await createTempDir("ork-electron-app-start-shutdown-");
     const worktreePath = await createTempDir("ork-electron-worktree-start-shutdown-");
@@ -9249,6 +9616,7 @@ exit 0
       output: "dev server listening on 3000\r\nsecond chunk\r\n",
       revision: 2,
       generation: 1,
+      truncated: false,
     });
     expect(emitted.filter(({ event }) => event === `terminal-output-${firstSessionId}`))
       .toEqual([
@@ -9286,6 +9654,7 @@ exit 0
       output: "dev server listening on 3000\r\nsecond chunk\r\n",
       revision: 2,
       generation: 1,
+      truncated: false,
     });
     await commands.get("start_local_terminal_session")?.(
       { sessionId: exitedResult.sessionId },
@@ -9304,6 +9673,45 @@ exit 0
     const replacementSessionId = replacementResult.sessionId;
     expect(replacementResult.created).toBe(true);
     expect(replacementSessionId).not.toBe(firstSessionId);
+  });
+
+  test("supersedes a stable local terminal when its activity configuration changes", async () => {
+    const worktreePath = await createTempDir("ork-electron-local-terminal-supersede-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-supersede",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const baseArgs = {
+      environmentId: environment.id,
+      terminalKey: "agent-tab",
+      cols: 80,
+      rows: 24,
+    };
+
+    const untracked = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      baseArgs,
+      context,
+    ));
+    await commands.get("start_local_terminal_session")?.(
+      { sessionId: untracked.sessionId },
+      context,
+    );
+
+    const tracked = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      { ...baseArgs, trackEnvironmentActivity: true },
+      context,
+    ));
+    expect(tracked.created).toBe(true);
+    expect(tracked.sessionId).not.toBe(untracked.sessionId);
+    expect(ptyProcesses[0]?.kill).toHaveBeenCalledTimes(1);
+
+    const reused = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      { ...baseArgs, trackEnvironmentActivity: true },
+      context,
+    ));
+    expect(reused).toEqual({ sessionId: tracked.sessionId, created: false });
   });
 
   test("records prompt and settled-output activity for tracked local agent terminals", async () => {
@@ -9610,6 +10018,42 @@ exit 0
       `Local environment worktree does not exist: ${missingWorktreePath}`,
     );
     expect(ptySpawn).not.toHaveBeenCalled();
+  });
+
+  test("starts legacy terminal session identifiers without a remembered config", async () => {
+    const worktreePath = await createTempDir("ork-electron-legacy-terminal-");
+    const environment = createEnvironment({
+      id: "env-legacy-terminal",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const localSessionId = `${environment.id}:legacy-local`;
+    const containerSessionId = "container-legacy:legacy-container";
+
+    await commands.get("start_local_terminal_session")?.(
+      { sessionId: localSessionId },
+      context,
+    );
+    await commands.get("start_terminal_session")?.(
+      { sessionId: containerSessionId },
+      context,
+    );
+
+    expect(ptySpawn.mock.calls[0]?.[0]).toBe(expectedLocalShellPath());
+    expect(ptySpawn.mock.calls[0]?.[2]).toMatchObject({
+      cwd: worktreePath,
+      cols: 80,
+      rows: 24,
+    });
+    expect(ptySpawn.mock.calls[1]?.[0]).toBe("docker");
+    expect(ptySpawn.mock.calls[1]?.[1]).toEqual([
+      "exec",
+      "-it",
+      "container-legacy",
+      "zsh",
+      "-l",
+    ]);
   });
 
   test("verifies, stores, and disconnects Linear auth through command handlers", async () => {
@@ -10216,6 +10660,57 @@ exit 0
     expect(changedActivity.created).toBe(true);
     expect(changedActivity.sessionId).not.toBe(changedUser.sessionId);
   });
+
+  test("does not start a container terminal after its stable session is superseded during lookup", async () => {
+    const environment = createEnvironment({
+      id: "env-container-terminal-start-replaced",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const baseArgs = {
+      containerId: "container-1",
+      environmentId: environment.id,
+      terminalKey: "root-tab",
+      cols: 100,
+      rows: 32,
+    };
+    const first = terminalSessionResult(await commands.get("create_terminal_session")?.(
+      { ...baseArgs, user: "node" },
+      context,
+    ));
+    const originalGetEnvironment = context.storage.getEnvironment.bind(context.storage);
+    let releaseLookup!: () => void;
+    const lookupGate = new Promise<void>((resolve) => {
+      releaseLookup = resolve;
+    });
+    let lookupStarted = false;
+    context.storage.getEnvironment = mock(async (environmentId) => {
+      lookupStarted = true;
+      await lookupGate;
+      return originalGetEnvironment(environmentId);
+    });
+
+    const startPromise = commands.get("start_terminal_session")?.(
+      { sessionId: first.sessionId },
+      context,
+    ) as Promise<void>;
+    await waitForCondition(() => lookupStarted, "the container terminal environment lookup");
+
+    const replacement = terminalSessionResult(await commands.get("create_terminal_session")?.(
+      { ...baseArgs, user: "root" },
+      context,
+    ));
+    releaseLookup();
+
+    await expect(startPromise).rejects.toThrow("Container terminal session is no longer available");
+    expect(replacement.sessionId).not.toBe(first.sessionId);
+    expect(ptySpawn).not.toHaveBeenCalled();
+
+    commands.get("detach_terminal")?.({ sessionId: replacement.sessionId }, context);
+  }, ASYNC_TEST_BUDGET_MS);
 });
 
 describe("GitHub issue commands", () => {

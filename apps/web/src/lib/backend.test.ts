@@ -561,11 +561,31 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
+  test("rejects malformed terminal creation results at the native boundary", async () => {
+    for (const malformed of [
+      undefined,
+      {},
+      { sessionId: "", created: true },
+      { sessionId: "terminal-1", created: "yes" },
+    ]) {
+      invokeMock.mockResolvedValueOnce(malformed);
+      await expect(
+        createTerminalSession("container-1", 80, 24),
+      ).rejects.toThrow("invalid terminal session result");
+    }
+
+    invokeMock.mockResolvedValueOnce({ sessionId: 42, created: false });
+    await expect(
+      createLocalTerminalSession("env-1", 80, 24),
+    ).rejects.toThrow("invalid terminal session result");
+  });
+
   test("returns the revisioned terminal output snapshot with its generation", async () => {
     const snapshot = {
       output: "ready\r\n",
       revision: 7,
       generation: 3,
+      truncated: false,
     };
     invokeMock.mockResolvedValueOnce(snapshot);
 
@@ -573,6 +593,34 @@ describe("backend setup wrappers", () => {
     expect(invokeMock.mock.calls).toEqual([
       ["get_terminal_output_snapshot", { sessionId: "terminal-1" }],
     ]);
+  });
+
+  test("normalizes legacy snapshots and rejects malformed snapshot cursors", async () => {
+    invokeMock.mockResolvedValueOnce({
+      output: "legacy",
+      revision: 1,
+      generation: 2,
+    });
+    await expect(getTerminalOutputSnapshot("terminal-1")).resolves.toEqual({
+      output: "legacy",
+      revision: 1,
+      generation: 2,
+      truncated: false,
+    });
+
+    for (const malformed of [
+      null,
+      { output: 1, revision: 1, generation: 1 },
+      { output: "", revision: -1, generation: 1 },
+      { output: "", revision: 1.5, generation: 1 },
+      { output: "", revision: 1, generation: Number.NaN },
+      { output: "", revision: 1, generation: 1, truncated: "yes" },
+    ]) {
+      invokeMock.mockResolvedValueOnce(malformed);
+      await expect(
+        getTerminalOutputSnapshot("terminal-1"),
+      ).rejects.toThrow("invalid terminal output snapshot");
+    }
   });
 
   test("calls Linear Electron commands with expected payloads", async () => {
@@ -945,6 +993,9 @@ describe("backend command wrapper coverage", () => {
       "getGatewayTokenSettings",
       "setGatewayToken",
       "readBinaryFile",
+      "createLocalTerminalSession",
+      "createTerminalSession",
+      "getTerminalOutputSnapshot",
     ]);
     const commandWrappers = Object.entries(backendWrappers).flatMap(([name, value]) =>
       typeof value === "function" && !specialWrappers.has(name)
@@ -968,6 +1019,22 @@ describe("backend command wrapper coverage", () => {
       environmentId: "env-1",
       refresh: false,
     });
+  });
+
+  test("uses the local Electron directory dialog and normalizes non-string results", async () => {
+    const open = mock(async () => "/tmp/project" as string | string[] | null);
+    window.orkestrator = {
+      ...originalOrkestrator!,
+      dialog: { open },
+    };
+    window.orkestratorGateway = undefined;
+
+    await expect(backendWrappers.browseForDirectory()).resolves.toBe("/tmp/project");
+    expect(open).toHaveBeenCalledWith({ directory: true });
+    expect(invokeMock).not.toHaveBeenCalled();
+
+    open.mockResolvedValue(["/tmp/one", "/tmp/two"]);
+    await expect(backendWrappers.browseForDirectory()).resolves.toBeNull();
   });
 
   test("getEnvironmentExtensions forwards an explicit refresh", async () => {

@@ -229,6 +229,21 @@ export interface TerminalSessionCreateResult {
   created: boolean;
 }
 
+function parseTerminalSessionCreateResult(
+  value: unknown,
+): TerminalSessionCreateResult {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as { sessionId?: unknown }).sessionId !== "string" ||
+    (value as { sessionId: string }).sessionId.length === 0 ||
+    typeof (value as { created?: unknown }).created !== "boolean"
+  ) {
+    throw new Error("Backend returned an invalid terminal session result");
+  }
+  return value as TerminalSessionCreateResult;
+}
+
 export async function createTerminalSession(
   containerId: string,
   cols: number,
@@ -238,7 +253,7 @@ export async function createTerminalSession(
   environmentId?: string,
   terminalKey?: string,
 ): Promise<TerminalSessionCreateResult> {
-  return invoke<TerminalSessionCreateResult>("create_terminal_session", {
+  const result = await invoke<unknown>("create_terminal_session", {
     containerId,
     cols,
     rows,
@@ -247,6 +262,7 @@ export async function createTerminalSession(
     environmentId,
     terminalKey,
   });
+  return parseTerminalSessionCreateResult(result);
 }
 
 export async function startTerminalSession(sessionId: string): Promise<void> {
@@ -272,6 +288,7 @@ export interface TerminalOutputSnapshot {
   output: string;
   revision: number;
   generation: number;
+  truncated: boolean;
 }
 
 export interface TerminalOutputEvent {
@@ -283,7 +300,29 @@ export interface TerminalOutputEvent {
 export async function getTerminalOutputSnapshot(
   sessionId: string,
 ): Promise<TerminalOutputSnapshot> {
-  return invoke<TerminalOutputSnapshot>("get_terminal_output_snapshot", { sessionId });
+  const value = await invoke<unknown>("get_terminal_output_snapshot", { sessionId });
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as { output?: unknown }).output !== "string" ||
+    !Number.isSafeInteger((value as { revision?: unknown }).revision) ||
+    (value as { revision: number }).revision < 0 ||
+    !Number.isSafeInteger((value as { generation?: unknown }).generation) ||
+    (value as { generation: number }).generation < 0 ||
+    (
+      (value as { truncated?: unknown }).truncated !== undefined &&
+      typeof (value as { truncated?: unknown }).truncated !== "boolean"
+    )
+  ) {
+    throw new Error("Backend returned an invalid terminal output snapshot");
+  }
+  return {
+    output: (value as { output: string }).output,
+    revision: (value as { revision: number }).revision,
+    generation: (value as { generation: number }).generation,
+    // Accept older desktop backends during rolling upgrades.
+    truncated: (value as { truncated?: boolean }).truncated ?? false,
+  };
 }
 
 export async function getEnvironmentSetupSession(
@@ -1827,13 +1866,14 @@ export async function createLocalTerminalSession(
   trackEnvironmentActivity = false,
   terminalKey?: string,
 ): Promise<TerminalSessionCreateResult> {
-  return invoke<TerminalSessionCreateResult>("create_local_terminal_session", {
+  const result = await invoke<unknown>("create_local_terminal_session", {
     environmentId,
     cols,
     rows,
     trackEnvironmentActivity,
     terminalKey,
   });
+  return parseTerminalSessionCreateResult(result);
 }
 
 /** Start a local terminal session and begin forwarding output */

@@ -1615,19 +1615,26 @@ describe("FeaturesView lifecycle and navigation", () => {
     ];
 
     try {
-      for (const scenario of cases) {
+      for (const [scenarioIndex, scenario] of cases.entries()) {
+        const scenarioSessionId = `unreachable-session-${scenarioIndex}`;
+        const scenarioAuthToken = `unreachable-token-${scenarioIndex}`;
         await drainReconcileMonitors();
         useEnvironmentStore.setState({ environments: scenario.environment ? [scenario.environment] : [] });
-        seedStores(chatFeature({ messages: [pendingUser()] }));
+        seedStores(chatFeature({
+          codexSessionId: scenarioSessionId,
+          messages: [pendingUser()],
+        }));
         getEnvironmentMock.mockClear();
         getEnvironmentMock.mockImplementation(async () => scenario.backendEnvironment ?? null);
         getCodexServerStatusMock.mockClear();
         getCodexServerStatusMock.mockImplementation(async () => (
-          scenario.bridge ?? {
-            running: true,
-            hostPort: 4200,
-            authToken: "container-token",
-          }
+          scenario.bridge
+            ? { ...scenario.bridge, authToken: scenarioAuthToken }
+            : {
+                running: true,
+                hostPort: 4200 + scenarioIndex,
+                authToken: scenarioAuthToken,
+              }
         ));
         getSessionStatusMock.mockClear();
         createClientMock.mockClear();
@@ -1642,11 +1649,14 @@ describe("FeaturesView lifecycle and navigation", () => {
           featureId: "feature-1",
           phase: "unavailable",
         });
-        // Safe as an absolute count: both spies are cleared inside this loop
-        // iteration, immediately before the render above, so nothing an earlier
-        // test leaked can reach these assertions.
-        expect(getSessionStatusMock).not.toHaveBeenCalled();
-        expect(createClientMock).not.toHaveBeenCalled();
+        // Reconciliation monitors deliberately survive a component unmount
+        // until their in-flight operation reaches an abort checkpoint. Scope
+        // this assertion to the case's unique session so those background calls
+        // cannot make the result depend on suite scheduling.
+        expect(statusReadsFor(scenarioSessionId)).toHaveLength(0);
+        expect(
+          createClientMock.mock.calls.filter((call) => call[1] === scenarioAuthToken),
+        ).toHaveLength(0);
       }
     } finally {
       timeoutSpy.mockRestore();

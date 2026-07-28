@@ -49,7 +49,23 @@ import { buildAgentLaunchCommand } from "@/lib/agent-launch-command";
 // If new buffer is less than 50% of stored buffer size, it likely represents a cleared
 // or intermediate state that shouldn't overwrite the valid stored content.
 const BUFFER_SIZE_THRESHOLD = 0.5;
+// A persistent buffer normally resolves almost immediately. Keep enough
+// replacement-session output to bridge a slow storage read, but never retain an
+// unbounded second copy of a noisy terminal while that read is hung.
+const MAX_PENDING_DURABLE_REPLAY_BYTES = 1024 * 1024;
 const terminalInputDisposables = new WeakMap<object, { dispose: () => void }>();
+
+type ReplayMetadata = {
+  preserveExisting: boolean;
+  degraded?: "snapshot-error" | "truncated";
+  error?: string;
+};
+
+type PendingDurableReplay = {
+  chunks: Uint8Array[];
+  byteLength: number;
+  overflowed: boolean;
+};
 
 interface PersistentTerminalProps {
   /** Pre-created terminal data from portal store */
@@ -115,13 +131,15 @@ export function PersistentTerminal({
   const [isEnvironmentReady, setIsEnvironmentReady] = useState(false);
   const [hasSelection, setHasSelection] = useState(false);
   const [isComposeBarOpen, setIsComposeBarOpen] = useState(false);
+  const [replayWarning, setReplayWarning] = useState<string | null>(null);
   const composeBarOpenRef = useRef(false); // Ref for synchronous access in key handler
   const dataBufferRef = useRef<string>("");
   const setupCompleteRef = useRef(false);
   const workspaceReadySignaledRef = useRef(false);
   const hasLaunchedCommandRef = useRef(false);
   const hasInitiatedConnectionRef = useRef(false);
-  const pendingDurableReplayRef = useRef<Uint8Array[] | null>(null);
+  const hasRenderedOutputRef = useRef(false);
+  const pendingDurableReplayRef = useRef<PendingDurableReplay | null>(null);
   const persistentBufferLoadPendingRef = useRef(false);
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
@@ -371,6 +389,7 @@ export function PersistentTerminal({
       workspaceReadySignaledRef.current = false;
       hasLaunchedCommandRef.current = false;
       hasInitiatedConnectionRef.current = false;
+      hasRenderedOutputRef.current = false;
       initialRestorationCompleteRef.current = false;
       previousContainerIdRef.current = containerId;
     }
@@ -385,11 +404,27 @@ export function PersistentTerminal({
   const handleData = useCallback(
     (data: Uint8Array) => {
       const pendingReplay = pendingDurableReplayRef.current;
-      if (pendingReplay) {
-        pendingReplay.push(data.slice());
+      if (pendingReplay && !pendingReplay.overflowed) {
+        if (pendingReplay.byteLength + data.length <= MAX_PENDING_DURABLE_REPLAY_BYTES) {
+          pendingReplay.chunks.push(data.slice());
+          pendingReplay.byteLength += data.length;
+        } else {
+          // The terminal already received every byte, so retain its current
+          // valid parser state instead of later resetting it from an incomplete
+          // pending tail.
+          pendingReplay.chunks = [];
+          pendingReplay.byteLength = 0;
+          pendingReplay.overflowed = true;
+          setReplayWarning(
+            "Saved terminal history loaded too slowly. Current output was retained.",
+          );
+        }
       }
 
       terminal.write(data);
+      if (data.length > 0) {
+        hasRenderedOutputRef.current = true;
+      }
 
       const text = new TextDecoder().decode(data);
 
@@ -404,7 +439,8 @@ export function PersistentTerminal({
           // Match "$ " or "% " only at line start or after whitespace to avoid false positives on command output
           const hasGenericPrompt = /(?:^|\n)\s*[$%] /m.test(strippedBuffer);
           // Length fallback: only trigger if buffer ends with a newline (prompt line fully rendered)
-          const hasLengthFallback = strippedBuffer.length > 500 && strippedBuffer.trimEnd().endsWith("\n");
+          const hasLengthFallback =
+            strippedBuffer.length > 500 && /(?:\r?\n)$/.test(strippedBuffer);
 
           if (hasShellPrompt || hasGenericPrompt || hasLengthFallback) {
             console.log("[PersistentTerminal] Local environment ready detected for first tab:", tabId);
@@ -465,14 +501,52 @@ export function PersistentTerminal({
 
   const handleReplay = useCallback((
     data: Uint8Array,
-    { preserveExisting }: { preserveExisting: boolean },
+    metadata: ReplayMetadata,
   ) => {
+    const { preserveExisting, degraded } = metadata;
     dataBufferRef.current = "";
+
+    if (degraded === "snapshot-error") {
+      setReplayWarning(
+        "Terminal history could not be synchronized. Existing history and live output were retained.",
+      );
+    } else if (degraded === "truncated") {
+      setReplayWarning(
+        "Terminal history was truncated. Earlier output may be unavailable.",
+      );
+    } else {
+      setReplayWarning(null);
+    }
+
+    // A truncated snapshot can begin inside an ANSI escape sequence or UTF-8
+    // character, so it must never be fed to xterm. A failed snapshot likewise
+    // has no authoritative bytes with which to replace the current view. Only
+    // a durable SerializeAddon buffer is safe to reset from; otherwise preserve
+    // the existing parser state and wait for post-cursor live output.
+    if (degraded) {
+      pendingDurableReplayRef.current = null;
+      if (serializedBuffer && !hasRenderedOutputRef.current) {
+        terminal.clear();
+        terminal.reset();
+        handleData(new TextEncoder().encode(serializedBuffer));
+      } else if (persistentBufferLoadPendingRef.current) {
+        // Do not retain a truncated snapshot for the later reset. Only bytes
+        // received after the snapshot cursor are safe to append to the durable
+        // checkpoint when it arrives.
+        pendingDurableReplayRef.current = {
+          chunks: [],
+          byteLength: 0,
+          overflowed: false,
+        };
+      }
+      terminal.scrollToBottom();
+      return;
+    }
 
     // A snapshot for a reused session is authoritative, including when it is
     // empty. A newly-created replacement session has no backend transcript of
-    // the previous PTY, so prepend the durable serialized view before showing
-    // any output already produced by the replacement.
+    // the previous PTY, so restore the durable serialized view before showing
+    // output produced by the replacement.
     let replayData = data;
     const trackUntilDurableHistoryLoads =
       preserveExisting &&
@@ -495,27 +569,37 @@ export function PersistentTerminal({
       // Persistent storage can finish loading after the replacement session
       // attaches. Keep the snapshot and any subsequent live bytes so the
       // durable view can be prepended later without dropping interim output.
-      pendingDurableReplayRef.current = [data.slice()];
+      pendingDurableReplayRef.current = {
+        chunks: data.length > 0 ? [data.slice()] : [],
+        byteLength: data.length,
+        overflowed: false,
+      };
     }
     terminal.scrollToBottom();
   }, [handleData, serializedBuffer, terminal]);
 
   useEffect(() => {
-    const pendingReplayChunks = pendingDurableReplayRef.current;
-    if (!serializedBuffer || !pendingReplayChunks) return;
+    const pendingReplay = pendingDurableReplayRef.current;
+    if (!serializedBuffer || !pendingReplay) return;
 
-    const pendingLength = pendingReplayChunks.reduce(
-      (total, chunk) => total + chunk.length,
-      0,
-    );
-    const pendingReplay = new Uint8Array(pendingLength);
-    let offset = 0;
-    for (const chunk of pendingReplayChunks) {
-      pendingReplay.set(chunk, offset);
+    pendingDurableReplayRef.current = null;
+    if (pendingReplay.overflowed) {
+      return;
+    }
+
+    const durableData = new TextEncoder().encode(serializedBuffer);
+    const replayData = new Uint8Array(durableData.length + pendingReplay.byteLength);
+    replayData.set(durableData);
+    let offset = durableData.length;
+    for (const chunk of pendingReplay.chunks) {
+      replayData.set(chunk, offset);
       offset += chunk.length;
     }
-    handleReplay(pendingReplay, { preserveExisting: true });
-  }, [handleReplay, serializedBuffer]);
+    terminal.clear();
+    terminal.reset();
+    handleData(replayData);
+    terminal.scrollToBottom();
+  }, [handleData, serializedBuffer, terminal]);
 
   // Register an invisible OSC escape handler for setup completion detection.
   // When the setup command finishes, it emits an OSC sequence that xterm.js
@@ -590,7 +674,9 @@ export function PersistentTerminal({
   // Ensure sessions are loaded for this environment
   useEffect(() => {
     if (environmentId) {
-      loadSessionsForEnvironment(environmentId);
+      void loadSessionsForEnvironment(environmentId).catch((err) => {
+        console.error("[PersistentTerminal] Failed to load persistent sessions:", err);
+      });
     }
   }, [environmentId, loadSessionsForEnvironment]);
 
@@ -638,6 +724,9 @@ export function PersistentTerminal({
         .catch((err) => {
           persistentBufferLoadPendingRef.current = false;
           pendingDurableReplayRef.current = null;
+          setReplayWarning(
+            "Saved terminal history could not be loaded. Current output was retained.",
+          );
           console.error("[PersistentTerminal] Failed to load persistent buffer:", err);
         });
     } else {
@@ -1318,6 +1407,15 @@ export function PersistentTerminal({
 
   return (
     <>
+      {replayWarning && isActive && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="absolute top-2 left-2 z-20 max-w-[min(36rem,calc(100%-1rem))] rounded-md border border-amber-500/40 bg-amber-950/90 px-2.5 py-1.5 text-xs text-amber-100 shadow-md backdrop-blur-sm"
+        >
+          {replayWarning}
+        </div>
+      )}
       {isSetupTab && isActive && !manuallyCompleted && !setupCompleteRef.current && (
         <div className="absolute top-1 right-2 z-10">
           <button

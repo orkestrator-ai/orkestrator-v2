@@ -1345,6 +1345,7 @@ describe("codex-client event cursor", () => {
       "session.structured-output",
       "session.title-updated",
       "session.updated",
+      "session.warning",
     ]);
   });
 });

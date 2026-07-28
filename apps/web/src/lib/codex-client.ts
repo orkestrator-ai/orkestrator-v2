@@ -190,6 +190,7 @@ export interface CodexEvent {
     | "session.updated"
     | "session.idle"
     | "session.error"
+    | "session.warning"
     | "session.title-updated"
     | "session.structured-output"
     | "message.updated"
@@ -1569,6 +1570,7 @@ export function subscribeToEvents(
           "session.updated",
           "session.idle",
           "session.error",
+          "session.warning",
           "session.title-updated",
           "session.structured-output",
           "message.updated",

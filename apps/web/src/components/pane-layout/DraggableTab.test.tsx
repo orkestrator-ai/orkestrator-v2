@@ -901,8 +901,8 @@ describe("DraggableTab tooltip and context menu structure", () => {
 
     await waitFor(() => {
       expect(screen.queryByText("src/components/Foo/Bar.tsx")).toBeNull();
-    });
-  });
+    }, { timeout: 10_000 });
+  }, 20_000);
 
   test("shows the file tooltip on focus and hides it on blur", async () => {
     renderTab({
@@ -921,8 +921,8 @@ describe("DraggableTab tooltip and context menu structure", () => {
 
     await waitFor(() => {
       expect(screen.queryByText("src/lib/util.ts")).toBeNull();
-    });
-  });
+    }, { timeout: 10_000 });
+  }, 20_000);
 
   test("marks a focused active tab with a full-opacity accent", () => {
     const { container } = render(

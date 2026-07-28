@@ -362,6 +362,58 @@ describe("session detail route outcomes", () => {
     );
   });
 
+  test("reports missing message and status snapshots as missing sessions", async () => {
+    await withRuntimeMethod("getMessages", async () => null, async () => {
+      const response = await app.request("/session/missing/messages");
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "Session not found" });
+    });
+
+    await withRuntimeMethod("getStatus", () => null, async () => {
+      const response = await app.request("/session/missing/status");
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "Session not found" });
+    });
+  });
+
+  test("serves structured output and trims the optional request identifier", async () => {
+    const calls: Array<{ sessionId: string; requestId?: string }> = [];
+    let outcome: unknown = {
+      requestId: "request-1",
+      structuredOutput: {
+        ok: true,
+        provider: "codex",
+        requestId: "request-1",
+        value: { answer: 42 },
+      },
+    };
+
+    await withRuntimeMethod(
+      "getStructuredOutput",
+      (sessionId: string, requestId?: string) => {
+        calls.push({ sessionId, requestId });
+        return outcome;
+      },
+      async () => {
+        const response = await app.request(
+          "/session/session-1/structured-output?requestId=%20request-1%20",
+        );
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual(outcome);
+
+        outcome = null;
+        const missing = await app.request("/session/missing/structured-output");
+        expect(missing.status).toBe(404);
+        expect(await missing.json()).toEqual({ error: "Session not found" });
+      },
+    );
+
+    expect(calls).toEqual([
+      { sessionId: "session-1", requestId: "request-1" },
+      { sessionId: "missing", requestId: undefined },
+    ]);
+  });
+
   test("rejects empty prompts and overlong request identifiers", async () => {
     const empty = await jsonRequest("/session/session-1/prompt", "POST", {
       prompt: "   ",
@@ -378,6 +430,63 @@ describe("session detail route outcomes", () => {
     });
     expect(longId.status).toBe(400);
     expect((await longId.json()).error).toContain("at most 200 characters");
+  });
+
+  test("forwards a valid output schema and rejects invalid schemas before dispatch", async () => {
+    const calls: unknown[] = [];
+    const outputSchema = {
+      type: "object",
+      properties: {
+        answer: { type: "string" },
+      },
+      required: ["answer"],
+      additionalProperties: false,
+    };
+
+    await withRuntimeMethod(
+      "prompt",
+      async (sessionId: string, input: unknown) => {
+        calls.push({ sessionId, input });
+        return {
+          ok: true,
+          result: {
+            status: "processing",
+            requestId: "request-schema",
+            threadId: "thread-1",
+          },
+        };
+      },
+      async () => {
+        const accepted = await jsonRequest("/session/session-1/prompt", "POST", {
+          prompt: "return structured data",
+          requestId: " request-schema ",
+          outputSchema,
+        });
+        expect(accepted.status).toBe(202);
+
+        for (const invalid of [null, [], "object"]) {
+          const rejected = await jsonRequest("/session/session-1/prompt", "POST", {
+            prompt: "return structured data",
+            requestId: "request-invalid",
+            outputSchema: invalid,
+          });
+          expect(rejected.status).toBe(400);
+          expect(await rejected.json()).toEqual({
+            error: "outputSchema must be a JSON Schema object",
+          });
+        }
+      },
+    );
+
+    expect(calls).toEqual([{
+      sessionId: "session-1",
+      input: {
+        prompt: "return structured data",
+        requestId: "request-schema",
+        attachments: [],
+        outputSchema,
+      },
+    }]);
   });
 
   test("filters prompt attachments and maps runtime success and failure", async () => {

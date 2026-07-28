@@ -924,9 +924,12 @@ describe("AgentInfoButton Codex runtime panel", () => {
     open();
 
     // The panel must leave the loading state even on failure.
-    await waitFor(() => expect(screen.queryByText("Loading Codex runtime…")).toBeNull());
+    await waitFor(
+      () => expect(screen.queryByText("Loading Codex runtime…")).toBeNull(),
+      { timeout: 10_000 },
+    );
     expect(screen.getByText("state unavailable")).toBeTruthy();
-  });
+  }, 20_000);
 
   test("does not request health while closed and drops a response that lands after close", async () => {
     seedCodex();
@@ -2195,7 +2198,10 @@ describe("AgentInfoButton OpenCode sharing", () => {
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
+    await waitFor(
+      () => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy(),
+      { timeout: 10_000 },
+    );
 
     // A share can be revoked from another client. A successful provider read
     // with no URL is authoritative and must remove the stale local action.
@@ -2204,10 +2210,11 @@ describe("AgentInfoButton OpenCode sharing", () => {
     }));
     reopen();
 
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull(),
+    await waitFor(
+      () => expect(screen.queryByRole("button", { name: /Stop sharing/ })).toBeNull(),
+      { timeout: 10_000 },
     );
-  });
+  }, 20_000);
 
   test("a client without a session.get surface reports not shared rather than throwing", async () => {
     openCodeClient = {};

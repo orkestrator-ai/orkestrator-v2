@@ -2215,6 +2215,18 @@ export function CodexChatTab({
               continue;
             }
 
+            if (event.type === "session.warning") {
+              const warning =
+                typeof event.data?.error === "string"
+                  ? event.data.error
+                  : "Codex reported a non-terminal turn error";
+              // Standalone app-server errors are advisory: Codex may retry or
+              // continue the turn. Keep the overlap lock, SSE subscription and
+              // watchdog alive until a real terminal event arrives.
+              console.warn("[CodexChatTab] Codex turn warning:", warning);
+              continue;
+            }
+
             if (event.type === "session.error") {
               const error =
                 typeof event.data?.error === "string"

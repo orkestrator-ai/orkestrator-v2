@@ -4947,7 +4947,7 @@ describe("interactive approvals", () => {
     });
   });
 
-  test("retryable errors fan out to every tab sharing the thread", async () => {
+  test("non-terminal errors warn every shared tab without releasing the turn", async () => {
     const h = await harness({
       "thread/resume": () => ({ thread: threadPayload("thread-1") }),
     });
@@ -4964,20 +4964,152 @@ describe("interactive approvals", () => {
     h.child().notify("error", {
       threadId: "thread-1",
       turnId: "turn-1",
-      error: { message: "retry later", codexErrorInfo: null },
+      error: {
+        message: "retry later",
+        codexErrorInfo: "usageLimitExceeded",
+      },
       willRetry: true,
     });
     await h.drain();
 
-    const recipients = h.events
-      .filter(
+    const warnings = h.events.filter((event) => event.type === "session.warning");
+    expect(warnings).toHaveLength(2);
+    expect(warnings.map((event) => event.sessionId).sort())
+      .toEqual([first.sessionId, second!.sessionId].sort());
+    for (const warning of warnings) {
+      expect(warning.data).toEqual({
+        error: "retry later",
+        code: "usageLimitExceeded",
+        willRetry: true,
+      });
+    }
+    expect(h.events.filter((event) => event.type === "session.error")).toEqual([]);
+    expect(h.runtime.getStatus(first.sessionId)).toMatchObject({
+      status: "running",
+      phase: "running",
+      turnId: "turn-1",
+    });
+    expect(h.runtime.getStatus(second!.sessionId)).toMatchObject({
+      status: "running",
+      phase: "running",
+      turnId: "turn-1",
+    });
+  });
+
+  test("a non-retrying standalone error remains a warning while the turn is live", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "go",
+      requestId: "req-1",
+      attachments: [],
+    });
+
+    h.child().notify("error", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      error: {
+        message: "context window exceeded",
+        codexErrorInfo: { contextWindowExceeded: {} },
+      },
+      willRetry: false,
+    });
+    await h.drain();
+
+    expect(
+      h.events.filter(
         (event) =>
-          event.type === "session.error"
-          && event.data?.error === "retry later",
-      )
-      .map((event) => event.sessionId)
-      .sort();
-    expect(recipients).toEqual([first.sessionId, second!.sessionId].sort());
+          event.type === "session.warning"
+          && event.sessionId === sessionId,
+      ),
+    ).toEqual([
+      {
+        type: "session.warning",
+        sessionId,
+        data: {
+          error: "context window exceeded",
+          code: "contextWindowExceeded",
+          willRetry: false,
+        },
+      },
+    ]);
+    expect(h.events.filter((event) => event.type === "session.error")).toEqual([]);
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "running",
+      phase: "running",
+      turnId: "turn-1",
+      requestId: "req-1",
+    });
+  });
+
+  test("a warning is followed by a terminal error when turn completion fails", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "go",
+      requestId: "req-1",
+      attachments: [],
+    });
+
+    h.child().notify("error", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      error: { message: "temporary provider failure", codexErrorInfo: null },
+      willRetry: true,
+    });
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "running",
+      phase: "running",
+      turnId: "turn-1",
+    });
+    expect(h.events.filter((event) => event.type === "session.error")).toEqual([]);
+
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: {
+        id: "turn-1",
+        status: "failed",
+        error: {
+          message: "provider retries exhausted",
+          codexErrorInfo: "streamDisconnected",
+        },
+      },
+    });
+    await h.drain();
+
+    expect(
+      h.events
+        .filter(
+          (event) =>
+            event.sessionId === sessionId
+            && (event.type === "session.warning" || event.type === "session.error"),
+        )
+        .map((event) => ({ type: event.type, data: event.data })),
+    ).toEqual([
+      {
+        type: "session.warning",
+        data: {
+          error: "temporary provider failure",
+          code: undefined,
+          willRetry: true,
+        },
+      },
+      {
+        type: "session.error",
+        data: { error: "provider retries exhausted" },
+      },
+    ]);
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "error",
+      phase: "failed",
+      error: "provider retries exhausted",
+    });
+    expect(h.runtime.getJournal().get("req-1")).toMatchObject({
+      state: "terminal",
+      terminalStatus: "failed",
+    });
   });
 
   test("a file-change approval is described as such", async () => {

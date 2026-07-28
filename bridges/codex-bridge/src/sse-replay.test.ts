@@ -187,6 +187,35 @@ describe("/event/subscribe", () => {
     expect(replayed.some((frame) => frame.data.sessionId === "gap")).toBe(false);
   });
 
+  test("serializes and replays session warnings with their retry metadata", async () => {
+    const cursor = __testing.eventRingForTesting().latestRevision;
+    __testing.emitForTesting({
+      type: "session.warning",
+      sessionId: "warning-replay",
+      data: {
+        error: "The provider connection was interrupted.",
+        code: "provider_connection_lost",
+        willRetry: true,
+      },
+    });
+    const warningRevision = __testing.eventRingForTesting().latestRevision;
+
+    const frames = await collect(`?since=${cursor}`, () => undefined);
+    const warning = frames.find((frame) => frame.event === "session.warning");
+
+    expect(frames.find((frame) => frame.event === "connected")!.data.replayed).toBe(1);
+    expect(warning).toEqual({
+      event: "session.warning",
+      id: String(warningRevision),
+      data: {
+        sessionId: "warning-replay",
+        error: "The provider connection was interrupted.",
+        code: "provider_connection_lost",
+        willRetry: true,
+      },
+    });
+  });
+
   test("session filtering replaces unrelated payloads with cursor-only frames", async () => {
     const frames = await collect(
       "?sessionId=target",

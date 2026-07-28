@@ -82,6 +82,7 @@ import {
 } from "./path-safety.js";
 import { terminateProcessTree } from "./process-tree.js";
 import {
+  cleanupEnvironmentTmux,
   registerTmuxBackendCommands,
   shutdownClaudeStatePolling,
   type ClaudeStatePollManager,
@@ -147,10 +148,14 @@ const terminalActivityArmed = new Set<string>();
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 /** Per-process bearer tokens for renderer → local Codex bridge requests. */
 const localCodexBridgeTokens = new Map<string, string>();
-/** Shape of a base64url-encoded 32-byte Codex bridge token persisted in the container. */
-const CODEX_BRIDGE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+/** Per-process bearer tokens for renderer → local Claude bridge requests. */
+const localClaudeBridgeTokens = new Map<string, string>();
+/** Per-process HTTP Basic passwords for renderer → local OpenCode requests. */
+const localOpenCodeServerPasswords = new Map<string, string>();
+/** Shape of a base64url-encoded 32-byte bridge token persisted in the container. */
+const BRIDGE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const localServerEnvironmentOperations = new Map<string, Promise<void>>();
-const containerCodexOperations = new Map<string, Promise<void>>();
+const containerBridgeOperations = new Map<string, Promise<void>>();
 const deletingLocalServerEnvironments = new Set<string>();
 type LocalServerKind = "opencode" | "claude" | "codex";
 const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = ["opencode", "claude", "codex"];
@@ -3261,7 +3266,11 @@ async function dockerExecDetached(
   await runCommand("docker", ["exec", "-d", containerId, "bash", "-lc", command], { timeoutMs: 30_000, redactValues });
 }
 
-async function checkHttpHealth(port: number, pathName = "/global/health"): Promise<boolean> {
+async function checkHttpHealth(
+  port: number,
+  pathName = "/global/health",
+  headers?: Record<string, string>,
+): Promise<boolean> {
   const http = await import("node:http");
   return new Promise((resolve) => {
     let settled = false;
@@ -3270,7 +3279,13 @@ async function checkHttpHealth(port: number, pathName = "/global/health"): Promi
       settled = true;
       resolve(healthy);
     };
-    const request = http.get({ host: "127.0.0.1", port, path: pathName, timeout: 2_000 }, (response) => {
+    const request = http.get({
+      host: "127.0.0.1",
+      port,
+      path: pathName,
+      timeout: 2_000,
+      headers,
+    }, (response) => {
       response.resume();
       complete((response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300);
     });
@@ -3282,12 +3297,59 @@ async function checkHttpHealth(port: number, pathName = "/global/health"): Promi
   });
 }
 
-async function waitForHealth(port: number, pathName = "/global/health", attempts = 75): Promise<void> {
+/**
+ * Distinguish "nothing is listening" from an authenticated server returning
+ * 401/403. Health checks intentionally treat those statuses as unhealthy, but
+ * replacement logic still has to stop that process before binding a new one.
+ */
+async function isHttpServerReachable(
+  port: number,
+  pathName = "/global/health",
+): Promise<boolean> {
+  const http = await import("node:http");
+  return new Promise((resolve) => {
+    let settled = false;
+    const complete = (reachable: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(reachable);
+    };
+    const request = http.get({
+      host: "127.0.0.1",
+      port,
+      path: pathName,
+      timeout: 2_000,
+    }, (response) => {
+      response.resume();
+      complete(true);
+    });
+    request.once("timeout", () => {
+      request.destroy();
+      complete(false);
+    });
+    request.once("error", () => complete(false));
+  });
+}
+
+async function waitForHealth(
+  port: number,
+  pathName = "/global/health",
+  attempts = 75,
+  headers?: Record<string, string>,
+): Promise<void> {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (await checkHttpHealth(port, pathName)) return;
+    if (await checkHttpHealth(port, pathName, headers)) return;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   throw new Error(`Server on port ${port} did not become healthy`);
+}
+
+async function waitForHttpServerExit(port: number, attempts = 50): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (!await isHttpServerReachable(port)) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Server on port ${port} did not stop`);
 }
 
 async function waitForUnhealthy(port: number, attempts = 50): Promise<void> {
@@ -3302,6 +3364,7 @@ async function waitForLocalServerStartup(
   child: ChildProcessWithoutNullStreams,
   port: number,
   kind: "opencode" | "claude" | "codex",
+  headers?: Record<string, string>,
 ): Promise<void> {
   let settled = false;
 
@@ -3324,7 +3387,7 @@ async function waitForLocalServerStartup(
 
     child.once("error", onError);
     child.once("exit", onExit);
-    waitForHealth(port).then(() => complete(), (error: unknown) => {
+    waitForHealth(port, "/global/health", 75, headers).then(() => complete(), (error: unknown) => {
       complete(error instanceof Error ? error : new Error(String(error)));
     });
   });
@@ -3352,17 +3415,19 @@ function enqueueLocalServerEnvironmentOperation<T>(
   return result;
 }
 
-function enqueueContainerCodexOperation<T>(
+function enqueueContainerBridgeOperation<T>(
+  agent: "codex" | "claude" | "opencode",
   containerId: string,
   operation: () => Promise<T>,
 ): Promise<T> {
-  const previous = containerCodexOperations.get(containerId) ?? Promise.resolve();
+  const key = `${agent}:${containerId}`;
+  const previous = containerBridgeOperations.get(key) ?? Promise.resolve();
   const result = previous.then(operation, operation);
   const tail = result.then(() => undefined, () => undefined);
-  containerCodexOperations.set(containerId, tail);
+  containerBridgeOperations.set(key, tail);
   void tail.finally(() => {
-    if (containerCodexOperations.get(containerId) === tail) {
-      containerCodexOperations.delete(containerId);
+    if (containerBridgeOperations.get(key) === tail) {
+      containerBridgeOperations.delete(key);
     }
   });
   return result;
@@ -3377,6 +3442,19 @@ function assertLocalServerStartAllowed(environmentId: string): void {
   }
 }
 
+/** Per-process renderer credentials for the given native server kind. */
+function localBridgeTokens(kind: LocalServerKind): Map<string, string> {
+  if (kind === "codex") return localCodexBridgeTokens;
+  if (kind === "claude") return localClaudeBridgeTokens;
+  return localOpenCodeServerPasswords;
+}
+
+function openCodeHealthHeaders(password: string): Record<string, string> {
+  return {
+    Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`,
+  };
+}
+
 function releaseLocalServerOwnership(
   key: string,
   child: ChildProcessWithoutNullStreams,
@@ -3385,6 +3463,10 @@ function releaseLocalServerOwnership(
   localServerProcesses.delete(key);
   if (key.startsWith("codex:")) {
     localCodexBridgeTokens.delete(key.slice("codex:".length));
+  } else if (key.startsWith("claude:")) {
+    localClaudeBridgeTokens.delete(key.slice("claude:".length));
+  } else if (key.startsWith("opencode:")) {
+    localOpenCodeServerPasswords.delete(key.slice("opencode:".length));
   }
 }
 
@@ -3398,17 +3480,18 @@ async function startLocalServerUnlocked(
   if (existing && !existing.killed && existing.pid) {
     const env = await context.storage.getEnvironment(environmentId);
     const port = kind === "opencode" ? env?.localOpencodePort : kind === "claude" ? env?.localClaudePort : env?.localCodexPort;
-    if (port && await checkHttpHealth(port)) {
-      const authToken =
-        kind === "codex" ? localCodexBridgeTokens.get(environmentId) : undefined;
-      if (kind !== "codex" || authToken) {
+    const tokens = localBridgeTokens(kind);
+    const authToken = tokens?.get(environmentId);
+    const healthHeaders = kind === "opencode" && authToken
+      ? openCodeHealthHeaders(authToken)
+      : undefined;
+    if (port && authToken && await checkHttpHealth(port, "/global/health", healthHeaders)) {
         return {
           port,
           pid: existing.pid,
           wasRunning: true,
-          ...(authToken ? { authToken } : {}),
+          authToken,
         };
-      }
     }
     await terminateLocalServerChild(key, existing);
   }
@@ -3455,10 +3538,18 @@ async function startLocalServerUnlocked(
     if (!existsSync(cwd)) throw new Error(`${kind} bridge directory not found: ${cwd}`);
     if (!existsSync(bridgeEntrypoint)) throw new Error(`${kind} bridge entrypoint not found: ${bridgeEntrypoint}`);
   }
-  if (kind === "codex") {
+  const tokens = localBridgeTokens(kind);
+  if (tokens) {
     const authToken = randomBytes(32).toString("base64url");
-    env.CODEX_BRIDGE_TOKEN = authToken;
-    localCodexBridgeTokens.set(environmentId, authToken);
+    env[
+      kind === "codex"
+        ? "CODEX_BRIDGE_TOKEN"
+        : kind === "claude"
+          ? "CLAUDE_BRIDGE_TOKEN"
+          : "OPENCODE_SERVER_PASSWORD"
+    ] = authToken;
+    if (kind === "opencode") env.OPENCODE_SERVER_USERNAME = "opencode";
+    tokens.set(environmentId, authToken);
   }
 
   const args = kind === "opencode"
@@ -3474,7 +3565,7 @@ async function startLocalServerUnlocked(
       detached: process.platform !== "win32",
     });
   } catch (error) {
-    if (kind === "codex") localCodexBridgeTokens.delete(environmentId);
+    tokens?.delete(environmentId);
     throw error;
   }
   localServerProcesses.set(key, child);
@@ -3489,7 +3580,13 @@ async function startLocalServerUnlocked(
   const field = kind === "opencode" ? "localOpencodePort" : kind === "claude" ? "localClaudePort" : "localCodexPort";
   const pidField = kind === "opencode" ? "opencodePid" : kind === "claude" ? "claudeBridgePid" : "codexBridgePid";
   try {
-    await waitForLocalServerStartup(child, port, kind);
+    const authToken = tokens?.get(environmentId);
+    await waitForLocalServerStartup(
+      child,
+      port,
+      kind,
+      kind === "opencode" && authToken ? openCodeHealthHeaders(authToken) : undefined,
+    );
     await context.storage.updateEnvironment(environmentId, { [field]: port, [pidField]: child.pid });
   } catch (error) {
     let terminationError: unknown;
@@ -3507,8 +3604,7 @@ async function startLocalServerUnlocked(
     }
     throw error;
   }
-  const authToken =
-    kind === "codex" ? localCodexBridgeTokens.get(environmentId) : undefined;
+  const authToken = tokens?.get(environmentId);
   return {
     port,
     pid: child.pid ?? 0,
@@ -3627,6 +3723,14 @@ async function deleteEnvironment(
         deletionRequestedAt: new Date().toISOString(),
       });
       if (environment) await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
+      // Before the container is removed and before the worktree is deleted:
+      // killing the tmux sessions needs the container alive, and restoring the
+      // user's `.claude/settings.local.json` from the tmux-mode backup needs
+      // the worktree still on disk. Best-effort — a tmux server that has
+      // already gone must not strand the rest of the deletion.
+      await cleanupEnvironmentTmux(environmentId, context).catch((error) => {
+        console.warn("[backend] claude-tmux cleanup failed during environment deletion:", error);
+      });
       if (environment?.containerId) {
         // Retire state polling before removing the container, or the next tick
         // execs into something that no longer exists.
@@ -3707,8 +3811,7 @@ async function getLocalServerStatus(environmentId: string, context: CommandConte
   const env = await context.storage.getEnvironment(environmentId);
   const port = kind === "opencode" ? env?.localOpencodePort : kind === "claude" ? env?.localClaudePort : env?.localCodexPort;
   const pid = kind === "opencode" ? env?.opencodePid : kind === "claude" ? env?.claudeBridgePid : env?.codexBridgePid;
-  const authToken =
-    kind === "codex" ? localCodexBridgeTokens.get(environmentId) : undefined;
+  const authToken = localBridgeTokens(kind)?.get(environmentId);
   return {
     running: !!child && !child.killed,
     port: port ?? null,
@@ -4719,15 +4822,144 @@ async function startContainerServer(
   return { hostPort, wasRunning: false };
 }
 
-const CLAUDE_BRIDGE_CONTAINER_START_COMMAND = `
-  cd /workspace
-  rm -f /tmp/claude-bridge.log
-  source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
-  orkestrator_source_runtime_env 2>/dev/null || true
-  export PORT=${CLAUDE_BRIDGE_PORT}
-  export HOSTNAME=0.0.0.0
-  setsid bun /opt/claude-bridge/dist/index.js > /tmp/claude-bridge.log 2>&1 &
-`;
+/**
+ * Start OpenCode behind its supported HTTP Basic authentication.
+ *
+ * The password is persisted inside the container with owner-only permissions,
+ * matching the bridge-token lifecycle used by Claude and Codex. A healthy
+ * passwordless process from an older build is replaced before its port is
+ * handed to the renderer.
+ */
+async function startContainerOpenCodeServer(
+  containerId: string,
+): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
+  if (!await isContainerRunning(containerId)) throw new Error("Container is not running");
+  const hostPort = await getHostPort(containerId, OPENCODE_SERVER_PORT);
+  if (!hostPort) throw new Error(`Container port ${OPENCODE_SERVER_PORT} is not mapped`);
+
+  const readPersistedPassword = async (): Promise<string | null> => {
+    const password = (
+      await dockerExec(containerId, "cat /tmp/opencode-server-password 2>/dev/null || true")
+    ).trim();
+    return BRIDGE_TOKEN_PATTERN.test(password) ? password : null;
+  };
+  const replaceRunningServer = async (): Promise<void> => {
+    await dockerExec(
+      containerId,
+      "pkill -f '[o]pencode serve' || true; rm -f /tmp/opencode-server-password",
+    );
+    await waitForHttpServerExit(hostPort);
+  };
+
+  const persistedPassword = await readPersistedPassword();
+  if (
+    persistedPassword
+    && await checkHttpHealth(
+      hostPort,
+      "/global/health",
+      openCodeHealthHeaders(persistedPassword),
+    )
+  ) {
+    return { hostPort, wasRunning: true, authToken: persistedPassword };
+  }
+
+  // A reachable server without our persisted credential predates authentication.
+  // A persisted credential that no longer authenticates belongs to a stale
+  // process. Replace either one before binding the new server.
+  if (persistedPassword || await isHttpServerReachable(hostPort)) {
+    await replaceRunningServer();
+  }
+
+  const authToken = randomBytes(32).toString("base64url");
+  await dockerExecDetached(containerId, `
+    cd /workspace
+    rm -f /tmp/opencode-serve.log
+    umask 077
+    printf '%s' ${quoteShell(authToken)} > /tmp/opencode-server-password
+    source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
+    orkestrator_source_runtime_env 2>/dev/null || true
+    export OPENCODE_SERVER_USERNAME=opencode
+    export OPENCODE_SERVER_PASSWORD=${quoteShell(authToken)}
+    setsid opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0 > /tmp/opencode-serve.log 2>&1 &
+  `, [authToken]);
+  await waitForHealth(
+    hostPort,
+    "/global/health",
+    75,
+    openCodeHealthHeaders(authToken),
+  ).catch(async (error) => {
+    const log = await dockerExec(
+      containerId,
+      "cat /tmp/opencode-serve.log 2>/dev/null || true",
+      undefined,
+      [authToken],
+    ).catch(() => "");
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}${log.trim() ? `\n${log.trim()}` : ""}`,
+    );
+  });
+  return { hostPort, wasRunning: false, authToken };
+}
+
+/**
+ * Starts the in-container Claude bridge behind a per-container auth token, with
+ * the same persistence and recovery contract as `start_codex_server`: the token
+ * lives in `/tmp/claude-bridge-token` so later starts can return it, and a
+ * healthy bridge without a readable token (from before per-process
+ * authentication) is replaced rather than served unauthenticated.
+ */
+async function startContainerClaudeServer(
+  containerId: string,
+): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
+  const readPersistedToken = async (): Promise<string | null> => {
+    const persistedToken = (
+      await dockerExec(containerId, "cat /tmp/claude-bridge-token 2>/dev/null || true")
+    ).trim();
+    return BRIDGE_TOKEN_PATTERN.test(persistedToken) ? persistedToken : null;
+  };
+  const replaceRunningBridge = async (port: number): Promise<void> => {
+    await dockerExec(containerId, "pkill -f '[c]laude-bridge/dist/index.js' || true");
+    await waitForUnhealthy(port);
+  };
+  const startWithFreshToken = async (): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> => {
+    const authToken = randomBytes(32).toString("base64url");
+    const started = await startContainerServer(containerId, CLAUDE_BRIDGE_PORT, "claude", `
+      cd /workspace
+      rm -f /tmp/claude-bridge.log
+      umask 077
+      printf '%s' ${quoteShell(authToken)} > /tmp/claude-bridge-token
+      source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
+      orkestrator_source_runtime_env 2>/dev/null || true
+      export PORT=${CLAUDE_BRIDGE_PORT}
+      export HOSTNAME=0.0.0.0
+      export CLAUDE_BRIDGE_TOKEN=${quoteShell(authToken)}
+      setsid bun /opt/claude-bridge/dist/index.js > /tmp/claude-bridge.log 2>&1 &
+    `, [authToken]);
+    return { ...started, authToken };
+  };
+
+  const hostPort = await getHostPort(containerId, CLAUDE_BRIDGE_PORT);
+  if (hostPort && await checkHttpHealth(hostPort)) {
+    const persistedToken = await readPersistedToken();
+    if (persistedToken) {
+      return { hostPort, wasRunning: true, authToken: persistedToken };
+    }
+    // A bridge from before per-process authentication cannot safely serve the
+    // renderer. Replace it once, then persist the new token for later starts.
+    await replaceRunningBridge(hostPort);
+  }
+
+  const started = await startWithFreshToken();
+  if (!started.wasRunning) return started;
+  // A bridge came up between the health check above and startContainerServer's
+  // internal recheck (e.g. a prior start whose health wait timed out but whose
+  // bridge arrived late). The fresh token was never written, so return the
+  // token that bridge actually holds — or replace the bridge if it has none.
+  const persistedToken = await readPersistedToken();
+  if (persistedToken) return { ...started, authToken: persistedToken };
+  await replaceRunningBridge(started.hostPort);
+  return startWithFreshToken();
+}
 
 type ClaudeBridgeModelCatalogResponse = {
   models: ClaudeModelCatalogEntry[];
@@ -4792,9 +5024,13 @@ function parseClaudeBridgeModelCatalog(value: unknown): ClaudeBridgeModelCatalog
   };
 }
 
-async function fetchClaudeBridgeModelCatalog(port: number): Promise<ClaudeBridgeModelCatalogResponse> {
+async function fetchClaudeBridgeModelCatalog(
+  port: number,
+  authToken?: string,
+): Promise<ClaudeBridgeModelCatalogResponse> {
   const response = await fetch(`http://127.0.0.1:${port}/config/models`, {
     signal: AbortSignal.timeout(CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS),
+    ...(authToken ? { headers: { "X-Orkestrator-Claude-Token": authToken } } : {}),
   });
   if (!response.ok) {
     throw new Error(`Claude bridge model discovery failed with HTTP ${response.status}`);
@@ -4821,23 +5057,26 @@ async function refreshClaudeModelCatalog(
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
 
   let port: number;
+  let authToken: string | undefined;
   if (environment.environmentType === "local") {
-    port = (await startLocalServer(environmentId, context, "claude")).port;
+    const started = await startLocalServer(environmentId, context, "claude");
+    port = started.port;
+    authToken = started.authToken;
   } else {
-    if (!environment.containerId) {
+    const containerId = environment.containerId;
+    if (!containerId) {
       throw new Error("Container ID is required for Claude model discovery");
     }
-    port = (
-      await startContainerServer(
-        environment.containerId,
-        CLAUDE_BRIDGE_PORT,
-        "claude",
-        CLAUDE_BRIDGE_CONTAINER_START_COMMAND,
-      )
-    ).hostPort;
+    const started = await enqueueContainerBridgeOperation(
+      "claude",
+      containerId,
+      () => startContainerClaudeServer(containerId),
+    );
+    port = started.hostPort;
+    authToken = started.authToken;
   }
 
-  const catalog = await fetchClaudeBridgeModelCatalog(port);
+  const catalog = await fetchClaudeBridgeModelCatalog(port, authToken);
   const snapshot: ClaudeModelCatalogSnapshot = {
     environmentId,
     models: catalog.models,
@@ -5741,64 +5980,46 @@ export function createCommandRegistry(
     return { updated, failed };
   });
 
-  /**
-   * The `stop`/`status`/`log` commands are identical across the three agents
-   * apart from the port, the pkill pattern and the log path, so they are
-   * registered from one table. A new agent gets the full quartet or is
-   * obviously missing from this list — previously each triple was hand-written
-   * and could silently drift.
-   *
-   * `start_*` stays per-agent: each builds a different container script. Codex
-   * is absent entirely: its bridge carries a per-process auth token, so its
-   * stop/status pair has to clear and report that token and is hand-written
-   * below alongside `start_codex_server`.
-   */
-  const NATIVE_SERVERS = [
-    {
-      agent: "opencode",
-      port: OPENCODE_SERVER_PORT,
-      pkillPattern: "opencode serve",
-      logPath: "/tmp/opencode-serve.log",
-    },
-    {
-      agent: "claude",
-      port: CLAUDE_BRIDGE_PORT,
-      pkillPattern: "claude-bridge",
-      logPath: "/tmp/claude-bridge.log",
-    },
-  ] as const;
-
-  for (const { agent, port, pkillPattern, logPath } of NATIVE_SERVERS) {
-    register(`stop_${agent}_server`, ({ containerId }) =>
-      dockerExec(
-        asString(containerId, "containerId"),
-        `pkill -f '${pkillPattern}' || true`,
-      ).then(() => undefined),
+  register("start_opencode_server", ({ containerId }) => {
+    const id = asString(containerId, "containerId");
+    return enqueueContainerBridgeOperation("opencode", id, () =>
+      startContainerOpenCodeServer(id),
     );
-    register(`get_${agent}_server_status`, async ({ containerId }) => {
-      const id = asString(containerId, "containerId");
-      const hostPort = await getHostPort(id, port);
-      return {
-        running: hostPort ? await checkHttpHealth(hostPort) : false,
+  });
+  register("stop_opencode_server", ({ containerId }) => {
+    const id = asString(containerId, "containerId");
+    return enqueueContainerBridgeOperation("opencode", id, () =>
+      // Bracketing avoids matching the `bash -lc` shell carrying this command.
+      dockerExec(
+        id,
+        "pkill -f '[o]pencode serve' || true; rm -f /tmp/opencode-server-password",
+      ).then(() => undefined)
+    );
+  });
+  register("get_opencode_server_status", async ({ containerId }) => {
+    const id = asString(containerId, "containerId");
+    const hostPort = await getHostPort(id, OPENCODE_SERVER_PORT);
+    const authToken = hostPort
+      ? (await dockerExec(id, "cat /tmp/opencode-server-password 2>/dev/null || true")).trim()
+      : "";
+    const running = !!hostPort
+      && BRIDGE_TOKEN_PATTERN.test(authToken)
+      && await checkHttpHealth(
         hostPort,
-      };
-    });
-    register(`get_${agent}_server_log`, ({ containerId }) =>
-      dockerExec(
-        asString(containerId, "containerId"),
-        `cat ${logPath} 2>/dev/null || true`,
-      ),
-    );
-  }
-
-  register("start_opencode_server", ({ containerId }) =>
-    startContainerServer(asString(containerId, "containerId"), OPENCODE_SERVER_PORT, "opencode", `
-      cd /workspace
-      rm -f /tmp/opencode-serve.log
-      source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
-      orkestrator_source_runtime_env 2>/dev/null || true
-      setsid opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0 > /tmp/opencode-serve.log 2>&1 &
-    `),
+        "/global/health",
+        openCodeHealthHeaders(authToken),
+      );
+    return {
+      running,
+      hostPort,
+      ...(running ? { authToken } : {}),
+    };
+  });
+  register("get_opencode_server_log", ({ containerId }) =>
+    dockerExec(
+      asString(containerId, "containerId"),
+      "cat /tmp/opencode-serve.log 2>/dev/null || true",
+    ),
   );
   register("get_opencode_model_preferences", async () => {
     const modelPath = homePath(".local", "state", "opencode", "model.json");
@@ -5818,12 +6039,40 @@ export function createCommandRegistry(
       asOpenCodeModelCatalog(args.models),
     );
   });
-  register("start_claude_server", ({ containerId }) =>
-    startContainerServer(
+  register("start_claude_server", ({ containerId }) => {
+    const id = asString(containerId, "containerId");
+    return enqueueContainerBridgeOperation("claude", id, () =>
+      startContainerClaudeServer(id),
+    );
+  });
+  register("stop_claude_server", ({ containerId }) => {
+    const id = asString(containerId, "containerId");
+    return enqueueContainerBridgeOperation("claude", id, () =>
+      // The bracketed pattern keeps pkill from matching the `bash -lc` shell that
+      // carries it, which would kill the shell before `rm -f` runs.
+      dockerExec(
+        id,
+        "pkill -f '[c]laude-bridge' || true; rm -f /tmp/claude-bridge-token",
+      ).then(() => undefined)
+    );
+  });
+  register("get_claude_server_status", async ({ containerId }) => {
+    const id = asString(containerId, "containerId");
+    const hostPort = await getHostPort(id, CLAUDE_BRIDGE_PORT);
+    const running = hostPort ? await checkHttpHealth(hostPort) : false;
+    const authToken = running
+      ? (await dockerExec(id, "cat /tmp/claude-bridge-token 2>/dev/null || true")).trim()
+      : "";
+    return {
+      running,
+      hostPort,
+      ...(BRIDGE_TOKEN_PATTERN.test(authToken) ? { authToken } : {}),
+    };
+  });
+  register("get_claude_server_log", ({ containerId }) =>
+    dockerExec(
       asString(containerId, "containerId"),
-      CLAUDE_BRIDGE_PORT,
-      "claude",
-      CLAUDE_BRIDGE_CONTAINER_START_COMMAND,
+      "cat /tmp/claude-bridge.log 2>/dev/null || true",
     ),
   );
   register("get_claude_model_catalog", async ({ environmentId, forceRefresh }, context) => {
@@ -5872,7 +6121,7 @@ export function createCommandRegistry(
   });
   register("start_codex_server", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerCodexOperation(id, async () => {
+    return enqueueContainerBridgeOperation("codex", id, async () => {
       const config = await context.storage.loadConfig();
       const maxConcurrentThreads = resolveCodexMaxConcurrentThreads(
         config.global.codexMaxConcurrentThreads,
@@ -5881,7 +6130,7 @@ export function createCommandRegistry(
         const persistedToken = (
           await dockerExec(id, "cat /tmp/codex-bridge-token 2>/dev/null || true")
         ).trim();
-        return CODEX_BRIDGE_TOKEN_PATTERN.test(persistedToken) ? persistedToken : null;
+        return BRIDGE_TOKEN_PATTERN.test(persistedToken) ? persistedToken : null;
       };
       const replaceRunningBridge = async (port: number): Promise<void> => {
         await dockerExec(id, "pkill -f '[c]odex-bridge/dist/index.js' || true");
@@ -5934,7 +6183,7 @@ export function createCommandRegistry(
   });
   register("stop_codex_server", ({ containerId }) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerCodexOperation(id, () =>
+    return enqueueContainerBridgeOperation("codex", id, () =>
       // The bracketed pattern keeps pkill from matching the `bash -lc` shell that
       // carries it, which would kill the shell before `rm -f` runs.
       dockerExec(
@@ -5953,7 +6202,7 @@ export function createCommandRegistry(
     return {
       running,
       hostPort,
-      ...(CODEX_BRIDGE_TOKEN_PATTERN.test(authToken) ? { authToken } : {}),
+      ...(BRIDGE_TOKEN_PATTERN.test(authToken) ? { authToken } : {}),
     };
   });
   register("get_codex_server_log", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "cat /tmp/codex-bridge.log 2>/dev/null || true"));
@@ -6682,12 +6931,26 @@ export const __testing = {
   deleteLocalCodexBridgeToken(environmentId: string): void {
     localCodexBridgeTokens.delete(environmentId);
   },
+  getLocalClaudeBridgeToken(environmentId: string): string | undefined {
+    return localClaudeBridgeTokens.get(environmentId);
+  },
+  deleteLocalClaudeBridgeToken(environmentId: string): void {
+    localClaudeBridgeTokens.delete(environmentId);
+  },
+  getLocalOpenCodeServerPassword(environmentId: string): string | undefined {
+    return localOpenCodeServerPasswords.get(environmentId);
+  },
+  deleteLocalOpenCodeServerPassword(environmentId: string): void {
+    localOpenCodeServerPasswords.delete(environmentId);
+  },
   resetLocalServerLifecycle(): void {
     if (localServerEnvironmentOperations.size > 0) {
       throw new Error("Cannot reset local server lifecycle while operations are active");
     }
     localServerProcesses.clear();
     localCodexBridgeTokens.clear();
+    localClaudeBridgeTokens.clear();
+    localOpenCodeServerPasswords.clear();
     deletingLocalServerEnvironments.clear();
     localServerShutdownRequested = false;
     localServerShutdownPromise = null;

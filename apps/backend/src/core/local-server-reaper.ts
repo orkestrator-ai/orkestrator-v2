@@ -26,11 +26,165 @@
  * Stale records are cleared in every case except a kill that failed, so a
  * later startup can retry it.
  */
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { runCommand } from "./shell.js";
 import { terminateProcessTree } from "./process-tree.js";
+import {
+  parseTmuxSessionNames,
+  RUNTIME_ROOT_PREFIX,
+  selectReapableTmuxSessions,
+} from "./tmux.js";
 import type { Environment } from "./models.js";
 
 export type LocalServerReapKind = "opencode" | "claude" | "codex";
+
+/**
+ * claude-tmux is deliberately *not* in `REAPABLE_SERVERS`.
+ *
+ * Every entry in that table is a process this backend spawned itself, detached,
+ * whose PID it recorded on the environment. tmux mode spawns nothing of the
+ * kind: it asks the user's (or the container's) already-running tmux *server* to
+ * create a session. There is no child of ours, no PID to record, and no process
+ * group that is ours to signal — the tmux server belongs to the login session
+ * and may be hosting the user's own unrelated work. Signalling it by PID would
+ * be exactly the false positive the pid-based checks exist to prevent.
+ *
+ * The equivalent evidence for tmux mode is the runtime root: tmux mode creates
+ * `${RUNTIME_ROOT_PREFIX}/<environmentId>` on the host for every *local*
+ * environment it starts (a container environment's root lives inside the
+ * container and dies with it) and removes it on a clean stop. A root left
+ * behind for an environment that no longer exists is therefore the same signal
+ * a stale PID record is, and the corresponding sessions are addressed by tmux
+ * session *name* rather than by PID.
+ *
+ * Roots belonging to environments that still exist are left completely alone.
+ * Their sessions may well be orphans of a crashed backend, but they are also
+ * exactly what a user returning to that environment expects to find running,
+ * and `claude_tmux_start` already kills a stale session before relaunching.
+ */
+export interface ReapedClaudeTmuxRuntime {
+  environmentId: string;
+  outcome: "reaped" | "kept-live-environment";
+  killedSessions: string[];
+}
+
+export interface ReapOrphanedClaudeTmuxRuntimesOptions {
+  storage: { loadEnvironments: () => Promise<Environment[]> };
+  /** Injected in tests so the sweep never touches the real shared root. */
+  runtimeRootPrefix?: string;
+  listRuntimeRoots?: (prefix: string) => Promise<string[]>;
+  listTmuxSessions?: () => Promise<string[]>;
+  killTmuxSession?: (sessionName: string) => Promise<void>;
+  removeRuntimeRoot?: (rootPath: string) => Promise<void>;
+  log?: (message: string) => void;
+}
+
+/** Directory names directly under the runtime root prefix, one per environment. */
+async function readRuntimeRoots(prefix: string): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(prefix, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      // A name that is not a plain path segment cannot be an environment id and
+      // must never be joined onto the prefix and removed recursively.
+      .filter((name) => name.length > 0 && name !== "." && name !== ".." && !name.includes("/"));
+  } catch {
+    // The prefix does not exist: tmux mode has never run on this host.
+    return [];
+  }
+}
+
+async function readHostTmuxSessions(): Promise<string[]> {
+  try {
+    const { stdout } = await runCommand(
+      "tmux",
+      ["list-sessions", "-F", "#{session_name}"],
+      { timeoutMs: 5_000 },
+    );
+    return parseTmuxSessionNames(stdout);
+  } catch {
+    // No tmux server running, or tmux is not installed. Either way there are no
+    // sessions to reap; the runtime roots below are still swept.
+    return [];
+  }
+}
+
+/**
+ * Sweeps claude-tmux runtime roots left behind for environments that no longer
+ * exist, killing the tmux sessions those environments owned.
+ *
+ * Runs at startup alongside `reapOrphanedLocalServers`, and like it prefers a
+ * false negative: anything it cannot positively attribute to a deleted
+ * environment is left for the next startup.
+ */
+export async function reapOrphanedClaudeTmuxRuntimes(
+  options: ReapOrphanedClaudeTmuxRuntimesOptions,
+): Promise<ReapedClaudeTmuxRuntime[]> {
+  const prefix = options.runtimeRootPrefix ?? RUNTIME_ROOT_PREFIX;
+  const listRuntimeRoots = options.listRuntimeRoots ?? readRuntimeRoots;
+  const listTmuxSessions = options.listTmuxSessions ?? readHostTmuxSessions;
+  const killTmuxSession = options.killTmuxSession ??
+    (async (sessionName: string) => {
+      await runCommand("tmux", ["kill-session", "-t", sessionName], { timeoutMs: 5_000 });
+    });
+  const removeRuntimeRoot = options.removeRuntimeRoot ??
+    ((rootPath: string) => fs.rm(rootPath, { recursive: true, force: true }));
+  const log = options.log ?? ((message) => console.warn(message));
+
+  const roots = await listRuntimeRoots(prefix);
+  if (roots.length === 0) return [];
+
+  const environmentIds = (await options.storage.loadEnvironments()).map(
+    (environment) => environment.id,
+  );
+  const surviving = new Set(environmentIds);
+  const orphans = roots.filter((environmentId) => !surviving.has(environmentId));
+  const kept: ReapedClaudeTmuxRuntime[] = roots
+    .filter((environmentId) => surviving.has(environmentId))
+    .map((environmentId) => ({
+      environmentId,
+      outcome: "kept-live-environment" as const,
+      killedSessions: [],
+    }));
+  if (orphans.length === 0) return kept;
+
+  // One listing for the whole sweep: the tmux server is shared, so re-listing
+  // per orphan would only add round trips.
+  const sessionNames = await listTmuxSessions();
+
+  const reaped: ReapedClaudeTmuxRuntime[] = [];
+  for (const environmentId of orphans) {
+    const targets = selectReapableTmuxSessions({
+      names: sessionNames,
+      environmentId,
+      survivingEnvironmentIds: environmentIds,
+    });
+    const killedSessions: string[] = [];
+    for (const sessionName of targets) {
+      try {
+        await killTmuxSession(sessionName);
+        killedSessions.push(sessionName);
+      } catch (error) {
+        log(`[backend] Failed to kill orphaned tmux session ${sessionName}: ${String(error)}`);
+      }
+    }
+    if (killedSessions.length > 0) {
+      log(
+        `[backend] Reaped ${killedSessions.length} orphaned claude-tmux session(s) for deleted environment ${environmentId}`,
+      );
+    }
+    // Removing the root is independent of the kills: it holds the hook script
+    // and the settings backup, and the environment it described is gone.
+    await removeRuntimeRoot(path.join(prefix, environmentId)).catch((error) => {
+      log(`[backend] Failed to remove claude-tmux runtime root for ${environmentId}: ${String(error)}`);
+    });
+    reaped.push({ environmentId, outcome: "reaped", killedSessions });
+  }
+
+  return [...reaped, ...kept];
+}
 
 interface ReapableServer {
   kind: LocalServerReapKind;

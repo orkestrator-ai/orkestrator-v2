@@ -670,10 +670,11 @@ describe("remote gateway", () => {
     expect(preflight.status).toBe(204);
     expect(preflight.headers["access-control-allow-origin"]).toBe("https://orkestrator.dev");
     expect(preflight.headers["access-control-allow-private-network"]).toBe("true");
-    // Remote renderers authenticate Codex bridge calls with this header, so a
-    // preflight that omits it blocks every Codex request from the browser.
+    // Remote renderers authenticate bridge calls with these headers, so a
+    // preflight that omits one blocks every request to that bridge from the
+    // browser.
     expect(preflight.headers["access-control-allow-headers"]).toBe(
-      "Authorization, Content-Type, X-Orkestrator-Codex-Token",
+      "Authorization, Content-Type, X-Orkestrator-Codex-Token, X-Orkestrator-Claude-Token, X-Orkestrator-OpenCode-Token",
     );
 
     const connected = await requestUrl(endpoint, {
@@ -1102,6 +1103,7 @@ describe("remote gateway", () => {
     const targetRequests: Array<{
       authorization?: string;
       codexToken?: string;
+      openCodeToken?: string;
       cookie?: string;
       origin?: string;
       method?: string;
@@ -1114,6 +1116,7 @@ describe("remote gateway", () => {
         targetRequests.push({
           authorization: request.headers.authorization,
           codexToken: request.headers["x-orkestrator-codex-token"] as string | undefined,
+          openCodeToken: request.headers["x-orkestrator-opencode-token"] as string | undefined,
           cookie: request.headers.cookie,
           origin: request.headers.origin,
           method: request.method,
@@ -1154,14 +1157,16 @@ describe("remote gateway", () => {
           origin: new URL(info!.url).origin,
           "content-type": "application/json",
           "x-orkestrator-codex-token": "codex-bridge-token",
+          "x-orkestrator-opencode-token": "opencode-password",
         },
         body: JSON.stringify({ prompt: "review" }),
       });
       expect(response.status).toBe(200);
       expect(response.json()).toEqual({ ok: true, url: "/hello?x=1" });
       expect(targetRequests).toEqual([{
-        authorization: undefined,
+        authorization: `Basic ${Buffer.from("opencode:opencode-password").toString("base64")}`,
         codexToken: "codex-bridge-token",
+        openCodeToken: undefined,
         cookie: "app_session=abc123",
         origin: undefined,
         method: "POST",

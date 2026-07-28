@@ -6,6 +6,7 @@ import { CodexComposeBar } from "@/components/codex/CodexComposeBar";
 import { OpenCodeComposeBar } from "@/components/opencode/OpenCodeComposeBar";
 import {useOpenCodeStore} from "@/stores/openCodeStore";
 import {useCodexStore} from "@/stores/codexStore";
+import {useClaudeStore} from "@/stores/claudeStore";
 
 const noop = () => {};
 const noopAsync = async () => {};
@@ -72,9 +73,13 @@ describe("native compose bar controls", () => {
   afterEach(() => {
     cleanup();
     useCodexStore.getState().setDraftText("codex-session", "");
+    useCodexStore.getState().setContextUsage("codex-session", null);
     useOpenCodeStore
       .getState()
       .setDraftText(createSessionKey("opencode-environment", "opencode-tab"), "");
+    useClaudeStore
+      .getState()
+      .setDraftText(createSessionKey("claude-environment", "claude-tab"), "");
   });
 
   test("uses two full-width control rows at mobile widths", () => {
@@ -182,6 +187,12 @@ describe("native compose bar controls", () => {
 
     expect(screen.getByTitle("Stop current query")).toBeTruthy();
     expect(screen.queryByTitle("Add to queue")).toBeNull();
+
+    cleanup();
+    renderClaudeComposeBar({ isLoading: true, onStop: noop, onQueue: noop });
+
+    expect(screen.getByTitle("Stop current query")).toBeTruthy();
+    expect(screen.queryByTitle("Add to queue")).toBeNull();
   });
 
   test("keeps the queue send button when a busy prompt has content", () => {
@@ -201,6 +212,32 @@ describe("native compose bar controls", () => {
 
     expect(screen.getByTitle("Stop current query")).toBeTruthy();
     expect(screen.getByTitle("Add to queue")).toBeTruthy();
+
+    cleanup();
+    const claudeSessionKey = createSessionKey("claude-environment", "claude-tab");
+    useClaudeStore.getState().setDraftText(claudeSessionKey, "Queue this prompt");
+    renderClaudeComposeBar({ isLoading: true, onStop: noop, onQueue: noop });
+
+    expect(screen.getByTitle("Stop current query")).toBeTruthy();
+    expect(screen.getByTitle("Add to queue")).toBeTruthy();
+  });
+
+  test("shows the Codex context usage wheel from the store", () => {
+    useCodexStore.getState().setContextUsage("codex-session", {
+      usedTokens: 50_000,
+      totalTokens: 100_000,
+      percentUsed: 50,
+      source: "codex",
+    });
+    renderCodexComposeBar();
+
+    expect(screen.getByLabelText("Context window 50% used")).toBeTruthy();
+
+    cleanup();
+    useCodexStore.getState().setContextUsage("codex-session", null);
+    renderCodexComposeBar();
+
+    expect(screen.queryByLabelText(/Context window/)).toBeNull();
   });
 
   test("hides the queue action when a busy compose bar is disabled", () => {

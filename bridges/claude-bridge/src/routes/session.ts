@@ -11,7 +11,7 @@ import {
   dismissQuestion,
   getPendingQuestions,
   getSessionInitData,
-  getStructuredPromptDispatchState,
+  getPromptDispatchState,
   respondToPlanApproval,
   getPendingPlanApprovals,
   reconcilePersistedSessions,
@@ -47,6 +47,21 @@ function sessionErrorStatus(error: unknown): 400 | 404 | 409 | 500 {
   if (code === "conflict") return 409;
   if (code === "invalid") return 400;
   return 500;
+}
+
+/**
+ * The prompt existed but its window has closed — answered, dismissed, expired,
+ * or the turn that raised it ended.
+ *
+ * 409, not 404: 404 says "no such session", which the client must surface as a
+ * failure the user can retry. A closed window is neither a failure nor
+ * retryable; the UI should quietly drop the card. Matches the Codex bridge's
+ * approval contract so both agents speak one vocabulary.
+ */
+const STALE_PROMPT_STATUS = 409;
+
+function stalePrompt(message: string): { error: string; status: "stale" } {
+  return { error: message, status: "stale" };
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -282,6 +297,10 @@ session.post("/:id/prompt", async (c) => {
         ? body.promptSuggestions
         : undefined;
     const outputSchema = body.outputSchema;
+    // Every prompt is deduplicated on this id, not just structured ones: a plain
+    // prompt retried after a lost HTTP response would otherwise run its shell
+    // commands and file edits twice. Clients always send one; the fallback keeps
+    // structured turns addressable for callers that predate that.
     const requestId = typeof body.requestId === "string" && body.requestId.trim().length > 0
       ? body.requestId.trim()
       : outputSchema === undefined
@@ -327,8 +346,11 @@ session.post("/:id/prompt", async (c) => {
       return c.json({ error: "Prompt is required" }, 400);
     }
 
-    if (outputSchema && requestId) {
-      const dispatchState = getStructuredPromptDispatchState(id, requestId);
+    // Answered before the `running` conflict below on purpose: a retry of the
+    // request that *is* the running turn must be told its own outcome, not
+    // refused as if it collided with somebody else's prompt.
+    if (requestId) {
+      const dispatchState = getPromptDispatchState(id, requestId);
       if (dispatchState === "processing") {
         return c.json({ status: "processing", requestId, duplicate: true }, 202);
       }
@@ -393,7 +415,10 @@ session.delete("/:id/questions/:questionId", (c) => {
 
   const pendingQuestion = getPendingQuestions(sessionId).find((question) => question.id === questionId);
   if (!pendingQuestion || !dismissQuestion(questionId)) {
-    return c.json({ error: "Question not found or already resolved" }, 404);
+    return c.json(
+      stalePrompt("Question is no longer pending"),
+      STALE_PROMPT_STATUS,
+    );
   }
 
   return c.json({ status: "dismissed" });
@@ -601,7 +626,10 @@ session.post("/:id/questions/:questionId/answer", async (c) => {
 
     if (!pendingQuestion) {
       console.log("[session] Pending question not found:", questionId);
-      return c.json({ error: "Question not found" }, 404);
+      return c.json(
+        stalePrompt("Question is no longer pending"),
+        STALE_PROMPT_STATUS,
+      );
     }
 
     // Convert string[][] to Record<string, string>
@@ -620,7 +648,12 @@ session.post("/:id/questions/:questionId/answer", async (c) => {
     if (answered) {
       return c.json({ status: "answered" });
     } else {
-      return c.json({ error: "Question not found or already answered" }, 404);
+      // Raced between the lookup above and the answer: it was resolved by
+      // something else in between, which is stale rather than missing.
+      return c.json(
+        stalePrompt("Question is no longer pending"),
+        STALE_PROMPT_STATUS,
+      );
     }
   } catch (error) {
     console.error("[session] Error answering question:", error);
@@ -666,7 +699,10 @@ session.post("/:id/plan-approvals/:approvalId/respond", async (c) => {
     const pendingApproval = getPendingPlanApprovals(sessionId)
       .find((approval) => approval.id === approvalId);
     if (!pendingApproval) {
-      return c.json({ error: "Plan approval not found or already responded" }, 404);
+      return c.json(
+        stalePrompt("Plan approval is no longer pending"),
+        STALE_PROMPT_STATUS,
+      );
     }
 
     console.log("[session] Plan approval response received", {
@@ -681,7 +717,10 @@ session.post("/:id/plan-approvals/:approvalId/respond", async (c) => {
     if (responded) {
       return c.json({ status: approved ? "approved" : "rejected" });
     } else {
-      return c.json({ error: "Plan approval not found or already responded" }, 404);
+      return c.json(
+        stalePrompt("Plan approval is no longer pending"),
+        STALE_PROMPT_STATUS,
+      );
     }
   } catch (error) {
     console.error("[session] Error responding to plan approval:", error);

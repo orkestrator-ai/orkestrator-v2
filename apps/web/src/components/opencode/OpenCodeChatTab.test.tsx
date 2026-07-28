@@ -69,6 +69,7 @@ const mockSubscribeToEvents = mock(
 );
 const mockGetAvailableSlashCommands = mock(async () => [] as any[]);
 const mockCreateClient = mock(() => MOCK_CLIENT as any);
+const mockCheckClientHealth = mock(async () => true);
 function emptyRuntimeHealth(overrides: Record<string, unknown> = {}) {
   return {
     agents: [],
@@ -96,11 +97,11 @@ const mockForkOpenCodeSession = mock<
     _messageId?: string,
   ) => Promise<{ id: string; title?: string }>
 >(async () => ({ id: "fork-session", title: "OpenCode fork" }));
-const mockStartOpenCodeServer = mock(async () => ({ hostPort: 9999 }));
-const mockGetOpenCodeServerStatus = mock(async () => ({ running: true, hostPort: 9999 }));
+const mockStartOpenCodeServer = mock(async () => ({ hostPort: 9999, authToken: "opencode-secret" }));
+const mockGetOpenCodeServerStatus = mock(async () => ({ running: true, hostPort: 9999, authToken: "opencode-secret" }));
 const mockGetOpenCodeServerLog = mock(async () => "");
-const mockStartLocalOpencodeServer = mock(async () => ({ running: true, port: 9999, pid: 1234 }));
-const mockGetLocalOpencodeServerStatus = mock(async () => ({ running: true, port: 9999, pid: 1234 }));
+const mockStartLocalOpencodeServer = mock(async () => ({ running: true, port: 9999, pid: 1234, authToken: "opencode-secret" }));
+const mockGetLocalOpencodeServerStatus = mock(async () => ({ running: true, port: 9999, pid: 1234, authToken: "opencode-secret" }));
 const mockResolveSlashCommandDirectory = mock(() => undefined as string | undefined);
 const mockShouldLoadSlashCommands = mock(() => false);
 const mockGetNativeSlashCommands = mock((commands: any[]) => commands);
@@ -159,6 +160,7 @@ const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => nul
 
 mock.module("@/lib/opencode-client", () => ({
   ...realOpenCodeClientSnapshot,
+  checkClientHealth: mockCheckClientHealth,
   createClient: mockCreateClient,
   getModelsWithDefaults: mockGetModelsWithDefaults,
   createSession: mockCreateSession,
@@ -644,6 +646,8 @@ describe("OpenCodeChatTab", () => {
     mockGetAvailableSlashCommands.mockResolvedValue([]);
     mockCreateClient.mockReset();
     mockCreateClient.mockImplementation(() => MOCK_CLIENT as any);
+    mockCheckClientHealth.mockReset();
+    mockCheckClientHealth.mockResolvedValue(true);
     mockGetOpenCodeRuntimeHealth.mockClear();
     mockGetOpenCodeRuntimeHealth.mockImplementation(async () => emptyRuntimeHealth());
     mockForkOpenCodeSession.mockClear();
@@ -652,15 +656,15 @@ describe("OpenCodeChatTab", () => {
       title: "OpenCode fork",
     }));
     mockStartOpenCodeServer.mockReset();
-    mockStartOpenCodeServer.mockResolvedValue({ hostPort: 9999 });
+    mockStartOpenCodeServer.mockResolvedValue({ hostPort: 9999, authToken: "opencode-secret" });
     mockGetOpenCodeServerStatus.mockReset();
-    mockGetOpenCodeServerStatus.mockResolvedValue({ running: true, hostPort: 9999 });
+    mockGetOpenCodeServerStatus.mockResolvedValue({ running: true, hostPort: 9999, authToken: "opencode-secret" });
     mockGetOpenCodeServerLog.mockReset();
     mockGetOpenCodeServerLog.mockResolvedValue("");
     mockStartLocalOpencodeServer.mockReset();
-    mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 9999, pid: 1234 });
+    mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 9999, pid: 1234, authToken: "opencode-secret" });
     mockGetLocalOpencodeServerStatus.mockReset();
-    mockGetLocalOpencodeServerStatus.mockResolvedValue({ running: true, port: 9999, pid: 1234 });
+    mockGetLocalOpencodeServerStatus.mockResolvedValue({ running: true, port: 9999, pid: 1234, authToken: "opencode-secret" });
     mockResolveSlashCommandDirectory.mockReset();
     mockResolveSlashCommandDirectory.mockReturnValue(undefined);
     mockShouldLoadSlashCommands.mockReset();
@@ -830,6 +834,28 @@ describe("OpenCodeChatTab", () => {
     await waitFor(() => expect(lastVirtualizedFind?.isActive).toBe(true));
   });
 
+  test("replaces a cached client whose per-process credential is stale", async () => {
+    mockCheckClientHealth.mockResolvedValue(false);
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockCheckClientHealth).toHaveBeenCalledWith(MOCK_CLIENT);
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        undefined,
+        "opencode-secret",
+      );
+    });
+    expect(useOpenCodeStore.getState().clients.get(ENVIRONMENT_ID)).toBe(MOCK_CLIENT as any);
+  });
+
   test("refresh requests pull the latest transcript, status, and pending prompts", async () => {
     const { rerender } = render(
       <OpenCodeChatTab
@@ -951,6 +977,11 @@ describe("OpenCodeChatTab", () => {
       />,
     );
 
+    // Let the cached-client reconnect establish the tab's ready state. A
+    // refresh watermark raised before that state commits is intentionally held
+    // by the hook until the tab becomes refreshable.
+    await waitFor(() => expect(mockGetPendingQuestions).toHaveBeenCalled());
+
     view.rerender(
       <OpenCodeChatTab
         tabId={TAB_ID}
@@ -959,7 +990,12 @@ describe("OpenCodeChatTab", () => {
         refreshRequestId={1}
       />,
     );
-    await waitFor(() => expect(mockGetPendingQuestions).toHaveBeenCalled());
+    await waitFor(() => {
+      // Fast reconnect performs its own authoritative pending-request sync.
+      // Wait for the manual refresh's second read so the update below lands
+      // inside the hydration window this test is exercising.
+      expect(mockGetPendingQuestions.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
 
     act(() => {
       useOpenCodeStore.getState().addPendingQuestion({
@@ -1316,11 +1352,17 @@ describe("OpenCodeChatTab", () => {
 
     test("starts a stopped container server and connects to its mapped port", async () => {
       mockGetOpenCodeServerStatus.mockResolvedValue({ running: false, hostPort: null } as any);
-      mockStartOpenCodeServer.mockResolvedValue({ hostPort: 4321 });
+      mockStartOpenCodeServer.mockResolvedValue({ hostPort: 4321, authToken: "opencode-secret" });
 
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
 
-      await waitFor(() => expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:4321"));
+      await waitFor(() =>
+        expect(mockCreateClient).toHaveBeenCalledWith(
+          "http://127.0.0.1:4321",
+          undefined,
+          "opencode-secret",
+        ),
+      );
       expect(mockStartOpenCodeServer).toHaveBeenCalledWith("container-1");
       expect(useOpenCodeStore.getState().serverStatus.get(ENVIRONMENT_ID)).toEqual({
         running: true,
@@ -1331,7 +1373,7 @@ describe("OpenCodeChatTab", () => {
     test("starts a stopped local server and connects to its port", async () => {
       useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
       mockGetLocalOpencodeServerStatus.mockResolvedValue({ running: false, port: null, pid: null } as any);
-      mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 5432, pid: 99 } as any);
+      mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 5432, pid: 99, authToken: "opencode-secret" } as any);
 
       render(
         <OpenCodeChatTab
@@ -1341,7 +1383,13 @@ describe("OpenCodeChatTab", () => {
         />,
       );
 
-      await waitFor(() => expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:5432"));
+      await waitFor(() =>
+        expect(mockCreateClient).toHaveBeenCalledWith(
+          "http://127.0.0.1:5432",
+          undefined,
+          "opencode-secret",
+        ),
+      );
       expect(mockStartLocalOpencodeServer).toHaveBeenCalledWith(ENVIRONMENT_ID);
       expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
     });
@@ -1349,7 +1397,7 @@ describe("OpenCodeChatTab", () => {
     test("reports a local server that starts without a port", async () => {
       useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
       mockGetLocalOpencodeServerStatus.mockResolvedValue({ running: false, port: null, pid: null } as any);
-      mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 0, pid: 99 } as any);
+      mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 0, pid: 99, authToken: "opencode-secret" } as any);
 
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData({ isLocal: true })} isActive />);
 
@@ -1359,7 +1407,7 @@ describe("OpenCodeChatTab", () => {
 
     test("reports a container server that starts without a port", async () => {
       mockGetOpenCodeServerStatus.mockResolvedValue({ running: false, hostPort: null } as any);
-      mockStartOpenCodeServer.mockResolvedValue({ hostPort: 0 });
+      mockStartOpenCodeServer.mockResolvedValue({ hostPort: 0, authToken: "opencode-secret" });
 
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
 

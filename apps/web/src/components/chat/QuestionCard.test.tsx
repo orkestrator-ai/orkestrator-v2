@@ -84,6 +84,33 @@ describe("QuestionCard multi-question submit", () => {
   });
 });
 
+describe("QuestionCard deadlines", () => {
+  test("shows a countdown for a live request and removes actions after expiry", () => {
+    const question = [{
+      question: "Proceed?",
+      options: [{ label: "Yes" }, { label: "No" }],
+    }];
+
+    const live = renderCard(question, { expiresAt: Date.now() + 65_000 });
+    expect(screen.getByText("1:05")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Yes" })).toBeTruthy();
+    cleanup();
+
+    renderCard(question, { expiresAt: Date.now() - 1 });
+    expect(screen.getByText("This request expired and was declined.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
+    expect(
+      (screen.getByRole("button", { name: "Yes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByPlaceholderText(
+        "Type your own answer (press Enter to add)",
+      ) as HTMLInputElement).disabled,
+    ).toBe(true);
+    expect(live.onSubmit).not.toHaveBeenCalled();
+  });
+});
+
 describe("QuestionCard single-select exclusivity", () => {
   const QUESTION: QuestionCardQuestion[] = [
     { question: "Pick one?", options: [{ label: "Option A" }, { label: "Option B" }] },

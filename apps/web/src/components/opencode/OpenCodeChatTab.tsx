@@ -26,6 +26,7 @@ import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import {
+  checkClientHealth,
   createClient,
   getModelsWithDefaults,
   createSession,
@@ -279,6 +280,7 @@ export function OpenCodeChatTab({
     getOrCreateEventSubscription,
     setEventStream,
     hasActiveEventSubscription,
+    closeEventSubscription,
     // Subscribe to Maps directly for proper reactivity (triggers re-render on changes)
     clients: clientsMap,
     sessions: sessionsMap,
@@ -794,8 +796,17 @@ export function OpenCodeChatTab({
         // Fast path: if we already have a client and session from a previous init,
         // skip all expensive steps (server status, model fetch, etc.) and
         // reconnect instantly. This makes environment switching near-instant.
-        const existingClient = useOpenCodeStore.getState().clients.get(environmentId);
+        let existingClient = useOpenCodeStore.getState().clients.get(environmentId);
         const existingSession = useOpenCodeStore.getState().sessions.get(sessionKey);
+        if (existingClient && !await checkClientHealth(existingClient)) {
+          if (!mounted) return;
+          // A restarted OpenCode server rotates its Basic credential. Keeping
+          // this SDK client would make both REST rehydration and the shared SSE
+          // loop retry the obsolete password forever.
+          closeEventSubscription(environmentId);
+          setClient(environmentId, null);
+          existingClient = undefined;
+        }
         /**
          * Seed this sessionKey's model/variant before either warm path returns.
          *
@@ -915,6 +926,15 @@ export function OpenCodeChatTab({
             getSessionStatus(existingClient, existingSession.sessionId, {
               throwOnError: true,
             }),
+            // Pending requests are equally authoritative. A tab can have been
+            // unmounted when the upstream SSE frame arrived, and a cached
+            // client/session fast path must not leave that blocked request
+            // invisible until the watchdog runs.
+            syncPendingRequests(existingClient, existingSession.sessionId, {
+              shouldApply: () =>
+                mounted
+                && reconnectSequence === manualRefreshSequenceRef.current,
+            }),
           ]).then(([messages, status]) => {
             if (
               !mounted ||
@@ -1004,6 +1024,7 @@ export function OpenCodeChatTab({
         setErrorMessage(null);
 
         let hostPort: number | null = null;
+        let authToken: string | undefined;
 
         if (isLocal) {
           // Local environment - use local server commands
@@ -1011,7 +1032,12 @@ export function OpenCodeChatTab({
 
           if (!localStatus.running) {
             const result = await startLocalOpencodeServer(environmentId);
-            localStatus = { running: true, port: result.port, pid: result.pid };
+            localStatus = {
+              running: true,
+              port: result.port,
+              pid: result.pid,
+              authToken: result.authToken,
+            };
           }
 
           if (!mounted) return;
@@ -1021,6 +1047,7 @@ export function OpenCodeChatTab({
           }
 
           hostPort = localStatus.port;
+          authToken = localStatus.authToken;
         } else {
           // Containerized environment - use container server commands
           if (!containerId) {
@@ -1033,7 +1060,11 @@ export function OpenCodeChatTab({
 
           if (!status.running) {
             const result = await startOpenCodeServer(containerId);
-            status = { running: true, hostPort: result.hostPort };
+            status = {
+              running: true,
+              hostPort: result.hostPort,
+              authToken: result.authToken,
+            };
           }
 
           if (!mounted) return;
@@ -1043,10 +1074,14 @@ export function OpenCodeChatTab({
           }
 
           hostPort = status.hostPort;
+          authToken = status.authToken;
         }
 
         if (!hostPort) {
           throw new Error("Failed to get server port");
+        }
+        if (!authToken) {
+          throw new Error("OpenCode server did not return an authentication credential");
         }
 
         setServerStatus(environmentId, {
@@ -1061,7 +1096,7 @@ export function OpenCodeChatTab({
         // environment worktree, so attaching the SDK-wide directory header is
         // unnecessary here. Avoiding that extra browser header also removes one
         // more local-only variable from native-tab startup.
-        const sdkClient = createClient(baseUrl);
+        const sdkClient = createClient(baseUrl, undefined, authToken);
         setClient(environmentId, sdkClient);
 
         // Fetch available models, server defaults, and model preferences

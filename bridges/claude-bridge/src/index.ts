@@ -2,7 +2,7 @@
 // Wraps the Claude Agent SDK and exposes HTTP/SSE endpoints for Orkestrator AI
 
 import { Hono } from "hono";
-import { cors } from "hono/cors";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import health from "./routes/health.js";
 import config from "./routes/config.js";
 import session from "./routes/session.js";
@@ -15,28 +15,124 @@ import {
   parseParentPid,
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
+import { serve } from "@hono/node-server";
 
-const app = new Hono();
+export const app = new Hono();
 
-// Middleware
-app.use(
-  "*",
-  cors({
-    origin: "*",
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
-  })
-);
+const BRIDGE_TOKEN_ENV = "CLAUDE_BRIDGE_TOKEN";
+const BRIDGE_ALLOWED_ORIGINS_ENV = "CLAUDE_BRIDGE_ALLOWED_ORIGINS";
+// A missing or blank token env var falls back to a random token nobody holds:
+// the bridge stays fail-closed instead of fail-open. Same policy as codex-bridge.
+let bridgeAuthToken =
+  process.env[BRIDGE_TOKEN_ENV]?.trim() || randomBytes(32).toString("base64url");
+let bridgeAuthEnabledOverrideForTesting: boolean | null = null;
+
+function isBridgeAuthEnabled(): boolean {
+  if (bridgeAuthEnabledOverrideForTesting !== null) {
+    return bridgeAuthEnabledOverrideForTesting;
+  }
+  // Route tests explicitly opt out because they exercise route mapping rather
+  // than process authentication. This escape hatch is inert for a real server.
+  return !(
+    process.env.CLAUDE_BRIDGE_NO_SERVER === "1"
+    && process.env.CLAUDE_BRIDGE_AUTH_DISABLED_FOR_TESTING === "1"
+  );
+}
+
+function tokenMatches(candidate: string | undefined): boolean {
+  if (!candidate) return false;
+  const expected = Buffer.from(bridgeAuthToken);
+  const actual = Buffer.from(candidate);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function bearerToken(header: string | undefined): string | undefined {
+  if (!header) return undefined;
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  return match?.[1]?.trim() || undefined;
+}
+
+function isTrustedBridgeOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+  // Electron's packaged file renderer can be represented as a null origin.
+  // Authentication is still mandatory, so allowing it does not grant access.
+  if (origin === "null" || origin === "file://") return true;
+  const configured = (process.env[BRIDGE_ALLOWED_ORIGINS_ENV] ?? "")
+    .split(",")
+    .map((entry) => entry.trim().replace(/\/$/, ""))
+    .filter(Boolean);
+  if (configured.includes(origin.replace(/\/$/, ""))) return true;
+  try {
+    const parsed = new URL(origin);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:")
+      && (parsed.hostname === "127.0.0.1"
+        || parsed.hostname === "localhost"
+        || parsed.hostname === "::1"
+        || parsed.hostname === "[::1]")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isPublicHealthRequest(method: string, path: string): boolean {
+  return method === "GET" && path === "/global/health";
+}
+
+// Middleware: origin policy + per-process token authentication. Only the
+// minimal process health probe is public; every data route needs the token.
+app.use("*", async (c, next) => {
+  const origin = c.req.raw.headers.get("origin") ?? undefined;
+  if (!isTrustedBridgeOrigin(origin)) {
+    return c.json({ error: "Origin is not allowed" }, 403);
+  }
+  if (origin) {
+    c.header("Access-Control-Allow-Origin", origin);
+    c.header("Vary", "Origin");
+  }
+  if (c.req.method === "OPTIONS") {
+    c.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    c.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Orkestrator-Claude-Token",
+    );
+    c.header("Access-Control-Allow-Private-Network", "true");
+    return c.body(null, 204);
+  }
+  if (
+    isBridgeAuthEnabled()
+    && !isPublicHealthRequest(c.req.method, c.req.path)
+  ) {
+    const dedicatedHeaderToken =
+      c.req.raw.headers.get("x-orkestrator-claude-token")?.trim();
+    const headerToken = bearerToken(
+      c.req.raw.headers.get("authorization") ?? undefined,
+    );
+    const eventToken =
+      c.req.path === "/event/subscribe" ? c.req.query("token")?.trim() : undefined;
+    if (
+      !tokenMatches(dedicatedHeaderToken)
+      && !tokenMatches(headerToken)
+      && !tokenMatches(eventToken)
+    ) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+  }
+  await next();
+});
 // Request logging is debug-only; see `createRequestLogger`.
 const requestLogger = createRequestLogger();
 if (requestLogger) {
   app.use("*", requestLogger);
 }
-app.use("*", async (c, next) => {
-  await next();
-  c.header("Access-Control-Allow-Private-Network", "true");
-});
-app.options("*", (c) => c.body(null, 204));
+
+/**
+ * Lightweight authenticated probe used to reject a cached client after token
+ * rotation. This bridge has no engine-health dimension the way codex-bridge
+ * does, so an authenticated 200 mirrors `/global/health`'s unconditional "ok".
+ */
+app.get("/global/auth-check", (c) => c.json({ status: "ok" }));
 
 // Mount routes
 app.route("/global", health);
@@ -78,19 +174,39 @@ if (parentPid !== null) {
   });
 }
 
-// Get port from environment or use default
-const port = parseInt(process.env.PORT || "4097", 10);
-const hostname = process.env.HOSTNAME || "0.0.0.0";
+type BridgeServerOptions = Parameters<typeof serve>[0];
 
-console.log(`Claude Bridge Server starting on ${hostname}:${port}`);
+function startBridgeServer(
+  env: NodeJS.ProcessEnv = process.env,
+  start: (options: BridgeServerOptions) => unknown = serve,
+): unknown {
+  if (env.CLAUDE_BRIDGE_NO_SERVER === "1") {
+    return undefined;
+  }
 
-// Start the server using Node.js built-in serve
-import { serve } from "@hono/node-server";
+  const port = parseInt(env.PORT || "4097", 10);
+  const hostname = env.HOSTNAME || "0.0.0.0";
+  console.log(`Claude Bridge Server starting on ${hostname}:${port}`);
+  const server = start({
+    fetch: app.fetch,
+    port,
+    hostname,
+  });
+  console.log(`Claude Bridge Server running at http://${hostname}:${port}`);
+  return server;
+}
 
-serve({
-  fetch: app.fetch,
-  port,
-  hostname,
-});
+export const __testing = {
+  isTrustedBridgeOriginForTesting: isTrustedBridgeOrigin,
+  setBridgeAuthForTesting: (token?: string) => {
+    if (token === undefined) {
+      bridgeAuthEnabledOverrideForTesting = null;
+      return;
+    }
+    bridgeAuthToken = token;
+    bridgeAuthEnabledOverrideForTesting = true;
+  },
+  startBridgeServerForTesting: startBridgeServer,
+};
 
-console.log(`Claude Bridge Server running at http://${hostname}:${port}`);
+startBridgeServer();

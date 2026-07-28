@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   detachedProcessHandle,
   isPidAlive,
   parseProcessIdentity,
+  reapOrphanedClaudeTmuxRuntimes,
   reapOrphanedLocalServers,
   type ProcessIdentity,
 } from "./local-server-reaper.js";
+import { tmuxSessionName } from "./tmux.js";
 import type { Environment } from "./models.js";
 
 /** A command line that satisfies every marker for the given kind. */
@@ -267,6 +272,171 @@ describe("reapOrphanedLocalServers", () => {
     // record cannot leave the remaining orphans running.
     expect(terminated.sort()).toEqual([401, 402]);
     expect(reaped.map((entry) => entry.outcome)).toEqual(["reaped", "reaped"]);
+  });
+});
+
+describe("reapOrphanedClaudeTmuxRuntimes", () => {
+  /**
+   * A real prefix directory, so the default `listRuntimeRoots`/`removeRuntimeRoot`
+   * are exercised rather than stubbed. It is never the shared
+   * `RUNTIME_ROOT_PREFIX`: that holds live user environments.
+   */
+  async function withRuntimePrefix(
+    environmentIds: string[],
+    run: (prefix: string) => Promise<void>,
+  ): Promise<void> {
+    const prefix = await fs.mkdtemp(path.join(os.tmpdir(), "ork-tmux-reaper-"));
+    try {
+      for (const id of environmentIds) {
+        await fs.mkdir(path.join(prefix, id), { recursive: true });
+        await fs.writeFile(path.join(prefix, id, "hook.sh"), "#!/bin/sh\n");
+      }
+      await run(prefix);
+    } finally {
+      await fs.rm(prefix, { recursive: true, force: true });
+    }
+  }
+
+  function harness(overrides: {
+    environments?: Environment[];
+    sessions?: string[];
+    killFails?: boolean;
+  } = {}) {
+    const killed: string[] = [];
+    return {
+      killed,
+      options: {
+        storage: { loadEnvironments: async () => overrides.environments ?? [] },
+        listTmuxSessions: async () => overrides.sessions ?? [],
+        killTmuxSession: async (sessionName: string) => {
+          if (overrides.killFails) throw new Error("tmux server went away");
+          killed.push(sessionName);
+        },
+        log: () => undefined,
+      },
+    };
+  }
+
+  test("kills the sessions of a deleted environment and removes its runtime root", async () => {
+    const dead = "env-deleted-0000000000";
+    const session = tmuxSessionName(dead, "tab-1");
+    const { options, killed } = harness({ sessions: [session, "user-own-work"] });
+
+    await withRuntimePrefix([dead], async (prefix) => {
+      const reaped = await reapOrphanedClaudeTmuxRuntimes({ ...options, runtimeRootPrefix: prefix });
+
+      expect(reaped).toEqual([
+        { environmentId: dead, outcome: "reaped", killedSessions: [session] },
+      ]);
+      // The user's own unrelated tmux session is untouched.
+      expect(killed).toEqual([session]);
+      expect(await fs.readdir(prefix)).toEqual([]);
+    });
+  });
+
+  test("leaves the runtime root of a surviving environment completely alone", async () => {
+    const live = "env-still-here-000000";
+    const session = tmuxSessionName(live, "tab-1");
+    const { options, killed } = harness({
+      environments: [environment({ id: live })],
+      sessions: [session],
+    });
+
+    await withRuntimePrefix([live], async (prefix) => {
+      const reaped = await reapOrphanedClaudeTmuxRuntimes({ ...options, runtimeRootPrefix: prefix });
+
+      expect(reaped).toEqual([
+        { environmentId: live, outcome: "kept-live-environment", killedSessions: [] },
+      ]);
+      expect(killed).toEqual([]);
+      expect(await fs.readdir(prefix)).toEqual([live]);
+    });
+  });
+
+  test("does not kill a session whose name prefix is shared with a live environment", async () => {
+    // tmux session names carry only the first 16 characters of the environment
+    // id, so these two ids are indistinguishable by prefix. Killing on a prefix
+    // match alone would terminate the live environment's agent.
+    const dead = "0123456789abcdef-dead";
+    const live = "0123456789abcdef-live";
+    const liveSession = tmuxSessionName(live, "tab-1");
+    const { options, killed } = harness({
+      environments: [environment({ id: live })],
+      sessions: [liveSession],
+    });
+
+    await withRuntimePrefix([dead], async (prefix) => {
+      const reaped = await reapOrphanedClaudeTmuxRuntimes({ ...options, runtimeRootPrefix: prefix });
+
+      expect(killed).toEqual([]);
+      // The root is still swept: it is keyed by the *full* id, so it is
+      // unambiguously the deleted environment's.
+      expect(reaped).toEqual([
+        { environmentId: dead, outcome: "reaped", killedSessions: [] },
+      ]);
+      expect(await fs.readdir(prefix)).toEqual([]);
+    });
+  });
+
+  test("still removes the runtime root when killing a session fails", async () => {
+    const dead = "env-kill-fails-000000";
+    const { options } = harness({
+      sessions: [tmuxSessionName(dead, "tab-1")],
+      killFails: true,
+    });
+
+    await withRuntimePrefix([dead], async (prefix) => {
+      const reaped = await reapOrphanedClaudeTmuxRuntimes({ ...options, runtimeRootPrefix: prefix });
+
+      expect(reaped).toEqual([
+        { environmentId: dead, outcome: "reaped", killedSessions: [] },
+      ]);
+      expect(await fs.readdir(prefix)).toEqual([]);
+    });
+  });
+
+  test("returns nothing and never lists sessions when the prefix does not exist", async () => {
+    let listed = 0;
+    const reaped = await reapOrphanedClaudeTmuxRuntimes({
+      storage: {
+        loadEnvironments: async () => {
+          throw new Error("storage must not be consulted");
+        },
+      },
+      runtimeRootPrefix: path.join(os.tmpdir(), "ork-tmux-reaper-absent-0000"),
+      listTmuxSessions: async () => {
+        listed += 1;
+        return [];
+      },
+      log: () => undefined,
+    });
+
+    expect(reaped).toEqual([]);
+    expect(listed).toBe(0);
+  });
+
+  test("ignores files and unusable names under the prefix", async () => {
+    const prefix = await fs.mkdtemp(path.join(os.tmpdir(), "ork-tmux-reaper-"));
+    try {
+      await fs.writeFile(path.join(prefix, "stray.log"), "not a runtime root");
+      const removed: string[] = [];
+
+      const reaped = await reapOrphanedClaudeTmuxRuntimes({
+        storage: { loadEnvironments: async () => [] },
+        runtimeRootPrefix: prefix,
+        listTmuxSessions: async () => [],
+        removeRuntimeRoot: async (rootPath: string) => {
+          removed.push(rootPath);
+        },
+        log: () => undefined,
+      });
+
+      expect(reaped).toEqual([]);
+      expect(removed).toEqual([]);
+      expect(await fs.readdir(prefix)).toEqual(["stray.log"]);
+    } finally {
+      await fs.rm(prefix, { recursive: true, force: true });
+    }
   });
 });
 

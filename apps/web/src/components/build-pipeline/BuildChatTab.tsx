@@ -357,15 +357,22 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         // Cold start
         setConnectionState("connecting");
         let hostPort: number | null = null;
+        let authToken: string | undefined;
 
         if (isLocal) {
           let localStatus = await getLocalClaudeServerStatus(environmentId);
-          if (!localStatus.running) {
+          if (!localStatus.running || !localStatus.authToken) {
             const result = await startLocalClaudeServer(environmentId);
-            localStatus = { running: true, port: result.port, pid: result.pid };
+            localStatus = {
+              running: true,
+              port: result.port,
+              pid: result.pid,
+              authToken: result.authToken,
+            };
           }
           if (!mounted) return;
           hostPort = localStatus.port ?? null;
+          authToken = localStatus.authToken;
         } else {
           // Containerized environment - start the bridge server (same as ClaudeChatTab)
           const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
@@ -375,9 +382,13 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
           }
 
           let status = await getClaudeServerStatus(containerId);
-          if (!status.running) {
+          if (!status.running || !status.authToken) {
             const result = await startClaudeServer(containerId);
-            status = { running: true, hostPort: result.hostPort };
+            status = {
+              running: true,
+              hostPort: result.hostPort,
+              authToken: result.authToken,
+            };
           }
           if (!mounted) return;
 
@@ -386,14 +397,16 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
           }
 
           hostPort = status.hostPort;
+          authToken = status.authToken;
         }
 
         if (!hostPort) throw new Error("Failed to get server port");
+        if (!authToken) throw new Error("Failed to resolve Claude bridge authentication");
 
         setServerStatus(environmentId, { running: true, hostPort });
 
         const baseUrl = `http://127.0.0.1:${hostPort}`;
-        const bridgeClient = createClient(baseUrl);
+        const bridgeClient = createClient(baseUrl, authToken);
         setClient(environmentId, bridgeClient);
 
         const healthy = await checkHealth(bridgeClient);

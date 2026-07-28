@@ -1690,7 +1690,7 @@ describe("CodexChatTab", () => {
     expect(mockScrollToBottom).toHaveBeenCalledTimes(1);
   });
 
-  test("keeps active subagents inline at their transcript position", async () => {
+  test("pins active subagents to the rendered bottom and releases them on success", async () => {
     const activeMessage: TestCodexMessage = {
       id: "assistant-agent",
       role: "assistant",
@@ -1724,11 +1724,7 @@ describe("CodexChatTab", () => {
     expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
       "assistant-agent",
       "assistant-later",
-    ]);
-    expect(lastVirtualizedMessages[0]?.parts.map((part: any) => part.type)).toEqual([
-      "text",
-      "subagent",
-      "text",
+      "assistant-agent:active-agent:agent-1",
     ]);
 
     const completedMessage: TestCodexMessage = {
@@ -1757,7 +1753,7 @@ describe("CodexChatTab", () => {
     });
   });
 
-  test("groups adjacent streaming subagents without moving them out of the message", () => {
+  test("pins adjacent streaming subagents individually and regroups them once finished", async () => {
     const activeMessage: TestCodexMessage = {
       id: "assistant-agent-group",
       role: "assistant",
@@ -1788,16 +1784,43 @@ describe("CodexChatTab", () => {
 
     render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
 
-    expect(lastVirtualizedMessages).toHaveLength(1);
+    // While streaming, each subagent is pinned to the rendered bottom.
+    expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
+      "assistant-agent-group",
+      "assistant-agent-group:active-agent:agent-1",
+      "assistant-agent-group:active-agent:agent-2",
+    ]);
     expect(lastVirtualizedMessages[0]?.parts.map((part: any) => part.type)).toEqual([
       "text",
-      "agent-group",
       "text",
     ]);
-    expect(lastVirtualizedMessages[0]?.parts[1].parts.map((part: any) => part.subagentId)).toEqual([
-      "agent-1",
-      "agent-2",
-    ]);
+
+    const completedMessage: TestCodexMessage = {
+      ...activeMessage,
+      parts: activeMessage.parts.map((part) =>
+        part.type === "subagent"
+          ? { ...part, toolState: "success" as const }
+          : part
+      ),
+    };
+
+    act(() => {
+      seedCodexStore([completedMessage]);
+    });
+
+    // Once finished, adjacent subagents regroup inline at their transcript position.
+    await waitFor(() => {
+      expect(lastVirtualizedMessages).toHaveLength(1);
+      expect(lastVirtualizedMessages[0]?.parts.map((part: any) => part.type)).toEqual([
+        "text",
+        "agent-group",
+        "text",
+      ]);
+      expect(lastVirtualizedMessages[0]?.parts[1].parts.map((part: any) => part.subagentId)).toEqual([
+        "agent-1",
+        "agent-2",
+      ]);
+    });
   });
 
   test("applies direct SSE message updates only to the current session", async () => {

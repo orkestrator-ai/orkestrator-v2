@@ -198,12 +198,15 @@ function openCodeMcpEntries(config: Record<string, unknown>): Record<string, unk
   return isRecord(config.mcp.servers) ? config.mcp.servers : config.mcp;
 }
 
-export function parseOpenCodeConfig(output: string): {
-  mcpServers: ExtensionItem[];
-  plugins: ExtensionItem[];
-} {
+export function parseOpenCodeMcpServers(output: string): ExtensionItem[] {
   const parsed = parseJsonOutput(output);
-  if (!isRecord(parsed)) return { mcpServers: [], plugins: [] };
+  if (!isRecord(parsed)) return [];
+  // Present but not an object: this surface exists and cannot be read, which is
+  // an error for *this* surface alone — the plugin list beside it in the same
+  // dump is still perfectly readable. An absent section stays "none configured".
+  if (parsed.mcp != null && !isRecord(parsed.mcp)) {
+    throw new Error("The CLI reported an unreadable mcp section");
+  }
 
   const mcpServers = Object.entries(openCodeMcpEntries(parsed)).flatMap(
     ([name, value]): ExtensionItem[] => {
@@ -226,6 +229,21 @@ export function parseOpenCodeConfig(output: string): {
     },
   );
 
+  return sortAndDedupe(mcpServers);
+}
+
+export function parseOpenCodePlugins(output: string): ExtensionItem[] {
+  const parsed = parseJsonOutput(output);
+  if (!isRecord(parsed)) return [];
+  // Same rule as the mcp section above, applied to this surface's own keys: a
+  // plugin list that is present but not a list is unreadable, and says nothing
+  // about whether the MCP servers beside it could be read.
+  for (const key of ["plugin", "plugin_origins"] as const) {
+    if (parsed[key] != null && !Array.isArray(parsed[key])) {
+      throw new Error(`The CLI reported an unreadable ${key} section`);
+    }
+  }
+
   const plugins: ExtensionItem[] = [];
   const configuredPlugins = Array.isArray(parsed.plugin) ? parsed.plugin : [];
   for (const value of configuredPlugins) {
@@ -245,9 +263,21 @@ export function parseOpenCodeConfig(output: string): {
     if (name) plugins.push({ name, status: "configured" });
   }
 
+  return sortAndDedupe(plugins);
+}
+
+/**
+ * Both OpenCode surfaces from one `debug config` dump. Kept as the combined
+ * view for callers that want the whole config; discovery deliberately calls the
+ * two parsers separately so one failing surface cannot blank the other.
+ */
+export function parseOpenCodeConfig(output: string): {
+  mcpServers: ExtensionItem[];
+  plugins: ExtensionItem[];
+} {
   return {
-    mcpServers: sortAndDedupe(mcpServers),
-    plugins: sortAndDedupe(plugins),
+    mcpServers: parseOpenCodeMcpServers(output),
+    plugins: parseOpenCodePlugins(output),
   };
 }
 
@@ -319,24 +349,32 @@ async function discoverCodex(
 async function discoverOpenCode(
   run: ExtensionCommandRunner,
 ): Promise<AgentExtensionCatalog> {
-  try {
-    const parsed = parseOpenCodeConfig(
-      await run("opencode", ["debug", "config"]),
-    );
-    return {
-      agent: "opencode",
-      mcpServers: parsed.mcpServers,
-      plugins: parsed.plugins,
-    };
-  } catch {
-    return {
-      agent: "opencode",
-      mcpServers: [],
-      plugins: [],
-      mcpError: "Could not read OpenCode MCP servers.",
-      pluginError: "Could not read OpenCode plugins.",
-    };
-  }
+  // OpenCode reports both surfaces from a single `debug config` dump, so there
+  // is one command to settle rather than two — but the two surfaces are still
+  // parsed independently, exactly as for Claude and Codex. A single try/catch
+  // around both parses reported a partial success as a total failure: a config
+  // whose `mcp` block had drifted into a shape the MCP parser rejects blanked
+  // the plugin list too, and vice versa.
+  const [config] = await Promise.allSettled([
+    run("opencode", ["debug", "config"]),
+  ]);
+  const mcpResult = parseCommandResult(
+    config,
+    parseOpenCodeMcpServers,
+    "Could not read OpenCode MCP servers.",
+  );
+  const pluginResult = parseCommandResult(
+    config,
+    parseOpenCodePlugins,
+    "Could not read OpenCode plugins.",
+  );
+  return {
+    agent: "opencode",
+    mcpServers: mcpResult.items,
+    plugins: pluginResult.items,
+    ...(mcpResult.error ? { mcpError: mcpResult.error } : {}),
+    ...(pluginResult.error ? { pluginError: pluginResult.error } : {}),
+  };
 }
 
 export async function discoverAgentExtensions(

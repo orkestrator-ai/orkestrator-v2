@@ -531,9 +531,19 @@ async function startControllableHealthServer(
   };
 }
 
-async function requestOk(port: number, requestPath: string): Promise<boolean> {
+async function requestOk(
+  port: number,
+  requestPath: string,
+  headers?: Record<string, string>,
+): Promise<boolean> {
   return new Promise((resolve, reject) => {
-    const request = http.get({ host: "127.0.0.1", port, path: requestPath, timeout: 2_000 }, (response) => {
+    const request = http.get({
+      host: "127.0.0.1",
+      port,
+      path: requestPath,
+      timeout: 2_000,
+      headers,
+    }, (response) => {
       response.resume();
       resolve((response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300);
     });
@@ -8103,16 +8113,69 @@ exec node -e 'const http=require("node:http");http.createServer((req,res)=>{res.
       port: number;
       pid: number;
       wasRunning: boolean;
+      authToken: string;
     };
 
     try {
       expect(result.wasRunning).toBe(false);
       expect(result.port).toBeGreaterThan(0);
+      expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
       await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
       expect(await fs.readFile(markerPath, "utf8")).toContain("used");
       expect(updates).toContainEqual({ localClaudePort: result.port, claudeBridgePid: result.pid });
+      await expect(
+        commands.get("get_local_claude_server_status")?.(
+          { environmentId: environment.id },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        running: true,
+        port: result.port,
+        pid: result.pid,
+        authToken: result.authToken,
+      });
     } finally {
       await commands.get("stop_local_claude_server_cmd")?.({ environmentId: environment.id }, context);
+    }
+  });
+
+  test("restarts a healthy local Claude bridge whose auth token this process no longer holds", async () => {
+    const appRoot = await createTempDir("ork-electron-app-tokenless-claude-");
+    const worktreePath = await createTempDir("ork-electron-worktree-tokenless-claude-");
+    await writeBridgeServer(appRoot, "claude-bridge");
+
+    const environment = createEnvironment({ id: "env-local-tokenless-claude", worktreePath });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    const first = await commands.get("start_local_claude_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as { port: number; pid: number; authToken: string };
+    expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+    // A bridge inherited from a previous backend process: still healthy, but its
+    // token was never handed to us, so the renderer could not authenticate.
+    commandTesting.deleteLocalClaudeBridgeToken(environment.id);
+
+    const second = await commands.get("start_local_claude_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as { port: number; pid: number; wasRunning: boolean; authToken: string };
+    try {
+      expect(second.wasRunning).toBe(false);
+      expect(second.pid).not.toBe(first.pid);
+      expect(second.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(second.authToken).not.toBe(first.authToken);
+      expect(isProcessRunning(first.pid)).toBe(false);
+      await expect(requestOk(second.port, "/global/health")).resolves.toBe(true);
+    } finally {
+      await commands.get("stop_local_claude_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
     }
   });
 
@@ -8358,7 +8421,7 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:http"); const port = Number(process.env.PORT_ARG); const host = process.env.HOST_ARG || "127.0.0.1"; http.createServer((req, res) => { if (req.url === "/global/health") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ok: true })); return; } res.writeHead(404); res.end(); }).listen(port, host);'
+exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:http"); const port = Number(process.env.PORT_ARG); const host = process.env.HOST_ARG || "127.0.0.1"; const expected = "Basic " + Buffer.from("opencode:" + process.env.OPENCODE_SERVER_PASSWORD).toString("base64"); http.createServer((req, res) => { if (req.headers.authorization !== expected) { res.writeHead(401); res.end(); return; } if (req.url === "/global/health") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ok: true })); return; } res.writeHead(404); res.end(); }).listen(port, host);'
 `,
     );
     await fs.chmod(opencodeWrapperPath, 0o755);
@@ -8375,12 +8438,18 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
       port: number;
       pid: number;
       wasRunning: boolean;
+      authToken: string;
     };
 
     try {
       expect(result.wasRunning).toBe(false);
       expect(result.port).toBeGreaterThan(0);
-      await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
+      expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      await expect(requestOk(result.port, "/global/health")).resolves.toBe(false);
+      await expect(requestOk(result.port, "/global/health", {
+        Authorization:
+          `Basic ${Buffer.from(`opencode:${result.authToken}`).toString("base64")}`,
+      })).resolves.toBe(true);
       expect(await fs.readFile(markerPath, "utf8")).toContain("used serve --port");
       expect(updates).toContainEqual({ localOpencodePort: result.port, opencodePid: result.pid });
     } finally {
@@ -8549,12 +8618,15 @@ exit 0
         const result = await commands.get("start_claude_server")?.(
           { containerId: "container-claude" },
           context,
-        );
-        expect(result).toEqual({ hostPort, wasRunning: false });
+        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        expect(result).toMatchObject({ hostPort, wasRunning: false });
+        expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain("setsid bun /opt/claude-bridge/dist/index.js");
         expect(execLog).not.toContain("setsid node");
+        expect(execLog).toContain("/tmp/claude-bridge-token");
+        expect(execLog).toContain("export CLAUDE_BRIDGE_TOKEN=");
       });
     } finally {
       const pid = await fs.readFile(pidFile, "utf8").catch(() => "");

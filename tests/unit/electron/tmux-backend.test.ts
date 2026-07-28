@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -8,7 +8,11 @@ import {
   CLAUDE_STATE_READ_TIMEOUT_MS,
   ClaudeStatePollManager,
   claudeStateReadCommand,
+  cleanupEnvironmentTmux,
   containerExecArgs,
+  parseTmuxSessionNames,
+  selectReapableTmuxSessions,
+  tmuxSessionNamePrefix,
   newestJsonlFindCommand,
   newestJsonlInDir,
   parseFreshJsonlFindOutput,
@@ -471,6 +475,78 @@ describe("Electron tmux backend command registration", () => {
       // Stopping the last session tears the whole root down. That is exactly why
       // two concurrent runs must not share an environment id.
       await expect(fs.stat(runtimeRoot)).rejects.toThrow();
+    });
+  });
+
+  test("environment teardown kills live sessions, restores settings and removes the runtime root", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, worktree, alive, log, runtimeRoot }) => {
+      const settingsPath = path.join(worktree, ".claude", "settings.local.json");
+      const original = JSON.stringify({ permissions: { allow: ["Bash(ls:*)"] } }, null, 2);
+      await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+      await fs.writeFile(settingsPath, original);
+
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+          loadEnvironments: async () => [environment],
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      const started = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-teardown", environmentId: environment.id },
+        context,
+      ) as { tmux_session: string; running: boolean };
+
+      expect(started.running).toBe(true);
+      // tmux mode has taken the settings file over by now.
+      expect(await fs.readFile(settingsPath, "utf8")).not.toBe(original);
+
+      // Deleting the environment goes through this, not `claude_tmux_stop`.
+      await cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext);
+
+      expect(await fs.readFile(settingsPath, "utf8")).toBe(original);
+      await expect(fs.stat(runtimeRoot)).rejects.toThrow();
+      // The fake tmux drops the alive marker on kill-session.
+      expect(existsSync(path.join(alive, started.tmux_session))).toBe(false);
+      expect(await fs.readFile(log, "utf8")).toContain(
+        `kill-session -t ${started.tmux_session}`,
+      );
+
+      // The session is forgotten too, so a later command cannot drive a dead tab.
+      await expect(
+        invoke(handlers, "claude_tmux_capture_pane", {
+          tabId: "tab-teardown",
+          environmentId: environment.id,
+        }, context),
+      ).rejects.toThrow("tmux session not running");
+    });
+  });
+
+  test("environment teardown survives a backend it cannot reach", async () => {
+    await withFakeTmuxRuntime(async ({ environment }) => {
+      // A container environment whose container id is already gone: there is
+      // nothing to exec into, and deletion must not be blocked by that.
+      const unreachable = { ...environment, environmentType: "container" as const, containerId: null };
+      const context = {
+        storage: {
+          getEnvironment: async () => unreachable,
+          loadEnvironments: async () => [unreachable],
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      await expect(
+        cleanupEnvironmentTmux(unreachable.id, context as unknown as CommandContext),
+      ).resolves.toBeUndefined();
     });
   });
 

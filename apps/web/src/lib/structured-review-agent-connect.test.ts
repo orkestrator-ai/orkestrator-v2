@@ -1,6 +1,7 @@
 import { beforeEach, expect, mock, test } from "bun:test";
 import * as realBackend from "@/lib/backend";
 import * as realCodexClient from "@/lib/codex-client";
+import * as realOpenCodeClient from "@/lib/opencode-client";
 import type { Environment } from "@/types";
 import type { LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
 
@@ -29,6 +30,32 @@ const createClient = mock((baseUrl: string, authToken?: string) => ({
   authToken,
 }));
 const checkHealth = mock(async () => true);
+const getLocalOpenCodeStatus = mock(async () => ({
+  running: true,
+  port: 4500 as number | null,
+  pid: 11 as number | null,
+  authToken: "local-opencode-secret" as string | undefined,
+}));
+const startLocalOpenCode = mock(async () => ({
+  port: 4500,
+  pid: 11,
+  authToken: "local-opencode-secret",
+}));
+const getOpenCodeContainerStatus = mock(async () => ({
+  running: false,
+  hostPort: null as number | null,
+  authToken: undefined as string | undefined,
+}));
+const startOpenCodeContainer = mock(async () => ({
+  hostPort: 4600,
+  authToken: "container-opencode-secret",
+}));
+const createOpenCodeClient = mock((baseUrl: string, directory?: string, authToken?: string) => ({
+  baseUrl,
+  directory,
+  authToken,
+}));
+const checkOpenCodeHealth = mock(async (_baseUrl: string, _authToken?: string) => true);
 
 mock.module("@/lib/backend", () => ({
   ...realBackend,
@@ -36,18 +63,29 @@ mock.module("@/lib/backend", () => ({
   startLocalCodexServer: startLocal,
   getCodexServerStatus: getContainerStatus,
   startCodexServer: startContainer,
+  getLocalOpencodeServerStatus: getLocalOpenCodeStatus,
+  startLocalOpencodeServer: startLocalOpenCode,
+  getOpenCodeServerStatus: getOpenCodeContainerStatus,
+  startOpenCodeServer: startOpenCodeContainer,
 }));
 mock.module("@/lib/codex-client", () => ({
   ...realCodexClient,
   createClient,
   checkHealth,
 }));
+mock.module("@/lib/opencode-client", () => ({
+  ...realOpenCodeClient,
+  createClient: createOpenCodeClient,
+  checkHealth: checkOpenCodeHealth,
+}));
 
 const { connectStructuredReviewAgent } = await import("./structured-review-agent");
 
-function workflow(): LoopedReviewWorkflow {
+function workflow(
+  agent: LoopedReviewWorkflow["agent"] = "codex",
+): LoopedReviewWorkflow {
   return {
-    agent: "codex",
+    agent,
     model: "default",
     sessions: [],
   } as unknown as LoopedReviewWorkflow;
@@ -75,6 +113,13 @@ beforeEach(() => {
   startLocal.mockClear();
   getContainerStatus.mockClear();
   startContainer.mockClear();
+  createOpenCodeClient.mockClear();
+  checkOpenCodeHealth.mockClear();
+  checkOpenCodeHealth.mockResolvedValue(true);
+  getLocalOpenCodeStatus.mockClear();
+  startLocalOpenCode.mockClear();
+  getOpenCodeContainerStatus.mockClear();
+  startOpenCodeContainer.mockClear();
 });
 
 test("connects a local Codex review agent with the running bridge token", async () => {
@@ -147,4 +192,37 @@ test("refuses to connect a Codex agent without authentication", async () => {
   ).rejects.toThrow("Codex bridge authentication is unavailable");
   expect(createClient).not.toHaveBeenCalled();
   expect(checkHealth).not.toHaveBeenCalled();
+});
+
+test("health-checks a local OpenCode server before connecting", async () => {
+  await connectStructuredReviewAgent(workflow("opencode"), environment({
+    environmentType: "local",
+    containerId: null,
+    worktreePath: "/workspace",
+  }));
+
+  expect(checkOpenCodeHealth).toHaveBeenCalledWith(
+    "http://127.0.0.1:4500",
+    "local-opencode-secret",
+  );
+  expect(createOpenCodeClient).toHaveBeenCalledWith(
+    "http://127.0.0.1:4500",
+    "/workspace",
+    "local-opencode-secret",
+  );
+  expect(startLocalOpenCode).not.toHaveBeenCalled();
+});
+
+test("refuses to connect an OpenCode agent when the health check fails", async () => {
+  checkOpenCodeHealth.mockResolvedValueOnce(false);
+
+  await expect(
+    connectStructuredReviewAgent(workflow("opencode"), environment()),
+  ).rejects.toThrow("OpenCode server health check failed");
+  expect(startOpenCodeContainer).toHaveBeenCalledWith("container-1");
+  expect(checkOpenCodeHealth).toHaveBeenCalledWith(
+    "http://127.0.0.1:4600",
+    "container-opencode-secret",
+  );
+  expect(createOpenCodeClient).not.toHaveBeenCalled();
 });

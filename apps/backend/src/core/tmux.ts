@@ -124,6 +124,46 @@ export function tmuxSessionName(environmentId: string, tabId: string): string {
   return `orkestrator-${readableIdPrefix(environmentId)}-${readableIdPrefix(tabId)}-${identityHash}`;
 }
 
+/**
+ * The prefix every tmux session belonging to `environmentId` shares.
+ *
+ * A session name also carries the tab id and an identity hash, and a sweep
+ * knows neither, so this prefix is the only handle a teardown has on "the
+ * sessions of this environment". It is deliberately derived from
+ * `tmuxSessionName` rather than duplicated: a change to the naming scheme must
+ * not silently orphan the cleanup.
+ */
+export function tmuxSessionNamePrefix(environmentId: string): string {
+  return `orkestrator-${readableIdPrefix(environmentId)}-`;
+}
+
+/** One session name per line, as `tmux list-sessions -F '#{session_name}'` prints them. */
+export function parseTmuxSessionNames(stdout: string): string[] {
+  return stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+}
+
+/**
+ * The tmux sessions that may be killed on behalf of `environmentId`.
+ *
+ * `readableIdPrefix` truncates to 16 characters, so a prefix match alone could
+ * in principle reach a *different* environment whose id starts the same way.
+ * When any surviving environment claims the same prefix, nothing is selected:
+ * a leaked tmux session is recovered on the next sweep, whereas killing a live
+ * environment's agent session destroys work that cannot be recovered at all.
+ */
+export function selectReapableTmuxSessions(options: {
+  names: readonly string[];
+  environmentId: string;
+  survivingEnvironmentIds: readonly string[];
+}): string[] {
+  const prefix = tmuxSessionNamePrefix(options.environmentId);
+  const contested = options.survivingEnvironmentIds.some(
+    (id) => id !== options.environmentId && tmuxSessionNamePrefix(id) === prefix,
+  );
+  if (contested) return [];
+  return options.names.filter((name) => name.startsWith(prefix));
+}
+
 function isBlockingHook(kind: string): boolean {
   return kind === "PreToolUse" || kind === "PermissionRequest" || kind === "Elicitation";
 }
@@ -1651,6 +1691,20 @@ class TmuxSessionManager {
     return session;
   }
 
+  /** Drops and returns every session of an environment. Used by teardown. */
+  removeEnvironment(environmentId: string): TmuxSession[] {
+    const removed: TmuxSession[] = [];
+    for (const [key, session] of this.sessions) {
+      if (session.environmentId !== environmentId) continue;
+      this.sessions.delete(key);
+      removed.push(session);
+    }
+    // The install lock is deliberately kept. Teardown runs *inside* it, so
+    // dropping it here would hand a concurrent start a fresh, uncontended lock
+    // and let it reinstall hooks under a directory being removed.
+    return removed;
+  }
+
   sessionsInEnvironment(environmentId: string): number {
     let count = 0;
     for (const session of this.sessions.values()) {
@@ -1731,6 +1785,101 @@ async function killOrphanSession(context: CommandContext, environmentId: string,
   } catch (error) {
     console.debug("[tmux] skipping orphan kill", error);
   }
+}
+
+/**
+ * Kills every tmux session that belongs to `environmentId`, including ones this
+ * process never registered — a backend restart empties `tmuxManager` while the
+ * tmux server keeps running the sessions it started.
+ *
+ * A tmux server with no sessions exits non-zero from `list-sessions`, which is
+ * the ordinary "nothing to do" case rather than a failure.
+ */
+async function killEnvironmentTmuxSessions(
+  backend: TmuxBackend,
+  environmentId: string,
+  survivingEnvironmentIds: readonly string[],
+): Promise<string[]> {
+  const listed = await backend
+    .exec(["tmux", "list-sessions", "-F", "#{session_name}"])
+    .catch(() => null);
+  if (!listed || listed.status !== 0) return [];
+  const targets = selectReapableTmuxSessions({
+    names: parseTmuxSessionNames(listed.stdout),
+    environmentId,
+    survivingEnvironmentIds,
+  });
+  const killed: string[] = [];
+  for (const name of targets) {
+    const result = await backend
+      .exec(["tmux", "kill-session", "-t", name])
+      .catch(() => null);
+    if (result?.status === 0) killed.push(name);
+  }
+  return killed;
+}
+
+/**
+ * Tears down every claude-tmux artefact an environment owns, for the deletion
+ * path.
+ *
+ * Deleting an environment used to leave three things behind: the tmux sessions
+ * themselves (a tmux server outlives the backend, so they ran forever), the
+ * runtime root under `RUNTIME_ROOT_PREFIX`, and — worst — the user's own
+ * `.claude/settings.local.json`, which tmux mode overwrites and only restores
+ * from its backup on `claude_tmux_stop`. Deleting an environment while a tmux
+ * tab was open therefore left the hook block installed in a settings file that
+ * outlives the worktree (the local `.claude` directory of a repo checkout).
+ *
+ * Every step is best-effort and independent: this runs inside a deletion that
+ * must complete, so a missing container or an unreachable tmux server must not
+ * abort the removal of anything else.
+ *
+ * Ordering matters at the call site — this needs the container to still exist
+ * and the worktree to still be on disk, so it runs before either is removed.
+ */
+export async function cleanupEnvironmentTmux(
+  environmentId: string,
+  context: CommandContext,
+): Promise<void> {
+  await tmuxManager.installLock(environmentId).runExclusive(async () => {
+    for (const session of tmuxManager.removeEnvironment(environmentId)) {
+      await session.stop().catch((error) => {
+        console.warn("[tmux] session stop failed during environment cleanup", error);
+      });
+    }
+
+    let backend: TmuxBackend;
+    try {
+      backend = await resolveBackend(environmentId, context);
+    } catch (error) {
+      // No container id, or a local environment with no worktree: there is
+      // nothing left to exec into. Dropping the in-memory sessions above is
+      // the part this process still owns.
+      console.debug("[tmux] skipping environment tmux cleanup", error);
+      return;
+    }
+
+    const survivingEnvironmentIds = await context.storage
+      .loadEnvironments()
+      .then((environments) => environments.map((environment) => environment.id))
+      .catch(() => [] as string[]);
+
+    await killEnvironmentTmuxSessions(backend, environmentId, survivingEnvironmentIds)
+      .catch((error) => {
+        console.warn("[tmux] failed to kill environment tmux sessions", error);
+      });
+
+    const { workspace } = workspaceAndClaudeHome(backend);
+    // Restores `.claude/settings.local.json` from the backup and removes
+    // `${RUNTIME_ROOT_PREFIX}/<environmentId>`.
+    await uninstallWorkspaceHooks(
+      backend,
+      workspaceHookPaths(`${RUNTIME_ROOT_PREFIX}/${environmentId}`, workspace),
+    ).catch((error) => {
+      console.warn("[tmux] uninstallWorkspaceHooks failed during environment cleanup", error);
+    });
+  });
 }
 
 type InteractiveTerminalSession = {

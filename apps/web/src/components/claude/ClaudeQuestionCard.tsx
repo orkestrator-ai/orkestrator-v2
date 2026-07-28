@@ -65,16 +65,20 @@ export function ClaudeQuestionCard({
       if (onSubmitAnswers) {
         return onSubmitAnswers(answers);
       }
-      const success = await answerQuestion(
+      const result = await answerQuestion(
         client!,
         sessionId!,
         question.id,
         answers,
       );
-      if (success) {
+      // `stale` removes the card just like `applied`: the window closed while
+      // the user was deciding, so there is nothing left to answer and nothing
+      // useful a retry could do. Only a real failure leaves the card retryable.
+      if (result === "applied" || result === "stale") {
         removePendingQuestion(question.id);
+        return true;
       }
-      return success;
+      return false;
     },
     [client, onSubmitAnswers, question.id, removePendingQuestion, sessionId],
   );
@@ -85,8 +89,8 @@ export function ClaudeQuestionCard({
       return;
     }
     if (!client || !sessionId) return;
-    const dismissed = await dismissQuestion(client, sessionId, question.id);
-    if (dismissed) {
+    const result = await dismissQuestion(client, sessionId, question.id);
+    if (result === "applied" || result === "stale") {
       removePendingQuestion(question.id);
     }
   }, [client, onDismiss, question.id, removePendingQuestion, sessionId]);
@@ -103,6 +107,7 @@ export function ClaudeQuestionCard({
       allowOptionDeselect={allowOptionDeselect}
       submitOnOptionSelect={submitOnOptionSelect}
       hideDismiss={hideDismiss}
+      expiresAt={question.expiresAt}
     />
   );
 }

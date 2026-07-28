@@ -427,6 +427,16 @@ describe("ClaudeComposeBar", () => {
     expect(screen.getByTitle("Stop current query")).toBeTruthy();
   });
 
+  test("keeps the stop button visible while typing during a running turn", () => {
+    renderComposeBar({ isLoading: true });
+    const input = screen.getByTestId("mentionable-input");
+
+    fireEvent.change(input, { target: { value: "Follow-up while running" } });
+
+    expect(screen.getByTitle("Stop current query")).toBeTruthy();
+    expect(screen.getByTitle("Add to queue")).toBeTruthy();
+  });
+
   test("disables the stop button when no stop callback is available", () => {
     renderComposeBar({ isLoading: true, onStop: undefined });
 

@@ -21,7 +21,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { cn, createSessionKey } from "@/lib/utils";
-import type { ContextUsageSnapshot } from "@/lib/context-usage";
+import type {
+  AgentRateLimitWindow,
+  ContextUsageSnapshot,
+} from "@/lib/context-usage";
 import { formatTokenCount } from "@/lib/context-usage";
 import type { TabInfo } from "@/types/paneLayout";
 import { useClaudeStore } from "@/stores/claudeStore";
@@ -351,11 +354,27 @@ function CodexRuntimePanel({ health }: { health: unknown }) {
 function UsagePanel({
   usage,
   modelId,
+  rateLimits,
 }: {
   usage: ContextUsageSnapshot | undefined;
   modelId: string | undefined;
+  /** Claude reports these independently of context occupancy. */
+  rateLimits?: AgentRateLimitWindow[];
 }) {
+  const displayedRateLimits = rateLimits ?? usage?.rateLimits;
+
   if (!usage) {
+    if (displayedRateLimits && displayedRateLimits.length > 0) {
+      return (
+        <div className="space-y-4">
+          <RateLimitsSection rateLimits={displayedRateLimits} />
+          <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-[10px] text-muted-foreground">
+            <span className="truncate">{modelId ?? "Model unavailable"}</span>
+            <span className="shrink-0">Provider reported</span>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="rounded-lg border border-dashed border-border/70 px-4 py-5 text-sm text-muted-foreground">
         Usage will appear after this session reports its first token snapshot.
@@ -428,31 +447,9 @@ function UsagePanel({
         ) : null}
       </div>
 
-      {usage.rateLimits && usage.rateLimits.length > 0 ? (
-        <div className="space-y-3 border-t border-border/60 pt-4">
-          <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
-            Limits
-          </div>
-          {usage.rateLimits.map((limit) => (
-            <div key={`${limit.label}:${limit.resetsAt ?? ""}`}>
-              <div className="mb-1.5 flex justify-between gap-3 text-xs">
-                <span className="text-foreground">{limit.label}</span>
-                <span className="font-mono tabular-nums text-muted-foreground">
-                  {limit.usedPercent === undefined ? "Available" : `${limit.usedPercent.toFixed(0)}% used`}
-                </span>
-              </div>
-              {limit.usedPercent !== undefined ? (
-                <Progress value={limit.usedPercent} className="h-1" />
-              ) : null}
-              {limit.resetsAt ? (
-                <div className="mt-1 text-right text-[10px] text-muted-foreground">
-                  Resets {new Date(limit.resetsAt).toLocaleString()}
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
+      {displayedRateLimits && displayedRateLimits.length > 0
+        ? <RateLimitsSection rateLimits={displayedRateLimits} />
+        : null}
 
       <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-[10px] text-muted-foreground">
         <span className="truncate">{usage.modelId ?? modelId ?? "Model unavailable"}</span>
@@ -460,6 +457,40 @@ function UsagePanel({
           {usage.estimated ? "Estimated" : "Provider reported"}
         </span>
       </div>
+    </div>
+  );
+}
+
+function RateLimitsSection({
+  rateLimits,
+}: {
+  rateLimits: AgentRateLimitWindow[];
+}) {
+  return (
+    <div className="space-y-3 border-t border-border/60 pt-4">
+      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+        Limits
+      </div>
+      {rateLimits.map((limit) => (
+        <div key={`${limit.label}:${limit.resetsAt ?? ""}`}>
+          <div className="mb-1.5 flex justify-between gap-3 text-xs">
+            <span className="text-foreground">{limit.label}</span>
+            <span className="font-mono tabular-nums text-muted-foreground">
+              {limit.usedPercent === undefined
+                ? "Available"
+                : `${limit.usedPercent.toFixed(0)}% used`}
+            </span>
+          </div>
+          {limit.usedPercent !== undefined ? (
+            <Progress value={limit.usedPercent} className="h-1" />
+          ) : null}
+          {limit.resetsAt ? (
+            <div className="mt-1 text-right text-[10px] text-muted-foreground">
+              Resets {new Date(limit.resetsAt).toLocaleString()}
+            </div>
+          ) : null}
+        </div>
+      ))}
     </div>
   );
 }
@@ -492,6 +523,11 @@ export function AgentInfoButton({
   const claudeUsage = useClaudeStore((state) =>
     activeSession?.provider === "claude"
       ? state.contextUsage.get(activeSession.sessionKey)
+      : undefined,
+  );
+  const claudeRateLimits = useClaudeStore((state) =>
+    activeSession?.provider === "claude"
+      ? state.rateLimits.get(activeSession.sessionKey)
       : undefined,
   );
   const openCodeUsage = useOpenCodeStore((state) =>
@@ -1203,7 +1239,15 @@ export function AgentInfoButton({
         <div className="max-h-[min(76vh,42rem)] overflow-y-auto p-4">
           {activeSession ? (
             <div className="space-y-5">
-              <UsagePanel usage={usage} modelId={modelId} />
+              <UsagePanel
+                usage={usage}
+                modelId={modelId}
+                rateLimits={
+                  activeSession.provider === "claude"
+                    ? claudeRateLimits
+                    : undefined
+                }
+              />
 
               {(activeSession.provider === "claude" && (claudeInit?.agents?.length ?? 0) > 0)
               || (activeSession.provider === "opencode" && (openCodeHealth?.agents.length ?? 0) > 0)

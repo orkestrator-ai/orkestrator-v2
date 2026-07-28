@@ -391,6 +391,7 @@ function resetStores(environmentName = "review-table") {
     messageQueue: new Map(),
     sessionInitData: new Map(),
     contextUsage: new Map(),
+    rateLimits: new Map(),
     pendingQuestions: new Map(),
     pendingPlanApprovals: new Map(),
     models: [],
@@ -1356,9 +1357,15 @@ describe("ClaudeChatTab", () => {
         messages: [replacementMessage],
         isLoading: false,
       });
+      useClaudeStore.getState().setRateLimits(SESSION_KEY, [
+        { label: "Replacement weekly", usedPercent: 8 },
+      ]);
     });
     await act(async () => {
-      serverGate.resolve({ status: "running" });
+      serverGate.resolve({
+        status: "running",
+        rateLimits: [{ label: "Stale five hour", usedPercent: 99 }],
+      });
       await serverGate.promise;
     });
     await flushAsyncWork();
@@ -1368,6 +1375,9 @@ describe("ClaudeChatTab", () => {
       messages: [replacementMessage],
       isLoading: false,
     });
+    expect(useClaudeStore.getState().rateLimits.get(SESSION_KEY)).toEqual([
+      { label: "Replacement weekly", usedPercent: 8 },
+    ]);
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
@@ -2421,6 +2431,42 @@ describe("ClaudeChatTab", () => {
     expect(mockGetSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
   });
 
+  test("does not apply a late fast-reconnect snapshot to a replacement session", async () => {
+    const sessionGate = deferred<any>();
+    mockGetSession.mockImplementationOnce(() => sessionGate.promise);
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() =>
+      expect(mockGetSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1"),
+    );
+
+    act(() => {
+      useClaudeStore.getState().setSession(SESSION_KEY, {
+        sessionId: "session-replacement",
+        messages: [],
+        isLoading: false,
+      });
+      useClaudeStore.getState().setRateLimits(SESSION_KEY, [
+        { label: "Replacement limit", usedPercent: 7 },
+      ]);
+    });
+    await act(async () => {
+      sessionGate.resolve({
+        status: "running",
+        rateLimits: [{ label: "Stale limit", usedPercent: 97 }],
+      });
+      await sessionGate.promise;
+    });
+    await flushAsyncWork();
+
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+      "session-replacement",
+    );
+    expect(useClaudeStore.getState().rateLimits.get(SESSION_KEY)).toEqual([
+      { label: "Replacement limit", usedPercent: 7 },
+    ]);
+  });
+
   test("warns distinctly for unmatched ordinary and plan-mode events", async () => {
     const channel = eventChannel();
     const originalWarn = console.warn;
@@ -2557,7 +2603,22 @@ describe("ClaudeChatTab", () => {
 
   test("replaces a restored session that the bridge confirms has expired", async () => {
     const expiredSessionId = "expired-claude-session";
-    useClaudeStore.setState({ sessions: new Map() });
+    useClaudeStore.setState({
+      sessions: new Map(),
+      contextUsage: new Map([
+        [
+          SESSION_KEY,
+          { usedTokens: 90, totalTokens: 100, percentUsed: 90 },
+        ],
+      ]),
+      rateLimits: new Map([
+        [SESSION_KEY, [{ label: "Expired limit", usedPercent: 90 }]],
+      ]),
+      promptSuggestions: new Map([[SESSION_KEY, "Expired suggestion"]]),
+      backgroundTasks: new Map([
+        [SESSION_KEY, { old: { id: "old", status: "running" } }],
+      ]),
+    });
     seedPaneLayout(expiredSessionId);
     mockGetSessionMessages.mockImplementation(async (_client, sessionId) => {
       if (sessionId === expiredSessionId) throw new MockSessionNotFoundError();
@@ -2580,6 +2641,11 @@ describe("ClaudeChatTab", () => {
         usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId,
       ).toBe("session-1");
     });
+    const state = useClaudeStore.getState();
+    expect(state.contextUsage.has(SESSION_KEY)).toBe(false);
+    expect(state.rateLimits.has(SESSION_KEY)).toBe(false);
+    expect(state.promptSuggestions.has(SESSION_KEY)).toBe(false);
+    expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
   });
 
   test("keeps a stored transcript when cold reconnect refresh fails transiently", async () => {
@@ -2754,6 +2820,9 @@ describe("ClaudeChatTab", () => {
       totalTokens: 10_000,
       percentUsed: 90,
     });
+    useClaudeStore.getState().setRateLimits(SESSION_KEY, [
+      { label: "Stale 5h", usedPercent: 90 },
+    ]);
     useClaudeStore.getState().setPromptSuggestion(SESSION_KEY, "stale suggestion");
     useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
       old: { id: "old", status: "running" },
@@ -2780,6 +2849,7 @@ describe("ClaudeChatTab", () => {
     );
     const state = useClaudeStore.getState();
     expect(state.contextUsage.has(SESSION_KEY)).toBe(false);
+    expect(state.rateLimits.has(SESSION_KEY)).toBe(false);
     expect(state.promptSuggestions.has(SESSION_KEY)).toBe(false);
     expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
   });
@@ -4452,6 +4522,123 @@ describe("ClaudeChatTab", () => {
       ).toEqual(["task-1"]);
     });
 
+    test("rehydrates rate limits without context and later preserves or clears them authoritatively", async () => {
+      mockGetSession.mockResolvedValue(
+        serverSession({
+          contextUsage: undefined,
+          rateLimits: [{ label: "5h window", usedPercent: 37 }],
+        }) as any,
+      );
+      const view = render(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(useClaudeStore.getState().rateLimits.get(SESSION_KEY)).toEqual([
+          { label: "5h window", usedPercent: 37 },
+        ]),
+      );
+      expect(useClaudeStore.getState().contextUsage.has(SESSION_KEY)).toBe(false);
+
+      // Switching environments unmounts this tree. Returning rehydrates the
+      // authoritative snapshot even though no context reading exists yet.
+      view.unmount();
+      useClaudeStore.getState().setRateLimits(SESSION_KEY, [
+        { label: "Stale local value", usedPercent: 99 },
+      ]);
+      const remounted = render(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      await waitFor(() =>
+        expect(useClaudeStore.getState().rateLimits.get(SESSION_KEY)).toEqual([
+          { label: "5h window", usedPercent: 37 },
+        ]),
+      );
+
+      // A later context reading with no quota field must not erase the
+      // independent authoritative windows.
+      mockGetSession.mockResolvedValue(
+        serverSession({
+          contextUsage: {
+            usedTokens: 1_000,
+            totalTokens: 10_000,
+            percentUsed: 10,
+          },
+          rateLimits: undefined,
+        }) as any,
+      );
+      remounted.rerender(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+      await waitFor(() =>
+        expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)?.usedTokens)
+          .toBe(1_000),
+      );
+      expect(useClaudeStore.getState().rateLimits.get(SESSION_KEY)).toEqual([
+        { label: "5h window", usedPercent: 37 },
+      ]);
+
+      // An explicit empty top-level snapshot is the provider's clear signal.
+      mockGetSession.mockResolvedValue(
+        serverSession({
+          contextUsage: {
+            usedTokens: 2_000,
+            totalTokens: 10_000,
+            percentUsed: 20,
+            rateLimits: [{ label: "Nested stale", usedPercent: 99 }],
+          },
+          rateLimits: [],
+        }) as any,
+      );
+      remounted.rerender(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive
+          refreshRequestId={2}
+        />,
+      );
+      await waitFor(() =>
+        expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)?.usedTokens)
+          .toBe(2_000),
+      );
+      expect(useClaudeStore.getState().rateLimits.get(SESSION_KEY)).toEqual([]);
+    });
+
+    test("uses sanitized top-level windows when malformed siblings were dropped", async () => {
+      mockGetSession.mockResolvedValue(
+        serverSession({
+          contextUsage: undefined,
+          rateLimits: [{ label: "Valid 5h", usedPercent: 18 }],
+          invalidMetadataFields: ["rateLimits"],
+        }) as any,
+      );
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() =>
+        expect(useClaudeStore.getState().rateLimits.get(SESSION_KEY)).toEqual([
+          { label: "Valid 5h", usedPercent: 18 },
+        ]),
+      );
+      expect(useClaudeStore.getState().contextUsage.has(SESSION_KEY)).toBe(false);
+    });
+
     test("clears usage, the suggestion and tasks when the snapshot omits them", async () => {
       useClaudeStore.getState().setContextUsage(SESSION_KEY, {
         usedTokens: 1,
@@ -4633,6 +4820,41 @@ describe("ClaudeChatTab", () => {
         expect(
           useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)?.["bg-1"]?.description,
         ).toBe("Long build");
+      });
+    });
+
+    test("stores and authoritatively clears rate limits without a context snapshot", async () => {
+      await withChannel(async (channel) => {
+        channel.push({
+          type: "session.updated",
+          sessionId: "session-1",
+          data: {
+            rateLimits: [{ label: "5h window", usedPercent: 42 }],
+          },
+        } as any);
+        await waitFor(() =>
+          expect(useClaudeStore.getState().rateLimits.get(SESSION_KEY)).toEqual([
+            { label: "5h window", usedPercent: 42 },
+          ]),
+        );
+        expect(useClaudeStore.getState().contextUsage.has(SESSION_KEY)).toBe(false);
+
+        channel.push({
+          type: "session.updated",
+          sessionId: "session-1",
+          data: {
+            contextUsage: {
+              usedTokens: 2_000,
+              totalTokens: 8_000,
+              percentUsed: 25,
+              rateLimits: [],
+            },
+            rateLimits: [],
+          },
+        } as any);
+        await waitFor(() =>
+          expect(useClaudeStore.getState().rateLimits.get(SESSION_KEY)).toEqual([]),
+        );
       });
     });
 

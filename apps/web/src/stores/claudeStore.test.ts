@@ -32,6 +32,7 @@ function resetClaudeStore() {
     messageQueue: new Map(),
     sessionInitData: new Map(),
     contextUsage: new Map(),
+    rateLimits: new Map(),
     pendingQuestions: new Map(),
     pendingPlanApprovals: new Map(),
     models: [],
@@ -233,6 +234,57 @@ describe("claudeStore cleanup and queue helpers", () => {
     ).toBe(true);
   });
 
+  test("replaceSessionIdentity swaps the provider identity and clears only old provider metadata", () => {
+    const store = useClaudeStore.getState();
+    store.setSession(SESSION_KEY, {
+      sessionId: "session-old",
+      messages: [],
+      isLoading: true,
+    });
+    store.setSelectedModel(SESSION_KEY, "claude-sonnet");
+    store.setContextUsage(SESSION_KEY, {
+      usedTokens: 10,
+      totalTokens: 100,
+      percentUsed: 10,
+    });
+    store.setRateLimits(SESSION_KEY, [{ label: "5h", usedPercent: 90 }]);
+    store.setPromptSuggestion(SESSION_KEY, "Old suggestion");
+    store.setDismissedPromptSuggestion(SESSION_KEY, "Old dismissal");
+    store.setBackgroundTasks(SESSION_KEY, {
+      old: { id: "old", status: "running" },
+    });
+    store.addPendingQuestion({
+      id: "old-question",
+      sessionId: "session-old",
+      questions: [],
+    });
+    store.addPendingPlanApproval({
+      id: "old-approval",
+      sessionId: "session-old",
+    });
+
+    store.replaceSessionIdentity(SESSION_KEY, {
+      sessionId: "session-new",
+      messages: [],
+      isLoading: false,
+    });
+
+    const state = useClaudeStore.getState();
+    expect(state.sessions.get(SESSION_KEY)).toEqual({
+      sessionId: "session-new",
+      messages: [],
+      isLoading: false,
+    });
+    expect(state.contextUsage.has(SESSION_KEY)).toBe(false);
+    expect(state.rateLimits.has(SESSION_KEY)).toBe(false);
+    expect(state.promptSuggestions.has(SESSION_KEY)).toBe(false);
+    expect(state.dismissedPromptSuggestions.has(SESSION_KEY)).toBe(false);
+    expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
+    expect(state.pendingQuestions.has("old-question")).toBe(false);
+    expect(state.pendingPlanApprovals.has("old-approval")).toBe(false);
+    expect(state.selectedModel.get(SESSION_KEY)).toBe("claude-sonnet");
+  });
+
   test("clearSession exhaustively removes every session-keyed map and only its pending requests", () => {
     const targetKey = createSessionKey("env-1", "tab-target");
     const otherKey = createSessionKey("env-1", "tab-other");
@@ -264,6 +316,10 @@ describe("claudeStore cleanup and queue helpers", () => {
       contextUsage: new Map([
         [targetKey, { usedTokens: 1, totalTokens: 10, percentUsed: 10 }],
         [otherKey, { usedTokens: 2, totalTokens: 10, percentUsed: 20 }],
+      ]),
+      rateLimits: new Map([
+        [targetKey, [{ label: "5h", usedPercent: 10 }]],
+        [otherKey, [{ label: "Weekly", usedPercent: 20 }]],
       ]),
       pendingQuestions: new Map([
         ["question-target", { id: "question-target", sessionId: "sdk-target", questions: [] }],
@@ -305,6 +361,7 @@ describe("claudeStore cleanup and queue helpers", () => {
       "planMode",
       "fastMode",
       "contextUsage",
+      "rateLimits",
     ] as const;
     for (const field of sessionKeyedMaps) {
       expect(state[field].has(targetKey), `${field} should remove target`).toBe(false);
@@ -1187,6 +1244,50 @@ describe("claudeStore per-session turn options", () => {
         percentUsed: 50,
       });
     });
+
+    test("stores rate limits without requiring a context snapshot", () => {
+      const store = useClaudeStore.getState();
+      const limits = [{ label: "5h", usedPercent: 12 }];
+
+      store.setRateLimits(SESSION_KEY, limits);
+
+      expect(store.getContextUsage(SESSION_KEY)).toBeUndefined();
+      expect(useClaudeStore.getState().getRateLimits(SESSION_KEY)).toEqual(limits);
+    });
+
+    test("retains an authoritative empty limit array and clears only on null", () => {
+      const store = useClaudeStore.getState();
+      store.setRateLimits(SESSION_KEY, [{ label: "Weekly", usedPercent: 80 }]);
+
+      store.setRateLimits(SESSION_KEY, []);
+      expect(useClaudeStore.getState().rateLimits.has(SESSION_KEY)).toBe(true);
+      expect(useClaudeStore.getState().getRateLimits(SESSION_KEY)).toEqual([]);
+
+      store.setRateLimits(SESSION_KEY, null);
+      expect(useClaudeStore.getState().rateLimits.has(SESSION_KEY)).toBe(false);
+    });
+
+    test("a context snapshot updates limits only when it carries that field", () => {
+      const store = useClaudeStore.getState();
+      store.setRateLimits(SESSION_KEY, [{ label: "5h", usedPercent: 12 }]);
+
+      store.setContextUsage(SESSION_KEY, {
+        usedTokens: 1,
+        totalTokens: 10,
+        percentUsed: 10,
+      });
+      expect(store.getRateLimits(SESSION_KEY)).toEqual([
+        { label: "5h", usedPercent: 12 },
+      ]);
+
+      store.setContextUsage(SESSION_KEY, {
+        usedTokens: 2,
+        totalTokens: 10,
+        percentUsed: 20,
+        rateLimits: [],
+      });
+      expect(useClaudeStore.getState().getRateLimits(SESSION_KEY)).toEqual([]);
+    });
   });
 
   test("clearEnvironment prunes every session-scoped map for that environment only", () => {
@@ -1202,6 +1303,7 @@ describe("claudeStore per-session turn options", () => {
       store.setBackgroundTasks(key, { "task-1": { id: "task-1" } as never });
       store.setFastMode(key, true);
       store.setContextUsage(key, { usedTokens: 1, totalTokens: 2, percentUsed: 50 });
+      store.setRateLimits(key, [{ label: "5h", usedPercent: 50 }]);
       store.setEffort(key, "low");
       store.setPlanMode(key, true);
       store.setComposing(key, true);
@@ -1222,6 +1324,7 @@ describe("claudeStore per-session turn options", () => {
     expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
     expect(state.fastMode.has(SESSION_KEY)).toBe(false);
     expect(state.contextUsage.has(SESSION_KEY)).toBe(false);
+    expect(state.rateLimits.has(SESSION_KEY)).toBe(false);
     expect(state.effort.has(SESSION_KEY)).toBe(false);
     expect(state.planMode.has(SESSION_KEY)).toBe(false);
     expect(state.isComposing.has(SESSION_KEY)).toBe(false);
@@ -1242,6 +1345,7 @@ describe("claudeStore per-session turn options", () => {
     expect(state.backgroundTasks.has(otherEnvKey)).toBe(true);
     expect(state.fastMode.get(otherEnvKey)).toBe(true);
     expect(state.contextUsage.has(otherEnvKey)).toBe(true);
+    expect(state.rateLimits.has(otherEnvKey)).toBe(true);
     expect(state.effort.get(otherEnvKey)).toBe("low");
     expect(state.planMode.get(otherEnvKey)).toBe(true);
     expect(state.isComposing.get(otherEnvKey)).toBe(true);

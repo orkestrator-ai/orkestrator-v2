@@ -180,6 +180,45 @@ const OPTIONAL_USAGE_NUMBER_KEYS = [
   "linesRemoved",
 ] as const satisfies readonly (keyof ContextUsageSnapshot)[];
 
+export function parseClaudeRateLimits(
+  value: unknown,
+  droppedFields?: string[],
+): NonNullable<ContextUsageSnapshot["rateLimits"]> | undefined {
+  if (value === undefined) return undefined;
+  const drop = () => {
+    if (droppedFields && !droppedFields.includes("rateLimits")) {
+      droppedFields.push("rateLimits");
+    }
+  };
+  if (!Array.isArray(value)) {
+    drop();
+    return undefined;
+  }
+  return value.flatMap((entry) => {
+    if (
+      isRecord(entry)
+      && typeof entry.label === "string"
+      && isOptionalNonNegativeNumber(entry.usedPercent)
+      && (entry.usedPercent === undefined || entry.usedPercent <= 100)
+      && isOptionalString(entry.resetsAt)
+      && isOptionalNonNegativeNumber(entry.windowMinutes)
+    ) {
+      return [{
+        label: entry.label,
+        ...(entry.usedPercent !== undefined ? { usedPercent: entry.usedPercent } : {}),
+        ...(entry.resetsAt !== undefined ? { resetsAt: entry.resetsAt } : {}),
+        ...(entry.windowMinutes !== undefined
+          ? { windowMinutes: entry.windowMinutes }
+          : {}),
+      }];
+    }
+    // e.g. `usedPercent > 100`: the bridge forwards utilization unclamped,
+    // so an overdrawn window is dropped rather than costing the reading.
+    drop();
+    return [];
+  });
+}
+
 /**
  * Validate exact provider usage snapshots before they cross the REST/SSE trust
  * boundary into Zustand. UI formatters assume finite numeric fields.
@@ -253,34 +292,8 @@ export function parseClaudeContextUsage(
   }
 
   if (value.rateLimits !== undefined) {
-    if (Array.isArray(value.rateLimits)) {
-      const windows = value.rateLimits.flatMap((entry) => {
-        if (
-          isRecord(entry)
-          && typeof entry.label === "string"
-          && isOptionalNonNegativeNumber(entry.usedPercent)
-          && (entry.usedPercent === undefined || entry.usedPercent <= 100)
-          && isOptionalString(entry.resetsAt)
-          && isOptionalNonNegativeNumber(entry.windowMinutes)
-        ) {
-          return [{
-            label: entry.label,
-            ...(entry.usedPercent !== undefined ? { usedPercent: entry.usedPercent } : {}),
-            ...(entry.resetsAt !== undefined ? { resetsAt: entry.resetsAt } : {}),
-            ...(entry.windowMinutes !== undefined
-              ? { windowMinutes: entry.windowMinutes }
-              : {}),
-          }];
-        }
-        // e.g. `usedPercent > 100`: the bridge forwards utilization unclamped,
-        // so an overdrawn window is dropped rather than costing the reading.
-        drop("rateLimits");
-        return [];
-      });
-      if (windows.length > 0) result.rateLimits = windows;
-    } else {
-      drop("rateLimits");
-    }
+    const windows = parseClaudeRateLimits(value.rateLimits, droppedFields);
+    if (windows && windows.length > 0) result.rateLimits = windows;
   }
 
   if (value.credits !== undefined) {
@@ -505,6 +518,12 @@ export interface ClaudeSession {
   lastActivity: string;
   error?: string;
   contextUsage?: ContextUsageSnapshot;
+  /**
+   * Authoritative provider quota windows. These are independent of
+   * `contextUsage`: a running first turn can receive quota data before the
+   * bridge has enough information to build a token-usage snapshot.
+   */
+  rateLimits?: NonNullable<ContextUsageSnapshot["rateLimits"]>;
   promptSuggestion?: string;
   planMode?: boolean;
   backgroundTasks?: Record<string, ClaudeBackgroundTask>;
@@ -512,9 +531,12 @@ export interface ClaudeSession {
    * Optional fields omitted because their wire values failed validation.
    *
    * A whole-field rejection is reported as the bare field name
-   * (`"contextUsage"`, `"promptSuggestion"`, `"backgroundTasks"`); a dropped
-   * optional decoration or task inside an otherwise-valid field is reported as
-   * a dotted path (`"contextUsage.rateLimits"`, `"backgroundTasks.<taskId>"`).
+   * (`"contextUsage"`, `"rateLimits"`, `"promptSuggestion"`,
+   * `"backgroundTasks"`); a dropped optional decoration or task inside an
+   * otherwise-valid field is reported as a dotted path
+   * (`"contextUsage.rateLimits"`, `"backgroundTasks.<taskId>"`). A top-level
+   * rate-limit array can also retain its valid windows while reporting
+   * `"rateLimits"` for malformed entries that were dropped.
    */
   invalidMetadataFields?: string[];
 }
@@ -818,6 +840,18 @@ export async function lookupSession(
       session.contextUsage,
       droppedUsageFields,
     );
+    const droppedRateLimitFields: string[] = [];
+    const authoritativeRateLimits = parseClaudeRateLimits(
+      session.rateLimits,
+      droppedRateLimitFields,
+    );
+    if (contextUsage && authoritativeRateLimits !== undefined) {
+      if (authoritativeRateLimits && authoritativeRateLimits.length > 0) {
+        contextUsage.rateLimits = authoritativeRateLimits;
+      } else {
+        delete contextUsage.rateLimits;
+      }
+    }
     const droppedTaskIds: string[] = [];
     const backgroundTasks = parseClaudeBackgroundTasks(
       session.backgroundTasks,
@@ -831,6 +865,7 @@ export async function lookupSession(
         invalidMetadataFields.push(`contextUsage.${field}`);
       }
     }
+    invalidMetadataFields.push(...droppedRateLimitFields);
     if (
       session.promptSuggestion !== undefined
       && typeof session.promptSuggestion !== "string"
@@ -858,6 +893,7 @@ export async function lookupSession(
         lastActivity: session.lastActivity,
         error: session.error as string | undefined,
         contextUsage,
+        rateLimits: authoritativeRateLimits,
         promptSuggestion:
           typeof session.promptSuggestion === "string"
             ? session.promptSuggestion
@@ -1596,6 +1632,7 @@ export function subscribeToEvents(
       let done = false;
 
       const handleEvent = (event: MessageEvent) => {
+        if (done) return;
         try {
           const data = JSON.parse(event.data);
           const cursor = event.lastEventId;
@@ -1641,7 +1678,10 @@ export function subscribeToEvents(
         }
         if (resolver) {
           resolver({ value: undefined as unknown as ClaudeEvent, done: true });
+          resolver = null;
+          rejecter = null;
         }
+        eventQueue.length = 0;
       };
 
       // Handle abort signal. An already-aborted signal never fires the

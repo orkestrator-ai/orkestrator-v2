@@ -429,6 +429,7 @@ afterEach(() => {
     clients: new Map(),
     sessions: new Map(),
     contextUsage: new Map(),
+    rateLimits: new Map(),
     selectedModel: new Map(),
     sessionInitData: new Map(),
     selectedAgent: new Map(),
@@ -682,6 +683,30 @@ describe("AgentInfoButton usage panel", () => {
     ).toBeTruthy();
   });
 
+  test("renders Claude rate limits before the first context snapshot", () => {
+    useClaudeStore.setState({
+      rateLimits: new Map([[
+        CLAUDE_KEY,
+        [
+          { label: "5h window", usedPercent: 31 },
+          { label: "Weekly", resetsAt: "2026-07-30T09:00:00.000Z" },
+        ],
+      ]]),
+      selectedModel: new Map([[CLAUDE_KEY, "claude-sonnet"]]),
+    } as never);
+
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    expect(screen.getByText("Limits")).toBeTruthy();
+    expect(screen.getByText("31% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("claude-sonnet")).toBeTruthy();
+    expect(screen.getByText("Provider reported")).toBeTruthy();
+    expect(screen.queryByText(/first token snapshot/)).toBeNull();
+    expect(screen.queryByText("Context")).toBeNull();
+  });
+
   test("renders context, token split, cache, reasoning, elapsed and denial rows", () => {
     useClaudeStore.setState({
       contextUsage: new Map([[
@@ -836,6 +861,22 @@ describe("AgentInfoButton usage panel", () => {
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     expect(screen.queryByText("Limits")).toBeNull();
+  });
+
+  test("an authoritative empty Claude limit snapshot hides stale nested limits", () => {
+    useClaudeStore.setState({
+      contextUsage: new Map([[
+        CLAUDE_KEY,
+        usage({ rateLimits: [{ label: "Stale 5h", usedPercent: 90 }] }),
+      ]]),
+      rateLimits: new Map([[CLAUDE_KEY, []]]),
+    } as never);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    expect(screen.queryByText("Limits")).toBeNull();
+    expect(screen.queryByText("Stale 5h")).toBeNull();
+    expect(screen.getByText("Context")).toBeTruthy();
   });
 });
 

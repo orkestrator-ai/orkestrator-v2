@@ -104,6 +104,12 @@ const pendingPromptDispatchClaims = new Map<
  */
 export const IDLE_TRANSCRIPT_EVICTION_MS = 30 * 60 * 1000;
 const IDLE_TRANSCRIPT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+/**
+ * Structured usage is best-effort enrichment after Claude has already
+ * produced a result. Keep it off the critical path when the experimental SDK
+ * control request stops responding.
+ */
+export const STRUCTURED_USAGE_REQUEST_TIMEOUT_MS = 1_000;
 
 /** Record that a caller read or hydrated this session's state. */
 function touchSession(session: SessionState): void {
@@ -350,6 +356,142 @@ function extractContextUsageFromUnknown(payload: unknown, fallbackModel?: string
   return null;
 }
 
+const STRUCTURED_RATE_LIMIT_WINDOWS = [
+  ["five_hour", "Five Hour"],
+  ["seven_day", "Weekly"],
+  ["seven_day_oauth_apps", "Weekly (OAuth Apps)"],
+  ["seven_day_opus", "Weekly (Opus)"],
+  ["seven_day_sonnet", "Weekly (Sonnet)"],
+] as const;
+
+function structuredRateLimitReset(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
+}
+
+function structuredRateLimitWindow(
+  value: unknown,
+  label: string,
+): SessionRateLimitWindow | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const window = value as Record<string, unknown>;
+  const usedPercent =
+    typeof window.utilization === "number"
+    && Number.isFinite(window.utilization)
+    && window.utilization >= 0
+    && window.utilization <= 100
+      ? window.utilization
+      : undefined;
+  const resetsAt = structuredRateLimitReset(window.resets_at);
+  if (usedPercent === undefined && resetsAt === undefined) return undefined;
+  return {
+    label,
+    ...(usedPercent !== undefined ? { usedPercent } : {}),
+    ...(resetsAt !== undefined ? { resetsAt } : {}),
+  };
+}
+
+/**
+ * Parse the structured data behind Claude Code's `/usage` screen.
+ *
+ * `rate_limit_event` is only a sparse threshold notification: it may omit
+ * utilization and reports one changed bucket at a time. The structured control
+ * response is the authoritative snapshot that includes the five-hour, weekly,
+ * and model-scoped weekly windows shown by Claude Code itself.
+ */
+function rateLimitsFromStructuredUsage(
+  value: unknown,
+): SessionRateLimitWindow[] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const usage = value as Record<string, unknown>;
+  // The SDK uses this exact pair to say that plan limits do not apply. It is
+  // an authoritative empty snapshot, distinct from a malformed or failed
+  // response, and must therefore clear retained threshold-event windows.
+  if (usage.rate_limits_available === false && usage.rate_limits === null) return [];
+  if (usage.rate_limits_available !== true || usage.rate_limits === null) return undefined;
+  if (
+    !usage.rate_limits
+    || typeof usage.rate_limits !== "object"
+    || Array.isArray(usage.rate_limits)
+  ) {
+    return undefined;
+  }
+
+  const rawLimits = usage.rate_limits as Record<string, unknown>;
+  const windowsByLabel = new Map<string, SessionRateLimitWindow>();
+  let sawMalformedWindow = false;
+  const addWindow = (window: SessionRateLimitWindow): void => {
+    const identity = window.label.trim().toLowerCase();
+    if (!windowsByLabel.has(identity)) windowsByLabel.set(identity, window);
+  };
+  for (const [key, label] of STRUCTURED_RATE_LIMIT_WINDOWS) {
+    if (!Object.hasOwn(rawLimits, key)) continue;
+    const rawWindow = rawLimits[key];
+    if (rawWindow === null) continue;
+    const window = structuredRateLimitWindow(rawWindow, label);
+    if (window) {
+      addWindow(window);
+    } else {
+      sawMalformedWindow = true;
+    }
+  }
+
+  if (Array.isArray(rawLimits.model_scoped)) {
+    for (const entry of rawLimits.model_scoped) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        sawMalformedWindow = true;
+        continue;
+      }
+      const modelWindow = entry as Record<string, unknown>;
+      if (typeof modelWindow.display_name !== "string" || !modelWindow.display_name.trim()) {
+        sawMalformedWindow = true;
+        continue;
+      }
+      const window = structuredRateLimitWindow(
+        modelWindow,
+        `Weekly (${modelWindow.display_name.trim()})`,
+      );
+      if (window) {
+        addWindow(window);
+      } else {
+        sawMalformedWindow = true;
+      }
+    }
+  } else if (
+    Object.hasOwn(rawLimits, "model_scoped")
+    && rawLimits.model_scoped !== null
+  ) {
+    sawMalformedWindow = true;
+  }
+  if (windowsByLabel.size === 0 && sawMalformedWindow) return undefined;
+  return [...windowsByLabel.values()];
+}
+
+async function getStructuredUsageWithTimeout(
+  getStructuredUsage: () => Promise<unknown>,
+  queryControl: NonNullable<SessionState["queryControl"]>,
+): Promise<unknown> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(
+        `Structured usage control request timed out after ${STRUCTURED_USAGE_REQUEST_TIMEOUT_MS}ms`,
+      ));
+    }, STRUCTURED_USAGE_REQUEST_TIMEOUT_MS);
+    timeout.unref?.();
+  });
+
+  try {
+    return await Promise.race([
+      getStructuredUsage.call(queryControl),
+      timeoutPromise,
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 async function buildClaudeUsageSnapshot(
   session: SessionState,
   result: SdkResultMessage,
@@ -432,6 +574,23 @@ async function buildClaudeUsageSnapshot(
       }
     } catch (error) {
       console.debug("[session-manager] Context usage control request failed:", error);
+    }
+  }
+
+  const getStructuredUsage =
+    queryControl?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+  if (getStructuredUsage) {
+    try {
+      const structuredUsage = await getStructuredUsageWithTimeout(
+        getStructuredUsage,
+        queryControl,
+      );
+      const rateLimits = rateLimitsFromStructuredUsage(structuredUsage);
+      if (rateLimits !== undefined) session.rateLimits = rateLimits;
+    } catch (error) {
+      // The API is explicitly experimental. A failure must not discard the
+      // sparse windows already retained from rate_limit_event notifications.
+      console.debug("[session-manager] Structured usage control request failed:", error);
     }
   }
 
@@ -2960,6 +3119,7 @@ async function assertOpenedWorkspaceFile(
 async function readWorkspaceImageAttachment(
   filePath: string,
   cwd: string,
+  afterSymlinkValidation?: (filePath: string) => void | Promise<void>,
   afterInitialValidation?: (filePath: string) => void | Promise<void>,
 ): Promise<Buffer> {
   const lexicalRoot = resolve(cwd);
@@ -2977,6 +3137,7 @@ async function readWorkspaceImageAttachment(
     throw attachmentErrorForFsFailure(error);
   });
   await assertNoSymlinkComponents(lexicalRoot, targetPath);
+  await afterSymlinkValidation?.(targetPath);
 
   const canonicalTarget = await realpath(targetPath).catch((error: unknown) => {
     throw attachmentErrorForFsFailure(error);
@@ -3080,6 +3241,7 @@ async function buildSdkPrompt(
   finalPrompt: string,
   attachments: PromptOptions["attachments"] | undefined,
   cwd: string,
+  afterAttachmentSymlinkValidation?: (filePath: string) => void | Promise<void>,
   afterAttachmentInitialValidation?: (filePath: string) => void | Promise<void>,
 ): Promise<string | AsyncIterable<SDKUserMessage>> {
   const imageAttachments = attachments?.filter((att) => att.type === "image") ?? [];
@@ -3112,6 +3274,7 @@ async function buildSdkPrompt(
       const buffer = await readWorkspaceImageAttachment(
         att.path,
         cwd,
+        afterAttachmentSymlinkValidation,
         afterAttachmentInitialValidation,
       );
       base64Data = buffer.toString("base64");
@@ -3246,6 +3409,7 @@ export async function sendPrompt(
   prompt: string,
   options?: PromptOptions,
   testHooks?: {
+    afterAttachmentSymlinkValidation?: (filePath: string) => void | Promise<void>;
     afterAttachmentInitialValidation?: (filePath: string) => void | Promise<void>;
     onQueryStarted?: () => void;
   },
@@ -3539,6 +3703,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       finalPrompt,
       options?.attachments,
       cwd,
+      testHooks?.afterAttachmentSymlinkValidation,
       testHooks?.afterAttachmentInitialValidation,
     );
     const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal);
@@ -4800,11 +4965,16 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         );
         if (exactUsage) {
           session.usage = exactUsage;
+        }
+        if (exactUsage || session.rateLimits !== undefined) {
           eventEmitter.emit({
             type: "session.updated",
             sessionId,
             data: {
-              contextUsage: exactUsage,
+              ...(exactUsage ? { contextUsage: exactUsage } : {}),
+              ...(session.rateLimits !== undefined
+                ? { rateLimits: session.rateLimits }
+                : {}),
             },
           });
         }

@@ -67,6 +67,16 @@ const DEFAULT_GATEWAY_PORT = 34121;
 const GATEWAY_PORT_FALLBACK_ATTEMPTS = 20;
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MAX_BROWSER_PREVIEW_BODY_BYTES = 8 * 1024 * 1024;
+/**
+ * Command bodies carry durable snapshots — prompt queues, build pipelines and
+ * agent handoffs — whose storage limit is 32 MB each. Every renderer command
+ * travels this route, in local desktop mode too, so a cap below the storage
+ * limit would make those limits unreachable and turn a legitimately large save
+ * into an opaque transport failure. `readRequestBody` discards bytes past the
+ * cap rather than buffering them, so a larger ceiling costs nothing until a
+ * request actually approaches it.
+ */
+const MAX_INVOKE_BODY_BYTES = 48 * 1024 * 1024;
 const KEEPALIVE_MS = 25_000;
 const CORS_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 const CORS_ALLOWED_HEADERS = "Authorization, Content-Type, X-Orkestrator-Codex-Token";
@@ -303,8 +313,11 @@ async function readRequestBody(request: IncomingMessage, maxBytes = MAX_JSON_BOD
   return Buffer.concat(chunks);
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
-  const body = await readRequestBody(request);
+async function readJsonBody(
+  request: IncomingMessage,
+  maxBytes = MAX_JSON_BODY_BYTES,
+): Promise<Record<string, unknown>> {
+  const body = await readRequestBody(request, maxBytes);
   if (body.length === 0) return {};
   let parsed: unknown;
   try {
@@ -1189,7 +1202,23 @@ export class OrkestratorGateway {
       return;
     }
 
-    const body = await readJsonBody(request);
+    let body: Record<string, unknown>;
+    try {
+      body = await readJsonBody(request, MAX_INVOKE_BODY_BYTES);
+    } catch (error) {
+      // Without these branches an oversized or malformed body escapes to the
+      // generic server catch and surfaces as a 500, which reads as a backend
+      // fault rather than as a request the caller can correct.
+      if (error instanceof RequestBodyTooLargeError) {
+        jsonResponse(response, 413, { error: error.message });
+        return;
+      }
+      if (error instanceof InvalidRequestBodyError) {
+        jsonResponse(response, 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
     const command = body.command;
     const args = body.args;
     if (typeof command !== "string") {

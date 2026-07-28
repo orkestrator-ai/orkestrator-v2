@@ -121,23 +121,57 @@ describe("reconcilePersistedLayout", () => {
     }
   });
 
-  test("ignores non-string one-shot agent launch options", () => {
+  test("ignores malformed one-shot agent launch and handoff values", () => {
+    for (const agentHandoffId of [["not", "a", "string"], "", "   "]) {
+      const restored = reconcilePersistedLayout(saved({
+        kind: "leaf",
+        id: "pane-1",
+        tabs: [{
+          id: "native",
+          type: "claude-native",
+          claudeNativeData: { environmentId: "env-1" },
+          initialAgentModel: 42,
+          initialReasoningEffort: { nested: true },
+          agentHandoffId,
+          consumedAgentHandoffId: agentHandoffId,
+        }],
+        activeTabId: "native",
+      }), context);
+
+      const tab = (
+        restored?.root as unknown as { tabs: Array<Record<string, unknown>> }
+      ).tabs[0]!;
+      expect(tab.initialAgentModel).toBeUndefined();
+      expect(tab.initialReasoningEffort).toBeUndefined();
+      expect(tab.agentHandoffId).toBeUndefined();
+      expect(tab.consumedAgentHandoffId).toBeUndefined();
+    }
+  });
+
+  test("restores a consumed handoff reference so the bootstrap stays hidden", () => {
+    /*
+     * A tab that resumed another session keeps only this id. It survives a
+     * restart because the bootstrap prompt is still the session's first message,
+     * and without the id it would render as a raw JSON frame.
+     */
     const restored = reconcilePersistedLayout(saved({
       kind: "leaf",
       id: "pane-1",
       tabs: [{
         id: "native",
-        type: "claude-native",
-        claudeNativeData: { environmentId: "env-1" },
-        initialAgentModel: 42,
-        initialReasoningEffort: { nested: true },
+        type: "codex-native",
+        codexNativeData: { environmentId: "env-1" },
+        agentHandoffId: "handoff-live",
+        consumedAgentHandoffId: "handoff-consumed",
       }],
       activeTabId: "native",
     }), context);
 
-    const tab = (restored?.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs[0]!;
-    expect(tab.initialAgentModel).toBeUndefined();
-    expect(tab.initialReasoningEffort).toBeUndefined();
+    const tab = (
+      restored?.root as unknown as { tabs: Array<Record<string, unknown>> }
+    ).tabs[0]!;
+    expect(tab.agentHandoffId).toBe("handoff-live");
+    expect(tab.consumedAgentHandoffId).toBe("handoff-consumed");
   });
 
   test("restores the last browser address", () => {

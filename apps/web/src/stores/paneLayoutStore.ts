@@ -31,6 +31,7 @@ import { deleteSession as deleteCodexSession } from "@/lib/codex-client";
 import { deleteSession as deleteOpenCodeSession } from "@/lib/opencode-client";
 import { createUuid } from "@/lib/uuid";
 import { destroyBrowserPreview } from "@/lib/native/browser-preview";
+import { forgetAgentHandoff } from "@/lib/agent-handoff";
 
 /**
  * Per-environment state for pane layout
@@ -166,6 +167,7 @@ interface PaneLayoutState {
   reorderTabs: (paneId: string, fromIndex: number, toIndex: number, environmentId?: string) => void;
   clearTabInitialPrompt: (tabId: string, environmentId?: string) => void;
   clearTabInitialAgentOptions: (tabId: string, environmentId?: string) => void;
+  clearTabAgentHandoff: (tabId: string, environmentId?: string) => void;
   updateTabNativeSessionId: (tabId: string, sessionId: string | undefined, environmentId?: string) => void;
   updateTabBrowserUrl: (tabId: string, url: string, environmentId?: string) => void;
 
@@ -336,6 +338,47 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
   }
 }
 
+function tabHandoffIds(tab: TabInfo): string[] {
+  return tab.agentHandoffId ? [tab.agentHandoffId] : [];
+}
+
+function deleteUnreferencedAgentHandoffs(
+  envId: string,
+  removedTabs: TabInfo[],
+  remainingRoot: PaneNode,
+): void {
+  const remainingHandoffIds = new Set(
+    getAllLeaves(remainingRoot)
+      .flatMap((leaf) => leaf.tabs)
+      .flatMap(tabHandoffIds),
+  );
+  const removedHandoffIds = new Set(removedTabs.flatMap(tabHandoffIds));
+  for (const handoffId of removedHandoffIds) {
+    if (remainingHandoffIds.has(handoffId)) continue;
+    forgetAgentHandoff(handoffId);
+    backend.deleteAgentHandoff(handoffId, envId).catch((error) => {
+      console.debug("[PaneLayout] Error deleting agent handoff:", error);
+    });
+  }
+}
+
+/**
+ * Reclaims handoffs the restored layout no longer references.
+ *
+ * The per-tab delete is fire-and-forget; if it is dropped (backend restart, lock
+ * timeout, app kill) the reference is already gone from the layout, so nothing
+ * retries and a sensitive transcript is stranded on disk forever. Hydration is
+ * the one moment the full reference set for an environment is authoritative.
+ */
+function pruneUnreferencedAgentHandoffs(envId: string, root: PaneNode): void {
+  const referenced = getAllLeaves(root)
+    .flatMap((leaf) => leaf.tabs)
+    .flatMap(tabHandoffIds);
+  backend.pruneAgentHandoffs(envId, referenced).catch((error) => {
+    console.debug("[PaneLayout] Error pruning agent handoffs:", error);
+  });
+}
+
 export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
   environments: new Map(),
   hydration: new Map(),
@@ -429,12 +472,19 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     if (!restored) {
       set({ hydration });
+      // Nothing was restored, so no tab in this environment references a
+      // handoff. Any stored record is orphaned.
+      pruneUnreferencedAgentHandoffs(
+        environmentId,
+        state.environments.get(environmentId)?.root ?? createInitialLayout(),
+      );
       return;
     }
 
     const environments = new Map(state.environments);
     environments.set(environmentId, restored);
     set({ environments, hydration });
+    pruneUnreferencedAgentHandoffs(environmentId, restored.root);
   },
 
   addTab: (paneId, tab, environmentId) => {
@@ -514,6 +564,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
         const newEnvs = new Map(state.environments);
         newEnvs.set(envId, { ...envState, root: newRoot });
         set({ environments: newEnvs });
+        if (closedTab) {
+          deleteUnreferencedAgentHandoffs(envId, [closedTab], newRoot);
+        }
       }
       return;
     }
@@ -532,6 +585,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
+    if (closedTab) {
+      deleteUnreferencedAgentHandoffs(envId, [closedTab], newRoot);
+    }
   },
 
   setActiveTab: (paneId, tabId, environmentId) => {
@@ -739,6 +795,36 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
     console.debug("[PaneLayout] Cleared initial agent options for tab:", tabId);
+  },
+
+  clearTabAgentHandoff: (tabId, environmentId) => {
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return;
+
+    const envState = state.environments.get(envId);
+    if (!envState) return;
+    const paneWithTab = findPaneWithTab(envState.root, tabId);
+    if (!paneWithTab) return;
+    const tabWithHandoff = paneWithTab.tabs.find((tab) => tab.id === tabId);
+    if (!tabWithHandoff?.agentHandoffId) return;
+
+    // Retain the id as consumed. The snapshot is deleted below, but the
+    // bootstrap prompt it produced is still the destination session's first
+    // message; forgetting the id entirely would render that raw JSON frame.
+    const consumedAgentHandoffId = tabWithHandoff.agentHandoffId;
+    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) =>
+        tab.id === tabId
+          ? { ...tab, agentHandoffId: undefined, consumedAgentHandoffId }
+          : tab
+      ),
+    }));
+    const newEnvs = new Map(state.environments);
+    newEnvs.set(envId, { ...envState, root: newRoot });
+    set({ environments: newEnvs });
+    deleteUnreferencedAgentHandoffs(envId, [tabWithHandoff], newRoot);
   },
 
   updateTabNativeSessionId: (tabId, sessionId, environmentId) => {
@@ -1062,6 +1148,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: newActivePaneId });
     set({ environments: newEnvs });
+    deleteUnreferencedAgentHandoffs(envId, pane.tabs, newRoot);
   },
 
   setActivePane: (paneId, environmentId) => {

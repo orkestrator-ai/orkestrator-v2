@@ -104,6 +104,28 @@ describe("delete_environment durable child-state cleanup", () => {
     );
   });
 
+  test("retains a deleting environment when handoff cleanup fails", async () => {
+    await withDeleteCommand(
+      async (storage) => storage.addEnvironment(environment()).then(() => undefined),
+      async (invokeDelete, storage) => {
+        const original = storage.deleteAgentHandoffsByEnvironment.bind(storage);
+        storage.deleteAgentHandoffsByEnvironment = mock(async () => {
+          throw new Error("handoff cleanup failed");
+        });
+
+        await expect(invokeDelete()).rejects.toThrow("handoff cleanup failed");
+        expect(await storage.getEnvironment("e1")).toMatchObject({
+          id: "e1",
+          deletionRequestedAt: expect.any(String),
+        });
+
+        storage.deleteAgentHandoffsByEnvironment = original;
+        await expect(invokeDelete()).resolves.toBeUndefined();
+        expect(await storage.getEnvironment("e1")).toBeNull();
+      },
+    );
+  });
+
   test("deletes the environment-linked pipeline whose stored environment id is blank", async () => {
     await withDeleteCommand(
       async (storage) => {
@@ -139,6 +161,12 @@ describe("delete_environment durable child-state cleanup", () => {
           "e1",
           [{ id: "m1" }],
         );
+        await storage.saveAgentHandoff(
+          "handoff-1",
+          "e1",
+          1,
+          { messages: [{ id: "m1" }] },
+        );
       },
       async (invokeDelete, storage) => {
         let releaseCleanup!: () => void;
@@ -170,12 +198,19 @@ describe("delete_environment durable child-state cleanup", () => {
           1,
           { id: "pipeline-1", phase: "late" },
         )).rejects.toThrow("being deleted");
+        await expect(storage.saveAgentHandoff(
+          "handoff-late",
+          "e1",
+          1,
+          { messages: [] },
+        )).rejects.toThrow("being deleted");
 
         releaseCleanup();
         await deletion;
         expect(await storage.getEnvironment("e1")).toBeNull();
         expect(await storage.getBuildPipeline("pipeline-1")).toBeNull();
         expect(await storage.getPromptQueue("claude env-e1:tab-1")).toBeNull();
+        expect(await storage.getAgentHandoff("handoff-1")).toBeNull();
       },
     );
   });

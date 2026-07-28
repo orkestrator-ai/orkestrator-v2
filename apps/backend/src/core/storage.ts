@@ -42,6 +42,7 @@ import type {
   PersistedLoopedReviewWorkflow,
   PersistedBuildPipeline,
   PersistedPromptQueue,
+  PersistedAgentHandoff,
   RepositoryConfig,
   Session,
   SessionType,
@@ -296,6 +297,20 @@ function isPersistedPromptQueue(
     && typeof value.updatedAt === "string"
     && Number.isFinite(Date.parse(value.updatedAt))
     && isPositiveInteger(value.revision);
+}
+
+function isPersistedAgentHandoff(
+  value: unknown,
+  expectedId?: string,
+): value is PersistedAgentHandoff {
+  return isRecord(value)
+    && isPositiveInteger(value.version)
+    && isNonBlankString(value.id)
+    && (expectedId === undefined || value.id === expectedId)
+    && isNonBlankString(value.environmentId)
+    && isRecord(value.snapshot)
+    && typeof value.createdAt === "string"
+    && Number.isFinite(Date.parse(value.createdAt));
 }
 
 function isPersistedBuildPipeline(
@@ -809,6 +824,7 @@ export class StorageService {
   private loopedReviewMutation: Promise<unknown> = Promise.resolve();
   private buildPipelineMutation: Promise<unknown> = Promise.resolve();
   private promptQueueMutation: Promise<unknown> = Promise.resolve();
+  private agentHandoffMutation: Promise<unknown> = Promise.resolve();
   private changeListener: ResourceChangeListener | null = null;
   private changeRevision = 0;
 
@@ -889,6 +905,10 @@ export class StorageService {
 
   private promptQueuesFile(): string {
     return this.file("prompt-queues.json");
+  }
+
+  private agentHandoffsFile(): string {
+    return this.file("agent-handoffs.json");
   }
 
   private kanbanFile(): string {
@@ -2299,6 +2319,248 @@ export class StorageService {
           && queue.environmentId !== environmentId,
       );
       return removedKeys;
+    });
+  }
+
+  private enqueueAgentHandoffMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.agentHandoffsFile(),
+        "agent handoff storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.agentHandoffMutation.then(run, run);
+    this.agentHandoffMutation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async loadAgentHandoffEntries(): Promise<Record<string, unknown>> {
+    const stored = await this.loadJson<unknown>(
+      this.agentHandoffsFile(),
+      () => ({}),
+    );
+    return isRecord(stored) ? stored : {};
+  }
+
+  private async loadAgentHandoffs(): Promise<Record<string, PersistedAgentHandoff>> {
+    const stored = await this.loadAgentHandoffEntries();
+    return Object.fromEntries(
+      Object.entries(stored).filter(([storedId, handoff]) =>
+        isPersistedAgentHandoff(handoff, storedId)
+      ),
+    ) as Record<string, PersistedAgentHandoff>;
+  }
+
+  async getAgentHandoff(handoffId: string): Promise<PersistedAgentHandoff | null> {
+    if (!isNonBlankString(handoffId)) {
+      throw new Error("Agent handoff ID must not be blank");
+    }
+    return (await this.loadAgentHandoffs())[handoffId] ?? null;
+  }
+
+  async saveAgentHandoff(
+    handoffId: string,
+    environmentId: string,
+    version: number,
+    snapshot: unknown,
+  ): Promise<PersistedAgentHandoff> {
+    if (!isNonBlankString(handoffId)) {
+      throw new Error("Agent handoff ID must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Agent handoff environment ID must not be blank");
+    }
+    if (!isPositiveInteger(version)) {
+      throw new Error("Agent handoff version must be a positive integer");
+    }
+    if (!isRecord(snapshot)) {
+      throw new Error("Agent handoff snapshot must be an object");
+    }
+
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(snapshot);
+    } catch {
+      throw new Error("Agent handoff snapshot must be JSON serializable");
+    }
+    if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
+      throw new Error("Agent handoff exceeds the 32 MB limit");
+    }
+
+    return this.enqueueAgentHandoffMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Agent handoff");
+      const handoffs = await this.loadAgentHandoffs();
+      const previous = handoffs[handoffId];
+      if (previous) {
+        if (previous.environmentId !== environmentId) {
+          throw new Error("Agent handoff belongs to another environment");
+        }
+        // Handoffs are immutable. Returning the committed record makes a retry
+        // idempotent without allowing a second client to replace its contents.
+        return previous;
+      }
+      const saved: PersistedAgentHandoff = {
+        version,
+        id: handoffId,
+        environmentId,
+        snapshot,
+        createdAt: nowIso(),
+      };
+      handoffs[handoffId] = saved;
+      await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      return saved;
+    });
+  }
+
+  private async assertAgentHandoffBackupOwnership(
+    handoffId: string,
+    environmentId: string,
+  ): Promise<void> {
+    for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
+      const backup = this.backupPath(this.agentHandoffsFile(), index);
+      if (!await exists(backup)) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await fs.readFile(backup, "utf8"));
+      } catch {
+        // The scrub that follows removes corrupt backups because their content
+        // cannot be proven free of the targeted handoff.
+        continue;
+      }
+      if (!isRecord(parsed)) continue;
+      const candidate = parsed[handoffId];
+      if (
+        isRecord(candidate)
+        && isNonBlankString(candidate.environmentId)
+        && candidate.environmentId !== environmentId
+      ) {
+        throw new Error("Agent handoff belongs to another environment");
+      }
+    }
+  }
+
+  /**
+   * Deletes one handoff after its destination tab no longer references it.
+   *
+   * The environment id is required even though handoff ids are globally unique:
+   * it prevents a stale or malformed client from deleting another environment's
+   * transcript. Backups are scrubbed even when the primary no longer contains
+   * the record so retrying a partially completed cleanup finishes the privacy
+   * boundary rather than reporting success with retained content.
+   */
+  async deleteAgentHandoff(
+    handoffId: string,
+    environmentId: string,
+  ): Promise<boolean> {
+    if (!isNonBlankString(handoffId)) {
+      throw new Error("Agent handoff ID must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Agent handoff environment ID must not be blank");
+    }
+    return this.enqueueAgentHandoffMutation(async () => {
+      const handoffs = await this.loadAgentHandoffEntries();
+      const stored = handoffs[handoffId];
+      if (
+        isRecord(stored)
+        && isNonBlankString(stored.environmentId)
+        && stored.environmentId !== environmentId
+      ) {
+        throw new Error("Agent handoff belongs to another environment");
+      }
+      await this.assertAgentHandoffBackupOwnership(handoffId, environmentId);
+      const existed = Object.prototype.hasOwnProperty.call(handoffs, handoffId);
+      delete handoffs[handoffId];
+      // Always rewrite an existing file: a corrupt primary may have fallen back
+      // to a backup, and an idempotent retry still needs to replace that
+      // unreadable primary. Do not *create* one — a client deleting a stale
+      // reference on an installation that never used the feature should leave no
+      // trace, and there is nothing to recover when no file exists.
+      if (await exists(this.agentHandoffsFile())) {
+        await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.agentHandoffsFile(),
+        (storedId) => storedId !== handoffId,
+      );
+      return existed;
+    });
+  }
+
+  /**
+   * Reconciles stored handoffs against the ids a pane layout still references.
+   *
+   * Deletion at tab close is a best-effort renderer call: a backend restart, a
+   * lock timeout or a kill between the layout update and the request drops it
+   * silently, and the id is gone from the layout by then, so nothing would ever
+   * retry. Without this sweep those transcripts stay on disk permanently,
+   * unreachable and unremovable short of deleting the environment. Called after
+   * pane-layout hydration, when `referencedHandoffIds` is authoritative.
+   */
+  async pruneAgentHandoffs(
+    environmentId: string,
+    referencedHandoffIds: string[],
+  ): Promise<string[]> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Agent handoff environment ID must not be blank");
+    }
+    const referenced = new Set(referencedHandoffIds.filter(isNonBlankString));
+    return this.enqueueAgentHandoffMutation(async () => {
+      const stored = await this.loadAgentHandoffEntries();
+      const isOrphan = (storedId: string, handoff: unknown): boolean =>
+        isRecord(handoff)
+        && handoff.environmentId === environmentId
+        && !referenced.has(storedId);
+      const removedIds = Object.entries(stored)
+        .filter(([storedId, handoff]) => isOrphan(storedId, handoff))
+        .map(([storedId]) => storedId);
+      if (removedIds.length === 0) return [];
+      const retained = Object.fromEntries(
+        Object.entries(stored).filter(([storedId, handoff]) => !isOrphan(storedId, handoff)),
+      );
+      await this.saveSensitiveJson(this.agentHandoffsFile(), retained);
+      await this.scrubSensitiveJsonBackups(
+        this.agentHandoffsFile(),
+        (storedId, handoff) => !isOrphan(storedId, handoff),
+      );
+      return removedIds;
+    });
+  }
+
+  async deleteAgentHandoffsByEnvironment(environmentId: string): Promise<string[]> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Agent handoff environment ID must not be blank");
+    }
+    return this.enqueueAgentHandoffMutation(async () => {
+      const stored = await this.loadAgentHandoffEntries();
+      const removedIds = Object.entries(stored)
+        .filter(([, handoff]) =>
+          isRecord(handoff) && handoff.environmentId === environmentId
+        )
+        .map(([storedId]) => storedId);
+      const handoffs = Object.fromEntries(
+        Object.entries(stored).filter(([storedId, handoff]) =>
+          isPersistedAgentHandoff(handoff, storedId)
+          && handoff.environmentId !== environmentId
+        ),
+      );
+      // Rewrite even if no valid record matched. Invalid primary entries cannot
+      // be proven free of content from the environment being deleted.
+      if (await exists(this.agentHandoffsFile())) {
+        await this.saveSensitiveJson(this.agentHandoffsFile(), handoffs);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.agentHandoffsFile(),
+        (storedId, handoff) =>
+          isPersistedAgentHandoff(handoff, storedId)
+          && handoff.environmentId !== environmentId,
+      );
+      return removedIds;
     });
   }
 

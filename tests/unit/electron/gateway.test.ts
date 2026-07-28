@@ -558,6 +558,8 @@ describe("remote gateway", () => {
     });
     expect(badCommand.status).toBe(400);
 
+    // A body the caller can correct is a 4xx. Before, both of these escaped to
+    // the generic server catch and reported 500, which reads as a backend fault.
     const malformedJson = await requestUrl(`${info!.url}__orkestrator/invoke`, {
       method: "POST",
       headers: {
@@ -566,7 +568,8 @@ describe("remote gateway", () => {
       },
       body: "{",
     });
-    expect(malformedJson.status).toBe(500);
+    expect(malformedJson.status).toBe(400);
+    expect(malformedJson.json()).toEqual({ error: "Malformed JSON request body" });
 
     backend.invoke.mockImplementationOnce(async () => {
       throw new Error("backend failed");
@@ -581,6 +584,68 @@ describe("remote gateway", () => {
     });
     expect(backendError.status).toBe(500);
     expect(backendError.json()).toEqual({ error: "backend failed" });
+  });
+
+  test("accepts command bodies far larger than the shared JSON limit and rejects oversized ones with 413", async () => {
+    const dataDir = await createTempDir("ork-gateway-invoke-size-");
+    await createRendererRoot(dataDir);
+
+    const backend = {
+      invoke: mock(async (command: string, args: Record<string, unknown>) => ({
+        command,
+        snapshotLength: (args.snapshot as string | undefined)?.length ?? 0,
+      })),
+    };
+    const gateway = new OrkestratorGateway({
+      backend,
+      dataDir,
+      rendererRoot: path.join(dataDir, "dist"),
+      bindAddress: "127.0.0.1",
+      port: 0,
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger: createLogger(),
+      allowNonTailscaleBind: true,
+    });
+    gateways.push(gateway);
+    const info = await gateway.start();
+    expect(info).not.toBeNull();
+
+    const headers = {
+      authorization: `Bearer ${info!.token}`,
+      "content-type": "application/json",
+    };
+
+    /*
+     * Durable snapshots — agent handoffs above all — routinely exceed the 1 MiB
+     * body limit the other JSON routes use. This route has to clear the 32 MB
+     * storage limit or those limits are unreachable and a legitimate save fails
+     * as a transport error.
+     */
+    const largeSnapshot = "x".repeat(4 * 1024 * 1024);
+    const accepted = await requestUrl(`${info!.url}__orkestrator/invoke`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        command: "save_agent_handoff",
+        args: { snapshot: largeSnapshot },
+      }),
+    });
+    expect(accepted.status).toBe(200);
+    expect(accepted.json()).toEqual({
+      result: { command: "save_agent_handoff", snapshotLength: largeSnapshot.length },
+    });
+
+    const oversized = await requestUrl(`${info!.url}__orkestrator/invoke`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        command: "save_agent_handoff",
+        args: { snapshot: "x".repeat(49 * 1024 * 1024) },
+      }),
+    });
+    expect(oversized.status).toBe(413);
+    expect(oversized.json()).toEqual({ error: "Request body is too large" });
+    expect(backend.invoke).toHaveBeenCalledTimes(1);
   });
 
   test("allows configured public client origins without proxying browser traffic", async () => {

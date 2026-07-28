@@ -6,6 +6,8 @@ import {
   type CSSProperties,
 } from "react";
 import {
+  ArrowRight,
+  ArrowRightLeft,
   Copy,
   Info,
   RotateCcw,
@@ -28,12 +30,16 @@ import { useOpenCodeStore } from "@/stores/openCodeStore";
 import {
   compactClaudeSession,
   forkClaudeSession,
+  getSession as getClaudeSession,
+  getSessionMessages as getClaudeSessionMessages,
   rewindClaudeFiles,
   stopClaudeBackgroundTask,
 } from "@/lib/claude-client";
 import {
   compactOpenCodeSession,
   forkOpenCodeSession,
+  getSessionMessages as getOpenCodeSessionMessages,
+  getSessionStatus as getOpenCodeSessionStatus,
   revertOpenCodeSession,
   shareOpenCodeSession,
   unrevertOpenCodeSession,
@@ -44,11 +50,30 @@ import {
   compactCodexSession,
   forkCodexSession,
   getCodexRuntimeHealth,
+  getSessionMessages as getCodexSessionMessages,
+  getSessionStatus as getCodexSessionStatus,
   startCodexNativeReview,
   steerCodexSession,
 } from "@/lib/codex-client";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUuid } from "@/lib/uuid";
+import {
+  AGENT_PROVIDER_LABELS,
+  agentHandoffTranscriptDigest,
+  composeAgentHandoffTransferMessages,
+  createAgentHandoffSnapshot,
+  forgetAgentHandoff,
+  loadAgentHandoff,
+  persistAgentHandoff,
+  type AgentProvider,
+} from "@/lib/agent-handoff";
+import { deleteAgentHandoff } from "@/lib/backend";
+import {
+  normalizeClaudeMessagesForDisplay,
+  normalizeCodexNativeMessage,
+  normalizeOpenCodeNativeMessage,
+} from "@/lib/chat/native-message-adapters";
+import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 interface AgentInfoButtonProps {
   activeTab: TabInfo | null;
@@ -117,6 +142,10 @@ function formatDuration(value: number): string {
   const seconds = value / 1_000;
   if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
   return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+}
+
+function formatCount(value: number, singular: string): string {
+  return `${value} ${singular}${value === 1 ? "" : "s"}`;
 }
 
 function Metric({
@@ -440,6 +469,7 @@ export function AgentInfoButton({
   mobile = false,
 }: AgentInfoButtonProps) {
   const [open, setOpen] = useState(false);
+  const [handoffOpen, setHandoffOpen] = useState(false);
   const [busyState, setBusyState] = useState<SessionActionState | null>(null);
   const [codexHealth, setCodexHealth] = useState<unknown>(null);
   const [steerState, setSteerState] = useState<SessionValueState<string>>({
@@ -591,6 +621,14 @@ export function AgentInfoButton({
         : activeSession?.provider === "codex"
           ? codexSession?.sessionId
           : undefined;
+  const currentSessionLoading =
+    activeSession?.provider === "claude"
+      ? claudeSession?.isLoading ?? false
+      : activeSession?.provider === "opencode"
+        ? openCodeSession?.isLoading ?? false
+        : activeSession?.provider === "codex"
+          ? codexSession?.isLoading ?? false
+          : false;
   /*
    * The tab key is not enough: resume replaces the provider session beneath
    * the same tab. Including the provider session id makes transient controls
@@ -693,6 +731,182 @@ export function AgentInfoButton({
     if (closeCurrentPanel) setOpen(false);
   };
 
+  const openHandoffTab = (
+    destination: AgentProvider,
+    handoffId: string,
+  ) => {
+    if (!activeTab || !activeSession) return;
+    const sourceData =
+      activeTab.claudeNativeData
+      ?? activeTab.openCodeNativeData
+      ?? activeTab.codexNativeData;
+    if (!sourceData) return;
+    const nativeData = {
+      containerId: sourceData.containerId,
+      environmentId: activeSession.environmentId,
+      isLocal: sourceData.isLocal,
+    };
+    const id = createUuid();
+    const destinationLabel = AGENT_PROVIDER_LABELS[destination];
+    const tab: TabInfo = {
+      id,
+      type: `${destination}-native` as TabInfo["type"],
+      displayTitle: `${destinationLabel} · from ${AGENT_PROVIDER_LABELS[activeSession.provider]}`,
+      agentHandoffId: handoffId,
+      ...(destination === "claude"
+        ? { claudeNativeData: nativeData }
+        : destination === "opencode"
+          ? { openCodeNativeData: nativeData }
+          : { codexNativeData: nativeData }),
+    };
+    const panes = usePaneLayoutStore.getState();
+    panes.addTab(
+      panes.getActivePaneId(activeSession.environmentId),
+      tab,
+      activeSession.environmentId,
+    );
+    setOpen(false);
+  };
+
+  const readAuthoritativeHandoffMessages = async (): Promise<NativeMessage[]> => {
+    if (!activeSession || !currentSessionId) {
+      throw new Error("No active conversation is available");
+    }
+    if (activeSession.provider === "claude" && claudeClient) {
+      const status = await getClaudeSession(claudeClient, currentSessionId);
+      if (!status) throw new Error("Claude session is unavailable");
+      if (status.status !== "idle") {
+        throw new Error("Wait for Claude to finish before continuing in another agent");
+      }
+      const messages = normalizeClaudeMessagesForDisplay(
+        await getClaudeSessionMessages(
+          claudeClient,
+          currentSessionId,
+          { throwOnError: true },
+        ),
+      );
+      const statusAfterRead = await getClaudeSession(claudeClient, currentSessionId);
+      if (!statusAfterRead) throw new Error("Claude session is unavailable");
+      if (statusAfterRead.status !== "idle") {
+        throw new Error("Claude started working while its conversation was being transferred");
+      }
+      if (statusAfterRead.lastActivity !== status.lastActivity) {
+        throw new Error("Claude conversation changed while it was being transferred");
+      }
+      return messages;
+    }
+    if (activeSession.provider === "opencode" && openCodeClient) {
+      const status = await getOpenCodeSessionStatus(
+        openCodeClient,
+        currentSessionId,
+        { throwOnError: true },
+      );
+      if (!status) throw new Error("OpenCode session is unavailable");
+      if (status === "busy" || status === "retry") {
+        throw new Error("Wait for OpenCode to finish before continuing in another agent");
+      }
+      const messages = (
+        await getOpenCodeSessionMessages(
+          openCodeClient,
+          currentSessionId,
+          { throwOnError: true },
+        )
+      ).map(normalizeOpenCodeNativeMessage);
+      const statusAfterRead = await getOpenCodeSessionStatus(
+        openCodeClient,
+        currentSessionId,
+        { throwOnError: true },
+      );
+      if (!statusAfterRead) throw new Error("OpenCode session is unavailable");
+      if (statusAfterRead === "busy" || statusAfterRead === "retry") {
+        throw new Error("OpenCode started working while its conversation was being transferred");
+      }
+      const messagesAfterRead = (
+        await getOpenCodeSessionMessages(
+          openCodeClient,
+          currentSessionId,
+          { throwOnError: true },
+        )
+      ).map(normalizeOpenCodeNativeMessage);
+      const finalStatus = await getOpenCodeSessionStatus(
+        openCodeClient,
+        currentSessionId,
+        { throwOnError: true },
+      );
+      if (!finalStatus) throw new Error("OpenCode session is unavailable");
+      if (finalStatus === "busy" || finalStatus === "retry") {
+        throw new Error("OpenCode started working while its conversation was being transferred");
+      }
+      // OpenCode exposes no revision counter, so a second read is the only way
+      // to detect a turn that started and finished inside the read window.
+      // Compare digests rather than serializing both transcripts twice: these
+      // can be tens of megabytes and this runs on the main thread.
+      if (
+        agentHandoffTranscriptDigest(messagesAfterRead)
+        !== agentHandoffTranscriptDigest(messages)
+      ) {
+        throw new Error("OpenCode conversation changed while it was being transferred");
+      }
+      return messagesAfterRead;
+    }
+    if (activeSession.provider === "codex" && codexClient) {
+      const status = await getCodexSessionStatus(
+        codexClient,
+        currentSessionId,
+        { throwOnError: true },
+      );
+      if (!status) throw new Error("Codex session is unavailable");
+      if (status.status !== "idle") {
+        throw new Error("Wait for Codex to finish before continuing in another agent");
+      }
+      const messages = (
+        await getCodexSessionMessages(
+          codexClient,
+          currentSessionId,
+          { throwOnError: true },
+        )
+      ).map(normalizeCodexNativeMessage);
+      const statusAfterRead = await getCodexSessionStatus(
+        codexClient,
+        currentSessionId,
+        { throwOnError: true },
+      );
+      if (!statusAfterRead) throw new Error("Codex session is unavailable");
+      if (statusAfterRead.status !== "idle") {
+        throw new Error("Codex started working while its conversation was being transferred");
+      }
+      if (
+        status.messageRevision !== undefined
+        && statusAfterRead.messageRevision !== undefined
+      ) {
+        if (statusAfterRead.messageRevision !== status.messageRevision) {
+          throw new Error("Codex conversation changed while it was being transferred");
+        }
+        return messages;
+      }
+      /*
+       * `messageRevision` is optional: an older bridge or a malformed status
+       * payload drops it. Treating that as "unchanged" would fail open and
+       * transfer a torn snapshot silently, so re-read and compare instead.
+       */
+      const messagesAfterRead = (
+        await getCodexSessionMessages(
+          codexClient,
+          currentSessionId,
+          { throwOnError: true },
+        )
+      ).map(normalizeCodexNativeMessage);
+      if (
+        agentHandoffTranscriptDigest(messagesAfterRead)
+        !== agentHandoffTranscriptDigest(messages)
+      ) {
+        throw new Error("Codex conversation changed while it was being transferred");
+      }
+      return messagesAfterRead;
+    }
+    throw new Error(`${activeSession.providerLabel} is not connected`);
+  };
+
   const runAction = async (
     name: string,
     action: (scope: { isCurrent: () => boolean; sessionIdentity: string }) => Promise<void>,
@@ -745,6 +959,78 @@ export function AgentInfoButton({
     }
   });
 
+  const continueIn = (destination: AgentProvider) =>
+    runAction(`continue-${destination}`, async ({ isCurrent }) => {
+      if (!activeSession || !currentSessionId) return;
+      if (destination === activeSession.provider) return;
+      if (currentSessionLoading) {
+        throw new Error(
+          `Wait for ${AGENT_PROVIDER_LABELS[activeSession.provider]} to finish before transferring`,
+        );
+      }
+      const providerMessages = await readAuthoritativeHandoffMessages();
+      if (!isCurrent()) return;
+      const priorHandoff = activeTab?.agentHandoffId
+        ? await loadAgentHandoff(activeTab.agentHandoffId)
+        : null;
+      if (activeTab?.agentHandoffId && !priorHandoff) {
+        throw new Error("The previous conversation transfer could not be loaded");
+      }
+      if (
+        priorHandoff
+        && (
+          priorHandoff.environmentId !== activeSession.environmentId
+          || priorHandoff.destinationProvider !== activeSession.provider
+        )
+      ) {
+        throw new Error("The previous conversation transfer does not belong to this session");
+      }
+      if (!isCurrent()) return;
+      const messages = composeAgentHandoffTransferMessages(
+        priorHandoff,
+        providerMessages,
+      );
+      if (messages.length === 0) {
+        throw new Error("This conversation has no history to transfer");
+      }
+      const handoff = createAgentHandoffSnapshot({
+        id: createUuid(),
+        environmentId: activeSession.environmentId,
+        sourceProvider: activeSession.provider,
+        destinationProvider: destination,
+        sourceSessionId: currentSessionId,
+        sourceTitle:
+          activeSession.provider === "claude"
+            ? claudeSession?.title
+            : activeSession.provider === "opencode"
+              ? openCodeSession?.title
+              : codexSession?.title,
+        sourceModel: modelId,
+        sourceAgent:
+          activeSession.provider === "claude"
+            ? claudeAgent
+            : activeSession.provider === "opencode"
+              ? openCodeAgent
+              : undefined,
+        messages,
+      });
+      await persistAgentHandoff(handoff);
+      if (!isCurrent()) {
+        // The source tab changed while persistence was in flight, so no
+        // destination tab will own this sensitive snapshot. Remove it instead
+        // of leaving an unreachable handoff in durable storage.
+        forgetAgentHandoff(handoff.id);
+        await deleteAgentHandoff(handoff.id, handoff.environmentId);
+        return;
+      }
+      openHandoffTab(destination, handoff.id);
+      toast.success(
+        `Continuing in ${AGENT_PROVIDER_LABELS[destination]} with `
+        + `${formatCount(handoff.stats.messageCount, "message")} and `
+        + formatCount(handoff.stats.toolCallCount, "tool call"),
+      );
+    });
+
   const compactCurrent = () => runAction("compact", async () => {
     if (!activeSession || !currentSessionId) return;
     const succeeded =
@@ -772,6 +1058,7 @@ export function AgentInfoButton({
    */
   useEffect(() => {
     setOpen(false);
+    setHandoffOpen(false);
     shareVersionRef.current += 1;
     setShareState({ sessionIdentity, value: false });
     setSteerState({ sessionIdentity, value: "" });
@@ -1031,6 +1318,59 @@ export function AgentInfoButton({
                     <Scissors className="h-3.5 w-3.5" />
                     Compact
                   </Button>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={
+                      !currentSessionId
+                      || currentSessionLoading
+                      || busyAction !== null
+                    }
+                    aria-expanded={handoffOpen}
+                    onClick={() => setHandoffOpen((value) => !value)}
+                    className={cn(
+                      "col-span-2 justify-start gap-2",
+                      handoffOpen && "border-primary/40 bg-primary/5",
+                    )}
+                  >
+                    <ArrowRightLeft className="h-3.5 w-3.5" />
+                    Continue in…
+                  </Button>
+
+                  {handoffOpen ? (
+                    <div className="col-span-2 rounded-lg border border-border/70 bg-muted/20 p-2.5">
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="rounded-md border border-border/70 bg-background px-2 py-1 text-[11px] font-medium">
+                          {AGENT_PROVIDER_LABELS[activeSession.provider]}
+                        </span>
+                        <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <div className="grid min-w-0 flex-1 grid-cols-2 gap-1.5">
+                          {(Object.keys(AGENT_PROVIDER_LABELS) as AgentProvider[])
+                            .filter((provider) => provider !== activeSession.provider)
+                            .map((provider) => (
+                              <Button
+                                key={provider}
+                                variant="secondary"
+                                size="sm"
+                                className="h-8 min-w-0 px-2 text-xs"
+                                disabled={busyAction !== null || currentSessionLoading}
+                                onClick={() => void continueIn(provider)}
+                              >
+                                {busyAction === `continue-${provider}`
+                                  ? "Preparing…"
+                                  : AGENT_PROVIDER_LABELS[provider]}
+                              </Button>
+                            ))}
+                        </div>
+                      </div>
+                      <p className="text-[10px] leading-relaxed text-muted-foreground">
+                        Copies the completed transcript and tool history into a new
+                        agent. This source session stays intact; live tasks and
+                        approvals do not transfer.
+                      </p>
+                    </div>
+                  ) : null}
 
                   {activeSession.provider === "claude" && claudeClient && currentSessionId ? (
                     <Button

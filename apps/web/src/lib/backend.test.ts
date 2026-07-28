@@ -951,6 +951,58 @@ describe("backend command wrapper coverage", () => {
     });
   });
 
+  test("deletes an agent handoff through its environment-scoped command", async () => {
+    invokeMock.mockResolvedValueOnce(true);
+
+    await expect(
+      backendWrappers.deleteAgentHandoff("handoff-1", "env-1"),
+    ).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith("delete_agent_handoff", {
+      handoffId: "handoff-1",
+      environmentId: "env-1",
+    });
+  });
+
+  test("reads and writes agent handoff snapshots through their commands", async () => {
+    const snapshot = { messages: [{ id: "m1" }] };
+    const stored = {
+      id: "handoff-1",
+      environmentId: "env-1",
+      version: 1,
+      snapshot,
+      createdAt: "2026-07-27T11:00:00.000Z",
+    };
+
+    invokeMock.mockResolvedValueOnce(stored);
+    await expect(backendWrappers.getAgentHandoff("handoff-1")).resolves.toEqual(stored);
+    expect(invokeMock).toHaveBeenCalledWith("get_agent_handoff", {
+      handoffId: "handoff-1",
+    });
+
+    invokeMock.mockResolvedValueOnce(stored);
+    await expect(
+      backendWrappers.saveAgentHandoff("handoff-1", "env-1", 1, snapshot),
+    ).resolves.toEqual(stored);
+    expect(invokeMock).toHaveBeenCalledWith("save_agent_handoff", {
+      handoffId: "handoff-1",
+      environmentId: "env-1",
+      version: 1,
+      snapshot,
+    });
+  });
+
+  test("prunes agent handoffs against the layout's reference set", async () => {
+    invokeMock.mockResolvedValueOnce(["orphan"]);
+
+    await expect(
+      backendWrappers.pruneAgentHandoffs("env-1", ["kept"]),
+    ).resolves.toEqual(["orphan"]);
+    expect(invokeMock).toHaveBeenCalledWith("prune_agent_handoffs", {
+      environmentId: "env-1",
+      referencedHandoffIds: ["kept"],
+    });
+  });
+
   test("readBinaryFile decodes the base64 wrapper result", async () => {
     await expect(backendWrappers.readBinaryFile("/tmp/image.bin")).resolves.toEqual(
       Uint8Array.from(new TextEncoder().encode("binary")),

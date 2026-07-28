@@ -9,6 +9,7 @@ import {
 } from "@/hooks/useManualSessionRefresh";
 import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
+import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import {
   OPTIMISTIC_MESSAGE_PREFIX,
@@ -107,6 +108,8 @@ interface OpenCodeChatTabProps {
   isReviewTab?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
+  agentHandoffId?: string;
+  consumedAgentHandoffId?: string;
   refreshRequestId?: number;
 }
 
@@ -177,6 +180,8 @@ export function OpenCodeChatTab({
   isReviewTab = false,
   initialAgentModel,
   initialReasoningEffort,
+  agentHandoffId,
+  consumedAgentHandoffId,
   refreshRequestId = 0,
 }: OpenCodeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
@@ -281,6 +286,7 @@ export function OpenCodeChatTab({
   const {
     clearTabInitialPrompt,
     clearTabInitialAgentOptions,
+    clearTabAgentHandoff,
     updateTabNativeSessionId,
   } = usePaneLayoutStore();
 
@@ -312,14 +318,32 @@ export function OpenCodeChatTab({
   const [forkInFlight, setForkInFlight] = useState(false);
 
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
-  const displayMessages = useMemo(
+  const providerDisplayMessages = useMemo(
     () => pinActiveNativeAgentParts(
       sessionMessages.map(normalizeOpenCodeNativeMessage),
     ),
     [sessionMessages],
   );
+  const handoff = useAgentHandoff(
+    agentHandoffId,
+    "opencode",
+    environmentId,
+    providerDisplayMessages,
+    consumedAgentHandoffId,
+  );
+  const displayMessages = handoff.displayMessages;
+  const launchPrompt = initialPrompt ?? handoff.initialPrompt;
+  /*
+   * Read through a ref inside the initialization effect. `launchPrompt` resolves
+   * a few milliseconds after mount for a handoff tab, so listing it as a
+   * dependency would tear down and restart an in-flight connect; `handoffPending`
+   * flips once and is the correct gate.
+   */
+  const handoffPending = !handoff.ready;
+  const launchPromptRef = useRef<string | undefined>(undefined);
+  launchPromptRef.current = launchPrompt;
   const forkPlan = useMemo(
-    () => buildMessageForkPlan(displayMessages, {
+    () => buildMessageForkPlan(providerDisplayMessages, {
       responseInProgress: session?.isLoading ?? false,
       /*
        * OpenCode's boundary is exclusive: it clones the messages *before*
@@ -338,14 +362,14 @@ export function OpenCodeChatTab({
           : { type: "whole-session" };
       },
     }),
-    [displayMessages, session?.isLoading],
+    [providerDisplayMessages, session?.isLoading],
   );
   // Read by the fork handler so it does not have to depend on the transcript:
   // `displayMessages` is a fresh array on every streaming tick, and a handler
   // that changed with it would rebuild every fork button on every tick.
   const forkPlanRef = useRef(forkPlan);
   forkPlanRef.current = forkPlan;
-  const hasMessageHistory = sessionMessages.length > 0;
+  const hasMessageHistory = displayMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
   const showAddressAll = Boolean(
     isReviewTab &&
@@ -739,11 +763,12 @@ export function OpenCodeChatTab({
   });
 
   // Initialize connection on mount.
-  // Active tabs always initialize; inactive tabs initialize too when an
-  // initialPrompt is pending so background mounts can dispatch the prompt
-  // before becoming visible.
+  // Active tabs always initialize; inactive tabs initialize too when a launch
+  // or handoff prompt is pending, so background mounts can dispatch it before
+  // becoming visible.
   useEffect(() => {
-    if (!isActive && !initialPrompt?.trim() && queueLength === 0) {
+    if (handoffPending) return;
+    if (!isActive && !launchPromptRef.current?.trim() && queueLength === 0) {
       return;
     }
 
@@ -1229,7 +1254,7 @@ export function OpenCodeChatTab({
     projectId,
     tabId,
     isActive,
-    initialPrompt,
+    handoffPending,
     isLocal,
     queueLength,
     syncPendingRequests,
@@ -1963,7 +1988,11 @@ export function OpenCodeChatTab({
     agentLabel: "OpenCode",
     sessionKey,
     store: useOpenCodeStore,
-    canDrain: !setupPending && connectionState === "connected" && !!client,
+    canDrain:
+      handoff.ready
+      && !setupPending
+      && connectionState === "connected"
+      && !!client,
     queueLength,
     isLoading: session?.isLoading ?? false,
     blockedByDraft: isQueueBlockedByDraft,
@@ -1998,7 +2027,8 @@ export function OpenCodeChatTab({
       connectionState === "connected" &&
       client &&
       session &&
-      initialPrompt &&
+      handoff.ready &&
+      launchPrompt &&
       !setupPending &&
       launchOptionsSettled &&
       !initialPromptSentRef.current &&
@@ -2013,7 +2043,7 @@ export function OpenCodeChatTab({
       const resolvedModel = launchOptionsValidated
         ? getSelectedModel(sessionKey)
         : undefined;
-      handleSendRef.current?.(initialPrompt, [], {
+      handleSendRef.current?.(launchPrompt, [], {
         model:
           initialLaunchOptionsRef.current.model === "default" || resolvedModel === "default"
             ? undefined
@@ -2027,7 +2057,8 @@ export function OpenCodeChatTab({
     connectionState,
     client,
     session,
-    initialPrompt,
+    handoff.ready,
+    launchPrompt,
     setupPending,
     launchOptionsSettled,
     tabId,
@@ -2155,6 +2186,7 @@ export function OpenCodeChatTab({
           runtimeHealth.delete(sessionKey);
           return { sessions, contextUsage, runtimeHealth };
         });
+        clearTabAgentHandoff(tabId, environmentId);
 
         await syncPendingRequests(client, sessionId);
 
@@ -2163,7 +2195,16 @@ export function OpenCodeChatTab({
         console.error("[OpenCodeChatTab] Failed to resume session:", error);
       }
     },
-    [client, environmentId, models, sessionKey, syncPendingRequests, tabId, updateTabNativeSessionId],
+    [
+      clearTabAgentHandoff,
+      client,
+      environmentId,
+      models,
+      sessionKey,
+      syncPendingRequests,
+      tabId,
+      updateTabNativeSessionId,
+    ],
   );
 
   const handleForkFromMessage = useCallback(async (
@@ -2364,7 +2405,7 @@ export function OpenCodeChatTab({
           onSend={async (text, attachments) => {
             await handleSend(text, attachments);
           }}
-          disabled={!client || !session}
+          disabled={!handoff.ready || !client || !session}
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}
           onStop={handleStop}

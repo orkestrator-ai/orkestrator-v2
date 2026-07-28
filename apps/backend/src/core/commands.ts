@@ -3628,6 +3628,7 @@ async function deleteEnvironment(
       );
       // Queued prompts for a deleted environment can never be dispatched.
       await storage.deletePromptQueuesByEnvironment(environmentId);
+      await storage.deleteAgentHandoffsByEnvironment(environmentId);
       await storage.removeEnvironment(environmentId);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);
       cleanupEnvironmentSetupState(environmentId);
@@ -6111,6 +6112,45 @@ export function createCommandRegistry(
         asString(expectedMessageId, "expectedMessageId"),
         candidateMessages as unknown[],
       ),
+  );
+  register("get_agent_handoff", ({ handoffId }, { storage }) =>
+    storage.getAgentHandoff(asString(handoffId, "handoffId")),
+  );
+  register(
+    "save_agent_handoff",
+    ({ handoffId, environmentId, version, snapshot }, { storage }) =>
+      storage.saveAgentHandoff(
+        asString(handoffId, "handoffId"),
+        asString(environmentId, "environmentId"),
+        asNumber(version, "version"),
+        snapshot,
+      ),
+  );
+  register(
+    "delete_agent_handoff",
+    ({ handoffId, environmentId }, { storage }) =>
+      storage.deleteAgentHandoff(
+        asString(handoffId, "handoffId"),
+        asString(environmentId, "environmentId"),
+      ),
+  );
+  register(
+    "prune_agent_handoffs",
+    ({ environmentId, referencedHandoffIds }, { storage }) => {
+      // Deliberately strict rather than `asStringArray`, which coerces a
+      // non-array to `[]`. Here that would mean "nothing is referenced" and
+      // delete every transcript in the environment.
+      if (!Array.isArray(referencedHandoffIds)) {
+        throw new Error("Expected referencedHandoffIds to be an array");
+      }
+      if (referencedHandoffIds.some((id) => typeof id !== "string")) {
+        throw new Error("Expected referencedHandoffIds to contain only strings");
+      }
+      return storage.pruneAgentHandoffs(
+        asString(environmentId, "environmentId"),
+        referencedHandoffIds as string[],
+      );
+    },
   );
 
   register("create_terminal_session", async ({ containerId, cols, rows, user, trackEnvironmentActivity }, { storage }) => {

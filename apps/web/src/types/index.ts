@@ -226,6 +226,20 @@ export interface PersistedPromptQueue<T = unknown> {
   revision: number;
 }
 
+/**
+ * Sensitive provider-to-provider handoff persisted by the backend.
+ *
+ * `snapshot` is validated by `lib/agent-handoff.ts`; the backend deliberately
+ * treats it as opaque JSON so provider message changes do not migrate storage.
+ */
+export interface PersistedAgentHandoff<T = unknown> {
+  version: number;
+  id: string;
+  environmentId: string;
+  snapshot: T;
+  createdAt: string;
+}
+
 export interface EnvironmentSetupSession {
   environmentId: string;
   sessionId: string;

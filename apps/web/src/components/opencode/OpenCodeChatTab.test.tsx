@@ -154,6 +154,7 @@ const mockClaimPromptQueueHead = mock(async (
     revision: 1,
   },
 }));
+const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
 
 mock.module("@/lib/opencode-client", () => ({
   ...realOpenCodeClientSnapshot,
@@ -182,6 +183,7 @@ mock.module("@/lib/opencode-client", () => ({
 
 mock.module("@/lib/backend", () => ({
   claimPromptQueueHead: mockClaimPromptQueueHead,
+  getAgentHandoff: mockGetAgentHandoff,
   startOpenCodeServer: mockStartOpenCodeServer,
   getOpenCodeServerStatus: mockGetOpenCodeServerStatus,
   getOpenCodeServerLog: mockGetOpenCodeServerLog,
@@ -386,6 +388,40 @@ function createData(overrides: Partial<OpenCodeNativeData> = {}): OpenCodeNative
   };
 }
 
+function agentHandoffRecord(id: string, bootstrapPrompt: string) {
+  const createdAt = "2026-07-27T12:00:00.000Z";
+  return {
+    version: 1,
+    id,
+    environmentId: ENVIRONMENT_ID,
+    createdAt,
+    snapshot: {
+      version: 1,
+      id,
+      environmentId: ENVIRONMENT_ID,
+      sourceProvider: "claude",
+      destinationProvider: "opencode",
+      sourceSessionId: "source-claude-session",
+      createdAt,
+      messages: [{
+        id: "source-message",
+        role: "user",
+        content: "Continue the transferred task",
+        parts: [{ type: "text", content: "Continue the transferred task" }],
+        createdAt,
+      }],
+      bootstrapPrompt,
+      stats: {
+        messageCount: 1,
+        toolCallCount: 0,
+        includedMessageCount: 1,
+        omittedMessageCount: 0,
+        promptCharacters: bootstrapPrompt.length,
+      },
+    },
+  };
+}
+
 function seedPaneLayout(
   sessionId?: string,
   launchOptions?: { initialAgentModel?: string; initialReasoningEffort?: string },
@@ -570,6 +606,8 @@ describe("OpenCodeChatTab", () => {
     composeAttachments = [];
     mockRenameEnvironmentFromPrompt.mockClear();
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
+    mockGetAgentHandoff.mockReset();
+    mockGetAgentHandoff.mockResolvedValue(null);
     mockSendPrompt.mockClear();
     mockSendPrompt.mockImplementation(async () => ({
       success: true,
@@ -662,6 +700,79 @@ describe("OpenCodeChatTab", () => {
     globalThis.setInterval = ORIGINAL_SET_INTERVAL;
     globalThis.clearInterval = ORIGINAL_CLEAR_INTERVAL;
     mock.restore();
+  });
+
+  test("blocks sending until a restored agent handoff finishes loading", async () => {
+    const handoffId = "opencode-delayed-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    const pending = deferred<any>();
+    mockGetAgentHandoff.mockImplementation(async () => pending.promise);
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+
+    expect((await screen.findByTestId("opencode-send")).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByTestId("opencode-send"));
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pending.resolve(agentHandoffRecord(handoffId, bootstrapPrompt));
+      await pending.promise;
+    });
+
+    await waitFor(() =>
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        expect.stringContaining(`"id": "${handoffId}"`),
+        expect.any(Object),
+      ),
+    );
+  });
+
+  test("initializes once when a handoff resolves during a cold start", async () => {
+    /*
+     * `launchPrompt` flips undefined → string a few milliseconds after mount.
+     * Listing it as an initialization dependency tore the effect down and re-ran
+     * it mid-connect. Gate on readiness and read the prompt from a ref instead.
+     */
+    const handoffId = "opencode-single-init";
+    // Force the cold path: with a cached client and session the effect short
+    // circuits and never reaches the work a restart would duplicate.
+    useOpenCodeStore.setState({ clients: new Map(), sessions: new Map() });
+    const pending = deferred<any>();
+    mockGetAgentHandoff.mockImplementation(async () => pending.promise);
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+    expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
+    expect(mockCreateSession).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pending.resolve(agentHandoffRecord(
+        handoffId,
+        `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`,
+      ));
+      await pending.promise;
+    });
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    // A restarted effect re-issues the server probe even when the session it
+    // already created keeps the second pass off the create path.
+    expect(mockGetOpenCodeServerStatus).toHaveBeenCalledTimes(1);
   });
 
   test("centers the compose bar with the ready title until message history exists", async () => {

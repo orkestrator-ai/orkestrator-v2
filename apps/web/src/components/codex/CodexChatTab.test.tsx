@@ -2393,7 +2393,7 @@ describe("CodexChatTab", () => {
     });
   });
 
-  test("pins adjacent streaming subagents individually and regroups them once finished", async () => {
+  test("keeps adjacent streaming subagents grouped while pinned and inline once finished", async () => {
     const activeMessage: TestCodexMessage = {
       id: "assistant-agent-group",
       role: "assistant",
@@ -2424,15 +2424,21 @@ describe("CodexChatTab", () => {
 
     render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
 
-    // While streaming, each subagent is pinned to the rendered bottom.
+    // While streaming, the subagents share one pinned group at the rendered bottom.
     expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
       "assistant-agent-group",
-      "assistant-agent-group:active-agent:agent-1",
-      "assistant-agent-group:active-agent:agent-2",
+      "assistant-agent-group:active-agents",
     ]);
     expect(lastVirtualizedMessages[0]?.parts.map((part: any) => part.type)).toEqual([
       "text",
       "text",
+    ]);
+    expect(lastVirtualizedMessages[1]?.parts.map((part: any) => part.type)).toEqual([
+      "agent-group",
+    ]);
+    expect(lastVirtualizedMessages[1]?.parts[0].parts.map((part: any) => part.subagentId)).toEqual([
+      "agent-1",
+      "agent-2",
     ]);
 
     const completedMessage: TestCodexMessage = {

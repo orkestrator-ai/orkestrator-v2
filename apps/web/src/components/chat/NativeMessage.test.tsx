@@ -1120,30 +1120,41 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("renders adjacent agents inside a compact shared block", () => {
-    const message = makeMessage([
-      {
-        type: "subagent",
-        content: "Reviewer",
-        subagentName: "Reviewer",
-        toolState: "pending",
-        subagentActions: [],
-      },
-      {
-        type: "subagent",
-        content: "Tester",
-        subagentName: "Tester",
-        toolState: "success",
-        subagentActions: [],
-      },
-    ]);
+    const message = makeMessage(
+      [
+        {
+          type: "subagent",
+          content: "Reviewer",
+          subagentName: "Reviewer",
+          toolState: "pending",
+          subagentActions: [],
+        },
+        {
+          type: "subagent",
+          content: "Tester",
+          subagentName: "Tester",
+          toolState: "success",
+          subagentActions: [],
+        },
+      ],
+      { modelId: "gpt-5.6-sol" },
+    );
 
     render(<NativeMessage message={message} />);
 
-    expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
+    const agentGroup = screen.getByRole("region", { name: "2 agents" });
+    const modelLabel = screen.getByText("gpt-5.6-sol");
+
+    expect(agentGroup).toBeTruthy();
     expect(screen.getByText("Agents")).toBeTruthy();
     expect(screen.getByText("1 running")).toBeTruthy();
     expect(screen.getByText("Reviewer")).toBeTruthy();
     expect(screen.getByText("Tester")).toBeTruthy();
+    expect(screen.getAllByText("gpt-5.6-sol")).toHaveLength(1);
+    expect(
+      agentGroup.compareDocumentPosition(modelLabel) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   test("counts pending task children and undefined states as running but not terminal agents", () => {

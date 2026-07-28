@@ -211,7 +211,7 @@ describe("pinActiveNativeAgentParts", () => {
     }
   });
 
-  test("pins every adjacent active agent after normalization", () => {
+  test("pins adjacent active agents in one shared group", () => {
     const normalized = normalizeOpenCodeNativeMessage(
       assistantMessage("assistant-1", [
         {
@@ -231,12 +231,18 @@ describe("pinActiveNativeAgentParts", () => {
     const pinned = pinActiveNativeAgentParts([normalized]);
 
     expect(pinned.map((message) => message.id)).toEqual([
-      "assistant-1:active-agent:agent-1",
-      "assistant-1:active-agent:agent-2",
+      "assistant-1:active-agents",
     ]);
+    expect(pinned[0]?.parts[0]?.type).toBe("agent-group");
+    if (pinned[0]?.parts[0]?.type === "agent-group") {
+      expect(pinned[0].parts[0].parts.map((part) => part.subagentId)).toEqual([
+        "agent-1",
+        "agent-2",
+      ]);
+    }
   });
 
-  test("generates unique fallback row ids for multiple active agents without stable ids", () => {
+  test("uses a stable source-scoped row id for active agent groups without stable child ids", () => {
     const messages: NativeMessage[] = [
       assistantMessage("assistant-1", [
         {
@@ -257,8 +263,7 @@ describe("pinActiveNativeAgentParts", () => {
     const pinned = pinActiveNativeAgentParts(messages);
 
     expect(pinned.map((message) => message.id)).toEqual([
-      "assistant-1:active-agent:worker:0",
-      "assistant-1:active-agent:worker:1",
+      "assistant-1:active-agents",
     ]);
   });
 });

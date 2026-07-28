@@ -608,8 +608,8 @@ describe("ActionBar grid presentation", () => {
     fireEvent.mouseLeave(tooltipTitle.parentElement!);
     await waitFor(() => {
       expect(screen.queryByText("New Tab with Claude")).toBeNull();
-    });
-  });
+    }, { timeout: 10_000 });
+  }, 20_000);
 
   test("keeps context-menu tooltips enabled on desktop keyboard focus", async () => {
     render(<ActionBar />);
@@ -621,7 +621,7 @@ describe("ActionBar grid presentation", () => {
     fireEvent.blur(claudeButton);
     await waitFor(() => {
       expect(screen.queryByText("New Tab with Claude")).toBeNull();
-    });
+    }, { timeout: 10_000 });
   // Radix closes the portalled tooltip on a timer. Under the repository's
   // concurrent workspace run this file shares a saturated runner with the web
   // build and can exceed Bun's default 10s test ceiling despite passing in
@@ -1546,7 +1546,7 @@ describe("ActionBar workflow tabs", () => {
         isReviewTab: true,
       }),
     );
-  });
+  }, 20_000);
 
   test("allows ordinary review clicks after long-press suppression expires", async () => {
     currentEnvironment = {
@@ -1575,7 +1575,7 @@ describe("ActionBar workflow tabs", () => {
       "codex",
       expect.objectContaining({ displayTitle: "Review", isReviewTab: true }),
     );
-  });
+  }, 20_000);
 
   test("clears active long-press click suppression when the action bar unmounts", async () => {
     currentEnvironment = {

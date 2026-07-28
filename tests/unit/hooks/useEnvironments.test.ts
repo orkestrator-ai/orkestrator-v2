@@ -72,6 +72,7 @@ const mockListen = listen as ReturnType<typeof mock>;
 // Import hook AFTER mocking
 import {
   reconcileEnvironmentSetupSnapshots,
+  useEnvironmentLifecycleService,
   useEnvironments,
 } from "../../../apps/web/src/hooks/useEnvironments";
 
@@ -1195,6 +1196,21 @@ describe("useEnvironments", () => {
     expect(project1Envs[0]?.id).toBe("env-1");
   });
 
+  test("useEnvironments alone registers no setup lifecycle or reconnect listeners", async () => {
+    const eventNames: string[] = [];
+    mockListen.mockImplementation((eventName: string) => {
+      eventNames.push(eventName);
+      return Promise.resolve(() => {});
+    });
+
+    renderHook(() => useEnvironments(null));
+
+    await waitFor(() => expect(eventNames).toContain("environment-renamed"));
+    expect(eventNames).not.toContain("environment-setup-started");
+    expect(eventNames).not.toContain("environment-setup-complete");
+    expect(eventNames).not.toContain("native-event-stream-connected");
+  });
+
   test("handles load error gracefully", async () => {
     mockGetEnvironments.mockImplementation(() => Promise.reject(new Error("Network error")));
 
@@ -1221,7 +1237,7 @@ describe("useEnvironments", () => {
       callbacks.set(eventName, callback);
       return Promise.resolve(() => {});
     });
-    renderHook(() => useEnvironments(null));
+    renderHook(() => useEnvironmentLifecycleService());
 
     await waitFor(() => {
       expect(callbacks.has("environment-setup-started")).toBe(true);
@@ -1287,7 +1303,7 @@ describe("useEnvironments", () => {
       if (eventName === "environment-setup-complete") completeCallback = callback;
       return Promise.resolve(() => {});
     });
-    renderHook(() => useEnvironments(null));
+    renderHook(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(completeCallback).toBeDefined());
 
     act(() => {
@@ -1312,7 +1328,7 @@ describe("useEnvironments", () => {
       if (eventName === "environment-setup-complete") completeCallback = callback;
       return Promise.resolve(() => {});
     });
-    renderHook(() => useEnvironments(null));
+    renderHook(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(completeCallback).toBeDefined());
 
     act(() => {
@@ -1337,7 +1353,7 @@ describe("useEnvironments", () => {
       if (eventName === "environment-setup-complete") completeCallback = callback;
       return Promise.resolve(() => {});
     });
-    renderHook(() => useEnvironments(null));
+    renderHook(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(completeCallback).toBeDefined());
 
     act(() => {
@@ -1693,7 +1709,7 @@ describe("useEnvironments", () => {
       return Promise.resolve(() => {});
     });
 
-    const { unmount } = renderHook(() => useEnvironments(null));
+    const { unmount } = renderHook(() => useEnvironmentLifecycleService());
     await waitFor(() => expect(listened).toContain("native-event-stream-connected"));
     expect(connectedCallback).toBeDefined();
 
@@ -1755,7 +1771,7 @@ describe("useEnvironments", () => {
       get: () => "hidden",
     });
     try {
-      renderHook(() => useEnvironments(null));
+      renderHook(() => useEnvironmentLifecycleService());
       await act(async () => {
         document.dispatchEvent(new Event("visibilitychange"));
         await Promise.resolve();
@@ -1775,7 +1791,12 @@ describe("useEnvironments", () => {
       eventNames.push(eventName);
       return Promise.resolve(() => {});
     });
-    renderHook(() => useEnvironments(null, { listenForRenameEvents: false }));
+    // Setup lifecycle listeners are registered once by the app-root service
+    // hook; useEnvironments only owns the optional rename listener.
+    renderHook(() => {
+      useEnvironmentLifecycleService();
+      useEnvironments(null, { listenForRenameEvents: false });
+    });
 
     await waitFor(() => expect(eventNames).toContain("environment-setup-complete"));
     expect(eventNames).not.toContain("environment-renamed");
@@ -1792,7 +1813,10 @@ describe("useEnvironments", () => {
     mockListen.mockImplementation(() => new Promise((resolve) => {
       resolvers.push(resolve);
     }));
-    const { unmount } = renderHook(() => useEnvironments(null));
+    const { unmount } = renderHook(() => {
+      useEnvironmentLifecycleService();
+      useEnvironments(null);
+    });
     await waitFor(() => expect(resolvers).toHaveLength(3));
 
     unmount();

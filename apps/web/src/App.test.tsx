@@ -70,6 +70,7 @@ const realPromptQueuePersistenceSnapshot = { ...realPromptQueuePersistence };
 const mockStartEnvironment = mock(async () => {});
 const mockCreateEnvironment = mock(async () => makeEnvironment("created", "project-1"));
 const mockUpdateEnvironment = mock(() => {});
+const mockUseEnvironmentLifecycleService = mock(() => {});
 const mockExit = mock(async () => {});
 const mockLinearMonitorRender = mock(() => undefined);
 const mockGitHubMonitorRender = mock(() => undefined);
@@ -225,6 +226,7 @@ mock.module("@/hooks/useGlobalActivityMonitor", () => ({
 }));
 
 mock.module("@/hooks", () => ({
+  useEnvironmentLifecycleService: mockUseEnvironmentLifecycleService,
   useEnvironments: () => ({
     startEnvironment: mockStartEnvironment,
     createEnvironment: mockCreateEnvironment,
@@ -451,6 +453,7 @@ function resetAppMocks() {
   mockCreateEnvironment.mockClear();
   mockCreateEnvironment.mockImplementation(async () => makeEnvironment("created", "project-1"));
   mockUpdateEnvironment.mockClear();
+  mockUseEnvironmentLifecycleService.mockClear();
   projectLauncherProps = null;
   mockExit.mockClear();
   mockCheckDocker.mockClear();
@@ -546,6 +549,18 @@ describe("App background processing mounts", () => {
     mock.restore();
   });
 
+  test("mounts the environment lifecycle service exactly once at the app root", () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+
+    render(<App />);
+
+    expect(mockUseEnvironmentLifecycleService).toHaveBeenCalledTimes(1);
+  });
+
   test("keeps off-screen setup-running environments mounted in hidden background terminals", async () => {
     resetStores({
       environments: [
@@ -564,9 +579,12 @@ describe("App background processing mounts", () => {
       expect(screen.getByTestId("terminal-env-background")).toBeTruthy();
     });
 
-    expect(
-      screen.getByTestId("background-terminal-host").className.split(/\s+/)
-    ).not.toContain("hidden");
+    const backgroundHostClasses = screen
+      .getByTestId("background-terminal-host")
+      .className
+      .split(/\s+/);
+    expect(backgroundHostClasses).toContain("invisible");
+    expect(backgroundHostClasses).not.toContain("hidden");
     expect(screen.getByTestId("terminal-env-visible").getAttribute("data-active")).toBe("true");
     expect(screen.getByTestId("terminal-env-background").getAttribute("data-active")).toBe("false");
   });

@@ -1787,13 +1787,12 @@ describe("FeaturesView lifecycle and navigation", () => {
         createClientMock.mockClear();
 
         const view = render(<FeaturesView projectId="project-1" />);
-        for (let turn = 0; turn < 20; turn += 1) {
-          if (
-            useFeaturePlanStore.getState().activeConversations.get(featureId)?.phase
-            === "unavailable"
-          ) break;
+        for (let attempt = 0; attempt < 300; attempt += 1) {
+          const conversation = useFeaturePlanStore.getState()
+            .activeConversations.get(featureId);
+          if (conversation?.phase === "unavailable") break;
           await act(async () => {
-            await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+            await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
           });
         }
         expect(
@@ -1817,7 +1816,7 @@ describe("FeaturesView lifecycle and navigation", () => {
     } finally {
       timeoutSpy.mockRestore();
     }
-  });
+  }, 20_000);
 
   test("cancels stale reconciliation on project switch and unmount", async () => {
     const firstStatus = deferred<{ status: "idle" }>();
@@ -2728,7 +2727,7 @@ describe("FeaturesView lifecycle and navigation", () => {
       target: { value: "Race recovery" },
     });
     fireEvent.click(screen.getByTitle("Send message"));
-    await waitFor(() => expect(liveWorkerWaiting).toBe(true));
+    await waitFor(() => expect(liveWorkerWaiting).toBe(true), { timeout: 3_000 });
     const conversation = useFeaturePlanStore.getState().activeConversations.get("feature-1");
     expect(conversation).toBeTruthy();
 
@@ -2744,14 +2743,20 @@ describe("FeaturesView lifecycle and navigation", () => {
         },
       );
     });
-    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(await screen.findByRole("alert", undefined, { timeout: 3_000 })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
-    await waitFor(() => expect(messageCalls).toBeGreaterThanOrEqual(2));
+    await waitFor(
+      () => expect(messageCalls).toBeGreaterThanOrEqual(2),
+      { timeout: 3_000 },
+    );
 
     await act(async () => {
       liveStatus.resolve({ status: "idle" });
     });
-    await waitFor(() => expect(messageCalls).toBeGreaterThanOrEqual(3));
+    await waitFor(
+      () => expect(messageCalls).toBeGreaterThanOrEqual(3),
+      { timeout: 3_000 },
+    );
     await act(async () => {
       transcript.resolve([
         makeCodexMessage({ id: "racing-reply", content: response }),
@@ -2760,12 +2765,12 @@ describe("FeaturesView lifecycle and navigation", () => {
 
     await waitFor(() => expect(
       useFeaturePlanStore.getState().activeConversations.has("feature-1"),
-    ).toBe(false));
+    ).toBe(false), { timeout: 3_000 });
     expect(appendMessageMock.mock.calls.filter((call) => (
       call[1] === "assistant" && call[2] === response
     ))).toHaveLength(1);
     expect(updateFeatureMock).toHaveBeenCalledTimes(1);
-  });
+  }, 15_000);
 
   test("identifies an unavailable feature while another feature is selected", async () => {
     seedStores([

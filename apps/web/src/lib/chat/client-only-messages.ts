@@ -46,6 +46,13 @@ function toOptimisticFileUrl(path: string, previewUrl?: string): string | undefi
   return `file://${encodedPath}`;
 }
 
+/**
+ * Fingerprints exist solely to match an optimistic user message against its
+ * server echo. Optimistic messages contain only text and file parts, so tool
+ * payloads (`toolOutput`, `toolArgs`) can never influence a match — a tool
+ * part already fails on `type` — and serializing them made every fingerprint
+ * pay for the largest fields in the transcript.
+ */
 function getPartFingerprint(part: NativeMessagePart): string {
   return JSON.stringify({
     type: part.type,
@@ -54,9 +61,7 @@ function getPartFingerprint(part: NativeMessagePart): string {
     toolName: part.toolName,
     toolTitle: part.toolTitle,
     toolState: part.toolState,
-    toolOutput: part.toolOutput,
     toolError: part.toolError,
-    toolArgs: part.toolArgs,
   });
 }
 
@@ -162,31 +167,58 @@ export function mergeNativeMessagesPreservingClientOnly(
     return incomingMessages;
   }
 
-  const existingServerFingerprintCounts = countFingerprints(existingServerMessages);
-  const incomingFingerprintCounts = countFingerprints(incomingMessages);
-  const acknowledgedOptimisticBudgets = new Map<string, number>();
+  const optimisticMessages = existingClientMessages.filter(isOptimisticNativeMessage);
 
-  for (const [fingerprint, incomingCount] of incomingFingerprintCounts) {
-    const existingCount = existingServerFingerprintCounts.get(fingerprint) ?? 0;
-    if (incomingCount > existingCount) {
-      acknowledgedOptimisticBudgets.set(fingerprint, incomingCount - existingCount);
+  let clientMessagesToPreserve: NativeMessage[];
+  if (optimisticMessages.length === 0) {
+    // Only optimistic messages can be superseded by a server echo; error and
+    // system messages are always preserved, so nothing needs fingerprinting.
+    clientMessagesToPreserve = existingClientMessages;
+  } else {
+    // A message can only fingerprint-match an optimistic send if it shares its
+    // role and normalized text, so restrict the (relatively expensive)
+    // fingerprinting to that handful of candidates instead of serializing
+    // every message in both lists on every snapshot.
+    const optimisticContentKeys = new Set(
+      optimisticMessages.map(
+        (message) => `${message.role}\0${normalizeMessageContent(message.content)}`,
+      ),
+    );
+    const couldMatchOptimistic = (message: NativeMessage): boolean =>
+      optimisticContentKeys.has(
+        `${message.role}\0${normalizeMessageContent(message.content)}`,
+      );
+
+    const existingServerFingerprintCounts = countFingerprints(
+      existingServerMessages.filter(couldMatchOptimistic),
+    );
+    const incomingFingerprintCounts = countFingerprints(
+      incomingMessages.filter(couldMatchOptimistic),
+    );
+    const acknowledgedOptimisticBudgets = new Map<string, number>();
+
+    for (const [fingerprint, incomingCount] of incomingFingerprintCounts) {
+      const existingCount = existingServerFingerprintCounts.get(fingerprint) ?? 0;
+      if (incomingCount > existingCount) {
+        acknowledgedOptimisticBudgets.set(fingerprint, incomingCount - existingCount);
+      }
     }
+
+    clientMessagesToPreserve = existingClientMessages.filter((message) => {
+      if (!isOptimisticNativeMessage(message)) {
+        return true;
+      }
+
+      const fingerprint = getMessageFingerprint(message);
+      const remainingBudget = acknowledgedOptimisticBudgets.get(fingerprint) ?? 0;
+      if (remainingBudget <= 0) {
+        return true;
+      }
+
+      acknowledgedOptimisticBudgets.set(fingerprint, remainingBudget - 1);
+      return false;
+    });
   }
-
-  const clientMessagesToPreserve = existingClientMessages.filter((message) => {
-    if (!isOptimisticNativeMessage(message)) {
-      return true;
-    }
-
-    const fingerprint = getMessageFingerprint(message);
-    const remainingBudget = acknowledgedOptimisticBudgets.get(fingerprint) ?? 0;
-    if (remainingBudget <= 0) {
-      return true;
-    }
-
-    acknowledgedOptimisticBudgets.set(fingerprint, remainingBudget - 1);
-    return false;
-  });
 
   if (clientMessagesToPreserve.length === 0) {
     return incomingMessages;

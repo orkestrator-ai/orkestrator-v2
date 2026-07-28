@@ -90,22 +90,53 @@ const mockSubscribeToEvents = mock(
   (_client: unknown, _signal?: AbortSignal): AsyncIterable<ClaudeEvent> =>
     abortableEmptyEventStream(_signal),
 );
-const mockStartClaudeServer = mock(async () => ({ hostPort: 9999 as number }));
-const mockGetClaudeServerStatus = mock(async () => ({
-  running: true,
-  hostPort: 9999 as number | null,
-}));
+// The tab refuses to build a client without a bridge token, so every server
+// mock hands one back exactly as the real commands do.
+const BRIDGE_AUTH_TOKEN = "claude-bridge-token";
+const mockStartClaudeServer = mock(
+  async (): Promise<{ hostPort: number; authToken?: string }> => ({
+    hostPort: 9999,
+    authToken: BRIDGE_AUTH_TOKEN,
+  }),
+);
+const mockGetClaudeServerStatus = mock(
+  async (): Promise<{
+    running: boolean;
+    hostPort: number | null;
+    authToken?: string;
+  }> => ({
+    running: true,
+    hostPort: 9999,
+    authToken: BRIDGE_AUTH_TOKEN,
+  }),
+);
 const mockGetClaudeServerLog = mock(async () => "");
-const mockStartLocalClaudeServer = mock(async () => ({
-  running: true,
-  port: 9999 as number,
-  pid: 1234,
-}));
-const mockGetLocalClaudeServerStatus = mock(async () => ({
-  running: true,
-  port: 9999 as number | null,
-  pid: 1234 as number | null,
-}));
+const mockStartLocalClaudeServer = mock(
+  async (): Promise<{
+    running: boolean;
+    port: number;
+    pid: number;
+    authToken?: string;
+  }> => ({
+    running: true,
+    port: 9999,
+    pid: 1234,
+    authToken: BRIDGE_AUTH_TOKEN,
+  }),
+);
+const mockGetLocalClaudeServerStatus = mock(
+  async (): Promise<{
+    running: boolean;
+    port: number | null;
+    pid: number | null;
+    authToken?: string;
+  }> => ({
+    running: true,
+    port: 9999,
+    pid: 1234,
+    authToken: BRIDGE_AUTH_TOKEN,
+  }),
+);
 const mockReadFileBase64 = mock(async () => "chat-local-base64");
 const mockReadContainerFileBase64 = mock(async () => "chat-container-base64");
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
@@ -505,11 +536,15 @@ describe("ClaudeChatTab", () => {
     mockGetAgentHandoff.mockReset();
     mockGetAgentHandoff.mockResolvedValue(null);
     mockStartClaudeServer.mockReset();
-    mockStartClaudeServer.mockImplementation(async () => ({ hostPort: 9999 }));
+    mockStartClaudeServer.mockImplementation(async () => ({
+      hostPort: 9999,
+      authToken: BRIDGE_AUTH_TOKEN,
+    }));
     mockGetClaudeServerStatus.mockReset();
     mockGetClaudeServerStatus.mockImplementation(async () => ({
       running: true,
       hostPort: 9999,
+      authToken: BRIDGE_AUTH_TOKEN,
     }));
     mockGetClaudeServerLog.mockReset();
     mockGetClaudeServerLog.mockImplementation(async () => "");
@@ -518,12 +553,14 @@ describe("ClaudeChatTab", () => {
       running: true,
       port: 9999,
       pid: 1234,
+      authToken: BRIDGE_AUTH_TOKEN,
     }));
     mockGetLocalClaudeServerStatus.mockReset();
     mockGetLocalClaudeServerStatus.mockImplementation(async () => ({
       running: true,
       port: 9999,
       pid: 1234,
+      authToken: BRIDGE_AUTH_TOKEN,
     }));
     mockForkClaudeSession.mockClear();
     mockForkClaudeSession.mockImplementation(async () => ({
@@ -1310,6 +1347,149 @@ describe("ClaudeChatTab", () => {
   });
 
   describe("shared SSE event handling", () => {
+    test("rehydrates transcript, status, questions, and approvals after a replay gap", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockImplementation(() => channel.stream);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      const replayedMessage: ClaudeMessageType = {
+        id: "replayed-message",
+        role: "assistant",
+        content: "Recovered from snapshot",
+        parts: [{ type: "text", content: "Recovered from snapshot" }],
+        timestamp: "2026-07-20T12:00:00.000Z",
+      };
+      mockGetSession.mockReset();
+      mockGetSession.mockResolvedValue({
+        sessionId: "session-1",
+        status: "running",
+        title: "Recovered session",
+      });
+      mockGetSessionMessages.mockReset();
+      mockGetSessionMessages.mockResolvedValue([replayedMessage]);
+      mockGetPendingQuestions.mockReset();
+      mockGetPendingQuestions.mockResolvedValue([{
+        id: "fresh-question",
+        sessionId: "session-1",
+        questions: [],
+      }]);
+      mockGetPendingPlanApprovals.mockReset();
+      mockGetPendingPlanApprovals.mockResolvedValue([{
+        id: "fresh-approval",
+        sessionId: "session-1",
+      }]);
+      act(() => {
+        useClaudeStore.getState().addPendingQuestion({
+          id: "stale-question",
+          sessionId: "session-1",
+          questions: [],
+        });
+        useClaudeStore.getState().addPendingPlanApproval({
+          id: "stale-approval",
+          sessionId: "session-1",
+        });
+      });
+
+      channel.push({ type: "replay.required", data: {} });
+
+      await waitFor(() => {
+        const state = useClaudeStore.getState();
+        expect(state.sessions.get(SESSION_KEY)).toMatchObject({
+          messages: [replayedMessage],
+          isLoading: true,
+          title: "Recovered session",
+        });
+        expect(state.pendingQuestions.has("fresh-question")).toBe(true);
+        expect(state.pendingQuestions.has("stale-question")).toBe(false);
+        expect(state.pendingPlanApprovals.has("fresh-approval")).toBe(true);
+        expect(state.pendingPlanApprovals.has("stale-approval")).toBe(false);
+      });
+      expect(mockGetSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+      expect(mockGetSessionMessages).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        { throwOnError: true },
+      );
+
+      useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("still reconciles the replay gap when an optional interaction endpoint fails", async () => {
+      // The two interaction lists are optional. Letting a transient 500 on
+      // `/questions` reject the whole reconcile leaves transcript, status,
+      // title *and* the approvals list stale, with no retry and no watchdog —
+      // `useStalledTurnWatchdog` is gated on `isLoading`, which a skipped
+      // reconcile leaves false.
+      const channel = eventChannel();
+      const originalWarn = console.warn;
+      const consoleWarn = mock(() => {});
+      console.warn = consoleWarn as unknown as typeof console.warn;
+      mockSubscribeToEvents.mockImplementation(() => channel.stream);
+
+      try {
+        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+        const replayedMessage: ClaudeMessageType = {
+          id: "replayed-message",
+          role: "assistant",
+          content: "Recovered from snapshot",
+          parts: [{ type: "text", content: "Recovered from snapshot" }],
+          timestamp: "2026-07-20T12:00:00.000Z",
+        };
+        mockGetSession.mockReset();
+        mockGetSession.mockResolvedValue({
+          sessionId: "session-1",
+          status: "running",
+          title: "Recovered session",
+        });
+        mockGetSessionMessages.mockReset();
+        mockGetSessionMessages.mockResolvedValue([replayedMessage]);
+        mockGetPendingQuestions.mockReset();
+        mockGetPendingQuestions.mockRejectedValue(new Error("questions unavailable"));
+        mockGetPendingPlanApprovals.mockReset();
+        mockGetPendingPlanApprovals.mockResolvedValue([{
+          id: "fresh-approval",
+          sessionId: "session-1",
+        }]);
+        act(() => {
+          useClaudeStore.getState().addPendingQuestion({
+            id: "preserved-question",
+            sessionId: "session-1",
+            questions: [],
+          });
+          useClaudeStore.getState().addPendingPlanApproval({
+            id: "stale-approval",
+            sessionId: "session-1",
+          });
+        });
+
+        channel.push({ type: "replay.required", data: {} });
+
+        await waitFor(() => {
+          const state = useClaudeStore.getState();
+          expect(state.sessions.get(SESSION_KEY)).toMatchObject({
+            messages: [replayedMessage],
+            isLoading: true,
+            title: "Recovered session",
+          });
+          // The approvals list that *did* answer is still applied, and the
+          // questions list that failed is left untouched rather than cleared.
+          expect(state.pendingPlanApprovals.has("fresh-approval")).toBe(true);
+          expect(state.pendingPlanApprovals.has("stale-approval")).toBe(false);
+          expect(state.pendingQuestions.has("preserved-question")).toBe(true);
+        });
+
+        useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+        channel.close();
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
+
     test("applies assistant updates, titles, usage, idle refreshes, and error payloads", async () => {
       const channel = eventChannel();
       const originalError = console.error;
@@ -1756,6 +1936,8 @@ describe("ClaudeChatTab", () => {
 
     test("reconciles questions, plan state, approvals, initialization, and system notices", async () => {
       const channel = eventChannel();
+      const questionExpiresAt = Date.now() + 120_000;
+      const approvalExpiresAt = Date.now() + 180_000;
       mockSubscribeToEvents.mockImplementation(() => channel.stream);
       useClaudeStore.getState().setSessionInitData(ENVIRONMENT_ID, {
         mcpServers: [],
@@ -1778,6 +1960,7 @@ describe("ClaudeChatTab", () => {
               options: [],
             }],
             toolUseId: "question-tool",
+            expiresAt: questionExpiresAt,
           },
         });
         channel.push({
@@ -1790,17 +1973,20 @@ describe("ClaudeChatTab", () => {
           data: {
             id: "approval-sse",
             toolUseId: "approval-tool",
+            expiresAt: approvalExpiresAt,
           },
         });
         await waitFor(() => {
           expect(useClaudeStore.getState().pendingQuestions.get("question-sse")).toMatchObject({
             sessionId: "session-1",
             toolUseId: "question-tool",
+            expiresAt: questionExpiresAt,
           });
           expect(useClaudeStore.getState().isPlanMode(SESSION_KEY)).toBe(true);
           expect(useClaudeStore.getState().pendingPlanApprovals.get("approval-sse")).toMatchObject({
             sessionId: "session-1",
             toolUseId: "approval-tool",
+            expiresAt: approvalExpiresAt,
           });
         });
 
@@ -2387,6 +2573,138 @@ describe("ClaudeChatTab", () => {
       }
     },
   );
+
+  describe("pending prompt rehydration", () => {
+    /**
+     * A question or plan approval blocks the turn until someone answers it, and
+     * the SSE frame that announced it is delivered exactly once. A tab that was
+     * unmounted (the user was in another environment), reconnecting, or resuming
+     * a session never saw that frame and resubscribes without a cursor, so the
+     * bridge replays nothing. `GET /session/:id/questions` and `/plan-approvals`
+     * are the authoritative snapshot, and every path that re-establishes a view
+     * of a session has to read them.
+     *
+     * These assert on the store rather than on the rendered card: the store is
+     * what the cards render from, and what survives the unmount.
+     */
+    const awayQuestion: ClaudeQuestionRequest = {
+      id: "question-raised-while-away",
+      sessionId: "session-1",
+      questions: [
+        {
+          question: "Which config should I edit?",
+          header: "Configuration",
+          options: [],
+          multiSelect: false,
+        },
+      ],
+    };
+
+    test("a question raised while the tab was unmounted appears after remount", async () => {
+      mockGetSession.mockResolvedValue({ status: "running" });
+      const view = render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockGetPendingQuestions).toHaveBeenCalled());
+      expect(useClaudeStore.getState().pendingQuestions.size).toBe(0);
+
+      // The user switches to another environment; Claude asks while nobody is
+      // listening, so the `question.asked` frame is lost.
+      view.unmount();
+      mockGetPendingQuestions.mockResolvedValue([awayQuestion]);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() =>
+        expect(useClaudeStore.getState().pendingQuestions.get(awayQuestion.id))
+          .toMatchObject({ id: awayQuestion.id, sessionId: "session-1" }),
+      );
+    });
+
+    test("a plan approval outstanding across a resume appears after the resume", async () => {
+      const outstandingApproval: ClaudePlanApprovalRequest = {
+        id: "approval-outstanding",
+        sessionId: "resumed-claude",
+        toolUseId: "tool-exit-plan",
+      };
+      mockGetSession.mockImplementation(async (_client, sessionId) =>
+        sessionId === "resumed-claude"
+          ? {
+              id: sessionId,
+              status: "running",
+              createdAt: "2026-04-15T10:00:00.000Z",
+              lastActivity: "2026-04-15T10:00:00.000Z",
+            }
+          : null,
+      );
+      mockGetPendingPlanApprovals.mockImplementation(async () => []);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      // Only the resumed session is parked on an approval.
+      mockGetPendingPlanApprovals.mockResolvedValue([outstandingApproval]);
+
+      fireEvent.click(screen.getAllByRole("button", { name: "Resume Session" })[0]!);
+      fireEvent.click(await screen.findByTestId("claude-resume-choice"));
+
+      await waitFor(() =>
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId)
+          .toBe("resumed-claude"),
+      );
+      await waitFor(() =>
+        expect(useClaudeStore.getState().pendingPlanApprovals.get(outstandingApproval.id))
+          .toMatchObject({ id: outstandingApproval.id, sessionId: "resumed-claude" }),
+      );
+    });
+
+    test("a question answered while the tab was away is not shown after remount", async () => {
+      mockGetSession.mockResolvedValue({ status: "running" });
+      mockGetPendingQuestions.mockResolvedValue([awayQuestion]);
+
+      const view = render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() =>
+        expect(useClaudeStore.getState().pendingQuestions.has(awayQuestion.id)).toBe(true),
+      );
+
+      // Answered from another window while this tab was unmounted: the server no
+      // longer lists it, and nothing else would ever clear the card.
+      view.unmount();
+      mockGetPendingQuestions.mockResolvedValue([]);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() =>
+        expect(useClaudeStore.getState().pendingQuestions.has(awayQuestion.id)).toBe(false),
+      );
+    });
+
+    test("a superseded session's answer never lands on the session now on screen", async () => {
+      /*
+       * The snapshot is fetched against one session id; by the time it resolves
+       * the tab may have resumed another. Applying it would show a card for a
+       * conversation the user is no longer looking at.
+       */
+      const gate = deferred<ClaudeQuestionRequest[]>();
+      mockGetSession.mockResolvedValue({ status: "running" });
+      mockGetPendingQuestions.mockImplementation(() => gate.promise);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockGetPendingQuestions).toHaveBeenCalled());
+
+      act(() => {
+        useClaudeStore.getState().setSession(SESSION_KEY, {
+          sessionId: "some-other-session",
+          messages: [],
+          isLoading: false,
+        });
+      });
+
+      await act(async () => {
+        gate.resolve([awayQuestion]);
+        await gate.promise;
+      });
+      await flushAsyncWork();
+
+      expect(useClaudeStore.getState().pendingQuestions.has(awayQuestion.id)).toBe(false);
+    });
+  });
 
   test("review tabs show Address all after messages exist and send the shared prompt", async () => {
     const message: ClaudeMessageType = {
@@ -3254,7 +3572,12 @@ describe("ClaudeChatTab", () => {
         port: null,
         pid: null,
       });
-      mockStartLocalClaudeServer.mockResolvedValue({ running: true, port: 5432, pid: 99 });
+      mockStartLocalClaudeServer.mockResolvedValue({
+        running: true,
+        port: 5432,
+        pid: 99,
+        authToken: BRIDGE_AUTH_TOKEN,
+      });
 
       render(
         <ClaudeChatTab
@@ -3282,6 +3605,7 @@ describe("ClaudeChatTab", () => {
         running: true,
         port: 6543,
         pid: 42,
+        authToken: BRIDGE_AUTH_TOKEN,
       });
 
       render(

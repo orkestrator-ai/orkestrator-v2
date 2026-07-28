@@ -34,7 +34,7 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const isMobile = useMediaQuery("(max-width: 767px)");
-  const { isOpen: filesPanelOpen } = useFilesPanelStore();
+  const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const paneEnvironments = usePaneLayoutStore((state) => state.environments);

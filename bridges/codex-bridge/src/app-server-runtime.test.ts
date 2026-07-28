@@ -27,6 +27,8 @@ import {
   hashCwd,
 } from "./sessions/persistence.js";
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
+import { persistSessionTitle } from "./session-titles.js";
+import { getTranscriptCatalogInvalidationCountForTesting } from "./history/rollout.js";
 import type { EngineEvent } from "./engine/types.js";
 
 /**
@@ -386,10 +388,8 @@ async function harness(
    * the test has to let those tasks land before asserting.
    */
   const drain = async () => {
-    for (let round = 0; round < 5; round += 1) {
-      await engine.getSupervisor().notificationQueue.drainAll();
-      await new Promise<void>((resolve) => setTimeout(resolve, 1));
-    }
+    await engine.getSupervisor().notificationQueue.drainAll();
+    await runtime.drainPendingWork();
   };
 
   const waitForEvent = (predicate: (event: RuntimeSseEvent) => boolean) =>
@@ -605,10 +605,14 @@ describe("session lifecycle", () => {
       }),
     });
 
+    const invalidationsBeforeResume =
+      getTranscriptCatalogInvalidationCountForTesting();
     const resumed = await h.runtime.resumeSession({
       threadId: "thread-ambiguous",
       mode: "build",
     });
+    expect(getTranscriptCatalogInvalidationCountForTesting())
+      .toBe(invalidationsBeforeResume + 1);
     hangNextTurn = true;
     const pending = h.runtime.prompt(resumed!.sessionId, {
       prompt: "first after recovery",
@@ -1157,6 +1161,7 @@ describe("session lifecycle", () => {
   test("the first prompt creates the thread and dispatches a turn", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const invalidationsBefore = getTranscriptCatalogInvalidationCountForTesting();
 
     const outcome = await h.runtime.prompt(sessionId, {
       prompt: "do the thing",
@@ -1171,10 +1176,91 @@ describe("session lifecycle", () => {
     const methods = h.child().requests.map((r) => r.method);
     expect(methods).toContain("thread/start");
     expect(methods).toContain("turn/start");
+    expect(getTranscriptCatalogInvalidationCountForTesting())
+      .toBe(invalidationsBefore + 1);
     // The request id must reach app-server as the at-most-once key.
     expect(
       h.child().requests.find((r) => r.method === "turn/start")!.params.clientUserMessageId,
     ).toBe("req-1");
+  });
+
+  test("drainPendingWork waits for terminal journal and render finalization", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "finish deterministically",
+      requestId: "req-drain",
+      attachments: [],
+    });
+
+    const journal = h.runtime.getJournal();
+    const originalMarkTerminal = journal.markTerminal.bind(journal);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    journal.markTerminal = async (...args) => {
+      await gate;
+      await originalMarkTerminal(...args);
+    };
+
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+
+    let drained = false;
+    const pendingDrain = h.runtime.drainPendingWork().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    expect(h.runtime.getStatus(sessionId)?.status).toBe("running");
+
+    release();
+    await pendingDrain;
+    expect(h.runtime.getStatus(sessionId)?.status).toBe("idle");
+    expect(journal.allRecords().find((record) => record.requestId === "req-drain"))
+      .toMatchObject({ state: "terminal", terminalStatus: "completed" });
+  });
+
+  test("graceful stop does not release render state before finalization settles", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "finish before shutdown",
+      requestId: "req-stop-drain",
+      attachments: [],
+    });
+
+    const journal = h.runtime.getJournal();
+    const originalMarkTerminal = journal.markTerminal.bind(journal);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    journal.markTerminal = async (...args) => {
+      await gate;
+      await originalMarkTerminal(...args);
+    };
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+
+    let stopped = false;
+    const pendingStop = h.runtime.stop().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    release();
+    await pendingStop;
+    expect(journal.allRecords().find((record) => record.requestId === "req-stop-drain"))
+      .toMatchObject({ state: "terminal", terminalStatus: "completed" });
   });
 
   test("stores a schema-constrained final response and rehydrates it by request id", async () => {
@@ -4329,6 +4415,24 @@ describe("history", () => {
     // No rollouts exist in the temp home, but the call must not throw.
     await expect(h.runtime.listSessions()).resolves.toMatchObject({ sessions: [] });
   });
+
+  test("a bridge-generated title overrides a native preview via the listing's title map", async () => {
+    // The listing already parsed the generated-title index; listSessions must
+    // apply it to native-only threads without re-reading the file.
+    await persistSessionTitle(codexHome, "native-titled", "Bridge title", {
+      source: "generated",
+    });
+    const h = await harness({
+      "thread/list": () => ({
+        data: [threadPayload("native-titled")],
+        nextCursor: null,
+      }),
+    });
+
+    const { sessions } = await h.runtime.listSessions();
+    expect(sessions.find((session) => session.id === "native-titled")!.title)
+      .toBe("Bridge title");
+  });
 });
 
 describe("titles", () => {
@@ -5017,8 +5121,11 @@ describe("forking", () => {
     });
     await h.drain();
 
+    const invalidationsBefore = getTranscriptCatalogInvalidationCountForTesting();
     const forked = await h.runtime.forkSession(sessionId);
     expect(forked).toMatchObject({ outcome: "created", threadId: "fork-of-thread-1" });
+    expect(getTranscriptCatalogInvalidationCountForTesting())
+      .toBe(invalidationsBefore + 1);
     const params = h.child().requests.find((request) => request.method === "thread/fork")?.params;
     expect(params && "lastTurnId" in params).toBe(false);
   });

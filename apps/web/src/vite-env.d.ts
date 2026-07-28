@@ -11,6 +11,8 @@ interface Window {
   orkestrator?: {
     invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;
     listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;
+    /** Browser gateway only: resolves once the event's filtered stream is live. */
+    eventStreamReady?(event: string): Promise<void>;
     clipboard: {
       readText(): Promise<string>;
       writeText(text: string): Promise<void>;

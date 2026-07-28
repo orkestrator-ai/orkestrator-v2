@@ -55,7 +55,7 @@ import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpe
 import { usePrMonitorService } from "@/hooks/usePrMonitorService";
 import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
 import { useUnreadEnvironmentSync } from "@/hooks/useUnreadEnvironmentSync";
-import { useEnvironments } from "@/hooks";
+import { useEnvironments, useEnvironmentLifecycleService } from "@/hooks";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -69,7 +69,12 @@ import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 
 function App() {
-  const { selectedEnvironmentId, selectedProjectId, zoomLevel, zoomIn, zoomOut, resetZoom } = useUIStore();
+  const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const selectedProjectId = useUIStore((state) => state.selectedProjectId);
+  const zoomLevel = useUIStore((state) => state.zoomLevel);
+  const zoomIn = useUIStore((state) => state.zoomIn);
+  const zoomOut = useUIStore((state) => state.zoomOut);
+  const resetZoom = useUIStore((state) => state.resetZoom);
   const environments = useEnvironmentStore((state) => state.environments);
   const getEnvironmentById = useEnvironmentStore((state) => state.getEnvironmentById);
   const setConfig = useConfigStore((state) => state.setConfig);
@@ -86,6 +91,9 @@ function App() {
   usePrMonitorService();
   // Monitor agent activity for ALL environments (regardless of selected project)
   useGlobalActivityMonitor();
+  // Single registration for setup lifecycle events and resume/reconnect
+  // reconciliation (previously duplicated per useEnvironments call site).
+  useEnvironmentLifecycleService();
   // Opening an environment clears its unread badge for every client.
   useUnreadEnvironmentSync();
   // The backend change feed must be attached before the store bindings that
@@ -649,11 +657,17 @@ function App() {
 
           {/* Background pipeline environments: kept mounted (but hidden) so their
               SSE subscriptions and pipeline-advancement effects continue running
-              even when the user navigates to a different project or kanban view. */}
+              even when the user navigates to a different project or kanban view.
+              `invisible` (visibility:hidden) stops the browser painting the
+              off-screen xterms while keeping layout intact, so fit-addon
+              measurements stay valid; `display:none` would zero them out.
+              PersistentTerminal refits and refreshes on reveal (isActive /
+              isEnvironmentVisible effects), so nothing stays blank when an
+              environment is brought back on screen. */}
           {backgroundProcessingEnvironments.length > 0 && (
             <div
               data-testid="background-terminal-host"
-              className="pointer-events-none fixed left-[-10000px] top-0 h-[720px] w-[1280px] overflow-hidden opacity-0"
+              className="pointer-events-none invisible fixed left-[-10000px] top-0 h-[720px] w-[1280px] overflow-hidden opacity-0"
               aria-hidden="true"
             >
               {backgroundProcessingEnvironments.map((environment) => (

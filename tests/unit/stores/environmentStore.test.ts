@@ -208,6 +208,20 @@ describe("environmentStore", () => {
     expect(state.setupCommandsResolved.has("env-complete")).toBe(true);
   });
 
+  test("mergeEnvironmentsForProject preserves state and object identity for an unchanged snapshot", () => {
+    const env = createEnvironment({ id: "env-1", projectId: "project-1" });
+    const store = useEnvironmentStore.getState();
+    store.setEnvironments([env]);
+    const beforeState = useEnvironmentStore.getState();
+    const beforeEnvironment = beforeState.environments[0];
+
+    store.mergeEnvironmentsForProject("project-1", [{ ...env }]);
+
+    const afterState = useEnvironmentStore.getState();
+    expect(afterState).toBe(beforeState);
+    expect(afterState.environments[0]).toBe(beforeEnvironment);
+  });
+
   test("setEnvironments clears stale hydrated readiness when setupScriptsComplete becomes false", () => {
     const complete = createEnvironment({ id: "env-1", setupScriptsComplete: true });
     const incomplete = createEnvironment({ id: "env-1", setupScriptsComplete: false });
@@ -263,6 +277,42 @@ describe("environmentStore", () => {
     const state = useEnvironmentStore.getState();
     expect(state.setupCommandsResolved.has("env-1")).toBe(true);
     expect(state.workspaceReadyEnvironments.has("env-1")).toBe(true);
+  });
+
+  test("updateEnvironment is a no-op for identical partial updates and missing environments", () => {
+    const store = useEnvironmentStore.getState();
+    store.addEnvironment(createEnvironment({ id: "env-1", name: "unchanged" }));
+    const before = useEnvironmentStore.getState();
+
+    store.updateEnvironment("env-1", { name: "unchanged" });
+    expect(useEnvironmentStore.getState()).toBe(before);
+
+    store.updateEnvironment("missing", { name: "ignored" });
+    expect(useEnvironmentStore.getState()).toBe(before);
+  });
+
+  test("updateEnvironment preserves order for non-order changes and re-sorts order changes", () => {
+    const store = useEnvironmentStore.getState();
+    store.setEnvironments([
+      createEnvironment({ id: "env-1", order: 0 }),
+      createEnvironment({ id: "env-2", order: 1 }),
+    ]);
+    const secondBefore = useEnvironmentStore.getState().environments[1];
+
+    store.updateEnvironment("env-1", { name: "renamed" });
+    let state = useEnvironmentStore.getState();
+    expect(state.environments.map((environment) => environment.id)).toEqual([
+      "env-1",
+      "env-2",
+    ]);
+    expect(state.environments[1]).toBe(secondBefore);
+
+    store.updateEnvironment("env-1", { order: 2 });
+    state = useEnvironmentStore.getState();
+    expect(state.environments.map((environment) => environment.id)).toEqual([
+      "env-2",
+      "env-1",
+    ]);
   });
 
   test("consumePendingSetupCommands returns and clears pending commands", () => {

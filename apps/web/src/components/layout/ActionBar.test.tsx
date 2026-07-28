@@ -356,6 +356,9 @@ mock.module("@/stores", () => ({
       selector,
     ),
   useEnvironmentStore: <T,>(selector?: (state: {
+    environments: Environment[];
+    workspaceReadyEnvironments: Set<string>;
+    setupScriptsRunning: Set<string>;
     getEnvironmentById: (environmentId: string) => Environment | undefined;
     updateEnvironment: (environmentId: string, environment: Environment) => void;
     isWorkspaceReady: () => boolean;
@@ -364,6 +367,13 @@ mock.module("@/stores", () => ({
   }) => T) =>
     selectState(
       {
+        environments: currentSelectedEnvironmentId ? [currentEnvironment] : [],
+        workspaceReadyEnvironments: currentWorkspaceReady
+          ? new Set([currentEnvironment.id])
+          : new Set<string>(),
+        setupScriptsRunning: currentSetupScriptsRunning
+          ? new Set([currentEnvironment.id])
+          : new Set<string>(),
         getEnvironmentById: (environmentId: string) =>
           environmentId === currentEnvironment.id ? currentEnvironment : undefined,
         updateEnvironment: updateEnvironmentMock,

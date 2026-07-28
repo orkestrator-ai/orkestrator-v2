@@ -512,7 +512,9 @@ describe("web gateway browser API", () => {
     expect(MockEventSource.instances).toHaveLength(1);
     const source = MockEventSource.instances[0];
     if (!source) throw new Error("EventSource was not created");
-    expect(source.url).toBe("/__orkestrator/events");
+    expect(source.url).toBe(
+      "/__orkestrator/events?excludeEvents=terminal-output-",
+    );
     expect(source.options).toEqual({ withCredentials: true });
 
     const connectedCallback = mock(() => undefined);
@@ -548,6 +550,264 @@ describe("web gateway browser API", () => {
     unsubscribe();
 
     expect(source.closed).toBe(true);
+  });
+
+  test("keeps the authoritative stream stable and gives each active terminal its own stream", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+
+    const unsubscribeMenu = api.listen("menu-zoom", () => undefined);
+    const firstSource = MockEventSource.instances[0];
+    if (!firstSource) throw new Error("EventSource was not created");
+
+    const unsubscribeTerminal = api.listen(
+      "terminal-output-session:one",
+      () => undefined,
+    );
+
+    expect(firstSource.closed).toBe(false);
+    expect(MockEventSource.instances).toHaveLength(2);
+    expect(MockEventSource.instances[1]?.url).toBe(
+      "/__orkestrator/events?excludeEvents=terminal-output-&includeEvents=terminal-output-session%3Aone",
+    );
+    let ready = false;
+    const readyPromise = api.eventStreamReady("terminal-output-session:one")
+      .then(() => { ready = true; });
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    MockEventSource.instances[1]?.onopen?.();
+    await readyPromise;
+    expect(ready).toBe(true);
+
+    unsubscribeTerminal();
+    expect(MockEventSource.instances).toHaveLength(2);
+    expect(MockEventSource.instances[1]?.closed).toBe(true);
+    expect(firstSource.closed).toBe(false);
+
+    unsubscribeMenu();
+    expect(firstSource.closed).toBe(true);
+  });
+
+  test("aborts a terminal stream that never becomes ready when its listener leaves", async () => {
+    let requestSignal: AbortSignal | undefined;
+    globalThis.fetch = mock(async (_input, init) => {
+      requestSignal = init?.signal ?? undefined;
+      return new Promise<Response>(() => {});
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+    });
+
+    const unsubscribe = api.listen("terminal-output-stuck", () => undefined);
+    const ready = api.eventStreamReady("terminal-output-stuck");
+    await Promise.resolve();
+    expect(requestSignal?.aborted).toBe(false);
+
+    unsubscribe();
+
+    expect(requestSignal?.aborted).toBe(true);
+    await expect(ready).resolves.toBeUndefined();
+  });
+
+  test("adding a second terminal never interrupts output for the first", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+    const firstOutput = mock(() => undefined);
+    const secondOutput = mock(() => undefined);
+
+    const stopFirst = api.listen("terminal-output-one", firstOutput);
+    const firstSource = MockEventSource.instances[0]!;
+    firstSource.onopen?.();
+    await api.eventStreamReady("terminal-output-one");
+
+    const stopSecond = api.listen("terminal-output-two", secondOutput);
+    const secondSource = MockEventSource.instances[1]!;
+    expect(firstSource.closed).toBe(false);
+    firstSource.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({ event: "terminal-output-one", payload: "YQ==" }),
+    }));
+    expect(firstOutput).toHaveBeenCalledWith("YQ==");
+    expect(secondOutput).not.toHaveBeenCalled();
+
+    secondSource.onopen?.();
+    await api.eventStreamReady("terminal-output-two");
+    stopSecond();
+    expect(secondSource.closed).toBe(true);
+    expect(firstSource.closed).toBe(false);
+    stopFirst();
+  });
+
+  test("tells a reconnected direct terminal stream to resynchronize", async () => {
+    const encoder = new TextEncoder();
+    const warning = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warning;
+    let attempt = 0;
+    globalThis.fetch = mock(async () => {
+      attempt += 1;
+      return new Response(new ReadableStream({
+        start(controller) {
+          // Only the first connection carries output; every later one stands in
+          // for a socket the gateway dropped under backpressure.
+          if (attempt === 1) {
+            controller.enqueue(encoder.encode(
+              'data: {"event":"terminal-output-session-1","payload":{"bytesBase64":"YQ==","revision":1,"generation":1}}\n\n',
+            ));
+          }
+          controller.close();
+        },
+      }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+      eventReconnectDelayMs: 0,
+    });
+
+    try {
+      const payloads: unknown[] = [];
+      let stop = () => {};
+      await new Promise<void>((resolve) => {
+        stop = api.listen<{ desynced?: boolean }>(
+          "terminal-output-session-1",
+          (payload) => {
+            payloads.push(payload);
+            if (payload?.desynced) resolve();
+          },
+        );
+      });
+      stop();
+
+      // The gateway has no replay buffer, so everything the PTY emitted during
+      // the gap is gone from this socket. Without the synthetic desync notice
+      // none of the consumer's reconcile triggers fire and the terminal stays
+      // permanently truncated.
+      expect(payloads[0]).toEqual({
+        bytesBase64: "YQ==",
+        revision: 1,
+        generation: 1,
+      });
+      expect(payloads[1]).toEqual({ desynced: true });
+      expect(attempt).toBeGreaterThanOrEqual(2);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("tells a reconnected browser EventSource terminal stream to resynchronize", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+    const payloads: unknown[] = [];
+    const stop = api.listen("terminal-output-session-1", (payload) => {
+      payloads.push(payload);
+    });
+    const source = MockEventSource.instances[0];
+    if (!source) throw new Error("EventSource was not created");
+
+    source.onopen?.();
+    await api.eventStreamReady("terminal-output-session-1");
+    // A first connection has nothing to reconcile against.
+    expect(payloads).toEqual([]);
+
+    source.onopen?.();
+    expect(payloads).toEqual([{ desynced: true }]);
+
+    // Resyncing must stay scoped to this terminal; the app-wide connected event
+    // would make every other consumer refetch for one dropped byte stream.
+    const connected = mock(() => undefined);
+    const stopConnected = api.listen(
+      NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+      connected,
+    );
+    source.onopen?.();
+    expect(connected).not.toHaveBeenCalled();
+    expect(payloads).toHaveLength(2);
+
+    stopConnected();
+    stop();
+  });
+
+  test("reconnects a direct terminal stream on its configured delay and stops once its listener leaves", async () => {
+    const warning = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warning;
+    let attempt = 0;
+    globalThis.fetch = mock(async () => {
+      attempt += 1;
+      return new Response(new ReadableStream({
+        start(controller) { controller.close(); },
+      }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    try {
+      const slow = createBrowserGatewayApi({
+        baseUrl: "https://workstation.tailnet.ts.net",
+        token: "direct-token-123456",
+        eventReconnectDelayMs: 60_000,
+      });
+      const stopSlow = slow.listen("terminal-output-slow", () => undefined);
+      await slow.eventStreamReady("terminal-output-slow");
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      // The retry is on a timer, so a long delay must not busy-reconnect.
+      expect(attempt).toBe(1);
+      stopSlow();
+
+      const fast = createBrowserGatewayApi({
+        baseUrl: "https://workstation.tailnet.ts.net",
+        token: "direct-token-123456",
+        eventReconnectDelayMs: 0,
+      });
+      const stopFast = fast.listen("terminal-output-fast", () => undefined);
+      await new Promise<void>((resolve) => {
+        const poll = () => (attempt >= 4 ? resolve() : setTimeout(poll, 1));
+        poll();
+      });
+
+      stopFast();
+      const attemptsAtStop = attempt;
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      // Nothing consumes this terminal any more, so the retry loop must end
+      // rather than reconnecting a stream forever in the background.
+      expect(attempt).toBe(attemptsAtStop);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("leaves terminal readiness pending when a browser stream errors before opening", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const warning = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warning;
+    const api = createBrowserGatewayApi();
+
+    try {
+      const stop = api.listen("terminal-output-session-1", () => undefined);
+      let ready = false;
+      const readyPromise = api
+        .eventStreamReady("terminal-output-session-1")
+        .then(() => { ready = true; });
+      const source = MockEventSource.instances[0];
+      if (!source) throw new Error("EventSource was not created");
+
+      source.onerror?.();
+      await Promise.resolve();
+      // An EventSource that never opens never latches readiness. Callers must
+      // therefore bound their own wait (see NATIVE_EVENT_STREAM_READY_TIMEOUT_MS)
+      // instead of assuming this promise always settles while the tab lives.
+      expect(ready).toBe(false);
+      expect(warning).toHaveBeenCalledWith(
+        "[RemoteGateway] Terminal event stream disconnected",
+      );
+
+      // Dropping the listener still releases anyone already waiting.
+      stop();
+      await readyPromise;
+      expect(ready).toBe(true);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   test("uses browser fallbacks for unavailable native-only APIs", async () => {

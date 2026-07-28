@@ -28,6 +28,7 @@ import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import {
+  checkClientHealth,
   createClient,
   getModelsWithDefaults,
   createSession,
@@ -46,7 +47,9 @@ import {
   subscribeToEvents,
   normalizeOpenCodePart,
   buildOpenCodeMessageFromPart,
-  hasOpenCodeSubagentSession,
+  collectOpenCodeSubagentIds,
+  carryOverOpenCodeSubagentHydration,
+  mergeOpenCodeMessageInfo,
   mergeOpenCodeSubagentTranscript,
   ERROR_MESSAGE_PREFIX,
   SYSTEM_MESSAGE_PREFIX,
@@ -118,6 +121,45 @@ interface OpenCodeChatTabProps {
 }
 
 type ConnectionState = "connecting" | "connected" | "error";
+
+type SessionPendingRequests = {
+  questions: Map<string, QuestionRequest>;
+  permissions: Map<string, PermissionRequest>;
+};
+
+function readSessionPendingRequests(sessionId: string): SessionPendingRequests {
+  const state = useOpenCodeStore.getState();
+  const questions = new Map<string, QuestionRequest>();
+  for (const question of state.pendingQuestions.values()) {
+    if (question.sessionId === sessionId) questions.set(question.id, question);
+  }
+  const permissions = new Map<string, PermissionRequest>();
+  for (const permission of state.pendingPermissions.values()) {
+    if (permission.sessionId === sessionId) permissions.set(permission.id, permission);
+  }
+  return { questions, permissions };
+}
+
+function pendingRequestMapChanged<T>(
+  before: Map<string, T>,
+  after: Map<string, T>,
+): boolean {
+  if (before.size !== after.size) return true;
+  for (const [id, value] of before) {
+    if (after.get(id) !== value) return true;
+  }
+  return false;
+}
+
+function sessionPendingRequestsChanged(
+  before: SessionPendingRequests,
+  after: SessionPendingRequests,
+): boolean {
+  return (
+    pendingRequestMapChanged(before.questions, after.questions)
+    || pendingRequestMapChanged(before.permissions, after.permissions)
+  );
+}
 
 const EMPTY_MODEL_PREFERENCES = EMPTY_OPENCODE_MODEL_PREFERENCES;
 
@@ -254,47 +296,64 @@ export function OpenCodeChatTab({
     ) => Promise<SendPromptResult | undefined>) | null
   >(null);
 
-  const {
-    setClient,
-    setModels,
-    setSession,
-    addMessage,
-    removeMessage,
-    setMessages,
-    upsertMessage,
-    setSessionLoading,
-    setServerStatus,
-    setSelectedModel,
-    setSelectedVariant,
-    setSlashCommands,
-    getSelectedModel,
-    getSelectedVariant,
-    getSelectedMode,
-    setContextUsage,
-    setSessionTitle,
-    setRuntimeHealth,
-    addToQueue,
-    addPendingPermission,
-    addPendingQuestion,
-    removePendingPermission,
-    removePendingQuestion,
-    // Event subscription management (shared per environment)
-    getOrCreateEventSubscription,
-    setEventStream,
-    hasActiveEventSubscription,
-    // Subscribe to Maps directly for proper reactivity (triggers re-render on changes)
-    clients: clientsMap,
-    sessions: sessionsMap,
-    pendingPermissions: pendingPermissionsMap,
-    pendingQuestions: pendingQuestionsMap,
-  } = useOpenCodeStore();
+  // Narrow, per-key subscriptions (mirrors CodexChatTab): store actions are
+  // referentially stable, and value reads are scoped so unrelated store writes
+  // (other environments, other sessions) no longer re-render this tab.
+  const setClient = useOpenCodeStore((state) => state.setClient);
+  const setModels = useOpenCodeStore((state) => state.setModels);
+  const setSession = useOpenCodeStore((state) => state.setSession);
+  const addMessage = useOpenCodeStore((state) => state.addMessage);
+  const removeMessage = useOpenCodeStore((state) => state.removeMessage);
+  const setMessages = useOpenCodeStore((state) => state.setMessages);
+  const upsertMessage = useOpenCodeStore((state) => state.upsertMessage);
+  const setSessionLoading = useOpenCodeStore((state) => state.setSessionLoading);
+  const setServerStatus = useOpenCodeStore((state) => state.setServerStatus);
+  const setSelectedModel = useOpenCodeStore((state) => state.setSelectedModel);
+  const setSelectedVariant = useOpenCodeStore((state) => state.setSelectedVariant);
+  const setSlashCommands = useOpenCodeStore((state) => state.setSlashCommands);
+  const getSelectedModel = useOpenCodeStore((state) => state.getSelectedModel);
+  const getSelectedVariant = useOpenCodeStore((state) => state.getSelectedVariant);
+  const getSelectedMode = useOpenCodeStore((state) => state.getSelectedMode);
+  const setContextUsage = useOpenCodeStore((state) => state.setContextUsage);
+  const setSessionTitle = useOpenCodeStore((state) => state.setSessionTitle);
+  const setRuntimeHealth = useOpenCodeStore((state) => state.setRuntimeHealth);
+  const addToQueue = useOpenCodeStore((state) => state.addToQueue);
+  const addPendingPermission = useOpenCodeStore((state) => state.addPendingPermission);
+  const addPendingQuestion = useOpenCodeStore((state) => state.addPendingQuestion);
+  const removePendingPermission = useOpenCodeStore(
+    (state) => state.removePendingPermission,
+  );
+  const removePendingQuestion = useOpenCodeStore(
+    (state) => state.removePendingQuestion,
+  );
+  // Event subscription management (shared per environment)
+  const getOrCreateEventSubscription = useOpenCodeStore(
+    (state) => state.getOrCreateEventSubscription,
+  );
+  const setEventStream = useOpenCodeStore((state) => state.setEventStream);
+  const hasActiveEventSubscription = useOpenCodeStore(
+    (state) => state.hasActiveEventSubscription,
+  );
+  const closeEventSubscription = useOpenCodeStore(
+    (state) => state.closeEventSubscription,
+  );
+  // Pending-request maps stay map-level subscriptions: the filtered views below
+  // need to react to any entry for this session appearing or disappearing.
+  const pendingPermissionsMap = useOpenCodeStore((state) => state.pendingPermissions);
+  const pendingQuestionsMap = useOpenCodeStore((state) => state.pendingQuestions);
 
-  const {
-    clearTabInitialPrompt,
-    clearTabInitialAgentOptions,
-    clearTabAgentHandoff,
-    updateTabNativeSessionId,
-  } = usePaneLayoutStore();
+  const clearTabInitialPrompt = usePaneLayoutStore(
+    (state) => state.clearTabInitialPrompt,
+  );
+  const clearTabInitialAgentOptions = usePaneLayoutStore(
+    (state) => state.clearTabInitialAgentOptions,
+  );
+  const clearTabAgentHandoff = usePaneLayoutStore(
+    (state) => state.clearTabAgentHandoff,
+  );
+  const updateTabNativeSessionId = usePaneLayoutStore(
+    (state) => state.updateTabNativeSessionId,
+  );
 
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
@@ -310,15 +369,14 @@ export function OpenCodeChatTab({
     clearTabInitialAgentOptions(tabId, environmentId);
   }, [clearTabInitialAgentOptions, environmentId, tabId]);
 
-  // Get client from Map (shared per environment) - subscribing to the Map ensures re-render on changes
-  const client = useMemo(
-    () => clientsMap.get(environmentId),
-    [clientsMap, environmentId],
+  // Get client for this environment (shared per environment). Per-key selector:
+  // re-renders only when this environment's client changes.
+  const client = useOpenCodeStore(
+    useCallback((state) => state.clients.get(environmentId), [environmentId]),
   );
-  // Get session from Map keyed by sessionKey (each tab has its own session, scoped by environment)
-  const session = useMemo(
-    () => sessionsMap.get(sessionKey),
-    [sessionsMap, sessionKey],
+  // Get session keyed by sessionKey (each tab has its own session, scoped by environment)
+  const session = useOpenCodeStore(
+    useCallback((state) => state.sessions.get(sessionKey), [sessionKey]),
   );
 
   const forkInFlightRef = useRef(false);
@@ -537,10 +595,34 @@ export function OpenCodeChatTab({
     };
   }, [environmentId, projectId, setModels]);
 
+  /**
+   * Fingerprint of every token-bearing field the usage summary reads.
+   *
+   * `sessionMessages` is a fresh array on every streaming frame, but the
+   * usage-relevant fields only change when a turn reports tokens (typically at
+   * completion). Keying the effect on this fingerprint instead of the array
+   * keeps `summarizeOpenCodeUsage` + the store write off the per-frame path
+   * while still recomputing the moment any turn's usage lands or changes.
+   */
+  const usageFingerprint = useMemo(() => {
+    let fingerprint = "";
+    for (const message of sessionMessages) {
+      const usage = message.providerUsage;
+      if (!usage) continue;
+      fingerprint += `${message.id}|${usage.modelId}|${usage.totalTokens ?? ""}|${usage.inputTokens}|${usage.outputTokens}|${usage.reasoningTokens}|${usage.cacheReadTokens}|${usage.cacheWriteTokens}|${usage.cost}|${usage.durationMs ?? ""};`;
+    }
+    return fingerprint;
+  }, [sessionMessages]);
+  const sessionMessagesRef = useRef(sessionMessages);
+  sessionMessagesRef.current = sessionMessages;
+
   useEffect(() => {
-    const usage = summarizeOpenCodeUsage(sessionMessages, models);
+    const usage = summarizeOpenCodeUsage(sessionMessagesRef.current, models);
     if (usage) setContextUsage(sessionKey, usage);
-  }, [models, sessionKey, sessionMessages, setContextUsage]);
+    // The transcript itself is read through a ref: every input the summary
+    // depends on is captured by `usageFingerprint` and `models`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [models, sessionKey, usageFingerprint, setContextUsage]);
 
   useEffect(() => {
     if (!client) return;
@@ -606,35 +688,37 @@ export function OpenCodeChatTab({
         shouldApply?: () => boolean;
       } = {},
     ): Promise<boolean> => {
-      const stateBeforeSync = useOpenCodeStore.getState();
-      const questionsBeforeSync = stateBeforeSync.pendingQuestions;
-      const permissionsBeforeSync = stateBeforeSync.pendingPermissions;
-      const existingQuestionIds = new Set<string>();
-      const existingPermissionIds = new Set<string>();
+      const pendingBeforeSync = readSessionPendingRequests(sessionId);
 
-      for (const existingQuestion of questionsBeforeSync.values()) {
-        if (existingQuestion.sessionId === sessionId) {
-          existingQuestionIds.add(existingQuestion.id);
-        }
+      let questions: QuestionRequest[];
+      let permissions: PermissionRequest[];
+      try {
+        [questions, permissions] = await Promise.all([
+          // An empty authoritative snapshot means "remove every old card"; a
+          // transport fallback must never be allowed to masquerade as one.
+          getPendingQuestions(sdkClient, { throwOnError: true }),
+          getPendingPermissions(sdkClient, { throwOnError: true }),
+        ]);
+      } catch (error) {
+        console.error(
+          "[OpenCodeChatTab] Failed to synchronize pending requests:",
+          error,
+        );
+        if (options.throwOnError) throw error;
+        return false;
       }
-
-      for (const existingPermission of permissionsBeforeSync.values()) {
-        if (existingPermission.sessionId === sessionId) {
-          existingPermissionIds.add(existingPermission.id);
-        }
-      }
-
-      const [questions, permissions] = await Promise.all([
-        getPendingQuestions(sdkClient, { throwOnError: options.throwOnError }),
-        getPendingPermissions(sdkClient, { throwOnError: options.throwOnError }),
-      ]);
       if (options.shouldApply && !options.shouldApply()) return false;
 
       const stateAfterSync = useOpenCodeStore.getState();
-      const pendingStateChanged =
-        stateAfterSync.pendingQuestions !== questionsBeforeSync ||
-        stateAfterSync.pendingPermissions !== permissionsBeforeSync;
-      if (pendingStateChanged) {
+      if (
+        stateAfterSync.clients.get(environmentId) !== sdkClient
+        || stateAfterSync.sessions.get(sessionKey)?.sessionId !== sessionId
+      ) {
+        return false;
+      }
+
+      const pendingAfterSync = readSessionPendingRequests(sessionId);
+      if (sessionPendingRequestsChanged(pendingBeforeSync, pendingAfterSync)) {
         if (options.throwOnStale ?? options.throwOnError) {
           throw new Error(
             "OpenCode pending requests changed while refreshing; try again",
@@ -657,13 +741,13 @@ export function OpenCodeChatTab({
         addPendingPermission(permission);
       }
 
-      for (const existingQuestionId of existingQuestionIds) {
+      for (const existingQuestionId of pendingBeforeSync.questions.keys()) {
         if (!questionIds.has(existingQuestionId)) {
           removePendingQuestion(existingQuestionId);
         }
       }
 
-      for (const existingPermissionId of existingPermissionIds) {
+      for (const existingPermissionId of pendingBeforeSync.permissions.keys()) {
         if (!permissionIds.has(existingPermissionId)) {
           removePendingPermission(existingPermissionId);
         }
@@ -674,8 +758,10 @@ export function OpenCodeChatTab({
     [
       addPendingPermission,
       addPendingQuestion,
+      environmentId,
       removePendingPermission,
       removePendingQuestion,
+      sessionKey,
     ],
   );
 
@@ -802,8 +888,17 @@ export function OpenCodeChatTab({
         // Fast path: if we already have a client and session from a previous init,
         // skip all expensive steps (server status, model fetch, etc.) and
         // reconnect instantly. This makes environment switching near-instant.
-        const existingClient = useOpenCodeStore.getState().clients.get(environmentId);
+        let existingClient = useOpenCodeStore.getState().clients.get(environmentId);
         const existingSession = useOpenCodeStore.getState().sessions.get(sessionKey);
+        if (existingClient && !await checkClientHealth(existingClient)) {
+          if (!mounted) return;
+          // A restarted OpenCode server rotates its Basic credential. Keeping
+          // this SDK client would make both REST rehydration and the shared SSE
+          // loop retry the obsolete password forever.
+          closeEventSubscription(environmentId);
+          setClient(environmentId, null);
+          existingClient = undefined;
+        }
         /**
          * Seed this sessionKey's model/variant before either warm path returns.
          *
@@ -923,6 +1018,15 @@ export function OpenCodeChatTab({
             getSessionStatus(existingClient, existingSession.sessionId, {
               throwOnError: true,
             }),
+            // Pending requests are equally authoritative. A tab can have been
+            // unmounted when the upstream SSE frame arrived, and a cached
+            // client/session fast path must not leave that blocked request
+            // invisible until the watchdog runs.
+            syncPendingRequests(existingClient, existingSession.sessionId, {
+              shouldApply: () =>
+                mounted
+                && reconnectSequence === manualRefreshSequenceRef.current,
+            }),
           ]).then(([messages, status]) => {
             if (
               !mounted ||
@@ -1012,6 +1116,7 @@ export function OpenCodeChatTab({
         setErrorMessage(null);
 
         let hostPort: number | null = null;
+        let authToken: string | undefined;
 
         if (isLocal) {
           // Local environment - use local server commands
@@ -1019,7 +1124,12 @@ export function OpenCodeChatTab({
 
           if (!localStatus.running) {
             const result = await startLocalOpencodeServer(environmentId);
-            localStatus = { running: true, port: result.port, pid: result.pid };
+            localStatus = {
+              running: true,
+              port: result.port,
+              pid: result.pid,
+              authToken: result.authToken,
+            };
           }
 
           if (!mounted) return;
@@ -1029,6 +1139,7 @@ export function OpenCodeChatTab({
           }
 
           hostPort = localStatus.port;
+          authToken = localStatus.authToken;
         } else {
           // Containerized environment - use container server commands
           if (!containerId) {
@@ -1041,7 +1152,11 @@ export function OpenCodeChatTab({
 
           if (!status.running) {
             const result = await startOpenCodeServer(containerId);
-            status = { running: true, hostPort: result.hostPort };
+            status = {
+              running: true,
+              hostPort: result.hostPort,
+              authToken: result.authToken,
+            };
           }
 
           if (!mounted) return;
@@ -1051,10 +1166,14 @@ export function OpenCodeChatTab({
           }
 
           hostPort = status.hostPort;
+          authToken = status.authToken;
         }
 
         if (!hostPort) {
           throw new Error("Failed to get server port");
+        }
+        if (!authToken) {
+          throw new Error("OpenCode server did not return an authentication credential");
         }
 
         setServerStatus(environmentId, {
@@ -1069,7 +1188,7 @@ export function OpenCodeChatTab({
         // environment worktree, so attaching the SDK-wide directory header is
         // unnecessary here. Avoiding that extra browser header also removes one
         // more local-only variable from native-tab startup.
-        const sdkClient = createClient(baseUrl);
+        const sdkClient = createClient(baseUrl, undefined, authToken);
         setClient(environmentId, sdkClient);
 
         // Fetch available models, server defaults, and model preferences
@@ -1381,7 +1500,7 @@ export function OpenCodeChatTab({
 
           const sessions = useOpenCodeStore.getState().sessions;
           for (const [sessionTabId, sessionState] of sessions) {
-            if (!hasOpenCodeSubagentSession(sessionState.messages, childSessionId)) {
+            if (!collectOpenCodeSubagentIds(sessionState.messages).has(childSessionId)) {
               continue;
             }
             const messages = mergeOpenCodeSubagentTranscript(
@@ -1435,6 +1554,13 @@ export function OpenCodeChatTab({
 
         // Helper to fetch messages with debouncing
         // Note: sessionKey is the session key from the sessions Map (e.g., "env-{envId}:{tabId}")
+        //
+        // Final events (`immediate`) fetch the fully hydrated transcript,
+        // subagents included — they are the authoritative reconcile point.
+        // Streaming-triggered refetches skip the recursive subagent hydration
+        // (`includeSubagents: false`): the live child updates are covered by
+        // `fetchSubagentMessagesDebounced`, and already-hydrated Agent rows are
+        // carried over so they do not blank until the final reconcile.
         const fetchMessagesDebounced = (
           sessionId: string,
           sessionKey: string,
@@ -1449,6 +1575,7 @@ export function OpenCodeChatTab({
             pendingReloads.delete(reloadKey);
           }
 
+          const includeSubagents = immediate;
           const doFetch = async () => {
             pendingReloads.delete(reloadKey);
             const now = Date.now();
@@ -1456,13 +1583,22 @@ export function OpenCodeChatTab({
             try {
               const messages = await getSessionMessages(sdkClient, sessionId, {
                 throwOnError: true,
+                ...(includeSubagents ? {} : { includeSubagents: false }),
               });
               if (!isCurrentReload(reloadKey, generation)) return;
               const currentSession = useOpenCodeStore
                 .getState()
                 .sessions.get(sessionKey);
               if (currentSession?.sessionId !== sessionId) return;
-              setMessages(sessionKey, messages);
+              setMessages(
+                sessionKey,
+                includeSubagents
+                  ? messages
+                  : carryOverOpenCodeSubagentHydration(
+                      currentSession.messages,
+                      messages,
+                    ),
+              );
             } catch (error) {
               console.warn(
                 "[OpenCodeChatTab] Failed to refresh session transcript:",
@@ -1489,6 +1625,17 @@ export function OpenCodeChatTab({
           }
         };
 
+        /**
+         * Sessions whose `message.part.updated` frames are currently applying
+         * cleanly. While a session streams via parts, `message.updated` and
+         * `session.updated` frames carry nothing the parts don't (bar
+         * message-level metadata, which is applied incrementally below), so
+         * the full-transcript refetch is skipped for them. The flag is cleared
+         * on any part-application failure and on final events, both of which
+         * fall back to the authoritative refetch.
+         */
+        const partStreamHealthyBySession = new Set<string>();
+
         const applyPartUpdate = (
           sessionTabId: string,
           rawPart: unknown,
@@ -1496,6 +1643,7 @@ export function OpenCodeChatTab({
         ) => {
           const part = normalizeOpenCodePart(rawPart);
           if (!part?.sourceMessageId) {
+            partStreamHealthyBySession.delete(sessionTabId);
             return null;
           }
 
@@ -1512,7 +1660,28 @@ export function OpenCodeChatTab({
               delta,
             ),
           );
+          partStreamHealthyBySession.add(sessionTabId);
           return part;
+        };
+
+        /**
+         * Apply a `message.updated` payload incrementally. Returns false when
+         * the payload cannot be applied and the caller must refetch.
+         */
+        const applyMessageInfoUpdate = (
+          sessionTabId: string,
+          rawInfo: unknown,
+        ): boolean => {
+          const sessionState = useOpenCodeStore.getState().sessions.get(sessionTabId);
+          const info = rawInfo as { id?: unknown } | null | undefined;
+          const messageId = typeof info?.id === "string" ? info.id : undefined;
+          const existingMessage = messageId
+            ? sessionState?.messages.find((message) => message.id === messageId)
+            : undefined;
+          const merged = mergeOpenCodeMessageInfo(existingMessage, rawInfo);
+          if (!merged) return false;
+          upsertMessage(sessionTabId, merged);
+          return true;
         };
 
         for await (const event of eventStream) {
@@ -1593,17 +1762,27 @@ export function OpenCodeChatTab({
               ) {
                 fetchSubagentMessagesDebounced(appliedPart.subagentId);
               }
-            } else if (
-              eventType === "message.updated" ||
-              eventType === "session.updated" ||
-              isRemovalEvent ||
-              isFinalEvent
-            ) {
-              fetchMessagesDebounced(
-                eventSessionId,
-                sessionTabId,
-                isFinalEvent || isRemovalEvent,
-              );
+            } else if (isFinalEvent || isRemovalEvent) {
+              // Final events fully reconcile (subagents included) so anything
+              // the incremental paths missed — including frames dropped while
+              // this environment was in the background — is recovered here.
+              partStreamHealthyBySession.delete(sessionTabId);
+              fetchMessagesDebounced(eventSessionId, sessionTabId, true);
+            } else if (eventType === "message.updated") {
+              // The payload carries message-level metadata only (role, error,
+              // token usage) — parts stream separately. Apply it in place and
+              // fall back to a cheap refetch only when it cannot be applied.
+              if (!applyMessageInfoUpdate(sessionTabId, props?.info)) {
+                fetchMessagesDebounced(eventSessionId, sessionTabId, false);
+              }
+            } else if (eventType === "session.updated") {
+              // Session metadata (title, share, revert timestamps). While the
+              // part stream is applying cleanly this carries no transcript
+              // content; outside streaming (e.g. an idle-time revert) refetch
+              // so the transcript still catches up promptly.
+              if (!partStreamHealthyBySession.has(sessionTabId)) {
+                fetchMessagesDebounced(eventSessionId, sessionTabId, false);
+              }
             }
 
             // Carry the server-assigned title into the store so the tab chrome
@@ -1652,11 +1831,16 @@ export function OpenCodeChatTab({
           }
 
           if (eventSessionId) {
-            const hasMatchingSubagent = Array.from(
-              useOpenCodeStore.getState().sessions.values(),
-            ).some((sessionState) =>
-              hasOpenCodeSubagentSession(sessionState.messages, eventSessionId),
-            );
+            // O(1) amortized per event: `collectOpenCodeSubagentIds` caches per
+            // transcript/message reference, so only the messages that actually
+            // changed since the last event are re-scanned.
+            let hasMatchingSubagent = false;
+            for (const sessionState of useOpenCodeStore.getState().sessions.values()) {
+              if (collectOpenCodeSubagentIds(sessionState.messages).has(eventSessionId)) {
+                hasMatchingSubagent = true;
+                break;
+              }
+            }
             if (hasMatchingSubagent) {
               const isChildIdle =
                 eventType === "session.idle" ||

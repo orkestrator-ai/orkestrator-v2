@@ -76,7 +76,10 @@ export function RepositorySettings({
   onOpenChange,
   onUpdateProject,
 }: RepositorySettingsProps) {
-  const { getRepositoryConfig, setRepositoryConfig, setConfig, config } = useConfigStore();
+  const getRepositoryConfig = useConfigStore((state) => state.getRepositoryConfig);
+  const setRepositoryConfig = useConfigStore((state) => state.setRepositoryConfig);
+  const setConfig = useConfigStore((state) => state.setConfig);
+  const config = useConfigStore((state) => state.config);
   const globalDefaultAgent = config.global.defaultAgent || "claude";
 
   // Pull cached models from stores

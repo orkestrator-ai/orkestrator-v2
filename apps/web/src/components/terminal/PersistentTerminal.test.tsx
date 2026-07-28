@@ -131,7 +131,10 @@ const persistentSessionStore = {
 
 const realSessionStoreSnapshot = { ...realSessionStore };
 mock.module("@/stores/sessionStore", () => ({
-  useSessionStore: () => persistentSessionStore,
+  // The component reads the store through narrow selectors, so the mock has to
+  // honor them.
+  useSessionStore: (selector?: (state: typeof persistentSessionStore) => unknown) =>
+    selector ? selector(persistentSessionStore) : persistentSessionStore,
 }));
 
 afterAll(() => {
@@ -151,18 +154,22 @@ const portalStoreActions = {
   disposeTerminal: mock(() => {}),
 };
 
-const useTerminalPortalStoreMock = (<T,>(selector?: (state: {
-    terminals: Map<string, { containerElement: HTMLDivElement | null; isOpened: boolean }>;
-  }) => T) => {
+/** The component selects actions as well as data, so both live in the state. */
+const portalStoreState = () => ({
+  ...portalStoreActions,
+  terminals: new Map([
+    ["env-1::tab-1", { containerElement: storedContainerElement, isOpened: true }],
+  ]),
+});
+
+const useTerminalPortalStoreMock = (<T,>(
+  selector?: (state: ReturnType<typeof portalStoreState>) => T,
+) => {
     if (!selector) {
       return portalStoreActions;
     }
 
-    return selector({
-      terminals: new Map([
-        ["env-1::tab-1", { containerElement: storedContainerElement, isOpened: true }],
-      ]),
-    });
+    return selector(portalStoreState());
   }) as any;
 
 useTerminalPortalStoreMock.getState = () => ({

@@ -1,13 +1,21 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingHttpHeaders,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
+  eventMatchesSubscription,
   isTailscaleAddress,
   loadOrCreateGatewayToken,
   OrkestratorGateway,
+  parseEventSubscriptionFilter,
   rewriteBrowserPreviewBody,
   selectTailscaleBindAddress,
 } from "../../../apps/backend/src/gateway";
@@ -118,6 +126,79 @@ async function startGateway(options: Partial<ConstructorParameters<typeof Orkest
   return { gateway, info, dataDir, rendererRoot };
 }
 
+async function waitUntil(predicate: () => boolean, message: string, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(message);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function eventClients(gateway: OrkestratorGateway): Map<ServerResponse, unknown> {
+  return (gateway as unknown as { clients: Map<ServerResponse, unknown> }).clients;
+}
+
+type GatewayEventStream = {
+  /** Everything this browser-side client has received so far. */
+  received: () => string;
+  /** The gateway-side response the real request path registered. */
+  response: ServerResponse;
+  /** True once the gateway hung up on this client. */
+  aborted: () => boolean;
+  close: () => void;
+};
+
+/** Opens a real `/__orkestrator/events` stream and pairs it with its server response. */
+async function openEventStream(
+  gateway: OrkestratorGateway,
+  info: { url: string; token: string },
+  search = "",
+): Promise<GatewayEventStream> {
+  const parsed = new URL(`${info.url}__orkestrator/events${search}`);
+  const known = new Set(eventClients(gateway).keys());
+  let received = "";
+  let aborted = false;
+  const request = httpRequest({
+    hostname: parsed.hostname,
+    port: parsed.port,
+    path: `${parsed.pathname}${parsed.search}`,
+    headers: { authorization: `Bearer ${info.token}` },
+  }, (response) => {
+    response.on("data", (chunk) => {
+      received += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    });
+    response.on("aborted", () => { aborted = true; });
+  });
+  request.on("error", () => { aborted = true; });
+  request.end();
+  await waitUntil(() => received.includes(": connected"), "Event stream never connected");
+
+  const response = [...eventClients(gateway).keys()].find((client) => !known.has(client));
+  if (!response) throw new Error("Gateway did not register the event-stream client");
+  return {
+    received: () => received,
+    response,
+    aborted: () => aborted,
+    close: () => request.destroy(),
+  };
+}
+
+/**
+ * Pins the buffered byte count the gateway sees for a live response.
+ *
+ * Every backpressure limit is expressed in terms of `writableLength`, and a
+ * loopback socket drains far faster than a test can observe, so a genuinely
+ * parked client is not reproducible here. Pinning the value puts a real
+ * response into the state the limits exist for.
+ */
+function pinBufferedBytes(response: ServerResponse, bytes: number): void {
+  Object.defineProperty(response, "writableLength", { value: bytes, configurable: true });
+}
+
+function releaseBufferedBytes(response: ServerResponse): void {
+  Reflect.deleteProperty(response, "writableLength");
+}
+
 afterEach(async () => {
   await Promise.all(gateways.splice(0).map((gateway) => gateway.stop().catch(() => undefined)));
   await Promise.all(auxiliaryServers.splice(0).map((server) => new Promise<void>((resolve) => {
@@ -128,6 +209,378 @@ afterEach(async () => {
 });
 
 describe("remote gateway", () => {
+  test("filters terminal prefixes while restoring explicitly subscribed sessions", () => {
+    expect(parseEventSubscriptionFilter(" terminal-output-one, menu- ")).toEqual([
+      "terminal-output-one",
+      "menu-",
+    ]);
+    expect(eventMatchesSubscription(
+      "menu-zoom",
+      null,
+      ["terminal-output-one"],
+      ["terminal-output-"],
+    )).toBe(false);
+    expect(eventMatchesSubscription(
+      "terminal-output-one",
+      null,
+      ["terminal-output-one"],
+      ["terminal-output-"],
+    )).toBe(true);
+    expect(eventMatchesSubscription(
+      "terminal-output-two",
+      null,
+      ["terminal-output-one"],
+      ["terminal-output-"],
+    )).toBe(false);
+  });
+
+  test("applies event filters before writing to connected clients", async () => {
+    const dataDir = await createTempDir("ork-gateway-filter-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir,
+      rendererRoot,
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger: createLogger(),
+    });
+    const writes: string[] = [];
+    const client = {
+      writableLength: 0,
+      write: mock((message: string) => {
+        writes.push(message);
+        return true;
+      }),
+      destroy: mock(() => undefined),
+    };
+    const clients = (
+      gateway as unknown as { clients: Map<object, unknown> }
+    ).clients;
+    clients.set(client, {
+      prefixes: null,
+      includedPrefixes: ["terminal-output-one"],
+      excludedPrefixes: ["terminal-output-"],
+      desyncedSessions: new Set<string>(),
+    });
+
+    gateway.emit("terminal-output-two", { bytesBase64: "dHdv" });
+    gateway.emit("menu-zoom", "in");
+    gateway.emit("terminal-output-one", { bytesBase64: "b25l" });
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain('"event":"terminal-output-one"');
+  });
+
+  test("drops projected soft-limit terminal frames and flushes a desync notice on drain", async () => {
+    const dataDir = await createTempDir("ork-gateway-soft-limit-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir,
+      rendererRoot,
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger: createLogger(),
+    });
+    const writes: string[] = [];
+    const client = {
+      writableLength: 1024 * 1024 - 20,
+      write: mock((message: string) => {
+        writes.push(message);
+        return false;
+      }),
+      destroy: mock(() => undefined),
+    };
+    const state = {
+      prefixes: null,
+      includedPrefixes: null,
+      excludedPrefixes: null,
+      desyncedSessions: new Set<string>(),
+    };
+    const clients = (
+      gateway as unknown as { clients: Map<object, typeof state> }
+    ).clients;
+    clients.set(client, state);
+
+    gateway.emit("terminal-output-session-a", {
+      bytesBase64: "eA==",
+      sequence: 1,
+    });
+    expect(writes).toEqual([]);
+    expect(state.desyncedSessions).toEqual(new Set(["session-a"]));
+
+    // Node emits "drain" only after writableLength returns below the
+    // high-water mark. Invoke the same private callback target to pin that the
+    // pending session becomes an authoritative recovery notice.
+    client.writableLength = 0;
+    const flushed = (
+      gateway as unknown as {
+        flushDesyncNotices(client: object, state: typeof state): boolean;
+      }
+    ).flushDesyncNotices(client, state);
+    expect(flushed).toBe(true);
+    expect(state.desyncedSessions.size).toBe(0);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain('"desynced":true');
+  });
+
+  test("retains only the latest refused tmux repaint and flushes it on drain", async () => {
+    const dataDir = await createTempDir("ork-gateway-tmux-soft-limit-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir,
+      rendererRoot,
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger: createLogger(),
+    });
+    const writes: string[] = [];
+    const client = {
+      writableLength: 1024 * 1024,
+      write: mock((message: string) => {
+        writes.push(message);
+        return false;
+      }),
+      destroy: mock(() => undefined),
+    };
+    const state = {
+      prefixes: null,
+      includedPrefixes: ["terminal-output-tmux:env:tab:one"],
+      excludedPrefixes: ["terminal-output-"],
+      desyncedSessions: new Set<string>(),
+    };
+    const clients = (
+      gateway as unknown as { clients: Map<object, typeof state> }
+    ).clients;
+    clients.set(client, state);
+
+    gateway.emit("terminal-output-tmux:env:tab:one", {
+      bytesBase64: Buffer.from("old pane").toString("base64"),
+    });
+    gateway.emit("terminal-output-tmux:env:tab:one", {
+      bytesBase64: Buffer.from("latest pane").toString("base64"),
+    });
+    gateway.emit("environment-changed", { id: "env" });
+    expect(writes).toEqual([]);
+
+    client.writableLength = 0;
+    const flushed = (
+      gateway as unknown as {
+        flushDesyncNotices(client: object, state: typeof state): boolean;
+      }
+    ).flushDesyncNotices(client, state);
+
+    expect(flushed).toBe(true);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain(Buffer.from("latest pane").toString("base64"));
+    expect(writes[0]).not.toContain(Buffer.from("old pane").toString("base64"));
+    expect(writes[0]).not.toContain('"desynced":true');
+    expect(state.desyncedSessions.size).toBe(0);
+  });
+
+  test("disconnects before a current frame would exceed the hard buffer limit", async () => {
+    const dataDir = await createTempDir("ork-gateway-hard-limit-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const logger = createLogger();
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir,
+      rendererRoot,
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger,
+    });
+    const client = {
+      writableLength: 8 * 1024 * 1024 - 10,
+      write: mock(() => true),
+      destroy: mock(() => undefined),
+    };
+    const clients = (
+      gateway as unknown as { clients: Map<object, unknown> }
+    ).clients;
+    clients.set(client, {
+      prefixes: null,
+      includedPrefixes: null,
+      excludedPrefixes: null,
+      desyncedSessions: new Set<string>(),
+    });
+
+    gateway.emit("environment-changed", { id: "environment-a" });
+    expect(client.write).not.toHaveBeenCalled();
+    expect(client.destroy).toHaveBeenCalledTimes(1);
+    expect(clients.has(client)).toBe(false);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  test("disconnects instead of retaining one oversized authoritative frame", async () => {
+    const dataDir = await createTempDir("ork-gateway-oversized-frame-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir,
+      rendererRoot,
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger: createLogger(),
+    });
+    const client = {
+      writableLength: 0,
+      write: mock(() => true),
+      destroy: mock(() => undefined),
+    };
+    const clients = (
+      gateway as unknown as { clients: Map<object, unknown> }
+    ).clients;
+    clients.set(client, {
+      prefixes: null,
+      includedPrefixes: null,
+      excludedPrefixes: null,
+      desyncedSessions: new Set<string>(),
+    });
+
+    gateway.emit("authoritative-snapshot", "x".repeat(8 * 1024 * 1024));
+    expect(client.write).not.toHaveBeenCalled();
+    expect(client.destroy).toHaveBeenCalledTimes(1);
+    expect(clients.has(client)).toBe(false);
+  });
+
+  test("keeps a scoped subscription restricted to its own prefixes", () => {
+    expect(eventMatchesSubscription("menu-zoom", ["menu-", "environment-"])).toBe(true);
+    expect(eventMatchesSubscription("terminal-output-one", ["menu-"])).toBe(false);
+    // An explicit include still wins over a base scope that omits the event, and
+    // an exclude still removes one the base scope would otherwise carry.
+    expect(eventMatchesSubscription(
+      "terminal-output-one",
+      ["menu-"],
+      ["terminal-output-one"],
+    )).toBe(true);
+    expect(eventMatchesSubscription("menu-zoom", ["menu-"], null, ["menu-"])).toBe(false);
+  });
+
+  test("rejects non-GET event-stream requests", async () => {
+    const { info } = await startGateway();
+
+    const response = await requestUrl(`${info.url}__orkestrator/events`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+
+    expect(response.status).toBe(405);
+    expect(response.headers.allow).toBe("GET");
+  });
+
+  test("subscribes a connecting stream from its own query string", async () => {
+    const { gateway, info } = await startGateway();
+    const scoped = await openEventStream(gateway, info, "?events=menu-");
+    const terminal = await openEventStream(
+      gateway,
+      info,
+      "?excludeEvents=terminal-output-&includeEvents=terminal-output-one",
+    );
+
+    gateway.emit("terminal-output-two", { bytesBase64: "dHdv" });
+    gateway.emit("environment-changed", { id: "env" });
+    gateway.emit("terminal-output-one", { bytesBase64: "b25l" });
+    gateway.emit("menu-zoom", "in");
+
+    // Each stream is ordered, so waiting for the last permitted event proves the
+    // earlier ones were filtered rather than merely still in flight.
+    await waitUntil(
+      () => scoped.received().includes("menu-zoom"),
+      "Scoped stream never received its subscribed event",
+    );
+    await waitUntil(
+      () => terminal.received().includes("terminal-output-one"),
+      "Terminal stream never received its restored session",
+    );
+
+    expect(scoped.received()).not.toContain("environment-changed");
+    expect(scoped.received()).not.toContain("terminal-output-");
+    expect(terminal.received()).not.toContain("terminal-output-two");
+    expect(terminal.received()).not.toContain("menu-zoom");
+
+    scoped.close();
+    terminal.close();
+  });
+
+  test("flushes a desync notice to a quiet stream once its socket drains", async () => {
+    const { gateway, info } = await startGateway();
+    const stream = await openEventStream(gateway, info);
+
+    pinBufferedBytes(stream.response, 2 * 1024 * 1024);
+    gateway.emit("terminal-output-session-a", { bytesBase64: "eA==" });
+    // Nothing was written, so nothing can be in flight: no further event is
+    // coming to carry the notice, which is exactly what "drain" has to cover.
+    expect(stream.received()).not.toContain("terminal-output-session-a");
+
+    releaseBufferedBytes(stream.response);
+    // "drain" only follows a refused write, so refuse one for real rather than
+    // synthesizing the event the gateway listens for.
+    const refused = stream.response.write(`: ${"filler".repeat(700_000)}\n\n`);
+    expect(refused).toBe(false);
+
+    await waitUntil(
+      () => stream.received().includes("\"desynced\":true"),
+      "Drained stream never learned it was desynced",
+    );
+    expect(stream.received()).toContain("terminal-output-session-a");
+
+    stream.close();
+  });
+
+  test("sends a plain desync notice when a tmux session drops on a broad stream", async () => {
+    const { gateway, info } = await startGateway();
+    const stream = await openEventStream(gateway, info);
+    const pane = Buffer.from("latest pane").toString("base64");
+
+    pinBufferedBytes(stream.response, 2 * 1024 * 1024);
+    gateway.emit("terminal-output-tmux:env:tab:one", { bytesBase64: pane });
+    releaseBufferedBytes(stream.response);
+    gateway.emit("environment-changed", { id: "env" });
+
+    await waitUntil(
+      () => stream.received().includes("environment-changed"),
+      "Recovered stream never resumed authoritative events",
+    );
+    // A broad stream is not the one terminal subscribed to this pane, so it must
+    // not accumulate repaints it never asked for.
+    expect(stream.received()).toContain("\"desynced\":true");
+    expect(stream.received()).not.toContain(pane);
+
+    stream.close();
+  });
+
+  test("disconnects a parked stream when even its desync notice would overflow", async () => {
+    const { gateway, info } = await startGateway();
+    const stream = await openEventStream(gateway, info);
+
+    pinBufferedBytes(stream.response, 2 * 1024 * 1024);
+    gateway.emit("terminal-output-session-a", { bytesBase64: "eA==" });
+    // Still at the hard limit when the socket drains: the notice itself no
+    // longer fits, and a client that cannot even be told it desynced is beyond
+    // recovering in place.
+    pinBufferedBytes(stream.response, 8 * 1024 * 1024);
+    stream.response.write(": nudge\n\n");
+
+    await waitUntil(() => stream.aborted(), "Hopeless stream was never disconnected");
+    expect(eventClients(gateway).size).toBe(0);
+    expect(stream.received()).not.toContain("\"desynced\":true");
+  });
+
+  test("drops a parked stream instead of writing keepalives past the hard limit", async () => {
+    const { gateway, info } = await startGateway({ keepaliveMs: 5 });
+    const stream = await openEventStream(gateway, info);
+    await waitUntil(
+      () => stream.received().includes(": keepalive"),
+      "Stream never received a keepalive",
+    );
+
+    pinBufferedBytes(stream.response, 8 * 1024 * 1024 + 1);
+
+    await waitUntil(
+      () => stream.aborted(),
+      "Keepalives kept writing to a stream already past the hard limit",
+    );
+    expect(eventClients(gateway).size).toBe(0);
+  });
+
   test("rewrites browser-preview asset paths into their isolated proxy namespace", () => {
     const prefix = "/__orkestrator/browser/loopback/3000";
     const target = new URL("http://127.0.0.1:3000/");
@@ -670,10 +1123,11 @@ describe("remote gateway", () => {
     expect(preflight.status).toBe(204);
     expect(preflight.headers["access-control-allow-origin"]).toBe("https://orkestrator.dev");
     expect(preflight.headers["access-control-allow-private-network"]).toBe("true");
-    // Remote renderers authenticate Codex bridge calls with this header, so a
-    // preflight that omits it blocks every Codex request from the browser.
+    // Remote renderers authenticate bridge calls with these headers, so a
+    // preflight that omits one blocks every request to that bridge from the
+    // browser.
     expect(preflight.headers["access-control-allow-headers"]).toBe(
-      "Authorization, Content-Type, X-Orkestrator-Codex-Token",
+      "Authorization, Content-Type, X-Orkestrator-Codex-Token, X-Orkestrator-Claude-Token, X-Orkestrator-OpenCode-Token",
     );
 
     const connected = await requestUrl(endpoint, {
@@ -1101,7 +1555,9 @@ describe("remote gateway", () => {
   test("proxies authenticated loopback POSTs without leaking gateway credentials or browser origin", async () => {
     const targetRequests: Array<{
       authorization?: string;
+      proxyAuthorization?: string;
       codexToken?: string;
+      openCodeToken?: string;
       cookie?: string;
       origin?: string;
       method?: string;
@@ -1113,7 +1569,9 @@ describe("remote gateway", () => {
       request.on("end", () => {
         targetRequests.push({
           authorization: request.headers.authorization,
+          proxyAuthorization: request.headers["proxy-authorization"],
           codexToken: request.headers["x-orkestrator-codex-token"] as string | undefined,
+          openCodeToken: request.headers["x-orkestrator-opencode-token"] as string | undefined,
           cookie: request.headers.cookie,
           origin: request.headers.origin,
           method: request.method,
@@ -1150,18 +1608,22 @@ describe("remote gateway", () => {
         method: "POST",
         headers: {
           authorization: `Bearer ${info!.token}`,
+          "proxy-authorization": "Basic must-not-reach-upstream",
           cookie: "orkestrator_gateway_auth=test-token-123456; app_session=abc123",
           origin: new URL(info!.url).origin,
           "content-type": "application/json",
           "x-orkestrator-codex-token": "codex-bridge-token",
+          "x-orkestrator-opencode-token": "opencode-password",
         },
         body: JSON.stringify({ prompt: "review" }),
       });
       expect(response.status).toBe(200);
       expect(response.json()).toEqual({ ok: true, url: "/hello?x=1" });
       expect(targetRequests).toEqual([{
-        authorization: undefined,
+        authorization: `Basic ${Buffer.from("opencode:opencode-password").toString("base64")}`,
+        proxyAuthorization: undefined,
         codexToken: "codex-bridge-token",
+        openCodeToken: undefined,
         cookie: "app_session=abc123",
         origin: undefined,
         method: "POST",

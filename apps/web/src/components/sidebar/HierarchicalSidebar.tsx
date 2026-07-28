@@ -52,6 +52,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
 import { cn } from "@/lib/utils";
 
+const NO_ENVIRONMENTS: Environment[] = [];
+
 export type SidebarReorderResult =
   | { type: "project"; ids: string[] }
   | { type: "environment"; projectId: string; ids: string[] };
@@ -340,21 +342,20 @@ export function HierarchicalSidebar() {
     (projectId) => loadEnvironments(projectId, { silent: true, reconcileStatus: false }),
   );
 
-  const {
-    selectedProjectId,
-    selectedEnvironmentId,
-    selectProject,
-    selectProjectAndEnvironment,
-    collapsedProjects,
-    toggleProjectCollapse,
-    selectedEnvironmentIds,
-    toggleEnvironmentSelection,
-    setMultiSelection,
-    clearMultiSelection,
-    collapseEmptyProjects,
-    environmentSortMode,
-    setEnvironmentSortMode,
-  } = useUIStore();
+  // Data via narrow selectors; actions are stable references on the store.
+  const selectedProjectId = useUIStore((state) => state.selectedProjectId);
+  const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const collapsedProjects = useUIStore((state) => state.collapsedProjects);
+  const selectedEnvironmentIds = useUIStore((state) => state.selectedEnvironmentIds);
+  const environmentSortMode = useUIStore((state) => state.environmentSortMode);
+  const selectProject = useUIStore((state) => state.selectProject);
+  const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
+  const toggleProjectCollapse = useUIStore((state) => state.toggleProjectCollapse);
+  const toggleEnvironmentSelection = useUIStore((state) => state.toggleEnvironmentSelection);
+  const setMultiSelection = useUIStore((state) => state.setMultiSelection);
+  const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
+  const collapseEmptyProjects = useUIStore((state) => state.collapseEmptyProjects);
+  const setEnvironmentSortMode = useUIStore((state) => state.setEnvironmentSortMode);
 
   const activityEnvironments = useMemo(
     () => sortEnvironmentsByActivity(allEnvironments, projects),
@@ -439,14 +440,26 @@ export function HierarchicalSidebar() {
     initialCollapseAppliedRef.current = true;
   }, [projects, allEnvironments, collapseEmptyProjects]);
 
+  // Group environments by project in one memoized pass, instead of a
+  // filter+sort per project per render.
+  const environmentsByProject = useMemo(() => {
+    const grouped = new Map<string, Environment[]>();
+    for (const environment of allEnvironments) {
+      const bucket = grouped.get(environment.projectId);
+      if (bucket) bucket.push(environment);
+      else grouped.set(environment.projectId, [environment]);
+    }
+    for (const bucket of grouped.values()) {
+      bucket.sort((a, b) => a.order - b.order);
+    }
+    return grouped;
+  }, [allEnvironments]);
+
   // Get environments for a specific project
   const getProjectEnvironments = useCallback(
-    (projectId: string): Environment[] => {
-      return allEnvironments
-        .filter((e) => e.projectId === projectId)
-        .sort((a, b) => a.order - b.order);
-    },
-    [allEnvironments]
+    (projectId: string): Environment[] =>
+      environmentsByProject.get(projectId) ?? NO_ENVIRONMENTS,
+    [environmentsByProject]
   );
 
   // DnD sensors
@@ -538,7 +551,8 @@ export function HierarchicalSidebar() {
     return orderedIds;
   }, [activityEnvironments, environmentSortMode, projects, getProjectEnvironments, collapsedProjects]);
 
-  const handleSelectEnvironment = (
+  // useCallback so memo(EnvironmentItem) rows are not invalidated every render.
+  const handleSelectEnvironment = useCallback((
     environmentId: string,
     modifiers: { shiftKey?: boolean; metaKey?: boolean } = {}
   ) => {
@@ -590,7 +604,18 @@ export function HierarchicalSidebar() {
       // (previously incomplete). Persisted `setupScriptsComplete` also seeds
       // `setupCommandsResolved` during env hydration in the store.
     }
-  };
+  }, [
+    getOrderedEnvironmentIds,
+    selectedEnvironmentId,
+    selectedEnvironmentIds,
+    toggleEnvironmentSelection,
+    setMultiSelection,
+    isMobile,
+    clearMultiSelection,
+    allEnvironments,
+    selectProjectAndEnvironment,
+    startEnvironment,
+  ]);
 
   // Bulk action handlers
   const handleStopSelected = async () => {
@@ -653,7 +678,10 @@ export function HierarchicalSidebar() {
     })
     .filter(Boolean) as { id: string; name: string }[];
 
-  const handleUpdateEnvironment = createEnvironmentUpdateHandler(updateEnvironment);
+  const handleUpdateEnvironment = useMemo(
+    () => createEnvironmentUpdateHandler(updateEnvironment),
+    [updateEnvironment]
+  );
 
   const handleOpenSettings = (projectId: string) => {
     setSettingsProjectId(projectId);

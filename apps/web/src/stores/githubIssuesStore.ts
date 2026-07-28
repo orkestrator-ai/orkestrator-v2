@@ -87,6 +87,31 @@ interface GitHubIssuesState {
   clearProject: (projectId: string) => void;
 }
 
+/**
+ * Cap on cached issue details. Every opened issue used to stay in the map for
+ * the life of the process (comments included); bound it and evict the
+ * least-recently-written entry instead.
+ */
+export const MAX_CACHED_ISSUE_DETAILS = 50;
+
+function setDetailCapped(
+  details: Map<string, GitHubIssueDetail>,
+  key: string,
+  issue: GitHubIssueDetail,
+): Map<string, GitHubIssueDetail> {
+  const next = new Map(details);
+  // Delete-then-set moves the key to the tail of the insertion order, so the
+  // head of the map is always the stalest entry.
+  next.delete(key);
+  next.set(key, issue);
+  while (next.size > MAX_CACHED_ISSUE_DETAILS) {
+    const oldest = next.keys().next().value;
+    if (oldest === undefined) break;
+    next.delete(oldest);
+  }
+  return next;
+}
+
 const activeIssueRequests = new Map<string, number>();
 const activeProjectRequests = new Map<string, number>();
 
@@ -158,7 +183,7 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
       const issue = await getGitHubIssue(projectId, issueNumber);
       if (activeIssueRequests.get(key) !== requestId) return;
       set((state) => {
-        const details = new Map(state.details).set(key, issue);
+        const details = setDetailCapped(state.details, key, issue);
         const snapshots = new Map(state.snapshots);
         const nextSnapshot = replaceIssue(snapshots.get(projectId), issue);
         if (nextSnapshot) snapshots.set(projectId, nextSnapshot);

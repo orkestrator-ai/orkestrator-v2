@@ -92,6 +92,35 @@ describe("EventRing", () => {
     expect(ring.oldestRevision).toBe(3);
   });
 
+  test("evicts by retained bytes even when the frame-count cap is not reached", () => {
+    const ring = new EventRing<string>(100, {
+      maxBytes: 5,
+      measureBytes: (value) => Buffer.byteLength(value, "utf8"),
+    });
+    ring.append("aa");
+    ring.append("bbb");
+    ring.append("cccc");
+
+    expect(ring.since(2).events.map((entry) => entry.event)).toEqual(["cccc"]);
+    expect(ring.getStats()).toMatchObject({
+      retained: 1,
+      retainedBytes: 4,
+      maxBytes: 5,
+      dropped: 2,
+    });
+  });
+
+  test("does not retain one frame larger than the whole byte budget", () => {
+    const ring = new EventRing<string>(100, {
+      maxBytes: 3,
+      measureBytes: (value) => Buffer.byteLength(value, "utf8"),
+    });
+    const revision = ring.append("oversized");
+
+    expect(ring.getStats()).toMatchObject({ retained: 0, retainedBytes: 0 });
+    expect(ring.since(revision - 1).complete).toBe(false);
+  });
+
   test("a zero or negative capacity is clamped to 1", () => {
     const ring = new EventRing<string>(0);
     ring.append("a");
@@ -112,6 +141,33 @@ describe("EventRing", () => {
     for (let index = 0; index < DEFAULT_RING_CAPACITY; index += 1) ring.append(index);
     expect(ring.since(0).complete).toBe(true);
     expect(ring.getStats().dropped).toBe(0);
+  });
+
+  test("clear releases retained byte accounting", () => {
+    const ring = new EventRing<string>(10, {
+      maxBytes: 100,
+      measureBytes: (value) => value.length,
+    });
+    ring.append("payload");
+    ring.clear();
+    expect(ring.getStats()).toMatchObject({ retained: 0, retainedBytes: 0 });
+  });
+
+  test("advance records an unreplayable gap without retaining a payload", () => {
+    const ring = new EventRing<string>();
+    ring.append("before");
+    const cursor = ring.latestRevision;
+    ring.clear();
+    expect(ring.advance()).toBe(cursor + 1);
+    expect(ring.getStats()).toMatchObject({
+      retained: 0,
+      latestRevision: cursor + 1,
+    });
+    expect(ring.since(cursor)).toMatchObject({
+      events: [],
+      complete: false,
+      latestRevision: cursor + 1,
+    });
   });
 });
 

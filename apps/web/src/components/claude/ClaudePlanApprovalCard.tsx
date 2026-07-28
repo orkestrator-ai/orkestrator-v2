@@ -1,6 +1,6 @@
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { useState, useCallback, useMemo } from "react";
-import { FileText, Check, X, ChevronRight } from "lucide-react";
+import { AlertTriangle, FileText, Check, X, ChevronRight } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
@@ -15,6 +15,7 @@ import {
   claudePlanApprovalDraftKey,
   usePromptDraftField,
 } from "@/stores/promptDraftStore";
+import { usePromptDeadline } from "@/hooks/usePromptDeadline";
 
 interface ClaudePlanApprovalCardProps {
   approval: ClaudePlanApprovalRequest;
@@ -102,7 +103,9 @@ export function ClaudePlanApprovalCard({
   sessionId,
   messages,
 }: ClaudePlanApprovalCardProps) {
-  const { removePendingPlanApproval } = useClaudeStore();
+  const removePendingPlanApproval = useClaudeStore(
+    (state) => state.removePendingPlanApproval,
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   // The rejection-feedback draft survives the card unmounting (environment
   // switches) by living in the prompt-draft store; `claudeStore.
@@ -119,20 +122,23 @@ export function ClaudePlanApprovalCard({
     () => "",
   );
   const [isPlanExpanded, setIsPlanExpanded] = useState(true);
+  const { remaining, expired } = usePromptDeadline(approval.expiresAt);
 
   // Extract plan content from messages
   const planContent = useMemo(() => extractPlanContent(messages), [messages]);
 
   const handleApprove = useCallback(async () => {
+    if (expired) return;
     setIsSubmitting(true);
     try {
       const result = await respondToPlanApproval(client, sessionId, approval.id, true);
       if (result === "applied") {
         removePendingPlanApproval(approval.id);
         // Plan mode will be disabled via the plan.exit-requested event from the server
-      } else if (result === "expired") {
-        // Request expired - remove the card since it's no longer actionable
-        console.warn("[ClaudePlanApprovalCard] Plan approval request expired, removing card");
+      } else if (result === "stale") {
+        // The approval window closed while the user was deciding. Remove the
+        // card: it is no longer actionable, and this is not a failure to report.
+        console.warn("[ClaudePlanApprovalCard] Plan approval is no longer pending, removing card");
         removePendingPlanApproval(approval.id);
       } else {
         // The card stays retryable, but the turn is fully blocked on this
@@ -146,9 +152,10 @@ export function ClaudePlanApprovalCard({
     } finally {
       setIsSubmitting(false);
     }
-  }, [client, sessionId, approval.id, removePendingPlanApproval]);
+  }, [client, sessionId, approval.id, expired, removePendingPlanApproval]);
 
   const handleReject = useCallback(async () => {
+    if (expired) return;
     if (!showFeedback) {
       // Show feedback input first
       setShowFeedback(true);
@@ -168,9 +175,9 @@ export function ClaudePlanApprovalCard({
         removePendingPlanApproval(approval.id);
         // Keep plan mode enabled so Claude can revise the plan
         // The plan.exit-requested event will NOT be sent on rejection
-      } else if (result === "expired") {
-        // Request expired - remove the card since it's no longer actionable
-        console.warn("[ClaudePlanApprovalCard] Plan rejection request expired, removing card");
+      } else if (result === "stale") {
+        // No longer actionable - remove the card rather than report a failure
+        console.warn("[ClaudePlanApprovalCard] Plan rejection is no longer pending, removing card");
         removePendingPlanApproval(approval.id);
       } else {
         console.error("[ClaudePlanApprovalCard] Plan feedback was not delivered");
@@ -182,20 +189,23 @@ export function ClaudePlanApprovalCard({
     } finally {
       setIsSubmitting(false);
     }
-  }, [client, sessionId, approval.id, feedback, showFeedback, removePendingPlanApproval]);
+  }, [client, sessionId, approval.id, expired, feedback, showFeedback, removePendingPlanApproval]);
 
   const handleDismiss = useCallback(() => {
+    if (expired) return;
     // Dismissing is treated as rejection without feedback
     setIsSubmitting(true);
     respondToPlanApproval(client, sessionId, approval.id, false)
       .then((result) => {
-        if (result === "applied" || result === "expired") {
+        if (result === "applied" || result === "stale") {
           removePendingPlanApproval(approval.id);
         }
-        if (result === "expired") {
-          console.warn("[ClaudePlanApprovalCard] Plan dismiss request expired, card removed anyway");
+        if (result === "stale") {
+          console.warn("[ClaudePlanApprovalCard] Plan dismissal is no longer pending, card removed anyway");
         }
-        if (result === "failed") {
+        // `forbidden` and `error` alike: the turn is still blocked on an answer
+        // that never landed, so the card stays and the user is told.
+        if (result === "forbidden" || result === "error") {
           console.error("[ClaudePlanApprovalCard] Plan dismissal was not delivered");
           toast.error(DISMISS_FAILURE_TITLE, { description: RETRY_HINT });
         }
@@ -207,7 +217,7 @@ export function ClaudePlanApprovalCard({
       .finally(() => {
         setIsSubmitting(false);
       });
-  }, [client, sessionId, approval.id, removePendingPlanApproval]);
+  }, [client, sessionId, approval.id, expired, removePendingPlanApproval]);
 
   return (
     <BlockingPromptCard>
@@ -216,7 +226,9 @@ export function ClaudePlanApprovalCard({
         <FileText className="w-4 h-4 text-amber-500" />
         <span className="text-sm font-medium text-foreground">Plan Ready for Review</span>
         <span className="text-xs text-muted-foreground ml-auto">
-          Review the plan above and approve or request changes
+          {remaining && !expired
+            ? `Expires in ${remaining}`
+            : "Review the plan above and approve or request changes"}
         </span>
       </div>
 
@@ -264,14 +276,20 @@ export function ClaudePlanApprovalCard({
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}
               className="min-h-[80px] text-sm bg-transparent border-muted-foreground/20 focus:border-primary resize-none"
-              disabled={isSubmitting}
+              disabled={isSubmitting || expired}
             />
           </div>
         )}
       </div>
 
       {/* Actions */}
-      <div className="flex items-center justify-between px-4 py-3 bg-muted/30 border-t border-border">
+      {expired ? (
+        <div className="flex items-center gap-1.5 border-t border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
+          <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+          This request expired and was declined.
+        </div>
+      ) : (
+        <div className="flex items-center justify-between px-4 py-3 bg-muted/30 border-t border-border">
         <Button
           variant="ghost"
           size="sm"
@@ -305,7 +323,8 @@ export function ClaudePlanApprovalCard({
             {isSubmitting ? "Approving..." : "Approve Plan"}
           </Button>
         </div>
-      </div>
+        </div>
+      )}
     </BlockingPromptCard>
   );
 }

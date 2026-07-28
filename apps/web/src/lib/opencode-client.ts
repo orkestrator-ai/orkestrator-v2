@@ -610,6 +610,149 @@ export function mergeOpenCodeSubagentTranscript(
   return changed ? nextMessages : messages;
 }
 
+/**
+ * Per-message and per-transcript caches for {@link collectOpenCodeSubagentIds}.
+ *
+ * Messages and transcript arrays are replaced (never mutated) by the stores, so
+ * a WeakMap keyed on the object reference is a correct cache: a streaming tick
+ * replaces exactly one message object and the surrounding array, which means a
+ * lookup re-scans only the message that actually changed instead of deep
+ * traversing every part of every message of every session per SSE frame.
+ */
+const transcriptSubagentIdsCache = new WeakMap<
+  readonly OpenCodeMessage[],
+  ReadonlySet<string>
+>();
+const messageSubagentIdsCache = new WeakMap<OpenCodeMessage, readonly string[]>();
+
+/**
+ * Collect every child session id referenced by a Task part in this transcript.
+ *
+ * O(1) amortized per call thanks to reference-keyed caching — see the cache
+ * comment above. Use this instead of {@link hasOpenCodeSubagentSession} on hot
+ * paths such as per-event routing.
+ */
+export function collectOpenCodeSubagentIds(
+  messages: OpenCodeMessage[],
+): ReadonlySet<string> {
+  const cached = transcriptSubagentIdsCache.get(messages);
+  if (cached) return cached;
+
+  const ids = new Set<string>();
+  for (const message of messages) {
+    let messageIds = messageSubagentIdsCache.get(message);
+    if (!messageIds) {
+      const collected: string[] = [];
+      mapOpenCodeParts(message.parts, (part) => {
+        if (part.type === "subagent" && part.subagentId) {
+          collected.push(part.subagentId);
+        }
+        return part;
+      });
+      messageIds = collected;
+      messageSubagentIdsCache.set(message, messageIds);
+    }
+    for (const id of messageIds) ids.add(id);
+  }
+  transcriptSubagentIdsCache.set(messages, ids);
+  return ids;
+}
+
+/**
+ * Apply a `message.updated` event payload (`properties.info`) to an existing
+ * message without refetching the transcript.
+ *
+ * The event carries only message-level metadata — role, error flag, token
+ * usage — never parts; those stream separately via `message.part.updated`.
+ * Returns null when the payload has no usable identity, in which case the
+ * caller must fall back to an authoritative refetch.
+ */
+export function mergeOpenCodeMessageInfo(
+  existing: OpenCodeMessage | undefined,
+  rawInfo: unknown,
+): OpenCodeMessage | null {
+  const info = rawInfo as { id?: unknown } | null | undefined;
+  if (!info || typeof info !== "object" || typeof info.id !== "string" || !info.id) {
+    return null;
+  }
+  const normalized = normalizeOpenCodeMessage({ info: rawInfo, parts: [] });
+  if (!normalized) return null;
+  if (!existing) return normalized;
+  const merged: OpenCodeMessage = {
+    ...existing,
+    role: normalized.role,
+    // `info` is the whole message record, not a patch, so its error field is
+    // authoritative in both directions: a message the server no longer reports
+    // as errored (a retried turn) must lose the badge, not keep it forever.
+    ...(normalized.hasError ? { hasError: true } : {}),
+    // Model and usage are only present once the backend has resolved them.
+    // An early streaming `info` legitimately omits them, so absence means
+    // "not known yet" rather than "cleared" — blanking would drop the
+    // backend-confirmed model badge for the whole streaming turn.
+    ...(normalized.modelId ? { modelId: normalized.modelId } : {}),
+    ...(normalized.providerUsage
+      ? { providerUsage: normalized.providerUsage }
+      : {}),
+  };
+  if (!normalized.hasError) delete merged.hasError;
+  return merged;
+}
+
+/**
+ * Preserve already-hydrated subagent transcripts when replacing a transcript
+ * with one fetched via `includeSubagents: false`.
+ *
+ * Streaming-triggered refetches skip the recursive child-session hydration for
+ * cost; without this carry-over they would blank every expanded Agent row until
+ * the next final (`session.idle`) reconcile re-hydrated it.
+ */
+export function carryOverOpenCodeSubagentHydration(
+  previous: OpenCodeMessage[],
+  next: OpenCodeMessage[],
+): OpenCodeMessage[] {
+  const hydratedBySubagentId = new Map<string, OpenCodeMessagePart>();
+  for (const message of previous) {
+    mapOpenCodeParts(message.parts, (part) => {
+      if (
+        part.type === "subagent" &&
+        part.subagentId &&
+        part.subagentActions?.length
+      ) {
+        hydratedBySubagentId.set(part.subagentId, part);
+      }
+      return part;
+    });
+  }
+  if (hydratedBySubagentId.size === 0) return next;
+
+  let changed = false;
+  const merged = next.map((message) => {
+    const mapped = mapOpenCodeParts(message.parts, (part) => {
+      if (part.type !== "subagent" || !part.subagentId) return part;
+      if (part.subagentActions?.length) return part;
+      const hydrated = hydratedBySubagentId.get(part.subagentId);
+      if (!hydrated) return part;
+      return {
+        ...part,
+        subagentActions: hydrated.subagentActions,
+        subagentActionCount: hydrated.subagentActionCount,
+        // A cheap parent-only refresh often reports a still-running Task part
+        // even though the hydrated child snapshot already proved it terminal.
+        // Do not regress a completed child to pending until the authoritative
+        // final hydration replaces it.
+        toolState:
+          hydrated.toolState === "success" || hydrated.toolState === "failure"
+            ? hydrated.toolState
+            : part.toolState ?? hydrated.toolState,
+      };
+    });
+    if (!mapped.changed) return message;
+    changed = true;
+    return { ...message, parts: mapped.parts };
+  });
+  return changed ? merged : next;
+}
+
 function isOpenCodeReasoningInProgress(part: Record<string, unknown>): boolean {
   if (!part.time || typeof part.time !== "object") return false;
 
@@ -978,11 +1121,66 @@ export function buildOpenCodeMessageFromPart(
 /**
  * Create an OpenCode SDK client connected to a server
  */
-export function createClient(baseUrl: string, directory?: string): OpencodeClient {
-  return createOpencodeClient({
+function openCodeAuthHeaders(authToken?: string): Record<string, string> | undefined {
+  if (!authToken) return undefined;
+  return {
+    // Direct loopback requests use the Basic header OpenCode supports.
+    Authorization: `Basic ${globalThis.btoa(`opencode:${authToken}`)}`,
+    // A remote Orkestrator gateway consumes Authorization for its own bearer
+    // token. It translates this dedicated credential header back to Basic on
+    // the authenticated server-side hop.
+    "X-Orkestrator-OpenCode-Token": authToken,
+  };
+}
+
+const openCodeClientConnections = new WeakMap<
+  OpencodeClient,
+  { baseUrl: string; authToken?: string }
+>();
+
+export function createClient(
+  baseUrl: string,
+  directory?: string,
+  authToken?: string,
+): OpencodeClient {
+  const client = createOpencodeClient({
     baseUrl: resolveGatewayLoopbackBaseUrl(baseUrl),
     directory,
+    headers: openCodeAuthHeaders(authToken),
   });
+  openCodeClientConnections.set(client, { baseUrl, authToken });
+  return client;
+}
+
+/**
+ * Check server health.
+ *
+ * Mirrors claude-client's checkHealth. The SDK client does not expose its base
+ * URL, so this takes the URL directly and probes the same GET /global/health
+ * route the backend polls for readiness.
+ */
+export async function checkHealth(baseUrl: string, authToken?: string): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `${resolveGatewayLoopbackBaseUrl(baseUrl)}/global/health`,
+      { headers: openCodeAuthHeaders(authToken) },
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate a cached SDK client against the exact per-process credential it was
+ * created with. This is the OpenCode equivalent of `checkHealth(client)` in
+ * the Claude/Codex wrappers and prevents a server restart from leaving a
+ * renderer stuck retrying an obsolete Basic password.
+ */
+export function checkClientHealth(client: OpencodeClient): Promise<boolean> {
+  const connection = openCodeClientConnections.get(client);
+  if (!connection) return Promise.resolve(false);
+  return checkHealth(connection.baseUrl, connection.authToken);
 }
 
 type ProviderLike = {

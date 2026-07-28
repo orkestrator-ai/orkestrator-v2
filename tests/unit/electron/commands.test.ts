@@ -1,7 +1,7 @@
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { execFile, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, promises as fs } from "node:fs";
+import { existsSync, promises as fs, readFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -540,9 +540,75 @@ async function startControllableHealthServer(
   };
 }
 
-async function requestOk(port: number, requestPath: string): Promise<boolean> {
+async function startAuthenticatedContainerServer(
+  port: number,
+  options: {
+    isHealthy: () => boolean;
+    isAuthorized: (request: http.IncomingMessage) => boolean;
+  },
+): Promise<{ close: () => Promise<void> }> {
+  const server = http.createServer((request, response) => {
+    if (!options.isHealthy()) {
+      // A stopped container process refuses the connection. This lets the
+      // production reachability check distinguish it from a live 401.
+      request.socket.destroy();
+      return;
+    }
+    if (request.url === "/global/health") {
+      const suppliedCredential =
+        request.headers.authorization
+        || request.headers["x-orkestrator-claude-token"];
+      response.writeHead(
+        suppliedCredential && !options.isAuthorized(request) ? 401 : 200,
+      );
+      response.end();
+      return;
+    }
+    if (request.url === "/global/auth-check") {
+      response.writeHead(options.isAuthorized(request) ? 200 : 401);
+      response.end();
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+  return {
+    close: () => new Promise<void>((resolve, reject) => {
+      server.closeAllConnections();
+      server.close((error) => (
+        !error || (error as NodeJS.ErrnoException).code === "ERR_SERVER_NOT_RUNNING"
+          ? resolve()
+          : reject(error)
+      ));
+    }),
+  };
+}
+
+function readTestCredential(file: string): string {
+  try {
+    return readFileSync(file, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+async function requestOk(
+  port: number,
+  requestPath: string,
+  headers?: Record<string, string>,
+): Promise<boolean> {
   return new Promise((resolve, reject) => {
-    const request = http.get({ host: "127.0.0.1", port, path: requestPath, timeout: 2_000 }, (response) => {
+    const request = http.get({
+      host: "127.0.0.1",
+      port,
+      path: requestPath,
+      timeout: 2_000,
+      headers,
+    }, (response) => {
       response.resume();
       resolve((response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300);
     });
@@ -948,6 +1014,8 @@ afterEach(async () => {
     // against a fixture worktree later in the run.
     shutdownPrMonitorTracking();
     commandTesting.resetLocalServerLifecycle();
+    commandTesting.resetDockerContainerStateCache();
+    commandTesting.resetTerminalOutputBuffers();
     await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
     showOpenDialog.mockClear();
     ptySpawn.mockClear();
@@ -1897,7 +1965,8 @@ exit 0
       const setupOutput = emitted
         .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
         .map((entry) => Buffer.from(
-          (entry.payload as { data: number[] }).data,
+          (entry.payload as { bytesBase64: string }).bytesBase64,
+          "base64",
         ).toString("utf8"))
         .join("");
       expect(setupOutput).toContain("[orkestrator] Starting environment setup");
@@ -2782,7 +2851,7 @@ exit 0
     });
   }, ASYNC_TEST_BUDGET_MS);
 
-  test("frees a non-setup terminal output buffer when the session exits", async () => {
+  test("retains an exited terminal snapshot long enough for desync recovery", async () => {
     const worktreePath = await createTempDir("ork-electron-terminal-buffer-");
     const environment = createEnvironment({
       id: "env-local-terminal-buffer",
@@ -2805,11 +2874,129 @@ exit 0
     const buffer = await commands.get("get_terminal_output_buffer")?.({ sessionId }, context) as string;
     expect(buffer).toContain("hello from shell");
 
-    // One-shot terminal buffers must be freed on exit so they do not leak for
-    // the lifetime of the main process.
+    const beforeExit = await commands.get("get_terminal_output_snapshot")?.(
+      { sessionId },
+      context,
+    );
     ptyProcesses[0]?.emitExit({ exitCode: 0 });
-    const afterExit = await commands.get("get_terminal_output_buffer")?.({ sessionId }, context) as string;
-    expect(afterExit).toBe("");
+    expect(
+      await commands.get("get_terminal_output_snapshot")?.({ sessionId }, context),
+    ).toEqual(beforeExit);
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(1);
+
+    // Retention is bounded in time; pin the expiry result without making the
+    // suite sleep for the production recovery window.
+    commandTesting.deleteRetainedTerminalOutputBuffer(sessionId);
+    expect(
+      await commands.get("get_terminal_output_snapshot")?.({ sessionId }, context),
+    ).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("expires an exited terminal snapshot through the production timer path", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-buffer-expiry-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-buffer-expiry",
+      environmentType: "local",
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    commandTesting.setTerminalOutputRetentionMs(5);
+
+    const sessionId = terminalSessionResult(
+      await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ),
+    ).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    ptyProcesses.at(-1)?.emitData("short-lived tail");
+    ptyProcesses.at(-1)?.emitExit({ exitCode: 0 });
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(1);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+    expect(commands.get("get_terminal_output_snapshot")?.({ sessionId }, context))
+      .toEqual({ output: "", revision: 0, generation: 0, truncated: false });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("an explicitly closed terminal does not retain its output snapshot", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-explicit-close-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-explicit-close",
+      environmentType: "local",
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const sessionId = terminalSessionResult(
+      await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ),
+    ).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    ptyProcesses.at(-1)?.emitData("user closed this terminal");
+
+    await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+    expect(commands.get("get_terminal_output_snapshot")?.({ sessionId }, context))
+      .toEqual({ output: "", revision: 0, generation: 0, truncated: false });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("bounds retained exited terminal snapshots and evicts the oldest", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-retention-cap-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-retention-cap",
+      environmentType: "local",
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const sessionIds: string[] = [];
+
+    for (let index = 0; index < 33; index += 1) {
+      const sessionId = terminalSessionResult(
+        await commands.get("create_local_terminal_session")?.(
+          { environmentId: environment.id, cols: 80, rows: 24 },
+          context,
+        ),
+      ).sessionId;
+      sessionIds.push(sessionId);
+      await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+      const process = ptyProcesses.at(-1)!;
+      process.emitData(`snapshot-${index}`);
+      process.emitExit({ exitCode: 0 });
+    }
+
+    expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(32);
+    expect(
+      await commands.get("get_terminal_output_snapshot")?.(
+        { sessionId: sessionIds[0] },
+        context,
+      ),
+    ).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
+    expect(
+      await commands.get("get_terminal_output_snapshot")?.(
+        { sessionId: sessionIds.at(-1) },
+        context,
+      ),
+    ).toEqual({
+      output: "snapshot-32",
+      revision: 1,
+      generation: 1,
+      truncated: false,
+    });
   }, ASYNC_TEST_BUDGET_MS);
 
   test("caps the terminal output buffer at the maximum size", async () => {
@@ -2834,13 +3021,23 @@ exit 0
 
     ptyProcesses[0]?.emitData("A".repeat(maxChars));
     ptyProcesses[0]?.emitData("B".repeat(1024));
+    for (let index = 0; index < 2_048; index += 1) {
+      ptyProcesses[0]?.emitData("x");
+    }
+    expect(commandTesting.terminalOutputBufferStats(sessionId)).toMatchObject({
+      chars: maxChars,
+      sequence: 2_050,
+      chunks: expect.any(Number),
+    });
+    expect(commandTesting.terminalOutputBufferStats(sessionId).chunks)
+      .toBeLessThanOrEqual(1_024);
     const buffer = await commands.get("get_terminal_output_buffer")?.({ sessionId }, context) as string;
     expect(buffer.length).toBe(maxChars);
-    expect(buffer.endsWith("B".repeat(1024))).toBe(true);
+    expect(buffer.endsWith(`${"B".repeat(1024)}${"x".repeat(2_048)}`)).toBe(true);
     expect(buffer.startsWith("A")).toBe(true);
     expect(commands.get("get_terminal_output_snapshot")?.({ sessionId }, context)).toEqual({
       output: buffer,
-      revision: 2,
+      revision: 2_050,
       generation: 1,
       truncated: true,
     });
@@ -2876,6 +3073,39 @@ exit 0
     expect(snapshot.truncated).toBe(true);
     expect(snapshot.output).toBe("A".repeat(maxChars - 1));
     expect(snapshot.output).not.toContain("\ufffd");
+    expect(Buffer.from(snapshot.output, "utf8").toString("utf8")).toBe(snapshot.output);
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("does not leave a low surrogate when the trimmed pair spans PTY chunks", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-unicode-chunks-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-unicode-chunks",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const maxChars = 500 * 1024;
+    const sessionId = terminalSessionResult(
+      await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ),
+    ).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+
+    // The high and low halves arrive in distinct PTY callbacks. Trimming the
+    // oldest code unit therefore drops an entire chunk and must also advance
+    // into the next one to remove the orphaned low half.
+    ptyProcesses.at(-1)?.emitData("\ud83d");
+    ptyProcesses.at(-1)?.emitData(`\ude00${"A".repeat(maxChars - 1)}`);
+
+    const snapshot = commands.get("get_terminal_output_snapshot")?.(
+      { sessionId },
+      context,
+    ) as { output: string; truncated: boolean };
+    expect(snapshot.truncated).toBe(true);
+    expect(snapshot.output).toBe("A".repeat(maxChars - 1));
+    expect(snapshot.output.charCodeAt(0)).not.toBe(0xde00);
     expect(Buffer.from(snapshot.output, "utf8").toString("utf8")).toBe(snapshot.output);
   }, ASYNC_TEST_BUDGET_MS);
 
@@ -4367,9 +4597,16 @@ exit 1
       const loadEntered = new Promise<void>((resolve) => {
         loadStarted = resolve;
       });
+      let loadCount = 0;
       context.storage.loadEnvironments = mock(async () => {
-        loadStarted();
-        await loadBlocked;
+        loadCount += 1;
+        // Only the reconciliation snapshot is stale and blocked. Environment
+        // deletion also loads the current environment set while cleaning tmux;
+        // blocking that independent lifecycle read deadlocks the test itself.
+        if (loadCount === 1) {
+          loadStarted();
+          await loadBlocked;
+        }
         return staleSnapshot;
       });
 
@@ -5423,7 +5660,8 @@ exit 0
       const setupOutput = emitted
         .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
         .map((entry) => Buffer.from(
-          (entry.payload as { data: number[] }).data,
+          (entry.payload as { bytesBase64: string }).bytesBase64,
+          "base64",
         ).toString("utf8"))
         .join("");
       // Preparation performs the clone, so its announcement and output have to
@@ -8672,16 +8910,69 @@ exec node -e 'const http=require("node:http");http.createServer((req,res)=>{res.
       port: number;
       pid: number;
       wasRunning: boolean;
+      authToken: string;
     };
 
     try {
       expect(result.wasRunning).toBe(false);
       expect(result.port).toBeGreaterThan(0);
+      expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
       await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
       expect(await fs.readFile(markerPath, "utf8")).toContain("used");
       expect(updates).toContainEqual({ localClaudePort: result.port, claudeBridgePid: result.pid });
+      await expect(
+        commands.get("get_local_claude_server_status")?.(
+          { environmentId: environment.id },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        running: true,
+        port: result.port,
+        pid: result.pid,
+        authToken: result.authToken,
+      });
     } finally {
       await commands.get("stop_local_claude_server_cmd")?.({ environmentId: environment.id }, context);
+    }
+  });
+
+  test("restarts a healthy local Claude bridge whose auth token this process no longer holds", async () => {
+    const appRoot = await createTempDir("ork-electron-app-tokenless-claude-");
+    const worktreePath = await createTempDir("ork-electron-worktree-tokenless-claude-");
+    await writeBridgeServer(appRoot, "claude-bridge");
+
+    const environment = createEnvironment({ id: "env-local-tokenless-claude", worktreePath });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    const first = await commands.get("start_local_claude_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as { port: number; pid: number; authToken: string };
+    expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+    // A bridge inherited from a previous backend process: still healthy, but its
+    // token was never handed to us, so the renderer could not authenticate.
+    commandTesting.deleteLocalClaudeBridgeToken(environment.id);
+
+    const second = await commands.get("start_local_claude_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as { port: number; pid: number; wasRunning: boolean; authToken: string };
+    try {
+      expect(second.wasRunning).toBe(false);
+      expect(second.pid).not.toBe(first.pid);
+      expect(second.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(second.authToken).not.toBe(first.authToken);
+      expect(isProcessRunning(first.pid)).toBe(false);
+      await expect(requestOk(second.port, "/global/health")).resolves.toBe(true);
+    } finally {
+      await commands.get("stop_local_claude_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
     }
   });
 
@@ -8847,7 +9138,7 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
-    bun -e 'const m=process.env.FAKE_CLAUDE_MODELS_JSON;require("node:http").createServer((q,s)=>{if(q.url==="/global/health"){s.writeHead(200,{"content-type":"application/json"});return s.end("{}")}if(q.url==="/config/models"){s.writeHead(200,{"content-type":"application/json","access-control-allow-origin":"*"});return s.end(m)}s.writeHead(404);s.end()}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    bun -e 'const m=process.env.FAKE_CLAUDE_MODELS_JSON;require("node:http").createServer((q,s)=>{if(q.url==="/global/health"||q.url==="/global/auth-check"){s.writeHead(200,{"content-type":"application/json"});return s.end("{}")}if(q.url==="/config/models"){s.writeHead(200,{"content-type":"application/json","access-control-allow-origin":"*"});return s.end(m)}s.writeHead(404);s.end()}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
     exit 0 ;;
 esac
@@ -8927,7 +9218,7 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:http"); const port = Number(process.env.PORT_ARG); const host = process.env.HOST_ARG || "127.0.0.1"; http.createServer((req, res) => { if (req.url === "/global/health") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ok: true })); return; } res.writeHead(404); res.end(); }).listen(port, host);'
+exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:http"); const port = Number(process.env.PORT_ARG); const host = process.env.HOST_ARG || "127.0.0.1"; const expected = "Basic " + Buffer.from("opencode:" + process.env.OPENCODE_SERVER_PASSWORD).toString("base64"); http.createServer((req, res) => { if (req.headers.authorization !== expected) { res.writeHead(401); res.end(); return; } if (req.url === "/global/health") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ok: true })); return; } res.writeHead(404); res.end(); }).listen(port, host);'
 `,
     );
     await fs.chmod(opencodeWrapperPath, 0o755);
@@ -8944,12 +9235,18 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
       port: number;
       pid: number;
       wasRunning: boolean;
+      authToken: string;
     };
 
     try {
       expect(result.wasRunning).toBe(false);
       expect(result.port).toBeGreaterThan(0);
-      await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
+      expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      await expect(requestOk(result.port, "/global/health")).resolves.toBe(false);
+      await expect(requestOk(result.port, "/global/health", {
+        Authorization:
+          `Basic ${Buffer.from(`opencode:${result.authToken}`).toString("base64")}`,
+      })).resolves.toBe(true);
       expect(await fs.readFile(markerPath, "utf8")).toContain("used serve --port");
       expect(updates).toContainEqual({ localOpencodePort: result.port, opencodePid: result.pid });
     } finally {
@@ -9031,7 +9328,7 @@ case "$1" in
     esac
     token=$(printf '%s' "$*" | sed -n "s/.*CODEX_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
-    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"||q.url==="/global/auth-check"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
     exit 0 ;;
 esac
@@ -9106,7 +9403,7 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
-    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"||q.url==="/global/auth-check"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
     exit 0 ;;
 esac
@@ -9118,12 +9415,15 @@ exit 0
         const result = await commands.get("start_claude_server")?.(
           { containerId: "container-claude" },
           context,
-        );
-        expect(result).toEqual({ hostPort, wasRunning: false });
+        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        expect(result).toMatchObject({ hostPort, wasRunning: false });
+        expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain("setsid bun /opt/claude-bridge/dist/index.js");
         expect(execLog).not.toContain("setsid node");
+        expect(execLog).toContain("/tmp/claude-bridge-token");
+        expect(execLog).toContain("export CLAUDE_BRIDGE_TOKEN=");
       });
     } finally {
       const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
@@ -9140,6 +9440,349 @@ exit 0
       else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
     }
   });
+
+  test("starts, replaces, and reuses an authenticated container OpenCode server", async () => {
+    const hostPort = await reserveFreePort();
+    const stateDir = await createTempDir("ork-opencode-container-auth-");
+    const tokenFile = path.join(stateDir, "persisted-password");
+    const liveTokenFile = path.join(stateDir, "live-password");
+    const healthyFile = path.join(stateDir, "healthy");
+    const environment = createEnvironment({
+      id: "env-container-opencode-auth",
+      environmentType: "containerized",
+      containerId: "container-opencode-auth",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const previous = {
+      hostPort: process.env.FAKE_BRIDGE_HOST_PORT,
+      tokenFile: process.env.FAKE_BRIDGE_TOKEN_FILE,
+      liveTokenFile: process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE,
+      healthyFile: process.env.FAKE_BRIDGE_HEALTHY_FILE,
+    };
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+    process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE = liveTokenFile;
+    process.env.FAKE_BRIDGE_HEALTHY_FILE = healthyFile;
+
+    const bridge = await startAuthenticatedContainerServer(hostPort, {
+      isHealthy: () => existsSync(healthyFile),
+      isAuthorized: (request) =>
+        request.headers.authorization === `Basic ${
+          Buffer.from(`opencode:${readTestCredential(liveTokenFile)}`).toString("base64")
+        }`,
+    });
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/opencode-server-password"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *"pkill -f '[o]pencode serve'"*)
+        rm -f "$FAKE_BRIDGE_HEALTHY_FILE" "$FAKE_BRIDGE_TOKEN_FILE"
+        exit 0 ;;
+    esac
+    token=$(printf '%s' "$*" | sed -n "s/.*OPENCODE_SERVER_PASSWORD='\\([^']*\\)'.*/\\1/p")
+    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
+    printf '%s' "$token" > "$FAKE_BRIDGE_LIVE_TOKEN_FILE"
+    : > "$FAKE_BRIDGE_HEALTHY_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        const first = await commands.get("start_opencode_server")?.(
+          { containerId: "container-opencode-auth" },
+          context,
+        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        expect(first).toMatchObject({ hostPort, wasRunning: false });
+        expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+        // A reachable legacy process without a readable password is replaced,
+        // rather than being handed to the renderer unauthenticated.
+        await fs.rm(tokenFile);
+        const legacyReplacement = await commands.get("start_opencode_server")?.(
+          { containerId: "container-opencode-auth" },
+          context,
+        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        expect(legacyReplacement).toMatchObject({ hostPort, wasRunning: false });
+        expect(legacyReplacement.authToken).not.toBe(first.authToken);
+
+        const stalePassword = "S".repeat(43);
+        await fs.writeFile(tokenFile, stalePassword);
+        await fs.writeFile(liveTokenFile, "L".repeat(43));
+        const replacement = await commands.get("start_opencode_server")?.(
+          { containerId: "container-opencode-auth" },
+          context,
+        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        expect(replacement).toMatchObject({ hostPort, wasRunning: false });
+        expect(replacement.authToken).not.toBe(stalePassword);
+
+        await expect(
+          commands.get("start_opencode_server")?.(
+            { containerId: "container-opencode-auth" },
+            context,
+          ),
+        ).resolves.toEqual({
+          hostPort,
+          wasRunning: true,
+          authToken: replacement.authToken,
+        });
+
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(
+          execLog.split("\n").filter((line) => line.startsWith("exec -d ")),
+        ).toHaveLength(3);
+        expect(execLog).toContain("pkill -f '[o]pencode serve'");
+      });
+    } finally {
+      await bridge.close();
+      for (const [key, value] of Object.entries(previous)) {
+        const envName = {
+          hostPort: "FAKE_BRIDGE_HOST_PORT",
+          tokenFile: "FAKE_BRIDGE_TOKEN_FILE",
+          liveTokenFile: "FAKE_BRIDGE_LIVE_TOKEN_FILE",
+          healthyFile: "FAKE_BRIDGE_HEALTHY_FILE",
+        }[key]!;
+        if (value === undefined) delete process.env[envName];
+        else process.env[envName] = value;
+      }
+    }
+  });
+
+  test("replaces a healthy Claude bridge when its persisted token does not authenticate", async () => {
+    const hostPort = await reserveFreePort();
+    const stateDir = await createTempDir("ork-claude-stale-identity-");
+    const tokenFile = path.join(stateDir, "persisted-token");
+    const liveTokenFile = path.join(stateDir, "live-token");
+    const healthyFile = path.join(stateDir, "healthy");
+    const staleToken = "S".repeat(43);
+    await fs.writeFile(tokenFile, staleToken);
+    await fs.writeFile(liveTokenFile, "L".repeat(43));
+    await fs.writeFile(healthyFile, "");
+
+    const environment = createEnvironment({
+      id: "env-container-claude-stale",
+      environmentType: "containerized",
+      containerId: "container-claude-stale",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const previous = {
+      hostPort: process.env.FAKE_BRIDGE_HOST_PORT,
+      tokenFile: process.env.FAKE_BRIDGE_TOKEN_FILE,
+      liveTokenFile: process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE,
+      healthyFile: process.env.FAKE_BRIDGE_HEALTHY_FILE,
+    };
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+    process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE = liveTokenFile;
+    process.env.FAKE_BRIDGE_HEALTHY_FILE = healthyFile;
+
+    const bridge = await startAuthenticatedContainerServer(hostPort, {
+      isHealthy: () => existsSync(healthyFile),
+      isAuthorized: (request) =>
+        request.headers["x-orkestrator-claude-token"]
+          === readTestCredential(liveTokenFile),
+    });
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/claude-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *"pkill -f '[c]laude-bridge/dist/index.js'"*)
+        rm -f "$FAKE_BRIDGE_HEALTHY_FILE"
+        exit 0 ;;
+    esac
+    token=$(printf '%s' "$*" | sed -n "s/.*CLAUDE_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
+    printf '%s' "$token" > "$FAKE_BRIDGE_LIVE_TOKEN_FILE"
+    : > "$FAKE_BRIDGE_HEALTHY_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        await expect(
+          commands.get("get_claude_server_status")?.(
+            { containerId: "container-claude-stale" },
+            context,
+          ),
+        ).resolves.toEqual({ running: true, hostPort });
+
+        const result = await commands.get("start_claude_server")?.(
+          { containerId: "container-claude-stale" },
+          context,
+        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+
+        expect(result).toMatchObject({ hostPort, wasRunning: false });
+        expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(result.authToken).not.toBe(staleToken);
+        expect(readTestCredential(liveTokenFile)).toBe(result.authToken);
+        expect(await fs.readFile(logs.exec, "utf8")).toContain(
+          "pkill -f '[c]laude-bridge/dist/index.js'",
+        );
+      });
+    } finally {
+      await bridge.close();
+      for (const [key, value] of Object.entries(previous)) {
+        const envName = {
+          hostPort: "FAKE_BRIDGE_HOST_PORT",
+          tokenFile: "FAKE_BRIDGE_TOKEN_FILE",
+          liveTokenFile: "FAKE_BRIDGE_LIVE_TOKEN_FILE",
+          healthyFile: "FAKE_BRIDGE_HEALTHY_FILE",
+        }[key]!;
+        if (value === undefined) delete process.env[envName];
+        else process.env[envName] = value;
+      }
+    }
+  });
+
+  test("authenticates the persisted Claude token when a bridge arrives between health checks", async () => {
+    const hostPort = await reserveFreePort();
+    const tokenFile = path.join(
+      await createTempDir("ork-claude-late-identity-"),
+      "token",
+    );
+    const persistedToken = "P".repeat(43);
+    await fs.writeFile(tokenFile, persistedToken);
+    const environment = createEnvironment({
+      id: "env-container-claude-late",
+      environmentType: "containerized",
+      containerId: "container-claude-late",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+    const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+
+    let healthChecks = 0;
+    const bridge = await startAuthenticatedContainerServer(hostPort, {
+      isHealthy: () => (healthChecks += 1) > 1,
+      isAuthorized: (request) =>
+        request.headers["x-orkestrator-claude-token"] === persistedToken,
+    });
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/claude-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE"
+        exit 0 ;;
+    esac
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        await expect(
+          commands.get("start_claude_server")?.(
+            { containerId: "container-claude-late" },
+            context,
+          ),
+        ).resolves.toEqual({
+          hostPort,
+          wasRunning: true,
+          authToken: persistedToken,
+        });
+        expect(await fs.readFile(logs.exec, "utf8")).not.toContain("exec -d ");
+      });
+    } finally {
+      await bridge.close();
+      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+      if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
+      else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
+    }
+  });
+
+  test.each([
+    [
+      "Claude",
+      "start_claude_server",
+      "container-claude-redaction",
+      "CLAUDE_BRIDGE_TOKEN",
+    ],
+    [
+      "OpenCode",
+      "start_opencode_server",
+      "container-opencode-redaction",
+      "OPENCODE_SERVER_PASSWORD",
+    ],
+  ] as const)(
+    "redacts a generated %s container credential when detached startup fails",
+    async (_label, commandName, containerId, credentialName) => {
+      const hostPort = await reserveFreePort();
+      const environment = createEnvironment({
+        id: `env-${containerId}`,
+        environmentType: "containerized",
+        containerId,
+        status: "running",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+      process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+      const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/claude-bridge-token"*|*"cat /tmp/opencode-server-password"*)
+        exit 0 ;;
+    esac
+    exit 9 ;;
+esac
+exit 0
+`;
+
+      try {
+        await withFakeDocker(dockerScript, async (logs) => {
+          const failure = await commands.get(commandName)?.(
+            { containerId },
+            context,
+          ).then(() => null, (error: unknown) => error as Error);
+
+          expect(failure).toBeInstanceOf(Error);
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          const token = execLog.match(
+            new RegExp(`${credentialName}='([^']+)'`),
+          )?.[1];
+          expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+          expect(failure!.message).not.toContain(token!);
+          expect(failure!.message).toContain("[REDACTED]");
+        });
+      } finally {
+        if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+        else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+      }
+    },
+  );
 
   test("defaults a malformed in-container Codex thread limit before shell interpolation", async () => {
     const hostPort = await reserveFreePort();
@@ -9400,6 +10043,9 @@ exit 0
       await expect(commandTesting.waitForUnhealthy(hostPort, 2)).rejects.toThrow(
         `Server on port ${hostPort} did not stop`,
       );
+      await expect(commandTesting.waitForHttpServerExit(hostPort, 2)).rejects.toThrow(
+        `Server on port ${hostPort} did not stop`,
+      );
     } finally {
       await bridge.close();
     }
@@ -9649,7 +10295,7 @@ exit 0
       {
         event: `terminal-output-${sessionId}`,
         payload: {
-          data: Array.from(Buffer.from("ready\r\n", "utf8")),
+          bytesBase64: Buffer.from("ready\r\n", "utf8").toString("base64"),
           revision: 1,
           generation: 1,
         },
@@ -9721,7 +10367,9 @@ exit 0
         {
           event: `terminal-output-${firstSessionId}`,
           payload: {
-            data: Array.from(Buffer.from("dev server listening on 3000\r\n")),
+            bytesBase64: Buffer.from(
+              "dev server listening on 3000\r\n",
+            ).toString("base64"),
             revision: 1,
             generation: 1,
           },
@@ -9729,7 +10377,7 @@ exit 0
         {
           event: `terminal-output-${firstSessionId}`,
           payload: {
-            data: Array.from(Buffer.from("second chunk\r\n")),
+            bytesBase64: Buffer.from("second chunk\r\n").toString("base64"),
             revision: 2,
             generation: 1,
           },
@@ -11076,6 +11724,183 @@ exit 1
       await expect(commands.get("sync_all_environments_with_docker")?.({}, context)).resolves.toEqual(["env-missing"]);
     });
     expect(updates).toContainEqual({ status: "stopped", containerId: null });
+  });
+
+  test("reconciles container statuses from one labelled docker ps snapshot", async () => {
+    const agreeing = createEnvironment({
+      id: "env-agree",
+      environmentType: "containerized",
+      containerId: "container-agree",
+      status: "running",
+    });
+    const transitioned = createEnvironment({
+      id: "env-transitioned",
+      environmentType: "containerized",
+      containerId: "container-transitioned",
+      status: "running",
+    });
+    const { context, updates } = createContext([agreeing, transitioned]);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf 'container-agree\\trunning\\n'
+  printf 'container-transitioned\\texited\\n'
+  exit 0
+fi
+if [ "$1" = "inspect" ]; then
+  printf 'exited\\n'
+  exit 0
+fi
+exit 0
+`, async ({ all }) => {
+      await commands.get("get_environments")?.({ projectId: agreeing.projectId }, context);
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      // The whole batch shares one labelled `docker ps` instead of one
+      // `docker inspect` per environment.
+      expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
+      // Only the container whose snapshot state disagrees with storage is
+      // confirmed with a fresh inspect before anything is rewritten.
+      expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
+        "inspect -f {{.State.Status}} container-transitioned",
+      ]);
+    });
+
+    expect(updates).toEqual([{ status: "stopped" }]);
+    expect(agreeing.status).toBe("running");
+    expect(transitioned.status).toBe("stopped");
+  });
+
+  test("reuses one docker ps snapshot across a burst of status refreshes", async () => {
+    const environment = createEnvironment({
+      id: "env-burst",
+      environmentType: "containerized",
+      containerId: "container-burst",
+      status: "running",
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf 'container-burst\\trunning\\n'
+  exit 0
+fi
+exit 1
+`, async ({ all }) => {
+      await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
+      await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
+      await expect(commands.get("get_environment_status")?.(
+        { environmentId: environment.id },
+        context,
+      )).resolves.toBe("running");
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
+      expect(log.some((line) => line.startsWith("inspect"))).toBe(false);
+    });
+    expect(updates).toHaveLength(0);
+  });
+
+  test("refreshes the docker ps snapshot after its cache expires", async () => {
+    const environment = createEnvironment({
+      id: "env-cache-expiry",
+      environmentType: "containerized",
+      containerId: "container-cache-expiry",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf 'container-cache-expiry\\trunning\\n'
+  exit 0
+fi
+exit 1
+`, async ({ all }) => {
+      await withFixedDate("2026-07-28T12:00:00.000Z", () =>
+        commands.get("get_environments")?.({ projectId: environment.projectId }, context)
+      );
+      await withFixedDate("2026-07-28T12:00:03.001Z", () =>
+        commands.get("get_environments")?.({ projectId: environment.projectId }, context)
+      );
+
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      expect(log.filter((line) => line.startsWith("ps -a"))).toHaveLength(2);
+    });
+  });
+
+  test("falls back to per-container inspect when the shared docker scan fails", async () => {
+    const environment = createEnvironment({
+      id: "env-cache-failure",
+      environmentType: "containerized",
+      containerId: "container-cache-failure",
+      status: "running",
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  exit 1
+fi
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+exit 1
+`, async ({ all }) => {
+      await commands.get("get_environments")?.(
+        { projectId: environment.projectId },
+        context,
+      );
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      expect(log.filter((line) => line.startsWith("ps -a"))).toHaveLength(1);
+      expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
+        "inspect -f {{.State.Status}} container-cache-failure",
+      ]);
+    });
+    expect(updates).toHaveLength(0);
+  });
+
+  test("only probes containers missing from the labelled snapshot during full sync", async () => {
+    const listed = createEnvironment({
+      id: "env-listed",
+      environmentType: "containerized",
+      containerId: "container-listed",
+      status: "running",
+    });
+    const missing = createEnvironment({
+      id: "env-absent",
+      environmentType: "containerized",
+      containerId: "container-absent",
+      status: "running",
+    });
+    const { context, updates } = createContext([listed, missing]);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf 'container-listed\\trunning\\n'
+  exit 0
+fi
+printf 'Error: No such object: container-absent\\n' >&2
+exit 1
+`, async ({ all }) => {
+      await expect(commands.get("sync_all_environments_with_docker")?.({}, context))
+        .resolves.toEqual([missing.id]);
+      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+      expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
+      expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
+        "inspect -f {{.State.Status}} container-absent",
+      ]);
+    });
+    expect(updates).toEqual([{ status: "stopped", containerId: null }]);
   });
 
   test("stops local and container environments and treats recreation without a container as a no-op", async () => {

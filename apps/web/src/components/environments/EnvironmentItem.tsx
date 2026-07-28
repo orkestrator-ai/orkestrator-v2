@@ -1,4 +1,4 @@
-import { useState, useEffect, useId, useRef, type ComponentType, type ReactNode } from "react";
+import { memo, useState, useEffect, useId, useMemo, useRef, type ComponentType, type ReactNode } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
@@ -160,7 +160,7 @@ interface EnvironmentItemProps {
   subtitle?: string;
 }
 
-export function EnvironmentItem({
+export const EnvironmentItem = memo(function EnvironmentItem({
   environment,
   isSelected,
   onSelect,
@@ -180,15 +180,15 @@ export function EnvironmentItem({
 
   // Get Claude activity state for this environment
   // For terminal-based Claude, state is keyed by containerId
-  // For native Claude mode, state is keyed by environmentId
-  const containerStates = useAgentActivityStore((s) => s.containerStates);
-  const containerStateUpdatedAt = useAgentActivityStore(
-    (s) => s.containerStateUpdatedAt,
-  );
-  const agentActivityState = resolveEnvironmentAgentActivity(
-    environment,
-    containerStates,
-    containerStateUpdatedAt,
+  // For native Claude mode, state is keyed by environmentId.
+  // Resolved inside the selector so this row only rerenders when ITS resolved
+  // state changes, not whenever any environment's activity record is touched.
+  const agentActivityState = useAgentActivityStore((s) =>
+    resolveEnvironmentAgentActivity(
+      environment,
+      s.containerStates,
+      s.containerStateUpdatedAt,
+    ),
   );
 
   // Check if this environment is being deleted
@@ -286,7 +286,10 @@ export function EnvironmentItem({
     });
   };
 
-  const createdDate = new Date(environment.createdAt).toLocaleDateString();
+  const createdDate = useMemo(
+    () => new Date(environment.createdAt).toLocaleDateString(),
+    [environment.createdAt],
+  );
   const tooltipAnchorRef = useRef<HTMLDivElement>(null);
   const tooltip = useHoverTooltip();
   // Touch devices have no right-click, so the actions live behind an explicit
@@ -605,14 +608,17 @@ export function EnvironmentItem({
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Environment Settings Dialog */}
-      <EnvironmentSettingsDialog
-        open={showSettingsDialog}
-        onOpenChange={setShowSettingsDialog}
-        environment={environment}
-        onUpdate={handleEnvironmentUpdate}
-        onRestart={backend.recreateEnvironment}
-      />
+      {/* Environment Settings Dialog — mounted only while open so a sidebar
+          with many rows does not pay for a dialog per row. */}
+      {showSettingsDialog && (
+        <EnvironmentSettingsDialog
+          open={showSettingsDialog}
+          onOpenChange={setShowSettingsDialog}
+          environment={environment}
+          onUpdate={handleEnvironmentUpdate}
+          onRestart={backend.recreateEnvironment}
+        />
+      )}
     </>
   );
-}
+});

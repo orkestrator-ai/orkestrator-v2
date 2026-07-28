@@ -13,17 +13,18 @@ import {
 // ---------------------------------------------------------------------------
 
 // backend commands
+const CLAUDE_AUTH_TOKEN = "claude-build-secret";
 const mockStartClaudeServer = mock(() =>
-  Promise.resolve({ hostPort: 9999 })
+  Promise.resolve({ hostPort: 9999, authToken: CLAUDE_AUTH_TOKEN })
 );
 const mockGetClaudeServerStatus = mock(() =>
-  Promise.resolve({ running: false, hostPort: null })
+  Promise.resolve({ running: false, hostPort: null, authToken: undefined })
 );
 const mockStartLocalClaudeServer = mock(() =>
-  Promise.resolve({ port: 8888, pid: 1234 })
+  Promise.resolve({ port: 8888, pid: 1234, authToken: CLAUDE_AUTH_TOKEN })
 );
 const mockGetLocalClaudeServerStatus = mock(() =>
-  Promise.resolve({ running: false, port: null, pid: null })
+  Promise.resolve({ running: false, port: null, pid: null, authToken: undefined })
 );
 const mockGetProjectNotes = mock(() =>
   Promise.resolve({ projectId: "project-1", notes: "" })
@@ -50,12 +51,24 @@ mock.module("@/lib/backend", () => ({
 }));
 
 // Claude client
-const mockCreateClient = mock(() => ({ baseUrl: "http://127.0.0.1:9999" }));
+const mockCreateClient = mock((baseUrl: string, authToken?: string) => ({
+  baseUrl,
+  authToken,
+}));
 const mockCheckHealth = mock(() => Promise.resolve(true));
 const mockGetModels = mock(() => Promise.resolve([]));
 const mockSubscribeToEvents = mock(() => (async function* () {})());
 const mockCreateSession = mock(() => Promise.resolve({ sessionId: "session-1" }));
+const mockGetSession = mock(() => Promise.resolve({
+  id: SESSION_ID,
+  title: "Build Session",
+  status: "idle" as const,
+  createdAt: "2026-06-22T00:00:00.000Z",
+  lastActivity: "2026-06-22T00:00:01.000Z",
+}));
 const mockGetSessionMessages = mock(() => Promise.resolve([] as ClaudeMessage[]));
+const mockGetPendingQuestions = mock(() => Promise.resolve([]));
+const mockGetPendingPlanApprovals = mock(() => Promise.resolve([]));
 const mockSendPrompt = mock(() => Promise.resolve(true));
 const mockAbortSession = mock(() => Promise.resolve(true));
 const mockGetStructuredOutput = mock(() =>
@@ -67,7 +80,10 @@ mock.module("@/lib/claude-client", () => ({
   checkHealth: mockCheckHealth,
   getModels: mockGetModels,
   createSession: mockCreateSession,
+  getSession: mockGetSession,
   getSessionMessages: mockGetSessionMessages,
+  getPendingQuestions: mockGetPendingQuestions,
+  getPendingPlanApprovals: mockGetPendingPlanApprovals,
   sendPrompt: mockSendPrompt,
   abortSession: mockAbortSession,
   getStructuredOutput: mockGetStructuredOutput,
@@ -497,27 +513,39 @@ describe("BuildChatTab", () => {
     mockGetModels.mockClear();
     mockSubscribeToEvents.mockClear();
     mockCreateSession.mockClear();
+    mockGetSession.mockClear();
     mockGetSessionMessages.mockClear();
+    mockGetPendingQuestions.mockClear();
+    mockGetPendingPlanApprovals.mockClear();
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
     mockGetStructuredOutput.mockClear();
 
     // Reset default implementations
     mockGetClaudeServerStatus.mockImplementation(() =>
-      Promise.resolve({ running: false, hostPort: null })
+      Promise.resolve({ running: false, hostPort: null, authToken: undefined })
     );
     mockStartClaudeServer.mockImplementation(() =>
-      Promise.resolve({ hostPort: 9999 })
+      Promise.resolve({ hostPort: 9999, authToken: CLAUDE_AUTH_TOKEN })
     );
     mockGetLocalClaudeServerStatus.mockImplementation(() =>
-      Promise.resolve({ running: false, port: null, pid: null })
+      Promise.resolve({ running: false, port: null, pid: null, authToken: undefined })
     );
     mockStartLocalClaudeServer.mockImplementation(() =>
-      Promise.resolve({ port: 8888, pid: 1234 })
+      Promise.resolve({ port: 8888, pid: 1234, authToken: CLAUDE_AUTH_TOKEN })
     );
     mockCheckHealth.mockImplementation(() => Promise.resolve(true));
     mockGetModels.mockImplementation(() => Promise.resolve([]));
+    mockGetSession.mockImplementation(() => Promise.resolve({
+      id: SESSION_ID,
+      title: "Build Session",
+      status: "idle" as const,
+      createdAt: "2026-06-22T00:00:00.000Z",
+      lastActivity: "2026-06-22T00:00:01.000Z",
+    }));
     mockGetSessionMessages.mockImplementation(() => Promise.resolve([]));
+    mockGetPendingQuestions.mockImplementation(() => Promise.resolve([]));
+    mockGetPendingPlanApprovals.mockImplementation(() => Promise.resolve([]));
     mockSendPrompt.mockImplementation(() => Promise.resolve(true));
     mockAbortSession.mockImplementation(() => Promise.resolve(true));
     mockGetStructuredOutput.mockImplementation(() =>
@@ -783,11 +811,19 @@ describe("BuildChatTab", () => {
       await waitFor(() => {
         expect(mockStartClaudeServer).toHaveBeenCalledWith(CONTAINER_ID);
       });
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        CLAUDE_AUTH_TOKEN,
+      );
     });
 
     test("reuses existing server if already running", async () => {
       mockGetClaudeServerStatus.mockImplementation(() =>
-        Promise.resolve({ running: true, hostPort: 7777 } as any)
+        Promise.resolve({
+          running: true,
+          hostPort: 7777,
+          authToken: CLAUDE_AUTH_TOKEN,
+        } as any)
       );
       seedPipeline("waiting-for-setup");
       seedEnvironment({ isLocal: false, workspaceReady: true });
@@ -800,6 +836,44 @@ describe("BuildChatTab", () => {
 
       // Should NOT try to start a new server
       expect(mockStartClaudeServer).not.toHaveBeenCalled();
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:7777",
+        CLAUDE_AUTH_TOKEN,
+      );
+    });
+
+    test("restarts a reachable tokenless server instead of reusing it", async () => {
+      mockGetClaudeServerStatus.mockResolvedValue({
+        running: true,
+        hostPort: 7777,
+        authToken: undefined,
+      } as any);
+      seedPipeline("waiting-for-setup");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockStartClaudeServer).toHaveBeenCalledWith(CONTAINER_ID);
+      });
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        CLAUDE_AUTH_TOKEN,
+      );
+    });
+
+    test("fails closed when startup cannot provide a bridge token", async () => {
+      mockStartClaudeServer.mockResolvedValue({
+        hostPort: 9999,
+        authToken: undefined,
+      } as any);
+      seedPipeline("waiting-for-setup");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      expect(await screen.findByText("Connection Failed")).toBeTruthy();
+      expect(mockCreateClient).not.toHaveBeenCalled();
     });
 
     test("throws when containerId is missing", async () => {
@@ -882,6 +956,10 @@ describe("BuildChatTab", () => {
       await waitFor(() => {
         expect(mockStartLocalClaudeServer).toHaveBeenCalledWith(ENV_ID);
       });
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:8888",
+        CLAUDE_AUTH_TOKEN,
+      );
     });
 
     test("does not start local server while setup scripts are running", async () => {
@@ -966,7 +1044,11 @@ describe("BuildChatTab", () => {
         }),
       );
       mockGetClaudeServerStatus.mockImplementation(() =>
-        Promise.resolve({ running: true, hostPort: 9999 } as any)
+        Promise.resolve({
+          running: true,
+          hostPort: 9999,
+          authToken: CLAUDE_AUTH_TOKEN,
+        } as any)
       );
       seedPipeline("waiting-for-setup");
       seedEnvironment({ isLocal: false, workspaceReady: true });
@@ -989,7 +1071,10 @@ describe("BuildChatTab", () => {
       });
 
       await waitFor(() => {
-        expect(mockAbortSession).toHaveBeenCalledWith({ baseUrl: "http://127.0.0.1:9999" }, "late-session");
+        expect(mockAbortSession).toHaveBeenCalledWith(
+          expect.objectContaining({ baseUrl: "http://127.0.0.1:9999" }),
+          "late-session",
+        );
       });
       expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions).toHaveLength(0);
 
@@ -998,7 +1083,7 @@ describe("BuildChatTab", () => {
       await waitFor(() => {
         expect(mockCreateSession).toHaveBeenCalledTimes(2);
         expect(mockSendPrompt).toHaveBeenCalledWith(
-          { baseUrl: "http://127.0.0.1:9999" },
+          expect.objectContaining({ baseUrl: "http://127.0.0.1:9999" }),
           SESSION_ID,
           expect.stringContaining("Test task"),
           {
@@ -1351,7 +1436,167 @@ describe("BuildChatTab", () => {
   // -----------------------------------------------------------------------
 
   describe("event stream disconnection", () => {
-    test("refreshes messages and records context usage from session events", async () => {
+    test("authoritatively reconciles a replay gap and advances an idle build", async () => {
+      const reconciledMessage: ClaudeMessage = {
+        id: "reconciled-message",
+        role: "assistant",
+        content: "Build finished while the tab was away",
+        parts: [{ type: "text", content: "Build finished while the tab was away" }],
+        timestamp: "2026-06-22T00:00:01.000Z",
+      };
+      const pendingQuestion = {
+        id: "question-live",
+        sessionId: SESSION_ID,
+        questions: [],
+      };
+      const pendingApproval = {
+        id: "approval-live",
+        sessionId: SESSION_ID,
+      };
+      mockGetSessionMessages.mockResolvedValueOnce([reconciledMessage]);
+      mockGetPendingQuestions.mockResolvedValueOnce([pendingQuestion] as never);
+      mockGetPendingPlanApprovals.mockResolvedValueOnce([pendingApproval] as never);
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield { type: "replay.required", data: {} } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("building", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+      useClaudeStore.setState({
+        pendingQuestions: new Map([[
+          "question-stale",
+          { id: "question-stale", sessionId: SESSION_ID, questions: [] } as never,
+        ]]),
+        pendingPlanApprovals: new Map([[
+          "approval-stale",
+          { id: "approval-stale", sessionId: SESSION_ID } as never,
+        ]]),
+      });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockGetSession).toHaveBeenCalledWith(
+          { baseUrl: "http://127.0.0.1:9999" },
+          SESSION_ID,
+        );
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+          messages: [reconciledMessage],
+          isLoading: false,
+          title: "Build Session",
+        });
+        expect(useClaudeStore.getState().pendingQuestions.has("question-live")).toBe(true);
+        expect(useClaudeStore.getState().pendingQuestions.has("question-stale")).toBe(false);
+        expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-live")).toBe(true);
+        expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-stale")).toBe(false);
+      });
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.sessions[0]?.status).toBe("idle");
+        expect(pipeline?.sessions.some((session) => session.phase === "review")).toBe(true);
+      });
+    });
+
+    test("restores idle status when an optional interaction endpoint fails", async () => {
+      const pendingApproval = {
+        id: "approval-live",
+        sessionId: SESSION_ID,
+      };
+      mockGetPendingQuestions.mockRejectedValueOnce(new Error("questions unavailable"));
+      mockGetPendingPlanApprovals.mockResolvedValueOnce([pendingApproval] as never);
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield { type: "replay.required", data: {} } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+      useClaudeStore.setState({
+        pendingQuestions: new Map([[
+          "question-preserved",
+          { id: "question-preserved", sessionId: SESSION_ID, questions: [] } as never,
+        ]]),
+        pendingPlanApprovals: new Map([[
+          "approval-stale",
+          { id: "approval-stale", sessionId: SESSION_ID } as never,
+        ]]),
+      });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+        expect(useClaudeStore.getState().pendingQuestions.has("question-preserved")).toBe(true);
+        expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-live")).toBe(true);
+        expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-stale")).toBe(false);
+      });
+    });
+
+    test("waits for final reconciliation and ignores an older fallback response", async () => {
+      let resolveFallback!: (messages: ClaudeMessage[]) => void;
+      const fallback = new Promise<ClaudeMessage[]>((resolve) => {
+        resolveFallback = resolve;
+      });
+      const authoritative: ClaudeMessage = {
+        id: "authoritative",
+        role: "assistant",
+        content: "Final snapshot",
+        parts: [{ type: "text", content: "Final snapshot" }],
+        timestamp: "2026-06-22T00:00:02.000Z",
+      };
+      let call = 0;
+      mockGetSessionMessages.mockImplementation(() => {
+        call += 1;
+        return call === 1 ? fallback : Promise.resolve([authoritative]);
+      });
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield {
+            type: "message.updated",
+            sessionId: SESSION_ID,
+            data: {},
+          } as any;
+          yield {
+            type: "session.idle",
+            sessionId: SESSION_ID,
+            data: {},
+          } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockGetSessionMessages).toHaveBeenCalledTimes(2);
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+          messages: [authoritative],
+          isLoading: false,
+        });
+      });
+
+      const stale: ClaudeMessage = {
+        ...authoritative,
+        id: "stale",
+        content: "Stale fallback",
+        parts: [{ type: "text", content: "Stale fallback" }],
+      };
+      resolveFallback([stale]);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages)
+        .toEqual([authoritative]);
+    });
+
+    test("refreshes messages on session.idle and records context usage from session events", async () => {
       const refreshedMessage: ClaudeMessage = {
         id: "refreshed-message",
         role: "assistant",
@@ -1362,6 +1607,7 @@ describe("BuildChatTab", () => {
       mockGetSessionMessages.mockResolvedValueOnce([refreshedMessage]);
       mockSubscribeToEvents.mockImplementationOnce(() =>
         (async function* () {
+          // Metadata-only frame: applied incrementally (usage), no refetch.
           yield {
             type: "session.updated",
             sessionId: SESSION_ID,
@@ -1369,6 +1615,12 @@ describe("BuildChatTab", () => {
               model: "anthropic/claude-sonnet",
               contextUsage: { usedTokens: 2_500, totalContextTokens: 10_000 },
             },
+          } as any;
+          // Final frame: the authoritative full-transcript reconcile.
+          yield {
+            type: "session.idle",
+            sessionId: SESSION_ID,
+            data: {},
           } as any;
         })() as unknown as AsyncGenerator<never, void, unknown>,
       );
@@ -1406,6 +1658,65 @@ describe("BuildChatTab", () => {
         ]);
         expect(Number.isNaN(Date.parse(usage?.updatedAt ?? ""))).toBe(false);
       });
+      // Only the final event refetched; the metadata frame was applied in place.
+      expect(mockGetSessionMessages).toHaveBeenCalledTimes(1);
+    });
+
+    test("applies message.updated payloads in place and refetches only on unappliable patches", async () => {
+      const streamedMessage: ClaudeMessage = {
+        id: "streamed-message",
+        role: "assistant",
+        content: "Streamed via event payload",
+        parts: [{ type: "text", content: "Streamed via event payload" }],
+        timestamp: "2026-06-22T00:00:01.000Z",
+        revision: 1,
+      } as ClaudeMessage;
+      const refetchedMessage: ClaudeMessage = {
+        id: "streamed-message",
+        role: "assistant",
+        content: "Authoritative transcript",
+        parts: [{ type: "text", content: "Authoritative transcript" }],
+        timestamp: "2026-06-22T00:00:02.000Z",
+        revision: 7,
+      } as ClaudeMessage;
+      mockGetSessionMessages.mockResolvedValue([refetchedMessage]);
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          // Full message payload: upserted directly, no refetch.
+          yield {
+            type: "message.updated",
+            sessionId: SESSION_ID,
+            data: { message: streamedMessage },
+          } as any;
+          // Patch that skips revisions: cannot apply, must refetch.
+          yield {
+            type: "message.patched",
+            sessionId: SESSION_ID,
+            data: {
+              messageId: "streamed-message",
+              partCount: 1,
+              changedParts: [
+                { index: 0, part: { type: "text", content: "lost frame" } },
+              ],
+              timestamp: "2026-06-22T00:00:03.000Z",
+              revision: 5,
+            },
+          } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "idle");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        // The out-of-order patch forced exactly one authoritative refetch.
+        expect(mockGetSessionMessages).toHaveBeenCalledTimes(1);
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+          refetchedMessage,
+        ]);
+      });
     });
 
     test("turns a session error event into an idle error message", async () => {
@@ -1430,6 +1741,126 @@ describe("BuildChatTab", () => {
         expect(session?.messages.at(-1)?.content).toBe("tool execution failed");
         expect(session?.messages.at(-1)?.id.startsWith("[ERROR]")).toBe(true);
       });
+    });
+
+    test("clears the spinner when the final transcript reconcile fails", async () => {
+      // `getSessionMessages` rejects on any network-layer failure, so "the
+      // bridge died right after emitting session.idle" lands here. The turn is
+      // still over and no second `session.idle` will ever arrive, so gating the
+      // loading flag on the refetch wedges the pipeline (it bails on isLoading)
+      // until the user hits Stop.
+      mockGetSessionMessages.mockRejectedValueOnce(new Error("bridge gone"));
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield {
+            type: "session.idle",
+            sessionId: SESSION_ID,
+            data: {},
+          } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockGetSessionMessages).toHaveBeenCalled();
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+      });
+    });
+
+    test("keeps dispatching frames for other sessions while a final reconcile is in flight", async () => {
+      // The subscription is environment-wide: awaiting one session's transcript
+      // inside the frame loop stalls every other session in the environment.
+      const OTHER_SESSION_ID = "session-2";
+      const OTHER_SESSION_KEY = createSessionKey(ENV_ID, "other-tab");
+      let releaseTranscript!: (messages: ClaudeMessage[]) => void;
+      const stalledTranscript = new Promise<ClaudeMessage[]>((resolve) => {
+        releaseTranscript = resolve;
+      });
+      mockGetSessionMessages.mockImplementation(() => stalledTranscript);
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield {
+            type: "session.idle",
+            sessionId: SESSION_ID,
+            data: {},
+          } as any;
+          yield {
+            type: "session.error",
+            sessionId: OTHER_SESSION_ID,
+            data: { error: "second session failed" },
+          } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+      useClaudeStore.setState((state) => ({
+        sessions: new Map(state.sessions).set(OTHER_SESSION_KEY, {
+          sessionId: OTHER_SESSION_ID,
+          messages: [],
+          isLoading: true,
+        }),
+      }));
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const other = useClaudeStore.getState().sessions.get(OTHER_SESSION_KEY);
+        expect(other?.isLoading).toBe(false);
+        expect(other?.messages.at(-1)?.content).toBe("second session failed");
+      });
+
+      releaseTranscript([]);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    });
+
+    test("appends the replay error bubble once across repeated replay gaps", async () => {
+      // Error bubbles are client-only: they are never in the server transcript,
+      // so de-duping against the fetched response always passes and every
+      // replay appends another message carrying the same React key.
+      mockGetSession.mockImplementation(() => Promise.resolve({
+        id: SESSION_ID,
+        title: "Build Session",
+        status: "error",
+        error: "bridge exploded",
+        createdAt: "2026-06-22T00:00:00.000Z",
+        lastActivity: "2026-06-22T00:00:02.000Z",
+      } as never));
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield { type: "replay.required", data: {} } as any;
+          yield { type: "replay.required", data: {} } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockGetSession).toHaveBeenCalledTimes(2);
+        expect(mockGetSessionMessages).toHaveBeenCalledTimes(2);
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const messages = useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
+      const errorMessages = messages.filter((message) => message.id.startsWith("[ERROR]"));
+      expect(errorMessages).toHaveLength(1);
+      expect(errorMessages[0]?.content).toBe("bridge exploded");
+      // Duplicate ids are duplicate React keys in the rendered transcript.
+      expect(new Set(messages.map((message) => message.id)).size).toBe(messages.length);
     });
 
     test("event subscription failure surfaces the error screen with reconnect controls", async () => {

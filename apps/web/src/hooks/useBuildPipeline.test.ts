@@ -381,51 +381,65 @@ describe("useBuildPipeline", () => {
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-visible");
   });
 
-  test("startBuild records a durable launch intent for a Claude pipeline", async () => {
-    usePaneLayoutStore.setState({
-      environments: new Map([
-        ["env-build", {
-          root: { kind: "leaf", id: "pane-build", tabs: [], activeTabId: null },
-          activePaneId: "pane-build",
-          containerId: "container-build",
-        }],
-      ]),
-      activeEnvironmentId: "env-visible",
-    });
+  // Every pipeline opens the agent through the renderer-memory options store,
+  // so every pipeline must also record the intent durably: without it a mobile
+  // page eviction between here and workspace-ready loses the launch outright.
+  // The durable flag stays a boolean because `defaultAgent` — written in the
+  // same call — is what the restore path reads back to know which agent to open.
+  const durableLaunchAgentCases = [
+    { agentType: "claude" as const, expectedModes: ["native", null, null, null] },
+    { agentType: "codex" as const, expectedModes: [null, null, null, "native"] },
+    { agentType: "opencode" as const, expectedModes: [null, null, "native", null] },
+  ];
 
-    const { result } = renderHook(() => useBuildPipeline());
+  for (const { agentType, expectedModes } of durableLaunchAgentCases) {
+    test(`startBuild records a durable launch intent for a ${agentType} pipeline`, async () => {
+      usePaneLayoutStore.setState({
+        environments: new Map([
+          ["env-build", {
+            root: { kind: "leaf", id: "pane-build", tabs: [], activeTabId: null },
+            activePaneId: "pane-build",
+            containerId: "container-build",
+          }],
+        ]),
+        activeEnvironmentId: "env-visible",
+      });
 
-    await act(async () => {
-      await result.current.startBuild({
-        id: "task-claude",
-        projectId: "project-1",
-        title: "Build task",
-        description: "Ship the feature",
-        acceptanceCriteria: "All checks green",
-        status: "backlog",
-        comments: [],
-        images: [],
-        environmentId: undefined,
-        createdAt: "2024-01-01T00:00:00.000Z",
-        order: 0,
-      }, "containerized", "claude");
-    });
+      const { result } = renderHook(() => useBuildPipeline());
 
-    // A Claude pipeline opens the agent through the renderer-memory options
-    // store, so the intent must also be recorded durably or a mobile page
-    // eviction before workspace-ready loses the launch.
-    await waitFor(() => {
-      expect(mockUpdateEnvironmentAgentSettings).toHaveBeenCalledWith(
-        "env-build",
-        "claude",
-        expect.anything(),
-        null,
-        null,
-        null,
-        true,
-      );
+      await act(async () => {
+        await result.current.startBuild({
+          id: `task-${agentType}`,
+          projectId: "project-1",
+          title: "Build task",
+          description: "Ship the feature",
+          acceptanceCriteria: "All checks green",
+          status: "backlog",
+          comments: [],
+          images: [],
+          environmentId: undefined,
+          createdAt: "2024-01-01T00:00:00.000Z",
+          order: 0,
+        }, "containerized", agentType);
+      });
+
+      await waitFor(() => {
+        expect(mockUpdateEnvironmentAgentSettings).toHaveBeenCalledWith(
+          "env-build",
+          agentType,
+          ...expectedModes,
+          true,
+        );
+      });
+
+      // The transient store must name the same agent, so the uninterrupted path
+      // and the post-eviction restore open the same surface.
+      expect(useClaudeOptionsStore.getState().options["env-build"]).toMatchObject({
+        launchAgent: true,
+        agentType,
+      });
     });
-  });
+  }
 
   test("startBuild propagates codexMode to environment agent settings", async () => {
     usePaneLayoutStore.setState({
@@ -470,9 +484,9 @@ describe("useBuildPipeline", () => {
         null,
         null,
         "native",
-        // A Codex pipeline does not open a Claude agent tab, so there is no
-        // post-setup launch to record.
-        false,
+        // A Codex pipeline opens a Codex agent surface, so it needs the same
+        // durable launch intent a Claude pipeline gets.
+        true,
       );
     });
 
@@ -492,7 +506,10 @@ describe("useBuildPipeline", () => {
         "Build task\n\nShip the feature\n\nAll checks green",
       );
     });
-    expect(useClaudeOptionsStore.getState().options["env-build"]).toBeUndefined();
+    expect(useClaudeOptionsStore.getState().options["env-build"]).toMatchObject({
+      launchAgent: true,
+      agentType: "codex",
+    });
   });
 
   test("startBuild reuses an existing feature environment when one is provided", async () => {
@@ -570,7 +587,7 @@ describe("useBuildPipeline", () => {
       null,
       null,
       "native",
-      false,
+      true,
     );
 
     const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId("task-feature");

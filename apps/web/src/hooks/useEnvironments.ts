@@ -1,5 +1,6 @@
 // Hook for managing environment operations with Electron backend
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
 import { createSessionKey, useBuildPipelineStore, useClaudeOptionsStore, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore } from "@/stores";
@@ -196,16 +197,138 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
   return setupSnapshotReconciliation;
 }
 
+/**
+ * Global environment lifecycle listeners.
+ *
+ * Mounted ONCE at the app root (see App.tsx, alongside the other service hooks
+ * such as `usePrMonitorService`). These used to live inside `useEnvironments`,
+ * which is mounted at ~5 call sites — every setup event and every
+ * pageshow/online/visibility/stream-connected trigger therefore ran five
+ * duplicate handlers. All handlers write to global Zustand stores, so a single
+ * registration serves every consumer.
+ */
+export function useEnvironmentLifecycleService(): void {
+  // Listen for backend-owned setup lifecycle events. Setup can run while the
+  // terminal UI is unmounted, so these events are only incremental updates; the
+  // persisted environment remains the source of truth on reload.
+  useEffect(() => {
+    let unlistenStarted: UnlistenFn | null = null;
+    let unlistenComplete: UnlistenFn | null = null;
+    let disposed = false;
+
+    const setupListeners = async () => {
+      const stopStarted = await listen<EnvironmentSetupStartedPayload>("environment-setup-started", (event) => {
+        const { environment_id, session_id, environment } = event.payload;
+        console.info("[setup-terminal] received environment-setup-started", {
+          environmentId: environment_id,
+          sessionId: session_id,
+          hasEnvironment: !!environment,
+          environmentType: environment?.environmentType ?? null,
+          containerId: environment?.containerId ?? null,
+        });
+        const store = useEnvironmentStore.getState();
+        if (environment) {
+          store.updateEnvironment(environment_id, environment);
+          bindSetupTerminalSession(environment, session_id);
+        }
+        store.consumePendingSetupCommands(environment_id);
+        store.setSetupCommandsResolved(environment_id, true);
+        store.setSetupScriptsRunning(environment_id, true);
+        store.setWorkspaceReady(environment_id, false);
+      });
+      if (disposed) stopStarted();
+      else unlistenStarted = stopStarted;
+
+      const stopComplete = await listen<EnvironmentSetupCompletePayload>("environment-setup-complete", (event) => {
+        const { environment_id, success, environment } = event.payload;
+        console.info("[setup-terminal] received environment-setup-complete", {
+          environmentId: environment_id,
+          success,
+          hasEnvironment: !!environment,
+          setupScriptsComplete: environment?.setupScriptsComplete ?? null,
+          error: event.payload.error ?? null,
+        });
+        const store = useEnvironmentStore.getState();
+        if (environment) {
+          store.updateEnvironment(
+            environment_id,
+            preserveCompletedSetupState(environment_id, environment),
+          );
+        }
+        store.consumePendingSetupCommands(environment_id);
+        store.setSetupCommandsResolved(environment_id, true);
+        store.setSetupScriptsRunning(environment_id, false);
+        if (success) {
+          store.setWorkspaceReady(environment_id, true);
+        } else {
+          // The backend clears the durable launch intent on failure and sends the
+          // updated environment above. Mirror it locally even when the payload
+          // omitted the environment, so a failed setup cannot leave this renderer
+          // holding a launch it will never be able to perform.
+          store.updateEnvironment(environment_id, { pendingAgentLaunch: false });
+        }
+      });
+      if (disposed) stopComplete();
+      else unlistenComplete = stopComplete;
+    };
+
+    setupListeners();
+
+    return () => {
+      disposed = true;
+      unlistenStarted?.();
+      unlistenComplete?.();
+    };
+  }, []);
+
+  // Mobile browsers routinely suspend network streams while backgrounded.
+  // Reconcile from authoritative backend snapshots whenever the gateway
+  // reconnects or the document becomes usable again.
+  useEffect(() => {
+    let unlistenConnected: UnlistenFn | null = null;
+    let disposed = false;
+    const reconcile = () => {
+      void reconcileEnvironmentSetupSnapshots();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") reconcile();
+    };
+
+    void listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, reconcile).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlistenConnected = unlisten;
+    });
+    window.addEventListener("pageshow", reconcile);
+    window.addEventListener("online", reconcile);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      disposed = true;
+      unlistenConnected?.();
+      window.removeEventListener("pageshow", reconcile);
+      window.removeEventListener("online", reconcile);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+}
+
+const EMPTY_ENVIRONMENTS: Environment[] = [];
+
 export function useEnvironments(
   projectId: string | null,
   options: UseEnvironmentsOptions = {}
 ) {
   const { listenForRenameEvents = true } = options;
 
+  // Data via narrow selectors: this hook is mounted at several call sites, and
+  // a selector-less subscription rerendered all of them on every store write.
+  const environments = useEnvironmentStore((state) => state.environments);
+  const isLoading = useEnvironmentStore((state) => state.isLoading);
+  const error = useEnvironmentStore((state) => state.error);
+
+  // Actions are stable references on the store, so one shallow-compared bundle
+  // subscribes without ever retriggering.
   const {
-    environments,
-    isLoading,
-    error,
     mergeEnvironmentsForProject,
     addEnvironment: addEnvironmentToStore,
     removeEnvironment: removeEnvironmentFromStore,
@@ -222,14 +345,35 @@ export function useEnvironments(
     setSetupCommandsResolved,
     setWorkspaceReady,
     setSetupScriptsRunning,
-  } = useEnvironmentStore();
+  } = useEnvironmentStore(
+    useShallow((state) => ({
+      mergeEnvironmentsForProject: state.mergeEnvironmentsForProject,
+      addEnvironment: state.addEnvironment,
+      removeEnvironment: state.removeEnvironment,
+      updateEnvironment: state.updateEnvironment,
+      updateEnvironmentStatus: state.updateEnvironmentStatus,
+      setEnvironmentPR: state.setEnvironmentPR,
+      reorderEnvironments: state.reorderEnvironments,
+      setLoading: state.setLoading,
+      setError: state.setError,
+      getEnvironmentsByProjectId: state.getEnvironmentsByProjectId,
+      setDeleting: state.setDeleting,
+      setPendingSetupCommands: state.setPendingSetupCommands,
+      consumePendingSetupCommands: state.consumePendingSetupCommands,
+      setSetupCommandsResolved: state.setSetupCommandsResolved,
+      setWorkspaceReady: state.setWorkspaceReady,
+      setSetupScriptsRunning: state.setSetupScriptsRunning,
+    }))
+  );
 
-  const {
-    disconnectEnvironmentSessions,
-    deleteSessionsByEnvironment,
-  } = useSessionStore();
+  const disconnectEnvironmentSessions = useSessionStore(
+    (state) => state.disconnectEnvironmentSessions
+  );
+  const deleteSessionsByEnvironment = useSessionStore(
+    (state) => state.deleteSessionsByEnvironment
+  );
 
-  const { showError } = useErrorDialogStore();
+  const showError = useErrorDialogStore((state) => state.showError);
 
   // Load environments when projectId changes
   useEffect(() => {
@@ -285,113 +429,6 @@ export function useEnvironments(
       }
     };
   }, [listenForRenameEvents, updateEnvironmentInStore, setPRInStore]);
-
-  // Listen for backend-owned setup lifecycle events. Setup can run while the
-  // terminal UI is unmounted, so these events are only incremental updates; the
-  // persisted environment remains the source of truth on reload.
-  useEffect(() => {
-    let unlistenStarted: UnlistenFn | null = null;
-    let unlistenComplete: UnlistenFn | null = null;
-    let disposed = false;
-
-    const setupListeners = async () => {
-      const stopStarted = await listen<EnvironmentSetupStartedPayload>("environment-setup-started", (event) => {
-        const { environment_id, session_id, environment } = event.payload;
-        console.info("[setup-terminal] received environment-setup-started", {
-          environmentId: environment_id,
-          sessionId: session_id,
-          hasEnvironment: !!environment,
-          environmentType: environment?.environmentType ?? null,
-          containerId: environment?.containerId ?? null,
-        });
-        if (environment) {
-          updateEnvironmentInStore(environment_id, environment);
-          bindSetupTerminalSession(environment, session_id);
-        }
-        consumePendingSetupCommands(environment_id);
-        setSetupCommandsResolved(environment_id, true);
-        setSetupScriptsRunning(environment_id, true);
-        setWorkspaceReady(environment_id, false);
-      });
-      if (disposed) stopStarted();
-      else unlistenStarted = stopStarted;
-
-      const stopComplete = await listen<EnvironmentSetupCompletePayload>("environment-setup-complete", (event) => {
-        const { environment_id, success, environment } = event.payload;
-        console.info("[setup-terminal] received environment-setup-complete", {
-          environmentId: environment_id,
-          success,
-          hasEnvironment: !!environment,
-          setupScriptsComplete: environment?.setupScriptsComplete ?? null,
-          error: event.payload.error ?? null,
-        });
-        if (environment) {
-          updateEnvironmentInStore(
-            environment_id,
-            preserveCompletedSetupState(environment_id, environment),
-          );
-        }
-        consumePendingSetupCommands(environment_id);
-        setSetupCommandsResolved(environment_id, true);
-        setSetupScriptsRunning(environment_id, false);
-        if (success) {
-          setWorkspaceReady(environment_id, true);
-        } else {
-          // The backend clears the durable launch intent on failure and sends the
-          // updated environment above. Mirror it locally even when the payload
-          // omitted the environment, so a failed setup cannot leave this renderer
-          // holding a launch it will never be able to perform.
-          updateEnvironmentInStore(environment_id, { pendingAgentLaunch: false });
-        }
-      });
-      if (disposed) stopComplete();
-      else unlistenComplete = stopComplete;
-    };
-
-    setupListeners();
-
-    return () => {
-      disposed = true;
-      unlistenStarted?.();
-      unlistenComplete?.();
-    };
-  }, [
-    consumePendingSetupCommands,
-    setSetupCommandsResolved,
-    setSetupScriptsRunning,
-    setWorkspaceReady,
-    updateEnvironmentInStore,
-  ]);
-
-  // Mobile browsers routinely suspend network streams while backgrounded.
-  // Reconcile from authoritative backend snapshots whenever the gateway
-  // reconnects or the document becomes usable again.
-  useEffect(() => {
-    let unlistenConnected: UnlistenFn | null = null;
-    let disposed = false;
-    const reconcile = () => {
-      void reconcileEnvironmentSetupSnapshots();
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") reconcile();
-    };
-
-    void listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, reconcile).then((unlisten) => {
-      if (disposed) unlisten();
-      else unlistenConnected = unlisten;
-    });
-    window.addEventListener("pageshow", reconcile);
-    window.addEventListener("online", reconcile);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      disposed = true;
-      unlistenConnected?.();
-      window.removeEventListener("pageshow", reconcile);
-      window.removeEventListener("online", reconcile);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, []);
 
   const loadEnvironments = useCallback(
     async (pid: string, options: LoadEnvironmentsOptions = {}) => {
@@ -793,8 +830,17 @@ export function useEnvironments(
     [updateStatusInStore, setError, disconnectEnvironmentSessions, startEnvironment, showError]
   );
 
-  // Get environments for the current project
-  const projectEnvironments = projectId ? getEnvironmentsByProjectId(projectId) : [];
+  // Get environments for the current project. Memoized so consumers do not
+  // receive a new array identity on renders where nothing changed.
+  const projectEnvironments = useMemo(
+    () =>
+      projectId
+        ? environments
+            .filter((e) => e.projectId === projectId)
+            .sort((a, b) => a.order - b.order)
+        : EMPTY_ENVIRONMENTS,
+    [environments, projectId]
+  );
 
   return {
     environments: projectEnvironments,

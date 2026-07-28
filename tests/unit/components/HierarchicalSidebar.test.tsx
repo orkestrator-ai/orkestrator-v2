@@ -6,8 +6,11 @@ import { mockReadImage } from "../../mocks/clipboard";
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import { useClaudeOptionsStore, useConfigStore, useUIStore } from "@/stores";
 import type { Environment, Project } from "@/types";
-import { ENVIRONMENT_LIST_RESYNC_INTERVAL_MS } from "@/hooks/useEnvironmentListSync";
-import { dispatchResourceChange, resetResourceSync } from "@/lib/resource-sync";
+import {
+  dispatchResourceChange,
+  requestResourceResync,
+  resetResourceSync,
+} from "@/lib/resource-sync";
 
 import * as realDndCore from "@dnd-kit/core";
 import * as realUseProjects from "@/hooks/useProjects";
@@ -1247,33 +1250,22 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("resyncs each project through the read-only silent snapshot path", async () => {
-    let intervalCallback: (() => void) | undefined;
-    const originalSetInterval = globalThis.setInterval;
-    const originalClearInterval = globalThis.clearInterval;
-    globalThis.setInterval = ((callback: TimerHandler, timeout?: number) => {
-      if (timeout === ENVIRONMENT_LIST_RESYNC_INTERVAL_MS) intervalCallback = callback as () => void;
-      return 42 as unknown as ReturnType<typeof setInterval>;
-    }) as typeof setInterval;
-    globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
+    // The periodic safety net is owned by resource-sync's own timer, which
+    // raises a resync; the sidebar's list-sync hook no longer runs a second
+    // interval of its own.
+    render(<HierarchicalSidebar />);
+    await waitFor(() => expect(loadEnvironmentsMock).toHaveBeenCalled());
+    loadEnvironmentsMock.mockClear();
 
-    try {
-      render(<HierarchicalSidebar />);
-      await waitFor(() => expect(intervalCallback).toBeDefined());
-      loadEnvironmentsMock.mockClear();
+    await act(async () => {
+      requestResourceResync();
+      await Promise.resolve();
+    });
 
-      await act(async () => {
-        intervalCallback?.();
-        await Promise.resolve();
-      });
-
-      expect(loadEnvironmentsMock).toHaveBeenCalledWith("project-1", {
-        silent: true,
-        reconcileStatus: false,
-      });
-    } finally {
-      globalThis.setInterval = originalSetInterval;
-      globalThis.clearInterval = originalClearInterval;
-    }
+    expect(loadEnvironmentsMock).toHaveBeenCalledWith("project-1", {
+      silent: true,
+      reconcileStatus: false,
+    });
   });
 
   test("refreshes environments when another client announces a change", async () => {

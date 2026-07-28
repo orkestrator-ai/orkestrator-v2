@@ -296,7 +296,7 @@ export interface TerminalOutputSnapshot {
 }
 
 export interface TerminalOutputEvent {
-  data: number[];
+  bytesBase64: string;
   revision: number;
   generation: number;
 }
@@ -847,11 +847,15 @@ export async function propagateGithubTokenToContainers(newToken: string | null):
 export interface OpenCodeServerStartResult {
   hostPort: number;
   wasRunning: boolean;
+  /** Per-process HTTP Basic password minted by the backend. */
+  authToken: string;
 }
 
 export interface OpenCodeServerStatus {
   running: boolean;
   hostPort: number | null;
+  /** Present only when the running server accepted the persisted credential. */
+  authToken?: string;
 }
 
 export type OpenCodeModelRef =
@@ -974,11 +978,13 @@ export async function cacheOpenCodeModelCatalog(
 export interface ClaudeServerStartResult {
   hostPort: number;
   wasRunning: boolean;
+  authToken: string;
 }
 
 export interface ClaudeServerStatus {
   running: boolean;
   hostPort: number | null;
+  authToken?: string;
 }
 
 export interface CodexServerStartResult {
@@ -1893,7 +1899,7 @@ export interface LocalServerStartResult {
   port: number;
   pid: number;
   wasRunning: boolean;
-  /** Present only for the authenticated Codex bridge. */
+  /** Per-process renderer credential for all native servers. */
   authToken?: string;
 }
 
@@ -1901,7 +1907,7 @@ export interface LocalServerStatus {
   running: boolean;
   port: number | null;
   pid: number | null;
-  /** Present only for the authenticated Codex bridge. */
+  /** Per-process renderer credential for all native servers. */
   authToken?: string;
 }
 

@@ -75,7 +75,8 @@ import {
 import {
   getWorkingDirectory,
   hydrateMessagesFromPersistedSession,
-  listPersistedSessionsForCwd,
+  invalidateTranscriptCatalogCache,
+  listPersistedSessionsWithTitlesForCwd,
   type PersistedSessionMeta,
 } from "./history/rollout.js";
 import {
@@ -434,6 +435,14 @@ export class AppServerRuntime {
   private readonly lastPersistedAccess = new Map<string, number>();
   /** In-flight registry writes that graceful shutdown must not abandon. */
   private readonly pendingSessionWrites = new Set<Promise<void>>();
+  /**
+   * Terminal notification work intentionally runs off the transport read loop.
+   *
+   * Tracking it separately preserves that non-blocking transport contract while
+   * giving shutdown and deterministic callers a way to wait for journal,
+   * rendering, persistence, and terminal SSE publication to finish.
+   */
+  private readonly pendingFinalizations = new Set<Promise<void>>();
   /** Serializes and exposes generation recovery to request paths. */
   private generationRecovery: Promise<void> = Promise.resolve();
   /**
@@ -824,12 +833,45 @@ export class AppServerRuntime {
     this.sweepTimer = null;
     for (const timer of this.recoveryBackstops.values()) clearTimeout(timer);
     this.recoveryBackstops.clear();
-    for (const threadId of [...this.threadState.keys()]) this.releaseThreadRuntimeState(threadId);
     // Nothing will report terminal after this, so release the drain rather than
     // holding shutdown for its full deadline.
     this.notifyThreadActivity();
-    await Promise.allSettled([...this.pendingSessionWrites]);
+    // Stop the transport first so no new terminal notifications can arrive,
+    // then settle work already handed off from its read loop before releasing
+    // the render state that work still needs.
     await this.options.engine.stop();
+    await this.drainPendingWork();
+    await Promise.allSettled([...this.pendingSessionWrites]);
+    for (const threadId of [...this.threadState.keys()]) this.releaseThreadRuntimeState(threadId);
+  }
+
+  /**
+   * Waits for every terminal-event finalization currently queued, including work
+   * enqueued by another finalization before it settles.
+   *
+   * The app-server stdout loop must never await this. It is for graceful
+   * shutdown and test/embedding synchronization only.
+   */
+  async drainPendingWork(): Promise<void> {
+    // Generation/dispatch recovery is also launched from transport callbacks.
+    // Settle it before flushing render coalescers because recovery may create or
+    // finalize turns and schedule a final snapshot.
+    await Promise.allSettled([this.generationRecovery, this.dispatchRecovery]);
+    while (true) {
+      // A finalization can schedule a coalesced render after an earlier flush,
+      // so flush at the start of every pass rather than only once before
+      // waiting. Otherwise shutdown (and the test harness) can observe all
+      // tracked promises settled while one last snapshot is still timer-bound.
+      for (const state of this.threadState.values()) {
+        await state.coalescer.flushNow();
+      }
+      const pending = [
+        ...this.pendingFinalizations,
+        ...this.pendingSessionWrites,
+      ];
+      if (pending.length === 0) return;
+      await Promise.allSettled(pending);
+    }
   }
 
   getRegistry(): ThreadRegistry {
@@ -1450,7 +1492,12 @@ export class AppServerRuntime {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
         turn.complete(event.status, event.error);
-        void this.finalizeTurn(context, turn);
+        void this.runFinalization(context, turn).catch((error) => {
+          console.error(
+            `[codex-bridge] Failed to finalize turn ${turn.turnId}:`,
+            error instanceof Error ? error.message : error,
+          );
+        });
         return;
       }
       default:
@@ -1687,7 +1734,7 @@ export class AppServerRuntime {
           );
           if (reviewOutcome.result === "terminal") {
             turn.complete(reviewOutcome.status);
-            await this.finalizeTurn(context, turn);
+            await this.runFinalization(context, turn);
             continue;
           }
           if (reviewOutcome.result === "running") {
@@ -1714,7 +1761,7 @@ export class AppServerRuntime {
 
         if (outcome.result === "terminal") {
           turn.complete(outcome.status ?? "completed");
-          await this.finalizeTurn(context, turn);
+          await this.runFinalization(context, turn);
           continue;
         }
         if (outcome.result === "attach") {
@@ -1840,6 +1887,19 @@ export class AppServerRuntime {
     }
   }
 
+  private runFinalization(
+    context: ThreadContext,
+    turn: TurnAccumulator,
+  ): Promise<void> {
+    const work = this.finalizeTurn(context, turn);
+    this.pendingFinalizations.add(work);
+    work.then(
+      () => this.pendingFinalizations.delete(work),
+      () => this.pendingFinalizations.delete(work),
+    );
+    return work;
+  }
+
   /** Re-renders the streaming assistant message and pushes a full snapshot. */
   private async publishAssistantMessage(threadId: string): Promise<void> {
     const context = this.registry.getThread(threadId);
@@ -1926,6 +1986,11 @@ export class AppServerRuntime {
         ? body.threadId.trim()
         : null;
     if (!threadId) return null;
+
+    // A resume often follows on-disk changes made outside this process, and both
+    // hydration paths below may consult the cwd listing; do not serve them a
+    // catalog cached from before those changes.
+    invalidateTranscriptCatalogCache();
 
     const config = this.toEngineConfig(body);
     const sessionId = createSessionId();
@@ -2043,6 +2108,9 @@ export class AppServerRuntime {
       return { outcome: "unavailable" };
     }
     if (!fork.id) return { outcome: "unavailable" };
+    // The fork's rollout was just born; a catalog cached before it existed must
+    // not answer the hydration or the next /session/list.
+    invalidateTranscriptCatalogCache();
     const child = this.registry.createSession({
       id: createSessionId(),
       threadId: null,
@@ -2841,6 +2909,9 @@ export class AppServerRuntime {
     if (!context) {
       const thread = await this.options.engine.startThread({ config: session.config });
       if (!thread.id) return { ok: false, status: 503, error: "Codex did not return a thread id" };
+      // A new thread means a new rollout on disk; the next /session/list must
+      // not answer from a catalog scanned before it existed.
+      invalidateTranscriptCatalogCache();
       context = this.registry.attach(session.id, thread.id, {
         engineHandle: thread.handle,
         engineGeneration: this.options.engine.info().generation,
@@ -3557,7 +3628,7 @@ export class AppServerRuntime {
       // case where escalation resolved it without one.
       if (context.activeTurn === turn && !turn.isTerminal()) {
         turn.complete(status === "unknown" ? "interrupted" : status);
-        await this.finalizeTurn(context, turn);
+        await this.runFinalization(context, turn);
       }
     })().catch(async (error) => {
       // The only rejection after waitForTurnTerminal's internal catches is a
@@ -3565,7 +3636,7 @@ export class AppServerRuntime {
       // generation, so the turn is definitively no longer executing.
       if (context.activeTurn === turn && !turn.isTerminal()) {
         turn.complete("interrupted");
-        await this.finalizeTurn(context, turn);
+        await this.runFinalization(context, turn);
       }
       const message =
         error instanceof Error ? error.message : "Failed to restart Codex after cancellation";
@@ -3639,8 +3710,13 @@ export class AppServerRuntime {
     }
 
     let persisted: PersistedSessionMeta[] = [];
+    // The listing already read and parsed the generated-title index; reuse its
+    // map instead of paying a second read + line parse per request.
+    let generatedTitles: Map<string, { title: string }> | null = null;
     try {
-      persisted = await listPersistedSessionsForCwd(cwd);
+      const listing = await listPersistedSessionsWithTitlesForCwd(cwd);
+      persisted = listing.sessions;
+      generatedTitles = listing.generatedTitles;
     } catch {
       persisted = [];
     }
@@ -3656,7 +3732,8 @@ export class AppServerRuntime {
 
     // Generated titles are the bridge's own, and win over a preview.
     try {
-      const generated = await readPersistedSessionTitleEntries(this.options.codexHome);
+      const generated =
+        generatedTitles ?? await readPersistedSessionTitleEntries(this.options.codexHome);
       for (const session of merged.values()) {
         const entry = generated.get(session.id);
         if (entry) session.title = entry.title;

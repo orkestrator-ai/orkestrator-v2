@@ -258,6 +258,42 @@ describe("useFilesPanel", () => {
     expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
   });
 
+  test("does not republish structurally identical changes or file trees", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
+    mockGetGitStatus.mockImplementation(() =>
+      Promise.resolve([{ ...change }])
+    );
+    mockGetFileTree.mockImplementation(() =>
+      Promise.resolve(JSON.parse(JSON.stringify(tree)))
+    );
+
+    const { result } = renderHook(() => useFilesPanel());
+    await waitFor(() => {
+      expect(useFilesPanelStore.getState().changes).toHaveLength(1);
+      expect(useFilesPanelStore.getState().fileTree).toHaveLength(1);
+    });
+    const changesBefore = useFilesPanelStore.getState().changes;
+    const treeBefore = useFilesPanelStore.getState().fileTree;
+
+    await act(async () => {
+      await Promise.all([
+        result.current.loadChanges(true),
+        result.current.loadFileTree(true),
+      ]);
+    });
+
+    expect(useFilesPanelStore.getState().changes).toBe(changesBefore);
+    expect(useFilesPanelStore.getState().fileTree).toBe(treeBefore);
+  });
+
   test("loads container changes against the environment creation commit when available", async () => {
     const environment = createMockEnvironment({
       id: "env-container",

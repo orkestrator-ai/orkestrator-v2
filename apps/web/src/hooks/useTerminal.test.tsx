@@ -56,7 +56,7 @@ mock.module("@/lib/backend", () => ({
 const listenMock = listen as ReturnType<typeof mock>;
 const unlistenMock = mock(() => undefined);
 
-const { useTerminal } = await import("./useTerminal");
+const { decodeTerminalOutputPayload, useTerminal } = await import("./useTerminal");
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
@@ -127,7 +127,11 @@ describe("useTerminal reconnect behavior", () => {
     expect(getTerminalSessionMock).toHaveBeenCalledWith("session-old");
     expect(createLocalTerminalSessionMock).not.toHaveBeenCalled();
     expect(startLocalTerminalSessionMock).not.toHaveBeenCalled();
-    expect(listenMock).toHaveBeenCalledWith("terminal-output-session-old", expect.any(Function));
+    expect(listenMock).toHaveBeenCalledWith(
+      "terminal-output-session-old",
+      expect.any(Function),
+      expect.objectContaining({ signal: expect.anything() }),
+    );
   });
 
   it("attaches once to a backend-owned setup session while preparation is running before its PTY exists", async () => {
@@ -196,6 +200,7 @@ describe("useTerminal reconnect behavior", () => {
     expect(listenMock).toHaveBeenCalledWith(
       "terminal-output-env-1:setup",
       expect.any(Function),
+      expect.objectContaining({ signal: expect.anything() }),
     );
     expect(new TextDecoder().decode(received[0])).toBe(
       "[orkestrator] Starting environment setup\r\n",
@@ -251,7 +256,11 @@ describe("useTerminal reconnect behavior", () => {
     expect(getTerminalSessionMock).toHaveBeenCalledWith("session-old");
     expect(createLocalTerminalSessionMock).toHaveBeenCalledWith("env-1", 80, 24, false, undefined);
     expect(startLocalTerminalSessionMock).toHaveBeenCalledWith("session-new-local");
-    expect(listenMock).toHaveBeenCalledWith("terminal-output-session-new-local", expect.any(Function));
+    expect(listenMock).toHaveBeenCalledWith(
+      "terminal-output-session-new-local",
+      expect.any(Function),
+      expect.objectContaining({ signal: expect.anything() }),
+    );
   });
 
   it("ignores overlapping connect calls before React connection state updates", async () => {
@@ -274,7 +283,11 @@ describe("useTerminal reconnect behavior", () => {
     expect(createTerminalSessionMock).toHaveBeenCalledTimes(1);
     expect(startTerminalSessionMock).toHaveBeenCalledTimes(1);
     expect(listenMock).toHaveBeenCalledTimes(1);
-    expect(listenMock).toHaveBeenCalledWith("terminal-output-session-new-container", expect.any(Function));
+    expect(listenMock).toHaveBeenCalledWith(
+      "terminal-output-session-new-container",
+      expect.any(Function),
+      expect.objectContaining({ signal: expect.anything() }),
+    );
   });
 
   it("forwards environment activity tracking to local and container session creation", async () => {
@@ -442,7 +455,11 @@ describe("useTerminal reconnect behavior", () => {
     });
 
     await waitFor(() => {
-      expect(listenMock).toHaveBeenCalledWith("terminal-output-shared-session", expect.any(Function));
+      expect(listenMock).toHaveBeenCalledWith(
+        "terminal-output-shared-session",
+        expect.any(Function),
+        expect.objectContaining({ signal: expect.anything() }),
+      );
     });
 
     const adopter = renderHook(() =>
@@ -1096,7 +1113,11 @@ describe("useTerminal reconnect behavior", () => {
     expect(startTerminalSessionMock).not.toHaveBeenCalled();
     // The buffer is still replayed and the listener attached before the guard.
     expect(getTerminalOutputSnapshotMock).toHaveBeenCalledWith("env-1:setup");
-    expect(listenMock).toHaveBeenCalledWith("terminal-output-env-1:setup", expect.any(Function));
+    expect(listenMock).toHaveBeenCalledWith(
+      "terminal-output-env-1:setup",
+      expect.any(Function),
+      expect.objectContaining({ signal: expect.anything() }),
+    );
   });
 
   it("replays and deduplicates output for the replacement session on the reconnect fallback", async () => {
@@ -1168,7 +1189,11 @@ describe("useTerminal reconnect behavior", () => {
     expect(createTerminalSessionMock).toHaveBeenCalled();
     expect(startTerminalSessionMock).toHaveBeenCalledWith("session-new-container");
     expect(getTerminalOutputSnapshotMock).toHaveBeenCalledWith("session-new-container");
-    expect(listenMock).toHaveBeenCalledWith("terminal-output-session-new-container", expect.any(Function));
+    expect(listenMock).toHaveBeenCalledWith(
+      "terminal-output-session-new-container",
+      expect.any(Function),
+      expect.objectContaining({ signal: expect.anything() }),
+    );
     expect(replayed).toEqual([{
       output: "fallback replay output",
       preserveExisting: true,
@@ -1622,6 +1647,83 @@ describe("useTerminal reconnect behavior", () => {
     expect(received).toEqual(["three"]);
   });
 
+  it("decodes the backend's bytesBase64 wire payload during a live attachment", async () => {
+    let outputHandler:
+      | ((event: {
+          payload: { bytesBase64: string; revision: number; generation: number };
+        }) => void)
+      | undefined;
+    listenMock.mockImplementation(async (event, handler) => {
+      if (event === "terminal-output-session-old") outputHandler = handler;
+      return unlistenMock;
+    });
+    const received: string[] = [];
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        existingSessionId: "session-old",
+        persistSession: true,
+        onData: (data) => received.push(new TextDecoder().decode(data)),
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    act(() => {
+      outputHandler?.({
+        payload: {
+          bytesBase64: btoa("native base64 output"),
+          revision: 1,
+          generation: 1,
+        },
+      });
+    });
+
+    expect(received).toEqual(["native base64 output"]);
+  });
+
+  it("rehydrates the authoritative snapshot after a gateway desync notice", async () => {
+    let outputHandler:
+      | ((event: { payload: { desynced: true } }) => void)
+      | undefined;
+    listenMock.mockImplementation(async (event, handler) => {
+      if (event === "terminal-output-session-old") outputHandler = handler;
+      return unlistenMock;
+    });
+    getTerminalOutputSnapshotMock
+      .mockResolvedValueOnce({
+        output: "before gap",
+        revision: 1,
+        generation: 1,
+      })
+      .mockResolvedValueOnce({
+        output: "after gap",
+        revision: 4,
+        generation: 1,
+      });
+    const replayed: string[] = [];
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        existingSessionId: "session-old",
+        persistSession: true,
+        replayOutputBuffer: true,
+        onReplay: (data) => replayed.push(new TextDecoder().decode(data)),
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    act(() => {
+      outputHandler?.({ payload: { desynced: true } });
+    });
+
+    await waitFor(() => expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(2));
+    expect(replayed).toEqual(["before gap", "after gap"]);
+  });
+
   it("marks a truncated snapshot as degraded replay", async () => {
     getTerminalOutputSnapshotMock.mockResolvedValue({
       output: "bounded tail",
@@ -1696,5 +1798,17 @@ describe("useTerminal reconnect behavior", () => {
     expect(detachTerminalMock).not.toHaveBeenCalled();
     expect(unlistenMock).toHaveBeenCalledTimes(1);
     expect(result.current.sessionId).toBeNull();
+  });
+});
+
+describe("decodeTerminalOutputPayload", () => {
+  it("supports base64, legacy byte arrays, and desync notices", () => {
+    expect(new TextDecoder().decode(decodeTerminalOutputPayload(btoa("base64"))!)).toBe("base64");
+    expect(new TextDecoder().decode(
+      decodeTerminalOutputPayload({ bytesBase64: btoa("object base64") })!,
+    )).toBe("object base64");
+    expect([...decodeTerminalOutputPayload([0, 127, 255])!]).toEqual([0, 127, 255]);
+    expect([...decodeTerminalOutputPayload({ bytes: [1, 2, 3] })!]).toEqual([1, 2, 3]);
+    expect(decodeTerminalOutputPayload({ desynced: true })).toBeNull();
   });
 });

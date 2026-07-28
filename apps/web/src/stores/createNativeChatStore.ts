@@ -1,4 +1,5 @@
 import type { StateCreator } from "zustand";
+import { preserveMessageIdentities } from "@/lib/chat/message-identity";
 import {
   reconcileTimedSession,
   updateTimedSessionLoading,
@@ -246,10 +247,19 @@ export function createNativeChatStoreSlice<
       set((state) => {
         const session = state.sessions.get(sessionKey);
         if (!session) return state;
+        // Snapshot objects are always freshly allocated even when nothing
+        // changed. Re-point unchanged entries at the store's existing objects
+        // so memoized rows keep their identity, and skip the write entirely
+        // when the merged transcript is element-for-element identical.
+        const merged = preserveMessageIdentities(
+          session.messages,
+          merge(session.messages, messages),
+        );
+        if (merged === session.messages) return state;
         const next = new Map(state.sessions);
         next.set(sessionKey, {
           ...session,
-          messages: merge(session.messages, messages),
+          messages: merged,
         });
         return { sessions: next };
       }),

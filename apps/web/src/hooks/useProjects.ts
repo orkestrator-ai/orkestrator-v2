@@ -55,19 +55,17 @@ const loadProjectsFromBackend = (): Promise<void> => {
 };
 
 export function useProjects() {
-  const {
-    projects,
-    isLoading,
-    error,
-    setProjects,
-    addProject: addProjectToStore,
-    removeProject: removeProjectFromStore,
-    updateProject: updateProjectInStore,
-    reorderProjects: reorderProjectsInStore,
-    setLoading,
-    setError,
-    getProjectById,
-  } = useProjectStore();
+  const projects = useProjectStore((state) => state.projects);
+  const isLoading = useProjectStore((state) => state.isLoading);
+  const error = useProjectStore((state) => state.error);
+  const setProjects = useProjectStore((state) => state.setProjects);
+  const addProjectToStore = useProjectStore((state) => state.addProject);
+  const removeProjectFromStore = useProjectStore((state) => state.removeProject);
+  const updateProjectInStore = useProjectStore((state) => state.updateProject);
+  const reorderProjectsInStore = useProjectStore((state) => state.reorderProjects);
+  const setLoading = useProjectStore((state) => state.setLoading);
+  const setError = useProjectStore((state) => state.setError);
+  const getProjectById = useProjectStore((state) => state.getProjectById);
 
   const loadProjects = useCallback(loadProjectsFromBackend, []);
 

@@ -12,8 +12,12 @@ import {
   createClient,
   getModels,
   createSession,
+  getSession,
   getSessionMessages,
+  getPendingQuestions,
+  getPendingPlanApprovals,
   getStructuredOutput,
+  shouldReconcileClaudePrompt,
   sendPrompt,
   abortSession,
   subscribeToEvents,
@@ -21,6 +25,7 @@ import {
   ERROR_MESSAGE_PREFIX,
   USAGE_SCAN_EXEMPT_EVENT_TYPES,
   type ClaudeMessage as ClaudeMessageType,
+  type ClaudeMessagePatch,
   type ClaudeAttachment,
 } from "@/lib/claude-client";
 import type { TaskSnapshotImage } from "@/prompts";
@@ -182,7 +187,7 @@ function AgentTabLoadingState({ label }: { label: string }) {
 
 export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(data.pipelineId));
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const environmentDefaultAgent = useEnvironmentStore(
     (state) => state.getEnvironmentById(data.environmentId)?.defaultAgent
   );
@@ -229,45 +234,62 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
   const jumpInTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const pipeline = useBuildPipelineStore((s) => s.pipelines.get(pipelineId));
-  const { config } = useConfigStore();
-  const {
-    setPhase,
-    addSession: addPipelineSession,
-    markSessionIdle,
-    markSessionRunning,
-    setVerificationResult,
-    beginStructuredReview,
-    setStructuredReview,
-    incrementIteration,
-    setPipelineError,
-    pausePipeline,
-    resumePipeline,
-  } = useBuildPipelineStore();
+  const config = useConfigStore((state) => state.config);
+  const setPhase = useBuildPipelineStore((state) => state.setPhase);
+  const addPipelineSession = useBuildPipelineStore((state) => state.addSession);
+  const markSessionIdle = useBuildPipelineStore((state) => state.markSessionIdle);
+  const markSessionRunning = useBuildPipelineStore((state) => state.markSessionRunning);
+  const setVerificationResult = useBuildPipelineStore((state) => state.setVerificationResult);
+  const beginStructuredReview = useBuildPipelineStore((state) => state.beginStructuredReview);
+  const setStructuredReview = useBuildPipelineStore((state) => state.setStructuredReview);
+  const incrementIteration = useBuildPipelineStore((state) => state.incrementIteration);
+  const setPipelineError = useBuildPipelineStore((state) => state.setPipelineError);
+  const pausePipeline = useBuildPipelineStore((state) => state.pausePipeline);
+  const resumePipeline = useBuildPipelineStore((state) => state.resumePipeline);
   const isPipelinePaused = useCallback(
     () => useBuildPipelineStore.getState().pipelines.get(pipelineId)?.phase === "paused",
     [pipelineId],
   );
 
-  const {
-    setClient,
-    setModels,
-    setSession,
-    addMessage,
-    setMessages,
-    setSessionLoading,
-    setServerStatus,
-    setContextUsage,
-    getOrCreateEventSubscription,
-    setEventStream,
-    hasActiveEventSubscription,
-    clients: clientsMap,
-    sessions: sessionsMap,
-    modelCatalogs,
-    models: fallbackModels,
-  } = useClaudeStore();
+  // Narrow store subscriptions: actions are stable references, and the client
+  // read is per-environment, so unrelated claudeStore writes no longer
+  // re-render the whole pipeline tab. `sessions` stays a map-level
+  // subscription — the transcript view and idle-detection effects below need
+  // to react to every pipeline session's messages.
+  const setClient = useClaudeStore((state) => state.setClient);
+  const setModels = useClaudeStore((state) => state.setModels);
+  const setSession = useClaudeStore((state) => state.setSession);
+  const addMessage = useClaudeStore((state) => state.addMessage);
+  const setMessages = useClaudeStore((state) => state.setMessages);
+  const upsertMessage = useClaudeStore((state) => state.upsertMessage);
+  const patchMessage = useClaudeStore((state) => state.patchMessage);
+  const setSessionLoading = useClaudeStore((state) => state.setSessionLoading);
+  const setSessionError = useClaudeStore((state) => state.setSessionError);
+  const setSessionTitle = useClaudeStore((state) => state.setSessionTitle);
+  const setServerStatus = useClaudeStore((state) => state.setServerStatus);
+  const setContextUsage = useClaudeStore((state) => state.setContextUsage);
+  const addPendingQuestion = useClaudeStore((state) => state.addPendingQuestion);
+  const removePendingQuestion = useClaudeStore((state) => state.removePendingQuestion);
+  const addPendingPlanApproval = useClaudeStore((state) => state.addPendingPlanApproval);
+  const removePendingPlanApproval = useClaudeStore((state) => state.removePendingPlanApproval);
+  const getOrCreateEventSubscription = useClaudeStore(
+    (state) => state.getOrCreateEventSubscription,
+  );
+  const setEventStream = useClaudeStore((state) => state.setEventStream);
+  const hasActiveEventSubscription = useClaudeStore(
+    (state) => state.hasActiveEventSubscription,
+  );
+  const sessionsMap = useClaudeStore((state) => state.sessions);
 
-  const client = useMemo(() => clientsMap.get(environmentId), [clientsMap, environmentId]);
-  const models = modelCatalogs.get(environmentId)?.models ?? fallbackModels;
+  const client = useClaudeStore(
+    useCallback((state) => state.clients.get(environmentId), [environmentId]),
+  );
+  const models = useClaudeStore(
+    useCallback(
+      (state) => state.modelCatalogs.get(environmentId)?.models ?? state.models,
+      [environmentId],
+    ),
+  );
   const resolveModelLabel = useCallback(
     (modelId: string) => resolveCatalogModelLabel(modelId, models),
     [models],
@@ -364,15 +386,22 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         // Cold start
         setConnectionState("connecting");
         let hostPort: number | null = null;
+        let authToken: string | undefined;
 
         if (isLocal) {
           let localStatus = await getLocalClaudeServerStatus(environmentId);
-          if (!localStatus.running) {
+          if (!localStatus.running || !localStatus.authToken) {
             const result = await startLocalClaudeServer(environmentId);
-            localStatus = { running: true, port: result.port, pid: result.pid };
+            localStatus = {
+              running: true,
+              port: result.port,
+              pid: result.pid,
+              authToken: result.authToken,
+            };
           }
           if (!mounted) return;
           hostPort = localStatus.port ?? null;
+          authToken = localStatus.authToken;
         } else {
           // Containerized environment - start the bridge server (same as ClaudeChatTab)
           const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
@@ -382,9 +411,13 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
           }
 
           let status = await getClaudeServerStatus(containerId);
-          if (!status.running) {
+          if (!status.running || !status.authToken) {
             const result = await startClaudeServer(containerId);
-            status = { running: true, hostPort: result.hostPort };
+            status = {
+              running: true,
+              hostPort: result.hostPort,
+              authToken: result.authToken,
+            };
           }
           if (!mounted) return;
 
@@ -393,14 +426,16 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
           }
 
           hostPort = status.hostPort;
+          authToken = status.authToken;
         }
 
         if (!hostPort) throw new Error("Failed to get server port");
+        if (!authToken) throw new Error("Failed to resolve Claude bridge authentication");
 
         setServerStatus(environmentId, { running: true, hostPort });
 
         const baseUrl = `http://127.0.0.1:${hostPort}`;
-        const bridgeClient = createClient(baseUrl);
+        const bridgeClient = createClient(baseUrl, authToken);
         setClient(environmentId, bridgeClient);
 
         const healthy = await checkHealth(bridgeClient);
@@ -442,31 +477,144 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         const lastReloadTimeBySession = new Map<string, number>();
         const DEBOUNCE_MS = 200;
         const pendingReloads = new Map<string, NodeJS.Timeout>();
+        const reloadGenerations = new Map<string, number>();
 
         const fetchMessagesDebounced = (sessionId: string, sessionKey: string, immediate = false) => {
-          const pendingTimeout = pendingReloads.get(sessionId);
+          const reloadKey = `${sessionId}:${sessionKey}`;
+          const generation = (reloadGenerations.get(reloadKey) ?? 0) + 1;
+          reloadGenerations.set(reloadKey, generation);
+          const pendingTimeout = pendingReloads.get(reloadKey);
           if (pendingTimeout) {
             clearTimeout(pendingTimeout);
-            pendingReloads.delete(sessionId);
+            pendingReloads.delete(reloadKey);
           }
 
           const doFetch = async () => {
+            pendingReloads.delete(reloadKey);
             lastReloadTimeBySession.set(sessionId, Date.now());
             const messages = await getSessionMessages(bridgeClient, sessionId);
+            if (reloadGenerations.get(reloadKey) !== generation) return false;
+            const currentSession = useClaudeStore.getState().sessions.get(sessionKey);
+            if (currentSession?.sessionId !== sessionId) return false;
             setMessages(sessionKey, messages);
+            return true;
           };
 
           if (immediate) {
-            doFetch();
+            return doFetch();
           } else {
             const now = Date.now();
             const lastTime = lastReloadTimeBySession.get(sessionId) || 0;
             if (now - lastTime > DEBOUNCE_MS) {
-              doFetch();
+              void doFetch();
             } else {
-              const timeout = setTimeout(doFetch, DEBOUNCE_MS);
-              pendingReloads.set(sessionId, timeout);
+              const timeout = setTimeout(() => void doFetch(), DEBOUNCE_MS);
+              pendingReloads.set(reloadKey, timeout);
             }
+            return undefined;
+          }
+        };
+
+        const reconcileAuthoritativeSession = async (
+          sessionId: string,
+          sessionKey: string,
+        ) => {
+          const reloadKey = `${sessionId}:${sessionKey}`;
+          const generation = (reloadGenerations.get(reloadKey) ?? 0) + 1;
+          reloadGenerations.set(reloadKey, generation);
+          const pendingTimeout = pendingReloads.get(reloadKey);
+          if (pendingTimeout) {
+            clearTimeout(pendingTimeout);
+            pendingReloads.delete(reloadKey);
+          }
+
+          const coreReconcile = Promise.all([
+            getSession(bridgeClient, sessionId),
+            getSessionMessages(bridgeClient, sessionId, { throwOnError: true }),
+          ]);
+          const interactionsReconcile = Promise.allSettled([
+            getPendingQuestions(bridgeClient, sessionId, { throwOnError: true }),
+            getPendingPlanApprovals(bridgeClient, sessionId, { throwOnError: true }),
+          ]);
+          const [serverSession, messages] = await coreReconcile;
+          if (reloadGenerations.get(reloadKey) !== generation || !serverSession) return;
+
+          const state = useClaudeStore.getState();
+          const currentSession = state.sessions.get(sessionKey);
+          if (currentSession?.sessionId !== sessionId) return;
+
+          const serverError = serverSession.status === "error"
+            ? serverSession.error?.trim() || "Claude session failed"
+            : undefined;
+          // Error bubbles are client-only, so they live in the store transcript
+          // and never in the server response we just fetched. De-duping against
+          // `messages` therefore always passes, and `setMessages` re-splices
+          // client-only messages without de-duping by id — so a second
+          // `replay.required` would append a second message carrying the same
+          // `error-replay-<sessionId>` React key.
+          const reconciledMessages = serverError
+            && !currentSession.messages.some((message) =>
+              message.id.startsWith(ERROR_MESSAGE_PREFIX))
+            ? [
+                ...messages,
+                {
+                  id: `${ERROR_MESSAGE_PREFIX}replay-${sessionId}`,
+                  role: "assistant" as const,
+                  content: serverError,
+                  parts: [{ type: "text" as const, content: serverError }],
+                  timestamp: serverSession.lastActivity,
+                },
+              ]
+            : messages;
+          setMessages(sessionKey, reconciledMessages);
+          setSessionError(
+            sessionKey,
+            serverError,
+          );
+          setSessionLoading(sessionKey, serverSession.status === "running");
+          if (serverSession.title?.trim()) {
+            setSessionTitle(sessionKey, serverSession.title);
+          }
+
+          const [questionsResult, approvalsResult] = await interactionsReconcile;
+          if (reloadGenerations.get(reloadKey) !== generation) return;
+          const reconciledState = useClaudeStore.getState();
+          if (reconciledState.sessions.get(sessionKey)?.sessionId !== sessionId) return;
+
+          if (questionsResult.status === "fulfilled") {
+            const existingQuestionIds = Array.from(reconciledState.pendingQuestions.values())
+              .filter((question) => question.sessionId === sessionId)
+              .map((question) => question.id);
+            const nextQuestionIds = new Set(
+              questionsResult.value.map((question) => question.id),
+            );
+            for (const question of questionsResult.value) addPendingQuestion(question);
+            for (const questionId of existingQuestionIds) {
+              if (!nextQuestionIds.has(questionId)) removePendingQuestion(questionId);
+            }
+          } else {
+            console.warn(
+              "[BuildChatTab] Failed to reconcile pending questions:",
+              questionsResult.reason,
+            );
+          }
+
+          if (approvalsResult.status === "fulfilled") {
+            const existingApprovalIds = Array.from(reconciledState.pendingPlanApprovals.values())
+              .filter((approval) => approval.sessionId === sessionId)
+              .map((approval) => approval.id);
+            const nextApprovalIds = new Set(
+              approvalsResult.value.map((approval) => approval.id),
+            );
+            for (const approval of approvalsResult.value) addPendingPlanApproval(approval);
+            for (const approvalId of existingApprovalIds) {
+              if (!nextApprovalIds.has(approvalId)) removePendingPlanApproval(approvalId);
+            }
+          } else {
+            console.warn(
+              "[BuildChatTab] Failed to reconcile pending plan approvals:",
+              approvalsResult.reason,
+            );
           }
         };
 
@@ -484,6 +632,29 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
             ? null
             : extractContextUsage(event.data);
 
+          if (eventType === "replay.required") {
+            const reconciles: Promise<void>[] = [];
+            for (const [sessionTabId, sessionState] of useClaudeStore.getState().sessions) {
+              if (
+                !sessionTabId.startsWith(`env-${environmentId}:`)
+                || !sessionState.sessionId
+              ) continue;
+              reconciles.push(
+                reconcileAuthoritativeSession(
+                  sessionState.sessionId,
+                  sessionTabId,
+                ).catch((error) => {
+                  console.warn(
+                    "[BuildChatTab] Failed to reconcile replay gap:",
+                    error,
+                  );
+                }),
+              );
+            }
+            await Promise.all(reconciles);
+            continue;
+          }
+
           if (!eventSessionId) continue;
 
           const sessions = useClaudeStore.getState().sessions;
@@ -493,17 +664,55 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
             const isFinalEvent = eventType === "session.idle";
 
-            // This tab never applies an event payload — it always refetches —
-            // so an incremental patch is just another "something changed"
-            // signal. Without it the transcript would freeze after the first
-            // frame of each message and only catch up at `session.idle`.
-            if (
-              eventType === "message.updated" ||
-              eventType === "message.patched" ||
-              eventType === "session.updated" ||
-              isFinalEvent
-            ) {
-              fetchMessagesDebounced(eventSessionId, sessionTabId, isFinalEvent);
+            // Mirror ClaudeChatTab's delta handling: apply event payloads
+            // incrementally and refetch the authoritative transcript only when
+            // a payload cannot be applied (missing/partial frame, revision
+            // mismatch) or on the final `session.idle` reconcile. The previous
+            // refetch-only handler here sustained ~5 full-transcript fetches
+            // per second for the whole duration of every build turn.
+            if (eventType === "message.updated") {
+              const message = (event.data as { message?: ClaudeMessageType } | undefined)?.message;
+              if (message?.id && message.role === "assistant") {
+                upsertMessage(sessionTabId, message);
+              } else {
+                // Non-assistant payloads and payload-less events fall back to
+                // an authoritative refetch so they still surface promptly.
+                fetchMessagesDebounced(eventSessionId, sessionTabId);
+              }
+            } else if (eventType === "message.patched") {
+              const patch = event.data as ClaudeMessagePatch | undefined;
+              // A patch only applies against the exact revision it extends;
+              // every failure mode (unseen message, missed frames, malformed
+              // payload) recovers via the authoritative transcript, which also
+              // re-establishes a revision the next patch can build on.
+              if (!patch?.messageId || !patchMessage(sessionTabId, patch)) {
+                fetchMessagesDebounced(eventSessionId, sessionTabId);
+              }
+            } else if (isFinalEvent) {
+              // The turn is over whether or not the transcript refetch succeeds,
+              // and no second `session.idle` will arrive for a finished turn.
+              // Gating the flag on the refetch therefore wedges the pipeline
+              // (which bails on `isLoading`) the moment the bridge dies right
+              // after emitting idle. Clear it first so a failed reconcile
+              // degrades to a stale transcript, matching the three sibling tabs.
+              setSessionLoading(sessionTabId, false);
+              // Never await here: this is the environment-wide shared
+              // subscription, so awaiting one transcript request blocks every
+              // subsequent frame for every other session in the environment.
+              // The reload generation guard already orders the writes.
+              void fetchMessagesDebounced(
+                eventSessionId,
+                sessionTabId,
+                true,
+              )?.catch((error) => {
+                setPipelineError(
+                  pipelineId,
+                  error instanceof Error
+                    ? `Failed to reconcile Claude transcript: ${error.message}`
+                    : "Failed to reconcile Claude transcript",
+                  null,
+                );
+              });
             }
 
             if (usageFromEvent) {
@@ -511,10 +720,6 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
                 ...usageFromEvent,
                 modelId: usageFromEvent.modelId ?? undefined,
               });
-            }
-
-            if (isFinalEvent) {
-              setSessionLoading(sessionTabId, false);
             }
 
             if (eventType === "session.error") {
@@ -544,7 +749,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         setEventStream(environmentId, null);
       }
     },
-    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, setSessionLoading, setContextUsage, addMessage]
+    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setSessionError, setSessionTitle, setContextUsage, addMessage, addPendingQuestion, removePendingQuestion, addPendingPlanApproval, removePendingPlanApproval, pipelineId, setPipelineError]
   );
 
   // Check if a session ended with an error, avoiding re-handling of already-processed errors
@@ -781,7 +986,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         permissionMode: "bypassPermissions",
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (isPipelinePaused()) return;
         setPipelineError(pipelineId, "Failed to send address issues prompt");
         return;
@@ -920,7 +1125,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         attachments,
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send build prompt");
       }
     },
@@ -980,7 +1185,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         requestId,
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send review prompt");
       }
     },
@@ -1031,7 +1236,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         attachments: taskImagesToAttachments(task.images),
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send verification prompt");
       }
     },
@@ -1079,7 +1284,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         attachments: taskImagesToAttachments(task.images),
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send fix prompt");
       }
     },
@@ -1125,7 +1330,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         permissionMode: "bypassPermissions",
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send PR creation prompt");
       }
     },
@@ -1199,7 +1404,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         permissionMode: "bypassPermissions",
       });
 
-      if (!success) {
+      if (!shouldReconcileClaudePrompt(success)) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send conflict resolution prompt");
       }
     },
@@ -1255,7 +1460,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       permissionMode: "bypassPermissions",
     });
 
-    if (!success) {
+    if (!shouldReconcileClaudePrompt(success)) {
       setSessionLoading(currentSession.sessionKey, false);
       markSessionIdle(pipelineId, currentSession.sdkSessionId);
       const errMessage: ClaudeMessageType = {
@@ -1348,7 +1553,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       permissionMode: "bypassPermissions",
     });
 
-    if (!success) {
+    if (!shouldReconcileClaudePrompt(success)) {
       setSessionLoading(currentSession.sessionKey, false);
       markSessionIdle(pipelineId, currentSession.sdkSessionId);
       const errMessage: ClaudeMessageType = {

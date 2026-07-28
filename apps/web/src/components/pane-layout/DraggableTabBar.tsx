@@ -48,8 +48,9 @@ export function DraggableTabBar({
   dragOverPaneId,
   isPaneFocused = false,
 }: DraggableTabBarProps) {
-  const { removeTab } = usePaneLayoutStore();
-  const { isDirty, clearDirty } = useFileDirtyStore();
+  const removeTab = usePaneLayoutStore((state) => state.removeTab);
+  const isDirty = useFileDirtyStore((state) => state.isDirty);
+  const clearDirty = useFileDirtyStore((state) => state.clearDirty);
 
   const discardTabDraft = useCallback((tabId: string): Promise<void> => {
     const tab = pane.tabs.find((candidate) => candidate.id === tabId);

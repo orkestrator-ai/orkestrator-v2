@@ -1,10 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
-import { Check, Circle, HelpCircle, X } from "lucide-react";
+import { AlertTriangle, Check, Circle, HelpCircle, X } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { usePromptDraftField } from "@/stores/promptDraftStore";
+import { usePromptDeadline } from "@/hooks/usePromptDeadline";
 
 /** Agent-neutral option shape. `value` falls back to `label` when absent. */
 export interface QuestionCardOption {
@@ -26,11 +28,10 @@ export interface QuestionCardQuestion {
 /**
  * Receives the answers the user submitted.
  *
- * The return value is the caller's own bookkeeping — the card ignores it. The
- * card never removes itself either way: every wrapper owns its lifecycle (via
+ * The card never removes itself: every wrapper owns its lifecycle (via
  * `removePendingQuestion` and friends) because the reply has to be accepted by
- * the agent before the prompt stops blocking the turn. A rejected submit simply
- * leaves the card as it was, ready to be retried.
+ * the agent before the prompt stops blocking the turn. Returning `false` leaves
+ * the card retryable and produces a user-visible delivery failure.
  */
 export type SubmitAnswersHandler = (
   answers: string[][],
@@ -42,7 +43,7 @@ interface QuestionCardProps {
   title: string;
   questions: QuestionCardQuestion[];
   onSubmit: SubmitAnswersHandler;
-  onDismiss?: () => Promise<void> | void;
+  onDismiss?: () => Promise<boolean | void> | boolean | void;
   initialAnswers?: string[][];
   allowCustomAnswer?: boolean;
   allowOptionDeselect?: boolean;
@@ -65,6 +66,8 @@ interface QuestionCardProps {
    * owns the pending request clears the draft when the request resolves.
    */
   draftKey?: string;
+  /** Absolute bridge deadline in epoch milliseconds, when the protocol exposes one. */
+  expiresAt?: number;
 }
 
 function optionValue(option: QuestionCardOption): string {
@@ -276,8 +279,12 @@ function QuestionItem({
               <span className="max-w-[28ch] truncate">{label}</span>
               <button
                 type="button"
+                disabled={disabled}
                 onClick={() => handleRemoveCustomAnswer(label)}
-                className="-mr-0.5 ml-0.5 rounded-full p-0.5 hover:bg-primary/20"
+                className={cn(
+                  "-mr-0.5 ml-0.5 rounded-full p-0.5 hover:bg-primary/20",
+                  disabled && "cursor-not-allowed opacity-60 hover:bg-transparent",
+                )}
                 aria-label={`Remove ${label}`}
               >
                 <X className="h-3 w-3" />
@@ -334,6 +341,7 @@ export function QuestionCard({
   exclusiveSingleSelect = false,
   hideDismiss = false,
   draftKey,
+  expiresAt,
 }: QuestionCardProps) {
   const [answers, setAnswers] = usePromptDraftField<string[][]>(
     draftKey,
@@ -353,6 +361,7 @@ export function QuestionCard({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentQuestionIndex, setCurrentQuestionIndex] =
     usePromptDraftField<number>(draftKey, "currentQuestionIndex", () => 0);
+  const { remaining, expired } = usePromptDeadline(expiresAt);
 
   const questionCount = questions.length;
   const currentQuestion = questions[currentQuestionIndex];
@@ -418,16 +427,25 @@ export function QuestionCard({
 
   const submitAnswers = useCallback(
     async (effectiveAnswers: string[][]) => {
+      if (expired) return;
       setIsSubmitting(true);
       try {
-        await onSubmit(effectiveAnswers);
+        const submitted = await onSubmit(effectiveAnswers);
+        if (submitted === false) {
+          toast.error("Failed to send your answer", {
+            description: `${agentLabel} is still waiting for a response. Please try again.`,
+          });
+        }
       } catch (error) {
         console.error(`[${agentLabel}QuestionCard] Failed to submit answer:`, error);
+        toast.error("Failed to send your answer", {
+          description: `${agentLabel} is still waiting for a response. Please try again.`,
+        });
       } finally {
         setIsSubmitting(false);
       }
     },
-    [agentLabel, onSubmit],
+    [agentLabel, expired, onSubmit],
   );
 
   const handleNext = useCallback(async () => {
@@ -460,24 +478,32 @@ export function QuestionCard({
 
   const handleOptionSelect = useCallback(
     (_label: string, nextAnswer: string[]) => {
-      if (!submitOnOptionSelect || isSubmitting || nextAnswer.length === 0) return;
+      if (!submitOnOptionSelect || isSubmitting || expired || nextAnswer.length === 0) return;
       if (questionCount !== 1) return;
       void submitAnswers([nextAnswer]);
     },
-    [submitOnOptionSelect, isSubmitting, questionCount, submitAnswers],
+    [submitOnOptionSelect, isSubmitting, expired, questionCount, submitAnswers],
   );
 
   const handleDismiss = useCallback(async () => {
-    if (isSubmitting || !onDismiss) return;
+    if (isSubmitting || expired || !onDismiss) return;
     setIsSubmitting(true);
     try {
-      await onDismiss();
+      const dismissed = await onDismiss();
+      if (dismissed === false) {
+        toast.error("Failed to dismiss this question", {
+          description: `${agentLabel} is still waiting for a response. Please try again.`,
+        });
+      }
     } catch (error) {
       console.error(`[${agentLabel}QuestionCard] Failed to dismiss question:`, error);
+      toast.error("Failed to dismiss this question", {
+        description: `${agentLabel} is still waiting for a response. Please try again.`,
+      });
     } finally {
       setIsSubmitting(false);
     }
-  }, [agentLabel, isSubmitting, onDismiss]);
+  }, [agentLabel, expired, isSubmitting, onDismiss]);
 
   const isLastQuestion = currentQuestionIndex === questionCount - 1;
   const nextButtonText = isSubmitting
@@ -505,6 +531,11 @@ export function QuestionCard({
         )}
         {questionCount > 1 && answeredCount === questionCount && (
           <Check className="ml-auto h-3.5 w-3.5 text-green-500" />
+        )}
+        {!expired && remaining && (
+          <span className="ml-auto text-xs tabular-nums text-muted-foreground" aria-live="off">
+            {remaining}
+          </span>
         )}
       </div>
 
@@ -560,11 +591,17 @@ export function QuestionCard({
           allowCustomAnswer={currentQuestion.allowCustomAnswer ?? allowCustomAnswer}
           allowOptionDeselect={allowOptionDeselect}
           exclusiveSingleSelect={exclusiveSingleSelect}
-          disabled={isSubmitting}
+          disabled={isSubmitting || expired}
         />
       </div>
 
-      <div className="flex items-center justify-between border-t border-border bg-muted/30 px-4 py-3">
+      {expired ? (
+        <div className="flex items-center gap-1.5 border-t border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
+          <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+          This request expired and was declined.
+        </div>
+      ) : (
+        <div className="flex items-center justify-between border-t border-border bg-muted/30 px-4 py-3">
         {!hideDismiss && onDismiss && (
           <Button
             variant="ghost"
@@ -595,7 +632,8 @@ export function QuestionCard({
             {nextButtonText}
           </Button>
         </div>
-      </div>
+        </div>
+      )}
     </BlockingPromptCard>
   );
 }

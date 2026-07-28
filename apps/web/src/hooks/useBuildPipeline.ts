@@ -230,10 +230,16 @@ function githubIssueToTicketInput(
 
 export function useBuildPipeline() {
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
-  const { createPipeline, setPipelineEnvironment, setPhase, setPipelineError } = useBuildPipelineStore();
-  const { updateTask } = useKanbanStore();
-  const { selectProjectAndEnvironment, setProjectCollapsed } = useUIStore();
-  const { setOptions } = useClaudeOptionsStore();
+  const createPipeline = useBuildPipelineStore((state) => state.createPipeline);
+  const setPipelineEnvironment = useBuildPipelineStore((state) => state.setPipelineEnvironment);
+  const setPhase = useBuildPipelineStore((state) => state.setPhase);
+  const setPipelineError = useBuildPipelineStore((state) => state.setPipelineError);
+  const updateTask = useKanbanStore((state) => state.updateTask);
+  const selectProjectAndEnvironment = useUIStore(
+    (state) => state.selectProjectAndEnvironment,
+  );
+  const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
+  const setOptions = useClaudeOptionsStore((state) => state.setOptions);
   const config = useConfigStore((state) => state.config);
 
   const startBuildFromTicket = useCallback(
@@ -297,10 +303,13 @@ export function useBuildPipeline() {
         // 3. Link pipeline to environment
         setPipelineEnvironment(pipelineId, environment.id);
 
-        // 4. Configure environment for the selected pipeline agent. When this
-        // pipeline will open Claude, record the launch intent durably too: the
-        // options store below is renderer-memory only, so a mobile page eviction
-        // between here and workspace-ready would otherwise lose the launch.
+        // 4. Configure environment for the selected pipeline agent, and record
+        // the launch intent durably: the options store below is renderer-memory
+        // only, so a mobile page eviction between here and workspace-ready would
+        // otherwise lose the launch. This applies to every agent, not just
+        // Claude — the durable flag stays a boolean because the agent identity
+        // travels with `defaultAgent` in this same write, which is exactly what
+        // the restore path in `TerminalContainer` reads back.
         let configuredEnvironment = await backend.updateEnvironmentAgentSettings(
           environment.id,
           agentSettings.defaultAgent,
@@ -308,20 +317,20 @@ export function useBuildPipeline() {
           null,
           agentSettings.opencodeMode,
           agentSettings.codexMode,
-          agentSettings.shouldLaunchClaude,
+          true,
         );
 
         // Update environment in store
         useEnvironmentStore.getState().updateEnvironment(environment.id, configuredEnvironment);
 
-        // Claude native mode still relies on the options store to auto-launch the bridge.
-        if (agentSettings.shouldLaunchClaude) {
-          setOptions(configuredEnvironment.id, {
-            launchAgent: true,
-            agentType: "claude",
-            initialPrompt: "",
-          });
-        }
+        // The uninterrupted path still goes through the options store, which
+        // launches the agent surface during the initial pane build rather than
+        // via the durable fallback after the build tab already exists.
+        setOptions(configuredEnvironment.id, {
+          launchAgent: true,
+          agentType: agentSettings.launchAgent,
+          initialPrompt: "",
+        });
 
         await ticket.onPipelineLinked?.({
           environmentId: configuredEnvironment.id,

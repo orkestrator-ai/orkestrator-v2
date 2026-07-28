@@ -109,6 +109,22 @@ describe("container runtime environment wiring", () => {
       return backend.slice(bodyStart, end);
     }
 
+    // Bridges that need an auth token delegate the whole start sequence to a
+    // `startContainer*Server` helper, so the script lives there rather than in
+    // the register block. Fold the helper body in the same way.
+    function startHelperBody(name: string): string {
+      const marker = `async function ${name}(`;
+      const start = backend.indexOf(marker);
+      expect(start).toBeGreaterThan(0);
+      // Helpers are top-level, so the next top-level declaration ends the body.
+      const nextDeclaration = backend
+        .slice(start + 1)
+        .search(/\n(?:async )?function \w+\(|\nconst \w+ = /);
+      return nextDeclaration === -1
+        ? backend.slice(start)
+        : backend.slice(start, start + 1 + nextDeclaration);
+    }
+
     const commands = [
       "start_opencode_server",
       "start_claude_server",
@@ -126,12 +142,17 @@ describe("container runtime environment wiring", () => {
         nextRegister === -1
           ? backend.slice(start)
           : backend.slice(start, start + 1 + nextRegister);
-      // If the block references a shared start-command constant, fold that
-      // constant's body into the searchable text.
+      // If the block references a shared start-command constant or delegates to
+      // a start helper, fold that body into the searchable text.
       const referencedConstant = registerBlock.match(/[A-Z0-9_]+_START_COMMAND/);
-      const block = referencedConstant
-        ? `${registerBlock}\n${startCommandConstant(referencedConstant[0])}`
-        : registerBlock;
+      const referencedHelper = registerBlock.match(/startContainer\w+Server/);
+      let block = registerBlock;
+      if (referencedConstant) {
+        block += `\n${startCommandConstant(referencedConstant[0])}`;
+      }
+      if (referencedHelper) {
+        block += `\n${startHelperBody(referencedHelper[0])}`;
+      }
       expect(block).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
       expect(block).toContain("orkestrator_source_runtime_env");
     }

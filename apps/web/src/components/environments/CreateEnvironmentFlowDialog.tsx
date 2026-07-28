@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { updateEnvironmentAgentSettings } from "@/lib/backend";
 import {
+  resolveAgentModeSettings,
+  type AgentModeSettings,
+} from "@/lib/build-pipeline-agent";
+import {
   useClaudeOptionsStore,
   useConfigStore,
   useProjectStore,
@@ -49,13 +53,12 @@ export function resolveEnvironmentCreateRequest(options: ClaudeOptions) {
   };
 }
 
-export function resolveEnvironmentAgentSettings(options: ClaudeOptions) {
-  return {
-    defaultAgent: options.agentType,
-    claudeMode: options.agentType === "claude" ? options.claudeMode : null,
-    opencodeMode: options.agentType === "opencode" ? options.opencodeMode : null,
-    codexMode: options.agentType === "codex" ? options.codexMode : null,
-  };
+/**
+ * Unlike a build pipeline, the create dialog forwards the modes the user picked
+ * instead of forcing native — the shared helper only owns the routing.
+ */
+export function resolveEnvironmentAgentSettings(options: ClaudeOptions): AgentModeSettings {
+  return resolveAgentModeSettings(options.agentType, options);
 }
 
 export function resolveEnvironmentAgentLaunchSettings(options: ClaudeOptions) {

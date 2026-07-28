@@ -17,7 +17,9 @@ export function OpenCodeQuestionCard({
   question,
   client,
 }: OpenCodeQuestionCardProps) {
-  const { removePendingQuestion } = useOpenCodeStore();
+  const removePendingQuestion = useOpenCodeStore(
+    (state) => state.removePendingQuestion,
+  );
 
   const questions = useMemo<QuestionCardQuestion[]>(
     () =>

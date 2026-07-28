@@ -1,4 +1,5 @@
 import { useEffect, useCallback, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { useFilesPanelStore, useConfigStore } from "@/stores";
 import { useUIStore, useEnvironmentStore } from "@/stores";
@@ -15,22 +16,33 @@ const AUTO_REFRESH_INTERVAL = 5000;
  * Auto-refreshes every 5 seconds when the panel is open.
  */
 export function useFilesPanel() {
-  const { selectedEnvironmentId } = useUIStore();
-  const { getEnvironmentById } = useEnvironmentStore();
-  const { getRepositoryConfig } = useConfigStore();
+  const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const { isOpen, activeTab } = useFilesPanelStore(
+    useShallow((state) => ({ isOpen: state.isOpen, activeTab: state.activeTab }))
+  );
+  // Actions are stable references on the store.
   const {
-    isOpen,
-    activeTab,
     setChanges,
     setFileTree,
     setLoadingChanges,
     setLoadingTree,
     setTargetBranch,
-  } = useFilesPanelStore();
+  } = useFilesPanelStore(
+    useShallow((state) => ({
+      setChanges: state.setChanges,
+      setFileTree: state.setFileTree,
+      setLoadingChanges: state.setLoadingChanges,
+      setLoadingTree: state.setLoadingTree,
+      setTargetBranch: state.setTargetBranch,
+    }))
+  );
 
-  const selectedEnvironment = selectedEnvironmentId
-    ? getEnvironmentById(selectedEnvironmentId)
-    : null;
+  const selectedEnvironment = useEnvironmentStore(
+    (state) =>
+      (selectedEnvironmentId
+        ? state.environments.find((e) => e.id === selectedEnvironmentId)
+        : null) ?? null
+  );
 
   // Detect environment type and get appropriate identifiers
   const isLocalEnvironment = selectedEnvironment?.environmentType === "local";
@@ -47,7 +59,11 @@ export function useFilesPanel() {
   // Prefer the commit captured when the environment was created. Older
   // environments fall back to the repository PR base branch, then its default
   // branch. Shared with the sidebar badge so both report the same numbers.
-  const repoConfig = projectId ? getRepositoryConfig(projectId) : null;
+  // Selected narrowly: `config.repositories[id]` is a stored object with a
+  // stable reference, so this only rerenders when that repo's config changes.
+  const repoConfig = useConfigStore(
+    (state) => (projectId ? state.config.repositories[projectId] : null) ?? null
+  );
   const comparisonRef = resolveComparisonRef(selectedEnvironment?.createdFromCommit, repoConfig);
   const environmentSnapshotKey = [
     selectedEnvironmentId ?? "",
@@ -64,6 +80,57 @@ export function useFilesPanel() {
   activeSnapshotKeyRef.current = environmentSnapshotKey;
   const [fileActionPending, setFileActionPending] = useState<string | null>(null);
 
+  // Digest of the last snapshot written to the store, per data type. The 5s
+  // auto-refresh nearly always returns identical data; comparing a cheap digest
+  // lets those ticks skip the store write (and the rerender it causes). The
+  // skip is only taken while the store still holds exactly what we last wrote,
+  // so an outside write to the store can never be masked by a stale digest.
+  const changesDigestRef = useRef<{
+    key: string;
+    digest: string;
+    written: backend.GitFileChange[];
+  } | null>(null);
+  const treeDigestRef = useRef<{
+    key: string;
+    digest: string;
+    written: backend.FileNode[];
+  } | null>(null);
+
+  const publishChanges = useCallback(
+    (key: string, changes: backend.GitFileChange[]) => {
+      const digest = JSON.stringify(changes);
+      const previous = changesDigestRef.current;
+      if (
+        previous?.key === key
+        && previous.digest === digest
+        && useFilesPanelStore.getState().changes === previous.written
+      ) {
+        return;
+      }
+      changesDigestRef.current = { key, digest, written: changes };
+      setChanges(changes);
+    },
+    [setChanges]
+  );
+
+  const publishFileTree = useCallback(
+    (key: string, tree: backend.FileNode[]) => {
+      const digest = JSON.stringify(tree);
+      const previous = treeDigestRef.current;
+      if (
+        previous?.key === key
+        && previous.digest === digest
+        && useFilesPanelStore.getState().fileTree === previous.written
+      ) {
+        return;
+      }
+      treeDigestRef.current = { key, digest, written: tree };
+      setFileTree(tree);
+    },
+    [setFileTree]
+  );
+
+
   // Store the target branch so other components can access it
   useEffect(() => {
     setTargetBranch(comparisonRef);
@@ -72,16 +139,16 @@ export function useFilesPanel() {
   // Panel snapshots are global, so clear the previous environment immediately
   // and only allow requests for the current key to publish their result.
   useEffect(() => {
-    setChanges([]);
-    setFileTree([]);
+    publishChanges(environmentSnapshotKey, []);
+    publishFileTree(environmentSnapshotKey, []);
     setLoadingChanges(false);
     setLoadingTree(false);
-  }, [environmentSnapshotKey, setChanges, setFileTree, setLoadingChanges, setLoadingTree]);
+  }, [environmentSnapshotKey, publishChanges, publishFileTree, setLoadingChanges, setLoadingTree]);
 
   // Load git changes from environment (silent mode for auto-refresh)
   const loadChanges = useCallback((silent = false): Promise<void> => {
     if (!isAvailable) {
-      setChanges([]);
+      publishChanges(environmentSnapshotKey, []);
       return Promise.resolve();
     }
 
@@ -107,13 +174,13 @@ export function useFilesPanel() {
           changes = await backend.getGitStatus(containerId, comparisonRef, true);
         }
         if (activeSnapshotKeyRef.current === environmentSnapshotKey) {
-          setChanges(changes);
+          publishChanges(environmentSnapshotKey, changes);
         }
       } catch (err) {
         console.error("Failed to load git changes:", err);
         // Only clear on non-silent (manual) refresh to avoid flickering
         if (!silent && activeSnapshotKeyRef.current === environmentSnapshotKey) {
-          setChanges([]);
+          publishChanges(environmentSnapshotKey, []);
         }
       } finally {
         if (!silent && activeSnapshotKeyRef.current === environmentSnapshotKey) {
@@ -129,12 +196,12 @@ export function useFilesPanel() {
       }
     });
     return request;
-  }, [isAvailable, isLocalEnvironment, worktreePath, containerId, comparisonRef, environmentSnapshotKey, setChanges, setLoadingChanges]);
+  }, [isAvailable, isLocalEnvironment, worktreePath, containerId, comparisonRef, environmentSnapshotKey, publishChanges, setLoadingChanges]);
 
   // Load file tree from environment (silent mode for auto-refresh)
   const loadFileTree = useCallback((silent = false): Promise<void> => {
     if (!isAvailable) {
-      setFileTree([]);
+      publishFileTree(environmentSnapshotKey, []);
       return Promise.resolve();
     }
 
@@ -158,12 +225,12 @@ export function useFilesPanel() {
           tree = await backend.getFileTree(containerId);
         }
         if (activeSnapshotKeyRef.current === environmentSnapshotKey) {
-          setFileTree(tree);
+          publishFileTree(environmentSnapshotKey, tree);
         }
       } catch (err) {
         console.error("Failed to load file tree:", err);
         if (!silent && activeSnapshotKeyRef.current === environmentSnapshotKey) {
-          setFileTree([]);
+          publishFileTree(environmentSnapshotKey, []);
         }
       } finally {
         if (!silent && activeSnapshotKeyRef.current === environmentSnapshotKey) {
@@ -179,7 +246,7 @@ export function useFilesPanel() {
       }
     });
     return request;
-  }, [isAvailable, isLocalEnvironment, worktreePath, containerId, environmentSnapshotKey, setFileTree, setLoadingTree]);
+  }, [isAvailable, isLocalEnvironment, worktreePath, containerId, environmentSnapshotKey, publishFileTree, setLoadingTree]);
 
   // Refresh data based on active tab (manual refresh shows loading indicator)
   const refresh = useCallback(() => {
@@ -279,10 +346,10 @@ export function useFilesPanel() {
   // Clear data when environment becomes unavailable
   useEffect(() => {
     if (!isAvailable) {
-      setChanges([]);
-      setFileTree([]);
+      publishChanges(environmentSnapshotKey, []);
+      publishFileTree(environmentSnapshotKey, []);
     }
-  }, [isAvailable, setChanges, setFileTree]);
+  }, [isAvailable, environmentSnapshotKey, publishChanges, publishFileTree]);
 
   return {
     loadChanges,

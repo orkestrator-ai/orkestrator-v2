@@ -40,9 +40,16 @@ export const MAX_DISPATCHED_REQUEST_IDS = 64;
 const SDK_SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function preferencesPath(sdkSessionId: string): string | null {
+function normalizedSessionId(sdkSessionId: string): string | null {
   if (!SDK_SESSION_ID_PATTERN.test(sdkSessionId)) return null;
-  return join(claudeSessionPreferencesDir(), `${sdkSessionId.toLowerCase()}.json`);
+  return sdkSessionId.toLowerCase();
+}
+
+function preferencesPath(sdkSessionId: string): string | null {
+  const normalized = normalizedSessionId(sdkSessionId);
+  return normalized
+    ? join(claudeSessionPreferencesDir(), `${normalized}.json`)
+    : null;
 }
 
 /**
@@ -67,12 +74,13 @@ function parsePreferences(raw: string): SessionPreferences | undefined {
   if (Array.isArray(record.dispatchedRequestIds)) {
     const unique = new Set<string>();
     for (const value of record.dispatchedRequestIds) {
+      const normalized = typeof value === "string" ? value.trim() : "";
       if (
         typeof value === "string"
-        && value.trim().length > 0
-        && value.length <= 200
+        && normalized.length > 0
+        && normalized.length <= 200
       ) {
-        unique.add(value);
+        unique.add(normalized);
       }
     }
     if (unique.size > 0) {
@@ -124,9 +132,10 @@ export async function updateSessionPreferences(
   sdkSessionId: string,
   update: SessionPreferences,
 ): Promise<void> {
+  const writeKey = normalizedSessionId(sdkSessionId);
   const path = preferencesPath(sdkSessionId);
-  if (!path) return;
-  const previous = pendingWrites.get(sdkSessionId) ?? Promise.resolve();
+  if (!writeKey || !path) return;
+  const previous = pendingWrites.get(writeKey) ?? Promise.resolve();
   // Chained regardless of the previous write's outcome; one failed write must
   // not wedge every later one.
   const write = previous
@@ -135,11 +144,11 @@ export async function updateSessionPreferences(
       const existing = (await readSessionPreferences(sdkSessionId)) ?? {};
       await writePreferencesFile(path, { ...existing, ...update });
     });
-  pendingWrites.set(sdkSessionId, write);
+  pendingWrites.set(writeKey, write);
   void write
     .finally(() => {
-      if (pendingWrites.get(sdkSessionId) === write) {
-        pendingWrites.delete(sdkSessionId);
+      if (pendingWrites.get(writeKey) === write) {
+        pendingWrites.delete(writeKey);
       }
     })
     .catch(() => {
@@ -151,7 +160,23 @@ export async function updateSessionPreferences(
 
 /** Remove a session's preference file. Absent files are a no-op. */
 export async function deleteSessionPreferences(sdkSessionId: string): Promise<void> {
+  const writeKey = normalizedSessionId(sdkSessionId);
   const path = preferencesPath(sdkSessionId);
-  if (!path) return;
-  await rm(path, { force: true });
+  if (!writeKey || !path) return;
+  const previous = pendingWrites.get(writeKey) ?? Promise.resolve();
+  const deletion = previous
+    .catch(() => {})
+    .then(() => rm(path, { force: true }));
+  pendingWrites.set(writeKey, deletion);
+  void deletion
+    .finally(() => {
+      if (pendingWrites.get(writeKey) === deletion) {
+        pendingWrites.delete(writeKey);
+      }
+    })
+    .catch(() => {
+      // The caller observes the original rejection; this branch only settles
+      // the promise returned by `finally`.
+    });
+  return deletion;
 }

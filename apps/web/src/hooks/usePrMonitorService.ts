@@ -38,6 +38,8 @@ export function usePrMonitorService(): void {
   useEffect(() => {
     let disposed = false;
     const unlisteners: UnlistenFn[] = [];
+    let stopChanges: UnlistenFn | null = null;
+    let changeSubscriptionPending = false;
     let rehydrating = false;
     let rehydrateRequested = false;
     let bufferedEvents: PrMonitorEvent[] = [];
@@ -101,9 +103,11 @@ export function usePrMonitorService(): void {
       })();
     };
 
-    const subscribe = async () => {
+    const ensureChangeSubscription = async () => {
+      if (disposed || stopChanges || changeSubscriptionPending) return;
+      changeSubscriptionPending = true;
       try {
-        const stopChanges = await listen<unknown>(
+        const stop = await listen<unknown>(
           PR_MONITOR_CHANGED_EVENT,
           (event) => {
             // The payload crosses a process boundary; validate rather than trust.
@@ -115,12 +119,18 @@ export function usePrMonitorService(): void {
             }
           },
         );
-        if (disposed) stopChanges();
-        else unlisteners.push(stopChanges);
+        if (disposed) stop();
+        else stopChanges = stop;
       } catch {
         // A snapshot remains useful when native event subscription is
-        // temporarily unavailable.
+        // temporarily unavailable. Reconnect will retry this listener.
+      } finally {
+        changeSubscriptionPending = false;
       }
+    };
+
+    const subscribe = async () => {
+      await ensureChangeSubscription();
 
       if (disposed) return;
 
@@ -128,6 +138,7 @@ export function usePrMonitorService(): void {
         const stopReconnects = await listen(
           NATIVE_EVENT_STREAM_CONNECTED_EVENT,
           () => {
+            void ensureChangeSubscription();
             requestRehydrate();
           },
         );
@@ -145,6 +156,7 @@ export function usePrMonitorService(): void {
     return () => {
       disposed = true;
       bufferedEvents = [];
+      stopChanges?.();
       for (const unlisten of unlisteners) unlisten();
     };
   }, [applySnapshot, applyEvent]);

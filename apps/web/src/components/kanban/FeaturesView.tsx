@@ -51,6 +51,7 @@ import * as backend from "@/lib/backend";
 import {
   composeDraftKey,
   discardComposeDraft,
+  loadComposeDraft,
   persistComposeDraft,
 } from "@/lib/compose-draft-persistence";
 import { cn } from "@/lib/utils";
@@ -535,14 +536,13 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const reconciliationControllersRef = useRef<Map<string, AbortController>>(new Map());
 
   useEffect(() => {
-    void loadFeatures(projectId);
-  }, [loadFeatures, projectId]);
-
-  useEffect(() => {
     let disposed = false;
     let hydrated = false;
+    let draftReadSucceeded = false;
+    let draftsChanged = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const draftKey = composeDraftKey("feature-chat", projectId, "all");
+    const featureLoadPromise = loadFeatures(projectId);
 
     const projectDrafts = () => {
       const state = useFeaturePlanStore.getState();
@@ -559,34 +559,52 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       );
     };
 
+    const persistCurrentDrafts = () => {
+      const drafts = projectDrafts();
+      const operation = Object.keys(drafts).length === 0
+        ? discardComposeDraft(draftKey)
+        : persistComposeDraft(
+            draftKey,
+            "project",
+            projectId,
+            drafts,
+          );
+      draftsChanged = false;
+      void operation.catch((error) => {
+        console.warn("[FeaturesView] Failed to persist chat drafts:", error);
+      });
+    };
+
     const schedule = () => {
       if (!hydrated || disposed) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        const drafts = projectDrafts();
-        const operation = Object.keys(drafts).length === 0
-          ? discardComposeDraft(draftKey)
-          : persistComposeDraft(
-              draftKey,
-              "project",
-              projectId,
-              drafts,
-            );
-        void operation.catch((error) => {
-          console.warn("[FeaturesView] Failed to persist chat drafts:", error);
-        });
+        timer = undefined;
+        persistCurrentDrafts();
       }, 400);
     };
 
     const unsubscribe = useFeaturePlanStore.subscribe((state, previous) => {
+      if (state.chatDrafts !== previous.chatDrafts) {
+        draftsChanged = true;
+      }
       if (state.chatDrafts !== previous.chatDrafts || state.features !== previous.features) {
         schedule();
       }
     });
 
-    void backend.getComposeDraft<Record<string, string>>(draftKey)
-      .then((persisted) => {
-        if (disposed || !persisted || typeof persisted.value !== "object" || !persisted.value) {
+    void loadComposeDraft<Record<string, string>>(draftKey)
+      .then(async (persisted) => {
+        draftReadSucceeded = true;
+        const featureLoadSucceeded = await featureLoadPromise;
+        if (
+          disposed
+          || !featureLoadSucceeded
+          || draftsChanged
+          || !persisted
+          || typeof persisted.value !== "object"
+          || !persisted.value
+        ) {
           return;
         }
         for (const [key, value] of Object.entries(persisted.value)) {
@@ -598,17 +616,22 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       .catch((error) => {
         console.warn("[FeaturesView] Failed to restore chat drafts:", error);
       })
-      .finally(() => {
-        hydrated = true;
-        schedule();
+      .finally(async () => {
+        const featureLoadSucceeded = await featureLoadPromise;
+        if (disposed || !featureLoadSucceeded) return;
+        if (draftReadSucceeded || draftsChanged) {
+          hydrated = true;
+          schedule();
+        }
       });
 
     return () => {
       disposed = true;
       if (timer) clearTimeout(timer);
       unsubscribe();
+      if (draftsChanged) persistCurrentDrafts();
     };
-  }, [projectId]);
+  }, [loadFeatures, projectId]);
 
   const projectFeatures = useMemo(
     () => features

@@ -182,15 +182,29 @@ session.get("/:id", async (c) => {
 session.put("/:id/preferences", async (c) => {
   const id = c.req.param("id");
   try {
-    const body = await c.req.json();
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Request body must be valid JSON" }, 400);
+    }
     if (
-      Object.hasOwn(body, "planMode")
-      && typeof body.planMode !== "boolean"
+      body === null
+      || typeof body !== "object"
+      || Array.isArray(body)
+      || Object.getPrototypeOf(body) !== Object.prototype
+    ) {
+      return c.json({ error: "Request body must be a JSON object" }, 400);
+    }
+    const record = body as Record<string, unknown>;
+    if (
+      Object.hasOwn(record, "planMode")
+      && typeof record.planMode !== "boolean"
     ) {
       return c.json({ error: "planMode must be a boolean" }, 400);
     }
-    const updated = setSessionPreferences(id, {
-      ...(typeof body.planMode === "boolean" ? { planMode: body.planMode } : {}),
+    const updated = await setSessionPreferences(id, {
+      ...(typeof record.planMode === "boolean" ? { planMode: record.planMode } : {}),
     });
     return c.json({ planMode: updated.planMode ?? false });
   } catch (error) {
@@ -370,14 +384,38 @@ session.post("/:id/prompt", async (c) => {
         return c.json({ status: "already-processed", requestId, duplicate: true });
       }
     }
-    if (sessionData.status === "running") {
-      return c.json({ error: "Session is already processing a prompt" }, 409);
-    }
-    if (sessionData.rewindInProgress === true) {
-      return c.json({ error: "Session is restoring files from a checkpoint" }, 409);
-    }
     if (requestId && outputSchema === undefined) {
-      const dispatchState = await claimPromptDispatch(id, requestId);
+      const dispatchState = await claimPromptDispatch(id, requestId, () => {
+        let resolveStarted: (() => void) | undefined;
+        let rejectStarted: ((error: unknown) => void) | undefined;
+        const started = new Promise<void>((resolve, reject) => {
+          resolveStarted = resolve;
+          rejectStarted = reject;
+        });
+        const completion = sendPrompt(
+          id,
+          prompt,
+          {
+            model,
+            attachments,
+            effort,
+            permissionMode,
+            fastMode,
+            agent,
+            includeLocalSettings,
+            promptSuggestions,
+            requestId,
+          },
+          {
+            onQueryStarted: () => resolveStarted?.(),
+          },
+        );
+        void completion.catch((error) => {
+          rejectStarted?.(error);
+          console.error("[session] Error processing prompt:", error);
+        });
+        return { started, completion };
+      });
       if (dispatchState === "not-found") {
         return c.json({ error: "Session not found" }, 404);
       }
@@ -388,6 +426,14 @@ session.post("/:id/prompt", async (c) => {
           duplicate: true,
         });
       }
+      console.debug("[session] Prompt accepted", { sessionId: id });
+      return c.json({ status: "processing", requestId }, 202);
+    }
+    if (sessionData.status === "running") {
+      return c.json({ error: "Session is already processing a prompt" }, 409);
+    }
+    if (sessionData.rewindInProgress === true) {
+      return c.json({ error: "Session is restoring files from a checkpoint" }, 409);
     }
 
     console.debug("[session] Prompt received", {
@@ -423,8 +469,8 @@ session.post("/:id/prompt", async (c) => {
   } catch (error) {
     console.error("[session] Error sending prompt:", error);
     return c.json(
-      { error: error instanceof Error ? error.message : "Failed to send prompt" },
-      500
+      { error: errorMessage(error, "Failed to send prompt") },
+      sessionErrorStatus(error),
     );
   }
 });

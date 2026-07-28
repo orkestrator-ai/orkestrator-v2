@@ -56,7 +56,7 @@ interface FeaturePlanState {
    */
   activeConversations: Map<string, ActiveFeatureConversation>;
 
-  loadFeatures: (projectId: string) => Promise<void>;
+  loadFeatures: (projectId: string) => Promise<boolean>;
   createFeature: (projectId: string) => Promise<string | undefined>;
   updateFeature: (
     featureId: string,
@@ -132,12 +132,15 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       const features = await getFeaturePlans(projectId);
       if (get().currentProjectId === projectId) {
         set({ features, isLoading: false });
+        return true;
       }
+      return false;
     } catch (error) {
       console.error("[FeaturePlanStore] Failed to load features:", error);
       if (get().currentProjectId === projectId) {
         set({ isLoading: false });
       }
+      return false;
     }
   },
 

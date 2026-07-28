@@ -17,10 +17,28 @@ function enqueue(draftKey: string, operation: () => Promise<unknown>): Promise<v
     .then(operation)
     .then(() => undefined);
   writeChains.set(draftKey, next);
-  void next.finally(() => {
-    if (writeChains.get(draftKey) === next) writeChains.delete(draftKey);
-  });
+  void next.then(
+    () => {
+      if (writeChains.get(draftKey) === next) writeChains.delete(draftKey);
+    },
+    () => {
+      if (writeChains.get(draftKey) === next) writeChains.delete(draftKey);
+    },
+  );
   return next;
+}
+
+/**
+ * Read a draft after every save/delete already queued for the same key.
+ *
+ * This matters when a tab is closed and immediately reopened: the new mount
+ * must not hydrate the value that the close path has already queued to delete.
+ */
+export async function loadComposeDraft<T>(
+  draftKey: string,
+): Promise<Awaited<ReturnType<typeof backend.getComposeDraft<T>>>> {
+  await (writeChains.get(draftKey) ?? Promise.resolve()).catch(() => undefined);
+  return backend.getComposeDraft<T>(draftKey);
 }
 
 export function persistComposeDraft<T>(

@@ -2528,7 +2528,10 @@ describe("CodexChatTab", () => {
         MOCK_CLIENT,
         SESSION_ID,
         initialPrompt,
-        expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
+        expect.objectContaining({
+          attachments: undefined,
+          requestId: `initial-prompt:${ENVIRONMENT_ID}:${TAB_ID}`,
+        }),
       );
     });
 
@@ -2536,6 +2539,113 @@ describe("CodexChatTab", () => {
       const pane = usePaneLayoutStore.getState().findPaneWithTab(TAB_ID, ENVIRONMENT_ID);
       const tab = pane?.tabs.find((candidate) => candidate.id === TAB_ID);
       expect(tab?.initialPrompt).toBeUndefined();
+    });
+  });
+
+  test("keeps the durable initial prompt until dispatch is accepted and retries it with the same id after remount", async () => {
+    const initialPrompt = "Recover this launch after a renderer crash";
+    seedPaneLayout(initialPrompt);
+    let resolveFirstDispatch: ((value: { status: "processing" }) => void) | undefined;
+    mockSendPrompt
+      .mockImplementationOnce(
+        async () => new Promise<{ status: "processing" }>((resolve) => {
+          resolveFirstDispatch = resolve;
+        }),
+      )
+      .mockResolvedValueOnce({ status: "processing" });
+
+    const first = render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+      />,
+    );
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+    let pane = usePaneLayoutStore.getState().findPaneWithTab(TAB_ID, ENVIRONMENT_ID);
+    expect(pane?.tabs.find((tab) => tab.id === TAB_ID)?.initialPrompt).toBe(initialPrompt);
+
+    first.unmount();
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+      />,
+    );
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+    const firstRequestId = (mockSendPrompt.mock.calls[0]?.[3] as { requestId?: string }).requestId;
+    const secondRequestId = (mockSendPrompt.mock.calls[1]?.[3] as { requestId?: string }).requestId;
+    expect(firstRequestId).toBe(`initial-prompt:${ENVIRONMENT_ID}:${TAB_ID}`);
+    expect(secondRequestId).toBe(firstRequestId);
+
+    await waitFor(() => {
+      pane = usePaneLayoutStore.getState().findPaneWithTab(TAB_ID, ENVIRONMENT_ID);
+      expect(pane?.tabs.find((tab) => tab.id === TAB_ID)?.initialPrompt).toBeUndefined();
+    });
+
+    resolveFirstDispatch?.({ status: "processing" });
+  });
+
+  test("retains a rejected initial prompt and caps its automatic retry", async () => {
+    const initialPrompt = "Do not lose this rejected launch";
+    seedPaneLayout(initialPrompt);
+    mockSendPrompt.mockResolvedValue({ outcome: "rejected", httpStatus: 503 });
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+      />,
+    );
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2), {
+      timeout: 2_000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    expect(mockSendPrompt).toHaveBeenCalledTimes(2);
+    const pane = usePaneLayoutStore.getState().findPaneWithTab(TAB_ID, ENVIRONMENT_ID);
+    expect(pane?.tabs.find((tab) => tab.id === TAB_ID)?.initialPrompt).toBe(initialPrompt);
+  });
+
+  test("clears a matching unconfirmed dispatch after the durable initial prompt is accepted", async () => {
+    const initialPrompt = "Reconcile this launch";
+    const requestId = `initial-prompt:${ENVIRONMENT_ID}:${TAB_ID}`;
+    seedPaneLayout(initialPrompt);
+    useCodexStore.setState((state) => ({
+      ...state,
+      unconfirmedDispatches: new Map([
+        [SESSION_KEY, {
+          userMessageId: "optimistic-before-remount",
+          fingerprint: "initial-prompt",
+          requestId,
+        }],
+      ]),
+    }));
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        SESSION_ID,
+        initialPrompt,
+        expect.objectContaining({ requestId }),
+      );
+      expect(useCodexStore.getState().unconfirmedDispatches.has(SESSION_KEY)).toBe(false);
     });
   });
 

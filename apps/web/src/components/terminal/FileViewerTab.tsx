@@ -8,7 +8,7 @@ import { useFileSave } from "@/hooks/useFileSave";
 import { MarkdownEditorTab } from "@/components/markdown/MarkdownEditorTab";
 import {
   discardFileDraft,
-  fileDraftKey,
+  loadFileDraft,
   persistFileDraft,
 } from "@/lib/file-draft-persistence";
 import { DiffViewerTab } from "./DiffViewerTab";
@@ -210,15 +210,23 @@ export function FileViewerTab({
           if (!cancelled) {
             setContent(fileContent.content);
             setDetectedLanguage(fileContent.language || language || "plaintext");
-            const persistedDraft = environmentId
-              ? await backend.getFileDraft(fileDraftKey(environmentId, filePath))
-                  .catch((draftError) => {
-                    console.warn("[FileViewerTab] Failed to restore file draft:", draftError);
-                    return null;
-                  })
-              : null;
+            const liveEntry = useFileDirtyStore.getState().dirtyFiles.get(tabId);
+            let draftReadSucceeded = !environmentId || Boolean(liveEntry);
+            let persistedDraft: Awaited<ReturnType<typeof loadFileDraft>> = null;
+            if (environmentId && !liveEntry) {
+              try {
+                persistedDraft = await loadFileDraft(environmentId, filePath);
+                draftReadSucceeded = true;
+              } catch (draftError) {
+                console.warn("[FileViewerTab] Failed to restore file draft:", draftError);
+              }
+            }
             if (cancelled) return;
-            if (
+            if (liveEntry) {
+              // Visibility changes may unmount the editor before its debounce
+              // fires. Its in-memory buffer is newer than any backend snapshot.
+              setOriginalContent(tabId, fileContent.content);
+            } else if (
               persistedDraft
               && persistedDraft.environmentId === environmentId
               && persistedDraft.filePath === filePath
@@ -231,7 +239,7 @@ export function FileViewerTab({
             } else {
               setOriginalContent(tabId, fileContent.content);
             }
-            setDraftHydrated(true);
+            setDraftHydrated(draftReadSucceeded);
           }
         }
       } catch (err) {
@@ -256,9 +264,11 @@ export function FileViewerTab({
   // save/delete operations per file, preventing an older in-flight save from
   // resurrecting a draft after the user saves or discards it.
   useEffect(() => {
-    if (!environmentId || isImage || !draftHydrated || !dirtyEntry) return;
+    if (!environmentId || isImage || !dirtyEntry) return;
+    const hasLocalEdit = dirtyEntry.content !== dirtyEntry.originalContent;
+    if (!draftHydrated && !hasLocalEdit) return;
     const timer = setTimeout(() => {
-      const operation = dirtyEntry.content !== dirtyEntry.originalContent
+      const operation = hasLocalEdit
         ? persistFileDraft(
             environmentId,
             filePath,

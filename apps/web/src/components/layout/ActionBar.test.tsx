@@ -1871,6 +1871,35 @@ describe("ActionBar workflow tabs", () => {
 });
 
 describe("ActionBar pull request actions", () => {
+  test("rehydrates an in-progress merge from the environment lifecycle marker", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      lifecycleOperation: "merging",
+    };
+    render(<ActionBar />);
+
+    const mergeButton = screen.getByRole("button", { name: "Merging..." });
+    expect((mergeButton as HTMLButtonElement).disabled).toBe(true);
+    expect(mergeButton.querySelector(".animate-spin")).toBeTruthy();
+  });
+
+  test("rehydrates an in-progress deletion from the environment lifecycle marker", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "merged",
+      lifecycleOperation: "deleting",
+      deletionRequestedAt: "2026-01-02T00:00:00.000Z",
+    };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
+
+    const deleteButton = screen.getByRole("button", { name: "Deleting..." });
+    expect((deleteButton as HTMLButtonElement).disabled).toBe(true);
+    expect(deleteButton.querySelector(".animate-spin")).toBeTruthy();
+  });
+
   test("opens an active pull request in the browser", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     render(<ActionBar />);

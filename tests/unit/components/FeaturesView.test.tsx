@@ -59,7 +59,7 @@ const updateFeatureMock = mock(async (
   _id: string,
   _updates: Partial<FeaturePlan>,
 ) => undefined as FeaturePlan | undefined);
-const loadFeaturesMock = mock(async () => undefined);
+const loadFeaturesMock = mock(async () => true);
 const createEnvironmentMock = mock(async () => makeEnvironment());
 const startEnvironmentMock = mock(async () => undefined);
 const createClientMock = mock((baseUrl: string, authToken?: string): CodexClient => ({
@@ -95,6 +95,23 @@ const startCodexServerMock = mock(async () => ({
   hostPort: 4200,
   authToken: "container-token",
 }));
+const getComposeDraftMock = mock(async (_draftKey: string) => null as Awaited<
+  ReturnType<typeof realBackend.getComposeDraft>
+>);
+const saveComposeDraftMock = mock(async (
+  draftKey: string,
+  ownerType: "environment" | "project",
+  ownerId: string,
+  value: unknown,
+) => ({
+  draftKey,
+  ownerType,
+  ownerId,
+  value,
+  revision: 1,
+  updatedAt: NOW,
+}));
+const deleteComposeDraftMock = mock(async (_draftKey: string) => undefined);
 const scrollToBottomMock = mock(() => undefined);
 const useVirtuosoScrollStateMock = mock((_options: unknown) => ({
   isAtBottom: true,
@@ -183,6 +200,9 @@ mock.module("@/lib/backend", () => ({
   startLocalCodexServer: startLocalCodexServerMock,
   getCodexServerStatus: getCodexServerStatusMock,
   startCodexServer: startCodexServerMock,
+  getComposeDraft: getComposeDraftMock,
+  saveComposeDraft: saveComposeDraftMock,
+  deleteComposeDraft: deleteComposeDraftMock,
 }));
 
 const { FeaturesView, NativeStyleChatPanel } = await import("@/components/kanban/FeaturesView");
@@ -586,6 +606,19 @@ beforeEach(() => {
     hostPort: 4200,
     authToken: "container-token",
   }));
+  getComposeDraftMock.mockReset();
+  getComposeDraftMock.mockResolvedValue(null);
+  saveComposeDraftMock.mockReset();
+  saveComposeDraftMock.mockImplementation(async (draftKey, ownerType, ownerId, value) => ({
+    draftKey,
+    ownerType,
+    ownerId,
+    value,
+    revision: 1,
+    updatedAt: NOW,
+  }));
+  deleteComposeDraftMock.mockReset();
+  deleteComposeDraftMock.mockResolvedValue(undefined);
   scrollToBottomMock.mockClear();
   useVirtuosoScrollStateMock.mockClear();
   useVirtuosoScrollStateMock.mockImplementation(() => ({
@@ -619,6 +652,84 @@ beforeEach(() => {
 });
 
 describe("FeaturesView message drafts", () => {
+  test("does not delete backend drafts when the feature snapshot fails to load", async () => {
+    loadFeaturesMock.mockResolvedValueOnce(false);
+    getComposeDraftMock.mockResolvedValueOnce({
+      draftKey: "feature-chat:project-1:all",
+      ownerType: "project",
+      ownerId: "project-1",
+      value: { "feature:feature-1": "Keep after feature load failure" },
+      revision: 2,
+      updatedAt: NOW,
+    });
+    seedStores([]);
+
+    render(<FeaturesView projectId="project-1" />);
+
+    await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(deleteComposeDraftMock).not.toHaveBeenCalled();
+    expect(saveComposeDraftMock).not.toHaveBeenCalled();
+  });
+
+  test("waits for feature loading before restoring and persisting backend drafts", async () => {
+    const featureLoad = deferred<boolean>();
+    loadFeaturesMock.mockImplementationOnce(() => featureLoad.promise);
+    getComposeDraftMock.mockResolvedValueOnce({
+      draftKey: "feature-chat:project-1:all",
+      ownerType: "project",
+      ownerId: "project-1",
+      value: { "feature:feature-1": "Wait for features" },
+      revision: 2,
+      updatedAt: NOW,
+    });
+    seedStores(chatFeature());
+
+    render(<FeaturesView projectId="project-1" />);
+    await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(deleteComposeDraftMock).not.toHaveBeenCalled();
+
+    featureLoad.resolve(true);
+    await waitFor(() => expect((screen.getByPlaceholderText(
+      "Describe the feature or answer Codex...",
+    ) as HTMLTextAreaElement).value).toBe("Wait for features"));
+  });
+
+  test("restores feature chat drafts from backend persistence", async () => {
+    getComposeDraftMock.mockResolvedValueOnce({
+      draftKey: "feature-chat:project-1:all",
+      ownerType: "project",
+      ownerId: "project-1",
+      value: { "feature:feature-1": "Recovered backend draft" },
+      revision: 2,
+      updatedAt: NOW,
+    });
+    seedStores(chatFeature());
+
+    render(<FeaturesView projectId="project-1" />);
+
+    await waitFor(() => expect((screen.getByPlaceholderText(
+      "Describe the feature or answer Codex...",
+    ) as HTMLTextAreaElement).value).toBe("Recovered backend draft"));
+  });
+
+  test("flushes a changed feature chat draft when the view unmounts before debounce", async () => {
+    seedStores(chatFeature());
+    const view = render(<FeaturesView projectId="project-1" />);
+    const composer = screen.getByPlaceholderText("Describe the feature or answer Codex...");
+
+    fireEvent.change(composer, { target: { value: "Persist before unmount" } });
+    view.unmount();
+
+    await waitFor(() => expect(saveComposeDraftMock).toHaveBeenCalledWith(
+      "feature-chat:project-1:all",
+      "project",
+      "project-1",
+      { "feature:feature-1": "Persist before unmount" },
+    ));
+  });
+
   test("restores an unfinished feature message after remounting", () => {
     seedStores(chatFeature());
     const view = render(<FeaturesView projectId="project-1" />);

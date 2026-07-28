@@ -933,6 +933,7 @@ export class StorageService {
   private promptQueueMutation: Promise<unknown> = Promise.resolve();
   private composeDraftMutation: Promise<unknown> = Promise.resolve();
   private fileDraftMutation: Promise<unknown> = Promise.resolve();
+  private kanbanMutation: Promise<unknown> = Promise.resolve();
   private agentHandoffMutation: Promise<unknown> = Promise.resolve();
   private changeListener: ResourceChangeListener | null = null;
   private changeRevision = 0;
@@ -1091,7 +1092,7 @@ export class StorageService {
         await fs.chmod(filePath, mode);
       }
       if (makeBackup && await exists(filePath)) {
-        await this.rotateBackups(filePath);
+        await this.rotateBackups(filePath, mode);
       }
       await fs.rename(tempPath, filePath);
       if (mode !== undefined) {
@@ -1290,17 +1291,21 @@ export class StorageService {
     return path.join(path.dirname(filePath), `${path.basename(filePath)}.bak.${index}`);
   }
 
-  private async rotateBackups(filePath: string): Promise<void> {
+  private async rotateBackups(filePath: string, mode?: number): Promise<void> {
     for (let index = MAX_JSON_BACKUPS - 1; index >= 1; index -= 1) {
       const current = this.backupPath(filePath, index);
       const next = this.backupPath(filePath, index + 1);
       if (await exists(next)) await fs.rm(next, { force: true });
-      if (await exists(current)) await fs.rename(current, next);
+      if (await exists(current)) {
+        if (mode !== undefined) await fs.chmod(current, mode);
+        await fs.rename(current, next);
+      }
     }
 
     const first = this.backupPath(filePath, 1);
     if (await exists(first)) await fs.rm(first, { force: true });
     await fs.copyFile(filePath, first);
+    if (mode !== undefined) await fs.chmod(first, mode);
   }
 
   private async loadJson<T>(filePath: string, fallback: () => T): Promise<T> {
@@ -1439,6 +1444,52 @@ export class StorageService {
     return environments.sort((a, b) => a.order - b.order);
   }
 
+  private async saveEnvironments(environments: Environment[]): Promise<void> {
+    // Launch attachments can contain full base64 image payloads. Treat the
+    // complete environment store and every rotated backup as sensitive.
+    await this.saveSensitiveJson(this.environmentsFile(), environments);
+  }
+
+  /**
+   * Removes superseded launch attachments (or a deleted environment record)
+   * from every retained environment backup. This runs while the environment
+   * mutation lock is held, after the authoritative primary write commits.
+   */
+  private async scrubEnvironmentBackups(
+    environmentId: string,
+    removeEnvironment: boolean,
+  ): Promise<void> {
+    for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
+      const backup = this.backupPath(this.environmentsFile(), index);
+      if (!await exists(backup)) continue;
+      try {
+        const parsed = JSON.parse(await fs.readFile(backup, "utf8")) as unknown;
+        if (!Array.isArray(parsed)) throw new Error("Backup is not an array");
+        const sanitized = removeEnvironment
+          ? parsed.filter((candidate) =>
+              !isRecord(candidate) || candidate.id !== environmentId
+            )
+          : parsed.map((candidate) => {
+              if (!isRecord(candidate) || candidate.id !== environmentId) {
+                return candidate;
+              }
+              const copy = { ...candidate };
+              delete copy.initialPromptAttachments;
+              return copy;
+            });
+        await this.writeAtomic(
+          backup,
+          `${JSON.stringify(sanitized, null, 2)}\n`,
+          false,
+          0o600,
+        );
+      } catch {
+        // A corrupt backup cannot be proven free of the removed payload.
+        await fs.rm(backup, { force: true });
+      }
+    }
+  }
+
   async getEnvironmentsByProject(projectId: string): Promise<Environment[]> {
     return (await this.loadEnvironments()).filter((environment) => environment.projectId === projectId);
   }
@@ -1453,7 +1504,7 @@ export class StorageService {
       environment.order =
         Math.max(-1, ...environments.filter((item) => item.projectId === environment.projectId).map((item) => item.order)) + 1;
       environments.push(environment);
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
       this.announce("environment", environment.id);
       return environment;
     });
@@ -1464,7 +1515,8 @@ export class StorageService {
       const environments = await this.loadEnvironments();
       const filtered = environments.filter((environment) => environment.id !== environmentId);
       if (filtered.length === environments.length) throw new Error(`Environment not found: ${environmentId}`);
-      await this.saveJson(this.environmentsFile(), filtered);
+      await this.saveEnvironments(filtered);
+      await this.scrubEnvironmentBackups(environmentId, true);
       this.announce("environment", environmentId);
     });
   }
@@ -1622,7 +1674,10 @@ export class StorageService {
         else if (isOneOf(updates.codexMode, ["terminal", "native"])) environment.codexMode = updates.codexMode;
       }
 
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
+      if ("initialPromptAttachments" in updates) {
+        await this.scrubEnvironmentBackups(environmentId, false);
+      }
       this.announce("environment", environmentId);
       return environment;
     });
@@ -1648,7 +1703,7 @@ export class StorageService {
       }
 
       environment.lastActivityAt = normalizedActivityAt;
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
       this.announce("environment", environmentId);
       return environment;
     });
@@ -1769,7 +1824,7 @@ export class StorageService {
           ? aggregateTime
           : Number.NEGATIVE_INFINITY,
       )).toISOString();
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
       this.announce("environment", environmentId);
       return environment;
     });
@@ -1808,7 +1863,7 @@ export class StorageService {
         changed.push(environment.id);
       }
       if (changed.length === 0) return changed;
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
       for (const environmentId of changed) {
         this.announce("environment", environmentId);
       }
@@ -1848,7 +1903,7 @@ export class StorageService {
         changed.push(environment.id);
       }
       if (changed.length === 0) return changed;
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
       for (const environmentId of changed) {
         this.announce("environment", environmentId);
       }
@@ -1880,7 +1935,7 @@ export class StorageService {
 
       environment.lastActivityAt = normalizedActivityAt;
       environment.hasUnreadWork = true;
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
       this.announce("environment", environmentId);
       return environment;
     });
@@ -1913,7 +1968,7 @@ export class StorageService {
       if (environment.hasUnreadWork === unread) return environment;
 
       environment.hasUnreadWork = unread;
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
       this.announce("environment", environmentId);
       return environment;
     });
@@ -1933,7 +1988,7 @@ export class StorageService {
         if (environment.projectId === projectId && !provided.has(environment.id)) environment.order = order++;
       }
 
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
       const reordered = environments
         .filter((environment) => environment.projectId === projectId)
         .sort((a, b) => a.order - b.order);
@@ -2569,16 +2624,20 @@ export class StorageService {
     return next;
   }
 
-  private async loadComposeDrafts(): Promise<Record<string, PersistedComposeDraft>> {
-    const stored = await this.loadJson<Record<string, PersistedComposeDraft>>(
-      this.composeDraftsFile(),
-      () => ({}),
-    );
+  private validComposeDrafts(
+    stored: unknown,
+  ): Record<string, PersistedComposeDraft> {
+    if (!isRecord(stored)) return {};
     return Object.fromEntries(
       Object.entries(stored).filter(([storedKey, draft]) =>
         isPersistedComposeDraft(draft, storedKey)
       ),
     ) as Record<string, PersistedComposeDraft>;
+  }
+
+  private async loadComposeDrafts(): Promise<Record<string, PersistedComposeDraft>> {
+    const stored = await this.loadJson<unknown>(this.composeDraftsFile(), () => ({}));
+    return this.validComposeDrafts(stored);
   }
 
   async getComposeDraft(draftKey: string): Promise<PersistedComposeDraft | null> {
@@ -2668,12 +2727,25 @@ export class StorageService {
   async deleteComposeDraft(draftKey: string): Promise<void> {
     if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
     await this.enqueueComposeDraftMutation(async () => {
-      const drafts = await this.loadComposeDrafts();
+      const stored = await this.loadJson<unknown>(this.composeDraftsFile(), () => ({}));
+      const drafts = this.validComposeDrafts(stored);
       const previous = drafts[draftKey];
-      if (!previous) return;
-      delete drafts[draftKey];
-      await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
-      this.announce("compose-draft", previous.ownerId);
+      const hasStoredKey = isRecord(stored) && Object.hasOwn(stored, draftKey);
+      if (hasStoredKey) {
+        delete drafts[draftKey];
+        await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
+      }
+      if (previous) {
+        this.announce("compose-draft", previous.ownerId);
+      }
+      // Always scrub backups, including when the primary no longer contains
+      // the key. A prior interrupted delete may have committed the primary
+      // write without sanitizing the retained copies.
+      await this.scrubSensitiveJsonBackups(
+        this.composeDraftsFile(),
+        (storedKey, draft) =>
+          storedKey !== draftKey && isPersistedComposeDraft(draft, storedKey),
+      );
     });
   }
 
@@ -2745,16 +2817,18 @@ export class StorageService {
     return next;
   }
 
-  private async loadFileDrafts(): Promise<Record<string, PersistedFileDraft>> {
-    const stored = await this.loadJson<Record<string, PersistedFileDraft>>(
-      this.fileDraftsFile(),
-      () => ({}),
-    );
+  private validFileDrafts(stored: unknown): Record<string, PersistedFileDraft> {
+    if (!isRecord(stored)) return {};
     return Object.fromEntries(
       Object.entries(stored).filter(([storedKey, draft]) =>
         isPersistedFileDraft(draft, storedKey)
       ),
     ) as Record<string, PersistedFileDraft>;
+  }
+
+  private async loadFileDrafts(): Promise<Record<string, PersistedFileDraft>> {
+    const stored = await this.loadJson<unknown>(this.fileDraftsFile(), () => ({}));
+    return this.validFileDrafts(stored);
   }
 
   async getFileDraft(draftKey: string): Promise<PersistedFileDraft | null> {
@@ -2809,12 +2883,22 @@ export class StorageService {
   async deleteFileDraft(draftKey: string): Promise<void> {
     if (!isNonBlankString(draftKey)) throw new Error("File draft key must not be blank");
     await this.enqueueFileDraftMutation(async () => {
-      const drafts = await this.loadFileDrafts();
+      const stored = await this.loadJson<unknown>(this.fileDraftsFile(), () => ({}));
+      const drafts = this.validFileDrafts(stored);
       const previous = drafts[draftKey];
-      if (!previous) return;
-      delete drafts[draftKey];
-      await this.saveSensitiveJson(this.fileDraftsFile(), drafts);
-      this.announce("file-draft", previous.environmentId);
+      const hasStoredKey = isRecord(stored) && Object.hasOwn(stored, draftKey);
+      if (hasStoredKey) {
+        delete drafts[draftKey];
+        await this.saveSensitiveJson(this.fileDraftsFile(), drafts);
+      }
+      if (previous) {
+        this.announce("file-draft", previous.environmentId);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.fileDraftsFile(),
+        (storedKey, draft) =>
+          storedKey !== draftKey && isPersistedFileDraft(draft, storedKey),
+      );
     });
   }
 
@@ -3379,96 +3463,156 @@ export class StorageService {
     return tasks.filter((task) => task.projectId === projectId);
   }
 
-  async addKanbanTask(projectId: string, title: string, description: string): Promise<KanbanTask> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task: KanbanTask = {
-      id: randomUUID(),
-      projectId,
-      title,
-      description,
-      acceptanceCriteria: "",
-      status: "backlog",
-      comments: [],
-      images: [],
-      createdAt: nowIso(),
-      order: Math.max(-1, ...tasks.filter((candidate) => candidate.projectId === projectId && candidate.status === "backlog").map((candidate) => candidate.order)) + 1,
-      prMergeCommented: false,
+  /**
+   * Serializes the complete Kanban read-modify-write transaction both within
+   * this service instance and across backend processes sharing the data
+   * directory. Background PR reconciliation and foreground edits otherwise
+   * risk saving independent stale snapshots over each other.
+   */
+  private enqueueKanbanMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.kanbanFile(),
+        "Kanban storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
     };
-    tasks.push(task);
-    await this.saveJson(this.kanbanFile(), tasks);
-    this.announce("kanban", projectId);
-    return task;
+    const next = this.kanbanMutation.then(run, run);
+    this.kanbanMutation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async removeKanbanImageFilesBestEffort(imageIds: string[]): Promise<void> {
+    await Promise.all(imageIds.map(async (imageId) => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await fs.rm(this.kanbanImageFile(imageId), { force: true });
+          return;
+        } catch {
+          if (attempt === 1) {
+            // The authoritative metadata no longer references this image.
+            // Keep the committed mutation successful; after the bounded
+            // retries the remaining orphan is safe to remove later.
+            console.warn("[Storage] Failed to clean up an orphaned Kanban image");
+          }
+        }
+      }
+    }));
+  }
+
+  async addKanbanTask(projectId: string, title: string, description: string): Promise<KanbanTask> {
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task: KanbanTask = {
+        id: randomUUID(),
+        projectId,
+        title,
+        description,
+        acceptanceCriteria: "",
+        status: "backlog",
+        comments: [],
+        images: [],
+        createdAt: nowIso(),
+        order: Math.max(-1, ...tasks.filter((candidate) => candidate.projectId === projectId && candidate.status === "backlog").map((candidate) => candidate.order)) + 1,
+        prMergeCommented: false,
+      };
+      tasks.push(task);
+      await this.saveJson(this.kanbanFile(), tasks);
+      this.announce("kanban", projectId);
+      return task;
+    });
   }
 
   async updateKanbanTask(taskId: string, updates: Partial<KanbanTask>): Promise<KanbanTask> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
 
-    const oldStatus = task.status;
-    Object.assign(task, updates);
-    if (updates.status && updates.status !== oldStatus) {
-      task.order = Math.max(-1, ...tasks.filter((candidate) => candidate.projectId === task.projectId && candidate.status === updates.status && candidate.id !== taskId).map((candidate) => candidate.order)) + 1;
-    }
-    await this.saveJson(this.kanbanFile(), tasks);
-    this.announce("kanban", task.projectId);
-    return task;
+      const oldStatus = task.status;
+      Object.assign(task, updates);
+      if (updates.status && updates.status !== oldStatus) {
+        task.order = Math.max(-1, ...tasks.filter((candidate) => candidate.projectId === task.projectId && candidate.status === updates.status && candidate.id !== taskId).map((candidate) => candidate.order)) + 1;
+      }
+      await this.saveJson(this.kanbanFile(), tasks);
+      this.announce("kanban", task.projectId);
+      return task;
+    });
   }
 
   async deleteKanbanTask(taskId: string): Promise<void> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error(`Kanban task not found: ${taskId}`);
-    await Promise.all(task.images.map((image) => fs.rm(this.kanbanImageFile(image.id), { force: true })));
-    await this.saveJson(this.kanbanFile(), tasks.filter((candidate) => candidate.id !== taskId));
-    this.announce("kanban", task.projectId);
+    await this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+      await this.saveJson(this.kanbanFile(), tasks.filter((candidate) => candidate.id !== taskId));
+      this.announce("kanban", task.projectId);
+      await this.removeKanbanImageFilesBestEffort(task.images.map((image) => image.id));
+    });
   }
 
   async addKanbanComment(taskId: string, text: string): Promise<KanbanTask> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error(`Kanban task not found: ${taskId}`);
-    task.comments.push({ id: randomUUID(), text, createdAt: nowIso() });
-    await this.saveJson(this.kanbanFile(), tasks);
-    this.announce("kanban", task.projectId);
-    return task;
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+      task.comments.push({ id: randomUUID(), text, createdAt: nowIso() });
+      await this.saveJson(this.kanbanFile(), tasks);
+      this.announce("kanban", task.projectId);
+      return task;
+    });
   }
 
   async deleteKanbanComment(taskId: string, commentId: string): Promise<KanbanTask> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error(`Kanban task not found: ${taskId}`);
-    task.comments = task.comments.filter((comment) => comment.id !== commentId);
-    await this.saveJson(this.kanbanFile(), tasks);
-    this.announce("kanban", task.projectId);
-    return task;
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+      task.comments = task.comments.filter((comment) => comment.id !== commentId);
+      await this.saveJson(this.kanbanFile(), tasks);
+      this.announce("kanban", task.projectId);
+      return task;
+    });
   }
 
   async addKanbanImage(taskId: string, filename: string, data: string): Promise<KanbanTask> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
 
-    const rawBytes = Buffer.from(data, "base64");
-    const webpBytes = await resizeKanbanImage(rawBytes);
-    await fs.mkdir(this.kanbanImagesDir(), { recursive: true });
-    const image: KanbanImage = { id: randomUUID(), filename, createdAt: nowIso() };
-    await fs.writeFile(this.kanbanImageFile(image.id), webpBytes);
-    task.images.push(image);
-    await this.saveJson(this.kanbanFile(), tasks);
-    this.announce("kanban", task.projectId);
-    return task;
+      const rawBytes = Buffer.from(data, "base64");
+      const webpBytes = await resizeKanbanImage(rawBytes);
+      await fs.mkdir(this.kanbanImagesDir(), { recursive: true });
+      const image: KanbanImage = { id: randomUUID(), filename, createdAt: nowIso() };
+      await fs.writeFile(this.kanbanImageFile(image.id), webpBytes);
+      task.images.push(image);
+      try {
+        await this.saveJson(this.kanbanFile(), tasks);
+      } catch (error) {
+        await fs.rm(this.kanbanImageFile(image.id), { force: true });
+        throw error;
+      }
+      this.announce("kanban", task.projectId);
+      return task;
+    });
   }
 
   async deleteKanbanImage(taskId: string, imageId: string): Promise<KanbanTask> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error(`Kanban task not found: ${taskId}`);
-    task.images = task.images.filter((image) => image.id !== imageId);
-    await fs.rm(this.kanbanImageFile(imageId), { force: true });
-    await this.saveJson(this.kanbanFile(), tasks);
-    this.announce("kanban", task.projectId);
-    return task;
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+      task.images = task.images.filter((image) => image.id !== imageId);
+      await this.saveJson(this.kanbanFile(), tasks);
+      this.announce("kanban", task.projectId);
+      await this.removeKanbanImageFilesBestEffort([imageId]);
+      return task;
+    });
   }
 
   async getKanbanImageData(imageId: string): Promise<string> {
@@ -3707,7 +3851,7 @@ export class StorageService {
           changed = true;
         }
       }
-      if (changed) await this.saveJson(this.environmentsFile(), environments);
+      if (changed) await this.saveEnvironments(environments);
     });
   }
 }

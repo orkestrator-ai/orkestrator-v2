@@ -226,6 +226,36 @@ describe("usePrMonitorService", () => {
     expect(mockGetPrMonitorState).toHaveBeenCalledTimes(2);
   });
 
+  test("retries a failed change listener on event-stream reconnect", async () => {
+    let changeAttempts = 0;
+    mockListen.mockImplementation((event, handler) => {
+      if (event === PR_MONITOR_CHANGED_EVENT && changeAttempts++ === 0) {
+        return Promise.reject(new Error("listener temporarily unavailable"));
+      }
+      return defaultListen(event, handler);
+    });
+
+    renderHook(() => usePrMonitorService());
+    await flush();
+
+    expect(changeAttempts).toBe(1);
+    expect(listenerCount(PR_MONITOR_CHANGED_EVENT)).toBe(0);
+    expect(listenerCount(NATIVE_EVENT_STREAM_CONNECTED_EVENT)).toBe(1);
+
+    act(() => {
+      emitEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
+    });
+    await flush();
+
+    expect(changeAttempts).toBe(2);
+    expect(listenerCount(PR_MONITOR_CHANGED_EVENT)).toBe(1);
+
+    act(() => {
+      emitEvent(PR_MONITOR_CHANGED_EVENT, stateEvent("env-1"));
+    });
+    expect(usePrMonitorStore.getState().states.get("env-1")?.prState).toBe("open");
+  });
+
   test("announces a merged transition once, with the environment branch", async () => {
     useEnvironmentStore.setState({ environments: [makeEnvironment()] });
     renderHook(() => usePrMonitorService());

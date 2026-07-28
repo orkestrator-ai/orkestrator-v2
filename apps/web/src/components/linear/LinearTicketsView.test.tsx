@@ -26,6 +26,23 @@ const postLinearIssueCommentMock = mock(async () => ({
   authorName: "Ada",
 }));
 const openInBrowserMock = mock(async () => undefined);
+const getComposeDraftMock = mock(async (_draftKey: string) => null as Awaited<
+  ReturnType<typeof realBackend.getComposeDraft>
+>);
+const saveComposeDraftMock = mock(async (
+  draftKey: string,
+  ownerType: "environment" | "project",
+  ownerId: string,
+  value: unknown,
+) => ({
+  draftKey,
+  ownerType,
+  ownerId,
+  value,
+  revision: 1,
+  updatedAt: "2026-07-28T00:00:00.000Z",
+}));
+const deleteComposeDraftMock = mock(async (_draftKey: string) => undefined);
 const startBuildFromLinearIssueMock = mock(async () => undefined);
 const navigateToPipelineMock = mock(async () => undefined);
 
@@ -37,6 +54,9 @@ mock.module("@/lib/backend", () => ({
   getLinearIssue: getLinearIssueMock,
   postLinearIssueComment: postLinearIssueCommentMock,
   openInBrowser: openInBrowserMock,
+  getComposeDraft: getComposeDraftMock,
+  saveComposeDraft: saveComposeDraftMock,
+  deleteComposeDraft: deleteComposeDraftMock,
 }));
 
 const { LinearTicketsViewContent } = await import("./LinearTicketsView");
@@ -129,6 +149,19 @@ describe("LinearTicketsView", () => {
       authorName: "Ada",
     });
     openInBrowserMock.mockClear();
+    getComposeDraftMock.mockReset();
+    getComposeDraftMock.mockResolvedValue(null);
+    saveComposeDraftMock.mockReset();
+    saveComposeDraftMock.mockImplementation(async (draftKey, ownerType, ownerId, value) => ({
+      draftKey,
+      ownerType,
+      ownerId,
+      value,
+      revision: 1,
+      updatedAt: "2026-07-28T00:00:00.000Z",
+    }));
+    deleteComposeDraftMock.mockReset();
+    deleteComposeDraftMock.mockResolvedValue(undefined);
     startBuildFromLinearIssueMock.mockClear();
     navigateToPipelineMock.mockClear();
     toastSuccessMock.mockClear();
@@ -263,12 +296,37 @@ describe("LinearTicketsView", () => {
       expect(postLinearIssueCommentMock).toHaveBeenCalledWith("issue-1", "New note from Orkestrator");
       expect(screen.getByText("New note from Orkestrator")).toBeTruthy();
       expect(toastSuccessMock).toHaveBeenCalledWith("Linear comment added");
+      expect(deleteComposeDraftMock).toHaveBeenCalledWith(
+        "linear-comment:project-1:issue-1",
+      );
     });
+  });
+
+  test("restores a persisted Linear comment draft for the selected ticket", async () => {
+    getComposeDraftMock.mockImplementation(async (draftKey) => (
+      draftKey === "linear-comment:project-1:issue-1"
+        ? {
+            draftKey,
+            ownerType: "project",
+            ownerId: "project-1",
+            value: "Recovered Linear comment",
+            revision: 2,
+            updatedAt: "2026-07-28T00:00:00.000Z",
+          }
+        : null
+    ));
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+
+    await waitFor(() => expect((
+      screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement
+    ).value).toBe("Recovered Linear comment"));
   });
 
   test("surfaces an error and keeps the draft when posting a comment fails", async () => {
     postLinearIssueCommentMock.mockRejectedValueOnce(new Error("Linear rejected the comment"));
-    renderLinearTicketsView();
+    const view = renderLinearTicketsView();
 
     fireEvent.click(await screen.findByText("Add Linear integration"));
     expect(await screen.findByText("Initial Linear comment")).toBeTruthy();
@@ -285,6 +343,13 @@ describe("LinearTicketsView", () => {
     expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value).toBe(
       "Draft that should survive",
     );
+    view.unmount();
+    await waitFor(() => expect(saveComposeDraftMock).toHaveBeenCalledWith(
+      "linear-comment:project-1:issue-1",
+      "project",
+      "project-1",
+      "Draft that should survive",
+    ));
   });
 
   test("shows an empty state when the ticket has no comments", async () => {

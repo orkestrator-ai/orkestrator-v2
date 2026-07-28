@@ -230,7 +230,7 @@ function githubIssueToTicketInput(
 
 export function useBuildPipeline() {
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
-  const { createPipeline, setPipelineEnvironment, setPhase, setPipelineError, removePipeline } = useBuildPipelineStore();
+  const { createPipeline, setPipelineEnvironment, setPhase, setPipelineError } = useBuildPipelineStore();
   const { updateTask } = useKanbanStore();
   const { selectProjectAndEnvironment, setProjectCollapsed } = useUIStore();
   const { setOptions } = useClaudeOptionsStore();
@@ -327,6 +327,10 @@ export function useBuildPipeline() {
           environmentId: configuredEnvironment.id,
           pipelineId,
         });
+        await options.onPipelineLinked?.({
+          environmentId: configuredEnvironment.id,
+          pipelineId,
+        });
 
         // 6. Expand the project if collapsed and select the environment in the UI
         setProjectCollapsed(ticket.projectId, false);
@@ -381,7 +385,20 @@ export function useBuildPipeline() {
         toast.success("Build pipeline started");
         return pipelineId;
       } catch (error) {
-        if (pipelineId) removePipeline(pipelineId);
+        if (pipelineId) {
+          // Keep the durable reservation as an explicit failed pipeline. Removing
+          // it here delegated backend deletion to the debounced persistence
+          // subscriber; a failed or interrupted delete then left an invisible
+          // source reservation that blocked future attempts after restart.
+          //
+          // Failed pipelines are excluded from active-source uniqueness checks,
+          // remain inspectable by the user, and the normal persistence retry
+          // loop will durably record this terminal state.
+          setPipelineError(
+            pipelineId,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
         console.error("[useBuildPipeline] Failed to start build:", error);
         toast.error("Failed to start build pipeline", {
           description: error instanceof Error ? error.message : "Unknown error",
@@ -389,7 +406,7 @@ export function useBuildPipeline() {
         return undefined;
       }
     },
-    [config, createPipeline, createEnvironment, setPipelineEnvironment, setPhase, setPipelineError, removePipeline, selectProjectAndEnvironment, setProjectCollapsed, setOptions, startEnvironment]
+    [config, createPipeline, createEnvironment, setPipelineEnvironment, setPhase, setPipelineError, selectProjectAndEnvironment, setProjectCollapsed, setOptions, startEnvironment]
   );
 
   const startBuild = useCallback(
@@ -434,7 +451,6 @@ export function useBuildPipeline() {
             environmentId,
             buildPipelineId: pipelineId,
           });
-          await options?.onPipelineLinked?.({ environmentId, pipelineId });
         },
       }, environmentType, agentOverride, options);
     },

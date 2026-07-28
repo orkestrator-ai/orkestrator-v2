@@ -553,6 +553,7 @@ async function findKanbanTaskForEnvironment(
         taskId: snapshot.taskId,
         status: null,
         prUrl: null,
+        prState: null,
         prMergeCommented: false,
         hasCommentText: () => false,
       };
@@ -564,6 +565,7 @@ async function findKanbanTaskForEnvironment(
     taskId: located.id,
     status: located.status,
     prUrl: located.prUrl ?? null,
+    prState: located.prState ?? null,
     prMergeCommented: located.prMergeCommented === true,
     hasCommentText: (text) => located.comments.some((comment) => comment.text === text),
   };
@@ -5563,6 +5565,7 @@ export function createCommandRegistry(
           const result = await startEnvironmentSetup(running, context);
           schedulePendingEnvironmentRename(environment.id, context);
           await syncDiffStatsTracking(context);
+          await syncPrMonitorTracking(context);
           return result;
         }
         const project = await storage.getProject(environment.projectId);
@@ -5584,6 +5587,7 @@ export function createCommandRegistry(
         const result = await startEnvironmentSetup(updated, context);
         schedulePendingEnvironmentRename(environment.id, context);
         await syncDiffStatsTracking(context);
+        await syncPrMonitorTracking(context);
         return result;
       }
 
@@ -5602,6 +5606,7 @@ export function createCommandRegistry(
       const result = await startEnvironmentSetup(updated, context);
       schedulePendingEnvironmentRename(environment.id, context);
       await syncDiffStatsTracking(context);
+      await syncPrMonitorTracking(context);
       return result;
     } catch (error) {
       await storage.updateEnvironment(environment.id, { status: "error" }).catch(() => undefined);
@@ -5819,6 +5824,7 @@ export function createCommandRegistry(
       if (!pendingAgentLaunch) {
         updates.initialAgentModel = undefined;
         updates.initialReasoningEffort = undefined;
+        updates.initialPromptAttachments = undefined;
       }
     }
     if (pendingAgentLaunch !== false && typeof initialAgentModel === "string") {
@@ -6828,11 +6834,11 @@ export function createCommandRegistry(
     if (!env.prUrl) throw new Error("Local environment PR URL is not available");
     if (mergingEnvironments.has(id)) throw new Error(`Environment is already being merged: ${id}`);
     mergingEnvironments.add(id);
-    await storage.updateEnvironment(id, {
-      lifecycleOperation: "merging",
-      lifecycleOperationStartedAt: new Date().toISOString(),
-    });
     try {
+      await storage.updateEnvironment(id, {
+        lifecycleOperation: "merging",
+        lifecycleOperationStartedAt: new Date().toISOString(),
+      });
       return await mergePullRequestViaGitHubApi(
         env.prUrl,
         parseMergeMethod(method),
@@ -6858,12 +6864,14 @@ export function createCommandRegistry(
     }
     if (environment) {
       mergingEnvironments.add(environment.id);
-      await storage.updateEnvironment(environment.id, {
-        lifecycleOperation: "merging",
-        lifecycleOperationStartedAt: new Date().toISOString(),
-      });
     }
     try {
+      if (environment) {
+        await storage.updateEnvironment(environment.id, {
+          lifecycleOperation: "merging",
+          lifecycleOperationStartedAt: new Date().toISOString(),
+        });
+      }
       return await mergePullRequestInContainer(
         resolvedContainerId,
         parseMergeMethod(method),

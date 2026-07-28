@@ -44,6 +44,7 @@ export async function saveInitialPromptAttachments(options: {
   }
 
   const saved: SavedInitialPromptAttachment[] = [];
+  let failed = 0;
   for (const attachment of attachments) {
     const filename = sanitizeFilename(attachment.name);
     const relativePath = `.orkestrator/initial-prompt/${filename}`;
@@ -60,8 +61,15 @@ export async function saveInitialPromptAttachments(options: {
 
       saved.push({ name: filename, path });
     } catch (error) {
+      failed += 1;
       console.error("[initial-prompt-attachments] Failed to save image:", error);
     }
+  }
+
+  if (failed > 0) {
+    throw new Error(
+      `Failed to save ${failed} of ${attachments.length} initial prompt attachment${attachments.length === 1 ? "" : "s"}`,
+    );
   }
 
   return saved;

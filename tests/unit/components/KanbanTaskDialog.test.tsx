@@ -28,6 +28,23 @@ const getKanbanImageDataMock = mock(async () => "");
 const detectPrMock = mock(async () => null as { url: string; state: "open" | "merged" | "closed"; hasMergeConflicts: boolean } | null);
 const detectPrLocalMock = mock(async () => null as { url: string; state: "open" | "merged" | "closed"; hasMergeConflicts: boolean } | null);
 const openInBrowserMock = mock(async () => {});
+const getComposeDraftMock = mock(async (_draftKey: string) => null as Awaited<
+  ReturnType<typeof realBackend.getComposeDraft>
+>);
+const saveComposeDraftMock = mock(async (
+  draftKey: string,
+  ownerType: "environment" | "project",
+  ownerId: string,
+  value: unknown,
+) => ({
+  draftKey,
+  ownerType,
+  ownerId,
+  value,
+  revision: 1,
+  updatedAt: "2026-01-01T00:00:00.000Z",
+}));
+const deleteComposeDraftMock = mock(async (_draftKey: string) => {});
 const readImageMock = mock(async () => {
   throw new Error("no image");
 });
@@ -64,6 +81,9 @@ mock.module("@/lib/backend", () => ({
   detectPr: detectPrMock,
   detectPrLocal: detectPrLocalMock,
   openInBrowser: openInBrowserMock,
+  getComposeDraft: getComposeDraftMock,
+  saveComposeDraft: saveComposeDraftMock,
+  deleteComposeDraft: deleteComposeDraftMock,
 }));
 
 mock.module("@/lib/native/clipboard", () => ({
@@ -126,6 +146,14 @@ function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
     environmentType: "containerized",
     ...overrides,
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
 }
 
 function installKanbanActionMocks() {
@@ -193,6 +221,19 @@ describe("KanbanTaskDialog", () => {
     detectPrLocalMock.mockClear();
     detectPrLocalMock.mockImplementation(async () => null);
     openInBrowserMock.mockClear();
+    getComposeDraftMock.mockReset();
+    getComposeDraftMock.mockResolvedValue(null);
+    saveComposeDraftMock.mockReset();
+    saveComposeDraftMock.mockImplementation(async (draftKey, ownerType, ownerId, value) => ({
+      draftKey,
+      ownerType,
+      ownerId,
+      value,
+      revision: 1,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }));
+    deleteComposeDraftMock.mockReset();
+    deleteComposeDraftMock.mockResolvedValue(undefined);
     readImageMock.mockClear();
     readImageMock.mockImplementation(async () => {
       throw new Error("no image");
@@ -326,6 +367,129 @@ describe("KanbanTaskDialog", () => {
     expect(taskBody.contains(screen.getByRole("button", { name: "Create Task" }))).toBe(false);
   });
 
+  test("restores a persisted create-task draft", async () => {
+    getComposeDraftMock.mockResolvedValueOnce({
+      draftKey: "kanban-create:project-1:task",
+      ownerType: "project",
+      ownerId: "project-1",
+      value: {
+        title: "Recovered task",
+        description: "Recovered description",
+        acceptanceCriteria: "Recovered criteria",
+        images: [],
+      },
+      revision: 3,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    });
+
+    render(
+      <KanbanTaskDialog
+        task={null}
+        open
+        onOpenChange={() => {}}
+        createForProjectId="project-1"
+      />,
+    );
+
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("Task title...") as HTMLInputElement).value).toBe(
+        "Recovered task",
+      );
+    });
+    expect((screen.getByPlaceholderText("Description...") as HTMLTextAreaElement).value).toBe(
+      "Recovered description",
+    );
+    expect((
+      screen.getByPlaceholderText("Define what 'done' looks like...") as HTMLTextAreaElement
+    ).value).toBe("Recovered criteria");
+  });
+
+  test("keeps typing entered while create-draft hydration is pending", async () => {
+    const snapshot = deferred<Awaited<ReturnType<typeof realBackend.getComposeDraft>>>();
+    getComposeDraftMock.mockImplementationOnce(() => snapshot.promise);
+    render(
+      <KanbanTaskDialog
+        task={null}
+        open
+        onOpenChange={() => {}}
+        createForProjectId="project-1"
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Task title..."), {
+      target: { value: "Newer local title" },
+    });
+    snapshot.resolve({
+      draftKey: "kanban-create:project-1:task",
+      ownerType: "project",
+      ownerId: "project-1",
+      value: {
+        title: "Stale stored title",
+        description: "",
+        acceptanceCriteria: "",
+        images: [],
+      },
+      revision: 1,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    });
+
+    await waitFor(() => expect((
+      screen.getByPlaceholderText("Task title...") as HTMLInputElement
+    ).value).toBe("Newer local title"));
+  });
+
+  test("flushes a create-task edit when the dialog unmounts before debounce", async () => {
+    const view = render(
+      <KanbanTaskDialog
+        task={null}
+        open
+        onOpenChange={() => {}}
+        createForProjectId="project-1"
+      />,
+    );
+    await waitFor(() => expect(getComposeDraftMock).toHaveBeenCalled());
+    fireEvent.change(screen.getByPlaceholderText("Task title..."), {
+      target: { value: "Flush on environment switch" },
+    });
+
+    view.unmount();
+
+    await waitFor(() => expect(saveComposeDraftMock).toHaveBeenCalledWith(
+      "kanban-create:project-1:task",
+      "project",
+      "project-1",
+      expect.objectContaining({ title: "Flush on environment switch" }),
+    ));
+  });
+
+  test("keeps the create-task draft when task creation fails", async () => {
+    addTaskMock.mockResolvedValueOnce(undefined);
+    render(
+      <KanbanTaskDialog
+        task={null}
+        open
+        onOpenChange={() => {}}
+        createForProjectId="project-1"
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Task title..."), {
+      target: { value: "Task worth recovering" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Task" }));
+
+    await waitFor(() => {
+      expect(addTaskMock).toHaveBeenCalledTimes(1);
+      expect(saveComposeDraftMock).toHaveBeenCalledWith(
+        "kanban-create:project-1:task",
+        "project",
+        "project-1",
+        expect.objectContaining({ title: "Task worth recovering" }),
+      );
+    });
+    expect(deleteComposeDraftMock).not.toHaveBeenCalled();
+  });
+
   test("create mode saves a new task and acceptance criteria", async () => {
     const onOpenChange = mock(() => {});
 
@@ -353,6 +517,7 @@ describe("KanbanTaskDialog", () => {
     await waitFor(() => {
       expect(addTaskMock).toHaveBeenCalledWith("project-1", "New task", "New description");
       expect(updateTaskMock).toHaveBeenCalledWith("task-created", { acceptanceCriteria: "Done means shipped" });
+      expect(deleteComposeDraftMock).toHaveBeenCalledWith("kanban-create:project-1:task");
     });
   });
 

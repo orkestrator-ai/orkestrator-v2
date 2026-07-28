@@ -1729,12 +1729,20 @@ export function ClaudeChatTab({
     }
   }, [client, session, sessionKey, promoteNextQueuedPromptToDraft, setSessionLoading, addMessage]);
 
+  const planPreferenceWriteRef = useRef<Promise<void>>(Promise.resolve());
   const handlePlanModeChange = useCallback((enabled: boolean) => {
     if (!client || !session) return;
-    void updateSessionPreferences(client, session.sessionId, { planMode: enabled })
-      .catch((error) => {
-        console.warn("[ClaudeChatTab] Failed to persist plan mode:", error);
-      });
+    const next = planPreferenceWriteRef.current
+      .catch(() => undefined)
+      .then(() => updateSessionPreferences(
+        client,
+        session.sessionId,
+        { planMode: enabled },
+      ));
+    planPreferenceWriteRef.current = next;
+    void next.catch((error) => {
+      console.warn("[ClaudeChatTab] Failed to persist plan mode:", error);
+    });
   }, [client, session]);
 
   useEscapeToStop({

@@ -999,7 +999,7 @@ describe("TerminalContainer", () => {
     });
   });
 
-  test("clears failed initial prompt attachments and still creates the tab", async () => {
+  test("retains failed initial prompt attachments and waits for a retry", async () => {
     seedContainerSetupCommands();
     writeContainerFileMock.mockImplementation(async () => {
       throw new Error("disk full");
@@ -1047,6 +1047,7 @@ describe("TerminalContainer", () => {
       </TerminalProvider>
     );
 
+    await waitFor(() => expect(writeContainerFileMock).toHaveBeenCalledTimes(1));
     await waitFor(() => {
       const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
       expect(envHidden?.root.kind).toBe("leaf");
@@ -1054,19 +1055,13 @@ describe("TerminalContainer", () => {
         throw new Error("env-hidden root should be a leaf");
       }
 
-      expect(envHidden.root.tabs[0]?.type).toBe("plain");
-      expect(envHidden.root.tabs[0]?.initialCommands).toEqual([TEST_CONTAINER_SETUP_COMMAND]);
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toEqual({
-        containerId: "container-hidden",
-        environmentId: "env-hidden",
-        initialPrompt: "Continue without image",
-        targetPaneId: "default",
-        agentType: "codex",
-        launchMode: "terminal",
-      });
+      expect(envHidden.root.tabs).toEqual([]);
+      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
       expect(
         useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments,
-      ).toEqual([]);
+      ).toEqual([
+        expect.objectContaining({ id: "img-1", name: "failed.png" }),
+      ]);
     });
   });
 

@@ -99,14 +99,14 @@ describe("saveInitialPromptAttachments", () => {
     ).rejects.toThrow("Cannot save initial prompt attachments");
   });
 
-  test("continues saving remaining attachments after one write fails", async () => {
+  test("reports a partial failure so the caller retains every attachment for retry", async () => {
     invokeMock
       .mockImplementationOnce(async () => {
         throw new Error("disk full");
       })
       .mockImplementationOnce(async (_command: string, args: Record<string, unknown>) => `/workspace/${args.filePath}`);
 
-    const saved = await saveInitialPromptAttachments({
+    const saving = saveInitialPromptAttachments({
       containerId: "container-1",
       attachments: [
         {
@@ -124,13 +124,8 @@ describe("saveInitialPromptAttachments", () => {
       ],
     });
 
+    await expect(saving).rejects.toThrow("Failed to save 1 of 2 initial prompt attachments");
     expect(invokeMock).toHaveBeenCalledTimes(2);
-    expect(saved).toEqual([
-      {
-        name: "saved.png",
-        path: "/workspace/.orkestrator/initial-prompt/saved.png",
-      },
-    ]);
   });
 });
 

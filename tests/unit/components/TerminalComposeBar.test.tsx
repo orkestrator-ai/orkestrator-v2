@@ -12,10 +12,25 @@ import { mockToastError } from "../../mocks/sonner";
 
 const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
+const mockGetComposeDraft = mock(
+  async (_draftKey: string): Promise<{
+    draftKey: string;
+    ownerType: "environment" | "project";
+    ownerId: string;
+    value: unknown;
+    updatedAt: string;
+    revision: number;
+  } | null> => null,
+);
+const mockSaveComposeDraft = mock(async () => undefined);
+const mockDeleteComposeDraft = mock(async () => undefined);
 
 mock.module("@/lib/backend", () => ({
   writeContainerFile: mockWriteContainerFile,
   writeLocalFile: mockWriteLocalFile,
+  getComposeDraft: mockGetComposeDraft,
+  saveComposeDraft: mockSaveComposeDraft,
+  deleteComposeDraft: mockDeleteComposeDraft,
 }));
 
 import { ComposeBar } from "../../../apps/web/src/components/terminal/ComposeBar";
@@ -133,10 +148,16 @@ describe("Terminal ComposeBar", () => {
     mockReadImage.mockReset();
     mockWriteContainerFile.mockReset();
     mockWriteLocalFile.mockReset();
+    mockGetComposeDraft.mockReset();
+    mockSaveComposeDraft.mockReset();
+    mockDeleteComposeDraft.mockReset();
     mockPutImageData.mockReset();
     mockDrawImage.mockReset();
     mockWriteContainerFile.mockImplementation(async () => {});
     mockWriteLocalFile.mockImplementation(async () => "/tmp/file.png");
+    mockGetComposeDraft.mockImplementation(async () => null);
+    mockSaveComposeDraft.mockImplementation(async () => undefined);
+    mockDeleteComposeDraft.mockImplementation(async () => undefined);
     mockReadImage.mockImplementation(async () => ({
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
@@ -198,6 +219,73 @@ describe("Terminal ComposeBar", () => {
     );
     expect(getTextarea().value).toBe("");
     expect(Number(getTextarea().getAttribute("rows"))).toBe(1);
+  });
+
+  test("restores an environment-scoped backend draft", async () => {
+    mockGetComposeDraft.mockResolvedValueOnce({
+      draftKey: `terminal:env-1:${encodeURIComponent(SESSION_KEY)}`,
+      ownerType: "environment",
+      ownerId: "env-1",
+      value: { text: "restored terminal prompt", images: [] },
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 1,
+    });
+
+    renderComposeBar({ environmentId: "env-1" });
+
+    await waitFor(() => expect(getTextarea().value).toBe("restored terminal prompt"));
+    expect(mockGetComposeDraft).toHaveBeenCalledWith(
+      `terminal:env-1:${encodeURIComponent(SESSION_KEY)}`,
+    );
+  });
+
+  test("local typing wins over pending hydration and unmount flushes it", async () => {
+    const snapshot = deferred<{
+      draftKey: string;
+      ownerType: "environment";
+      ownerId: string;
+      value: unknown;
+      updatedAt: string;
+      revision: number;
+    } | null>();
+    mockGetComposeDraft.mockImplementationOnce(() => snapshot.promise);
+    const { unmount } = renderComposeBar({ environmentId: "env-pending" });
+
+    fireEvent.change(getTextarea(), { target: { value: "local terminal prompt" } });
+    snapshot.resolve({
+      draftKey: `terminal:env-pending:${encodeURIComponent(SESSION_KEY)}`,
+      ownerType: "environment",
+      ownerId: "env-pending",
+      value: { text: "older stored prompt", images: [] },
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 1,
+    });
+    await waitFor(() => expect(getTextarea().value).toBe("local terminal prompt"));
+
+    unmount();
+    await waitFor(() => expect(mockSaveComposeDraft).toHaveBeenCalledWith(
+      `terminal:env-pending:${encodeURIComponent(SESSION_KEY)}`,
+      "environment",
+      "env-pending",
+      { text: "local terminal prompt", images: [] },
+    ));
+  });
+
+  test("ignores malformed backend fields", async () => {
+    mockGetComposeDraft.mockResolvedValueOnce({
+      draftKey: `terminal:env-malformed:${encodeURIComponent(SESSION_KEY)}`,
+      ownerType: "environment",
+      ownerId: "env-malformed",
+      value: { text: 42, images: "not-an-array" },
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 1,
+    });
+
+    renderComposeBar({ environmentId: "env-malformed" });
+
+    await waitFor(() => expect(mockGetComposeDraft).toHaveBeenCalled());
+    expect(getTextarea().value).toBe("");
+    expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
   });
 
   test("hides Address all by default", () => {

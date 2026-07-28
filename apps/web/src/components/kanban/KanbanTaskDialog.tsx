@@ -29,7 +29,6 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { readImage } from "@/lib/native/clipboard";
 import {
-  getComposeDraft,
   getKanbanImageData,
   detectPr,
   detectPrLocal,
@@ -38,6 +37,7 @@ import {
 import {
   composeDraftKey,
   discardComposeDraft,
+  loadComposeDraft,
   persistComposeDraft,
 } from "@/lib/compose-draft-persistence";
 import { useEnvironmentStore } from "@/stores";
@@ -167,6 +167,20 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   // Image state
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const createDraftHydratedRef = useRef<string | null>(null);
+  const createDraftEditRevisionRef = useRef(0);
+  const createDraftClosingRef = useRef(false);
+  const createDraftValuesRef = useRef<KanbanCreateDraft>({
+    title: editTitle,
+    description: editDescription,
+    acceptanceCriteria: editAC,
+    images: pendingImages,
+  });
+  createDraftValuesRef.current = {
+    title: editTitle,
+    description: editDescription,
+    acceptanceCriteria: editAC,
+    images: pendingImages,
+  };
   const [previewImage, setPreviewImage] = useState<{ url: string; filename: string } | null>(null);
   const dialogContentRef = useRef<HTMLDivElement>(null);
 
@@ -174,20 +188,19 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   const [imageUrlCache, setImageUrlCache] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (!createForProjectId) return;
+    if (!createForProjectId || !open) return;
     let disposed = false;
     const draftKey = composeDraftKey("kanban-create", createForProjectId, "task");
+    const revisionAtRequest = createDraftEditRevisionRef.current;
+    createDraftClosingRef.current = false;
     createDraftHydratedRef.current = null;
-    void getComposeDraft<KanbanCreateDraft>(draftKey)
+    void loadComposeDraft<KanbanCreateDraft>(draftKey)
       .then((persisted) => {
         if (
           disposed
           || !persisted
           || !isKanbanCreateDraft(persisted.value)
-          || editTitle.length > 0
-          || editDescription.length > 0
-          || editAC.length > 0
-          || pendingImages.length > 0
+          || createDraftEditRevisionRef.current !== revisionAtRequest
         ) {
           return;
         }
@@ -207,14 +220,28 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       if (createDraftHydratedRef.current === draftKey) {
         createDraftHydratedRef.current = null;
       }
+      if (
+        !createDraftClosingRef.current
+        && createDraftEditRevisionRef.current !== revisionAtRequest
+      ) {
+        const latest = createDraftValuesRef.current;
+        const empty = !latest.title && !latest.description
+          && !latest.acceptanceCriteria && latest.images.length === 0;
+        const operation = empty
+          ? discardComposeDraft(draftKey)
+          : persistComposeDraft(draftKey, "project", createForProjectId, latest);
+        void operation.catch((error) => {
+          console.warn("[KanbanTaskDialog] Failed to persist create draft during cleanup:", error);
+        });
+      }
     };
     // The local fields are intentionally sampled once. User input entered
     // during hydration wins over the backend snapshot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [createForProjectId]);
+  }, [createForProjectId, open]);
 
   useEffect(() => {
-    if (!createForProjectId) return;
+    if (!createForProjectId || !open) return;
     const draftKey = composeDraftKey("kanban-create", createForProjectId, "task");
     if (createDraftHydratedRef.current !== draftKey) return;
     const timer = setTimeout(() => {
@@ -239,7 +266,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       });
     }, 400);
     return () => clearTimeout(timer);
-  }, [createForProjectId, editAC, editDescription, editTitle, pendingImages]);
+  }, [createForProjectId, editAC, editDescription, editTitle, open, pendingImages]);
 
   // Load image data on demand when dialog opens with a task that has images
   useEffect(() => {
@@ -307,9 +334,10 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   }, [open, task?.id, task?.prUrl, task?.prMergeCommented, task?.prState]);
 
   // Reset create mode fields when dialog opens in create mode
-  const handleOpenChange = (newOpen: boolean) => {
+  const handleOpenChange = (newOpen: boolean, discardDraft = true) => {
     if (!newOpen) {
-      if (createForProjectId) {
+      createDraftClosingRef.current = true;
+      if (createForProjectId && discardDraft) {
         const draftKey = composeDraftKey("kanban-create", createForProjectId, "task");
         void discardComposeDraft(draftKey).catch((error) => {
           console.warn("[KanbanTaskDialog] Failed to discard create draft:", error);
@@ -405,6 +433,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       const filename = `clipboard-${timestamp}.png`;
 
       if (isCreateMode || !task) {
+        createDraftEditRevisionRef.current += 1;
         setPendingImages((prev) => [...prev, { id: createUuid(), filename, data: base64Data, previewUrl: dataUrl }]);
       } else {
         void addImage(task.id, filename, base64Data);
@@ -444,6 +473,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       if (!result) continue;
 
       if (isCreateMode || !task) {
+        createDraftEditRevisionRef.current += 1;
         setPendingImages((prev) => [...prev, { id: createUuid(), ...result }]);
       } else {
         void addImage(task.id, result.filename, result.data);
@@ -498,9 +528,26 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       const description = editDescription.trim();
       const ac = editAC.trim();
       const imagesToSave = [...pendingImages];
-      handleOpenChange(false);
+      const draftKey = composeDraftKey("kanban-create", createForProjectId, "task");
+      void persistComposeDraft(
+        draftKey,
+        "project",
+        createForProjectId,
+        {
+          title: editTitle,
+          description: editDescription,
+          acceptanceCriteria: editAC,
+          images: imagesToSave,
+        } satisfies KanbanCreateDraft,
+      ).catch((error) => {
+        console.warn("[KanbanTaskDialog] Failed to preserve create draft:", error);
+      });
+      handleOpenChange(false, false);
       void addTaskStore(createForProjectId, title, description).then(async (newTaskId) => {
         if (!newTaskId) return;
+        void discardComposeDraft(draftKey).catch((error) => {
+          console.warn("[KanbanTaskDialog] Failed to discard created task draft:", error);
+        });
         if (ac) {
           void updateTask(newTaskId, { acceptanceCriteria: ac });
         }
@@ -675,6 +722,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                       onClick={(e) => {
                         e.stopPropagation();
                         if (isCreateMode) {
+                          createDraftEditRevisionRef.current += 1;
                           setPendingImages((prev) => prev.filter((i) => i.id !== img.id));
                         } else if (task) {
                           void deleteImage(task.id, img.id);
@@ -742,7 +790,10 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                     <DialogTitle className="sr-only">New Task</DialogTitle>
                     <Input
                       value={editTitle}
-                      onChange={(e) => setEditTitle(e.target.value)}
+                      onChange={(e) => {
+                        createDraftEditRevisionRef.current += 1;
+                        setEditTitle(e.target.value);
+                      }}
                       onKeyDown={handleCreateKeyDown}
                       placeholder="Task title..."
                       className="text-lg font-semibold"
@@ -750,7 +801,10 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                     />
                     <Textarea
                       value={editDescription}
-                      onChange={(e) => setEditDescription(e.target.value)}
+                      onChange={(e) => {
+                        createDraftEditRevisionRef.current += 1;
+                        setEditDescription(e.target.value);
+                      }}
                       placeholder="Description..."
                       rows={3}
                       className="max-h-[calc(10lh+1rem)] overflow-y-auto"
@@ -768,7 +822,10 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                   </div>
                   <Textarea
                     value={editAC}
-                    onChange={(e) => setEditAC(e.target.value)}
+                    onChange={(e) => {
+                      createDraftEditRevisionRef.current += 1;
+                      setEditAC(e.target.value);
+                    }}
                     placeholder="Define what 'done' looks like..."
                     rows={4}
                     className="max-h-[calc(10lh+1rem)] overflow-y-auto"

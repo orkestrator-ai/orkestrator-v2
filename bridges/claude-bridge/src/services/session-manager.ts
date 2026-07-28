@@ -54,6 +54,40 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 // Store for active sessions
 const sessions = new Map<string, SessionState>();
 
+/**
+ * Stable prompt ids whose durable journal write is in flight.
+ *
+ * The paired session status is set to running before that write yields. The
+ * map lets the one sendPrompt invocation owning the reservation pass the
+ * ordinary running guard while every competing prompt is refused.
+ */
+const claimedPromptDispatches = new Map<string, string>();
+
+interface PendingPromptDispatchClaim {
+  requestId: string;
+  outcome: Promise<void>;
+}
+
+export interface PromptDispatchHandle {
+  /** Resolves once the SDK query has been constructed and handed off. */
+  started: Promise<void>;
+  /** The complete turn; callers observe it without blocking the HTTP 202. */
+  completion: Promise<void>;
+}
+
+/**
+ * One not-yet-settled durable claim per session.
+ *
+ * A same-id retry joins this outcome rather than treating the optimistic
+ * in-memory Set entry as proof of acceptance. That way a failed journal write
+ * or dispatch start is reported to every waiter and none of them clears the
+ * renderer's one-shot launch marker prematurely.
+ */
+const pendingPromptDispatchClaims = new Map<
+  string,
+  PendingPromptDispatchClaim
+>();
+
 function claudeExecutableOptions(): { pathToClaudeCodeExecutable: string } | Record<string, never> {
   const executable = process.env.CLAUDE_CLI_PATH?.trim();
   return executable ? { pathToClaudeCodeExecutable: executable } : {};
@@ -671,9 +705,13 @@ function persistSessionPlanMode(session: SessionState): void {
  * toggle raced an authoritative snapshot converges on what the bridge actually
  * holds.
  */
-function applySessionPlanMode(session: SessionState, planMode: boolean): void {
+function applySessionPlanMode(
+  session: SessionState,
+  planMode: boolean,
+  persist = true,
+): void {
   session.planMode = planMode;
-  persistSessionPlanMode(session);
+  if (persist) persistSessionPlanMode(session);
   eventEmitter.emit({
     type: "session.updated",
     sessionId: session.id,
@@ -687,16 +725,31 @@ function applySessionPlanMode(session: SessionState, planMode: boolean): void {
  * The bridge owns these so they survive renderer restarts; the renderer calls
  * this on every explicit toggle and rehydrates from the session snapshot.
  */
-export function setSessionPreferences(
+export async function setSessionPreferences(
   sessionId: string,
   preferences: { planMode?: boolean },
-): SessionState {
+): Promise<SessionState> {
   const session = sessions.get(sessionId);
   if (!session) {
     throw sessionOperationError("not_found", "Session not found");
   }
   if (typeof preferences.planMode === "boolean") {
-    applySessionPlanMode(session, preferences.planMode);
+    const sdkSessionId =
+      session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
+    if (!sdkSessionId) {
+      throw sessionOperationError(
+        "invalid",
+        "Session does not have a durable preference key",
+      );
+    }
+    // Explicit user changes are acknowledged only after the durable value is
+    // safe. On failure the previous in-memory value remains authoritative, so
+    // the next snapshot corrects an optimistic renderer instead of silently
+    // widening permissions after a restart.
+    await updateSessionPreferences(sdkSessionId, {
+      planMode: preferences.planMode,
+    });
+    applySessionPlanMode(session, preferences.planMode, false);
   }
   return session;
 }
@@ -752,13 +805,38 @@ export function getStructuredPromptDispatchState(
 export async function claimPromptDispatch(
   sessionId: string,
   requestId: string,
+  startDispatch: () => PromptDispatchHandle,
+  testHooks?: {
+    beforePersistence?: () => void | Promise<void>;
+  },
 ): Promise<"claimed" | "duplicate" | "not-found"> {
   const session = sessions.get(sessionId);
   if (!session) return "not-found";
 
   const dispatchedRequestIds =
     session.dispatchedRequestIds ?? new Set<string>();
-  if (dispatchedRequestIds.has(requestId)) return "duplicate";
+  if (dispatchedRequestIds.has(requestId)) {
+    const pending = pendingPromptDispatchClaims.get(sessionId);
+    if (pending?.requestId === requestId) {
+      await pending.outcome;
+    }
+    return "duplicate";
+  }
+  if (session.deleting) {
+    throw sessionOperationError("conflict", "Session is being deleted");
+  }
+  if (session.status === "running") {
+    throw sessionOperationError(
+      "conflict",
+      "Session is already processing a prompt",
+    );
+  }
+  if (session.rewindInProgress) {
+    throw sessionOperationError(
+      "conflict",
+      "Session is restoring files from a checkpoint",
+    );
+  }
 
   dispatchedRequestIds.add(requestId);
   session.dispatchedRequestIds = dispatchedRequestIds;
@@ -766,7 +844,8 @@ export async function claimPromptDispatch(
   const recentRequestIds = [...dispatchedRequestIds].slice(
     -MAX_DISPATCHED_REQUEST_IDS,
   );
-  session.dispatchedRequestIds = new Set(recentRequestIds);
+  const retainedRequestIds = new Set(recentRequestIds);
+  session.dispatchedRequestIds = retainedRequestIds;
 
   const sdkSessionId =
     session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
@@ -778,16 +857,93 @@ export async function claimPromptDispatch(
     );
   }
 
-  try {
+  // Reserve the turn synchronously before the journal write yields. Without
+  // this, another request can start while persistence is in flight, leaving a
+  // request id accepted on disk for a turn that sendPrompt later refuses.
+  const previousStatus = session.status;
+  session.status = "running";
+  claimedPromptDispatches.set(sessionId, requestId);
+
+  const outcome = (async () => {
+    await testHooks?.beforePersistence?.();
     await updateSessionPreferences(sdkSessionId, {
       dispatchedRequestIds: recentRequestIds,
     });
+
+    if (
+      sessions.get(sessionId) !== session
+      || session.deleting
+      || claimedPromptDispatches.get(sessionId) !== requestId
+    ) {
+      claimedPromptDispatches.delete(sessionId);
+      retainedRequestIds.delete(requestId);
+      await updateSessionPreferences(sdkSessionId, {
+        dispatchedRequestIds: [...retainedRequestIds].slice(
+          -MAX_DISPATCHED_REQUEST_IDS,
+        ),
+      });
+      throw sessionOperationError(
+        "conflict",
+        "Session became unavailable before the prompt could start",
+      );
+    }
+
+    try {
+      const dispatch = startDispatch();
+      // Invoking an async function is not yet an accepted turn: attachment
+      // and config preparation can still fail before the SDK sees anything.
+      // Wait only for that unambiguous handoff, never for the provider turn.
+      await dispatch.started;
+    } catch (error) {
+      claimedPromptDispatches.delete(sessionId);
+      if (!session.deleting) session.status = previousStatus;
+      retainedRequestIds.delete(requestId);
+      try {
+        await updateSessionPreferences(sdkSessionId, {
+          dispatchedRequestIds: [...retainedRequestIds].slice(
+            -MAX_DISPATCHED_REQUEST_IDS,
+          ),
+        });
+      } catch (rollbackError) {
+        console.error(
+          "[session-manager] Failed to roll back prompt dispatch claim:",
+          rollbackError instanceof Error
+            ? rollbackError.message
+            : String(rollbackError),
+        );
+      }
+      throw error;
+    }
+  })();
+  pendingPromptDispatchClaims.set(sessionId, { requestId, outcome });
+
+  try {
+    await outcome;
   } catch (error) {
-    session.dispatchedRequestIds.delete(requestId);
+    claimedPromptDispatches.delete(sessionId);
+    if (!session.deleting) session.status = previousStatus;
+    retainedRequestIds.delete(requestId);
     throw error;
+  } finally {
+    if (pendingPromptDispatchClaims.get(sessionId)?.outcome === outcome) {
+      pendingPromptDispatchClaims.delete(sessionId);
+    }
   }
 
   return "claimed";
+}
+
+async function waitForPendingPromptDispatchClaim(
+  sessionId: string,
+): Promise<void> {
+  const pending = pendingPromptDispatchClaims.get(sessionId);
+  if (!pending) return;
+  try {
+    await pending.outcome;
+  } catch {
+    // Deletion owns the terminal state. The claim path reports its own failure;
+    // deletion waits only to order rollback before preference removal.
+  }
 }
 
 /**
@@ -852,6 +1008,7 @@ function cleanupPendingInteractions(sessionId: string): void {
 export function deleteSession(sessionId: string): boolean {
   const session = sessions.get(sessionId);
   if (session) {
+    claimedPromptDispatches.delete(sessionId);
     // Abort any running query
     if (session.abortController) {
       session.abortController.abort();
@@ -1635,7 +1792,14 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
   // must claim it synchronously so a prompt cannot slip in on the next
   // microtask before `deleting` is visible.
   const session = sessions.get(sessionId) ?? await ensurePersistedSession(sessionId);
-  if (!session) return false;
+  if (!session) {
+    // A prior attempt can delete the SDK rollout and then fail while removing
+    // bridge-owned metadata. Let a retry finish that cleanup even though the
+    // authoritative rollout no longer materializes.
+    const sdkSessionId = sdkSessionIdFromBridgeId(sessionId);
+    if (sdkSessionId) await deleteSessionPreferences(sdkSessionId);
+    return false;
+  }
   if (session.deleting) {
     throw sessionOperationError("conflict", "Session deletion is already in progress");
   }
@@ -1644,11 +1808,16 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
   // removing its rollout so it cannot recreate or append to the file.
   session.deleting = true;
   session.status = "running";
+  claimedPromptDispatches.delete(sessionId);
   session.abortController?.abort();
   session.abortController = undefined;
   cleanupPendingInteractions(sessionId);
   await releaseQueryControls(session);
+  await waitForPendingPromptDispatchClaim(sessionId);
+  let rolloutDeleted = false;
   try {
+    const preferenceSessionId =
+      session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
     if (session.sdkSessionId) {
       const sdk = await claudeSdk();
       if (typeof sdk.deleteSession === "function") {
@@ -1656,13 +1825,26 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
           dir: currentWorkingDirectory(),
         });
       }
+      rolloutDeleted = true;
       // Recorded before the map entry is dropped: a reconcile already holding a
       // pre-deletion `listSessions` snapshot would otherwise re-insert it.
       recordDeletedSdkSession(session.sdkSessionId);
     }
+    if (preferenceSessionId) {
+      await deleteSessionPreferences(preferenceSessionId);
+    }
     sessions.delete(sessionId);
     return true;
   } catch (error) {
+    if (rolloutDeleted && session.sdkSessionId) {
+      // The rollout is already gone and cannot be restored. Keep the registry
+      // consistent with that authoritative fact; a retry by id can still
+      // finish removing the preference journal through the missing-session
+      // branch above.
+      recordDeletedSdkSession(session.sdkSessionId);
+      sessions.delete(sessionId);
+      throw error;
+    }
     // The rollout still exists when deletion fails. Restore an addressable idle
     // session, but leave its stopped query stopped.
     session.deleting = false;
@@ -2495,6 +2677,7 @@ export async function sendPrompt(
   options?: PromptOptions,
   testHooks?: {
     afterAttachmentInitialValidation?: (filePath: string) => void | Promise<void>;
+    onQueryStarted?: () => void;
   },
 ): Promise<void> {
   const session = sessions.get(sessionId);
@@ -2505,6 +2688,12 @@ export async function sendPrompt(
   const structuredRequestId = options?.outputSchema
     ? (options.requestId?.trim() || crypto.randomUUID())
     : undefined;
+  const claimedRequestId = !options?.outputSchema
+    ? options?.requestId?.trim()
+    : undefined;
+  const ownsClaimedDispatch =
+    claimedRequestId !== undefined
+    && claimedPromptDispatches.get(sessionId) === claimedRequestId;
   if (
     structuredRequestId
     && session.structuredOutputRequestId === structuredRequestId
@@ -2519,7 +2708,7 @@ export async function sendPrompt(
     throw sessionOperationError("conflict", "Session is being deleted");
   }
 
-  if (session.status === "running") {
+  if (session.status === "running" && !ownsClaimedDispatch) {
     throw new Error("Session is already processing a prompt");
   }
 
@@ -2528,6 +2717,10 @@ export async function sendPrompt(
       "conflict",
       "Session is restoring files from a checkpoint",
     );
+  }
+
+  if (ownsClaimedDispatch) {
+    claimedPromptDispatches.delete(sessionId);
   }
 
   if (structuredRequestId) {
@@ -2992,6 +3185,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     });
     session.queryControl = queryIterator;
     queryIteratorControl = queryIterator;
+    testHooks?.onQueryStarted?.();
     let supportedAgents: NonNullable<SessionInitData["agents"]> = [];
     if (typeof queryIterator.supportedAgents === "function") {
       try {

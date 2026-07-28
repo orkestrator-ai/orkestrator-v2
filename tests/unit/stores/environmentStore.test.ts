@@ -105,6 +105,25 @@ describe("environmentStore", () => {
     expect(state.environments[0]?.id).toBe("env-2");
   });
 
+  test("isDeleting rehydrates from backend lifecycle and tombstone fields", () => {
+    const store = useEnvironmentStore.getState();
+    store.setEnvironments([
+      createEnvironment({ id: "live" }),
+      createEnvironment({ id: "operation", lifecycleOperation: "deleting" }),
+      createEnvironment({
+        id: "tombstone",
+        deletionRequestedAt: "2026-07-28T12:00:00.000Z",
+      }),
+    ]);
+
+    expect(store.isDeleting("live")).toBe(false);
+    expect(store.isDeleting("operation")).toBe(true);
+    expect(store.isDeleting("tombstone")).toBe(true);
+
+    store.setDeleting("live", true);
+    expect(store.isDeleting("live")).toBe(true);
+  });
+
   test("setSetupCommandsResolved is idempotent when already resolved", () => {
     const store = useEnvironmentStore.getState();
 

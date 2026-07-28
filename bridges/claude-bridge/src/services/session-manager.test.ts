@@ -299,8 +299,14 @@ mock.module("./plugin-config.js", () => ({
 // Import AFTER mocks are installed so session-manager picks them up.
 const sessionManager = await import("./session-manager.js");
 const { eventEmitter } = await import("./event-emitter.js");
-const { setClaudeHomeForTesting } = await import("./claude-home.js");
-const { readSessionPreferences } = await import("./session-preferences.js");
+const {
+  claudeSessionPreferencesDir,
+  setClaudeHomeForTesting,
+} = await import("./claude-home.js");
+const {
+  readSessionPreferences,
+  updateSessionPreferences,
+} = await import("./session-preferences.js");
 const sessionManagerTestHome = await mkdtemp(
   join(tmpdir(), "claude-session-manager-home-"),
 );
@@ -346,6 +352,7 @@ const {
   stopBackgroundTask,
   getStructuredPromptDispatchState,
   claimPromptDispatch,
+  setSessionPreferences,
 } = sessionManager;
 
 // ---------------------------------------------------------------------------
@@ -572,17 +579,393 @@ describe("session lifecycle", () => {
       const session = createSession("launch");
       track(session.id);
       const sdkSessionId = session.id.slice("session-".length);
+      let promptTask: Promise<void> | undefined;
 
       expect(
-        await claimPromptDispatch(session.id, "initial-prompt:env-1:tab-1"),
+        await claimPromptDispatch(
+          session.id,
+          "initial-prompt:env-1:tab-1",
+          () => {
+            promptTask = sendPrompt(session.id, "Launch once", {
+              requestId: "initial-prompt:env-1:tab-1",
+            });
+            return promptTask;
+          },
+        ),
       ).toBe("claimed");
       expect(
-        await claimPromptDispatch(session.id, "initial-prompt:env-1:tab-1"),
+        await claimPromptDispatch(
+          session.id,
+          "initial-prompt:env-1:tab-1",
+          async () => {
+            throw new Error("duplicate dispatch must not start");
+          },
+        ),
       ).toBe("duplicate");
       expect(
         await readSessionPreferences(sdkSessionId),
       ).toMatchObject({
         dispatchedRequestIds: ["initial-prompt:env-1:tab-1"],
+      });
+
+      const call = await nextQueryCall();
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptTask;
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("reserves a stable-id turn before its durable claim yields", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-dispatch-race-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("launch");
+      track(session.id);
+      let promptTask: Promise<void> | undefined;
+
+      const claim = claimPromptDispatch(
+        session.id,
+        "initial-prompt:env-1:tab-race",
+        () => {
+          promptTask = sendPrompt(session.id, "Launch once", {
+            requestId: "initial-prompt:env-1:tab-race",
+          });
+          return promptTask;
+        },
+      );
+
+      expect(getSession(session.id)?.status).toBe("running");
+      await expect(
+        sendPrompt(session.id, "Competing prompt"),
+      ).rejects.toThrow("already processing");
+      await expect(claim).resolves.toBe("claimed");
+
+      const call = await nextQueryCall();
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptTask;
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("same-id concurrent claims join the deferred durable outcome", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-dispatch-join-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("launch");
+      track(session.id);
+      let releasePersistence: (() => void) | undefined;
+      const persistenceGate = new Promise<void>((resolve) => {
+        releasePersistence = resolve;
+      });
+      const firstDispatch = mock(async () => {});
+      const duplicateDispatch = mock(async () => {});
+
+      const first = claimPromptDispatch(
+        session.id,
+        "initial-prompt:env-1:tab-join",
+        firstDispatch,
+        { beforePersistence: () => persistenceGate },
+      );
+      const duplicate = claimPromptDispatch(
+        session.id,
+        "initial-prompt:env-1:tab-join",
+        duplicateDispatch,
+      );
+      let duplicateSettled = false;
+      void duplicate.then(
+        () => {
+          duplicateSettled = true;
+        },
+        () => {
+          duplicateSettled = true;
+        },
+      );
+
+      await Promise.resolve();
+      expect(duplicateSettled).toBe(false);
+      expect(firstDispatch).not.toHaveBeenCalled();
+      expect(duplicateDispatch).not.toHaveBeenCalled();
+
+      releasePersistence!();
+      await expect(first).resolves.toBe("claimed");
+      await expect(duplicate).resolves.toBe("duplicate");
+      expect(firstDispatch).toHaveBeenCalledTimes(1);
+      expect(duplicateDispatch).not.toHaveBeenCalled();
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("same-id concurrent claims share a deferred persistence failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-dispatch-join-failure-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("launch");
+      track(session.id);
+      await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+      let releasePersistence: (() => void) | undefined;
+      const persistenceGate = new Promise<void>((resolve) => {
+        releasePersistence = resolve;
+      });
+      const firstDispatch = mock(async () => {});
+      const duplicateDispatch = mock(async () => {});
+
+      const first = claimPromptDispatch(
+        session.id,
+        "initial-prompt:env-1:tab-join-failure",
+        firstDispatch,
+        { beforePersistence: () => persistenceGate },
+      );
+      const duplicate = claimPromptDispatch(
+        session.id,
+        "initial-prompt:env-1:tab-join-failure",
+        duplicateDispatch,
+      );
+
+      releasePersistence!();
+      const [firstResult, duplicateResult] = await Promise.allSettled([
+        first,
+        duplicate,
+      ]);
+      expect(firstResult.status).toBe("rejected");
+      expect(duplicateResult.status).toBe("rejected");
+      expect(firstDispatch).not.toHaveBeenCalled();
+      expect(duplicateDispatch).not.toHaveBeenCalled();
+      expect(session.status).toBe("idle");
+      expect(session.dispatchedRequestIds?.has(
+        "initial-prompt:env-1:tab-join-failure",
+      )).toBe(false);
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("durable deletion waits for an invalidated claim to roll back on disk", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-dispatch-delete-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("launch");
+      track(session.id);
+      const sdkSessionId = session.id.slice("session-".length);
+      let releasePersistence: (() => void) | undefined;
+      const persistenceGate = new Promise<void>((resolve) => {
+        releasePersistence = resolve;
+      });
+      const dispatch = mock(async () => {});
+
+      const claim = claimPromptDispatch(
+        session.id,
+        "initial-prompt:env-1:tab-delete",
+        dispatch,
+        { beforePersistence: () => persistenceGate },
+      );
+      const deletion = deleteSessionDurably(session.id);
+      expect(session.deleting).toBe(true);
+
+      releasePersistence!();
+      await expect(claim).rejects.toMatchObject({ code: "conflict" });
+      await expect(deletion).resolves.toBe(true);
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(await readSessionPreferences(sdkSessionId)).toBeUndefined();
+      expect(getSession(session.id)).toBeUndefined();
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("post-write invalidation removes the request id from the durable journal", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-dispatch-invalidate-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("launch");
+      track(session.id);
+      const sdkSessionId = session.id.slice("session-".length);
+      let releasePersistence: (() => void) | undefined;
+      const persistenceGate = new Promise<void>((resolve) => {
+        releasePersistence = resolve;
+      });
+      const dispatch = mock(async () => {});
+
+      const claim = claimPromptDispatch(
+        session.id,
+        "initial-prompt:env-1:tab-invalidate",
+        dispatch,
+        { beforePersistence: () => persistenceGate },
+      );
+      expect(deleteSession(session.id)).toBe(true);
+
+      releasePersistence!();
+      await expect(claim).rejects.toMatchObject({ code: "conflict" });
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(await readSessionPreferences(sdkSessionId)).toEqual({});
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rolls back the turn reservation when request-id persistence fails", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-dispatch-failure-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("launch");
+      track(session.id);
+      await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+
+      await expect(
+        claimPromptDispatch(
+          session.id,
+          "initial-prompt:env-1:tab-failure",
+          async () => {},
+        ),
+      ).rejects.toBeTruthy();
+
+      expect(getSession(session.id)?.status).toBe("idle");
+      expect(getSession(session.id)?.dispatchedRequestIds?.has(
+        "initial-prompt:env-1:tab-failure",
+      )).toBe(false);
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rolls back the durable claim when dispatch cannot start", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-dispatch-start-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("launch");
+      track(session.id);
+      session.status = "error";
+      const sdkSessionId = session.id.slice("session-".length);
+
+      await expect(
+        claimPromptDispatch(
+          session.id,
+          "initial-prompt:env-1:tab-start",
+          () => {
+            throw new Error("dispatch refused");
+          },
+        ),
+      ).rejects.toThrow("dispatch refused");
+
+      expect(session.status).toBe("error");
+      expect(session.dispatchedRequestIds?.has(
+        "initial-prompt:env-1:tab-start",
+      )).toBe(false);
+      expect(await readSessionPreferences(sdkSessionId)).toEqual({});
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rolls back when prompt preparation fails before the SDK query starts", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-dispatch-prequery-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("launch");
+      track(session.id);
+      const sdkSessionId = session.id.slice("session-".length);
+      const requestId = "initial-prompt:env-1:tab-prequery";
+      const missingImage = join(directory, "missing.png");
+
+      const claim = withWorkspaceCwd(directory, () =>
+        claimPromptDispatch(session.id, requestId, () => {
+          let resolveStarted: (() => void) | undefined;
+          let rejectStarted: ((error: unknown) => void) | undefined;
+          const started = new Promise<void>((resolve, reject) => {
+            resolveStarted = resolve;
+            rejectStarted = reject;
+          });
+          const completion = sendPrompt(
+            session.id,
+            "Describe this image",
+            {
+              requestId,
+              attachments: [{ type: "image", path: missingImage }],
+            },
+            { onQueryStarted: () => resolveStarted?.() },
+          );
+          void completion.catch((error) => rejectStarted?.(error));
+          return { started, completion };
+        }),
+      );
+
+      await expect(claim).rejects.toMatchObject({
+        name: "ClaudeAttachmentError",
+        code: "attachment_read_failed",
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(session.dispatchedRequestIds?.has(requestId)).toBe(false);
+      expect(await readSessionPreferences(sdkSessionId)).toEqual({});
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("acknowledges explicit plan mode only after it is durable", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-plan-mode-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("plan");
+      track(session.id);
+      const { events, stop } = captureEvents();
+      try {
+        const updated = await setSessionPreferences(session.id, {
+          planMode: true,
+        });
+        expect(updated.planMode).toBe(true);
+      } finally {
+        stop();
+      }
+
+      expect(await readSessionPreferences(
+        session.id.slice("session-".length),
+      )).toEqual({ planMode: true });
+      expect(events).toContainEqual({
+        type: "session.updated",
+        sessionId: session.id,
+        data: { planMode: true },
+      });
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps the previous plan mode authoritative when persistence fails", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-plan-failure-"));
+    setClaudeHomeForTesting(directory);
+    try {
+      const session = createSession("plan");
+      track(session.id);
+      session.planMode = false;
+      await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+      const { events, stop } = captureEvents();
+      try {
+        await expect(
+          setSessionPreferences(session.id, { planMode: true }),
+        ).rejects.toBeTruthy();
+      } finally {
+        stop();
+      }
+
+      expect(session.planMode).toBe(false);
+      expect(events).not.toContainEqual({
+        type: "session.updated",
+        sessionId: session.id,
+        data: { planMode: true },
       });
     } finally {
       setClaudeHomeForTesting(sessionManagerTestHome);
@@ -4462,10 +4845,27 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
 
   test("deletes the rollout and the registry entry together", async () => {
     const state = await materializePersistedSession();
+    await updateSessionPreferences(PERSISTED_SDK_ID, {
+      planMode: true,
+      dispatchedRequestIds: ["initial-prompt:env-1:tab-1"],
+    });
     expect(await deleteSessionDurably(state.id)).toBe(true);
     expect(mockSdkDeleteSession).toHaveBeenCalledWith(PERSISTED_SDK_ID, {
       dir: process.env.CWD || process.cwd(),
     });
+    expect(await readSessionPreferences(PERSISTED_SDK_ID)).toBeUndefined();
+    expect(getSession(state.id)).toBeUndefined();
+  });
+
+  test("deletes preferences for a session before its first SDK turn", async () => {
+    const state = createSession("not started");
+    track(state.id);
+    await setSessionPreferences(state.id, { planMode: true });
+    const sdkSessionId = state.id.slice("session-".length);
+
+    expect(await deleteSessionDurably(state.id)).toBe(true);
+    expect(mockSdkDeleteSession).not.toHaveBeenCalled();
+    expect(await readSessionPreferences(sdkSessionId)).toBeUndefined();
     expect(getSession(state.id)).toBeUndefined();
   });
 
@@ -4516,6 +4916,26 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
     expect(getSession(state.id)).toBe(state);
     expect(state).toMatchObject({ deleting: false, status: "idle" });
     expect(state.queryControl).toBeUndefined();
+  });
+
+  test("keeps a deleted rollout absent when preference cleanup fails and lets retry finish cleanup", async () => {
+    const state = await materializePersistedSession();
+    const preferencePath = join(
+      claudeSessionPreferencesDir(),
+      `${PERSISTED_SDK_ID}.json`,
+    );
+    await rm(preferencePath, { recursive: true, force: true });
+    await mkdir(preferencePath, { recursive: true });
+
+    await expect(deleteSessionDurably(state.id)).rejects.toBeTruthy();
+    expect(mockSdkDeleteSession).toHaveBeenCalledTimes(1);
+    expect(getSession(state.id)).toBeUndefined();
+
+    await rm(preferencePath, { recursive: true, force: true });
+    mockSdkGetSessionInfo.mockImplementation(async () => undefined);
+    await expect(deleteSessionDurably(state.id)).resolves.toBe(false);
+    expect(await readSessionPreferences(PERSISTED_SDK_ID)).toBeUndefined();
+    expect(mockSdkDeleteSession).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -58,6 +58,19 @@ export function resolveEnvironmentAgentSettings(options: ClaudeOptions) {
   };
 }
 
+export function resolveEnvironmentAgentLaunchSettings(options: ClaudeOptions) {
+  return {
+    pendingAgentLaunch: options.launchAgent,
+    initialAgentModel: options.launchAgent ? options.model : undefined,
+    initialReasoningEffort: options.launchAgent
+      ? options.reasoningEffort
+      : undefined,
+    initialPromptAttachments: options.launchAgent
+      ? options.initialPromptAttachments
+      : undefined,
+  };
+}
+
 /**
  * Owns the shared create/configure/start workflow so every project entry point
  * behaves the same way.
@@ -102,6 +115,7 @@ export function CreateEnvironmentFlowDialog({
       );
 
       const agentSettings = resolveEnvironmentAgentSettings(options);
+      const launchSettings = resolveEnvironmentAgentLaunchSettings(options);
       const configuredEnvironment = await updateEnvironmentAgentSettings(
         environment.id,
         agentSettings.defaultAgent,
@@ -109,10 +123,10 @@ export function CreateEnvironmentFlowDialog({
         null,
         agentSettings.opencodeMode,
         agentSettings.codexMode,
-        options.launchAgent,
-        options.launchAgent ? options.model : undefined,
-        options.launchAgent ? options.reasoningEffort : undefined,
-        options.launchAgent ? options.initialPromptAttachments : undefined,
+        launchSettings.pendingAgentLaunch,
+        launchSettings.initialAgentModel,
+        launchSettings.initialReasoningEffort,
+        launchSettings.initialPromptAttachments,
       );
       updateEnvironment(environment.id, configuredEnvironment);
 

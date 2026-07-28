@@ -6,8 +6,12 @@ import {
 import { usePaneLayoutStore, useFileDirtyStore } from "@/stores";
 import type { PaneLeaf } from "@/types/paneLayout";
 import { createDraggableTabId, parseDraggableTabId } from "@/types/paneLayout";
-import { cn } from "@/lib/utils";
+import { cn, createSessionKey } from "@/lib/utils";
 import { discardFileDraft } from "@/lib/file-draft-persistence";
+import {
+  composeDraftKey,
+  discardComposeDraft,
+} from "@/lib/compose-draft-persistence";
 import { DraggableTab } from "./DraggableTab";
 import {
   AlertDialog,
@@ -47,12 +51,23 @@ export function DraggableTabBar({
   const { removeTab } = usePaneLayoutStore();
   const { isDirty, clearDirty } = useFileDirtyStore();
 
-  const discardTabDraft = useCallback((tabId: string) => {
+  const discardTabDraft = useCallback((tabId: string): Promise<void> => {
     const tab = pane.tabs.find((candidate) => candidate.id === tabId);
-    if (tab?.type !== "file" || !tab.fileData?.filePath) return;
-    void discardFileDraft(environmentId, tab.fileData.filePath).catch((error) => {
-      console.warn("[DraggableTabBar] Failed to discard file draft:", error);
-    });
+    if (tab?.type === "file" && tab.fileData?.filePath) {
+      return discardFileDraft(environmentId, tab.fileData.filePath);
+    }
+    const namespace = tab?.type === "claude-native"
+      ? "claude"
+      : tab?.type === "codex-native"
+        ? "codex"
+        : tab?.type === "opencode-native"
+          ? "opencode"
+          : null;
+    if (!namespace) return Promise.resolve();
+    const sessionKey = createSessionKey(environmentId, tabId);
+    return discardComposeDraft(
+      composeDraftKey(namespace, environmentId, sessionKey),
+    );
   }, [environmentId, pane.tabs]);
 
   // State for unsaved changes confirmation dialog
@@ -95,7 +110,7 @@ export function DraggableTabBar({
   );
 
   const closeTabs = useCallback(
-    (tabIds: string[]) => {
+    async (tabIds: string[]) => {
       const uniqueTabIds = Array.from(new Set(tabIds));
       const idsInPane = uniqueTabIds.filter((tabId) =>
         pane.tabs.some((tab) => tab.id === tabId),
@@ -122,12 +137,25 @@ export function DraggableTabBar({
         return;
       }
 
+      try {
+        await Promise.all(idsInPane.map(discardTabDraft));
+      } catch (error) {
+        console.warn("[DraggableTabBar] Failed to discard file draft:", error);
+        return;
+      }
+
+      const becameDirty = idsInPane.filter((tabId) => isDirty(tabId));
+      if (becameDirty.length > 0) {
+        setPendingCloseTabIds(becameDirty);
+        return;
+      }
+
       for (let i = idsInPane.length - 1; i >= 0; i--) {
-        discardTabDraft(idsInPane[i]!);
+        clearDirty(idsInPane[i]!);
         removeTab(pane.id, idsInPane[i]!, environmentId);
       }
     },
-    [discardTabDraft, environmentId, pane.id, pane.tabs, removeTab, isDirty],
+    [clearDirty, discardTabDraft, environmentId, pane.id, pane.tabs, removeTab, isDirty],
   );
 
   const handleClose = useCallback(
@@ -166,14 +194,20 @@ export function DraggableTabBar({
     return `${pendingCloseTabNames.length} files`;
   }, [pendingCloseTabNames]);
 
-  const handleConfirmClose = useCallback(() => {
+  const handleConfirmClose = useCallback(async () => {
     if (pendingCloseTabIds.length === 0) {
+      return;
+    }
+
+    try {
+      await Promise.all(pendingCloseTabIds.map(discardTabDraft));
+    } catch (error) {
+      console.warn("[DraggableTabBar] Failed to discard file draft:", error);
       return;
     }
 
     for (const tabId of pendingCloseTabIds) {
       clearDirty(tabId);
-      discardTabDraft(tabId);
     }
 
     for (let i = pendingCloseTabIds.length - 1; i >= 0; i--) {

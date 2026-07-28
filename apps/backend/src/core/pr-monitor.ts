@@ -51,6 +51,7 @@ export interface PrMonitorKanbanTask {
   /** Null when the task was located via a build pipeline but not loaded. */
   status: string | null;
   prUrl: string | null;
+  prState: PrState | null;
   prMergeCommented: boolean;
   hasCommentText: (text: string) => boolean;
 }
@@ -108,6 +109,8 @@ interface PrMonitorEntry {
    * without a PR does not accrete monitor entries.
    */
   provisional: boolean;
+  /** A detected state could not be written yet, so polling must retry it. */
+  persistencePending: boolean;
   /**
    * Kanban side-effect progress per (url, state, task), so a failure in a later
    * step retries that step without repeating comments or status moves.
@@ -284,6 +287,7 @@ export class PrMonitorService {
       recheckRequested: false,
       active: !behaviour.paused,
       provisional: false,
+      persistencePending: false,
       reconciliation: new Map(),
       announcedTransitions: new Set(),
     };
@@ -406,6 +410,7 @@ export class PrMonitorService {
    */
   private dropIfUnmonitorable(entry: PrMonitorEntry): boolean {
     if (entry.checkInProgress) return false;
+    if (entry.persistencePending) return false;
     if (entry.target.prUrl || entry.mode !== "normal") return false;
     this.remove(entry);
     return true;
@@ -424,7 +429,7 @@ export class PrMonitorService {
 
     let transition: PrMonitorTransition | undefined;
     if (detection.url !== previous.prUrl || detection.state !== previous.prState) {
-      const key = [entry.target.environmentId, detection.url, detection.state].join(" ");
+      const key = [entry.target.environmentId, detection.url, detection.state].join("\0");
       // A confirmed transition is announced even if persisting it fails: the
       // stale stored state would otherwise make every retry look like the same
       // new transition and re-notify on each one.
@@ -434,6 +439,7 @@ export class PrMonitorService {
       }
     }
 
+    let persisted = !changed;
     if (changed) {
       try {
         await this.options.effects.persistPr(entry.target.environmentId, detection);
@@ -443,23 +449,35 @@ export class PrMonitorService {
           prState: detection.state,
           hasMergeConflicts: detection.hasMergeConflicts,
         };
+        persisted = true;
+        entry.persistencePending = false;
       } catch (error) {
+        entry.persistencePending = true;
         entry.consecutiveErrors += 1;
         this.warn(`Failed to persist PR state for ${entry.target.environmentId}`, error);
       }
     }
-    entry.provisional = false;
+    // A newly discovered PR is not materialized until its authoritative
+    // environment record has been updated. Keeping the entry provisional (or
+    // create-pending) makes the next scheduled check retry persistence instead
+    // of retiring the only monitor that knows a PR was found.
+    if (persisted) {
+      entry.persistencePending = false;
+      entry.provisional = false;
+    }
 
     if (detection.state === "merged" || detection.state === "closed") {
       await this.reconcileTask(entry, detection);
     }
 
-    if (entry.mode === "create-pending") {
-      entry.mode = "normal";
-      entry.modeStartedAt = this.options.monotonicNow();
-      await this.storePrOnTask(entry, detection);
+    if (persisted && entry.mode === "create-pending") {
+      if (await this.storePrOnTask(entry, detection)) {
+        entry.mode = "normal";
+        entry.modeStartedAt = this.options.monotonicNow();
+      }
     } else if (
-      entry.mode === "merge-pending"
+      persisted
+      && entry.mode === "merge-pending"
       && (detection.state === "merged" || detection.state === "closed")
     ) {
       entry.mode = "normal";
@@ -471,7 +489,13 @@ export class PrMonitorService {
 
   private async applyNotFound(entry: PrMonitorEntry): Promise<void> {
     const { prUrl, prState } = entry.target;
-    if (!prUrl) return;
+    if (!prUrl) {
+      // A PR found on the previous check but never durably stored may disappear
+      // before the retry. There is then no state left to persist and no reason
+      // to retain a provisional background poller forever.
+      entry.persistencePending = false;
+      return;
+    }
     // After a merge with --delete-branch the environment checks out the base
     // branch and `gh pr list --head` stops finding the PR. The merged/closed
     // reading saved when the merge landed is the truth; do not clear it.
@@ -479,6 +503,7 @@ export class PrMonitorService {
     try {
       await this.options.effects.clearPr(entry.target.environmentId);
       entry.target = { ...entry.target, prUrl: null, prState: null, hasMergeConflicts: null };
+      entry.persistencePending = false;
     } catch (error) {
       entry.consecutiveErrors += 1;
       this.warn(`Failed to clear PR state for ${entry.target.environmentId}`, error);
@@ -501,17 +526,21 @@ export class PrMonitorService {
       const task = await this.options.effects.findTaskForEnvironment(environmentId);
       if (!task) return;
 
-      const key = [environmentId, detection.url, terminalState, task.taskId].join(" ");
+      const key = [environmentId, detection.url, terminalState, task.taskId].join("\0");
       const progress = entry.reconciliation.get(key) ?? new Set<ReconciliationStep>();
       entry.reconciliation.set(key, progress);
       const commentText = terminalState === "merged" ? PR_MERGED_COMMENT : PR_CLOSED_COMMENT;
 
-      if (task.prMergeCommented) {
+      const taskMetadataMatchesDetection = task.prUrl === detection.url
+        && task.prState === terminalState;
+      if (task.prMergeCommented && taskMetadataMatchesDetection) {
         progress.add("comment");
         progress.add("metadata");
-      } else if (task.hasCommentText(commentText)) {
+      } else if (taskMetadataMatchesDetection && task.hasCommentText(commentText)) {
         // A previous attempt (possibly by an earlier backend process) added the
-        // comment but died before setting the idempotency flag.
+        // comment but died before setting the idempotency flag. Only the same
+        // PR and terminal state qualify: a replacement PR on the same task must
+        // receive its own reconciliation.
         progress.add("comment");
       }
 
@@ -532,6 +561,7 @@ export class PrMonitorService {
 
       if (!progress.has("metadata")) {
         await this.options.effects.updateTaskPrMetadata(task.taskId, {
+          prUrl: detection.url,
           prState: terminalState,
           prMergeCommented: true,
         });
@@ -543,16 +573,18 @@ export class PrMonitorService {
   }
 
   /** Records the PR on the linked task when it is first detected. */
-  private async storePrOnTask(entry: PrMonitorEntry, detection: PrDetection): Promise<void> {
+  private async storePrOnTask(entry: PrMonitorEntry, detection: PrDetection): Promise<boolean> {
     try {
       const task = await this.options.effects.findTaskForEnvironment(entry.target.environmentId);
-      if (!task || task.prUrl) return;
+      if (!task || task.prUrl) return true;
       await this.options.effects.updateTaskPrMetadata(task.taskId, {
         prUrl: detection.url,
         prState: detection.state,
       });
+      return true;
     } catch (error) {
       this.warn(`Failed to store PR on task for ${entry.target.environmentId}`, error);
+      return false;
     }
   }
 

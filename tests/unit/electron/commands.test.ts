@@ -181,10 +181,12 @@ function expectClearsPendingAgentLaunch(update: unknown): void {
   expect(keys).toContain("pendingAgentLaunch");
   expect(keys).toContain("initialAgentModel");
   expect(keys).toContain("initialReasoningEffort");
+  expect(keys).toContain("initialPromptAttachments");
   const record = update as Record<string, unknown>;
   expect(record.pendingAgentLaunch).toBe(false);
   expect(record.initialAgentModel).toBeUndefined();
   expect(record.initialReasoningEffort).toBeUndefined();
+  expect(record.initialPromptAttachments).toBeUndefined();
 }
 
 /** The `updateEnvironment` updates recorded for a given status, in order. */
@@ -1168,6 +1170,46 @@ exit 42
       expect(environment.branch).toBe("review-oauth-flow");
       expect(environment.pendingRenamePrompt).toBeUndefined();
       expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow");
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("starting a stopped environment resumes backend PR polling", async () => {
+    const worktreePath = await createGitRepoOnBranch("feature-pr-monitor");
+    const environment = createEnvironment({
+      id: "env-pr-monitor-resume",
+      branch: "feature-pr-monitor",
+      environmentType: "local",
+      worktreePath,
+      status: "running",
+      setupScriptsComplete: true,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "open",
+      hasMergeConflicts: false,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    // Rehydrate the backend-owned entry, then stop the environment to exercise
+    // the same pause path used by the desktop lifecycle.
+    await commands.get("get_pr_monitor_state")?.({}, context);
+    await commands.get("stop_environment")?.({ environmentId: environment.id }, context);
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+  printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/42","state":"OPEN","mergeable":"MERGEABLE","updatedAt":"2026-01-03T00:00:00Z"}]'
+  exit 0
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async (logPath) => {
+      await commands.get("start_environment")?.({ environmentId: environment.id }, context);
+      await commands.get("pr_monitor_refresh")?.({ environmentId: environment.id }, context);
+      await waitForCondition(() => existsSync(logPath), "resumed PR monitor check");
+
+      expect(await fs.readFile(logPath, "utf8")).toContain(
+        "pr list --head feature-pr-monitor --state all",
+      );
     });
   }, ASYNC_TEST_BUDGET_MS);
 
@@ -6395,6 +6437,55 @@ exit 1
     )).rejects.toThrow("Local environment PR URL is not available");
   });
 
+  test("releases local and container merge guards when lifecycle persistence fails", async () => {
+    for (const kind of ["local", "container"] as const) {
+      const environment = createEnvironment(kind === "local"
+        ? {
+          id: "env-local-lifecycle-failure",
+          worktreePath: "/tmp/worktree",
+          prUrl: "https://github.com/acme/repo/pull/42",
+        }
+        : {
+          id: "env-container-lifecycle-failure",
+          environmentType: "containerized",
+          worktreePath: undefined,
+          containerId: "container-1",
+          status: "running",
+        });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const updateEnvironment = context.storage.updateEnvironment.bind(context.storage);
+      let failLifecycleWrite = true;
+      context.storage.updateEnvironment = mock(async (
+        environmentId: string,
+        updates: Partial<Environment>,
+      ) => {
+        if (updates.lifecycleOperation === "merging" && failLifecycleWrite) {
+          failLifecycleWrite = false;
+          throw new Error("lifecycle storage unavailable");
+        }
+        return updateEnvironment(environmentId, updates);
+      });
+
+      const command = kind === "local" ? "merge_pr_local" : "merge_pr";
+      const argumentsFor = (method: string) => kind === "local"
+        ? { environmentId: environment.id, method, deleteBranch: false }
+        : { containerId: environment.containerId, method, deleteBranch: false };
+
+      await expect(commands.get(command)?.(
+        argumentsFor("squash"),
+        context,
+      )).rejects.toThrow("lifecycle storage unavailable");
+
+      // An invalid method fails after acquiring the guard. If the first call
+      // leaked that guard, this would instead report "already being merged".
+      await expect(commands.get(command)?.(
+        argumentsFor("fast-forward"),
+        context,
+      )).rejects.toThrow("Invalid merge method: fast-forward");
+    }
+  });
+
   test("rejects invalid local API merge inputs before invoking gh", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-invalid-worktree-");
     const environment = createEnvironment({
@@ -9900,6 +9991,12 @@ exit 1
       pendingAgentLaunch: true,
       initialAgentModel: "gpt-5.6-sol",
       initialReasoningEffort: "high",
+      initialPromptAttachments: [{
+        id: "attachment-1",
+        name: "diagram.png",
+        previewUrl: "blob:diagram",
+        base64Data: "aW1hZ2U=",
+      }],
     });
     const { context, updates } = createContext([local, container]);
     const commands = createCommandRegistry();
@@ -9984,7 +10081,15 @@ exit 0
   });
 
   test("stores PR metadata, normalized settings, and deduplicated domain changes", async () => {
-    const environment = createEnvironment({ allowedDomains: ["api.example.com", "shared.example.com"] });
+    const environment = createEnvironment({
+      allowedDomains: ["api.example.com", "shared.example.com"],
+      initialPromptAttachments: [{
+        id: "attachment-1",
+        name: "diagram.png",
+        previewUrl: "blob:diagram",
+        base64Data: "aW1hZ2U=",
+      }],
+    });
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
 
@@ -10058,12 +10163,14 @@ exit 0
       pendingAgentLaunch: false,
       initialAgentModel: undefined,
       initialReasoningEffort: undefined,
+      initialPromptAttachments: undefined,
     });
     expectClearsPendingAgentLaunch(updates.at(-1));
     // ...and the stored environment really loses the model it had from the first
     // call in this test, rather than silently keeping "gpt-5.6-sol".
     expect(environment.initialAgentModel).toBeUndefined();
     expect(environment.initialReasoningEffort).toBeUndefined();
+    expect(environment.initialPromptAttachments).toBeUndefined();
     await commands.get("update_environment_agent_settings")?.({
       environmentId: environment.id,
       defaultAgent: "codex",

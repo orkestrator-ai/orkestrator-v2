@@ -73,7 +73,7 @@ const mockDismissQuestion = mock(() => true);
 const mockGetPendingPlanApprovals = mock(() => []);
 const mockRespondToPlanApproval = mock(() => true);
 const mockSetSessionPreferences = mock(
-  (_id: string, preferences: { planMode?: boolean }) => preferences,
+  async (_id: string, preferences: { planMode?: boolean }) => preferences,
 );
 const mockClearPromptSuggestion = mock((id: string) => id === "s-1");
 const mockGetStructuredPromptDispatchState = mock<
@@ -81,7 +81,10 @@ const mockGetStructuredPromptDispatchState = mock<
 >(() => "new");
 const mockClaimPromptDispatch = mock<
   typeof realSessionManager.claimPromptDispatch
->(async () => "claimed");
+>(async (_sessionId, _requestId, startDispatch) => {
+  void startDispatch();
+  return "claimed";
+});
 const mockReconcilePersistedSessions = mock(async () => {});
 const mockEnsurePersistedSession = mock(async (id: string) => mockGetSession(id));
 const mockHydratePersistedSessionMessages = mock(async () => mockGetSessionMessages());
@@ -218,10 +221,17 @@ describe("session routes", () => {
     mockGetPendingPlanApprovals.mockClear();
     mockRespondToPlanApproval.mockClear();
     mockClaimPromptDispatch.mockReset();
-    mockClaimPromptDispatch.mockImplementation(async () => "claimed");
+    mockClaimPromptDispatch.mockImplementation(async (
+      _sessionId,
+      _requestId,
+      startDispatch,
+    ) => {
+      void startDispatch();
+      return "claimed";
+    });
     mockSetSessionPreferences.mockClear();
     mockSetSessionPreferences.mockImplementation(
-      (_id: string, preferences: { planMode?: boolean }) => preferences,
+      async (_id: string, preferences: { planMode?: boolean }) => preferences,
     );
     mockClearPromptSuggestion.mockClear();
     mockClearPromptSuggestion.mockImplementation((id: string) => id === "s-1");
@@ -303,11 +313,65 @@ describe("session routes", () => {
       expect(mockSetSessionPreferences).toHaveBeenCalledWith("s-1", { planMode: true });
     });
 
+    test.each([
+      [null],
+      [[]],
+      ["plan"],
+      [true],
+      [1],
+    ])("rejects a non-object request body: %p", async (body) => {
+      const res = await jsonRequest("PUT", "/session/s-1/preferences", body);
+
+      expect(res.status).toBe(400);
+      expect(await jsonBody(res)).toEqual({
+        error: "Request body must be a JSON object",
+      });
+      expect(mockSetSessionPreferences).not.toHaveBeenCalled();
+    });
+
     test("rejects a non-boolean plan mode", async () => {
       const res = await jsonRequest("PUT", "/session/s-1/preferences", { planMode: "yes" });
 
       expect(res.status).toBe(400);
       expect(mockSetSessionPreferences).not.toHaveBeenCalled();
+    });
+
+    test("rejects malformed JSON without calling the preference store", async () => {
+      const res = await app.request("/session/s-1/preferences", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: "{",
+      });
+
+      expect(res.status).toBe(400);
+      expect(await jsonBody(res)).toEqual({
+        error: "Request body must be valid JSON",
+      });
+      expect(mockSetSessionPreferences).not.toHaveBeenCalled();
+    });
+
+    test("does not acknowledge a preference that failed to persist", async () => {
+      mockSetSessionPreferences.mockRejectedValueOnce(new Error("disk full"));
+
+      const res = await jsonRequest("PUT", "/session/s-1/preferences", {
+        planMode: true,
+      });
+
+      expect(res.status).toBe(500);
+      expect(await jsonBody(res)).toEqual({ error: "disk full" });
+    });
+
+    test("maps an unknown session preference update to 404", async () => {
+      mockSetSessionPreferences.mockRejectedValueOnce(
+        refusal("not_found", "Session not found"),
+      );
+
+      const res = await jsonRequest("PUT", "/session/missing/preferences", {
+        planMode: true,
+      });
+
+      expect(res.status).toBe(404);
+      expect(await jsonBody(res)).toEqual({ error: "Session not found" });
     });
   });
 
@@ -482,12 +546,16 @@ describe("session routes", () => {
       expect(mockClaimPromptDispatch).toHaveBeenCalledWith(
         "s-1",
         "initial-prompt:env-1:tab-1",
+        expect.any(Function),
       );
       expect(mockSendPrompt).toHaveBeenCalledWith(
         "s-1",
         "Launch once",
         expect.objectContaining({
           requestId: "initial-prompt:env-1:tab-1",
+        }),
+        expect.objectContaining({
+          onQueryStarted: expect.any(Function),
         }),
       );
     });
@@ -505,6 +573,65 @@ describe("session routes", () => {
         status: "already-processed",
         requestId: "initial-prompt:env-1:tab-1",
         duplicate: true,
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("routes a running session's same-id retry through the duplicate claim", async () => {
+      mockGetSession.mockImplementationOnce(() => ({
+        id: "s-1",
+        title: "Test",
+        status: "running" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+      }));
+      mockClaimPromptDispatch.mockResolvedValueOnce("duplicate");
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Launch once",
+        requestId: "initial-prompt:env-1:tab-1",
+      });
+
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({
+        status: "already-processed",
+        requestId: "initial-prompt:env-1:tab-1",
+        duplicate: true,
+      });
+      expect(mockClaimPromptDispatch).toHaveBeenCalledWith(
+        "s-1",
+        "initial-prompt:env-1:tab-1",
+        expect.any(Function),
+      );
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("does not dispatch when the durable request-id claim fails", async () => {
+      mockClaimPromptDispatch.mockRejectedValueOnce(new Error("journal unavailable"));
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Launch once",
+        requestId: "initial-prompt:env-1:tab-1",
+      });
+
+      expect(res.status).toBe(500);
+      expect(await jsonBody(res)).toEqual({ error: "journal unavailable" });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("maps a request-id reservation conflict to 409", async () => {
+      mockClaimPromptDispatch.mockRejectedValueOnce(
+        refusal("conflict", "Session is already processing a prompt"),
+      );
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Launch once",
+        requestId: "initial-prompt:env-1:tab-1",
+      });
+
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toEqual({
+        error: "Session is already processing a prompt",
       });
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });

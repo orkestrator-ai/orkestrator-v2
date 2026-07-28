@@ -7,10 +7,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { getComposeDraft } from "@/lib/backend";
 import {
   composeDraftKey,
   discardComposeDraft,
+  loadComposeDraft,
   persistComposeDraft,
 } from "@/lib/compose-draft-persistence";
 
@@ -55,29 +55,46 @@ export function useDurableComposeDraft<T>({
   const [value, setValue] = useState(initialValue);
   const valueRef = useRef(value);
   const initialRef = useRef(initialValue);
-  const hydratedKeyRef = useRef<string | null>(null);
+  const isEmptyRef = useRef(isEmpty);
+  const isValidRef = useRef(isValid);
+  const editRevisionRef = useRef(0);
+  const clearedKeyRef = useRef<string | null>(null);
+  const [hydratedKey, setHydratedKey] = useState<string | null>(null);
 
   valueRef.current = value;
   initialRef.current = initialValue;
+  isEmptyRef.current = isEmpty;
+  isValidRef.current = isValid;
+
+  const persistValue = useCallback((
+    draftKey: string,
+    nextValue: T,
+  ): Promise<void> => (
+    clearedKeyRef.current === draftKey || isEmptyRef.current(nextValue)
+      ? discardComposeDraft(draftKey)
+      : persistComposeDraft(draftKey, ownerType, ownerId, nextValue)
+  ), [ownerId, ownerType]);
 
   useEffect(() => {
     if (!enabled) {
-      hydratedKeyRef.current = null;
+      setHydratedKey(null);
       return;
     }
     let disposed = false;
-    const valueAtRequest = valueRef.current;
+    let hydrated = false;
+    let loadSucceeded = false;
+    const revisionAtRequest = editRevisionRef.current;
     setValue(initialRef.current);
     valueRef.current = initialRef.current;
 
-    void getComposeDraft<T>(key)
+    void loadComposeDraft<T>(key)
       .then((persisted) => {
+        loadSucceeded = true;
         if (
           disposed
           || !persisted
-          || !isValid(persisted.value)
-          || valueRef.current !== initialRef.current
-          || valueAtRequest !== initialRef.current
+          || !isValidRef.current(persisted.value)
+          || editRevisionRef.current !== revisionAtRequest
         ) {
           return;
         }
@@ -88,33 +105,54 @@ export function useDurableComposeDraft<T>({
         console.warn(`[${namespace}] Failed to restore draft:`, error);
       })
       .finally(() => {
-        if (!disposed) hydratedKeyRef.current = key;
+        if (!disposed && loadSucceeded) {
+          hydrated = true;
+          setHydratedKey(key);
+        }
       });
 
     return () => {
       disposed = true;
-      if (hydratedKeyRef.current === key) hydratedKeyRef.current = null;
+      setHydratedKey((current) => current === key ? null : current);
+      // A completed hydration or any local edit makes valueRef authoritative.
+      // Flush immediately because the ordinary debounce is cancelled by this
+      // same unmount/key-change cleanup.
+      if (hydrated || editRevisionRef.current !== revisionAtRequest) {
+        void persistValue(key, valueRef.current).catch((error) => {
+          console.warn(`[${namespace}] Failed to persist draft during cleanup:`, error);
+        });
+      }
     };
-  }, [enabled, isValid, key, namespace]);
+  }, [enabled, key, namespace, persistValue]);
 
   useEffect(() => {
-    if (!enabled || hydratedKeyRef.current !== key) return;
+    if (!enabled || hydratedKey !== key) return;
     const timer = setTimeout(() => {
-      const operation = isEmpty(value)
-        ? discardComposeDraft(key)
-        : persistComposeDraft(key, ownerType, ownerId, value);
-      void operation.catch((error) => {
+      void persistValue(key, value).catch((error) => {
         console.warn(`[${namespace}] Failed to persist draft:`, error);
       });
     }, debounceMs);
     return () => clearTimeout(timer);
-  }, [debounceMs, enabled, isEmpty, key, namespace, ownerId, ownerType, value]);
+  }, [debounceMs, enabled, hydratedKey, key, namespace, persistValue, value]);
+
+  const setDraftValue = useCallback<Dispatch<SetStateAction<T>>>((action) => {
+    const nextValue = typeof action === "function"
+      ? (action as (previous: T) => T)(valueRef.current)
+      : action;
+    editRevisionRef.current += 1;
+    clearedKeyRef.current = null;
+    valueRef.current = nextValue;
+    setValue(nextValue);
+    setHydratedKey(key);
+  }, [key]);
 
   const clear = useCallback(async () => {
+    editRevisionRef.current += 1;
+    clearedKeyRef.current = key;
     valueRef.current = initialRef.current;
     setValue(initialRef.current);
     await discardComposeDraft(key);
   }, [key]);
 
-  return [value, setValue, clear];
+  return [value, setDraftValue, clear];
 }

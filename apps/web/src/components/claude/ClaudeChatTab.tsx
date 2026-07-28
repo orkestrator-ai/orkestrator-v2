@@ -85,7 +85,12 @@ import {
   normalizeClaudeMessagesForDisplay,
 } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
-import { getNewEnvironmentConnectionRetryDelay } from "@/lib/new-environment-connection-retry";
+import {
+  RetryableNewEnvironmentConnectionError,
+  classifyNewEnvironmentConnectionStartupError,
+  getNewEnvironmentConnectionRetryDecision,
+  isRetryableNewEnvironmentConnectionError,
+} from "@/lib/new-environment-connection-retry";
 
 /**
  * Event types that legitimately arrive without matching a stored session —
@@ -205,6 +210,8 @@ export function ClaudeChatTab({
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
   const automaticInitRetryCountRef = useRef(0);
+  const automaticInitRetryWindowStartedAtRef = useRef<number | null>(null);
+  const setupPendingObservedForInitRetryRef = useRef(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [forkInFlight, setForkInFlight] = useState(false);
 
@@ -875,6 +882,7 @@ export function ClaudeChatTab({
   useEffect(() => {
     // Block initialization until setup scripts finish (local environments with orkestrator-ai.json)
     if (setupPending) {
+      setupPendingObservedForInitRetryRef.current = true;
       return;
     }
 
@@ -886,6 +894,22 @@ export function ClaudeChatTab({
      */
     if (handoffPending) {
       return;
+    }
+
+    if (automaticInitRetryWindowStartedAtRef.current === null) {
+      const environment = useEnvironmentStore
+        .getState()
+        .getEnvironmentById(environmentId);
+      const initialDecision = getNewEnvironmentConnectionRetryDecision({
+        createdAt: environment?.createdAt,
+        attempt: 0,
+        retryWindowStartedAt: null,
+        setupPendingObserved: setupPendingObservedForInitRetryRef.current,
+      });
+      if (initialDecision) {
+        automaticInitRetryWindowStartedAtRef.current =
+          initialDecision.retryWindowStartedAt;
+      }
     }
 
     const now = Date.now();
@@ -1088,7 +1112,12 @@ export function ClaudeChatTab({
 
         if (isLocal) {
           // Local environment - use local server commands
-          let localStatus = await getLocalClaudeServerStatus(environmentId);
+          let localStatus;
+          try {
+            localStatus = await getLocalClaudeServerStatus(environmentId);
+          } catch (error) {
+            throw classifyNewEnvironmentConnectionStartupError(error);
+          }
           console.debug("[ClaudeChatTab] Local server status:", localStatus.running);
 
           if (!localStatus.running || !localStatus.authToken) {
@@ -1116,7 +1145,12 @@ export function ClaudeChatTab({
             throw new Error("Container ID is required for containerized environments");
           }
 
-          let status = await getClaudeServerStatus(containerId);
+          let status;
+          try {
+            status = await getClaudeServerStatus(containerId);
+          } catch (error) {
+            throw classifyNewEnvironmentConnectionStartupError(error);
+          }
           console.debug("[ClaudeChatTab] Container server status:", status.running);
 
           if (!status.running || !status.authToken) {
@@ -1156,8 +1190,18 @@ export function ClaudeChatTab({
         const bridgeClient = createClient(baseUrl, authToken);
         setClient(environmentId, bridgeClient);
 
-        const healthy = await checkHealth(bridgeClient);
+        let healthy: boolean;
+        try {
+          healthy = await checkHealth(bridgeClient);
+        } catch (error) {
+          throw classifyNewEnvironmentConnectionStartupError(error);
+        }
         console.debug("[ClaudeChatTab] Claude bridge health:", healthy);
+        if (!healthy) {
+          throw new RetryableNewEnvironmentConnectionError(
+            "Claude bridge health check failed",
+          );
+        }
         const modelsStart = Date.now();
         const availableModels = await loadAuthoritativeModels(bridgeClient);
         if (!mounted) return;
@@ -1408,21 +1452,28 @@ export function ClaudeChatTab({
         const environment = useEnvironmentStore
           .getState()
           .getEnvironmentById(environmentId);
-        const retryDelay = getNewEnvironmentConnectionRetryDelay(
-          environment?.createdAt,
-          automaticInitRetryCountRef.current,
-        );
-        if (retryDelay !== null) {
+        const retryDecision = isRetryableNewEnvironmentConnectionError(error)
+          ? getNewEnvironmentConnectionRetryDecision({
+              createdAt: environment?.createdAt,
+              attempt: automaticInitRetryCountRef.current,
+              retryWindowStartedAt: automaticInitRetryWindowStartedAtRef.current,
+              setupPendingObserved: setupPendingObservedForInitRetryRef.current,
+            })
+          : null;
+        if (retryDecision !== null) {
+          const { delayMs, retryWindowStartedAt } = retryDecision;
+          automaticInitRetryWindowStartedAtRef.current = retryWindowStartedAt;
           automaticInitRetryCountRef.current += 1;
           console.warn(
-            `[ClaudeChatTab] Retrying new environment connection in ${retryDelay}ms:`,
+            `[ClaudeChatTab] Retrying new environment connection in ${delayMs}ms:`,
             message,
           );
+          setClient(environmentId, null);
           setConnectionState("connecting");
           setErrorMessage(null);
           window.setTimeout(() => {
             if (mounted) setInitAttempt((value) => value + 1);
-          }, retryDelay);
+          }, delayMs);
           return;
         }
 
@@ -2250,6 +2301,8 @@ export function ClaudeChatTab({
 
   const handleRetry = useCallback(() => {
     automaticInitRetryCountRef.current = 0;
+    automaticInitRetryWindowStartedAtRef.current = Date.now();
+    setupPendingObservedForInitRetryRef.current = false;
     setConnectionState("connecting");
     setErrorMessage(null);
     tabSessionIdRef.current = null;

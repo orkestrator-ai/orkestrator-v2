@@ -267,6 +267,8 @@ const MOCK_CLIENT = { baseUrl: "http://127.0.0.1:9999" } as const;
 const ORIGINAL_DATE_NOW = Date.now;
 const ORIGINAL_SET_INTERVAL = globalThis.setInterval;
 const ORIGINAL_CLEAR_INTERVAL = globalThis.clearInterval;
+const ORIGINAL_SET_TIMEOUT = globalThis.setTimeout;
+const ORIGINAL_WINDOW_SET_TIMEOUT = window.setTimeout;
 
 let mockedNow = 0;
 let intervalCallback: (() => void) | null = null;
@@ -441,6 +443,51 @@ async function flushAsyncWork(rounds = 3) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
+}
+
+async function flushMicrotaskWork(rounds = 12) {
+  await act(async () => {
+    for (let round = 0; round < rounds; round += 1) {
+      await Promise.resolve();
+    }
+  });
+}
+
+function installRetryTimeoutQueue() {
+  const timers: Array<{ callback: () => void; delay: number }> = [];
+  let nextHandle = 20_000;
+  const retryDelays = new Set([500, 1_000, 2_000, 4_000]);
+  const schedule = ((
+    handler: TimerHandler,
+    timeout?: number,
+    ...args: unknown[]
+  ) => {
+    const delay = timeout ?? 0;
+    if (!retryDelays.has(delay)) {
+      return ORIGINAL_SET_TIMEOUT(handler, delay, ...args);
+    }
+    timers.push({
+      callback: () => {
+        if (typeof handler === "function") handler(...args);
+      },
+      delay,
+    });
+    return nextHandle++ as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.setTimeout = schedule;
+  window.setTimeout = schedule as typeof window.setTimeout;
+  return {
+    timers,
+    async runNextRetry() {
+      const timer = timers.shift();
+      if (!timer) throw new Error("Expected a queued retry timer");
+      await act(async () => {
+        timer.callback();
+        for (let round = 0; round < 12; round += 1) await Promise.resolve();
+      });
+      return timer.delay;
+    },
+  };
 }
 
 function deferred<T>() {
@@ -990,6 +1037,8 @@ describe("ClaudeChatTab", () => {
     Date.now = ORIGINAL_DATE_NOW;
     globalThis.setInterval = ORIGINAL_SET_INTERVAL;
     globalThis.clearInterval = ORIGINAL_CLEAR_INTERVAL;
+    globalThis.setTimeout = ORIGINAL_SET_TIMEOUT;
+    window.setTimeout = ORIGINAL_WINDOW_SET_TIMEOUT;
     mock.restore();
   });
 
@@ -1238,6 +1287,88 @@ describe("ClaudeChatTab", () => {
     expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
       currentMessage,
     ]);
+  });
+
+  test("abandons a refresh if its bridge client is replaced before requests begin", async () => {
+    const { rerender } = render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={0} />,
+    );
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+    mockGetSession.mockClear();
+    mockGetSessionMessages.mockClear();
+
+    const originalGetState = useClaudeStore.getState;
+    let refreshStateReads = 0;
+    (useClaudeStore as any).getState = () => {
+      const state = originalGetState();
+      refreshStateReads += 1;
+      if (refreshStateReads === 2) {
+        return { ...state, clients: new Map() };
+      }
+      return state;
+    };
+    try {
+      rerender(
+        <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={1} />,
+      );
+      await flushAsyncWork();
+
+      expect(refreshStateReads).toBeGreaterThanOrEqual(2);
+      expect(mockGetSession).not.toHaveBeenCalled();
+      expect(mockGetSessionMessages).not.toHaveBeenCalled();
+    } finally {
+      (useClaudeStore as any).getState = originalGetState;
+    }
+  });
+
+  test("abandons a completed refresh when the tab switches sessions in flight", async () => {
+    const { rerender } = render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={0} />,
+    );
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+
+    const serverGate = deferred<any>();
+    const staleMessage: ClaudeMessageType = {
+      id: "stale-refresh-message",
+      role: "assistant",
+      content: "Do not apply this snapshot",
+      parts: [{ type: "text", content: "Do not apply this snapshot" }],
+      timestamp: "2026-07-28T12:00:00.000Z",
+    };
+    const replacementMessage: ClaudeMessageType = {
+      ...staleMessage,
+      id: "replacement-session-message",
+      content: "Keep the replacement session",
+      parts: [{ type: "text", content: "Keep the replacement session" }],
+    };
+    mockGetSession.mockReset();
+    mockGetSession.mockImplementation(() => serverGate.promise);
+    mockGetSessionMessages.mockReset();
+    mockGetSessionMessages.mockResolvedValue([staleMessage]);
+
+    rerender(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={1} />,
+    );
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+    act(() => {
+      useClaudeStore.getState().setSession(SESSION_KEY, {
+        sessionId: "replacement-session",
+        messages: [replacementMessage],
+        isLoading: false,
+      });
+    });
+    await act(async () => {
+      serverGate.resolve({ status: "running" });
+      await serverGate.promise;
+    });
+    await flushAsyncWork();
+
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+      sessionId: "replacement-session",
+      messages: [replacementMessage],
+      isLoading: false,
+    });
+    expect(mockToastError).not.toHaveBeenCalled();
   });
 
   test("an older overlapping refresh cannot overwrite the newer request", async () => {
@@ -2212,6 +2343,43 @@ describe("ClaudeChatTab", () => {
         replacementChannel.close();
       }
     });
+
+    test("stops reconnecting after the SSE retry budget is exhausted", async () => {
+      const originalWarn = console.warn;
+      const consoleWarn = mock(() => {});
+      console.warn = consoleWarn as unknown as typeof console.warn;
+      let reconnectTimers = 0;
+      globalThis.setTimeout = ((
+        handler: TimerHandler,
+        timeout?: number,
+        ...args: unknown[]
+      ) => {
+        if ((timeout ?? 0) >= 3_000) {
+          reconnectTimers += 1;
+          queueMicrotask(() => {
+            if (typeof handler === "function") handler(...args);
+          });
+          return (10_000 + reconnectTimers) as unknown as ReturnType<typeof setTimeout>;
+        }
+        return ORIGINAL_SET_TIMEOUT(handler, timeout, ...args);
+      }) as typeof setTimeout;
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {})());
+
+      try {
+        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+        await waitFor(() =>
+          expect(consoleWarn).toHaveBeenCalledWith(
+            "[ClaudeChatTab] SSE reconnect limit reached for",
+            ENVIRONMENT_ID,
+          ),
+        );
+        expect(reconnectTimers).toBe(10);
+        expect(mockSubscribeToEvents).toHaveBeenCalledTimes(11);
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
   });
 
   test("fast reconnect reuses the existing session instead of creating a new one", async () => {
@@ -2227,6 +2395,30 @@ describe("ClaudeChatTab", () => {
       expect(mockCheckHealth).toHaveBeenCalledWith(MOCK_CLIENT);
     });
     expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("turns an unhealthy fast reconnect into a reconnectable error", async () => {
+    mockCheckHealth.mockResolvedValueOnce(false);
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(
+      await screen.findByText("Bridge server disconnected. Click retry to reconnect."),
+    ).toBeTruthy();
+    expect(useClaudeStore.getState().clients.has(ENVIRONMENT_ID)).toBe(false);
+    expect(mockGetSession).not.toHaveBeenCalled();
+  });
+
+  test("clears stale loading state after a healthy fast reconnect reads an idle session", async () => {
+    act(() => useClaudeStore.getState().setSessionLoading(SESSION_KEY, true));
+    mockGetSession.mockResolvedValueOnce({ status: "idle" });
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() =>
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false),
+    );
+    expect(mockGetSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
   });
 
   test("warns distinctly for unmatched ordinary and plan-mode events", async () => {
@@ -2472,7 +2664,11 @@ describe("ClaudeChatTab", () => {
 
   test("replaces an expired restored session and persists the replacement id", async () => {
     const expiredSessionId = "expired-claude";
-    useClaudeStore.setState((state) => ({ ...state, sessions: new Map() }));
+    useClaudeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
     seedPaneLayout(expiredSessionId);
     mockGetSessionMessages.mockRejectedValueOnce(new MockSessionNotFoundError("expired"));
 
@@ -2847,6 +3043,121 @@ describe("ClaudeChatTab", () => {
       await flushAsyncWork();
 
       expect(useClaudeStore.getState().pendingQuestions.has(awayQuestion.id)).toBe(false);
+    });
+
+    test("keeps existing cards when background pending-prompt rehydration fails", async () => {
+      const existingQuestion: ClaudeQuestionRequest = {
+        ...awayQuestion,
+        id: "question-already-visible",
+      };
+      act(() => useClaudeStore.getState().addPendingQuestion(existingQuestion));
+      mockGetSession.mockResolvedValue({ status: "running" });
+      mockGetPendingQuestions.mockRejectedValueOnce(new Error("questions temporarily unavailable"));
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => expect(mockGetPendingQuestions).toHaveBeenCalled());
+      await flushAsyncWork();
+      expect(useClaudeStore.getState().pendingQuestions.get(existingQuestion.id))
+        .toEqual(existingQuestion);
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+    });
+
+    test("does not apply a pending-prompt snapshot from a replaced bridge client", async () => {
+      const gate = deferred<ClaudeQuestionRequest[]>();
+      mockGetSession.mockResolvedValue({ status: "running" });
+      mockGetPendingQuestions.mockImplementation(() => gate.promise);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockGetPendingQuestions).toHaveBeenCalled());
+
+      act(() => {
+        useClaudeStore.setState((state) => ({
+          clients: new Map(state.clients).set(
+            ENVIRONMENT_ID,
+            { baseUrl: "http://127.0.0.1:10000" } as any,
+          ),
+        }));
+      });
+      await act(async () => {
+        gate.resolve([awayQuestion]);
+        await gate.promise;
+      });
+      await flushAsyncWork();
+
+      expect(useClaudeStore.getState().pendingQuestions.has(awayQuestion.id)).toBe(false);
+    });
+
+    test("silently keeps a live pending card when background rehydration becomes stale", async () => {
+      const gate = deferred<ClaudeQuestionRequest[]>();
+      mockGetSession.mockResolvedValue({ status: "running" });
+      mockGetPendingQuestions.mockImplementation(() => gate.promise);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockGetPendingQuestions).toHaveBeenCalled());
+
+      const liveQuestion: ClaudeQuestionRequest = {
+        ...awayQuestion,
+        id: "question-arrived-during-background-sync",
+      };
+      act(() => useClaudeStore.getState().addPendingQuestion(liveQuestion));
+      await act(async () => {
+        gate.resolve([]);
+        await gate.promise;
+      });
+      await flushAsyncWork();
+
+      expect(useClaudeStore.getState().pendingQuestions.get(liveQuestion.id))
+        .toEqual(liveQuestion);
+      expect(mockToastError).not.toHaveBeenCalled();
+    });
+
+    test("reports a manual refresh whose pending-prompt snapshot races a live card", async () => {
+      mockGetSession.mockResolvedValue({ status: "idle" });
+      const { rerender } = render(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      await waitFor(() => expect(mockGetPendingQuestions).toHaveBeenCalled());
+
+      const gate = deferred<ClaudeQuestionRequest[]>();
+      mockGetPendingQuestions.mockReset();
+      mockGetPendingQuestions.mockImplementation(() => gate.promise);
+      mockToastError.mockClear();
+      rerender(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+      await waitFor(() => expect(mockGetPendingQuestions).toHaveBeenCalled());
+
+      const liveQuestion: ClaudeQuestionRequest = {
+        ...awayQuestion,
+        id: "question-from-live-frame",
+      };
+      act(() => useClaudeStore.getState().addPendingQuestion(liveQuestion));
+      await act(async () => {
+        gate.resolve([]);
+        await gate.promise;
+      });
+
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          "Failed to refresh Claude tab",
+          {
+            description: "Claude session changed while refreshing; try again",
+          },
+        ),
+      );
+      expect(useClaudeStore.getState().pendingQuestions.get(liveQuestion.id))
+        .toEqual(liveQuestion);
     });
   });
 
@@ -3699,6 +4010,55 @@ describe("ClaudeChatTab", () => {
     expect(mockGetSession.mock.calls.length).toBeGreaterThan(sessionReadsForManualRefresh);
   });
 
+  test("a background watchdog refresh silently preserves a newer session update", async () => {
+    installTimerHarness(2_000_000);
+    mockGetSession.mockResolvedValue({ status: "running" });
+    act(() => useClaudeStore.getState().setSessionLoading(SESSION_KEY, true));
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await flushAsyncWork();
+
+    const transcriptGate = deferred<ClaudeMessageType[]>();
+    const staleMessage: ClaudeMessageType = {
+      id: "watchdog-stale-message",
+      role: "assistant",
+      content: "Stale watchdog snapshot",
+      parts: [{ type: "text", content: "Stale watchdog snapshot" }],
+      timestamp: "2026-07-28T12:00:00.000Z",
+    };
+    const liveMessage: ClaudeMessageType = {
+      ...staleMessage,
+      id: "watchdog-live-message",
+      content: "Newer live update",
+      parts: [{ type: "text", content: "Newer live update" }],
+    };
+    mockGetSession.mockClear();
+    mockGetSession.mockResolvedValue({ status: "running" });
+    mockGetSessionMessages.mockReset();
+    mockGetSessionMessages.mockImplementation(() => transcriptGate.promise);
+    mockToastError.mockClear();
+
+    mockedNow += 20_000;
+    await act(async () => {
+      intervalCallback?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+    act(() => useClaudeStore.getState().upsertMessage(SESSION_KEY, liveMessage));
+    await act(async () => {
+      transcriptGate.resolve([staleMessage]);
+      await transcriptGate.promise;
+    });
+    await flushAsyncWork();
+
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages)
+      .toContainEqual(liveMessage);
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages)
+      .not.toContainEqual(staleMessage);
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
   describe("cold start server bring-up", () => {
     beforeEach(() => {
       useClaudeStore.setState((state) => ({
@@ -3729,6 +4089,83 @@ describe("ClaudeChatTab", () => {
         () => expect(mockCreateSession).toHaveBeenCalledTimes(1),
         { timeout: 1_500 },
       );
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+    });
+
+    test("shows the terminal error after exhausting retries and manual retry resets the budget", async () => {
+      const retryTimers = installRetryTimeoutQueue();
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date().toISOString(),
+      });
+      mockGetClaudeServerStatus.mockRejectedValue(new Error("bridge is still starting"));
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await flushMicrotaskWork();
+      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([500]);
+
+      expect(await retryTimers.runNextRetry()).toBe(500);
+      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([1_000]);
+      expect(await retryTimers.runNextRetry()).toBe(1_000);
+      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([2_000]);
+      expect(await retryTimers.runNextRetry()).toBe(2_000);
+      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([4_000]);
+      expect(await retryTimers.runNextRetry()).toBe(4_000);
+
+      expect(screen.getByText("bridge is still starting")).toBeTruthy();
+      expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(5);
+      expect(retryTimers.timers).toHaveLength(0);
+
+      fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
+      await flushMicrotaskWork();
+
+      expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(6);
+      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([500]);
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+    });
+
+    test("does not reconnect after unmounting with an automatic retry pending", async () => {
+      const retryTimers = installRetryTimeoutQueue();
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date().toISOString(),
+      });
+      mockGetClaudeServerStatus.mockRejectedValue(new Error("bridge is still starting"));
+
+      const view = render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await flushMicrotaskWork();
+      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([500]);
+
+      view.unmount();
+      await retryTimers.runNextRetry();
+
+      expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(1);
+      expect(retryTimers.timers).toHaveLength(0);
+    });
+
+    test("retries after slow setup using a window that starts at the first connection failure", async () => {
+      const retryTimers = installRetryTimeoutQueue();
+      useEnvironmentStore.setState({ workspaceReadyEnvironments: new Set() });
+      mockGetClaudeServerStatus
+        .mockRejectedValueOnce(new Error("bridge is still starting"))
+        .mockResolvedValueOnce({
+          running: true,
+          hostPort: 9999,
+          authToken: BRIDGE_AUTH_TOKEN,
+        });
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      expect(screen.getByText(/Waiting for setup/i)).toBeTruthy();
+      expect(mockGetClaudeServerStatus).not.toHaveBeenCalled();
+
+      act(() => {
+        useEnvironmentStore.setState({
+          workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
+        });
+      });
+      await flushMicrotaskWork();
+      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([500]);
+
+      await retryTimers.runNextRetry();
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
       expect(screen.queryByText("Connection Failed")).toBeNull();
     });
 
@@ -3821,6 +4258,61 @@ describe("ClaudeChatTab", () => {
 
       expect(await screen.findByText("Server started but no port available")).toBeTruthy();
       expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    test("reports missing bridge authentication without creating a session", async () => {
+      mockGetClaudeServerStatus.mockResolvedValue({
+        running: true,
+        hostPort: 9999,
+      });
+      mockStartClaudeServer.mockResolvedValue({ hostPort: 9999 });
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      expect(
+        await screen.findByText("Failed to resolve Claude bridge authentication"),
+      ).toBeTruthy();
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    test("reports a null cold-start session result", async () => {
+      useClaudeStore.setState({
+        clients: new Map(),
+        sessions: new Map(),
+      });
+      mockCreateSession.mockResolvedValueOnce(null);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      expect(await screen.findByText("Failed to create session")).toBeTruthy();
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    });
+
+    test("does not retry an ambiguous session-creation failure", async () => {
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date().toISOString(),
+      });
+      mockCreateSession.mockRejectedValue(new Error("create response was lost"));
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      expect(await screen.findByText("create response was lost")).toBeTruthy();
+      await new Promise((resolve) => ORIGINAL_SET_TIMEOUT(resolve, 600));
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    });
+
+    test("reports a null warm-path session result", async () => {
+      useClaudeStore.setState({
+        clients: new Map([[ENVIRONMENT_ID, MOCK_CLIENT as any]]),
+        sessions: new Map(),
+      });
+      mockCreateSession.mockResolvedValueOnce(null);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      expect(await screen.findByText("Failed to create session")).toBeTruthy();
+      expect(mockGetClaudeServerStatus).not.toHaveBeenCalled();
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
     });
 
     test("rejects a containerized environment without a container id", async () => {
@@ -4791,6 +5283,35 @@ describe("ClaudeChatTab", () => {
 
       await waitFor(() => expect(mockForkClaudeSession).toHaveBeenCalled());
       expect(mockToastWarning).not.toHaveBeenCalled();
+    });
+
+    test("rejects a stale fork action after its message leaves the current plan", async () => {
+      await renderWithUserTurn();
+      const staleButton = forkButtons()[0] as HTMLButtonElement & Record<string, any>;
+      const reactPropsKey = Object.keys(staleButton).find((key) =>
+        key.startsWith("__reactProps$")
+      );
+      if (!reactPropsKey) throw new Error("Expected React event props on fork button");
+      const staleClick = staleButton[reactPropsKey]?.onClick as (() => void) | undefined;
+      if (!staleClick) throw new Error("Expected fork click handler");
+
+      act(() => useClaudeStore.getState().setMessages(SESSION_KEY, []));
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", { name: "Fork Claude session from this prompt" }),
+        ).toBeNull(),
+      );
+      await act(async () => {
+        staleClick();
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          "The selected message is no longer in this session",
+        ),
+      );
+      expect(mockForkClaudeSession).not.toHaveBeenCalled();
     });
 
     test("reports a fork the bridge refuses", async () => {

@@ -80,6 +80,8 @@ export interface BridgeSession {
   structuredOutput?: StructuredOutputResult;
   /** Request id for the structured turn currently running or last completed. */
   structuredOutputRequestId?: string;
+  /** Bridge-observed turn reroutes that Codex does not write to its rollout. */
+  confirmedModelsByTurn?: Record<string, string>;
   lastAccessed: number;
   createdAt: number;
   /** Attachments staged by the current prompt request. */
@@ -148,6 +150,8 @@ export interface ThreadContext {
   materialized: boolean;
   /** Last model app-server confirmed for this thread. */
   modelId?: string;
+  /** Turn-scoped confirmations take precedence over thread settings. */
+  confirmedModelsByTurn: Map<string, string>;
 }
 
 /**
@@ -334,6 +338,9 @@ export class ThreadRegistry {
         unsubscribed: false,
         materialized: false,
         modelId: options.modelId,
+        confirmedModelsByTurn: new Map(
+          Object.entries(session?.confirmedModelsByTurn ?? {}),
+        ),
         cwd: options.cwd,
         name: options.name ?? null,
       };
@@ -346,8 +353,18 @@ export class ThreadRegistry {
       }
       context.unsubscribed = false;
       if (options.modelId) context.modelId = options.modelId;
+      for (const [turnId, modelId] of Object.entries(
+        session?.confirmedModelsByTurn ?? {},
+      )) {
+        context.confirmedModelsByTurn.set(turnId, modelId);
+      }
     }
 
+    if (session && context.confirmedModelsByTurn.size > 0) {
+      session.confirmedModelsByTurn = Object.fromEntries(
+        context.confirmedModelsByTurn,
+      );
+    }
     context.bridgeSessionIds.add(sessionId);
     return context;
   }

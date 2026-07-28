@@ -162,12 +162,15 @@ export function MessageShell({
             {showAssistantActionRow ? (
               <div className="mt-1 flex min-h-6 items-center justify-between gap-3 text-[10px] leading-none text-muted-foreground/55">
                 {metadata ? (
-                  <div className="min-w-0 truncate text-left">
-                    <span className="font-medium text-muted-foreground/70">
+                  <div className="flex min-w-0 items-center text-left">
+                    <span
+                      className="min-w-0 truncate font-medium text-muted-foreground/70"
+                      title={authorLabel}
+                    >
                       {authorLabel}
                     </span>
-                    <span className="mx-1.5">·</span>
-                    <span>{metadata}</span>
+                    <span className="mx-1.5 shrink-0">·</span>
+                    <span className="shrink-0 whitespace-nowrap">{metadata}</span>
                   </div>
                 ) : <span />}
                 {actions ? (

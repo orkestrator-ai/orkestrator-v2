@@ -98,6 +98,7 @@ import {
   type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import {
   applyTmuxAgentUsageSummaries,
@@ -367,6 +368,10 @@ export function ClaudeTmuxChatTab({
   );
   const setModelCatalog = useClaudeStore((s) => s.setModelCatalog);
   const availableModels = useMemo(() => tmuxModelList(sdkModels), [sdkModels]);
+  const resolveModelLabel = useCallback(
+    (modelId: string) => resolveCatalogModelLabel(modelId, availableModels),
+    [availableModels],
+  );
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
@@ -1470,6 +1475,7 @@ export function ClaudeTmuxChatTab({
                   previousMessage={previousMessage}
                   assistantLabel="Claude"
                   containerId={containerId}
+                  resolveModelLabel={resolveModelLabel}
                 />
               )}
               emptyState={

@@ -784,6 +784,7 @@ export class AppServerRuntime {
         lastAcceptedRequestId: persisted.lastAcceptedRequestId,
         structuredOutputRequestId: persisted.structuredOutputRequestId,
         structuredOutput: persisted.structuredOutput,
+        confirmedModelsByTurn: persisted.confirmedModelsByTurn,
         lastAccessed: Date.parse(persisted.lastAccessed),
       });
       this.lastPersistedAccess.set(
@@ -1072,8 +1073,22 @@ export class AppServerRuntime {
       // already attached would otherwise never join `bridgeSessionIds` — and
       // every emit path iterates that set, so the tab would receive no status,
       // no messages and no approval cards, not even for its own prompts.
-      existing.bridgeSessionIds.add(sessionId);
-      return existing;
+      const modelsBeforeAttach = JSON.stringify(
+        session.confirmedModelsByTurn ?? {},
+      );
+      const attached = this.registry.attach(sessionId, existing.threadId, {
+        engineHandle: existing.engineHandle,
+        engineGeneration: existing.engineGeneration,
+        cwd: existing.cwd,
+        name: existing.name,
+      });
+      if (
+        JSON.stringify(session.confirmedModelsByTurn ?? {})
+        !== modelsBeforeAttach
+      ) {
+        await this.persistSession(session);
+      }
+      return attached;
     }
     // No thread id yet: lazy creation on first prompt, nothing to re-attach.
     if (!session.threadId) return undefined;
@@ -1097,6 +1112,7 @@ export class AppServerRuntime {
       if (context.messages.length === 0) {
         const hydrated = await hydrateMessagesFromPersistedSession(threadId);
         context.messages = hydrated.messages;
+        this.applyPersistedModelOverrides(context);
         if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
         if (!session.title) {
           session.title = thread.name ?? hydrated.title;
@@ -1454,6 +1470,18 @@ export class AppServerRuntime {
     turnId?: string,
   ): void {
     if (!turnId) context.modelId = model;
+    if (turnId) {
+      context.confirmedModelsByTurn.set(turnId, model);
+      for (const sessionId of context.bridgeSessionIds) {
+        const session = this.registry.getSession(sessionId);
+        if (!session) continue;
+        session.confirmedModelsByTurn = {
+          ...(session.confirmedModelsByTurn ?? {}),
+          [turnId]: model,
+        };
+        void this.persistSession(session);
+      }
+    }
     let target: NormalizedMessage | undefined;
 
     if (turnId) {
@@ -1479,6 +1507,16 @@ export class AppServerRuntime {
       }
     }
 
+    const targetTurnId =
+      target?.turnId
+      ?? (
+        target?.id === context.activeTurn?.assistantMessageId
+          ? context.activeTurn?.turnId
+          : undefined
+      );
+    if (!turnId && targetTurnId && context.confirmedModelsByTurn.has(targetTurnId)) {
+      return;
+    }
     if (!target || target.modelId === model) return;
     target.modelId = model;
     this.bumpMessageRevision(context);
@@ -1488,6 +1526,19 @@ export class AppServerRuntime {
         sessionId,
         data: { message: target },
       });
+    }
+  }
+
+  /**
+   * Codex rollouts record the turn-start model but not `model/rerouted`.
+   * Reapply the bridge's sparse durable overlay after transcript hydration so
+   * REST reads and a newly mounted tab agree with the live SSE view.
+   */
+  private applyPersistedModelOverrides(context: ThreadContext): void {
+    for (const message of context.messages) {
+      if (message.role !== "assistant" || !message.turnId) continue;
+      const model = context.confirmedModelsByTurn.get(message.turnId);
+      if (model) message.modelId = model;
     }
   }
 
@@ -1860,6 +1911,7 @@ export class AppServerRuntime {
     if (context.messages.length === 0) {
       const hydrated = await hydrateMessagesFromPersistedSession(threadId);
       context.messages = hydrated.messages;
+      this.applyPersistedModelOverrides(context);
       if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
       session.title = thread.name ?? hydrated.title;
       session.titleSource = thread.name ? "codex" : hydrated.titleSource;
@@ -1940,6 +1992,7 @@ export class AppServerRuntime {
       title: parent.title ? `${parent.title} (fork)` : "Forked session",
       titleSource: "explicit",
       titleGenerationAttempted: true,
+      confirmedModelsByTurn: { ...(parent.confirmedModelsByTurn ?? {}) },
     });
     try {
       const context = this.registry.attach(child.id, fork.id, {
@@ -1952,6 +2005,7 @@ export class AppServerRuntime {
       context.materialized = true;
       const hydrated = await hydrateMessagesFromPersistedSession(fork.id);
       context.messages = hydrated.messages;
+      this.applyPersistedModelOverrides(context);
       if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
       await this.persistSession(child);
       return {
@@ -2302,7 +2356,9 @@ export class AppServerRuntime {
     if (context && phaseToExternalStatus(context.phase) === "running") return "running";
 
     const nextConfig = this.toEngineConfig(body);
+    const requestedModelChanged = session.config.model !== nextConfig.model;
     let attached: ThreadContext | undefined;
+    let previousConfirmedModel: string | undefined;
     try {
       // ensureAttached fast-returns a healthy current-generation context, but
       // re-resumes one invalidated by a failed generation recovery. Never update
@@ -2310,12 +2366,17 @@ export class AppServerRuntime {
       attached = await this.ensureAttached(sessionId);
       if (attached && phaseToExternalStatus(attached.phase) === "running") return "running";
       if (attached) {
+        previousConfirmedModel = attached.modelId;
+        if (requestedModelChanged) attached.modelId = undefined;
         // Configuration is transactional from the bridge's perspective: a failed
         // engine update must leave both memory and the durable session record on
         // the last configuration the engine actually accepted.
         await this.options.engine.configureThread(attached.engineHandle, nextConfig);
       }
     } catch (error) {
+      if (attached && requestedModelChanged && attached.modelId === undefined) {
+        attached.modelId = previousConfirmedModel;
+      }
       // A transient resume, an in-flight restart or an open circuit are all
       // retryable. Reported as an outcome rather than thrown so the route answers
       // 503 instead of leaking a stack trace as a 500.
@@ -2458,6 +2519,7 @@ export class AppServerRuntime {
           lastAcceptedRequestId: session.lastAcceptedRequestId,
           structuredOutputRequestId: session.structuredOutputRequestId,
           structuredOutput: session.structuredOutput,
+          confirmedModelsByTurn: session.confirmedModelsByTurn,
         }),
       )
       .catch(() => undefined);
@@ -2727,16 +2789,11 @@ export class AppServerRuntime {
         cwd: thread.cwd,
         modelId: thread.model,
       });
-      // `ThreadStartResponse.model` is app-server's resolved value, not an echo
-      // from the compose bar, so it is safe even when it differs from the request.
+      // The top-level response value is the engine-observed setting for this
+      // accepted thread. Later settings/reroute notifications supersede it.
       confirmedModelForTurn = thread.model;
       await this.persistSession(session);
-    } else if (
-      context.modelId
-      && (!session.config.model || session.config.model === context.modelId)
-    ) {
-      // A changed requested model invalidates the previous thread setting until
-      // app-server confirms the new one via `thread/settings/updated`.
+    } else if (context.modelId) {
       confirmedModelForTurn = context.modelId;
     }
 

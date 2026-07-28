@@ -18,6 +18,51 @@ import {
 } from "./native-message-adapters";
 
 describe("native message adapters", () => {
+  test("preserves model attribution through provider-neutral normalization", () => {
+    const message: NativeMessage = {
+      id: "native-model",
+      role: "assistant",
+      content: "Done",
+      createdAt: "2026-06-18T12:00:00.000Z",
+      parts: [{ type: "text", content: "Done" }],
+      modelId: "provider/model",
+    };
+
+    expect(normalizeCodexNativeMessage(message).modelId).toBe("provider/model");
+    expect(normalizeOpenCodeNativeMessage(message).modelId).toBe("provider/model");
+  });
+
+  test("propagates Claude model attribution to every timestamp-split row", () => {
+    const normalized = normalizeClaudeMessage({
+      id: "claude-model",
+      role: "assistant",
+      content: "FirstSecond",
+      timestamp: "2026-06-18T12:00:00.000Z",
+      modelId: "claude-opus-5",
+      parts: [
+        {
+          type: "text",
+          content: "First",
+          timestamp: "2026-06-18T12:00:00.000Z",
+        },
+        {
+          type: "thinking",
+          content: "Inspecting",
+          timestamp: "2026-06-18T12:01:00.000Z",
+        },
+        {
+          type: "text",
+          content: "Second",
+          timestamp: "2026-06-18T12:03:00.000Z",
+        },
+      ],
+    });
+
+    expect(normalized.modelId).toBe("claude-opus-5");
+    expect(splitClaudeAssistantTextBlocks(normalized).map((row) => row.modelId))
+      .toEqual(["claude-opus-5", "claude-opus-5"]);
+  });
+
   test("groups consecutive native tool activity into a tool group", () => {
     const message: NativeMessage = {
       id: "native-1",

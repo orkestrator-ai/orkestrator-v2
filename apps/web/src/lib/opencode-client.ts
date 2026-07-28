@@ -966,6 +966,7 @@ export function buildOpenCodeMessageFromPart(
     .join("");
 
   return {
+    ...existing,
     id: messageId,
     role: existing?.role ?? "assistant",
     content,

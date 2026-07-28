@@ -59,6 +59,42 @@ describe("lazy thread creation", () => {
     expect(registry.referenceCount("thread-1")).toBe(1);
   });
 
+  test("attach seeds and merges durable turn model confirmations", () => {
+    const registry = makeRegistry();
+    registry.createSession({
+      id: "s1",
+      threadId: null,
+      config: CONFIG,
+      confirmedModelsByTurn: { "turn-1": "gpt-rerouted" },
+    });
+    const context = registry.attach("s1", "thread-1", {
+      engineHandle: "thread-1",
+      modelId: "gpt-thread",
+    });
+    expect(context.modelId).toBe("gpt-thread");
+    expect(context.confirmedModelsByTurn.get("turn-1")).toBe("gpt-rerouted");
+
+    registry.createSession({
+      id: "s2",
+      threadId: null,
+      config: CONFIG,
+      confirmedModelsByTurn: { "turn-2": "gpt-other-reroute" },
+    });
+    const reattached = registry.attach("s2", "thread-1", {
+      engineHandle: "thread-1-next",
+    });
+    expect(reattached).toBe(context);
+    expect(reattached.modelId).toBe("gpt-thread");
+    expect(Object.fromEntries(reattached.confirmedModelsByTurn)).toEqual({
+      "turn-1": "gpt-rerouted",
+      "turn-2": "gpt-other-reroute",
+    });
+    expect(registry.getSession("s2")?.confirmedModelsByTurn).toEqual({
+      "turn-1": "gpt-rerouted",
+      "turn-2": "gpt-other-reroute",
+    });
+  });
+
   test("a session created with a thread id attaches immediately", () => {
     const registry = makeRegistry();
     createSession(registry, "s1", "thread-1");

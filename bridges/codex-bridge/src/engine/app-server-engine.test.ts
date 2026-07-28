@@ -246,6 +246,19 @@ describe("thread lifecycle", () => {
     expect(resumed.turns![0]!.startedAt).toBe("2023-11-14T22:13:20.000Z");
   });
 
+  test("resume reads the model from the response envelope, not the raw thread", async () => {
+    const h = harness({
+      "thread/resume": () => ({
+        thread: thread("t1", { model: "unreachable-raw-model" }),
+        model: "gpt-resumed",
+      }),
+    });
+    await h.engine.start();
+
+    const resumed = await h.engine.resumeThread("t1", { config: BUILD });
+    expect(resumed.model).toBe("gpt-resumed");
+  });
+
   test("an unmaterialized thread reads as empty turns, not an error", async () => {
     const h = harness({
       "thread/read": () => {
@@ -900,7 +913,12 @@ describe("server requests", () => {
 
 describe("thread operations behind the new session routes", () => {
   test("forkThread forwards lastTurnId and binds the returned thread", async () => {
-    const h = harness({ "thread/fork": () => ({ thread: thread("fork-1") }) });
+    const h = harness({
+      "thread/fork": () => ({
+        thread: thread("fork-1", { model: "unreachable-raw-model" }),
+        model: "gpt-forked",
+      }),
+    });
     await h.engine.start();
 
     const forked = await h.engine.forkThread("t1", BUILD, "turn-3");
@@ -909,6 +927,7 @@ describe("thread operations behind the new session routes", () => {
     // A handle is what every later call addresses; a fork with none would be
     // unusable even though the RPC succeeded.
     expect(forked.handle).toBeTruthy();
+    expect(forked.model).toBe("gpt-forked");
     expect(h.child().requests.find((entry) => entry.method === "thread/fork")?.params)
       .toMatchObject({ threadId: "t1", lastTurnId: "turn-3" });
   });

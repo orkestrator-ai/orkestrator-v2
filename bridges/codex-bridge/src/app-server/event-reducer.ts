@@ -172,7 +172,7 @@ export function reduceNotification(
       const settings = isRecord(params) && isRecord(params.threadSettings)
         ? params.threadSettings
         : undefined;
-      const model = settings ? str(settings.model) : undefined;
+      const model = settings ? str(settings.model)?.trim() : undefined;
       if (!threadId || !model) return { events: [] };
       return {
         events: [{
@@ -185,7 +185,7 @@ export function reduceNotification(
     }
 
     case "model/rerouted": {
-      const model = isRecord(params) ? str(params.toModel) : undefined;
+      const model = isRecord(params) ? str(params.toModel)?.trim() : undefined;
       if (!threadId || !turnId || !model) return { events: [] };
       return {
         events: [{

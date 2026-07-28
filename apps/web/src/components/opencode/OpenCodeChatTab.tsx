@@ -11,6 +11,7 @@ import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import {
   OPTIMISTIC_MESSAGE_PREFIX,
   TURN_STOPPED_BY_USER,
@@ -499,6 +500,10 @@ export function OpenCodeChatTab({
       (state) => state.models.get(environmentId) ?? EMPTY_MODELS,
       [environmentId],
     ),
+  );
+  const resolveModelLabel = useCallback(
+    (modelId: string) => resolveCatalogModelLabel(modelId, models),
+    [models],
   );
 
   // Rehydrate a last-known-good catalogue before a server finishes starting.
@@ -2360,6 +2365,7 @@ export function OpenCodeChatTab({
       serverLog={serverLog}
       onRetry={handleRetry}
       messages={displayMessages}
+      resolveModelLabel={resolveModelLabel}
       isLoading={session?.isLoading ?? false}
       elapsedSeconds={elapsedSeconds}
       finalElapsedSeconds={finalElapsedSeconds}

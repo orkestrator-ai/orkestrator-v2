@@ -105,6 +105,7 @@ interface NativeMessageProps {
   assistantLabel?: string;
   containerId?: string;
   actions?: ReactNode;
+  resolveModelLabel?: (modelId: string) => string;
 }
 
 interface AgentExpansionContextValue {
@@ -1549,6 +1550,7 @@ export const NativeMessage = memo(function NativeMessage({
   assistantLabel = "Assistant",
   containerId,
   actions: messageActions,
+  resolveModelLabel,
 }: NativeMessageProps) {
   const normalizedMessage = useMemo(() => normalizeNativeMessage(message), [message]);
   const normalizedPreviousMessage = useMemo(
@@ -1587,6 +1589,10 @@ export const NativeMessage = memo(function NativeMessage({
     previousMessage?.role === "assistant" &&
     !previousMessage.id.startsWith(ERROR_MESSAGE_PREFIX) &&
     isSameMinute(previousMessage.createdAt, message.createdAt);
+  const confirmedModelId = message.modelId?.trim();
+  const assistantAuthorLabel = confirmedModelId
+    ? resolveModelLabel?.(confirmedModelId).trim() || confirmedModelId
+    : assistantLabel;
 
   const hasTextParts = message.parts.some((part) => part.type === "text");
   const userCopyContent = isUser
@@ -1656,7 +1662,7 @@ export const NativeMessage = memo(function NativeMessage({
         authorLabel={
           isUser
             ? "You"
-            : message.modelId?.trim() || assistantLabel
+            : assistantAuthorLabel
         }
         timestampLabel={formatTime(message.createdAt)}
         durationLabel={durationLabel}

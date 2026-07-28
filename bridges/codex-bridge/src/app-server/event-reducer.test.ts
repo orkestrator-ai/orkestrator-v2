@@ -56,6 +56,26 @@ describe("thread and turn lifecycle", () => {
     }]);
   });
 
+  test("drops malformed model notifications", () => {
+    for (const params of [
+      {},
+      { threadSettings: { model: "gpt" } },
+      { threadId: "t1", threadSettings: null },
+      { threadId: "t1", threadSettings: {} },
+      { threadId: "t1", threadSettings: { model: "   " } },
+    ]) {
+      expect(reduce("thread/settings/updated", params)).toEqual([]);
+    }
+    for (const params of [
+      {},
+      { threadId: "t1", toModel: "gpt" },
+      { threadId: "t1", turnId: "turn-1" },
+      { threadId: "t1", turnId: "turn-1", toModel: "   " },
+    ]) {
+      expect(reduce("model/rerouted", params)).toEqual([]);
+    }
+  });
+
   test("turn/completed maps each terminal status", () => {
     for (const [status, expected] of [
       ["completed", "completed"],
@@ -470,6 +490,8 @@ describe("unknown and ignored notifications", () => {
       "item/completed",
       "item/agentMessage/delta",
       "turn/diff/updated",
+      "thread/settings/updated",
+      "model/rerouted",
       "error",
     ]) {
       expect(isIgnoredNotification(method)).toBe(false);

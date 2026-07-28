@@ -30,6 +30,10 @@ import type {
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import {
+  isRootAssistantRecord,
+  normalizeBackendModelId,
+} from "@orkestrator/protocol/model-id";
+import {
   structuredOutputFailure,
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
@@ -1119,6 +1123,7 @@ function normalizePersistedSessionMessages(
     session_id: string;
     message: unknown;
     parent_tool_use_id: string | null;
+    isSidechain?: boolean;
   }>,
 ): { messages: NormalizedMessage[]; taskRegistry: TaskRegistry } {
   const toolTracker = new ToolTracker();
@@ -1162,19 +1167,24 @@ function normalizePersistedSessionMessages(
       typeof rawTimestamp === "string"
         ? rawTimestamp
         : new Date(now + index).toISOString();
+    const isRootAssistant =
+      entry.raw.type === "assistant"
+      && isRootAssistantRecord(
+        entry.raw.parent_tool_use_id,
+        entry.raw.isSidechain,
+      );
+    const modelId = isRootAssistant
+      && entry.raw.message
+      && typeof entry.raw.message === "object"
+      ? normalizeBackendModelId((entry.raw.message as { model?: unknown }).model)
+      : undefined;
     messages.push({
       id: entry.raw.uuid || generateMessageId(),
       role: entry.raw.type,
       content: entry.content,
       parts,
       timestamp,
-      ...(entry.raw.type === "assistant"
-        && entry.raw.message
-        && typeof entry.raw.message === "object"
-        && typeof (entry.raw.message as { model?: unknown }).model === "string"
-        && (entry.raw.message as { model: string }).model.trim().length > 0
-        ? { modelId: (entry.raw.message as { model: string }).model.trim() }
-        : {}),
+      ...(modelId ? { modelId } : {}),
       // Recorded explicitly rather than inferred from `id`: a record with no
       // uuid falls back to a generated id, which must never be mistaken for a
       // transcript uuid by `resolvePersistedMessageId`.
@@ -3077,16 +3087,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           ? streamEvent.message.id
           : undefined;
         currentStreamApiMessageId = apiMessageId ?? null;
-        const isRootAssistant =
-          typeof partialMessage.parent_tool_use_id !== "string"
-          || partialMessage.parent_tool_use_id.trim().length === 0;
-        if (
-          isRootAssistant
-          && typeof streamEvent.message?.model === "string"
-          && streamEvent.message.model.trim().length > 0
-        ) {
-          lastStreamModelId = streamEvent.message.model.trim();
-        }
+        const isRootAssistant = isRootAssistantRecord(
+          partialMessage.parent_tool_use_id,
+          partialMessage.isSidechain,
+        );
+        const modelId = isRootAssistant
+          ? normalizeBackendModelId(streamEvent.message?.model)
+          : undefined;
+        if (modelId) lastStreamModelId = modelId;
         if (apiMessageId) {
           getBlocksForMessage(apiMessageId);
         }
@@ -3557,14 +3565,13 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         const parentToolUseId = (
           message as { parent_tool_use_id?: unknown }
         ).parent_tool_use_id;
-        const isRootAssistant =
-          typeof parentToolUseId !== "string" || parentToolUseId.trim().length === 0;
-        const modelId =
-          isRootAssistant
-          && typeof observedModel === "string"
-          && observedModel.trim().length > 0
-            ? observedModel.trim()
-            : undefined;
+        const isRootAssistant = isRootAssistantRecord(
+          parentToolUseId,
+          (message as { isSidechain?: unknown }).isSidechain,
+        );
+        const modelId = isRootAssistant
+          ? normalizeBackendModelId(observedModel)
+          : undefined;
         if (!currentAssistantMessage) {
           currentAssistantMessage = {
             id: messageKey,

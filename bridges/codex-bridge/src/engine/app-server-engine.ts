@@ -909,10 +909,6 @@ export class AppServerEngine implements CodexEngine {
       id,
       handle: id ?? "",
       cwd: typeof thread.cwd === "string" ? thread.cwd : undefined,
-      model:
-        typeof thread.model === "string" && thread.model.trim().length > 0
-          ? thread.model.trim()
-          : undefined,
       name: typeof thread.name === "string" ? thread.name : null,
       preview: typeof thread.preview === "string" ? thread.preview : undefined,
       source: describeSource(thread.source),

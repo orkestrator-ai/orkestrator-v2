@@ -2,6 +2,7 @@ import { createSessionKey } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import {
   clearPersistedVirtuosoState,
   useElapsedTimer,
@@ -299,6 +300,10 @@ export function CodexChatTab({
   const persistedPreferencesRef = useRef(getPersistedCodexPreferences(config));
 
   const models = useCodexStore((state) => state.models);
+  const resolveModelLabel = useCallback(
+    (modelId: string) => resolveCatalogModelLabel(modelId, models),
+    [models],
+  );
   const setModels = useCodexStore((state) => state.setModels);
   const setSlashCommands = useCodexStore((state) => state.setSlashCommands);
   const setServerStatus = useCodexStore((state) => state.setServerStatus);
@@ -2261,6 +2266,7 @@ export function CodexChatTab({
       serverLog={serverLog}
       onRetry={handleRetry}
       messages={displayMessages}
+      resolveModelLabel={resolveModelLabel}
       isLoading={session?.isLoading ?? false}
       statusLabel={
         /*

@@ -149,6 +149,7 @@ describe("BridgeSessionStore", () => {
       title: "A session",
       titleSource: "explicit",
       lastAcceptedRequestId: "request-1",
+      confirmedModelsByTurn: { "turn-1": "gpt-rerouted" },
     });
 
     await store.upsert(record);

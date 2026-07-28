@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -50,7 +51,7 @@ import {
 import * as backend from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
-import { useConfigStore, useEnvironmentStore, useFeaturePlanStore, useKanbanStore, useProjectStore } from "@/stores";
+import { useCodexStore, useConfigStore, useEnvironmentStore, useFeaturePlanStore, useKanbanStore, useProjectStore } from "@/stores";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import type { Environment, EnvironmentType } from "@/types";
 import type {
@@ -2127,6 +2128,11 @@ export function NativeStyleChatPanel({
   onSend: (text: string) => void;
   onRefresh?: () => void;
 }) {
+  const models = useCodexStore((state) => state.models);
+  const resolveModelLabel = useCallback(
+    (modelId: string) => resolveCatalogModelLabel(modelId, models),
+    [models],
+  );
   const nativeMessages = useMemo(
     () => messages
       .map((message) => toNativeChatMessage(message, stripState))
@@ -2156,6 +2162,7 @@ export function NativeStyleChatPanel({
               message={message}
               previousMessage={previousMessage}
               assistantLabel="Codex"
+              resolveModelLabel={resolveModelLabel}
             />
           )}
           footer={

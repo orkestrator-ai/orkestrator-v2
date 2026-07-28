@@ -710,6 +710,80 @@ describe("rollout public helpers (continued)", () => {
     });
   });
 
+  test("scopes changing models to their turn and never attributes user messages", async () => {
+    const hydrated = await hydrateRollout("thread-models", [
+      sessionMeta("thread-models"),
+      {
+        type: "turn_context",
+        payload: { turn_id: "turn-1", cwd: "/workspace", model: "gpt-one" },
+      },
+      // A repeated context without a model must not erase the value already
+      // observed for this same turn.
+      {
+        type: "turn_context",
+        payload: { turn_id: "turn-1", cwd: "/workspace" },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "First" }],
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "One" }],
+        },
+      },
+      {
+        type: "turn_context",
+        payload: { turn_id: "turn-2", cwd: "/workspace", model: "gpt-two" },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Two" }],
+        },
+      },
+    ]);
+
+    expect(hydrated.messages.map((message) => ({
+      role: message.role,
+      turnId: message.turnId,
+      modelId: message.modelId,
+    }))).toEqual([
+      { role: "user", turnId: "turn-1", modelId: undefined },
+      { role: "assistant", turnId: "turn-1", modelId: "gpt-one" },
+      { role: "assistant", turnId: "turn-2", modelId: "gpt-two" },
+    ]);
+  });
+
+  test("does not retroactively apply a turn context that arrives after output", async () => {
+    const hydrated = await hydrateRollout("thread-late-model", [
+      sessionMeta("thread-late-model"),
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Before context" }],
+        },
+      },
+      {
+        type: "turn_context",
+        payload: { turn_id: "turn-1", cwd: "/workspace", model: "gpt-late" },
+      },
+    ]);
+
+    expect(hydrated.messages[0]?.modelId).toBeUndefined();
+  });
+
   /**
    * `status: "failed"` has not been observed in 34,640 sampled `custom_tool_call`
    * records — every one was `"completed"`. It is kept as a guard because it is

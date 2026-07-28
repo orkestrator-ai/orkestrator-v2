@@ -57,6 +57,72 @@ describe("applyTranscriptLine", () => {
     ).toBe("claude-opus-4-6");
   });
 
+  test("rejects synthetic, subagent, sidechain, and blank model attribution", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.applyTranscriptLine("e", {
+      type: "assistant",
+      uuid: "synthetic",
+      message: {
+        role: "assistant",
+        model: "<synthetic>",
+        content: [{ type: "text", text: "Generated" }],
+      },
+    });
+    store.applyTranscriptLine("e", {
+      type: "assistant",
+      uuid: "subagent",
+      parent_tool_use_id: "tool-1",
+      message: {
+        role: "assistant",
+        model: "claude-subagent",
+        content: [{ type: "text", text: "Subagent" }],
+      },
+    });
+    store.applyTranscriptLine("e", {
+      type: "assistant",
+      uuid: "sidechain",
+      isSidechain: true,
+      parent_tool_use_id: null,
+      message: {
+        role: "assistant",
+        model: "claude-sidechain",
+        content: [{ type: "text", text: "Sidechain" }],
+      },
+    });
+    store.applyTranscriptLine("e", {
+      type: "assistant",
+      uuid: "blank",
+      message: {
+        role: "assistant",
+        model: "   ",
+        content: [{ type: "text", text: "Blank" }],
+      },
+    });
+
+    expect(store.getTab("e").messages.map((message) => message.modelId))
+      .toEqual([undefined, undefined, undefined, undefined]);
+  });
+
+  test("adopts model attribution from a later line with the same uuid", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.applyTranscriptLine("e", {
+      type: "assistant",
+      uuid: "assistant-repeat",
+      message: { role: "assistant", content: [{ type: "text", text: "Partial" }] },
+    });
+    store.applyTranscriptLine("e", {
+      type: "assistant",
+      uuid: "assistant-repeat",
+      message: {
+        role: "assistant",
+        model: "claude-opus-5",
+        content: [{ type: "text", text: "Final" }],
+      },
+    });
+
+    expect(store.getTab("e").messages[0]?.modelId).toBe("claude-opus-5");
+  });
+
   test("user text line becomes a message", () => {
     const line: TranscriptLine = {
       type: "user",
@@ -669,6 +735,29 @@ describe("compactConsecutiveAssistantMessages", () => {
       "tool-invocation",
       "text",
     ]);
+  });
+
+  test("uses the latest model attribution in a compacted assistant run", () => {
+    const messages: ClaudeMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "partial",
+        timestamp: "2026-01-01T00:00:01Z",
+        parts: [{ type: "text", content: "partial" }],
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "final",
+        timestamp: "2026-01-01T00:00:02Z",
+        parts: [{ type: "text", content: "final" }],
+        modelId: "claude-opus-5",
+      },
+    ];
+
+    expect(compactConsecutiveAssistantMessages(messages)[0]?.modelId)
+      .toBe("claude-opus-5");
   });
 
   test("does not combine assistant messages across a visible user message", () => {

@@ -5,6 +5,7 @@ import {
   extractExecCommandPreview,
   MAX_SUBAGENT_ACTION_OUTPUT_CHARS,
   mergeSubagentPartsIntoMessageParts,
+  normalizeTranscriptToolArgs,
   parseSubAgentActivityRecords,
   parseTranscriptRecords,
   SUBAGENT_OUTPUT_TRUNCATION_NOTICE,
@@ -23,6 +24,9 @@ describe("exec transcript previews", () => {
   });
 
   test("summarizes multi-command orchestration and deduplicates repeats", () => {
+    // Source order is not execution order, and a command inside an untaken
+    // branch is indistinguishable from one that ran, so no single command is
+    // promoted to the label.
     expect(extractExecCommandPreview(
       [
         "const results = await Promise.all([",
@@ -31,7 +35,182 @@ describe("exec transcript previews", () => {
         "  tools.exec_command({cmd: 'git status'}),",
         "]);",
       ].join("\n"),
-    )).toBe("git status (+1 more)");
+    )).toBe("2 commands");
+  });
+
+  test("marks the count as a floor once the tracked-command cap is reached", () => {
+    const many = `[${Array.from({ length: 35 }, (_, index) => `{cmd:"c${index}"}`).join(",")}]`;
+    expect(extractExecCommandPreview(many)).toBe("20+ commands");
+
+    const exactlyAtCap = `[${Array.from({ length: 20 }, (_, index) => `{cmd:"c${index}"}`).join(",")}]`;
+    expect(extractExecCommandPreview(exactlyAtCap)).toBe("20 commands");
+  });
+
+  test("ignores cmd keys that live inside another tool's string argument", () => {
+    // The decoy never ran. Labelling the row with it would be worse than
+    // showing nothing, because the row is the user's record of what executed.
+    expect(extractExecCommandPreview(
+      [
+        `await tools.write_file({path:'x.js', content: "module.exports = {cmd: 'rm -rf /tmp/build'}"});`,
+        `await tools.exec_command({cmd: 'ls -la'});`,
+      ].join("\n"),
+    )).toBe("ls -la");
+
+    expect(extractExecCommandPreview(
+      `await tools.exec_command({note: 'contains {cmd: "decoy"} text', cmd: "ls"});`,
+    )).toBe("ls");
+  });
+
+  test("ignores cmd keys inside line and block comments", () => {
+    expect(extractExecCommandPreview("// {cmd: 'rm -rf /'}\nexec({cmd: \"ls\"})")).toBe("ls");
+    expect(extractExecCommandPreview("/* {cmd: 'rm -rf /'} */ exec({cmd: \"ls\"})")).toBe("ls");
+    expect(extractExecCommandPreview("exec({/* why */ cmd: \"ls\"})")).toBe("ls");
+    // An unterminated comment swallows the rest rather than exposing it.
+    expect(extractExecCommandPreview("/* {cmd: 'never'}")).toBeUndefined();
+  });
+
+  test("rejects templates whose value depends on runtime substitution", () => {
+    expect(extractExecCommandPreview("{cmd: `ls ${dir}/sub`}")).toBeUndefined();
+    expect(extractExecCommandPreview("{cmd: `ls ${`a`}`}")).toBeUndefined();
+    // A template with no substitution is still a static string.
+    expect(extractExecCommandPreview("{cmd: `ls -la`}")).toBe("ls -la");
+    // Templates may legally span lines.
+    expect(extractExecCommandPreview("{cmd: `ls\nwc -l`}")).toBe("ls\nwc -l");
+  });
+
+  test("refuses to let an unterminated quote swallow unrelated prose", () => {
+    expect(extractExecCommandPreview(
+      "{cmd: 'ls -la\nsome other text with don't apostrophe",
+    )).toBeUndefined();
+    expect(extractExecCommandPreview(`{cmd: "ls -la\nmore prose"`)).toBeUndefined();
+  });
+
+  test("accepts every quote style for both the key and the value", () => {
+    expect(extractExecCommandPreview(`{"cmd":"ls"}`)).toBe("ls");
+    expect(extractExecCommandPreview(`{'cmd':'ls'}`)).toBe("ls");
+    expect(extractExecCommandPreview("{`cmd`: `ls`}")).toBe("ls");
+    expect(extractExecCommandPreview(`{ cmd : "ls" }`)).toBe("ls");
+  });
+
+  test("requires cmd to be a whole identifier, not a substring", () => {
+    expect(extractExecCommandPreview(`{ foo_cmd: "x" }`)).toBeUndefined();
+    expect(extractExecCommandPreview(`{ "mycmd": "x" }`)).toBeUndefined();
+    expect(extractExecCommandPreview(`{ cmdx: "x" }`)).toBeUndefined();
+    expect(extractExecCommandPreview(`{ cmd2: "x" }`)).toBeUndefined();
+    // Leading position is still a valid identifier boundary.
+    expect(extractExecCommandPreview(`cmd: "ls"`)).toBe("ls");
+  });
+
+  test("skips cmd keys with no static string value", () => {
+    expect(extractExecCommandPreview("{cmd: buildCommand()}")).toBeUndefined();
+    expect(extractExecCommandPreview("{cmd: 42}")).toBeUndefined();
+    expect(extractExecCommandPreview("{cmd}")).toBeUndefined();
+    expect(extractExecCommandPreview("{cmd: ''}")).toBeUndefined();
+    expect(extractExecCommandPreview("{cmd: '   '}")).toBeUndefined();
+    // A non-literal value must not stop the scan from finding a later one.
+    expect(extractExecCommandPreview("{cmd: dynamic}, {cmd: 'ls'}")).toBe("ls");
+  });
+
+  test("returns nothing for empty or command-free input", () => {
+    expect(extractExecCommandPreview("")).toBeUndefined();
+    expect(extractExecCommandPreview("   \n  ")).toBeUndefined();
+    expect(extractExecCommandPreview("await tools.read_file({path: 'a.ts'})")).toBeUndefined();
+  });
+
+  test("decodes JavaScript escapes without evaluating the snippet", () => {
+    expect(extractExecCommandPreview(String.raw`{cmd:'echo \u{1F600}'}`)).toBe("echo 😀");
+    expect(extractExecCommandPreview(String.raw`{cmd:'echo 😀'}`)).toBe("echo 😀");
+    expect(extractExecCommandPreview(String.raw`{cmd:'echo \x42'}`)).toBe("echo B");
+    expect(extractExecCommandPreview(String.raw`{cmd:'a\tb\vc'}`)).toBe("a\tb\vc");
+    expect(extractExecCommandPreview(String.raw`{cmd:'a\\nb'}`)).toBe("a\\nb");
+    expect(extractExecCommandPreview(String.raw`{cmd:'it\'s'}`)).toBe("it's");
+    // Unrecognized escapes collapse to the escaped character, as JS does.
+    expect(extractExecCommandPreview(String.raw`{cmd:'gre\a p'}`)).toBe("grea p");
+    // A backslash before a newline is a line continuation and contributes nothing.
+    expect(extractExecCommandPreview("{cmd:'ls \\\n -la'}")).toBe("ls  -la");
+    // An out-of-range code point is left alone rather than throwing.
+    expect(extractExecCommandPreview(String.raw`{cmd:'x\u{110000}'}`)).toBe(String.raw`x\u{110000}`);
+    expect(extractExecCommandPreview(String.raw`{cmd:'x\u{FFFFFFFFFFFFFFFFFF}'}`))
+      .toBe(String.raw`x\u{FFFFFFFFFFFFFFFFFF}`);
+  });
+
+  test("caps the preview so it cannot bloat the frame it travels in", () => {
+    const preview = extractExecCommandPreview(`{cmd: "${"echo hi; ".repeat(400)}"}`);
+    expect(preview).toHaveLength(200);
+    expect(preview?.endsWith("…")).toBe(true);
+  });
+
+  test("stays fast on pathological input", () => {
+    // This runs on the bridge read loop, where a stall blocks every thread's
+    // SSE — not just the one being rendered.
+    const many = `[${Array.from({ length: 128_000 }, (_, index) => `{cmd:"c${index}"}`).join(",")}]`;
+    const startedAt = performance.now();
+    expect(extractExecCommandPreview(many)).toBe("20+ commands");
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+
+    const huge = `{cmd:"${"a".repeat(2_000_000)}"}`;
+    const hugeStartedAt = performance.now();
+    extractExecCommandPreview(huge);
+    expect(performance.now() - hugeStartedAt).toBeLessThan(1_000);
+  });
+
+  test("does not resume scanning inside a literal left open by the scan window", () => {
+    // Past the scan cap the literal is still open; treating the remainder as
+    // code would surface a `cmd` belonging to another tool's argument.
+    const source = `tools.write_file({content: "${"x".repeat(300_000)}{cmd: 'rm -rf /'}"});`;
+    expect(extractExecCommandPreview(source)).toBeUndefined();
+  });
+});
+
+describe("normalizeTranscriptToolArgs exec previews", () => {
+  test("derives the command from a raw exec source string", () => {
+    expect(normalizeTranscriptToolArgs("exec", "await tools.exec_command({cmd: 'ls'});")).toEqual({
+      input: "await tools.exec_command({cmd: 'ls'});",
+      command: "ls",
+    });
+  });
+
+  test("keeps the raw input when no command can be derived", () => {
+    expect(normalizeTranscriptToolArgs("exec", "await tools.custom_action();")).toEqual({
+      input: "await tools.custom_action();",
+    });
+  });
+
+  test("only scans exec source, not the serialized argument object", () => {
+    // `meta.cmd` is not a shell command; promoting it would label the row with
+    // something the machine never ran.
+    expect(normalizeTranscriptToolArgs("exec", `{"meta":{"cmd":"not-run"},"code":"console.log(1)"}`))
+      .toEqual({ meta: { cmd: "not-run" }, code: "console.log(1)" });
+  });
+
+  test("derives the command from parsed args carrying a plain cmd", () => {
+    expect(normalizeTranscriptToolArgs("exec", `{"cmd":"ls"}`)).toEqual({ cmd: "ls", command: "ls" });
+    // app-server types `arguments` as JsonValue, so an object can arrive parsed.
+    expect(normalizeTranscriptToolArgs("exec", { cmd: "ls" })).toEqual({ cmd: "ls", command: "ls" });
+    expect(normalizeTranscriptToolArgs("exec", { cmd: "   " })).toEqual({ cmd: "   " });
+  });
+
+  test("caps a command taken straight from parsed args", () => {
+    const args = normalizeTranscriptToolArgs("exec", { cmd: "echo hi; ".repeat(400) });
+    expect(args?.command).toHaveLength(200);
+  });
+
+  test("scans exec source held in an input property", () => {
+    expect(normalizeTranscriptToolArgs("exec", { input: "tools.exec_command({cmd:'ls'})" }))
+      .toEqual({ input: "tools.exec_command({cmd:'ls'})", command: "ls" });
+  });
+
+  test("leaves non-exec tools untouched", () => {
+    expect(normalizeTranscriptToolArgs("write_file", "{cmd: 'ls'}"))
+      .toEqual({ input: "{cmd: 'ls'}" });
+    expect(normalizeTranscriptToolArgs("exec", "")).toBeUndefined();
+    expect(normalizeTranscriptToolArgs("exec", undefined)).toBeUndefined();
+    expect(normalizeTranscriptToolArgs("exec", 42)).toBeUndefined();
+  });
+
+  test("still maps exec_command's structured cmd to a command", () => {
+    expect(normalizeTranscriptToolArgs("exec_command", { cmd: "ls", yield_time_ms: 10 }))
+      .toEqual({ cmd: "ls", yield_time_ms: 10, command: "ls" });
   });
 });
 

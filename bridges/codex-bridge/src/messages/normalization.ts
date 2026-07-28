@@ -59,6 +59,15 @@ export function stringifyUnknown(value: unknown): string | undefined {
   }
 }
 
+/**
+ * Media arrives as a URL, which for tool results is routinely an inline
+ * `data:` payload. Emitting those verbatim would push megabytes of base64
+ * through SSE and into a `<pre>`, so only referenceable URLs survive.
+ */
+function describeMediaUrl(url: string, kind: "image" | "audio"): string {
+  return url.startsWith("data:") ? `[${kind}]` : url;
+}
+
 function stringifyDynamicToolContent(items: unknown[]): string | undefined {
   const content = items.map((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
@@ -69,10 +78,10 @@ function stringifyDynamicToolContent(items: unknown[]): string | undefined {
       return record.text;
     }
     if (record.type === "inputImage" && typeof record.imageUrl === "string") {
-      return record.imageUrl;
+      return describeMediaUrl(record.imageUrl, "image");
     }
     if (record.type === "inputAudio" && typeof record.audioUrl === "string") {
-      return record.audioUrl;
+      return describeMediaUrl(record.audioUrl, "audio");
     }
     return stringifyUnknown(item);
   }).filter((value): value is string => typeof value === "string" && value.length > 0);
@@ -360,7 +369,9 @@ export async function itemToParts(
             : item.status === "completed"
               ? "success"
               : "pending",
-        toolTitle: item.tool,
+        // Dynamic tools are namespaced by the protocol, so two same-named tools
+        // are only distinguishable by it. Mirrors the `mcp_tool_call` title.
+        toolTitle: item.namespace ? `${item.namespace}:${item.tool}` : item.tool,
         toolOutput: item.status === "failed" ? undefined : output,
         toolError: item.status === "failed" ? output ?? "Tool failed" : undefined,
       }];

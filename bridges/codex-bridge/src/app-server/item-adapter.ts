@@ -192,7 +192,15 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
           tool,
           arguments: raw.arguments,
           content_items: Array.isArray(raw.contentItems) ? raw.contentItems : [],
-          status: raw.success === false ? "failed" : commandStatus(raw.status),
+          // `success` is authoritative for a call that has finished, but it must
+          // not settle one that is still running: reporting a terminal outcome
+          // for an in-flight call is the same class of mistake as reporting
+          // `idle` for a turn that is still executing.
+          status: raw.status === "inProgress"
+            ? "in_progress"
+            : raw.success === false
+              ? "failed"
+              : commandStatus(raw.status),
         } as EngineItem,
       };
     }

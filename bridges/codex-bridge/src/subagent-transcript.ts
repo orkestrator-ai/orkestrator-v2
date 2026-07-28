@@ -111,10 +111,53 @@ function parseJson<T>(value: unknown): T | null {
   }
 }
 
+/**
+ * Longest command preview retained. The preview travels in `toolArgs` next to
+ * the full `input`, so an uncapped command would roughly double every SSE frame
+ * carrying an exec call. The authoritative source stays in `input`.
+ */
+const MAX_EXEC_COMMAND_PREVIEW_CHARS = 200;
+
+/** Distinct commands tracked before the preview degrades to a bare count. */
+const MAX_EXEC_COMMANDS_TRACKED = 20;
+
+/**
+ * Hard bound on the scan. `itemToParts` runs on the bridge's read loop, and
+ * AGENTS.md is explicit that stalling it stalls every thread's SSE.
+ */
+const MAX_EXEC_SCAN_CHARS = 262_144;
+
+/**
+ * Longest literal body decoded. Comfortably above the preview cap so a long
+ * command still yields a full-length preview, while a megabyte of file content
+ * handed to some other tool is skipped over rather than decoded.
+ */
+const MAX_DECODED_LITERAL_CHARS = 2048;
+
+const SIMPLE_ESCAPES = new Map([
+  ["b", "\b"],
+  ["f", "\f"],
+  ["n", "\n"],
+  ["r", "\r"],
+  ["t", "\t"],
+  ["v", "\v"],
+  ["0", "\0"],
+]);
+
 function decodeJavascriptStringBody(body: string): string {
   return body.replace(
-    /\\(?:u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|([\\'"`bfnrtv0]))/g,
-    (_match, codePoint: string | undefined, unicode: string | undefined, hex: string | undefined, simple: string | undefined) => {
+    // The trailing `[\s\S]` branch must stay last: it is the catch-all that
+    // makes unrecognized escapes collapse to the escaped character, the way
+    // JavaScript itself treats `\a`.
+    /\\(?:u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|(\r\n|[\n\r\u2028\u2029])|([\s\S]))/g,
+    (
+      _match,
+      codePoint: string | undefined,
+      unicode: string | undefined,
+      hex: string | undefined,
+      lineContinuation: string | undefined,
+      simple: string | undefined,
+    ) => {
       if (codePoint) {
         const value = Number.parseInt(codePoint, 16);
         return Number.isSafeInteger(value) && value <= 0x10ffff
@@ -123,29 +166,48 @@ function decodeJavascriptStringBody(body: string): string {
       }
       if (unicode) return String.fromCharCode(Number.parseInt(unicode, 16));
       if (hex) return String.fromCharCode(Number.parseInt(hex, 16));
-      switch (simple) {
-        case "b": return "\b";
-        case "f": return "\f";
-        case "n": return "\n";
-        case "r": return "\r";
-        case "t": return "\t";
-        case "v": return "\v";
-        case "0": return "\0";
-        default: return simple ?? _match;
-      }
+      // A backslash before a line terminator continues the line; it contributes
+      // nothing to the string value.
+      if (lineContinuation) return "";
+      return simple === undefined ? _match : SIMPLE_ESCAPES.get(simple) ?? simple;
     },
   );
 }
 
+/**
+ * Cuts a literal body to the decodable bound without splitting an escape: a
+ * trailing run of backslashes is dropped whole so the decoder never sees a
+ * dangling `\` and mistakes the closing character for an escaped one.
+ */
+function truncateLiteralBody(body: string): string {
+  if (body.length <= MAX_DECODED_LITERAL_CHARS) return body;
+  const head = body.slice(0, MAX_DECODED_LITERAL_CHARS);
+  return head.replace(/\\+$/, (run) => (run.length % 2 === 0 ? run : run.slice(0, -1)));
+}
+
+/**
+ * Reads one JavaScript string literal starting at `start`.
+ *
+ * `end` is always the position just past the literal, so callers can skip a
+ * literal even when its contents are not worth decoding. `value` is omitted
+ * when the literal is not a usable static string: a template carrying a `${…}`
+ * substitution whose runtime value we cannot know, or a literal still open when
+ * the scan window ran out.
+ *
+ * `null` means the literal is malformed — a raw newline inside a quoted string,
+ * which JavaScript forbids — so the opening quote was not really a literal at
+ * all and the caller should resume scanning just past it.
+ */
 function readJavascriptStringLiteral(
   source: string,
   start: number,
-): { value: string; end: number } | null {
+  limit: number,
+): { value?: string; end: number } | null {
   const quote = source[start];
   if (quote !== "\"" && quote !== "'" && quote !== "`") return null;
 
   let escaped = false;
-  for (let index = start + 1; index < source.length; index += 1) {
+  for (let index = start + 1; index < limit; index += 1) {
     const character = source[index]!;
     if (escaped) {
       escaped = false;
@@ -155,46 +217,159 @@ function readJavascriptStringLiteral(
       escaped = true;
       continue;
     }
+    // JavaScript forbids a raw newline inside a quoted literal, so an
+    // unterminated quote must not swallow the rest of the snippet and present
+    // unrelated prose as the command that ran.
+    if (quote !== "`" && (character === "\n" || character === "\r")) return null;
     if (character !== quote) continue;
 
-    const literal = source.slice(start, index + 1);
-    if (quote === "\"") {
+    const end = index + 1;
+    const body = source.slice(start + 1, index);
+    if (quote === "`" && body.includes("${")) return { end };
+    if (body.length <= MAX_DECODED_LITERAL_CHARS && quote === "\"") {
       try {
-        const value = JSON.parse(literal);
-        if (typeof value === "string") return { value, end: index + 1 };
+        const value = JSON.parse(source.slice(start, end));
+        if (typeof value === "string") return { value, end };
       } catch {
         // JavaScript permits a few escapes JSON does not; use the bounded
         // decoder below rather than evaluating transcript content.
       }
     }
-    return {
-      value: decodeJavascriptStringBody(literal.slice(1, -1)),
-      end: index + 1,
-    };
+    // Decode only a prefix. A long command still yields a full-length preview
+    // once capped, while a megabyte of file content bound for another tool
+    // costs a fixed slice instead of a full decode.
+    return { value: decodeJavascriptStringBody(truncateLiteralBody(body)), end };
   }
-  return null;
+  // Still open when the scan window ran out. Report the window as the end so
+  // the caller stops rather than resuming *inside* the literal, where a `cmd:`
+  // belonging to some other tool's string argument would look like code.
+  return { end: limit };
+}
+
+function isIdentifierPart(character: string | undefined): boolean {
+  return character !== undefined && /[\w$]/.test(character);
+}
+
+function capCommandPreview(command: string): string {
+  return command.length > MAX_EXEC_COMMAND_PREVIEW_CHARS
+    ? `${command.slice(0, MAX_EXEC_COMMAND_PREVIEW_CHARS - 1)}…`
+    : command;
+}
+
+/** Advances past whitespace and comments, returning the next code position. */
+function skipTrivia(source: string, from: number, limit: number): number {
+  let index = from;
+  while (index < limit) {
+    const character = source[index]!;
+    if (character === "/" && source[index + 1] === "/") {
+      const newline = source.indexOf("\n", index + 2);
+      index = newline === -1 || newline >= limit ? limit : newline + 1;
+      continue;
+    }
+    if (character === "/" && source[index + 1] === "*") {
+      const end = source.indexOf("*/", index + 2);
+      index = end === -1 || end + 2 > limit ? limit : end + 2;
+      continue;
+    }
+    if (!/\s/.test(character)) return index;
+    index += 1;
+  }
+  return limit;
+}
+
+interface ExecCommandScan {
+  commands: string[];
+  /** Set when more distinct commands existed than the scan retains. */
+  truncated: boolean;
+}
+
+/**
+ * Single forward pass over the snippet that records `cmd:` property values
+ * found in *code* position.
+ *
+ * Skipping string literals and comments wholesale is the point: a `cmd:` that
+ * lives inside another tool's string argument — say the body of a file being
+ * written — never ran, and promoting it would label the row with a command the
+ * user's machine never executed.
+ *
+ * Regex literals are not tracked, since telling `/re/` from division needs a
+ * full JavaScript lexer. A `cmd:"…"` inside a regex would still be picked up;
+ * that is a knowingly accepted gap, far narrower than the string and comment
+ * cases this scan does close.
+ */
+function scanExecCommands(source: string): ExecCommandScan {
+  const limit = Math.min(source.length, MAX_EXEC_SCAN_CHARS);
+  const seen = new Set<string>();
+  const commands: string[] = [];
+  let truncated = false;
+  let index = 0;
+
+  const record = (raw: string | undefined): void => {
+    const command = raw?.trim();
+    if (!command || seen.has(command)) return;
+    if (commands.length >= MAX_EXEC_COMMANDS_TRACKED) {
+      truncated = true;
+      return;
+    }
+    seen.add(command);
+    commands.push(capCommandPreview(command));
+  };
+
+  const readValueAfterKey = (afterKey: number): number => {
+    const colon = skipTrivia(source, afterKey, limit);
+    if (source[colon] !== ":") return afterKey;
+    const valueStart = skipTrivia(source, colon + 1, limit);
+    const literal = readJavascriptStringLiteral(source, valueStart, limit);
+    if (!literal) return colon + 1;
+    record(literal.value);
+    return literal.end;
+  };
+
+  while (index < limit) {
+    index = skipTrivia(source, index, limit);
+    if (index >= limit) break;
+    const character = source[index]!;
+
+    if (character === "\"" || character === "'" || character === "`") {
+      const literal = readJavascriptStringLiteral(source, index, limit);
+      if (!literal) {
+        index += 1;
+        continue;
+      }
+      // A quoted `cmd` is still a property key: `{"cmd": "ls"}`.
+      index = literal.value === "cmd" ? readValueAfterKey(literal.end) : literal.end;
+      continue;
+    }
+
+    if (
+      source.startsWith("cmd", index)
+      && !isIdentifierPart(source[index - 1])
+      && !isIdentifierPart(source[index + 3])
+    ) {
+      index = readValueAfterKey(index + 3);
+      continue;
+    }
+
+    index += 1;
+  }
+
+  return { commands, truncated };
 }
 
 /**
  * Pulls a useful shell-command preview out of the raw JavaScript accepted by
  * Codex's custom `exec` tool. This deliberately recognizes only static string
  * literals in `cmd` object properties and never evaluates rollout content.
+ *
+ * Snippets that run several commands report a count rather than promoting one:
+ * the scan sees source order, not execution order, and a command inside an
+ * untaken `if`/`catch` branch is indistinguishable from one that ran.
  */
 export function extractExecCommandPreview(input: string): string | undefined {
-  const commands: string[] = [];
-  const commandProperty = /(?:^|[,{])\s*(?:"cmd"|'cmd'|cmd)\s*:\s*/g;
-
-  for (const match of input.matchAll(commandProperty)) {
-    const valueStart = (match.index ?? 0) + match[0].length;
-    const literal = readJavascriptStringLiteral(input, valueStart);
-    const command = literal?.value.trim();
-    if (command && !commands.includes(command)) commands.push(command);
-  }
-
+  const { commands, truncated } = scanExecCommands(input);
   if (commands.length === 0) return undefined;
-  return commands.length === 1
-    ? commands[0]
-    : `${commands[0]} (+${commands.length - 1} more)`;
+  if (commands.length === 1 && !truncated) return commands[0];
+  return `${commands.length}${truncated ? "+" : ""} commands`;
 }
 
 export function normalizeTranscriptToolArgs(
@@ -240,12 +415,16 @@ export function normalizeTranscriptToolArgs(
   }
 
   if (toolName === "exec") {
-    const input = typeof normalized.input === "string"
-      ? normalized.input
-      : typeof rawArgs === "string"
-        ? rawArgs
+    // Only `input` carries exec source. Falling back to the serialized args
+    // would scan the whole JSON and promote an unrelated nested `cmd` key —
+    // say `{"meta":{"cmd":"…"}}` — into the command label.
+    const command = typeof normalized.input === "string"
+      ? extractExecCommandPreview(normalized.input)
+      // app-server types `arguments` as JsonValue, so a pre-parsed object with
+      // a plain `cmd` reaches here without ever having been a source snippet.
+      : typeof normalized.cmd === "string"
+        ? capCommandPreview(normalized.cmd.trim()) || undefined
         : undefined;
-    const command = input ? extractExecCommandPreview(input) : undefined;
     if (command) return { ...normalized, command };
   }
 

@@ -63,6 +63,7 @@ const {
   setEnvironmentPendingAgentLaunch,
   setEnvironmentInitialPrompt,
   cacheOpenCodeModelCatalog,
+  claimFeaturePlanBuild,
   updateAgentModelDefault,
   updateEnvironmentAgentSettings,
 } = backendWrappers;
@@ -182,6 +183,41 @@ describe("backend setup wrappers", () => {
       ["set_environment_initial_prompt", {
         environmentId: "env-1",
         initialPrompt: "Fix it [img](/work/a.png)",
+      }],
+    ]);
+  });
+
+  test("forwards initial prompt attachments through durable launch settings", async () => {
+    const attachments = [{
+      id: "image-1",
+      name: "diagram.png",
+      previewUrl: "data:image/png;base64,cHJldmlldw==",
+      base64Data: "cGl4ZWxz",
+    }];
+
+    await updateEnvironmentAgentSettings(
+      "env-1",
+      "codex",
+      null,
+      null,
+      null,
+      "native",
+      true,
+      "gpt-5.6-sol",
+      "high",
+      attachments,
+    );
+    await setEnvironmentInitialPrompt("env-1", "Inspect the diagram", attachments);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["update_environment_agent_settings", expect.objectContaining({
+        environmentId: "env-1",
+        initialPromptAttachments: attachments,
+      })],
+      ["set_environment_initial_prompt", {
+        environmentId: "env-1",
+        initialPrompt: "Inspect the diagram",
+        initialPromptAttachments: attachments,
       }],
     ]);
   });
@@ -487,6 +523,21 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
+  test("forwards authoritative PR-monitor snapshot, watch, and refresh commands", async () => {
+    await backendWrappers.getPrMonitorState();
+    await backendWrappers.prMonitorWatch("env-1", "merge-pending");
+    await backendWrappers.prMonitorRefresh("env-1");
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_pr_monitor_state"],
+      ["pr_monitor_watch", {
+        environmentId: "env-1",
+        mode: "merge-pending",
+      }],
+      ["pr_monitor_refresh", { environmentId: "env-1" }],
+    ]);
+  });
+
   test("forwards prompt-queue persistence and atomic claim payloads exactly", async () => {
     const messages = [{ id: "message-1", text: "Ship it" }];
 
@@ -519,6 +570,52 @@ describe("backend setup wrappers", () => {
         environmentId: "env-1",
         expectedMessageId: "message-1",
         candidateMessages: messages,
+      }],
+    ]);
+  });
+
+  test("forwards draft compare-and-swap revisions exactly", async () => {
+    await backendWrappers.saveComposeDraft(
+      "compose:env-1:tab",
+      "environment",
+      "env-1",
+      { text: "draft" },
+      3,
+    );
+    await backendWrappers.deleteComposeDraft("compose:env-1:tab", 4);
+    await backendWrappers.saveFileDraft(
+      "file:env-1:index",
+      "env-1",
+      "src/index.ts",
+      "edited",
+      "disk",
+      7,
+    );
+    await backendWrappers.deleteFileDraft("file:env-1:index", 8);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["save_compose_draft", {
+        draftKey: "compose:env-1:tab",
+        ownerType: "environment",
+        ownerId: "env-1",
+        value: { text: "draft" },
+        expectedRevision: 3,
+      }],
+      ["delete_compose_draft", {
+        draftKey: "compose:env-1:tab",
+        expectedRevision: 4,
+      }],
+      ["save_file_draft", {
+        draftKey: "file:env-1:index",
+        environmentId: "env-1",
+        filePath: "src/index.ts",
+        content: "edited",
+        originalContent: "disk",
+        expectedRevision: 7,
+      }],
+      ["delete_file_draft", {
+        draftKey: "file:env-1:index",
+        expectedRevision: 8,
       }],
     ]);
   });
@@ -1095,6 +1192,15 @@ describe("backend command wrapper coverage", () => {
     expect(invokeMock).toHaveBeenCalledWith("prune_agent_handoffs", {
       environmentId: "env-1",
       referencedHandoffIds: ["kept"],
+    });
+  });
+
+  test("claims a feature build with both ownership identifiers", async () => {
+    await claimFeaturePlanBuild("feature-1", "task-1");
+
+    expect(invokeMock).toHaveBeenCalledWith("claim_feature_plan_build", {
+      featureId: "feature-1",
+      taskId: "task-1",
     });
   });
 

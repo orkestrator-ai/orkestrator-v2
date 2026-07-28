@@ -48,6 +48,10 @@ let useTerminalOptionsHistory: MockUseTerminalOptions[] = [];
 let useTerminalSessionId: string | null = "session-1";
 let useTerminalIsConnected = true;
 let clipboardImagePasteOptions: { onImageSaved: (filePath: string) => Promise<void> } | undefined;
+const composeBarPropsMock = mock((_props: {
+  environmentId?: string;
+  sessionKey: string;
+}) => {});
 let composeBarOptions: {
   isOpen: boolean;
   onSend: (
@@ -188,11 +192,15 @@ mock.module("@/components/ui/context-menu", () => ({
 
 mock.module("@/components/terminal/ComposeBar", () => ({
   ComposeBar: ({
+    environmentId,
+    sessionKey,
     isOpen,
     onSend,
     showAddressAll,
     onAddressAll,
   }: {
+    environmentId?: string;
+    sessionKey: string;
     isOpen: boolean;
     onSend: (
       images: Array<{
@@ -207,6 +215,7 @@ mock.module("@/components/terminal/ComposeBar", () => ({
     showAddressAll?: boolean;
     onAddressAll?: () => void;
   }) => {
+    composeBarPropsMock({ environmentId, sessionKey });
     composeBarOptions = { isOpen, onSend, showAddressAll, onAddressAll };
     return showAddressAll ? (
       <button type="button" onClick={onAddressAll}>
@@ -316,6 +325,7 @@ function createTerminalData(options?: {
 
 describe("PersistentTerminal", () => {
   beforeEach(() => {
+    composeBarPropsMock.mockClear();
     setMobileViewport(false);
     cleanup();
     resizeMock.mockClear();
@@ -457,6 +467,28 @@ describe("PersistentTerminal", () => {
     await waitFor(() => {
       const resizeCalls = resizeMock.mock.calls as unknown as Array<[number, number]>;
       expect(resizeCalls.some(([cols, rows]) => cols === 80 && rows === 25)).toBe(false);
+    });
+  });
+
+  it("forwards the environment identity to terminal compose draft persistence", () => {
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    expect(composeBarPropsMock).toHaveBeenCalledWith({
+      environmentId: "env-1",
+      sessionKey: "container-1:tab-1",
     });
   });
 

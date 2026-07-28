@@ -20,9 +20,29 @@ import * as realBackend from "@/lib/backend";
 
 const realBackendSnapshot = { ...realBackend };
 const openInBrowserMock = mock(async () => undefined);
+const getComposeDraftMock = mock(async (_draftKey: string) => null as Awaited<
+  ReturnType<typeof realBackend.getComposeDraft>
+>);
+const saveComposeDraftMock = mock(async (
+  draftKey: string,
+  ownerType: "environment" | "project",
+  ownerId: string,
+  value: unknown,
+) => ({
+  draftKey,
+  ownerType,
+  ownerId,
+  value,
+  revision: 1,
+  updatedAt: "2026-07-28T00:00:00.000Z",
+}));
+const deleteComposeDraftMock = mock(async (_draftKey: string) => undefined);
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   openInBrowser: openInBrowserMock,
+  getComposeDraft: getComposeDraftMock,
+  saveComposeDraft: saveComposeDraftMock,
+  deleteComposeDraft: deleteComposeDraftMock,
 }));
 
 const { GitHubIssueDetailContent } = await import("./GitHubIssueDetail");
@@ -121,6 +141,19 @@ describe("GitHubIssueDetail", () => {
     startBuildMock.mockResolvedValue("pipeline-new");
     navigateToPipelineMock.mockClear();
     openInBrowserMock.mockClear();
+    getComposeDraftMock.mockReset();
+    getComposeDraftMock.mockResolvedValue(null);
+    saveComposeDraftMock.mockReset();
+    saveComposeDraftMock.mockImplementation(async (draftKey, ownerType, ownerId, value) => ({
+      draftKey,
+      ownerType,
+      ownerId,
+      value,
+      revision: 1,
+      updatedAt: "2026-07-28T00:00:00.000Z",
+    }));
+    deleteComposeDraftMock.mockReset();
+    deleteComposeDraftMock.mockResolvedValue(undefined);
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -205,7 +238,7 @@ describe("GitHubIssueDetail", () => {
   test("preserves issue and comment drafts when GitHub rejects mutations", async () => {
     saveIssueMock.mockRejectedValueOnce(new Error("Title update was rejected"));
     addCommentMock.mockRejectedValueOnce(new Error("Comment permission denied"));
-    renderDetail();
+    const view = renderDetail();
 
     fireEvent.click(screen.getByRole("button", { name: "Edit issue" }));
     const title = screen.getByRole("textbox", { name: "Issue title" });
@@ -223,6 +256,65 @@ describe("GitHubIssueDetail", () => {
     expect((newComment as HTMLTextAreaElement).value).toBe(
       "Unsaved discussion draft",
     );
+    view.unmount();
+    await waitFor(() => expect(saveComposeDraftMock).toHaveBeenCalledWith(
+      "github-comment:project-1:acme%2Fwidget%2342",
+      "project",
+      "project-1",
+      "Unsaved discussion draft",
+      expect.any(Number),
+    ));
+  });
+
+  test("initializes editing from fresh detail rather than a stale list summary", async () => {
+    render(
+      <GitHubIssueDetailContent
+        projectId="project-1"
+        repository={repository}
+        issueNumber={42}
+        summary={{
+          ...detail,
+          title: "Stale list title",
+          body: "Stale list body",
+        }}
+        onBack={() => {}}
+        onClosed={() => {}}
+        buildPipeline={{
+          startBuildFromGitHubIssue: startBuildMock,
+          navigateToPipeline: navigateToPipelineMock,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit issue" }));
+
+    await waitFor(() => {
+      expect((screen.getByRole("textbox", { name: "Issue title" }) as HTMLInputElement).value)
+        .toBe(detail.title);
+      expect((screen.getByRole("textbox", { name: "Issue body" }) as HTMLTextAreaElement).value)
+        .toBe(detail.body);
+    });
+  });
+
+  test("restores a persisted new-comment draft", async () => {
+    getComposeDraftMock.mockImplementation(async (draftKey) => (
+      draftKey === "github-comment:project-1:acme%2Fwidget%2342"
+        ? {
+            draftKey,
+            ownerType: "project",
+            ownerId: "project-1",
+            value: "Recovered GitHub comment",
+            revision: 2,
+            updatedAt: "2026-07-28T00:00:00.000Z",
+          }
+        : null
+    ));
+
+    renderDetail();
+
+    await waitFor(() => expect((
+      screen.getByRole("textbox", { name: "Add GitHub comment" }) as HTMLTextAreaElement
+    ).value).toBe("Recovered GitHub comment"));
   });
 
   test("only offers comment editing when the backend grants permission", () => {
@@ -264,6 +356,10 @@ describe("GitHubIssueDetail", () => {
         "A new decision",
       );
       expect(newComment.value).toBe("");
+      expect(deleteComposeDraftMock).toHaveBeenCalledWith(
+        "github-comment:project-1:acme%2Fwidget%2342",
+        expect.any(Number),
+      );
     });
   });
 

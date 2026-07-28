@@ -8,6 +8,7 @@ import {
   type RefreshSessionOptions,
 } from "@/hooks/useManualSessionRefresh";
 import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
+import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
@@ -290,6 +291,7 @@ export function OpenCodeChatTab({
         model?: string;
         variant?: string;
         mode?: OpenCodeConversationMode;
+        requestId?: string;
       },
     ) => Promise<SendPromptResult | undefined>) | null
   >(null);
@@ -359,6 +361,7 @@ export function OpenCodeChatTab({
     () => createSessionKey(environmentId, tabId),
     [environmentId, tabId],
   );
+  useNativeComposeDraftPersistence("opencode", environmentId, sessionKey, useOpenCodeStore);
 
   const acknowledgeInitialLaunchOptions = useCallback(() => {
     if (!initialLaunchOptionsPendingRef.current) return;
@@ -2025,6 +2028,7 @@ export function OpenCodeChatTab({
         model?: string;
         variant?: string;
         mode?: OpenCodeConversationMode;
+        requestId?: string;
       },
     ) => {
       if (!client || !session) return;
@@ -2115,6 +2119,7 @@ export function OpenCodeChatTab({
         directory: slashCommandDirectory,
         command: nativeCommand,
         attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
+        requestId: options?.requestId,
       });
 
       if (!sendResult.success) {
@@ -2243,6 +2248,7 @@ export function OpenCodeChatTab({
         variant: launchOptionsValidated
           ? getSelectedVariant(sessionKey)
           : undefined,
+        requestId: `initial-prompt:${environmentId}:${tabId}`,
       });
     }
   }, [

@@ -28,8 +28,16 @@ import { useKanbanStore } from "@/stores/kanbanStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { readImage } from "@/lib/native/clipboard";
-import { getKanbanImageData, detectPr, detectPrLocal, openInBrowser } from "@/lib/backend";
-import { useEnvironmentStore } from "@/stores";
+import {
+  getKanbanImageData,
+  openInBrowser,
+} from "@/lib/backend";
+import {
+  composeDraftKey,
+  discardComposeDraft,
+  loadComposeDraft,
+  persistComposeDraft,
+} from "@/lib/compose-draft-persistence";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 import { createUuid } from "@/lib/uuid";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
@@ -69,6 +77,29 @@ interface PendingImage {
   filename: string;
   data: string; // base64
   previewUrl: string; // data URL for display
+}
+
+interface KanbanCreateDraft {
+  title: string;
+  description: string;
+  acceptanceCriteria: string;
+  images: PendingImage[];
+}
+
+function isKanbanCreateDraft(value: unknown): value is KanbanCreateDraft {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Partial<KanbanCreateDraft>;
+  return typeof candidate.title === "string"
+    && typeof candidate.description === "string"
+    && typeof candidate.acceptanceCriteria === "string"
+    && Array.isArray(candidate.images)
+    && candidate.images.every((image) =>
+      image
+      && typeof image.id === "string"
+      && typeof image.filename === "string"
+      && typeof image.data === "string"
+      && typeof image.previewUrl === "string"
+    );
 }
 
 /** Renders comment text with clickable URLs */
@@ -132,11 +163,107 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
   // Image state
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const createDraftHydratedRef = useRef<string | null>(null);
+  const createDraftEditRevisionRef = useRef(0);
+  const createDraftClosingRef = useRef(false);
+  const createDraftValuesRef = useRef<KanbanCreateDraft>({
+    title: editTitle,
+    description: editDescription,
+    acceptanceCriteria: editAC,
+    images: pendingImages,
+  });
+  createDraftValuesRef.current = {
+    title: editTitle,
+    description: editDescription,
+    acceptanceCriteria: editAC,
+    images: pendingImages,
+  };
   const [previewImage, setPreviewImage] = useState<{ url: string; filename: string } | null>(null);
   const dialogContentRef = useRef<HTMLDivElement>(null);
 
   // Cache of loaded image data URLs keyed by image ID (for on-demand loading from disk)
   const [imageUrlCache, setImageUrlCache] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!createForProjectId || !open) return;
+    let disposed = false;
+    const draftKey = composeDraftKey("kanban-create", createForProjectId, "task");
+    const revisionAtRequest = createDraftEditRevisionRef.current;
+    createDraftClosingRef.current = false;
+    createDraftHydratedRef.current = null;
+    void loadComposeDraft<KanbanCreateDraft>(draftKey)
+      .then((persisted) => {
+        if (
+          disposed
+          || !persisted
+          || !isKanbanCreateDraft(persisted.value)
+          || createDraftEditRevisionRef.current !== revisionAtRequest
+        ) {
+          return;
+        }
+        setEditTitle(persisted.value.title);
+        setEditDescription(persisted.value.description);
+        setEditAC(persisted.value.acceptanceCriteria);
+        setPendingImages(persisted.value.images);
+      })
+      .catch((error) => {
+        console.warn("[KanbanTaskDialog] Failed to restore create draft:", error);
+      })
+      .finally(() => {
+        if (!disposed) createDraftHydratedRef.current = draftKey;
+      });
+    return () => {
+      disposed = true;
+      if (createDraftHydratedRef.current === draftKey) {
+        createDraftHydratedRef.current = null;
+      }
+      if (
+        !createDraftClosingRef.current
+        && createDraftEditRevisionRef.current !== revisionAtRequest
+      ) {
+        const latest = createDraftValuesRef.current;
+        const empty = !latest.title && !latest.description
+          && !latest.acceptanceCriteria && latest.images.length === 0;
+        const operation = empty
+          ? discardComposeDraft(draftKey)
+          : persistComposeDraft(draftKey, "project", createForProjectId, latest);
+        void operation.catch((error) => {
+          console.warn("[KanbanTaskDialog] Failed to persist create draft during cleanup:", error);
+        });
+      }
+    };
+    // The local fields are intentionally sampled once. User input entered
+    // during hydration wins over the backend snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createForProjectId, open]);
+
+  useEffect(() => {
+    if (!createForProjectId || !open) return;
+    const draftKey = composeDraftKey("kanban-create", createForProjectId, "task");
+    if (createDraftHydratedRef.current !== draftKey) return;
+    const timer = setTimeout(() => {
+      const draft: KanbanCreateDraft = {
+        title: editTitle,
+        description: editDescription,
+        acceptanceCriteria: editAC,
+        images: pendingImages,
+      };
+      const empty = !draft.title && !draft.description
+        && !draft.acceptanceCriteria && draft.images.length === 0;
+      const operation = empty
+        ? discardComposeDraft(draftKey)
+        : persistComposeDraft(
+            draftKey,
+            "project",
+            createForProjectId,
+            draft,
+          );
+      void operation.catch((error) => {
+        console.warn("[KanbanTaskDialog] Failed to persist create draft:", error);
+      });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [createForProjectId, editAC, editDescription, editTitle, open, pendingImages]);
 
   // Load image data on demand when dialog opens with a task that has images
   useEffect(() => {
@@ -163,49 +290,16 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- imageUrlCache intentionally excluded to avoid re-fetch loop
   }, [open, task]);
 
-  // Check PR state when dialog opens for a task with a PR that hasn't been merge-commented yet.
-  // This handles the case where a PR was merged or closed outside the app.
-  useEffect(() => {
-    if (!open || !task || !task.prUrl || task.prMergeCommented) return;
-    // Only check if PR state is not already known as merged/closed
-    if (task.prState === "merged" || task.prState === "closed") return;
-    if (!task.environmentId) return;
-
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        const env = useEnvironmentStore.getState().getEnvironmentById(task.environmentId!);
-        if (!env) return;
-
-        const isLocal = env.environmentType === "local";
-        const isRunning = isLocal ? !!env.worktreePath : env.status === "running";
-        if (!isRunning) return;
-
-        const result = isLocal
-          ? await detectPrLocal(task.environmentId!, env.branch)
-          : env.containerId ? await detectPr(env.containerId, env.branch) : null;
-
-        if (cancelled || !result) return;
-
-        if (result.state === "merged" || result.state === "closed") {
-          const commentText = result.state === "merged" ? "🎉 PR merged" : "❌ PR closed";
-          await addComment(task.id, commentText);
-          await updateTask(task.id, { prState: result.state, prMergeCommented: true });
-          console.log(`[KanbanTaskDialog] PR ${result.state} detected on open, added comment to task ${task.id}`);
-        }
-      } catch (error) {
-        console.warn("[KanbanTaskDialog] Failed to check PR state on dialog open:", error);
-      }
-    })();
-
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, task?.id, task?.prUrl, task?.prMergeCommented, task?.prState]);
-
   // Reset create mode fields when dialog opens in create mode
-  const handleOpenChange = (newOpen: boolean) => {
+  const handleOpenChange = (newOpen: boolean, discardDraft = true) => {
     if (!newOpen) {
+      createDraftClosingRef.current = true;
+      if (createForProjectId && discardDraft) {
+        const draftKey = composeDraftKey("kanban-create", createForProjectId, "task");
+        void discardComposeDraft(draftKey).catch((error) => {
+          console.warn("[KanbanTaskDialog] Failed to discard create draft:", error);
+        });
+      }
       setEditTitle("");
       setEditDescription("");
       setEditAC("");
@@ -296,6 +390,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       const filename = `clipboard-${timestamp}.png`;
 
       if (isCreateMode || !task) {
+        createDraftEditRevisionRef.current += 1;
         setPendingImages((prev) => [...prev, { id: createUuid(), filename, data: base64Data, previewUrl: dataUrl }]);
       } else {
         void addImage(task.id, filename, base64Data);
@@ -335,6 +430,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       if (!result) continue;
 
       if (isCreateMode || !task) {
+        createDraftEditRevisionRef.current += 1;
         setPendingImages((prev) => [...prev, { id: createUuid(), ...result }]);
       } else {
         void addImage(task.id, result.filename, result.data);
@@ -389,9 +485,26 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       const description = editDescription.trim();
       const ac = editAC.trim();
       const imagesToSave = [...pendingImages];
-      handleOpenChange(false);
+      const draftKey = composeDraftKey("kanban-create", createForProjectId, "task");
+      void persistComposeDraft(
+        draftKey,
+        "project",
+        createForProjectId,
+        {
+          title: editTitle,
+          description: editDescription,
+          acceptanceCriteria: editAC,
+          images: imagesToSave,
+        } satisfies KanbanCreateDraft,
+      ).catch((error) => {
+        console.warn("[KanbanTaskDialog] Failed to preserve create draft:", error);
+      });
+      handleOpenChange(false, false);
       void addTaskStore(createForProjectId, title, description).then(async (newTaskId) => {
         if (!newTaskId) return;
+        void discardComposeDraft(draftKey).catch((error) => {
+          console.warn("[KanbanTaskDialog] Failed to discard created task draft:", error);
+        });
         if (ac) {
           void updateTask(newTaskId, { acceptanceCriteria: ac });
         }
@@ -566,6 +679,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                       onClick={(e) => {
                         e.stopPropagation();
                         if (isCreateMode) {
+                          createDraftEditRevisionRef.current += 1;
                           setPendingImages((prev) => prev.filter((i) => i.id !== img.id));
                         } else if (task) {
                           void deleteImage(task.id, img.id);
@@ -633,7 +747,10 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                     <DialogTitle className="sr-only">New Task</DialogTitle>
                     <Input
                       value={editTitle}
-                      onChange={(e) => setEditTitle(e.target.value)}
+                      onChange={(e) => {
+                        createDraftEditRevisionRef.current += 1;
+                        setEditTitle(e.target.value);
+                      }}
                       onKeyDown={handleCreateKeyDown}
                       placeholder="Task title..."
                       className="text-lg font-semibold"
@@ -641,7 +758,10 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                     />
                     <Textarea
                       value={editDescription}
-                      onChange={(e) => setEditDescription(e.target.value)}
+                      onChange={(e) => {
+                        createDraftEditRevisionRef.current += 1;
+                        setEditDescription(e.target.value);
+                      }}
                       placeholder="Description..."
                       rows={3}
                       className="max-h-[calc(10lh+1rem)] overflow-y-auto"
@@ -659,7 +779,10 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                   </div>
                   <Textarea
                     value={editAC}
-                    onChange={(e) => setEditAC(e.target.value)}
+                    onChange={(e) => {
+                      createDraftEditRevisionRef.current += 1;
+                      setEditAC(e.target.value);
+                    }}
                     placeholder="Define what 'done' looks like..."
                     rows={4}
                     className="max-h-[calc(10lh+1rem)] overflow-y-auto"

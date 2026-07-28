@@ -7,7 +7,14 @@ import {
   mock,
   test,
 } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realBackend from "@/lib/backend";
 import * as realMarkdownEditorTab from "@/components/markdown/MarkdownEditorTab";
@@ -35,6 +42,13 @@ const readFileBase64Mock = mock(async (_filePath: string) => "aW1hZ2U=");
 const readContainerFileBase64Mock = mock(
   async (_containerId: string, _filePath: string) => "Y29udGFpbmVyLWltYWdl",
 );
+const getFileDraftMock = mock(
+  async (
+    _draftKey: string,
+  ): Promise<Awaited<ReturnType<typeof realBackend.getFileDraft>>> => null,
+);
+const saveFileDraftMock = mock(async () => undefined);
+const deleteFileDraftMock = mock(async () => undefined);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -42,6 +56,9 @@ mock.module("@/lib/backend", () => ({
   readContainerFile: readContainerFileMock,
   readFileBase64: readFileBase64Mock,
   readContainerFileBase64: readContainerFileBase64Mock,
+  getFileDraft: getFileDraftMock,
+  saveFileDraft: saveFileDraftMock,
+  deleteFileDraft: deleteFileDraftMock,
 }));
 
 mock.module("@/components/markdown/MarkdownEditorTab", () => ({
@@ -114,6 +131,9 @@ beforeEach(() => {
   readContainerFileMock.mockClear();
   readFileBase64Mock.mockClear();
   readContainerFileBase64Mock.mockClear();
+  getFileDraftMock.mockReset();
+  saveFileDraftMock.mockReset();
+  deleteFileDraftMock.mockReset();
   readLocalFileMock.mockImplementation(async () => ({
     content: "# Loaded Markdown",
     language: "markdown",
@@ -123,6 +143,9 @@ beforeEach(() => {
     language: "plaintext",
   }));
   readFileBase64Mock.mockImplementation(async () => "aW1hZ2U=");
+  getFileDraftMock.mockImplementation(async () => null);
+  saveFileDraftMock.mockImplementation(async () => undefined);
+  deleteFileDraftMock.mockImplementation(async () => undefined);
 });
 
 afterEach(() => {
@@ -300,7 +323,7 @@ describe("FileViewerTab component", () => {
     expect(readLocalFileMock).toHaveBeenCalledWith("/repo", "README.md");
   });
 
-  test("clears per-tab dirty state when the file tab unmounts", async () => {
+  test("keeps per-tab dirty state when the file tab temporarily unmounts", async () => {
     const view = render(
       <FileViewerTab
         tabId="closing-tab"
@@ -317,6 +340,189 @@ describe("FileViewerTab component", () => {
 
     view.unmount();
 
-    expect(useFileDirtyStore.getState().getContent("closing-tab")).toBeNull();
+    expect(useFileDirtyStore.getState().getContent("closing-tab")).toBe("unsaved");
+  });
+
+  test("prefers a newer in-memory buffer over an older backend draft on remount", async () => {
+    useFileDirtyStore.getState().hydrateDraft(
+      "remount-tab",
+      "newer unsaved buffer",
+      "older disk",
+    );
+    getFileDraftMock.mockResolvedValueOnce({
+      draftKey: "file:env-1:notes.txt",
+      environmentId: "env-1",
+      filePath: "notes.txt",
+      content: "stale backend buffer",
+      originalContent: "older disk",
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 1,
+    });
+
+    render(
+      <FileViewerTab
+        tabId="remount-tab"
+        environmentId="env-1"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    expect((editor as HTMLTextAreaElement).value).toBe("newer unsaved buffer");
+    expect(getFileDraftMock).not.toHaveBeenCalled();
+    expect(useFileDirtyStore.getState().dirtyFiles.get("remount-tab")).toEqual({
+      content: "newer unsaved buffer",
+      originalContent: "container text",
+    });
+  });
+
+  test("hydrates a valid backend draft with the owning environment", async () => {
+    getFileDraftMock.mockResolvedValueOnce({
+      draftKey: "file:env-restore:notes.txt",
+      environmentId: "env-restore",
+      filePath: "notes.txt",
+      content: "restored buffer",
+      originalContent: "old disk",
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      revision: 1,
+    });
+
+    render(
+      <FileViewerTab
+        tabId="restore-tab"
+        environmentId="env-restore"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    expect((editor as HTMLTextAreaElement).value).toBe("restored buffer");
+    expect(getFileDraftMock).toHaveBeenCalledWith(
+      "file:env-restore:notes.txt",
+    );
+    expect(useFileDirtyStore.getState().dirtyFiles.get("restore-tab")).toEqual({
+      content: "restored buffer",
+      originalContent: "container text",
+    });
+  });
+
+  test("persists edits through the environment-scoped file draft path", async () => {
+    render(
+      <FileViewerTab
+        tabId="persist-tab"
+        environmentId="env-persist"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    fireEvent.change(editor, { target: { value: "unsaved text" } });
+
+    await waitFor(() => expect(saveFileDraftMock).toHaveBeenCalledWith(
+      "file:env-persist:notes.txt",
+      "env-persist",
+      "notes.txt",
+      "unsaved text",
+      "container text",
+      0,
+    ), { timeout: 1_500 });
+  });
+
+  test("flushes an edit when the tab unmounts before the debounce expires", async () => {
+    const view = render(
+      <FileViewerTab
+        tabId="unmount-flush-tab"
+        environmentId="env-unmount"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    fireEvent.change(editor, { target: { value: "latest unsaved text" } });
+
+    view.unmount();
+
+    await waitFor(() => expect(saveFileDraftMock).toHaveBeenCalledWith(
+      "file:env-unmount:notes.txt",
+      "env-unmount",
+      "notes.txt",
+      "latest unsaved text",
+      "container text",
+      0,
+    ));
+  });
+
+  test("flushes the current edit on pagehide", async () => {
+    render(
+      <FileViewerTab
+        tabId="pagehide-flush-tab"
+        environmentId="env-pagehide"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    fireEvent.change(editor, { target: { value: "leaving page" } });
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    await waitFor(() => expect(saveFileDraftMock).toHaveBeenCalledWith(
+      "file:env-pagehide:notes.txt",
+      "env-pagehide",
+      "notes.txt",
+      "leaving page",
+      "container text",
+      0,
+    ));
+  });
+
+  test("flushes draft deletion after a successful save and immediate unmount", async () => {
+    const view = render(
+      <FileViewerTab
+        tabId="save-unmount-tab"
+        environmentId="env-save"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    fireEvent.change(editor, { target: { value: "saved text" } });
+    fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
+    await waitFor(() =>
+      expect(useFileDirtyStore.getState().isDirty("save-unmount-tab")).toBe(false),
+    );
+
+    view.unmount();
+
+    await waitFor(() => expect(deleteFileDraftMock).toHaveBeenCalledWith(
+      "file:env-save:notes.txt",
+      0,
+    ));
+  });
+
+  test("continues with the disk buffer when backend draft restore fails", async () => {
+    getFileDraftMock.mockRejectedValueOnce(new Error("draft store unavailable"));
+
+    render(
+      <FileViewerTab
+        tabId="draft-error-tab"
+        environmentId="env-error"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    expect((editor as HTMLTextAreaElement).value).toBe("container text");
+    expect(useFileDirtyStore.getState().isDirty("draft-error-tab")).toBe(false);
   });
 });

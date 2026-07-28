@@ -1,558 +1,163 @@
 /**
- * PR Monitor Service Hook
+ * PR Monitor subscriber hook. Mount once at the app root.
  *
- * This is a singleton-like hook that should be mounted once at the app root level.
- * It manages centralized PR monitoring with mode-based polling intervals.
+ * The polling loop used to live here: a 1-second tick that only ever watched
+ * the active environment, with mode requests in a renderer store that a reload
+ * erased. The backend owns all of that now (`apps/backend/src/core/pr-monitor.ts`)
+ * — it monitors every environment with a PR or a pending mode request, performs
+ * the kanban side effects, and persists PR state. This hook only mirrors the
+ * monitor into the store and raises user-facing notifications for transitions.
  *
- * Key responsibilities:
- * - Runs a 1-second tick loop to check if environments need polling
- * - Only polls the active environment (non-active environments are "idle")
- * - Subscribes to environment switches and agent idle events
- * - Performs PR detection and updates the environment store
+ * Snapshot + incremental, like useEnvironmentDiffStats: the event stream has no
+ * replay buffer, so the authoritative `get_pr_monitor_state` snapshot is read
+ * after subscribing on mount and again on every reconnect, with live events
+ * buffered while a snapshot is in flight.
  */
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect } from "react";
 import { toast } from "sonner";
 import {
-  usePrMonitorStore,
-  PR_MONITOR_TIMEOUTS,
-  getEffectiveInterval,
-} from "@/stores/prMonitorStore";
-import { useEnvironmentStore, useUIStore, useAgentActivityStore } from "@/stores";
-import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
+  PR_MONITOR_CHANGED_EVENT,
+  isPrMonitorEvent,
+  isPrMonitorSnapshot,
+  type PrMonitorEvent,
+} from "@orkestrator/protocol/pr-monitor";
+import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { useEnvironmentStore } from "@/stores";
 import * as backend from "@/lib/backend";
-import type { PrDetectionResult } from "@/lib/backend";
-import type { PrState } from "@/types";
+import {
+  listen,
+  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+  type UnlistenFn,
+} from "@/lib/native/events";
 
-/** How often the tick loop runs (1 second) */
-const TICK_INTERVAL_MS = 1000;
-
-/**
- * Result of a PR detection attempt.
- * Discriminated union to distinguish between:
- * - success: PR was found
- * - not-found: No PR exists for this branch (not an error)
- * - error: An actual error occurred during detection
- */
-type DetectionResult =
-  | { status: "success"; data: PrDetectionResult }
-  | { status: "not-found" }
-  | { status: "error"; error: unknown };
-
-/**
- * Perform a PR detection for an environment.
- * Returns a discriminated union to distinguish between no PR and actual errors.
- */
-async function detectPR(
-  environmentId: string,
-  containerId: string | null,
-  isLocal: boolean,
-  branch: string
-): Promise<DetectionResult> {
-  if (!environmentId) return { status: "not-found" };
-  if (!isLocal && !containerId) return { status: "not-found" };
-
-  try {
-    const result = isLocal
-      ? await backend.detectPrLocal(environmentId, branch)
-      : await backend.detectPr(containerId!, branch);
-
-    if (result) {
-      return { status: "success", data: result };
-    }
-    return { status: "not-found" };
-  } catch (error) {
-    // Log actual errors at warn level, not debug
-    console.warn("[PrMonitorService] Detection error:", error);
-    return { status: "error", error };
-  }
-}
-
-/**
- * Save PR state to both backend (Electron) and frontend (Zustand) stores.
- * Only updates state on successful detection or when clearing a previously stored PR.
- */
-async function savePRState(
-  environmentId: string,
-  detectionResult: DetectionResult,
-  currentPrUrl: string | null,
-  currentPrState: PrState | null,
-  setEnvironmentPR: (
-    id: string,
-    url: string | null,
-    state: PrState | null,
-    conflicts: boolean | null
-  ) => void
-): Promise<void> {
-  if (detectionResult.status === "success") {
-    const { data } = detectionResult;
-    // Save to backend
-    await backend.setEnvironmentPr(
-      environmentId,
-      data.url,
-      data.state,
-      data.hasMergeConflicts
-    );
-    // Update frontend store
-    setEnvironmentPR(
-      environmentId,
-      data.url,
-      data.state,
-      data.hasMergeConflicts
-    );
-  } else if (detectionResult.status === "not-found" && currentPrUrl) {
-    // No PR found but we had one stored.
-    // IMPORTANT: Don't clear if the PR is in a "finished" state (merged/closed).
-    // After a PR is merged with --delete-branch, the container checks out the base branch
-    // (e.g., main), causing subsequent `gh pr view` calls to fail. We preserve the
-    // merged/closed state that was saved immediately after the merge command succeeded.
-    if (currentPrState === "merged" || currentPrState === "closed") {
-      console.log(
-        `[PrMonitorService] Detection returned not-found but PR state is ${currentPrState}, preserving state`
-      );
-      return;
-    }
-    // Only clear for open PRs - this handles cases where the PR was deleted/removed
-    await backend.clearEnvironmentPr(environmentId);
-    setEnvironmentPR(environmentId, null, null, null);
-  }
-  // On error, keep existing state - don't update
-}
-
-/**
- * Service hook that manages the PR monitoring polling loop.
- * Should be mounted once at the app root level.
- */
 export function usePrMonitorService(): void {
-  const tickIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const isInitializedRef = useRef(false);
-  const notifiedPrTransitionsRef = useRef(new Set<string>());
-  const kanbanReconciliationProgressRef = useRef(
-    new Map<string, Set<"status" | "comment" | "metadata">>()
-  );
+  const applySnapshot = usePrMonitorStore((s) => s.applySnapshot);
+  const applyEvent = usePrMonitorStore((s) => s.applyEvent);
 
-  // Get store actions via narrow selectors (all stable references) — a
-  // selector-less subscription made this service rerender on every store write.
-  const startMonitoring = usePrMonitorStore((state) => state.startMonitoring);
-  const setMonitoringMode = usePrMonitorStore((state) => state.setMonitoringMode);
-  const setActiveEnvironment = usePrMonitorStore((state) => state.setActiveEnvironment);
-  const getMonitoringState = usePrMonitorStore((state) => state.getMonitoringState);
-  const _setCheckInProgress = usePrMonitorStore((state) => state._setCheckInProgress);
-  const _updateLastCheckTime = usePrMonitorStore((state) => state._updateLastCheckTime);
-  const _resetErrors = usePrMonitorStore((state) => state._resetErrors);
-  const _incrementErrors = usePrMonitorStore((state) => state._incrementErrors);
+  useEffect(() => {
+    let disposed = false;
+    const unlisteners: UnlistenFn[] = [];
+    let stopChanges: UnlistenFn | null = null;
+    let changeSubscriptionPending = false;
+    let rehydrating = false;
+    let rehydrateRequested = false;
+    let bufferedEvents: PrMonitorEvent[] = [];
+    // Transitions already announced to the user. Effect-lifetime rather than
+    // per-event because the backend may legitimately re-emit a transition (it
+    // announces before persisting, and a persist failure retries), and the
+    // same merge must not toast twice.
+    const notifiedTransitions = new Set<string>();
 
-  const registerStateCallback = useAgentActivityStore((state) => state.registerStateCallback);
-  const unregisterStateCallback = useAgentActivityStore((state) => state.unregisterStateCallback);
+    const handleEvent = (event: PrMonitorEvent) => {
+      applyEvent(event);
+      if ("removed" in event) return;
+      const transition = event.transition;
+      if (!transition || transition.state !== "merged") return;
+      const key = [event.environmentId, transition.url, transition.state].join("\0");
+      if (notifiedTransitions.has(key)) return;
+      notifiedTransitions.add(key);
+      const environment = useEnvironmentStore
+        .getState()
+        .getEnvironmentById(event.environmentId);
+      toast.success("Branch merged", {
+        description: environment?.branch,
+        id: `branch-merged-${event.environmentId}`,
+      });
+    };
 
-  /**
-   * Perform a single PR check for an environment.
-   * Handles concurrency guards, error tracking, and mode transitions.
-   */
-  const performCheck = useCallback(
-    async (environmentId: string) => {
-      const monitorState = usePrMonitorStore.getState().getMonitoringState(environmentId);
-      if (!monitorState) {
-        console.debug(`[PrMonitorService] No monitor state for ${environmentId}`);
-        return;
-      }
+    const requestRehydrate = () => {
+      rehydrateRequested = true;
+      if (rehydrating || disposed) return;
+      rehydrating = true;
 
-      if (monitorState.checkInProgress) {
-        console.debug(`[PrMonitorService] Check already in progress for ${environmentId}`);
-        return;
-      }
+      void (async () => {
+        try {
+          // Reconnects may overlap a slow snapshot. Serialising requests keeps
+          // an older response from landing after a newer one; a reconnect that
+          // arrives mid-request causes one more pass through the loop.
+          while (!disposed && rehydrateRequested) {
+            rehydrateRequested = false;
 
-      const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-      if (!environment) {
-        console.debug(`[PrMonitorService] Environment not found: ${environmentId}`);
-        return;
-      }
+            try {
+              const snapshot: unknown = await backend.getPrMonitorState();
+              if (!disposed && isPrMonitorSnapshot(snapshot)) {
+                applySnapshot(snapshot.entries);
+              }
+            } catch {
+              // Non-critical: buffered changes still apply below, and the next
+              // reconnect will request another authoritative snapshot.
+            }
 
-      const isLocal = environment.environmentType === "local";
-      const isRunning = isLocal
-        ? !!environment.worktreePath
-        : environment.status === "running";
-      const workspaceReady = useEnvironmentStore.getState().isWorkspaceReady(environmentId);
+            if (disposed) return;
+            const pending = bufferedEvents;
+            bufferedEvents = [];
+            // Replayed over the snapshot so an update that raced the request
+            // is not overwritten — and so a transition that arrived mid-flight
+            // still notifies.
+            for (const event of pending) handleEvent(event);
+          }
+        } finally {
+          rehydrating = false;
+        }
+      })();
+    };
 
-      if (!isRunning || !workspaceReady) {
-        console.debug(
-          `[PrMonitorService] Skipping check for ${environmentId} - not ready (running: ${isRunning}, workspace: ${workspaceReady})`
+    const ensureChangeSubscription = async () => {
+      if (disposed || stopChanges || changeSubscriptionPending) return;
+      changeSubscriptionPending = true;
+      try {
+        const stop = await listen<unknown>(
+          PR_MONITOR_CHANGED_EVENT,
+          (event) => {
+            // The payload crosses a process boundary; validate rather than trust.
+            if (!isPrMonitorEvent(event.payload)) return;
+            if (rehydrating) {
+              bufferedEvents.push(event.payload);
+            } else {
+              handleEvent(event.payload);
+            }
+          },
         );
-        return;
+        if (disposed) stop();
+        else stopChanges = stop;
+      } catch {
+        // A snapshot remains useful when native event subscription is
+        // temporarily unavailable. Reconnect will retry this listener.
+      } finally {
+        changeSubscriptionPending = false;
       }
+    };
 
-      console.log(`[PrMonitorService] Performing PR check for ${environmentId} (mode: ${monitorState.mode})`);
-      _setCheckInProgress(environmentId, true);
+    const subscribe = async () => {
+      await ensureChangeSubscription();
+
+      if (disposed) return;
 
       try {
-        const detectionResult = await detectPR(environmentId, environment.containerId ?? null, isLocal, environment.branch);
-
-        // Only increment errors on actual errors, not on "not found"
-        if (detectionResult.status === "error") {
-          _incrementErrors(environmentId);
-        } else {
-          _resetErrors(environmentId);
-        }
-
-        // A confirmed remote transition should be announced even if persisting it
-        // locally fails. Keep a hook-lifetime record because the stale environment
-        // state will otherwise make every retry look like the same new transition.
-        if (
-          detectionResult.status === "success" &&
-          detectionResult.data.state === "merged" &&
-          environment.prState !== "merged"
-        ) {
-          const notificationKey = [
-            environmentId,
-            detectionResult.data.url,
-            detectionResult.data.state,
-          ].join("\u0000");
-          if (!notifiedPrTransitionsRef.current.has(notificationKey)) {
-            notifiedPrTransitionsRef.current.add(notificationKey);
-            toast.success("Branch merged", {
-              description: environment.branch,
-              id: `branch-merged-${environmentId}`,
-            });
-          }
-        }
-
-        await savePRState(
-          environmentId,
-          detectionResult,
-          environment.prUrl ?? null,
-          environment.prState ?? null,
-          useEnvironmentStore.getState().setEnvironmentPR
+        const stopReconnects = await listen(
+          NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+          () => {
+            void ensureChangeSubscription();
+            requestRehydrate();
+          },
         );
-
-        // Reconcile terminal PR state on every successful detection until every
-        // side effect completes. Progress is tracked per PR/task so a failure in a
-        // later step retries that step without repeating comments or status moves.
-        if (
-          detectionResult.status === "success" &&
-          (detectionResult.data.state === "merged" ||
-            detectionResult.data.state === "closed")
-        ) {
-          const terminalState = detectionResult.data.state;
-          try {
-            const { task: taskInStore, taskId } = findTaskForEnvironment(environmentId);
-
-            if (taskId) {
-              const kanbanState = useKanbanStore.getState();
-              const reconciliationKey = [
-                environmentId,
-                detectionResult.data.url,
-                terminalState,
-                taskId,
-              ].join("\u0000");
-              const progress =
-                kanbanReconciliationProgressRef.current.get(reconciliationKey) ??
-                new Set<"status" | "comment" | "metadata">();
-              kanbanReconciliationProgressRef.current.set(reconciliationKey, progress);
-              const commentText =
-                terminalState === "merged" ? "🎉 PR merged" : "❌ PR closed";
-
-              if (taskInStore?.prMergeCommented) {
-                progress.add("comment");
-                progress.add("metadata");
-              } else if (taskInStore?.comments.some((comment) => comment.text === commentText)) {
-                // A previous attempt may have added the comment but failed before
-                // setting the idempotency metadata.
-                progress.add("comment");
-              }
-
-              if (terminalState === "merged" && !progress.has("status")) {
-                // Only advance tasks that are currently in-progress to avoid
-                // regressing tasks that have already moved to "done".
-                const currentStatus = taskInStore?.status;
-                if (currentStatus === "in-progress") {
-                  await kanbanState.moveTask(taskId, "review");
-                  console.log(`[PrMonitorService] PR merged, moved task ${taskId} to review`);
-                } else if (!taskInStore) {
-                  // Task not loaded in store (found via pipeline); update backend directly
-                  await kanbanState.updateTask(taskId, { status: "review" });
-                  console.log(`[PrMonitorService] PR merged, moved task ${taskId} to review (via pipeline)`);
-                }
-                const refreshedTask = findTaskForEnvironment(environmentId).task;
-                if (!taskInStore || refreshedTask?.status !== "in-progress") {
-                  progress.add("status");
-                } else {
-                  throw new Error(`Task ${taskId} status update did not persist`);
-                }
-              }
-
-              if (!progress.has("comment")) {
-                await kanbanState.addComment(taskId, commentText);
-                const refreshedTask = findTaskForEnvironment(environmentId).task;
-                if (
-                  !taskInStore ||
-                  refreshedTask?.comments.some((comment) => comment.text === commentText)
-                ) {
-                  progress.add("comment");
-                } else {
-                  throw new Error(`Task ${taskId} comment did not persist`);
-                }
-              }
-
-              if (!progress.has("metadata")) {
-                await kanbanState.updateTask(taskId, {
-                  prState: terminalState,
-                  prMergeCommented: true,
-                });
-                const refreshedTask = findTaskForEnvironment(environmentId).task;
-                if (
-                  !taskInStore ||
-                  (refreshedTask?.prState === terminalState &&
-                    refreshedTask.prMergeCommented)
-                ) {
-                  progress.add("metadata");
-                } else {
-                  throw new Error(`Task ${taskId} PR metadata did not persist`);
-                }
-                console.log(
-                  `[PrMonitorService] Added PR ${terminalState} comment to task ${taskId}`
-                );
-              }
-            }
-          } catch (error) {
-            console.warn(
-              `[PrMonitorService] Failed to reconcile task after PR ${terminalState}:`,
-              error
-            );
-          }
-        }
-
-        // Handle mode transitions based on result
-        const currentMode = usePrMonitorStore.getState().getMonitoringState(environmentId)?.mode;
-
-        // create-pending → normal: When PR is detected
-        if (currentMode === "create-pending" && detectionResult.status === "success") {
-          console.log(`[PrMonitorService] PR detected, transitioning ${environmentId} from create-pending to normal`);
-          setMonitoringMode(environmentId, "normal");
-
-          // Store PR URL on associated ticket metadata when first detected
-          try {
-            const { task: taskInStore, taskId } = findTaskForEnvironment(environmentId);
-            if (taskId && !taskInStore?.prUrl) {
-              await useKanbanStore.getState().updateTask(taskId, {
-                prUrl: detectionResult.data.url,
-                prState: detectionResult.data.state,
-              });
-              console.log(`[PrMonitorService] Stored PR URL on task ${taskId}`);
-            }
-          } catch (error) {
-            console.warn("[PrMonitorService] Failed to store PR URL on task:", error);
-          }
-        }
-
-        // merge-pending → normal: When PR state becomes merged/closed
-        if (currentMode === "merge-pending" && detectionResult.status === "success") {
-          const prState = detectionResult.data.state;
-          if (prState === "merged" || prState === "closed") {
-            console.log(
-              `[PrMonitorService] PR ${prState}, transitioning ${environmentId} from merge-pending to normal`
-            );
-            setMonitoringMode(environmentId, "normal");
-          }
-        }
-      } catch (error) {
-        // This catch is for unexpected errors in savePRState or mode transitions
-        console.error(`[PrMonitorService] Unexpected error for ${environmentId}:`, error);
-        _incrementErrors(environmentId);
-      } finally {
-        _setCheckInProgress(environmentId, false);
-        _updateLastCheckTime(environmentId);
+        if (disposed) stopReconnects();
+        else unlisteners.push(stopReconnects);
+      } catch {
+        // The initial snapshot still runs. Remounting retries the listener.
       }
-    },
-    [_setCheckInProgress, _updateLastCheckTime, _resetErrors, _incrementErrors, setMonitoringMode]
-  );
 
-  /**
-   * Main tick function - runs every second to check if any environment needs polling.
-   *
-   * Note: This callback uses getState() to access fresh store state on each tick,
-   * avoiding stale closure issues. The setInterval in the mount effect captures this
-   * callback, but since we read state dynamically, it remains current.
-   */
-  const tick = useCallback(() => {
-    const now = Date.now();
-    const state = usePrMonitorStore.getState();
-    const activeEnvId = state.activeEnvironmentId;
+      if (!disposed) requestRehydrate();
+    };
 
-    if (!activeEnvId) return;
-
-    const monitorState = state.monitoredEnvironments[activeEnvId];
-    if (!monitorState) return;
-
-    const { mode, consecutiveErrors } = monitorState;
-
-    // Calculate effective interval with exponential backoff for errors
-    const interval = getEffectiveInterval(mode, consecutiveErrors);
-
-    // Skip if idle mode (interval is Infinity)
-    if (interval === Infinity) return;
-
-    // Check mode timeout (e.g., merge-pending should revert to normal after 20s)
-    const modeTimeout = PR_MONITOR_TIMEOUTS[mode];
-    if (modeTimeout && now - monitorState.modeStartTime > modeTimeout) {
-      console.log(`[PrMonitorService] Mode timeout for ${activeEnvId}, reverting to normal`);
-      usePrMonitorStore.getState().setMonitoringMode(activeEnvId, "normal");
-      // Trigger immediate check after mode timeout to ensure we have fresh state
-      performCheck(activeEnvId);
-      return;
-    }
-
-    // Check if enough time has passed since last check
-    const timeSinceLastCheck = now - monitorState.lastCheckTime;
-    if (timeSinceLastCheck >= interval) {
-      performCheck(activeEnvId);
-    }
-  }, [performCheck]);
-
-  // Start the tick loop on mount
-  useEffect(() => {
-    if (isInitializedRef.current) return;
-    isInitializedRef.current = true;
-
-    console.log("[PrMonitorService] Starting tick loop");
-    tickIntervalRef.current = setInterval(tick, TICK_INTERVAL_MS);
+    void subscribe();
 
     return () => {
-      if (tickIntervalRef.current) {
-        console.log("[PrMonitorService] Stopping tick loop");
-        clearInterval(tickIntervalRef.current);
-        tickIntervalRef.current = null;
-      }
-      isInitializedRef.current = false;
+      disposed = true;
+      bufferedEvents = [];
+      stopChanges?.();
+      for (const unlisten of unlisteners) unlisten();
     };
-  }, [tick]);
-
-  // Track previous selectedEnvironmentId for change detection
-  const prevSelectedEnvIdRef = useRef<string | null>(null);
-
-  // Subscribe to active environment changes (selectedEnvironmentId in uiStore)
-  useEffect(() => {
-    // Handle initial environment if one is already selected
-    const initialEnvId = useUIStore.getState().selectedEnvironmentId;
-    prevSelectedEnvIdRef.current = initialEnvId;
-
-    if (initialEnvId) {
-      console.log(`[PrMonitorService] Initial environment: ${initialEnvId}`);
-      setActiveEnvironment(initialEnvId);
-      const existingState = getMonitoringState(initialEnvId);
-      if (!existingState) {
-        startMonitoring(initialEnvId, "normal");
-      } else {
-        setMonitoringMode(initialEnvId, "normal");
-      }
-      // Trigger immediate check
-      performCheck(initialEnvId);
-    }
-
-    // Subscribe to changes
-    const unsub = useUIStore.subscribe((state) => {
-      const newId = state.selectedEnvironmentId;
-      const prevId = prevSelectedEnvIdRef.current;
-
-      // Only process if there's an actual change
-      if (newId === prevId) return;
-
-      console.log(`[PrMonitorService] Environment switched: ${prevId} -> ${newId}`);
-      prevSelectedEnvIdRef.current = newId;
-
-      // Set previous environment to idle
-      if (prevId) {
-        const prevMonitorState = usePrMonitorStore.getState().getMonitoringState(prevId);
-        if (prevMonitorState) {
-          // If it was in create-pending, it loses focus so revert to idle
-          // (create-pending stops when environment loses focus)
-          setMonitoringMode(prevId, "idle");
-        }
-      }
-
-      // Start monitoring new environment
-      if (newId) {
-        setActiveEnvironment(newId);
-        const existingState = usePrMonitorStore.getState().getMonitoringState(newId);
-        if (!existingState) {
-          startMonitoring(newId, "normal");
-        } else {
-          setMonitoringMode(newId, "normal");
-        }
-        // Trigger immediate check on environment switch
-        performCheck(newId);
-      } else {
-        setActiveEnvironment(null);
-      }
-    });
-
-    return unsub;
-  }, [
-    setActiveEnvironment,
-    startMonitoring,
-    setMonitoringMode,
-    getMonitoringState,
-    performCheck,
-  ]);
-
-  // Subscribe to Claude/Agent idle transitions
-  useEffect(() => {
-    const callbackId = registerStateCallback((containerId, prevState, newState) => {
-      if (newState === "idle" && prevState !== "idle") {
-        // Find environment by containerId or environmentId (for local envs)
-        const envs = useEnvironmentStore.getState().environments;
-        const env = envs.find(
-          (e) => e.containerId === containerId || e.id === containerId
-        );
-
-        if (env) {
-          const activeEnvId = usePrMonitorStore.getState().activeEnvironmentId;
-          // Only trigger check if this is the active environment
-          if (env.id === activeEnvId) {
-            console.log(
-              `[PrMonitorService] Agent became idle for active environment ${env.id}, triggering check`
-            );
-            performCheck(env.id);
-          }
-        }
-      }
-    });
-
-    return () => {
-      unregisterStateCallback(callbackId);
-    };
-  }, [registerStateCallback, unregisterStateCallback, performCheck]);
-
-  // Track previous workspace ready set for change detection
-  const prevWorkspaceReadyRef = useRef<Set<string>>(new Set());
-
-  // Subscribe to workspace ready changes - trigger check when workspace becomes ready
-  useEffect(() => {
-    // Initialize with current state
-    prevWorkspaceReadyRef.current = new Set(useEnvironmentStore.getState().workspaceReadyEnvironments);
-
-    const unsub = useEnvironmentStore.subscribe((state) => {
-      const newSet = state.workspaceReadyEnvironments;
-      const prevSet = prevWorkspaceReadyRef.current;
-
-      // Find environments that just became ready
-      const activeEnvId = usePrMonitorStore.getState().activeEnvironmentId;
-      if (!activeEnvId) {
-        prevWorkspaceReadyRef.current = new Set(newSet);
-        return;
-      }
-
-      const wasReady = prevSet.has(activeEnvId);
-      const isNowReady = newSet.has(activeEnvId);
-
-      if (!wasReady && isNowReady) {
-        console.log(`[PrMonitorService] Workspace became ready for ${activeEnvId}, triggering check`);
-        performCheck(activeEnvId);
-      }
-
-      // Update previous state
-      prevWorkspaceReadyRef.current = new Set(newSet);
-    });
-
-    return unsub;
-  }, [performCheck]);
+  }, [applySnapshot, applyEvent]);
 }

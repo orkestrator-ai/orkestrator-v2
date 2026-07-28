@@ -39,6 +39,13 @@ import {
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
+import {
+  deleteSessionPreferences,
+  MAX_DISPATCHED_REQUEST_IDS,
+  readSessionPreferences,
+  sessionPreferencesUnavailable,
+  updateSessionPreferences,
+} from "./session-preferences.js";
 import { debugLog, isDebugLoggingEnabled } from "./logger.js";
 import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
 import { getMcpRuntimeConfig } from "./mcp-config.js";
@@ -52,6 +59,40 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // Store for active sessions
 const sessions = new Map<string, SessionState>();
+
+/**
+ * Stable prompt ids whose durable journal write is in flight.
+ *
+ * The paired session status is set to running before that write yields. The
+ * map lets the one sendPrompt invocation owning the reservation pass the
+ * ordinary running guard while every competing prompt is refused.
+ */
+const claimedPromptDispatches = new Map<string, string>();
+
+interface PendingPromptDispatchClaim {
+  requestId: string;
+  outcome: Promise<void>;
+}
+
+export interface PromptDispatchHandle {
+  /** Resolves once the SDK query has been constructed and handed off. */
+  started: Promise<void>;
+  /** The complete turn; callers observe it without blocking the HTTP 202. */
+  completion: Promise<void>;
+}
+
+/**
+ * One not-yet-settled durable claim per session.
+ *
+ * A same-id retry joins this outcome rather than treating the optimistic
+ * in-memory Set entry as proof of acceptance. That way a failed journal write
+ * or dispatch start is reported to every waiter and none of them clears the
+ * renderer's one-shot launch marker prematurely.
+ */
+const pendingPromptDispatchClaims = new Map<
+  string,
+  PendingPromptDispatchClaim
+>();
 
 /**
  * How long a hydrated transcript may sit unread on an idle session before it
@@ -826,6 +867,90 @@ export function createSession(title?: string): SessionState {
   return session;
 }
 
+/** Persist a plan-mode value before it becomes observable or actionable. */
+async function persistSessionPlanMode(
+  session: SessionState,
+  planMode: boolean | undefined = session.planMode,
+): Promise<void> {
+  if (planMode === undefined) return;
+  const sdkSessionId =
+    session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
+  if (!sdkSessionId) {
+    throw sessionOperationError(
+      "invalid",
+      "Session does not have a durable preference key",
+    );
+  }
+  await updateSessionPreferences(sdkSessionId, { planMode });
+}
+
+/**
+ * Record a plan-mode change on the session, durably and observably.
+ *
+ * Emitted unconditionally (not only on change) so a renderer whose optimistic
+ * toggle raced an authoritative snapshot converges on what the bridge actually
+ * holds.
+ */
+async function applySessionPlanMode(
+  session: SessionState,
+  planMode: boolean,
+  persist = true,
+): Promise<void> {
+  if (persist) await persistSessionPlanMode(session, planMode);
+  session.planMode = planMode;
+  eventEmitter.emit({
+    type: "session.updated",
+    sessionId: session.id,
+    data: { planMode },
+  });
+}
+
+/**
+ * Update the caller-settable per-session preferences.
+ *
+ * The bridge owns these so they survive renderer restarts; the renderer calls
+ * this on every explicit toggle and rehydrates from the session snapshot.
+ */
+export async function setSessionPreferences(
+  sessionId: string,
+  preferences: { planMode?: boolean },
+): Promise<SessionState> {
+  const session = sessions.get(sessionId);
+  if (!session) {
+    throw sessionOperationError("not_found", "Session not found");
+  }
+  if (typeof preferences.planMode === "boolean") {
+    // Explicit user changes are acknowledged only after the durable value is
+    // safe. On failure the previous in-memory value remains authoritative, so
+    // the next snapshot corrects an optimistic renderer instead of silently
+    // widening permissions after a restart.
+    await applySessionPlanMode(session, preferences.planMode);
+  }
+  return session;
+}
+
+/**
+ * Server-side dismissal of the pending prompt suggestion.
+ *
+ * The bridge replays `promptSuggestion` in every authoritative snapshot and
+ * only clears it when the next prompt runs, so a dismissal held solely in
+ * renderer state resurfaces after a restart or in a second client. Clearing it
+ * here makes the dismissal durable for as long as the suggestion itself was.
+ */
+export function clearPromptSuggestion(sessionId: string): boolean {
+  const session = sessions.get(sessionId);
+  if (!session) return false;
+  if (session.promptSuggestion !== undefined) {
+    session.promptSuggestion = undefined;
+    eventEmitter.emit({
+      type: "session.updated",
+      sessionId,
+      data: { promptSuggestion: null },
+    });
+  }
+  return true;
+}
+
 /**
  * Get a session by ID
  */
@@ -915,6 +1040,10 @@ function getPromptDispatchRecord(
   return promptDispatchRecords.get(promptDispatchKey(sessionId, requestId));
 }
 
+function forgetPromptDispatch(sessionId: string, requestId: string): void {
+  promptDispatchRecords.delete(promptDispatchKey(sessionId, requestId));
+}
+
 function forgetPromptDispatchesForSession(sessionId: string): void {
   for (const [requestId, record] of promptDispatchRecords) {
     if (record.sessionId === sessionId) promptDispatchRecords.delete(requestId);
@@ -964,6 +1093,164 @@ export function getPromptDispatchState(
     if (session.status === "running") return "processing";
   }
   return "new";
+}
+
+/**
+ * Atomically reserve an idempotent prompt request id before dispatch.
+ *
+ * The in-memory Set makes concurrent retries atomic without awaiting. The
+ * durable write is completed before the route returns 202, so a renderer or
+ * bridge restart cannot turn an accepted one-shot launch prompt into a second
+ * agent turn. A failed write rolls the claim back and rejects the request.
+ */
+export async function claimPromptDispatch(
+  sessionId: string,
+  requestId: string,
+  startDispatch: () => PromptDispatchHandle,
+  testHooks?: {
+    beforePersistence?: () => void | Promise<void>;
+  },
+): Promise<"claimed" | "duplicate" | "not-found"> {
+  const session = sessions.get(sessionId);
+  if (!session) return "not-found";
+  if (session.dispatchJournalUnavailable) {
+    throw sessionOperationError(
+      "conflict",
+      "The durable prompt journal is unavailable; refusing to risk replaying this prompt",
+    );
+  }
+
+  const dispatchedRequestIds =
+    session.dispatchedRequestIds ?? new Set<string>();
+  if (dispatchedRequestIds.has(requestId)) {
+    const pending = pendingPromptDispatchClaims.get(sessionId);
+    if (pending?.requestId === requestId) {
+      await pending.outcome;
+    }
+    return "duplicate";
+  }
+  if (session.deleting) {
+    throw sessionOperationError("conflict", "Session is being deleted");
+  }
+  if (session.status === "running") {
+    throw sessionOperationError(
+      "conflict",
+      "Session is already processing a prompt",
+    );
+  }
+  if (session.rewindInProgress) {
+    throw sessionOperationError(
+      "conflict",
+      "Session is restoring files from a checkpoint",
+    );
+  }
+
+  dispatchedRequestIds.add(requestId);
+  session.dispatchedRequestIds = dispatchedRequestIds;
+
+  const recentRequestIds = [...dispatchedRequestIds].slice(
+    -MAX_DISPATCHED_REQUEST_IDS,
+  );
+  const retainedRequestIds = new Set(recentRequestIds);
+  session.dispatchedRequestIds = retainedRequestIds;
+
+  const sdkSessionId =
+    session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
+  if (!sdkSessionId) {
+    session.dispatchedRequestIds.delete(requestId);
+    throw sessionOperationError(
+      "invalid",
+      "Session does not have a durable request-id key",
+    );
+  }
+
+  // Reserve the turn synchronously before the journal write yields. Without
+  // this, another request can start while persistence is in flight, leaving a
+  // request id accepted on disk for a turn that sendPrompt later refuses.
+  const previousStatus = session.status;
+  session.status = "running";
+  claimedPromptDispatches.set(sessionId, requestId);
+
+  const outcome = (async () => {
+    await testHooks?.beforePersistence?.();
+    await updateSessionPreferences(sdkSessionId, {
+      dispatchedRequestIds: recentRequestIds,
+    });
+
+    if (
+      sessions.get(sessionId) !== session
+      || session.deleting
+      || claimedPromptDispatches.get(sessionId) !== requestId
+    ) {
+      claimedPromptDispatches.delete(sessionId);
+      retainedRequestIds.delete(requestId);
+      await updateSessionPreferences(sdkSessionId, {
+        dispatchedRequestIds: [...retainedRequestIds].slice(
+          -MAX_DISPATCHED_REQUEST_IDS,
+        ),
+      });
+      throw sessionOperationError(
+        "conflict",
+        "Session became unavailable before the prompt could start",
+      );
+    }
+
+    try {
+      const dispatch = startDispatch();
+      // Invoking an async function is not yet an accepted turn: attachment
+      // and config preparation can still fail before the SDK sees anything.
+      // Wait only for that unambiguous handoff, never for the provider turn.
+      await dispatch.started;
+    } catch (error) {
+      claimedPromptDispatches.delete(sessionId);
+      if (!session.deleting) session.status = previousStatus;
+      retainedRequestIds.delete(requestId);
+      try {
+        await updateSessionPreferences(sdkSessionId, {
+          dispatchedRequestIds: [...retainedRequestIds].slice(
+            -MAX_DISPATCHED_REQUEST_IDS,
+          ),
+        });
+      } catch (rollbackError) {
+        console.error(
+          "[session-manager] Failed to roll back prompt dispatch claim:",
+          rollbackError instanceof Error
+            ? rollbackError.message
+            : String(rollbackError),
+        );
+      }
+      throw error;
+    }
+  })();
+  pendingPromptDispatchClaims.set(sessionId, { requestId, outcome });
+
+  try {
+    await outcome;
+  } catch (error) {
+    claimedPromptDispatches.delete(sessionId);
+    if (!session.deleting) session.status = previousStatus;
+    retainedRequestIds.delete(requestId);
+    throw error;
+  } finally {
+    if (pendingPromptDispatchClaims.get(sessionId)?.outcome === outcome) {
+      pendingPromptDispatchClaims.delete(sessionId);
+    }
+  }
+
+  return "claimed";
+}
+
+async function waitForPendingPromptDispatchClaim(
+  sessionId: string,
+): Promise<void> {
+  const pending = pendingPromptDispatchClaims.get(sessionId);
+  if (!pending) return;
+  try {
+    await pending.outcome;
+  } catch {
+    // Deletion owns the terminal state. The claim path reports its own failure;
+    // deletion waits only to order rollback before preference removal.
+  }
 }
 
 /**
@@ -1039,6 +1326,7 @@ function sessionHasPendingInteractions(sessionId: string): boolean {
 export function deleteSession(sessionId: string): boolean {
   const session = sessions.get(sessionId);
   if (session) {
+    claimedPromptDispatches.delete(sessionId);
     // Abort any running query
     if (session.abortController) {
       session.abortController.abort();
@@ -1629,6 +1917,23 @@ export async function reconcilePersistedSessions(): Promise<void> {
     // environment's sessions — which rename, delete and fork would then act on.
     includeWorktrees: false,
   });
+  // Durable preferences are read before the adoption loop below: the loop's
+  // race-safety against concurrent prompts and deletions depends on it never
+  // awaiting between its `sessions.get` check and `sessions.set`. Sequential
+  // rather than fanned out so a large Claude home cannot open hundreds of
+  // files at once; entries that already live in memory are skipped, and memory
+  // stays authoritative for them.
+  const storedPreferencesBySdkId = new Map<
+    string,
+    Awaited<ReturnType<typeof readSessionPreferences>>
+  >();
+  for (const info of infos) {
+    if (sessions.has(bridgeSessionIdFromSdkId(info.sessionId))) continue;
+    const preferences = await readSessionPreferences(info.sessionId);
+    if (preferences) {
+      storedPreferencesBySdkId.set(info.sessionId, preferences);
+    }
+  }
   for (const info of infos) {
     // Belt and braces: an SDK that ignores `includeWorktrees` (or a store
     // backend where it does not apply) must still not leak another
@@ -1658,6 +1963,7 @@ export async function reconcilePersistedSessions(): Promise<void> {
       existing.sdkSessionId = info.sessionId;
       continue;
     }
+    const storedPreferences = storedPreferencesBySdkId.get(info.sessionId);
     sessions.set(id, {
       id,
       title: info.customTitle || info.summary || `Session ${info.sessionId.slice(-6)}`,
@@ -1667,6 +1973,19 @@ export async function reconcilePersistedSessions(): Promise<void> {
       lastActivity: new Date(info.lastModified),
       sdkSessionId: info.sessionId,
       persistedMessagesLoaded: false,
+      ...(storedPreferences?.planMode !== undefined
+        ? { planMode: storedPreferences.planMode }
+        : {}),
+      ...(storedPreferences?.dispatchedRequestIds?.length
+        ? {
+            dispatchedRequestIds: new Set(
+              storedPreferences.dispatchedRequestIds,
+            ),
+          }
+        : {}),
+      ...(sessionPreferencesUnavailable(storedPreferences)
+        ? { dispatchJournalUnavailable: true }
+        : {}),
     });
   }
 }
@@ -1693,9 +2012,12 @@ async function materializePersistedSessionState(
   if (racedDuringImport) return racedDuringImport;
 
   if (typeof sdk.getSessionInfo !== "function") return undefined;
-  const info = await sdk.getSessionInfo(sdkId, {
-    dir: currentWorkingDirectory(),
-  });
+  const [info, preferences] = await Promise.all([
+    sdk.getSessionInfo(sdkId, {
+      dir: currentWorkingDirectory(),
+    }),
+    readSessionPreferences(sdkId),
+  ]);
   const racedDuringRead = sessions.get(sessionId);
   if (racedDuringRead) return racedDuringRead;
 
@@ -1712,6 +2034,13 @@ async function materializePersistedSessionState(
     lastActivity: new Date(info.lastModified),
     sdkSessionId: sdkId,
     persistedMessagesLoaded: false,
+    ...(preferences?.planMode !== undefined ? { planMode: preferences.planMode } : {}),
+    ...(preferences?.dispatchedRequestIds?.length
+      ? { dispatchedRequestIds: new Set(preferences.dispatchedRequestIds) }
+      : {}),
+    ...(sessionPreferencesUnavailable(preferences)
+      ? { dispatchJournalUnavailable: true }
+      : {}),
   };
   touchSession(state);
   sessions.set(sessionId, state);
@@ -1960,7 +2289,14 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
   // must claim it synchronously so a prompt cannot slip in on the next
   // microtask before `deleting` is visible.
   const session = sessions.get(sessionId) ?? await ensurePersistedSession(sessionId);
-  if (!session) return false;
+  if (!session) {
+    // A prior attempt can delete the SDK rollout and then fail while removing
+    // bridge-owned metadata. Let a retry finish that cleanup even though the
+    // authoritative rollout no longer materializes.
+    const sdkSessionId = sdkSessionIdFromBridgeId(sessionId);
+    if (sdkSessionId) await deleteSessionPreferences(sdkSessionId);
+    return false;
+  }
   if (session.deleting) {
     throw sessionOperationError("conflict", "Session deletion is already in progress");
   }
@@ -1969,11 +2305,16 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
   // removing its rollout so it cannot recreate or append to the file.
   session.deleting = true;
   session.status = "running";
+  claimedPromptDispatches.delete(sessionId);
   session.abortController?.abort();
   session.abortController = undefined;
   cleanupPendingInteractions(sessionId);
   await releaseQueryControls(session);
+  await waitForPendingPromptDispatchClaim(sessionId);
+  let rolloutDeleted = false;
   try {
+    const preferenceSessionId =
+      session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
     if (session.sdkSessionId) {
       const sdk = await claudeSdk();
       if (typeof sdk.deleteSession === "function") {
@@ -1981,14 +2322,27 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
           dir: currentWorkingDirectory(),
         });
       }
+      rolloutDeleted = true;
       // Recorded before the map entry is dropped: a reconcile already holding a
       // pre-deletion `listSessions` snapshot would otherwise re-insert it.
       recordDeletedSdkSession(session.sdkSessionId);
     }
     forgetPromptDispatchesForSession(sessionId);
+    if (preferenceSessionId) {
+      await deleteSessionPreferences(preferenceSessionId);
+    }
     sessions.delete(sessionId);
     return true;
   } catch (error) {
+    if (rolloutDeleted && session.sdkSessionId) {
+      // The rollout is already gone and cannot be restored. Keep the registry
+      // consistent with that authoritative fact; a retry by id can still
+      // finish removing the preference journal through the missing-session
+      // branch above.
+      recordDeletedSdkSession(session.sdkSessionId);
+      sessions.delete(sessionId);
+      throw error;
+    }
     // The rollout still exists when deletion fails. Restore an addressable idle
     // session, but leave its stopped query stopped.
     session.deleting = false;
@@ -2893,6 +3247,7 @@ export async function sendPrompt(
   options?: PromptOptions,
   testHooks?: {
     afterAttachmentInitialValidation?: (filePath: string) => void | Promise<void>;
+    onQueryStarted?: () => void;
   },
 ): Promise<void> {
   const session = sessions.get(sessionId);
@@ -2904,6 +3259,12 @@ export async function sendPrompt(
   const structuredRequestId = options?.outputSchema
     ? (dispatchRequestId ?? crypto.randomUUID())
     : undefined;
+  const claimedRequestId = !options?.outputSchema
+    ? options?.requestId?.trim()
+    : undefined;
+  const ownsClaimedDispatch =
+    claimedRequestId !== undefined
+    && claimedPromptDispatches.get(sessionId) === claimedRequestId;
 
   // At-most-once dispatch, for plain prompts as much as structured ones. The
   // HTTP response may have been lost; reusing a request id attaches to the
@@ -2923,7 +3284,7 @@ export async function sendPrompt(
     throw sessionOperationError("conflict", "Session is being deleted");
   }
 
-  if (session.status === "running") {
+  if (session.status === "running" && !ownsClaimedDispatch) {
     throw new Error("Session is already processing a prompt");
   }
 
@@ -2932,6 +3293,19 @@ export async function sendPrompt(
       "conflict",
       "Session is restoring files from a checkpoint",
     );
+  }
+
+  const statusBeforeStartup = session.status;
+  const abortControllerBeforeStartup = session.abortController;
+  const errorBeforeStartup = session.error;
+  const lastActivityBeforeStartup = session.lastActivity;
+  const persistedMessagesLoadedBeforeStartup = session.persistedMessagesLoaded;
+  const structuredOutputBeforeStartup = session.structuredOutput;
+  const structuredOutputRequestIdBeforeStartup =
+    session.structuredOutputRequestId;
+
+  if (ownsClaimedDispatch) {
+    claimedPromptDispatches.delete(sessionId);
   }
 
   if (structuredRequestId) {
@@ -2960,6 +3334,48 @@ export async function sendPrompt(
   const abortController = new AbortController();
   session.abortController = abortController;
   session.status = "running";
+
+  // The UI maps its plan-mode toggle onto exactly these two permission modes,
+  // so a prompt carrying one of them is an authoritative statement of the
+  // toggle. Recording it here is a safety net behind the explicit preferences
+  // endpoint (e.g. a toggle made before this session had a durable identity).
+  // Other permission modes say nothing about the toggle and are left alone.
+  if (
+    (options?.permissionMode === "plan"
+      || options?.permissionMode === "bypassPermissions")
+    && session.planMode !== (options.permissionMode === "plan")
+  ) {
+    try {
+      await applySessionPlanMode(session, options.permissionMode === "plan");
+      if (sessions.get(sessionId) !== session || session.deleting) {
+        throw sessionOperationError(
+          "conflict",
+          "Session became unavailable before the prompt could start",
+        );
+      }
+    } catch (error) {
+      // No SDK query exists yet, so this is an unambiguous failed startup.
+      // Restore every reservation made above and leave the request id retryable.
+      if (sessions.get(sessionId) === session && !session.deleting) {
+        if (session.abortController === abortController) {
+          abortController.abort();
+          session.abortController = abortControllerBeforeStartup;
+        }
+        session.status = statusBeforeStartup;
+        session.error = errorBeforeStartup;
+        session.lastActivity = lastActivityBeforeStartup;
+        session.persistedMessagesLoaded = persistedMessagesLoadedBeforeStartup;
+        session.structuredOutput = structuredOutputBeforeStartup;
+        session.structuredOutputRequestId =
+          structuredOutputRequestIdBeforeStartup;
+      }
+      if (dispatchRequestId) {
+        forgetPromptDispatch(sessionId, dispatchRequestId);
+      }
+      throw error;
+    }
+  }
+
   session.error = undefined;
   session.lastActivity = new Date();
 
@@ -2971,7 +3387,7 @@ export async function sendPrompt(
     eventEmitter.emit({
       type: "session.updated",
       sessionId,
-      data: { promptSuggestion: undefined },
+      data: { promptSuggestion: null },
     });
   }
 
@@ -3070,6 +3486,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   let earlyWarningTimeout: ReturnType<typeof setTimeout> | null = null;
   let streamEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
   let queryIteratorControl: SessionState["queryControl"];
+  let queryStarted = false;
   let closeSdkInput: (() => void) | undefined;
   let finishTurnInputForThisTurn: (() => void) | undefined;
   // Hoisted out of the `try` so the error path can still publish whatever the
@@ -3297,6 +3714,20 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           if (toolName === "EnterPlanMode") {
             console.log("[session-manager] EnterPlanMode requested", { sessionId });
 
+            // The agent itself switched the session into plan mode; record it
+            // like a user toggle so the preference survives a restart.
+            try {
+              await applySessionPlanMode(session, true);
+            } catch (error) {
+              const message = error instanceof Error
+                ? error.message
+                : "Failed to persist plan mode";
+              return {
+                behavior: "deny" as const,
+                message: `Plan mode could not be persisted safely: ${message}`,
+              };
+            }
+
             // Emit event so frontend knows to enter plan mode
             eventEmitter.emit({
               type: "plan.enter-requested",
@@ -3355,6 +3786,19 @@ Plan mode is read-only: do not write or edit files until the user approves your 
                 // Mark `planApprovedThisTurn` so the fallback below can detect
                 // the case where the SDK still fails the ExitPlanMode tool
                 // (override the failure + re-prompt Claude to continue).
+                // Approval ends plan mode; record it so the preference the
+                // next prompt rehydrates from matches what the UI shows.
+                try {
+                  await applySessionPlanMode(session, false);
+                } catch (error) {
+                  const message = error instanceof Error
+                    ? error.message
+                    : "Failed to persist plan mode";
+                  return {
+                    behavior: "deny" as const,
+                    message: `Plan mode could not be exited safely: ${message}`,
+                  };
+                }
                 planApprovedThisTurn = true;
                 eventEmitter.emit({
                   type: "plan.exit-requested",
@@ -3417,6 +3861,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     });
     session.queryControl = queryIterator;
     queryIteratorControl = queryIterator;
+    queryStarted = true;
+    testHooks?.onQueryStarted?.();
     let supportedAgents: NonNullable<SessionInitData["agents"]> = [];
     if (typeof queryIterator.supportedAgents === "function") {
       try {
@@ -3858,8 +4304,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         const initMsg = message as any;
         const sdkSessionId = initMsg.session_id;
         if (sdkSessionId) {
+          const gainedDurableIdentity = session.sdkSessionId !== sdkSessionId;
           session.sdkSessionId = sdkSessionId;
           console.log("[session-manager] Session initialized, stored SDK session ID:", sdkSessionId);
+          // A plan-mode preference set before the first turn had no durable key
+          // to be written under; the id assigned here is that key.
+          if (gainedDurableIdentity) await persistSessionPlanMode(session);
         }
 
         // Capture MCP servers and plugins from init message
@@ -4594,12 +5044,15 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     if (session.finishTurnInputIfSettled === finishTurnInputForThisTurn) {
       session.finishTurnInputIfSettled = undefined;
     }
-    // The turn is over however it ended — completed, failed or aborted — so a
-    // retry of this request id must replay that outcome rather than re-run it.
-    // Settling the record (instead of dropping it) is what makes the second
-    // request answer `already-processed`.
+    // Once the SDK accepted the query, a retry must replay the outcome rather
+    // than risk running its side effects twice. Before that startup barrier,
+    // failure is unambiguous and the caller must be able to retry.
     if (dispatchRequestId && sessions.get(sessionId) === session) {
-      recordPromptDispatch(sessionId, dispatchRequestId, "already-processed");
+      if (queryStarted) {
+        recordPromptDispatch(sessionId, dispatchRequestId, "already-processed");
+      } else {
+        forgetPromptDispatch(sessionId, dispatchRequestId);
+      }
     }
     // The loop above is the only consumer of this iterator, and it ends either
     // exhausted or through an abrupt exit — which invokes `return()`, i.e. the

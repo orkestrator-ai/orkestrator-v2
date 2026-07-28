@@ -86,6 +86,13 @@ const mockGetStructuredOutput = mock<
   ) => Promise<any>
 >(async () => null);
 const mockAbortSession = mock(async () => true);
+const mockUpdateSessionPreferences = mock(
+  async (
+    _client: unknown,
+    _sessionId: string,
+    _preferences: { planMode?: boolean },
+  ): Promise<void> => undefined,
+);
 const mockSubscribeToEvents = mock(
   (_client: unknown, _signal?: AbortSignal): AsyncIterable<ClaudeEvent> =>
     abortableEmptyEventStream(_signal),
@@ -189,6 +196,7 @@ mock.module("@/lib/claude-client", () => ({
   sendPrompt: mockSendPrompt,
   getStructuredOutput: mockGetStructuredOutput,
   abortSession: mockAbortSession,
+  updateSessionPreferences: mockUpdateSessionPreferences,
   subscribeToEvents: mockSubscribeToEvents,
   checkHealth: mockCheckHealth,
   getSlashCommands: mockGetSlashCommands,
@@ -526,6 +534,8 @@ describe("ClaudeChatTab", () => {
     mockGetStructuredOutput.mockResolvedValue(null);
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => true);
+    mockUpdateSessionPreferences.mockReset();
+    mockUpdateSessionPreferences.mockResolvedValue(undefined);
     mockSubscribeToEvents.mockReset();
     mockSubscribeToEvents.mockImplementation(
       (_client: unknown, _signal?: AbortSignal): AsyncIterable<ClaudeEvent> =>
@@ -1092,6 +1102,102 @@ describe("ClaudeChatTab", () => {
       expect(useClaudeStore.getState().pendingQuestions.has("stale-question")).toBe(false);
       expect(useClaudeStore.getState().pendingPlanApprovals.has("stale-approval")).toBe(false);
     });
+  });
+
+  test("does not let a stale session snapshot undo a persisted plan-mode toggle", async () => {
+    const { container, rerender } = render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+    mockGetSession.mockReset();
+    mockGetSessionMessages.mockResolvedValue([]);
+    mockGetPendingQuestions.mockResolvedValue([]);
+    mockGetPendingPlanApprovals.mockResolvedValue([]);
+
+    const input = container.querySelector<HTMLElement>("[contenteditable=true]");
+    expect(input).not.toBeNull();
+    fireEvent.keyDown(input!, { key: "Tab", shiftKey: true });
+    await waitFor(() =>
+      expect(mockUpdateSessionPreferences).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        { planMode: true },
+      ),
+    );
+    expect(useClaudeStore.getState().isPlanMode(SESSION_KEY)).toBe(true);
+
+    // This response represents a GET that began before the successful PUT.
+    mockGetSession.mockResolvedValue({ status: "idle", planMode: false });
+    rerender(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+    expect(useClaudeStore.getState().isPlanMode(SESSION_KEY)).toBe(true);
+
+    // A matching snapshot acknowledges the desired value and returns normal
+    // authority to subsequent server snapshots.
+    mockGetSession.mockClear();
+    mockGetSession.mockResolvedValue({ status: "idle", planMode: true });
+    rerender(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={2}
+      />,
+    );
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+
+    mockGetSession.mockClear();
+    mockGetSession.mockResolvedValue({ status: "idle", planMode: false });
+    rerender(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={3}
+      />,
+    );
+    await waitFor(() =>
+      expect(useClaudeStore.getState().isPlanMode(SESSION_KEY)).toBe(false),
+    );
+  });
+
+  test("reconciles plan mode from the server when preference persistence fails", async () => {
+    mockUpdateSessionPreferences.mockRejectedValueOnce(
+      new Error("preference store unavailable"),
+    );
+    const { container } = render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />,
+    );
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue({ status: "idle", planMode: false });
+
+    const input = container.querySelector<HTMLElement>("[contenteditable=true]");
+    expect(input).not.toBeNull();
+    fireEvent.keyDown(input!, { key: "Tab", shiftKey: true });
+
+    await waitFor(() =>
+      expect(mockUpdateSessionPreferences).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        { planMode: true },
+      ),
+    );
+    await waitFor(() =>
+      expect(useClaudeStore.getState().isPlanMode(SESSION_KEY)).toBe(false),
+    );
   });
 
   test("failed and missing-session refreshes preserve the current transcript", async () => {
@@ -2482,6 +2588,44 @@ describe("ClaudeChatTab", () => {
     expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
   });
 
+  test("replaces an optimistic plan preference with the resumed session mode", async () => {
+    mockGetSession.mockImplementation(async (_client, sessionId) =>
+      sessionId === "resumed-claude"
+        ? {
+            id: sessionId,
+            status: "idle",
+            planMode: false,
+            createdAt: "2026-04-15T10:00:00.000Z",
+            lastActivity: "2026-04-15T10:00:00.000Z",
+          }
+        : null
+    );
+
+    const { container } = render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />,
+    );
+    const input = container.querySelector<HTMLElement>("[contenteditable=true]");
+    expect(input).not.toBeNull();
+    fireEvent.keyDown(input!, { key: "Tab", shiftKey: true });
+    await waitFor(() =>
+      expect(mockUpdateSessionPreferences).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        { planMode: true },
+      ),
+    );
+    expect(useClaudeStore.getState().isPlanMode(SESSION_KEY)).toBe(true);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Resume Session" })[0]!);
+    fireEvent.click(await screen.findByTestId("claude-resume-choice"));
+
+    await waitFor(() =>
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId)
+        .toBe("resumed-claude"),
+    );
+    expect(useClaudeStore.getState().isPlanMode(SESSION_KEY)).toBe(false);
+  });
+
   test("keeps the resume dialog open and logs when loading a resumed session fails", async () => {
     const originalError = console.error;
     const consoleError = mock(() => {});
@@ -2767,9 +2911,14 @@ describe("ClaudeChatTab", () => {
         MOCK_CLIENT,
         "session-1",
         reviewPrompt,
-        expect.not.objectContaining({ outputSchema: expect.anything() }),
+        expect.objectContaining({
+          requestId: "initial-prompt:env-1:tab-1",
+        }),
       );
     });
+    expect(mockSendPrompt.mock.calls.at(-1)?.[3]).not.toHaveProperty(
+      "outputSchema",
+    );
     expect(mockGetStructuredOutput).not.toHaveBeenCalled();
   });
 
@@ -4009,10 +4158,10 @@ describe("ClaudeChatTab", () => {
       });
     });
 
-    test("an explicit undefined suggestion clears it, a missing key leaves it alone", async () => {
+    test("an explicit null suggestion clears it, a missing key leaves it alone", async () => {
       /*
        * The presence check (`"promptSuggestion" in data`) is the clear
-       * mechanism: the bridge sends the key with no value to retract a
+       * mechanism: the bridge sends an explicit JSON null to retract a
        * suggestion, and omits it entirely when it has nothing to say.
        */
       await withChannel(async (channel) => {
@@ -4043,7 +4192,7 @@ describe("ClaudeChatTab", () => {
         channel.push({
           type: "session.updated",
           sessionId: "session-1",
-          data: { promptSuggestion: undefined },
+          data: { promptSuggestion: null },
         } as any);
         await waitFor(() =>
           expect(useClaudeStore.getState().promptSuggestions.get(SESSION_KEY)).toBeUndefined(),

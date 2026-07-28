@@ -49,6 +49,12 @@ import {
   stripStoryRefinementStateBlocks,
 } from "@/lib/feature-planner";
 import * as backend from "@/lib/backend";
+import {
+  composeDraftKey,
+  discardComposeDraft,
+  loadComposeDraft,
+  persistComposeDraft,
+} from "@/lib/compose-draft-persistence";
 import { cn } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
 import { useCodexStore, useConfigStore, useEnvironmentStore, useFeaturePlanStore, useKanbanStore, useProjectStore } from "@/stores";
@@ -524,6 +530,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const loadFeatures = useFeaturePlanStore((state) => state.loadFeatures);
   const createFeature = useFeaturePlanStore((state) => state.createFeature);
   const updateFeature = useFeaturePlanStore((state) => state.updateFeature);
+  const claimFeatureBuild = useFeaturePlanStore((state) => state.claimFeatureBuild);
   const appendMessage = useFeaturePlanStore((state) => state.appendMessage);
   const appendStoryMessage = useFeaturePlanStore((state) => state.appendStoryMessage);
   const chatDrafts = useFeaturePlanStore((state) => state.chatDrafts);
@@ -541,6 +548,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   );
   const settleConversation = useFeaturePlanStore((state) => state.settleConversation);
   const addTask = useKanbanStore((state) => state.addTask);
+  const deleteTask = useKanbanStore((state) => state.deleteTask);
   const { startBuild } = useBuildPipeline();
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
@@ -552,7 +560,101 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const reconciliationControllersRef = useRef<Map<string, AbortController>>(new Map());
 
   useEffect(() => {
-    void loadFeatures(projectId);
+    let disposed = false;
+    let hydrated = false;
+    let draftReadSucceeded = false;
+    let draftsChanged = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const draftKey = composeDraftKey("feature-chat", projectId, "all");
+    const featureLoadPromise = loadFeatures(projectId);
+
+    const projectDrafts = () => {
+      const state = useFeaturePlanStore.getState();
+      const featureIds = new Set(
+        state.features
+          .filter((feature) => feature.projectId === projectId)
+          .map((feature) => feature.id),
+      );
+      return Object.fromEntries(
+        Array.from(state.chatDrafts.entries()).filter(([key]) => {
+          const featureId = key.split(":")[1];
+          return featureId !== undefined && featureIds.has(featureId);
+        }),
+      );
+    };
+
+    const persistCurrentDrafts = () => {
+      const drafts = projectDrafts();
+      const operation = Object.keys(drafts).length === 0
+        ? discardComposeDraft(draftKey)
+        : persistComposeDraft(
+            draftKey,
+            "project",
+            projectId,
+            drafts,
+          );
+      draftsChanged = false;
+      void operation.catch((error) => {
+        console.warn("[FeaturesView] Failed to persist chat drafts:", error);
+      });
+    };
+
+    const schedule = () => {
+      if (!hydrated || disposed) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = undefined;
+        persistCurrentDrafts();
+      }, 400);
+    };
+
+    const unsubscribe = useFeaturePlanStore.subscribe((state, previous) => {
+      if (state.chatDrafts !== previous.chatDrafts) {
+        draftsChanged = true;
+      }
+      if (state.chatDrafts !== previous.chatDrafts || state.features !== previous.features) {
+        schedule();
+      }
+    });
+
+    void loadComposeDraft<Record<string, string>>(draftKey)
+      .then(async (persisted) => {
+        draftReadSucceeded = true;
+        const featureLoadSucceeded = await featureLoadPromise;
+        if (
+          disposed
+          || !featureLoadSucceeded
+          || draftsChanged
+          || !persisted
+          || typeof persisted.value !== "object"
+          || !persisted.value
+        ) {
+          return;
+        }
+        for (const [key, value] of Object.entries(persisted.value)) {
+          if (typeof value === "string" && !useFeaturePlanStore.getState().chatDrafts.has(key)) {
+            useFeaturePlanStore.getState().setChatDraft(key, value);
+          }
+        }
+      })
+      .catch((error) => {
+        console.warn("[FeaturesView] Failed to restore chat drafts:", error);
+      })
+      .finally(async () => {
+        const featureLoadSucceeded = await featureLoadPromise;
+        if (disposed || !featureLoadSucceeded) return;
+        if (draftReadSucceeded || draftsChanged) {
+          hydrated = true;
+          schedule();
+        }
+      });
+
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      unsubscribe();
+      if (draftsChanged) persistCurrentDrafts();
+    };
   }, [loadFeatures, projectId]);
 
   const projectFeatures = useMemo(
@@ -1917,25 +2019,65 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       if (
         buildingFeatureId
         || hasBlockingConversation
+        || feature.status === "building"
+        || !!feature.buildTaskId
+        || !!feature.buildPipelineId
         || feature.stories.length === 0
       ) return;
       setBuildingFeatureId(feature.id);
+      let ownsBuildReservation = false;
+      let unreservedTaskId: string | null = null;
       try {
         const taskDetails = formatFeatureStoriesForBuild(feature);
         const taskId = await addTask(projectId, taskDetails.title, taskDetails.description);
         if (!taskId) throw new Error("Failed to create Kanban task for feature build");
+        unreservedTaskId = taskId;
 
         const task = useKanbanStore.getState().tasks.find((candidate) => candidate.id === taskId);
         if (!task) throw new Error("Created build task was not found in the Kanban store");
 
+        // Persist the feature→task half of the launch before navigation can
+        // unmount this view. A restarted client now sees an in-progress feature
+        // instead of offering a duplicate build while the pipeline is being
+        // created.
+        const reservation = await claimFeatureBuild(feature.id, taskId);
+        if (!reservation) {
+          await deleteTask(taskId);
+          unreservedTaskId = null;
+          throw new Error("Failed to reserve the feature build");
+        }
+        if (!reservation.claimed) {
+          await deleteTask(taskId);
+          unreservedTaskId = null;
+          toast.error("This feature already has an active build");
+          return;
+        }
+        ownsBuildReservation = true;
+        unreservedTaskId = null;
+
         await startBuild(task, getPreferredEnvironmentType(projectId), "codex", {
           existingEnvironmentId: feature.codexEnvironmentId,
+          onPipelineLinked: ({ pipelineId, environmentId }) =>
+            updateFeature(feature.id, {
+              status: "building",
+              buildTaskId: taskId,
+              buildPipelineId: pipelineId,
+              codexEnvironmentId: environmentId,
+            }).then((updated) => {
+              if (!updated) throw new Error("Failed to persist the feature build linkage");
+            }),
         });
         const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId(taskId);
         if (!pipeline || pipeline.phase === "failed") {
           // startBuild surfaces its own error toast and clears or fails the
-          // pipeline when it cannot start. Leave the feature in its prior state
-          // rather than marking it as building.
+          // pipeline when it cannot start. Undo the durable reservation so the
+          // feature does not remain stuck in "building" with no live pipeline.
+          await updateFeature(feature.id, {
+            status: feature.status,
+            buildTaskId: feature.buildTaskId,
+            buildPipelineId: feature.buildPipelineId,
+          }).catch(() => undefined);
+          ownsBuildReservation = false;
           return;
         }
         const updated = await updateFeature(feature.id, {
@@ -1947,6 +2089,16 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         if (!updated) throw new Error("Failed to persist the feature build state");
       } catch (error) {
         console.error("[FeaturesView] Failed to start feature build:", error);
+        if (unreservedTaskId) {
+          await deleteTask(unreservedTaskId);
+        }
+        if (ownsBuildReservation) {
+          await updateFeature(feature.id, {
+            status: feature.status,
+            buildTaskId: feature.buildTaskId,
+            buildPipelineId: feature.buildPipelineId,
+          }).catch(() => undefined);
+        }
         toast.error("Failed to start feature build", {
           description: error instanceof Error ? error.message : "Unknown error",
         });
@@ -1957,6 +2109,8 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     [
       addTask,
       buildingFeatureId,
+      claimFeatureBuild,
+      deleteTask,
       hasBlockingConversation,
       projectId,
       startBuild,
@@ -2068,10 +2222,16 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                   disabled={
                     buildingFeatureId === selectedFeature.id
                     || hasBlockingConversation
+                    || selectedFeature.status === "building"
+                    || !!selectedFeature.buildTaskId
+                    || !!selectedFeature.buildPipelineId
                   }
                   onClick={() => void handleBuildFeature(selectedFeature)}
                 >
-                  {buildingFeatureId === selectedFeature.id ? (
+                  {buildingFeatureId === selectedFeature.id
+                    || selectedFeature.status === "building"
+                    || !!selectedFeature.buildTaskId
+                    || !!selectedFeature.buildPipelineId ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <Wrench className="h-3.5 w-3.5" />

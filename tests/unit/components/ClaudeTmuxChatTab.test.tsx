@@ -19,6 +19,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useUIStore } from "@/stores/uiStore";
+import { usePromptDraftStore } from "@/stores/promptDraftStore";
 import { clearPersistedVirtuosoState } from "@/hooks/useVirtuosoScrollState";
 import * as realTmuxClient from "@/lib/claude-tmux-client";
 import * as realBackend from "@/lib/backend";
@@ -505,6 +506,7 @@ describe("ClaudeTmuxChatTab", () => {
       messageQueue: new Map(),
       effortLevels: new Map(),
     });
+    usePromptDraftStore.getState().reset();
     // The tmux tab prefers the live SDK model list shared via the claude
     // store; keep it empty by default so tests exercise the fallback list.
     useClaudeStore.setState({ models: [], modelCatalogs: new Map() });
@@ -6259,6 +6261,51 @@ Enter to confirm · Esc to cancel
         "env-1",
       );
     });
+  });
+
+  test("restores unfinished plan feedback after the tmux tab remounts", () => {
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+    useClaudeTmuxStore.getState().addPendingPlan("tab-1", {
+      eventId: "plan-remount",
+      plan: "Keep the pending plan",
+      planFilePath: null,
+      allowedPrompts: [],
+      toolInput: { plan: "Keep the pending plan" },
+      payload: {},
+      receivedAt: new Date().toISOString(),
+    });
+
+    const view = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Request changes" }));
+    fireEvent.change(screen.getByPlaceholderText("What should Claude change?"), {
+      target: { value: "Preserve this unfinished feedback" },
+    });
+
+    view.unmount();
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(
+      (screen.getByPlaceholderText(
+        "What should Claude change?",
+      ) as HTMLTextAreaElement).value,
+    ).toBe("Preserve this unfinished feedback");
   });
 
   test("opens plan markdown links externally and renders plan permission counts", async () => {

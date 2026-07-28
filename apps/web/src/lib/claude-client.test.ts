@@ -23,6 +23,8 @@ import {
   answerQuestion,
   dismissQuestion,
   respondToPlanApproval,
+  updateSessionPreferences,
+  dismissPromptSuggestion,
   getSlashCommands,
   subscribeToEvents,
   SessionNotFoundError,
@@ -253,6 +255,7 @@ describe("claude-client", () => {
           "contextUsage",
         ],
         [{ promptSuggestion: { text: "not a string" } }, "promptSuggestion"],
+        [{ planMode: "yes" }, "planMode"],
         [{ backgroundTasks: "none" }, "backgroundTasks"],
       ] as const) {
         mockFetchJson({ ...base, ...malformed });
@@ -262,6 +265,7 @@ describe("claude-client", () => {
           expect(result.session).toMatchObject(base);
           expect(result.session.contextUsage).toBeUndefined();
           expect(result.session.promptSuggestion).toBeUndefined();
+          expect(result.session.planMode).toBeUndefined();
           expect(result.session.backgroundTasks).toBeUndefined();
           expect(result.session.invalidMetadataFields).toEqual([expectedField]);
         }
@@ -303,6 +307,87 @@ describe("claude-client", () => {
           "backgroundTasks.broken",
         ]);
       }
+    });
+
+    test("propagates a valid plan-mode preference", async () => {
+      mockFetchJson({
+        id: "s-1",
+        status: "idle",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+        planMode: true,
+      });
+
+      const result = await lookupSession(client, "s-1");
+      expect(result).toMatchObject({
+        kind: "found",
+        session: { planMode: true },
+      });
+    });
+  });
+
+  describe("session preferences and prompt suggestions", () => {
+    test("updates plan mode with the expected authenticated bridge request", async () => {
+      let request: Request | undefined;
+      globalThis.fetch = mock(async (input, init) => {
+        request = new Request(input, init);
+        return new Response(JSON.stringify({ planMode: true }), { status: 200 });
+      }) as unknown as typeof fetch;
+
+      const authenticatedClient = createClient(
+        "http://127.0.0.1:4001",
+        "bridge-token",
+      );
+      await updateSessionPreferences(
+        authenticatedClient,
+        "session-1",
+        { planMode: true },
+      );
+
+      expect(request?.url).toBe(
+        "http://127.0.0.1:4001/session/session-1/preferences",
+      );
+      expect(request?.method).toBe("PUT");
+      expect(request?.headers.get("X-Orkestrator-Claude-Token")).toBe(
+        "bridge-token",
+      );
+      expect(await request?.json()).toEqual({ planMode: true });
+    });
+
+    test("reports preference update failures", async () => {
+      mockFetchStatus(503);
+      await expect(
+        updateSessionPreferences(client, "session-1", { planMode: false }),
+      ).rejects.toThrow("HTTP 503");
+    });
+
+    test("dismisses suggestions and treats an already-missing suggestion as success", async () => {
+      const requests: Request[] = [];
+      globalThis.fetch = mock(async (input, init) => {
+        requests.push(new Request(input, init));
+        return new Response(null, { status: requests.length === 1 ? 204 : 404 });
+      }) as unknown as typeof fetch;
+
+      const authenticatedClient = createClient(
+        "http://127.0.0.1:4001",
+        "bridge-token",
+      );
+      await dismissPromptSuggestion(authenticatedClient, "session-1");
+      await dismissPromptSuggestion(authenticatedClient, "session-1");
+      expect(requests.map((request) => request.method)).toEqual(["DELETE", "DELETE"]);
+      expect(
+        requests.every(
+          (request) =>
+            request.headers.get("X-Orkestrator-Claude-Token") === "bridge-token",
+        ),
+      ).toBe(true);
+    });
+
+    test("reports non-404 suggestion dismissal failures", async () => {
+      mockFetchStatus(500);
+      await expect(
+        dismissPromptSuggestion(client, "session-1"),
+      ).rejects.toThrow("HTTP 500");
     });
   });
 

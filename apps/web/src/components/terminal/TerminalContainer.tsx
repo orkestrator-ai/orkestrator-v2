@@ -1024,11 +1024,15 @@ export function TerminalContainer({
               // a prompt whose references still resolve, instead of the raw text
               // the user typed. (Eviction *before* this point still loses the
               // attachments themselves — they are never persisted.)
-              if (promptWithReferences !== currentOptions.initialPrompt) {
+              if (
+                promptWithReferences !== currentOptions.initialPrompt
+                || pendingAttachments.length > 0
+              ) {
                 try {
                   const updatedEnvironment = await backend.setEnvironmentInitialPrompt(
                     environmentId,
                     promptWithReferences,
+                    [],
                   );
                   useEnvironmentStore.getState().updateEnvironment(
                     environmentId,
@@ -1043,13 +1047,9 @@ export function TerminalContainer({
               }
             } catch (error) {
               console.error("[TerminalContainer] Failed to save initial prompt attachments:", error);
-              const currentOptions = useClaudeOptionsStore.getState().getOptions(environmentId);
-              if (currentOptions) {
-                setOptions(environmentId, {
-                  ...currentOptions,
-                  initialPromptAttachments: [],
-                });
-              }
+              // Keep both renderer and backend copies so a later retry can
+              // recover the images rather than silently launching without
+              // them.
             } finally {
               isSavingInitialPromptAttachmentsRef.current = false;
             }

@@ -13,6 +13,12 @@ import {
 import { toast } from "sonner";
 import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
+import {
+  composeDraftKey,
+  discardComposeDraft,
+  loadComposeDraft,
+  persistComposeDraft,
+} from "@/lib/compose-draft-persistence";
 
 interface ImageAttachment {
   id: string;
@@ -24,6 +30,7 @@ interface ImageAttachment {
 
 interface ComposeBarProps {
   sessionKey: string;
+  environmentId?: string;
   isOpen: boolean;
   onClose: () => void;
   onSend: (images: ImageAttachment[], text: string) => void;
@@ -55,6 +62,7 @@ function generateImageFilename(): string {
 
 export function ComposeBar({
   sessionKey,
+  environmentId,
   isOpen,
   onClose,
   onSend,
@@ -71,6 +79,7 @@ export function ComposeBar({
   const clearComposeDraft = useTerminalSessionStore((state) => state.clearComposeDraft);
 
   const [isSending, setIsSending] = useState(false);
+  const [backendDraftHydrated, setBackendDraftHydrated] = useState(false);
   const [pendingPasteCount, setPendingPasteCount] = useState(0);
   const [previewImage, setPreviewImage] = useState<ImageAttachment | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -96,6 +105,111 @@ export function ComposeBar({
       pasteLifecycleRef.current += 1;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let hydrated = false;
+    let readSucceeded = false;
+    let locallyChanged = false;
+    let applyingHydration = false;
+    setBackendDraftHydrated(false);
+    if (!environmentId) {
+      setBackendDraftHydrated(true);
+      return;
+    }
+    const key = composeDraftKey("terminal", environmentId, sessionKey);
+    const unsubscribe = useTerminalSessionStore.subscribe((state, previous) => {
+      if (applyingHydration) return;
+      const currentText = state.composeDraftText.get(sessionKey) ?? "";
+      const previousText = previous.composeDraftText.get(sessionKey) ?? "";
+      const currentImages = state.composeDraftImages.get(sessionKey) ?? [];
+      const previousImages = previous.composeDraftImages.get(sessionKey) ?? [];
+      if (currentText === previousText && currentImages === previousImages) return;
+      locallyChanged = true;
+      hydrated = true;
+      setBackendDraftHydrated(true);
+    });
+    void loadComposeDraft<{ text?: unknown; images?: unknown }>(key).then((draft) => {
+      readSucceeded = true;
+      if (
+        cancelled
+        || locallyChanged
+        || !draft
+        || typeof draft.value !== "object"
+        || draft.value === null
+      ) return;
+      const value = draft.value as { text?: unknown; images?: unknown };
+      const store = useTerminalSessionStore.getState();
+      // Local typing that happened while the read was in flight wins.
+      if (
+        store.getComposeDraftText(sessionKey) === ""
+        && store.getComposeDraftImages(sessionKey).length === 0
+      ) {
+        applyingHydration = true;
+        try {
+          if (typeof value.text === "string") store.setComposeDraftText(sessionKey, value.text);
+          if (Array.isArray(value.images)) {
+            store.setComposeDraftImages(
+              sessionKey,
+              value.images.filter((image): image is ImageAttachment =>
+                typeof image === "object"
+                && image !== null
+                && typeof (image as ImageAttachment).id === "string"
+                && typeof (image as ImageAttachment).dataUrl === "string"
+                && typeof (image as ImageAttachment).base64Data === "string"
+                && typeof (image as ImageAttachment).width === "number"
+                && typeof (image as ImageAttachment).height === "number"
+              ),
+            );
+          }
+        } finally {
+          applyingHydration = false;
+        }
+      }
+    }).catch((error) => {
+      console.warn("[ComposeBar] Failed to restore compose draft:", error);
+    }).finally(() => {
+      if (!cancelled && (readSucceeded || locallyChanged)) {
+        hydrated = true;
+        setBackendDraftHydrated(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      const store = useTerminalSessionStore.getState();
+      const currentText = store.getComposeDraftText(sessionKey);
+      const currentImages = store.getComposeDraftImages(sessionKey);
+      if (!hydrated && !locallyChanged) {
+        return;
+      }
+      const operation = currentText.length > 0 || currentImages.length > 0
+        ? persistComposeDraft(
+            key,
+            "environment",
+            environmentId,
+            { text: currentText, images: currentImages },
+          )
+        : discardComposeDraft(key);
+      void operation.catch((error) => {
+        console.warn("[ComposeBar] Failed to persist compose draft during cleanup:", error);
+      });
+    };
+  }, [environmentId, sessionKey]);
+
+  useEffect(() => {
+    if (!environmentId || !backendDraftHydrated) return;
+    const key = composeDraftKey("terminal", environmentId, sessionKey);
+    const timer = setTimeout(() => {
+      const operation = text.length > 0 || images.length > 0
+        ? persistComposeDraft(key, "environment", environmentId, { text, images })
+        : discardComposeDraft(key);
+      void operation.catch((error) => {
+        console.warn("[ComposeBar] Failed to persist compose draft:", error);
+      });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [backendDraftHydrated, environmentId, images, sessionKey, text]);
 
   // A paste belongs only to the open compose session that received it.
   useEffect(() => {

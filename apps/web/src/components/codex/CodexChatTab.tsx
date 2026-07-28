@@ -11,6 +11,11 @@ import {
 import { useEscapeToStop } from "@/hooks/useEscapeToStop";
 import { useManualSessionRefresh } from "@/hooks/useManualSessionRefresh";
 import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
+import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
+import {
+  codexInteractionDraftKey,
+  usePromptDraftStore,
+} from "@/stores/promptDraftStore";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -117,7 +122,8 @@ type CodexSendHandler = (
   text: string,
   attachments: CodexAttachment[],
   requestId?: string,
-) => Promise<void>;
+) => Promise<CodexDispatchResult>;
+type CodexDispatchResult = "accepted" | "rejected" | "unknown";
 interface ReconcileSessionOptions {
   forceRefreshMessages?: boolean;
   throwOnError?: boolean;
@@ -197,6 +203,8 @@ export function CodexChatTab({
   const [initAttempt, setInitAttempt] = useState(0);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [initialPromptSent, setInitialPromptSent] = useState(false);
+  const initialPromptRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialPromptRetryCountRef = useRef(0);
   const [dismissedPlanReviewMessageId, setDismissedPlanReviewMessageId] = useState<string | null>(null);
   const [isPlanTransitionPending, setIsPlanTransitionPending] = useState(false);
   const lastInitTimeRef = useRef(0);
@@ -223,6 +231,12 @@ export function CodexChatTab({
   const interactionActivitySequenceRef = useRef(0);
   const forkInFlightRef = useRef(false);
   const [forkInFlight, setForkInFlight] = useState(false);
+
+  useEffect(() => () => {
+    if (initialPromptRetryTimerRef.current) {
+      clearTimeout(initialPromptRetryTimerRef.current);
+    }
+  }, []);
   const reconcileSessionStateRef = useRef<
     (options?: ReconcileSessionOptions) => Promise<ReconcileSessionResult>
   >(async () => "unavailable");
@@ -240,7 +254,6 @@ export function CodexChatTab({
    * appears to have been told but never received. Whichever path next observes
    * an authoritative idle session settles it.
    */
-  const unconfirmedDispatchRef = useRef<{ userMessageId: string } | null>(null);
   const refreshControllerRef = useRef(createCodexSessionRefreshController());
   /**
    * Last bridge event revision this tab processed.
@@ -253,6 +266,7 @@ export function CodexChatTab({
     () => createSessionKey(environmentId, tabId),
     [environmentId, tabId],
   );
+  useNativeComposeDraftPersistence("codex", environmentId, sessionKey, useCodexStore);
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
@@ -460,6 +474,7 @@ export function CodexChatTab({
   );
   const displayMessages = handoff.displayMessages;
   const launchPrompt = initialPrompt ?? handoff.initialPrompt;
+  const initialPromptRequestId = `initial-prompt:${environmentId}:${tabId}`;
   /*
    * Read through a ref inside the initialization effect. `launchPrompt` resolves
    * a few milliseconds after mount for a handoff tab, so listing it as a
@@ -600,7 +615,6 @@ export function CodexChatTab({
     interactionSnapshotSequenceRef.current += 1;
     interactionActivitySequenceRef.current += 1;
     retryablePromptRef.current = null;
-    unconfirmedDispatchRef.current = null;
     // The pending "stopped" marker belongs to the session that was interrupted.
     // If the identity changed before the interrupt settled, writing it now would
     // append TURN_STOPPED_BY_USER to a transcript the user never stopped.
@@ -616,11 +630,12 @@ export function CodexChatTab({
    * the transcript as if Codex had seen it.
    */
   const resolveUnconfirmedDispatch = useCallback(() => {
-    const pending = unconfirmedDispatchRef.current;
+    const store = useCodexStore.getState();
+    const pending = store.unconfirmedDispatches.get(sessionKey);
     if (!pending) return;
-    unconfirmedDispatchRef.current = null;
+    store.clearUnconfirmedDispatch(sessionKey);
 
-    const current = useCodexStore.getState().sessions.get(sessionKey);
+    const current = store.sessions.get(sessionKey);
     const stillPresent = current?.messages.some(
       (message) => message.id === pending.userMessageId,
     ) === true;
@@ -628,23 +643,38 @@ export function CodexChatTab({
       // The bridge echoed the prompt, so the dispatch did land and its key is
       // spent.
       retryablePromptRef.current = null;
+      if (pending.requestId === initialPromptRequestId) {
+        clearTabInitialPrompt(tabId, environmentId);
+      }
       return;
     }
 
+    retryablePromptRef.current = {
+      fingerprint: pending.fingerprint,
+      requestId: pending.requestId,
+    };
     removeMessage(sessionKey, pending.userMessageId);
     setSessionError(
       sessionKey,
       "Could not confirm whether Codex received the prompt. You can send it again safely.",
     );
-  }, [removeMessage, sessionKey, setSessionError]);
+  }, [
+    clearTabInitialPrompt,
+    environmentId,
+    initialPromptRequestId,
+    removeMessage,
+    sessionKey,
+    setSessionError,
+    tabId,
+  ]);
 
   const handleSend = useCallback(
     async (
       text: string,
       attachments: CodexAttachment[],
       logicalRequestId?: string,
-    ) => {
-      if (!client || !session?.sessionId) return;
+    ): Promise<CodexDispatchResult> => {
+      if (!client || !session?.sessionId) return "rejected";
 
       const fingerprint = JSON.stringify({
         text,
@@ -659,6 +689,12 @@ export function CodexChatTab({
         ?? (retryablePromptRef.current?.fingerprint === fingerprint
           ? retryablePromptRef.current.requestId
           : createUuid());
+      const clearMatchingUnconfirmedDispatch = () => {
+        const store = useCodexStore.getState();
+        if (store.unconfirmedDispatches.get(sessionKey)?.requestId === requestId) {
+          store.clearUnconfirmedDispatch(sessionKey);
+        }
+      };
       const userMessage = createOptimisticNativeMessage(
         `${OPTIMISTIC_MESSAGE_PREFIX}${createUuid()}`,
         text,
@@ -717,7 +753,7 @@ export function CodexChatTab({
             ? `Failed to send prompt (HTTP ${sent.httpStatus})`
             : "Failed to send prompt",
         );
-        return;
+        return "rejected";
       }
 
       if (sent.outcome === "unknown") {
@@ -734,7 +770,11 @@ export function CodexChatTab({
         // Claimed before reconciling: if this reconcile cannot conclude, a later
         // authoritative idle state has to finish the job rather than silently
         // unlocking and stranding the message.
-        unconfirmedDispatchRef.current = { userMessageId: userMessage.id };
+        useCodexStore.getState().setUnconfirmedDispatch(sessionKey, {
+          userMessageId: userMessage.id,
+          fingerprint,
+          requestId,
+        });
         setSessionPhase(sessionKey, "recovering");
         const reconciliation = await reconcileSessionStateRef.current({
           forceRefreshMessages: true,
@@ -742,11 +782,12 @@ export function CodexChatTab({
         const reconciledSession = useCodexStore.getState().sessions.get(sessionKey);
 
         if (reconciliation === "missing") {
-          unconfirmedDispatchRef.current = null;
+          useCodexStore.getState().clearUnconfirmedDispatch(sessionKey);
           removeMessage(sessionKey, userMessage.id);
           setSessionPhase(sessionKey, undefined);
           setSessionLoading(sessionKey, false);
           setSessionError(sessionKey, "The Codex session is no longer available");
+          return "rejected";
         } else if (reconciliation === "unavailable") {
           // Keep the lock. The running turn remains authoritative until status or
           // an SSE terminal event proves otherwise.
@@ -754,6 +795,7 @@ export function CodexChatTab({
             sessionKey,
             "Lost connection while sending the prompt. Reconnecting to Codex…",
           );
+          return "unknown";
         } else if (
           reconciliation === "applied"
           && reconciledSession?.isLoading !== true
@@ -761,7 +803,8 @@ export function CodexChatTab({
           const optimisticStillPresent = reconciledSession?.messages.some(
             (message) => message.id === userMessage.id,
           ) === true;
-          unconfirmedDispatchRef.current = null;
+          useCodexStore.getState().clearUnconfirmedDispatch(sessionKey);
+          setSessionPhase(sessionKey, undefined);
           if (optimisticStillPresent) {
             // Authoritative idle state did not echo the prompt, so expose a
             // retryable failure rather than leaving a local-only user message.
@@ -770,15 +813,23 @@ export function CodexChatTab({
               sessionKey,
               "Could not confirm whether Codex received the prompt. You can send it again safely.",
             );
+            return "rejected";
           } else {
             // The transcript proves the request completed despite the lost
             // response; its idempotency key is now spent.
             retryablePromptRef.current = null;
             setSessionError(sessionKey, undefined);
+            clearMatchingUnconfirmedDispatch();
+            return "accepted";
           }
-          setSessionPhase(sessionKey, undefined);
         }
-        return;
+        if (reconciliation === "applied" && reconciledSession?.isLoading === true) {
+          // The authoritative status proves this request is running even though
+          // the HTTP response was lost.
+          clearMatchingUnconfirmedDispatch();
+          return "accepted";
+        }
+        return "unknown";
       }
       /**
        * Any accepted dispatch spends the stored key.
@@ -790,6 +841,7 @@ export function CodexChatTab({
        * below forever instead of running a turn.
        */
       retryablePromptRef.current = null;
+      clearMatchingUnconfirmedDispatch();
 
       if (sent.status === "already-processed" && sent.duplicate) {
         /**
@@ -806,9 +858,10 @@ export function CodexChatTab({
           description: "It was not sent again. The transcript below is up to date.",
         });
         await refreshMessages(client, session.sessionId);
-        return;
+        return "accepted";
       }
       await refreshMessages(client, session.sessionId);
+      return "accepted";
     },
     [
       client,
@@ -1053,6 +1106,11 @@ export function CodexChatTab({
       // The tab key is stable across resume, while approvals/interactions are
       // bridge-session scoped. Replace the session and clear both collections
       // atomically so no render can post an old request to the resumed session.
+      const withdrawnInteractionDraftKeys = (
+        useCodexStore.getState().pendingInteractions.get(sessionKey) ?? []
+      ).map((interaction) =>
+        codexInteractionDraftKey(interaction.interactionId)
+      );
       useCodexStore.setState((state) => {
         const sessions = new Map(state.sessions);
         sessions.set(sessionKey, {
@@ -1077,6 +1135,9 @@ export function CodexChatTab({
           contextUsage,
         };
       });
+      usePromptDraftStore
+        .getState()
+        .clearDrafts(withdrawnInteractionDraftKeys);
       updateTabNativeSessionId(tabId, resumed.session.sessionId, environmentId);
       clearTabAgentHandoff(tabId, environmentId);
       setResumeDialogOpen(false);
@@ -2242,8 +2303,41 @@ export function CodexChatTab({
     }
 
     setInitialPromptSent(true);
-    void handleSend(launchPrompt, []).then(() => {
-      clearTabInitialPrompt(tabId, environmentId);
+    // Keep the durable launch intent until the bridge accepts the turn (or
+    // authoritative reconciliation proves that it did). If the renderer
+    // disappears during rename or dispatch, a remount retries with this same
+    // idempotency key instead of losing the prompt or creating a second turn.
+    void handleSend(
+      launchPrompt,
+      [],
+      initialPromptRequestId,
+    ).then((result) => {
+      if (result === "accepted") {
+        initialPromptRetryCountRef.current = 0;
+        clearTabInitialPrompt(tabId, environmentId);
+      } else if (
+        result === "rejected"
+        && initialPromptRetryCountRef.current < 1
+      ) {
+        initialPromptRetryCountRef.current += 1;
+        initialPromptRetryTimerRef.current = setTimeout(() => {
+          initialPromptRetryTimerRef.current = null;
+          setInitialPromptSent(false);
+        }, 1_000);
+      }
+    }).catch((error) => {
+      console.error("[CodexChatTab] Failed to dispatch initial prompt:", error);
+      setSessionError(
+        sessionKey,
+        error instanceof Error ? error.message : "Failed to send initial prompt",
+      );
+      if (initialPromptRetryCountRef.current < 1) {
+        initialPromptRetryCountRef.current += 1;
+        initialPromptRetryTimerRef.current = setTimeout(() => {
+          initialPromptRetryTimerRef.current = null;
+          setInitialPromptSent(false);
+        }, 1_000);
+      }
     });
   }, [
     clearTabInitialPrompt,
@@ -2251,7 +2345,10 @@ export function CodexChatTab({
     environmentId,
     handleSend,
     handoff.ready,
+    initialPromptRequestId,
     launchPrompt,
+    sessionKey,
+    setSessionError,
     initialPromptSent,
     setupPending,
     session?.sessionId,
@@ -2363,7 +2460,9 @@ export function CodexChatTab({
           disabled={!handoff.ready || !session?.sessionId}
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}
-          onSend={handleSend}
+          onSend={async (text, attachments) => {
+            await handleSend(text, attachments);
+          }}
           onQueue={handleQueue}
           onStop={handleStop}
           onModeChange={handleModeChange}

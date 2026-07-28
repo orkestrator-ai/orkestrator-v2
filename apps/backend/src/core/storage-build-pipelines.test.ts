@@ -69,6 +69,54 @@ describe("StorageService build pipelines", () => {
     });
   });
 
+  test("atomically reserves one active pipeline per GitHub issue", async () => {
+    await withStorage(async (storage) => {
+      const githubSnapshot = (id: string, phase = "creating-environment") => ({
+        id,
+        phase,
+        source: {
+          type: "github",
+          repositoryOwner: "OpenAI",
+          repositoryName: "Codex",
+          issueNumber: 42,
+        },
+      });
+      await storage.saveBuildPipeline(
+        "p1",
+        "proj-1",
+        "",
+        1,
+        githubSnapshot("p1"),
+      );
+      await expect(
+        storage.saveBuildPipeline(
+          "p2",
+          "proj-1",
+          "",
+          1,
+          githubSnapshot("p2"),
+        ),
+      ).rejects.toThrow("active build already exists");
+
+      await storage.saveBuildPipeline(
+        "p1",
+        "proj-1",
+        "",
+        1,
+        githubSnapshot("p1", "complete"),
+      );
+      await expect(
+        storage.saveBuildPipeline(
+          "p2",
+          "proj-1",
+          "",
+          1,
+          githubSnapshot("p2"),
+        ),
+      ).resolves.toMatchObject({ id: "p2" });
+    });
+  });
+
   test("rejects a first write that expects an existing record", async () => {
     await withStorage(async (storage) => {
       await expect(

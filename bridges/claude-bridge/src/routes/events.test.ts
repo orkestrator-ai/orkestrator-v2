@@ -279,6 +279,14 @@ describe("serializeEventData", () => {
     expect(first).toBe('{"sessionId":"a"}');
     expect(second).toBe('{"sessionId":"b"}');
   });
+
+  test("preserves an explicit prompt-suggestion removal on the wire", () => {
+    expect(serializeEventData({
+      type: "session.updated",
+      sessionId: "s-1",
+      data: { promptSuggestion: null },
+    })).toBe('{"sessionId":"s-1","promptSuggestion":null}');
+  });
 });
 
 describe("SSE replay ring", () => {

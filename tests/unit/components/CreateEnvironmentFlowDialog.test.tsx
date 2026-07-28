@@ -25,6 +25,7 @@ afterAll(() => {
 const {
   CreateEnvironmentFlowDialog,
   resolveEnvironmentAgentSettings,
+  resolveEnvironmentAgentLaunchSettings,
   resolveEnvironmentCreateRequest,
 } = await import("@/components/environments/CreateEnvironmentFlowDialog");
 import type { ClaudeOptions } from "@/components/environments/CreateEnvironmentDialog";
@@ -130,6 +131,35 @@ describe("CreateEnvironmentFlowDialog", () => {
       model: "gpt-5.4-mini",
       reasoningEffort: "high",
     }));
+  });
+
+  test("forwards non-empty launch attachments only while launch is enabled", () => {
+    const attachments = [{
+      id: "image-1",
+      name: "diagram.png",
+      previewUrl: "data:image/png;base64,cHJldmlldw==",
+      base64Data: "cGl4ZWxz",
+    }];
+
+    expect(resolveEnvironmentAgentLaunchSettings({
+      ...baseOptions,
+      initialPromptAttachments: attachments,
+    })).toEqual({
+      pendingAgentLaunch: true,
+      initialAgentModel: "default",
+      initialReasoningEffort: undefined,
+      initialPromptAttachments: attachments,
+    });
+    expect(resolveEnvironmentAgentLaunchSettings({
+      ...baseOptions,
+      launchAgent: false,
+      initialPromptAttachments: attachments,
+    })).toEqual({
+      pendingAgentLaunch: false,
+      initialAgentModel: undefined,
+      initialReasoningEffort: undefined,
+      initialPromptAttachments: undefined,
+    });
   });
 
   test("keeps the transient options store free of a model when the agent is off", async () => {

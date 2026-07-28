@@ -3,7 +3,15 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { createCommandRegistry, type CommandContext } from "./commands.js";
+import { isPrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
+import {
+  createCommandRegistry,
+  findKanbanTaskForEnvironment,
+  getPrMonitorDetectionRequest,
+  parsePrMonitorDetectionResponse,
+  shutdownPrMonitorTracking,
+  type CommandContext,
+} from "./commands.js";
 import { StorageService } from "./storage.js";
 import { ClaudeStatePollManager } from "./tmux.js";
 
@@ -178,6 +186,82 @@ describe("prompt queue commands", () => {
       })).rejects.toThrow();
       await expect(invoke("get_prompt_queue", { queueKey: "" })).rejects.toThrow();
       await expect(invoke("list_prompt_queues", { environmentId: "" })).rejects.toThrow();
+    });
+  });
+});
+
+describe("draft commands", () => {
+  test("forwards compare-and-swap revisions for compose and file mutations", async () => {
+    await withCommands(async (invoke) => {
+      const compose = await invoke("save_compose_draft", {
+        draftKey: "compose:e1:tab",
+        ownerType: "environment",
+        ownerId: "e1",
+        value: "first",
+        expectedRevision: 0,
+      }) as { revision: number };
+      const file = await invoke("save_file_draft", {
+        draftKey: "file:e1:a",
+        environmentId: "e1",
+        filePath: "a.ts",
+        content: "first",
+        originalContent: "disk",
+        expectedRevision: 0,
+      }) as { revision: number };
+
+      await invoke("save_compose_draft", {
+        draftKey: "compose:e1:tab",
+        ownerType: "environment",
+        ownerId: "e1",
+        value: "second",
+        expectedRevision: compose.revision,
+      });
+      await invoke("save_file_draft", {
+        draftKey: "file:e1:a",
+        environmentId: "e1",
+        filePath: "a.ts",
+        content: "second",
+        originalContent: "disk",
+        expectedRevision: file.revision,
+      });
+
+      await expect(invoke("delete_compose_draft", {
+        draftKey: "compose:e1:tab",
+        expectedRevision: compose.revision,
+      })).rejects.toThrow("revision conflict");
+      await expect(invoke("delete_file_draft", {
+        draftKey: "file:e1:a",
+        expectedRevision: file.revision,
+      })).rejects.toThrow("revision conflict");
+      await expect(invoke("delete_compose_draft", {
+        draftKey: "compose:e1:tab",
+        expectedRevision: 2,
+      })).resolves.toBeUndefined();
+      await expect(invoke("delete_file_draft", {
+        draftKey: "file:e1:a",
+        expectedRevision: 2,
+      })).resolves.toBeUndefined();
+    });
+  });
+
+  test("rejects malformed revision arguments before draft mutation", async () => {
+    await withCommands(async (invoke) => {
+      await expect(invoke("save_file_draft", {
+        draftKey: "file:e1:a",
+        environmentId: "e1",
+        filePath: "a.ts",
+        content: "first",
+        originalContent: "disk",
+        expectedRevision: "zero",
+      })).rejects.toThrow("Expected expectedRevision to be a number");
+      await expect(invoke("delete_compose_draft", {
+        draftKey: "compose:e1:tab",
+        expectedRevision: "zero",
+      })).rejects.toThrow("Expected expectedRevision to be a number");
+      await expect(invoke("delete_file_draft", {
+        draftKey: "file:e1:a",
+        expectedRevision: "zero",
+      })).rejects.toThrow("Expected expectedRevision to be a number");
     });
   });
 });
@@ -648,6 +732,187 @@ describe("set_environment_unread", () => {
       await expect(invoke("record_environment_completion", {
         environmentId: "e1", occurredAt: "2026-01-01T00:00:00.000Z",
       })).resolves.toMatchObject({ lastActivityAt: newest, hasUnreadWork: false });
+    });
+  });
+});
+
+describe("pr monitor commands", () => {
+  // The module-level PR monitor service outlives each temporary storage
+  // directory; dropping its entries keeps one test's watch requests (and any
+  // scheduled polls) from leaking into the next.
+  test("pr_monitor_watch validates its arguments", async () => {
+    await withCommands(async (invoke) => {
+      try {
+        await expect(invoke("pr_monitor_watch", {
+          environmentId: "e1", mode: "idle",
+        })).rejects.toThrow("mode must be normal, create-pending, or merge-pending");
+        await expect(invoke("pr_monitor_watch", {
+          environmentId: 42, mode: "merge-pending",
+        })).rejects.toThrow("Expected environmentId to be a string");
+        await expect(invoke("pr_monitor_watch", {
+          environmentId: "missing", mode: "merge-pending",
+        })).rejects.toThrow("Environment not found: missing");
+      } finally {
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
+  test("watch requests are durable in the authoritative snapshot", async () => {
+    await withCommands(async (invoke) => {
+      try {
+        const empty = await invoke("get_pr_monitor_state", {});
+        expect(isPrMonitorSnapshot(empty)).toBe(true);
+        expect((empty as { entries: unknown[] }).entries).toEqual([]);
+
+        await invoke("pr_monitor_watch", { environmentId: "e1", mode: "create-pending" });
+
+        // A later snapshot — the rehydration path a freshly mounted client
+        // uses — still carries the pending request; nothing about it lived in
+        // the client that asked.
+        const snapshot = await invoke("get_pr_monitor_state", {}) as {
+          entries: Array<Record<string, unknown>>;
+        };
+        expect(isPrMonitorSnapshot(snapshot)).toBe(true);
+        expect(snapshot.entries).toHaveLength(1);
+        expect(snapshot.entries[0]).toMatchObject({
+          environmentId: "e1",
+          mode: "create-pending",
+          prUrl: null,
+          consecutiveErrors: 0,
+        });
+
+        await expect(invoke("pr_monitor_refresh", { environmentId: "e1" })).resolves.toBeUndefined();
+      } finally {
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
+  test("snapshot reconciliation tracks environments with a stored PR", async () => {
+    await withCommands(async (invoke, storage) => {
+      try {
+        await storage.updateEnvironment("e1", {
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: false,
+        });
+
+        const snapshot = await invoke("get_pr_monitor_state", {}) as {
+          entries: Array<Record<string, unknown>>;
+        };
+        expect(snapshot.entries).toHaveLength(1);
+        expect(snapshot.entries[0]).toMatchObject({
+          environmentId: "e1",
+          mode: "normal",
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+        });
+      } finally {
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
+  test("production detection uses branch discovery only until a PR URL is known", () => {
+    const discovery = getPrMonitorDetectionRequest({
+      environmentId: "e1",
+      branch: "feature/pr-monitor",
+      kind: "local",
+      worktreePath: "/tmp/worktree",
+      ready: true,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    });
+    expect(discovery.args).toEqual([
+      "pr", "list", "--head", "feature/pr-monitor", "--state", "all",
+      "--limit", "30", "--json", "url,state,mergeable,updatedAt",
+    ]);
+    expect(discovery.knownPrUrl).toBeNull();
+
+    const known = getPrMonitorDetectionRequest({
+      environmentId: "e1",
+      branch: "feature/pr-monitor",
+      kind: "container",
+      containerId: "container-1",
+      ready: true,
+      prUrl: "https://github.com/acme/repo/pull/7",
+      prState: "open",
+      hasMergeConflicts: false,
+    });
+    expect(known.args).toEqual([
+      "pr", "view", "https://github.com/acme/repo/pull/7",
+      "--json", "url,state,mergeable",
+    ]);
+    expect(known.shellCommand).toBe(
+      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,mergeable",
+    );
+    expect(parsePrMonitorDetectionResponse(known, JSON.stringify({
+      url: "https://github.com/acme/repo/pull/7",
+      state: "MERGED",
+      mergeable: "UNKNOWN",
+    }))).toEqual({
+      url: "https://github.com/acme/repo/pull/7",
+      state: "merged",
+      hasMergeConflicts: false,
+    });
+    expect(() => parsePrMonitorDetectionResponse(known, JSON.stringify({
+      url: "https://github.com/acme/repo/pull/8",
+      state: "OPEN",
+      mergeable: "MERGEABLE",
+    }))).toThrow("unexpected pull request metadata");
+
+    const terminal = getPrMonitorDetectionRequest({
+      environmentId: "e1",
+      branch: "feature/pr-monitor",
+      kind: "container",
+      containerId: "container-1",
+      ready: true,
+      prUrl: "https://github.com/acme/repo/pull/7",
+      prState: "merged",
+      hasMergeConflicts: false,
+    });
+    expect(terminal.knownPrUrl).toBeNull();
+    expect(terminal.args.slice(0, 4)).toEqual([
+      "pr", "list", "--head", "feature/pr-monitor",
+    ]);
+  });
+
+  test("production task lookup resolves direct and build-pipeline environment links", async () => {
+    await withCommands(async (_invoke, storage) => {
+      const direct = await storage.addKanbanTask("proj-1", "Direct", "");
+      await storage.updateKanbanTask(direct.id, {
+        environmentId: "e1",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+      });
+
+      await expect(findKanbanTaskForEnvironment(storage, "e1")).resolves.toMatchObject({
+        taskId: direct.id,
+        status: "backlog",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+      });
+
+      await storage.updateKanbanTask(direct.id, { environmentId: undefined });
+      const pipelineTask = await storage.addKanbanTask("proj-1", "Pipeline", "");
+      await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
+        taskId: pipelineTask.id,
+        source: { type: "kanban" },
+      });
+
+      await expect(findKanbanTaskForEnvironment(storage, "e1")).resolves.toMatchObject({
+        taskId: pipelineTask.id,
+        status: "backlog",
+      });
+      await storage.deleteKanbanTask(pipelineTask.id);
+      await expect(findKanbanTaskForEnvironment(storage, "e1")).resolves.toMatchObject({
+        taskId: pipelineTask.id,
+        status: null,
+        prUrl: null,
+      });
+      await expect(findKanbanTaskForEnvironment(storage, "missing")).resolves.toBeNull();
     });
   });
 });

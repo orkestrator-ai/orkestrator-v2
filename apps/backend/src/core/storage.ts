@@ -42,6 +42,8 @@ import type {
   PersistedPaneLayout,
   PersistedLoopedReviewWorkflow,
   PersistedBuildPipeline,
+  PersistedComposeDraft,
+  PersistedFileDraft,
   PersistedPromptQueue,
   PersistedAgentHandoff,
   RepositoryConfig,
@@ -205,6 +207,16 @@ function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isInitialPromptImageAttachment(
+  value: unknown,
+): value is NonNullable<Environment["initialPromptAttachments"]>[number] {
+  return isRecord(value)
+    && isNonBlankString(value.id)
+    && isNonBlankString(value.name)
+    && typeof value.previewUrl === "string"
+    && isNonBlankString(value.base64Data);
+}
+
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   return typeof value === "string" && allowed.includes(value as T);
 }
@@ -330,6 +342,11 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+function isCanonicalUuid(value: unknown): value is string {
+  return typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+}
+
 function isPortNumber(value: unknown): value is number {
   return isPositiveInteger(value) && value <= 65_535;
 }
@@ -370,6 +387,37 @@ function isPersistedPromptQueue(
     && isPositiveInteger(value.revision);
 }
 
+function isPersistedComposeDraft(
+  value: unknown,
+  expectedKey?: string,
+): value is PersistedComposeDraft {
+  return isRecord(value)
+    && isNonBlankString(value.draftKey)
+    && (expectedKey === undefined || value.draftKey === expectedKey)
+    && (value.ownerType === "environment" || value.ownerType === "project")
+    && isNonBlankString(value.ownerId)
+    && Object.hasOwn(value, "value")
+    && typeof value.updatedAt === "string"
+    && Number.isFinite(Date.parse(value.updatedAt))
+    && isPositiveInteger(value.revision);
+}
+
+function isPersistedFileDraft(
+  value: unknown,
+  expectedKey?: string,
+): value is PersistedFileDraft {
+  return isRecord(value)
+    && isNonBlankString(value.draftKey)
+    && (expectedKey === undefined || value.draftKey === expectedKey)
+    && isNonBlankString(value.environmentId)
+    && isNonBlankString(value.filePath)
+    && typeof value.content === "string"
+    && typeof value.originalContent === "string"
+    && typeof value.updatedAt === "string"
+    && Number.isFinite(Date.parse(value.updatedAt))
+    && isPositiveInteger(value.revision);
+}
+
 function isPersistedAgentHandoff(
   value: unknown,
   expectedId?: string,
@@ -399,6 +447,22 @@ function isPersistedBuildPipeline(
     && typeof value.updatedAt === "string"
     && Number.isFinite(Date.parse(value.updatedAt))
     && isPositiveInteger(value.revision);
+}
+
+function activeGitHubBuildReservation(snapshot: unknown): string | null {
+  if (!isRecord(snapshot)) return null;
+  if (snapshot.phase === "complete" || snapshot.phase === "failed") return null;
+  const source = snapshot.source;
+  if (
+    !isRecord(source)
+    || source.type !== "github"
+    || !isNonBlankString(source.repositoryOwner)
+    || !isNonBlankString(source.repositoryName)
+    || !isPositiveInteger(source.issueNumber)
+  ) {
+    return null;
+  }
+  return `${source.repositoryOwner.toLowerCase()}/${source.repositoryName.toLowerCase()}#${source.issueNumber}`;
 }
 
 function isClaudeModelCatalogSnapshot(
@@ -908,6 +972,9 @@ export class StorageService {
   private loopedReviewMutation: Promise<unknown> = Promise.resolve();
   private buildPipelineMutation: Promise<unknown> = Promise.resolve();
   private promptQueueMutation: Promise<unknown> = Promise.resolve();
+  private composeDraftMutation: Promise<unknown> = Promise.resolve();
+  private fileDraftMutation: Promise<unknown> = Promise.resolve();
+  private kanbanMutation: Promise<unknown> = Promise.resolve();
   private agentHandoffMutation: Promise<unknown> = Promise.resolve();
   private changeListener: ResourceChangeListener | null = null;
   private changeRevision = 0;
@@ -1003,6 +1070,14 @@ export class StorageService {
     return this.file("prompt-queues.json");
   }
 
+  private composeDraftsFile(): string {
+    return this.file("compose-drafts.json");
+  }
+
+  private fileDraftsFile(): string {
+    return this.file("file-drafts.json");
+  }
+
   private agentHandoffsFile(): string {
     return this.file("agent-handoffs.json");
   }
@@ -1049,6 +1124,9 @@ export class StorageService {
   }
 
   private kanbanImageFile(imageId: string): string {
+    if (!isCanonicalUuid(imageId)) {
+      throw new Error("Kanban image ID is invalid");
+    }
     return path.join(this.kanbanImagesDir(), `${imageId}.webp`);
   }
 
@@ -1093,7 +1171,7 @@ export class StorageService {
         await fs.chmod(filePath, mode);
       }
       if (makeBackup && await exists(filePath)) {
-        await this.rotateBackups(filePath);
+        await this.rotateBackups(filePath, mode);
       }
       if (recoveryTempPath) {
         await fs.rename(recoveryTempPath, this.backupPath(filePath, 1));
@@ -1298,17 +1376,21 @@ export class StorageService {
     return path.join(path.dirname(filePath), `${path.basename(filePath)}.bak.${index}`);
   }
 
-  private async rotateBackups(filePath: string): Promise<void> {
+  private async rotateBackups(filePath: string, mode?: number): Promise<void> {
     for (let index = MAX_JSON_BACKUPS - 1; index >= 1; index -= 1) {
       const current = this.backupPath(filePath, index);
       const next = this.backupPath(filePath, index + 1);
       if (await exists(next)) await fs.rm(next, { force: true });
-      if (await exists(current)) await fs.rename(current, next);
+      if (await exists(current)) {
+        if (mode !== undefined) await fs.chmod(current, mode);
+        await fs.rename(current, next);
+      }
     }
 
     const first = this.backupPath(filePath, 1);
     if (await exists(first)) await fs.rm(first, { force: true });
     await fs.copyFile(filePath, first);
+    if (mode !== undefined) await fs.chmod(first, mode);
   }
 
   /**
@@ -1404,12 +1486,17 @@ export class StorageService {
     );
   }
 
-  private async saveSensitiveJson(filePath: string, value: unknown): Promise<void> {
+  private async saveSensitiveJson(
+    filePath: string,
+    value: unknown,
+    options: { backup?: boolean } = {},
+  ): Promise<void> {
     await this.writeAtomic(
       filePath,
       `${JSON.stringify(value, null, 2)}\n`,
-      true,
+      options.backup ?? true,
       0o600,
+      options.backup === false,
     );
   }
 
@@ -1473,6 +1560,7 @@ export class StorageService {
     const filtered = projects.filter((project) => project.id !== projectId);
     if (filtered.length === projects.length) throw new Error(`Project not found: ${projectId}`);
     await this.saveJson(this.projectsFile(), filtered);
+    await this.deleteComposeDraftsByProject(projectId);
     this.announce("project", projectId);
   }
 
@@ -1514,6 +1602,55 @@ export class StorageService {
     return environments.sort((a, b) => a.order - b.order);
   }
 
+  private async saveEnvironments(
+    environments: Environment[],
+    options: { backup?: boolean } = {},
+  ): Promise<void> {
+    // Launch attachments can contain full base64 image payloads. Treat the
+    // complete environment store and every rotated backup as sensitive.
+    await this.saveSensitiveJson(this.environmentsFile(), environments, options);
+  }
+
+  /**
+   * Removes superseded launch attachments (or a deleted environment record)
+   * from every retained environment backup. This runs while the environment
+   * mutation lock is held, after the authoritative primary write commits.
+   */
+  private async scrubEnvironmentBackups(
+    environmentId: string,
+    removeEnvironment: boolean,
+  ): Promise<void> {
+    for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
+      const backup = this.backupPath(this.environmentsFile(), index);
+      if (!await exists(backup)) continue;
+      try {
+        const parsed = JSON.parse(await fs.readFile(backup, "utf8")) as unknown;
+        if (!Array.isArray(parsed)) throw new Error("Backup is not an array");
+        const sanitized = removeEnvironment
+          ? parsed.filter((candidate) =>
+              !isRecord(candidate) || candidate.id !== environmentId
+            )
+          : parsed.map((candidate) => {
+              if (!isRecord(candidate) || candidate.id !== environmentId) {
+                return candidate;
+              }
+              const copy = { ...candidate };
+              delete copy.initialPromptAttachments;
+              return copy;
+            });
+        await this.writeAtomic(
+          backup,
+          `${JSON.stringify(sanitized, null, 2)}\n`,
+          false,
+          0o600,
+        );
+      } catch {
+        // A corrupt backup cannot be proven free of the removed payload.
+        await fs.rm(backup, { force: true });
+      }
+    }
+  }
+
   async getEnvironmentsByProject(projectId: string): Promise<Environment[]> {
     return (await this.loadEnvironments()).filter((environment) => environment.projectId === projectId);
   }
@@ -1528,7 +1665,7 @@ export class StorageService {
       environment.order =
         Math.max(-1, ...environments.filter((item) => item.projectId === environment.projectId).map((item) => item.order)) + 1;
       environments.push(environment);
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
       this.announce("environment", environment.id);
       return environment;
     });
@@ -1538,8 +1675,16 @@ export class StorageService {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
       const filtered = environments.filter((environment) => environment.id !== environmentId);
-      if (filtered.length === environments.length) throw new Error(`Environment not found: ${environmentId}`);
-      await this.saveJson(this.environmentsFile(), filtered);
+      if (filtered.length === environments.length) {
+        // A previous attempt may have committed the primary removal and then
+        // failed while sanitizing retained backups. Keep deletion idempotent so
+        // retrying can finish the privacy cleanup before preserving the public
+        // not-found contract.
+        await this.scrubEnvironmentBackups(environmentId, true);
+        throw new Error(`Environment not found: ${environmentId}`);
+      }
+      await this.saveEnvironments(filtered);
+      await this.scrubEnvironmentBackups(environmentId, true);
       this.announce("environment", environmentId);
     });
   }
@@ -1588,6 +1733,7 @@ export class StorageService {
         "createdFromCommit",
         "lastActivityAt",
         "deletionRequestedAt",
+        "lifecycleOperationStartedAt",
       ] as const;
       for (const field of optionalStringFields) {
         if (field in updates) {
@@ -1595,6 +1741,16 @@ export class StorageService {
           if (value === null || value === undefined || typeof value === "string") {
             (environment as unknown as Record<string, unknown>)[field] = value ?? undefined;
           }
+        }
+      }
+      if ("lifecycleOperation" in updates) {
+        if (updates.lifecycleOperation == null) {
+          environment.lifecycleOperation = undefined;
+        } else if (
+          updates.lifecycleOperation === "deleting"
+          || updates.lifecycleOperation === "merging"
+        ) {
+          environment.lifecycleOperation = updates.lifecycleOperation;
         }
       }
 
@@ -1651,6 +1807,22 @@ export class StorageService {
       if ("pendingAgentLaunch" in updates && typeof updates.pendingAgentLaunch === "boolean") {
         environment.pendingAgentLaunch = updates.pendingAgentLaunch;
       }
+      if ("initialPromptAttachments" in updates) {
+        if (updates.initialPromptAttachments == null) {
+          environment.initialPromptAttachments = undefined;
+        } else if (
+          Array.isArray(updates.initialPromptAttachments)
+          && updates.initialPromptAttachments.every(isInitialPromptImageAttachment)
+        ) {
+          const serialized = JSON.stringify(updates.initialPromptAttachments);
+          if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
+            throw new Error("Initial prompt attachments exceed the 32 MB limit");
+          }
+          environment.initialPromptAttachments = updates.initialPromptAttachments;
+        } else {
+          throw new Error("Initial prompt attachments are malformed");
+        }
+      }
       if ("claudeModelCatalog" in updates) {
         if (updates.claudeModelCatalog == null) {
           environment.claudeModelCatalog = undefined;
@@ -1685,9 +1857,21 @@ export class StorageService {
       // A merge that changed nothing persists nothing. Rewriting the whole
       // store — and announcing a change that makes every client refetch every
       // project — for a field-equal record is pure churn.
-      if (JSON.stringify(environment) === beforeJson) return environment;
+      if (JSON.stringify(environment) === beforeJson) {
+        // Attachment cleanup is a retryable two-step operation: the primary
+        // may already be clean while a retained backup still contains the
+        // payload. Explicit attachment updates must therefore finish scrubbing
+        // even when the primary record no longer changes.
+        if ("initialPromptAttachments" in updates) {
+          await this.scrubEnvironmentBackups(environmentId, false);
+        }
+        return environment;
+      }
 
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
+      if ("initialPromptAttachments" in updates) {
+        await this.scrubEnvironmentBackups(environmentId, false);
+      }
       this.announce("environment", environmentId);
       return environment;
     });
@@ -1715,7 +1899,7 @@ export class StorageService {
       environment.lastActivityAt = normalizedActivityAt;
       // Activity timestamps churn constantly and are reconstructed from live
       // observation anyway; rotating five backups for each refresh is waste.
-      await this.saveJson(this.environmentsFile(), environments, { backup: false });
+      await this.saveEnvironments(environments, { backup: false });
       this.announce("environment", environmentId);
       return environment;
     });
@@ -1839,7 +2023,7 @@ export class StorageService {
       )).toISOString();
       // The lease itself must persist (its expiry is enforced from disk), but
       // the backup rotation is skipped: only volatile activity fields changed.
-      await this.saveJson(this.environmentsFile(), environments, { backup: false });
+      await this.saveEnvironments(environments, { backup: false });
       // A pure lease renewal — same aggregate, same per-source and observer
       // states, only timestamps refreshed — is not announced. Announcing it
       // made every connected client refetch every project on each renewal
@@ -1898,7 +2082,7 @@ export class StorageService {
         changed.push(environment.id);
       }
       if (changed.length === 0) return changed;
-      await this.saveJson(this.environmentsFile(), environments, { backup: false });
+      await this.saveEnvironments(environments, { backup: false });
       for (const environmentId of changed) {
         this.announce("environment", environmentId);
       }
@@ -1938,7 +2122,7 @@ export class StorageService {
         changed.push(environment.id);
       }
       if (changed.length === 0) return changed;
-      await this.saveJson(this.environmentsFile(), environments, { backup: false });
+      await this.saveEnvironments(environments, { backup: false });
       for (const environmentId of changed) {
         this.announce("environment", environmentId);
       }
@@ -1970,7 +2154,7 @@ export class StorageService {
 
       environment.lastActivityAt = normalizedActivityAt;
       environment.hasUnreadWork = true;
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
       this.announce("environment", environmentId);
       return environment;
     });
@@ -2003,7 +2187,7 @@ export class StorageService {
       if (environment.hasUnreadWork === unread) return environment;
 
       environment.hasUnreadWork = unread;
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
       this.announce("environment", environmentId);
       return environment;
     });
@@ -2023,7 +2207,7 @@ export class StorageService {
         if (environment.projectId === projectId && !provided.has(environment.id)) environment.order = order++;
       }
 
-      await this.saveJson(this.environmentsFile(), environments);
+      await this.saveEnvironments(environments);
       const reordered = environments
         .filter((environment) => environment.projectId === projectId)
         .sort((a, b) => a.order - b.order);
@@ -2642,6 +2826,360 @@ export class StorageService {
     });
   }
 
+  private enqueueComposeDraftMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.composeDraftsFile(),
+        "compose draft storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.composeDraftMutation.then(run, run);
+    this.composeDraftMutation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private validComposeDrafts(
+    stored: unknown,
+  ): Record<string, PersistedComposeDraft> {
+    if (!isRecord(stored)) return {};
+    return Object.fromEntries(
+      Object.entries(stored).filter(([storedKey, draft]) =>
+        isPersistedComposeDraft(draft, storedKey)
+      ),
+    ) as Record<string, PersistedComposeDraft>;
+  }
+
+  private async loadComposeDrafts(): Promise<Record<string, PersistedComposeDraft>> {
+    const stored = await this.loadJson<unknown>(this.composeDraftsFile(), () => ({}));
+    return this.validComposeDrafts(stored);
+  }
+
+  async getComposeDraft(draftKey: string): Promise<PersistedComposeDraft | null> {
+    if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
+    return (await this.loadComposeDrafts())[draftKey] ?? null;
+  }
+
+  async listComposeDrafts(
+    ownerType: "environment" | "project",
+    ownerId: string,
+  ): Promise<PersistedComposeDraft[]> {
+    if (ownerType !== "environment" && ownerType !== "project") {
+      throw new Error("Compose draft owner type is invalid");
+    }
+    if (!isNonBlankString(ownerId)) {
+      throw new Error("Compose draft owner ID must not be blank");
+    }
+    return Object.values(await this.loadComposeDrafts())
+      .filter((draft) => draft.ownerType === ownerType && draft.ownerId === ownerId);
+  }
+
+  async saveComposeDraft(
+    draftKey: string,
+    ownerType: "environment" | "project",
+    ownerId: string,
+    value: unknown,
+    expectedRevision?: number,
+  ): Promise<PersistedComposeDraft> {
+    if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
+    if (ownerType !== "environment" && ownerType !== "project") {
+      throw new Error("Compose draft owner type is invalid");
+    }
+    if (!isNonBlankString(ownerId)) {
+      throw new Error("Compose draft owner ID must not be blank");
+    }
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
+      throw new Error("Compose draft expected revision must be a non-negative integer");
+    }
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(value);
+    } catch {
+      throw new Error("Compose draft value must be JSON serializable");
+    }
+    if (
+      serialized === undefined
+      || Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024
+    ) {
+      throw new Error("Compose draft exceeds the 32 MB limit");
+    }
+
+    return this.enqueueComposeDraftMutation(async () => {
+      if (ownerType === "environment") {
+        await this.assertEnvironmentAcceptsBackgroundState(ownerId, "Compose draft");
+      } else if (!await this.getProject(ownerId)) {
+        throw new Error(`Compose draft project not found: ${ownerId}`);
+      }
+      const drafts = await this.loadComposeDrafts();
+      const previous = drafts[draftKey];
+      if (
+        previous
+        && (previous.ownerType !== ownerType || previous.ownerId !== ownerId)
+      ) {
+        throw new Error("Compose draft belongs to another owner");
+      }
+      if (
+        expectedRevision !== undefined
+        && (previous?.revision ?? 0) !== expectedRevision
+      ) {
+        throw new Error("Compose draft revision conflict");
+      }
+      const saved: PersistedComposeDraft = {
+        draftKey,
+        ownerType,
+        ownerId,
+        value,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      drafts[draftKey] = saved;
+      await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
+      this.announce("compose-draft", ownerId);
+      return saved;
+    });
+  }
+
+  async deleteComposeDraft(
+    draftKey: string,
+    expectedRevision?: number,
+  ): Promise<void> {
+    if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
+      throw new Error("Compose draft expected revision must be a non-negative integer");
+    }
+    await this.enqueueComposeDraftMutation(async () => {
+      const stored = await this.loadJson<unknown>(this.composeDraftsFile(), () => ({}));
+      const drafts = this.validComposeDrafts(stored);
+      const previous = drafts[draftKey];
+      if (
+        previous
+        && expectedRevision !== undefined
+        && previous.revision !== expectedRevision
+      ) {
+        throw new Error("Compose draft revision conflict");
+      }
+      const hasStoredKey = isRecord(stored) && Object.hasOwn(stored, draftKey);
+      if (hasStoredKey) {
+        delete drafts[draftKey];
+        await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
+      }
+      if (previous) {
+        this.announce("compose-draft", previous.ownerId);
+      }
+      // Always scrub backups, including when the primary no longer contains
+      // the key. A prior interrupted delete may have committed the primary
+      // write without sanitizing the retained copies.
+      await this.scrubSensitiveJsonBackups(
+        this.composeDraftsFile(),
+        (storedKey, draft) =>
+          storedKey !== draftKey && isPersistedComposeDraft(draft, storedKey),
+      );
+    });
+  }
+
+  async deleteComposeDraftsByEnvironment(environmentId: string): Promise<void> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Compose draft environment ID must not be blank");
+    }
+    await this.enqueueComposeDraftMutation(async () => {
+      const drafts = await this.loadComposeDrafts();
+      const keys = Object.values(drafts)
+        .filter((draft) =>
+          draft.ownerType === "environment" && draft.ownerId === environmentId
+        )
+        .map((draft) => draft.draftKey);
+      for (const key of keys) delete drafts[key];
+      if (keys.length > 0) {
+        await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
+        this.announce("compose-draft", environmentId);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.composeDraftsFile(),
+        (storedKey, draft) =>
+          isPersistedComposeDraft(draft, storedKey)
+          && (
+            draft.ownerType !== "environment"
+            || draft.ownerId !== environmentId
+          ),
+      );
+    });
+  }
+
+  async deleteComposeDraftsByProject(projectId: string): Promise<void> {
+    if (!isNonBlankString(projectId)) {
+      throw new Error("Compose draft project ID must not be blank");
+    }
+    await this.enqueueComposeDraftMutation(async () => {
+      const drafts = await this.loadComposeDrafts();
+      const keys = Object.values(drafts)
+        .filter((draft) => draft.ownerType === "project" && draft.ownerId === projectId)
+        .map((draft) => draft.draftKey);
+      for (const key of keys) delete drafts[key];
+      if (keys.length > 0) {
+        await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
+        this.announce("compose-draft", projectId);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.composeDraftsFile(),
+        (storedKey, draft) =>
+          isPersistedComposeDraft(draft, storedKey)
+          && (draft.ownerType !== "project" || draft.ownerId !== projectId),
+      );
+    });
+  }
+
+  private enqueueFileDraftMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.fileDraftsFile(),
+        "file draft storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.fileDraftMutation.then(run, run);
+    this.fileDraftMutation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private validFileDrafts(stored: unknown): Record<string, PersistedFileDraft> {
+    if (!isRecord(stored)) return {};
+    return Object.fromEntries(
+      Object.entries(stored).filter(([storedKey, draft]) =>
+        isPersistedFileDraft(draft, storedKey)
+      ),
+    ) as Record<string, PersistedFileDraft>;
+  }
+
+  private async loadFileDrafts(): Promise<Record<string, PersistedFileDraft>> {
+    const stored = await this.loadJson<unknown>(this.fileDraftsFile(), () => ({}));
+    return this.validFileDrafts(stored);
+  }
+
+  async getFileDraft(draftKey: string): Promise<PersistedFileDraft | null> {
+    if (!isNonBlankString(draftKey)) throw new Error("File draft key must not be blank");
+    return (await this.loadFileDrafts())[draftKey] ?? null;
+  }
+
+  async saveFileDraft(
+    draftKey: string,
+    environmentId: string,
+    filePath: string,
+    content: string,
+    originalContent: string,
+    expectedRevision?: number,
+  ): Promise<PersistedFileDraft> {
+    if (!isNonBlankString(draftKey)) throw new Error("File draft key must not be blank");
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("File draft environment ID must not be blank");
+    }
+    if (!isNonBlankString(filePath)) throw new Error("File draft path must not be blank");
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
+      throw new Error("File draft expected revision must be a non-negative integer");
+    }
+    const size = Buffer.byteLength(content, "utf8") + Buffer.byteLength(originalContent, "utf8");
+    if (size > 32 * 1024 * 1024) throw new Error("File draft exceeds the 32 MB limit");
+
+    return this.enqueueFileDraftMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "File draft");
+      const drafts = await this.loadFileDrafts();
+      const previous = drafts[draftKey];
+      if (
+        previous
+        && (
+          previous.environmentId !== environmentId
+          || previous.filePath !== filePath
+        )
+      ) {
+        throw new Error("File draft key belongs to another file");
+      }
+      if (
+        expectedRevision !== undefined
+        && (previous?.revision ?? 0) !== expectedRevision
+      ) {
+        throw new Error("File draft revision conflict");
+      }
+      const saved: PersistedFileDraft = {
+        draftKey,
+        environmentId,
+        filePath,
+        content,
+        originalContent,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      drafts[draftKey] = saved;
+      await this.saveSensitiveJson(this.fileDraftsFile(), drafts);
+      this.announce("file-draft", environmentId);
+      return saved;
+    });
+  }
+
+  async deleteFileDraft(
+    draftKey: string,
+    expectedRevision?: number,
+  ): Promise<void> {
+    if (!isNonBlankString(draftKey)) throw new Error("File draft key must not be blank");
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
+      throw new Error("File draft expected revision must be a non-negative integer");
+    }
+    await this.enqueueFileDraftMutation(async () => {
+      const stored = await this.loadJson<unknown>(this.fileDraftsFile(), () => ({}));
+      const drafts = this.validFileDrafts(stored);
+      const previous = drafts[draftKey];
+      if (
+        previous
+        && expectedRevision !== undefined
+        && previous.revision !== expectedRevision
+      ) {
+        throw new Error("File draft revision conflict");
+      }
+      const hasStoredKey = isRecord(stored) && Object.hasOwn(stored, draftKey);
+      if (hasStoredKey) {
+        delete drafts[draftKey];
+        await this.saveSensitiveJson(this.fileDraftsFile(), drafts);
+      }
+      if (previous) {
+        this.announce("file-draft", previous.environmentId);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.fileDraftsFile(),
+        (storedKey, draft) =>
+          storedKey !== draftKey && isPersistedFileDraft(draft, storedKey),
+      );
+    });
+  }
+
+  async deleteFileDraftsByEnvironment(environmentId: string): Promise<void> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("File draft environment ID must not be blank");
+    }
+    await this.enqueueFileDraftMutation(async () => {
+      const drafts = await this.loadFileDrafts();
+      const keys = Object.values(drafts)
+        .filter((draft) => draft.environmentId === environmentId)
+        .map((draft) => draft.draftKey);
+      for (const key of keys) delete drafts[key];
+      if (keys.length > 0) {
+        await this.saveSensitiveJson(this.fileDraftsFile(), drafts);
+        this.announce("file-draft", environmentId);
+      }
+      await this.scrubSensitiveJsonBackups(
+        this.fileDraftsFile(),
+        (storedKey, draft) =>
+          isPersistedFileDraft(draft, storedKey)
+          && draft.environmentId !== environmentId,
+      );
+    });
+  }
+
   private enqueueAgentHandoffMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
       const release = await this.acquireMutationLock(
@@ -2969,6 +3507,16 @@ export class StorageService {
       ) {
         throw new Error("Build pipeline revision conflict");
       }
+      const reservation = activeGitHubBuildReservation(snapshot);
+      if (
+        reservation
+        && Object.values(pipelines).some((pipeline) =>
+          pipeline.id !== pipelineId
+          && activeGitHubBuildReservation(pipeline.snapshot) === reservation
+        )
+      ) {
+        throw new Error(`An active build already exists for ${reservation}`);
+      }
       const saved: PersistedBuildPipeline = {
         version,
         id: pipelineId,
@@ -3170,99 +3718,180 @@ export class StorageService {
     return tasks.filter((task) => task.projectId === projectId);
   }
 
-  async addKanbanTask(projectId: string, title: string, description: string): Promise<KanbanTask> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task: KanbanTask = {
-      id: randomUUID(),
-      projectId,
-      title,
-      description,
-      acceptanceCriteria: "",
-      status: "backlog",
-      comments: [],
-      images: [],
-      createdAt: nowIso(),
-      order: Math.max(-1, ...tasks.filter((candidate) => candidate.projectId === projectId && candidate.status === "backlog").map((candidate) => candidate.order)) + 1,
-      prMergeCommented: false,
+  /**
+   * Serializes the complete Kanban read-modify-write transaction both within
+   * this service instance and across backend processes sharing the data
+   * directory. Background PR reconciliation and foreground edits otherwise
+   * risk saving independent stale snapshots over each other.
+   */
+  private enqueueKanbanMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.kanbanFile(),
+        "Kanban storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
     };
-    tasks.push(task);
-    await this.saveJson(this.kanbanFile(), tasks);
-    this.announce("kanban", projectId);
-    return task;
+    const next = this.kanbanMutation.then(run, run);
+    this.kanbanMutation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async removeKanbanImageFilesBestEffort(imageIds: string[]): Promise<void> {
+    await Promise.all(imageIds.map(async (imageId) => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await fs.rm(this.kanbanImageFile(imageId), { force: true });
+          return;
+        } catch {
+          if (attempt === 1) {
+            // The authoritative metadata no longer references this image.
+            // Keep the committed mutation successful; after the bounded
+            // retries the remaining orphan is safe to remove later.
+            console.warn("[Storage] Failed to clean up an orphaned Kanban image");
+          }
+        }
+      }
+    }));
+  }
+
+  async addKanbanTask(projectId: string, title: string, description: string): Promise<KanbanTask> {
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task: KanbanTask = {
+        id: randomUUID(),
+        projectId,
+        title,
+        description,
+        acceptanceCriteria: "",
+        status: "backlog",
+        comments: [],
+        images: [],
+        createdAt: nowIso(),
+        order: Math.max(-1, ...tasks.filter((candidate) => candidate.projectId === projectId && candidate.status === "backlog").map((candidate) => candidate.order)) + 1,
+        prMergeCommented: false,
+      };
+      tasks.push(task);
+      await this.saveJson(this.kanbanFile(), tasks);
+      this.announce("kanban", projectId);
+      return task;
+    });
   }
 
   async updateKanbanTask(taskId: string, updates: Partial<KanbanTask>): Promise<KanbanTask> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error(`Kanban task not found: ${taskId}`);
-
-    const oldStatus = task.status;
-    Object.assign(task, updates);
-    if (updates.status && updates.status !== oldStatus) {
-      task.order = Math.max(-1, ...tasks.filter((candidate) => candidate.projectId === task.projectId && candidate.status === updates.status && candidate.id !== taskId).map((candidate) => candidate.order)) + 1;
+    if (
+      updates.status !== undefined
+      && !isOneOf(updates.status, ["backlog", "in-progress", "review", "done"])
+    ) {
+      throw new Error("Kanban task status is invalid");
     }
-    await this.saveJson(this.kanbanFile(), tasks);
-    this.announce("kanban", task.projectId);
-    return task;
+    if (
+      updates.prState !== undefined
+      && !isOneOf(updates.prState, ["open", "merged", "closed"])
+    ) {
+      throw new Error("Kanban task pull request state is invalid");
+    }
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+
+      const oldStatus = task.status;
+      Object.assign(task, updates);
+      if (updates.status && updates.status !== oldStatus) {
+        task.order = Math.max(-1, ...tasks.filter((candidate) => candidate.projectId === task.projectId && candidate.status === updates.status && candidate.id !== taskId).map((candidate) => candidate.order)) + 1;
+      }
+      await this.saveJson(this.kanbanFile(), tasks);
+      this.announce("kanban", task.projectId);
+      return task;
+    });
   }
 
   async deleteKanbanTask(taskId: string): Promise<void> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error(`Kanban task not found: ${taskId}`);
-    await Promise.all(task.images.map((image) => fs.rm(this.kanbanImageFile(image.id), { force: true })));
-    await this.saveJson(this.kanbanFile(), tasks.filter((candidate) => candidate.id !== taskId));
-    this.announce("kanban", task.projectId);
+    await this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+      await this.saveJson(this.kanbanFile(), tasks.filter((candidate) => candidate.id !== taskId));
+      this.announce("kanban", task.projectId);
+      await this.removeKanbanImageFilesBestEffort(task.images.map((image) => image.id));
+    });
   }
 
   async addKanbanComment(taskId: string, text: string): Promise<KanbanTask> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error(`Kanban task not found: ${taskId}`);
-    task.comments.push({ id: randomUUID(), text, createdAt: nowIso() });
-    await this.saveJson(this.kanbanFile(), tasks);
-    this.announce("kanban", task.projectId);
-    return task;
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+      task.comments.push({ id: randomUUID(), text, createdAt: nowIso() });
+      await this.saveJson(this.kanbanFile(), tasks);
+      this.announce("kanban", task.projectId);
+      return task;
+    });
   }
 
   async deleteKanbanComment(taskId: string, commentId: string): Promise<KanbanTask> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error(`Kanban task not found: ${taskId}`);
-    task.comments = task.comments.filter((comment) => comment.id !== commentId);
-    await this.saveJson(this.kanbanFile(), tasks);
-    this.announce("kanban", task.projectId);
-    return task;
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+      task.comments = task.comments.filter((comment) => comment.id !== commentId);
+      await this.saveJson(this.kanbanFile(), tasks);
+      this.announce("kanban", task.projectId);
+      return task;
+    });
   }
 
   async addKanbanImage(taskId: string, filename: string, data: string): Promise<KanbanTask> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
 
-    const rawBytes = Buffer.from(data, "base64");
-    const webpBytes = await resizeKanbanImage(rawBytes);
-    await fs.mkdir(this.kanbanImagesDir(), { recursive: true });
-    const image: KanbanImage = { id: randomUUID(), filename, createdAt: nowIso() };
-    await fs.writeFile(this.kanbanImageFile(image.id), webpBytes);
-    task.images.push(image);
-    await this.saveJson(this.kanbanFile(), tasks);
-    this.announce("kanban", task.projectId);
-    return task;
+      const rawBytes = Buffer.from(data, "base64");
+      const webpBytes = await resizeKanbanImage(rawBytes);
+      await fs.mkdir(this.kanbanImagesDir(), { recursive: true });
+      const image: KanbanImage = { id: randomUUID(), filename, createdAt: nowIso() };
+      await fs.writeFile(this.kanbanImageFile(image.id), webpBytes);
+      task.images.push(image);
+      try {
+        await this.saveJson(this.kanbanFile(), tasks);
+      } catch (error) {
+        await fs.rm(this.kanbanImageFile(image.id), { force: true });
+        throw error;
+      }
+      this.announce("kanban", task.projectId);
+      return task;
+    });
   }
 
   async deleteKanbanImage(taskId: string, imageId: string): Promise<KanbanTask> {
-    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error(`Kanban task not found: ${taskId}`);
-    task.images = task.images.filter((image) => image.id !== imageId);
-    await fs.rm(this.kanbanImageFile(imageId), { force: true });
-    await this.saveJson(this.kanbanFile(), tasks);
-    this.announce("kanban", task.projectId);
-    return task;
+    return this.enqueueKanbanMutation(async () => {
+      const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+      if (!isCanonicalUuid(imageId)) {
+        throw new Error("Kanban image ID is invalid");
+      }
+      if (!task.images.some((image) => image.id === imageId)) {
+        throw new Error(`Kanban image not found on task: ${imageId}`);
+      }
+      task.images = task.images.filter((image) => image.id !== imageId);
+      await this.saveJson(this.kanbanFile(), tasks);
+      this.announce("kanban", task.projectId);
+      await this.removeKanbanImageFilesBestEffort([imageId]);
+      return task;
+    });
   }
 
   async getKanbanImageData(imageId: string): Promise<string> {
+    if (!isCanonicalUuid(imageId)) {
+      throw new Error("Kanban image ID is invalid");
+    }
     return (await fs.readFile(this.kanbanImageFile(imageId))).toString("base64");
   }
 
@@ -3351,6 +3980,32 @@ export class StorageService {
       plan.updatedAt = nowIso();
       return plan;
     }, (plan) => plan.projectId);
+  }
+
+  async claimFeaturePlanBuild(
+    featureId: string,
+    taskId: string,
+  ): Promise<{ claimed: boolean; feature: FeaturePlan }> {
+    return this.mutateFeaturePlans((plans) => {
+      const plan = plans.find((candidate) => candidate.id === featureId);
+      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+
+      if (plan.status === "building" && plan.buildTaskId === taskId) {
+        return { claimed: true, feature: plan };
+      }
+      if (
+        plan.status === "building"
+        || Boolean(plan.buildTaskId)
+        || Boolean(plan.buildPipelineId)
+      ) {
+        return { claimed: false, feature: plan };
+      }
+
+      plan.status = "building";
+      plan.buildTaskId = taskId;
+      plan.updatedAt = nowIso();
+      return { claimed: true, feature: plan };
+    }, (result) => result.feature.projectId);
   }
 
   async appendFeaturePlanMessage(
@@ -3502,7 +4157,7 @@ export class StorageService {
           changed = true;
         }
       }
-      if (changed) await this.saveJson(this.environmentsFile(), environments);
+      if (changed) await this.saveEnvironments(environments);
     });
   }
 }

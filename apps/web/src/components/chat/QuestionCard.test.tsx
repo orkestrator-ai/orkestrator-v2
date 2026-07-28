@@ -7,6 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { usePromptDraftStore } from "@/stores/promptDraftStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { QuestionCard, type QuestionCardQuestion } from "./QuestionCard";
 
@@ -38,7 +39,12 @@ const TWO_QUESTIONS: QuestionCardQuestion[] = [
   { question: "Two?", header: "Two", options: [{ label: "2a" }, { label: "2b" }] },
 ];
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  // Drafts are keyed by request id and survive unmount by design, so tests
+  // reusing an id would otherwise inherit the previous test's answers.
+  usePromptDraftStore.getState().reset();
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -588,6 +594,98 @@ describe("QuestionCard dismiss affordance", () => {
     // The build pipeline reuses this card with no dismiss path at all.
     renderCard([{ question: "Continue?", options: [{ label: "Yes" }] }]);
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+  });
+});
+
+describe("QuestionCard draft persistence", () => {
+  const DRAFT_KEY = "test-question:req-1";
+
+  test("in-progress answers survive unmount and remount under the same draftKey", () => {
+    /**
+     * The card lives in a chat tab that unmounts when the user switches
+     * environments; the pending request rehydrates, so half-entered answers
+     * must too. This is the whole point of the prompt-draft store.
+     */
+    const { unmount } = render(
+      <QuestionCard
+        agentLabel="Test"
+        title="Agent needs your input"
+        questions={TWO_QUESTIONS}
+        onSubmit={async () => true}
+        draftKey={DRAFT_KEY}
+      />,
+    );
+
+    // Answer question one, type an uncommitted draft on question two.
+    fireEvent.click(screen.getByRole("button", { name: "1b" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.change(screen.getByPlaceholderText(/type your own/i), {
+      target: { value: "half-typed answer" },
+    });
+
+    unmount();
+
+    render(
+      <QuestionCard
+        agentLabel="Test"
+        title="Agent needs your input"
+        questions={TWO_QUESTIONS}
+        onSubmit={async () => true}
+        draftKey={DRAFT_KEY}
+      />,
+    );
+
+    // Remounted on the question the user was answering, with the typed draft
+    // and the earlier selection intact.
+    expect(screen.getByText("Two?")).toBeTruthy();
+    expect(
+      (screen.getByPlaceholderText(/type your own/i) as HTMLInputElement).value,
+    ).toBe("half-typed answer");
+    expect(screen.getByText("2/2 answered")).toBeTruthy();
+  });
+
+  test("clearing the draft key resets a remounted card", () => {
+    // This is what the owning store does when the request resolves; a future
+    // request reusing the id must start blank.
+    const { unmount } = render(
+      <QuestionCard
+        agentLabel="Test"
+        title="Agent needs your input"
+        questions={TWO_QUESTIONS}
+        onSubmit={async () => true}
+        draftKey={DRAFT_KEY}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "1b" }));
+    unmount();
+
+    usePromptDraftStore.getState().clearDraft(DRAFT_KEY);
+
+    render(
+      <QuestionCard
+        agentLabel="Test"
+        title="Agent needs your input"
+        questions={TWO_QUESTIONS}
+        onSubmit={async () => true}
+        draftKey={DRAFT_KEY}
+      />,
+    );
+    expect(screen.getByText("0/2 answered")).toBeTruthy();
+  });
+
+  test("without a draftKey the card keeps plain component state", () => {
+    // Callers without a durable pending request (e.g. the tmux TUI selection
+    // prompt) must not write into the shared draft store.
+    render(
+      <QuestionCard
+        agentLabel="Test"
+        title="Agent needs your input"
+        questions={TWO_QUESTIONS}
+        onSubmit={async () => true}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "1b" }));
+    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
   });
 });
 

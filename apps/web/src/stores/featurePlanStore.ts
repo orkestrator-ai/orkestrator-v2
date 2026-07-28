@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
   appendFeaturePlanMessage,
   appendFeatureStoryMessage,
+  claimFeaturePlanBuild,
   createFeaturePlan,
   getFeaturePlans,
   updateFeaturePlan,
@@ -57,7 +58,7 @@ interface FeaturePlanState {
    */
   activeConversations: Map<string, ActiveFeatureConversation>;
 
-  loadFeatures: (projectId: string) => Promise<void>;
+  loadFeatures: (projectId: string) => Promise<boolean>;
   createFeature: (projectId: string) => Promise<string | undefined>;
   updateFeature: (
     featureId: string,
@@ -74,6 +75,10 @@ interface FeaturePlanState {
       | "buildPipelineId"
     >>,
   ) => Promise<FeaturePlan | undefined>;
+  claimFeatureBuild: (
+    featureId: string,
+    taskId: string,
+  ) => Promise<{ claimed: boolean; feature: FeaturePlan } | undefined>;
   appendMessage: (
     featureId: string,
     role: FeaturePlanMessage["role"],
@@ -136,12 +141,15 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       const features = await getFeaturePlans(projectId);
       if (get().currentProjectId === projectId) {
         set({ features, isLoading: false });
+        return true;
       }
+      return false;
     } catch (error) {
       console.error("[FeaturePlanStore] Failed to load features:", error);
       if (get().currentProjectId === projectId) {
         set({ isLoading: false });
       }
+      return false;
     }
   },
 
@@ -163,6 +171,19 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       return feature;
     } catch (error) {
       console.error("[FeaturePlanStore] Failed to update feature:", error);
+      return undefined;
+    }
+  },
+
+  claimFeatureBuild: async (featureId, taskId) => {
+    try {
+      const result = await claimFeaturePlanBuild(featureId, taskId);
+      set((state) => ({
+        features: upsertFeature(state.features, result.feature),
+      }));
+      return result;
+    } catch (error) {
+      console.error("[FeaturePlanStore] Failed to claim feature build:", error);
       return undefined;
     }
   },

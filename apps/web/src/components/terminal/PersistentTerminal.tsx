@@ -1466,6 +1466,7 @@ export function PersistentTerminal({
       {isActive && (
         <ComposeBar
           sessionKey={sessionKey}
+          environmentId={environmentId}
           isOpen={isComposeBarOpen}
           onClose={() => {
             setIsComposeBarOpen(false);

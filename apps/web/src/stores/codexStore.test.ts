@@ -10,10 +10,15 @@ import {
 } from "@/lib/codex-client";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import { useCodexStore } from "./codexStore";
+import {
+  codexInteractionDraftKey,
+  usePromptDraftStore,
+} from "./promptDraftStore";
 
 const SESSION_KEY = createSessionKey("env-1", "tab-1");
 
 function resetCodexStore() {
+  usePromptDraftStore.getState().reset();
   useCodexStore.setState({
     models: [],
     serverStatus: new Map(),
@@ -289,7 +294,21 @@ describe("codexStore session cleanup", () => {
         [targetKey, [approval("approval-target")]],
         [otherKey, [approval("approval-other")]],
       ]),
+      pendingInteractions: new Map([
+        [targetKey, [interaction("interaction-target")]],
+        [otherKey, [interaction("interaction-other")]],
+      ]),
     });
+    usePromptDraftStore.getState().setDraftValue(
+      codexInteractionDraftKey("interaction-target"),
+      "answer",
+      "target",
+    );
+    usePromptDraftStore.getState().setDraftValue(
+      codexInteractionDraftKey("interaction-other"),
+      "answer",
+      "other",
+    );
 
     useCodexStore.getState().clearSession(targetKey);
 
@@ -306,11 +325,22 @@ describe("codexStore session cleanup", () => {
       "fastMode",
       "sessionPhase",
       "pendingApprovals",
+      "pendingInteractions",
     ] as const;
     for (const field of sessionKeyedMaps) {
       expect(state[field].has(targetKey), `${field} should remove target`).toBe(false);
       expect(state[field].has(otherKey), `${field} should preserve other tab`).toBe(true);
     }
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        codexInteractionDraftKey("interaction-target"),
+      ),
+    ).toBe(false);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        codexInteractionDraftKey("interaction-other"),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -1033,11 +1063,31 @@ describe("codexStore pending interactions", () => {
     const otherEnvKey = createSessionKey("env-2", "tab-1");
     store.addPendingInteraction(SESSION_KEY, interaction("int-1"));
     store.addPendingInteraction(otherEnvKey, interaction("int-2"));
+    usePromptDraftStore.getState().setDraftValue(
+      codexInteractionDraftKey("int-1"),
+      "answer",
+      "target",
+    );
+    usePromptDraftStore.getState().setDraftValue(
+      codexInteractionDraftKey("int-2"),
+      "answer",
+      "other",
+    );
 
     store.clearEnvironment("env-1");
 
     expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
     expect(useCodexStore.getState().pendingInteractions.has(otherEnvKey)).toBe(true);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        codexInteractionDraftKey("int-1"),
+      ),
+    ).toBe(false);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        codexInteractionDraftKey("int-2"),
+      ),
+    ).toBe(true);
   });
 });
 

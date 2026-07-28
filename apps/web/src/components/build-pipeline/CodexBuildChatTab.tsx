@@ -47,7 +47,6 @@ import {
 } from "@/prompts";
 import { parseVerificationResult } from "@/lib/parse-verification-result";
 import { isSetupPending } from "@/lib/setup-commands";
-import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { cn, createSessionKey } from "@/lib/utils";
 import { createPipelineResumePrompt, getPipelineResumePhase, isSessionCompatibleWithResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
@@ -1031,10 +1030,11 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       setPhase(pipelineId, "creating-pr");
       if (isPipelinePaused()) return;
 
-      const { setMonitoringMode, monitoredEnvironments } = usePrMonitorStore.getState();
-      if (monitoredEnvironments[environmentId]) {
-        setMonitoringMode(environmentId, "create-pending");
-      }
+      // Ask the backend PR monitor to poll faster until the PR exists. The
+      // request is durable there, so it survives tab switches and reloads.
+      void backend.prMonitorWatch(environmentId, "create-pending").catch((error) => {
+        console.warn("[BuildPipeline] Failed to request create-pending PR monitoring:", error);
+      });
 
       const result = await createPipelineSession("pr", currentPipeline.iteration, "PR Creation Session");
       if (!result) {

@@ -11,6 +11,7 @@
     "./gateway-token": "./src/gateway-token.ts",
     "./model-id": "./src/model-id.ts",
     "./parent-watchdog": "./src/parent-watchdog.ts",
+    "./pr-monitor": "./src/pr-monitor.ts",
     "./resource-events": "./src/resource-events.ts",
     "./review-artifacts": "./src/review-artifacts.ts",
     "./review-instruction": "./src/review-prompt.ts",

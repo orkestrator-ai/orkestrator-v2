@@ -39,6 +39,7 @@ const mockDetectPrLocal = mock(() => Promise.resolve(null as {
   state: "open" | "merged" | "closed";
   hasMergeConflicts: boolean;
 } | null));
+const mockPrMonitorWatch = mock(async () => undefined);
 
 mock.module("@/lib/backend", () => ({
   startClaudeServer: mockStartClaudeServer,
@@ -48,6 +49,7 @@ mock.module("@/lib/backend", () => ({
   getProjectNotes: mockGetProjectNotes,
   detectPr: mockDetectPr,
   detectPrLocal: mockDetectPrLocal,
+  prMonitorWatch: mockPrMonitorWatch,
 }));
 
 // Claude client
@@ -480,8 +482,7 @@ function resetStores() {
   });
 
   usePrMonitorStore.setState({
-    monitoredEnvironments: {},
-    activeEnvironmentId: null,
+    states: new Map(),
   });
 }
 
@@ -509,6 +510,8 @@ describe("BuildChatTab", () => {
     mockGetProjectNotes.mockClear();
     mockDetectPr.mockClear();
     mockDetectPrLocal.mockClear();
+    mockPrMonitorWatch.mockReset();
+    mockPrMonitorWatch.mockResolvedValue(undefined);
     mockCreateClient.mockClear();
     mockCheckHealth.mockClear();
     mockGetModels.mockClear();
@@ -2299,6 +2302,21 @@ describe("BuildChatTab", () => {
         expect(pipeline?.verificationResult).toBe("pass");
         expect(pipeline?.sessions.at(-1)?.phase).toBe("pr");
       });
+      expect(mockPrMonitorWatch).toHaveBeenCalledWith(ENV_ID, "create-pending");
+    });
+
+    test("continues PR creation when the backend watch request is rejected", async () => {
+      mockPrMonitorWatch.mockRejectedValueOnce(new Error("monitor unavailable"));
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeVerifyPipeline("All acceptance criteria are satisfied", { complete: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase)
+          .toBe("creating-pr");
+      });
+      expect(mockPrMonitorWatch).toHaveBeenCalledWith(ENV_ID, "create-pending");
     });
 
     test("starts a fix session after failed verification below the iteration limit", async () => {

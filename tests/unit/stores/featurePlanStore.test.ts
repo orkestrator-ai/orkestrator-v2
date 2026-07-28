@@ -58,6 +58,16 @@ const mockUpdateFeaturePlan = mock(async (featureId: string, updates: Partial<Fe
   Object.assign(feature, updates);
   return { ...feature };
 });
+const mockClaimFeaturePlanBuild = mock(async (featureId: string, taskId: string) => {
+  const feature = backing.find((candidate) => candidate.id === featureId);
+  if (!feature) throw new Error(`Feature plan not found: ${featureId}`);
+  if (feature.status === "building" || feature.buildTaskId || feature.buildPipelineId) {
+    return { claimed: false, feature: { ...feature } };
+  }
+  feature.status = "building";
+  feature.buildTaskId = taskId;
+  return { claimed: true, feature: { ...feature } };
+});
 const mockAppendFeaturePlanMessage = mock(async (
   featureId: string,
   role: FeaturePlanMessage["role"],
@@ -103,6 +113,7 @@ mock.module("@/lib/backend", () => ({
   getFeaturePlans: mockGetFeaturePlans,
   createFeaturePlan: mockCreateFeaturePlan,
   updateFeaturePlan: mockUpdateFeaturePlan,
+  claimFeaturePlanBuild: mockClaimFeaturePlanBuild,
   appendFeaturePlanMessage: mockAppendFeaturePlanMessage,
   appendFeatureStoryMessage: mockAppendFeatureStoryMessage,
 }));
@@ -122,6 +133,17 @@ describe("featurePlanStore", () => {
     );
     mockCreateFeaturePlan.mockClear();
     mockUpdateFeaturePlan.mockClear();
+    mockClaimFeaturePlanBuild.mockClear();
+    mockClaimFeaturePlanBuild.mockImplementation(async (featureId, taskId) => {
+      const feature = backing.find((candidate) => candidate.id === featureId);
+      if (!feature) throw new Error(`Feature plan not found: ${featureId}`);
+      if (feature.status === "building" || feature.buildTaskId || feature.buildPipelineId) {
+        return { claimed: false, feature: { ...feature } };
+      }
+      feature.status = "building";
+      feature.buildTaskId = taskId;
+      return { claimed: true, feature: { ...feature } };
+    });
     mockAppendFeaturePlanMessage.mockClear();
     mockAppendFeatureStoryMessage.mockClear();
     useFeaturePlanStore.setState({
@@ -372,9 +394,10 @@ describe("featurePlanStore", () => {
       makeFeature({ id: "b", projectId: "project-1", order: 0 }),
     ];
 
-    await useFeaturePlanStore.getState().loadFeatures("project-1");
+    const loaded = await useFeaturePlanStore.getState().loadFeatures("project-1");
 
     const state = useFeaturePlanStore.getState();
+    expect(loaded).toBe(true);
     expect(state.currentProjectId).toBe("project-1");
     expect(state.isLoading).toBe(false);
     expect(state.features.map((feature) => feature.id)).toEqual(["b", "a"]);
@@ -391,8 +414,9 @@ describe("featurePlanStore", () => {
     useFeaturePlanStore.getState().startConversation(conversation);
     const activeConversations = useFeaturePlanStore.getState().activeConversations;
 
-    await useFeaturePlanStore.getState().loadFeatures("project-1");
+    const loaded = await useFeaturePlanStore.getState().loadFeatures("project-1");
 
+    expect(loaded).toBe(true);
     expect(useFeaturePlanStore.getState().activeConversations).toBe(activeConversations);
     expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual(
       conversation,
@@ -406,9 +430,10 @@ describe("featurePlanStore", () => {
       throw new Error("backend down");
     });
 
-    await useFeaturePlanStore.getState().loadFeatures("project-1");
+    const loaded = await useFeaturePlanStore.getState().loadFeatures("project-1");
 
     const state = useFeaturePlanStore.getState();
+    expect(loaded).toBe(false);
     expect(state.currentProjectId).toBe("project-1");
     expect(state.isLoading).toBe(false);
     expect(state.features).toEqual([existing]);
@@ -424,7 +449,7 @@ describe("featurePlanStore", () => {
     const firstPromise = useFeaturePlanStore.getState().loadFeatures("project-1");
     const secondPromise = useFeaturePlanStore.getState().loadFeatures("project-2");
     firstLoad.resolve([makeFeature({ id: "stale", projectId: "project-1" })]);
-    await firstPromise;
+    expect(await firstPromise).toBe(false);
 
     expect(useFeaturePlanStore.getState()).toMatchObject({
       currentProjectId: "project-2",
@@ -433,7 +458,7 @@ describe("featurePlanStore", () => {
     });
 
     secondLoad.resolve([makeFeature({ id: "current", projectId: "project-2" })]);
-    await secondPromise;
+    expect(await secondPromise).toBe(true);
 
     expect(useFeaturePlanStore.getState()).toMatchObject({
       currentProjectId: "project-2",
@@ -454,7 +479,7 @@ describe("featurePlanStore", () => {
     const firstPromise = useFeaturePlanStore.getState().loadFeatures("project-1");
     const secondPromise = useFeaturePlanStore.getState().loadFeatures("project-2");
     firstLoad.reject(new Error("stale failure"));
-    await firstPromise;
+    expect(await firstPromise).toBe(false);
 
     expect(useFeaturePlanStore.getState()).toMatchObject({
       currentProjectId: "project-2",
@@ -463,7 +488,7 @@ describe("featurePlanStore", () => {
     });
 
     secondLoad.resolve([makeFeature({ id: "current", projectId: "project-2" })]);
-    await secondPromise;
+    expect(await secondPromise).toBe(true);
 
     expect(useFeaturePlanStore.getState()).toMatchObject({
       currentProjectId: "project-2",
@@ -515,6 +540,23 @@ describe("featurePlanStore", () => {
 
     expect(result).toBeUndefined();
     expect(useFeaturePlanStore.getState().features).toEqual([existing]);
+  });
+
+  test("claimFeatureBuild installs the backend's atomic reservation result", async () => {
+    const existing = makeFeature({ id: "existing", status: "stories" });
+    backing = [existing];
+    useFeaturePlanStore.setState({ features: [existing] });
+
+    const result = await useFeaturePlanStore.getState()
+      .claimFeatureBuild("existing", "task-1");
+
+    expect(result?.claimed).toBe(true);
+    expect(mockClaimFeaturePlanBuild).toHaveBeenCalledWith("existing", "task-1");
+    expect(useFeaturePlanStore.getState().features[0]).toMatchObject({
+      id: "existing",
+      status: "building",
+      buildTaskId: "task-1",
+    });
   });
 
   test("appendMessage adds the message to the stored feature", async () => {

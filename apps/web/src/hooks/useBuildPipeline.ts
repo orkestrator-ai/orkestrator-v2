@@ -14,6 +14,7 @@ import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
 import type { TaskSnapshot } from "@/prompts";
 import type { LinearIssueDetail } from "@/types/linear";
+import { persistBuildPipelineNow } from "@/lib/build-pipeline-persistence";
 
 /**
  * Wait for setup scripts to be initiated by the TerminalContainer.
@@ -80,6 +81,7 @@ type BuildPipelineTicketInput = {
 
 type StartBuildOptions = {
   existingEnvironmentId?: string | null;
+  onPipelineLinked?: (params: { pipelineId: string; environmentId: string }) => Promise<void>;
 };
 
 export type GitHubIssueBuildComment = {
@@ -232,7 +234,6 @@ export function useBuildPipeline() {
   const setPipelineEnvironment = useBuildPipelineStore((state) => state.setPipelineEnvironment);
   const setPhase = useBuildPipelineStore((state) => state.setPhase);
   const setPipelineError = useBuildPipelineStore((state) => state.setPipelineError);
-  const removePipeline = useBuildPipelineStore((state) => state.removePipeline);
   const updateTask = useKanbanStore((state) => state.updateTask);
   const selectProjectAndEnvironment = useUIStore(
     (state) => state.selectProjectAndEnvironment,
@@ -279,6 +280,11 @@ export function useBuildPipeline() {
           taskSnapshot: ticket.taskSnapshot,
           source: ticket.source,
         });
+        // Reserve the source in the backend before creating an environment.
+        // saveBuildPipeline performs the GitHub issue uniqueness check under
+        // its cross-process mutation lock, so two clients cannot both pass a
+        // renderer snapshot check and launch duplicate builds.
+        await persistBuildPipelineNow(pipelineId);
 
         let environment = reusableEnvironment;
         if (!environment) {
@@ -327,6 +333,10 @@ export function useBuildPipeline() {
         });
 
         await ticket.onPipelineLinked?.({
+          environmentId: configuredEnvironment.id,
+          pipelineId,
+        });
+        await options.onPipelineLinked?.({
           environmentId: configuredEnvironment.id,
           pipelineId,
         });
@@ -384,7 +394,20 @@ export function useBuildPipeline() {
         toast.success("Build pipeline started");
         return pipelineId;
       } catch (error) {
-        if (pipelineId) removePipeline(pipelineId);
+        if (pipelineId) {
+          // Keep the durable reservation as an explicit failed pipeline. Removing
+          // it here delegated backend deletion to the debounced persistence
+          // subscriber; a failed or interrupted delete then left an invisible
+          // source reservation that blocked future attempts after restart.
+          //
+          // Failed pipelines are excluded from active-source uniqueness checks,
+          // remain inspectable by the user, and the normal persistence retry
+          // loop will durably record this terminal state.
+          setPipelineError(
+            pipelineId,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
         console.error("[useBuildPipeline] Failed to start build:", error);
         toast.error("Failed to start build pipeline", {
           description: error instanceof Error ? error.message : "Unknown error",
@@ -392,7 +415,7 @@ export function useBuildPipeline() {
         return undefined;
       }
     },
-    [config, createPipeline, createEnvironment, setPipelineEnvironment, setPhase, setPipelineError, removePipeline, selectProjectAndEnvironment, setProjectCollapsed, setOptions, startEnvironment]
+    [config, createPipeline, createEnvironment, setPipelineEnvironment, setPhase, setPipelineError, selectProjectAndEnvironment, setProjectCollapsed, setOptions, startEnvironment]
   );
 
   const startBuild = useCallback(
@@ -432,11 +455,12 @@ export function useBuildPipeline() {
           comments: task.comments.map((c) => ({ text: c.text })),
           images: snapshotImages,
         },
-        onPipelineLinked: ({ environmentId, pipelineId }) =>
-          updateTask(task.id, {
+        onPipelineLinked: async ({ environmentId, pipelineId }) => {
+          await updateTask(task.id, {
             environmentId,
             buildPipelineId: pipelineId,
-          }),
+          });
+        },
       }, environmentType, agentOverride, options);
     },
     [startBuildFromTicket, updateTask]

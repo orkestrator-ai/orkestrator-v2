@@ -41,6 +41,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
+import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
 import { openInBrowser } from "@/lib/backend";
 import {
   githubIssueDetailKey,
@@ -77,6 +78,9 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+const isStringDraft = (value: unknown): value is string => typeof value === "string";
+const isBlankDraft = (value: string): boolean => value.length === 0;
+
 function findIssuePipelines(
   pipelines: Map<string, BuildPipeline>,
   repository: GitHubRepository,
@@ -112,7 +116,16 @@ function GitHubComment({
   const editComment = useGitHubIssuesStore((state) => state.editComment);
   const mutations = useGitHubIssuesStore((state) => state.mutations);
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(comment.body);
+  const [draft, setDraft, clearDraft] = useDurableComposeDraft({
+    ownerType: "project",
+    ownerId: projectId,
+    namespace: "github-comment-edit",
+    localKey: String(comment.id),
+    initialValue: comment.body,
+    isEmpty: isBlankDraft,
+    isValid: isStringDraft,
+    enabled: editing,
+  });
   const [error, setError] = useState<string | null>(null);
   const mutationKey = `comment-edit:${projectId}:${comment.id}`;
   const saving = mutations.has(mutationKey);
@@ -127,6 +140,9 @@ function GitHubComment({
     setError(null);
     try {
       await editComment(projectId, issueNumber, comment.id, body);
+      void clearDraft().catch((clearError) => {
+        console.warn("[GitHubComment] Failed to clear saved edit draft:", clearError);
+      });
       setEditing(false);
       toast.success("Comment updated");
     } catch (saveError) {
@@ -149,7 +165,6 @@ function GitHubComment({
             size="sm"
             className="ml-auto h-7 px-2 text-xs"
             onClick={() => {
-              setDraft(comment.body);
               setError(null);
               setEditing(true);
             }}
@@ -184,7 +199,7 @@ function GitHubComment({
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  setDraft(comment.body);
+                  void clearDraft().catch(() => undefined);
                   setError(null);
                   setEditing(false);
                 }}
@@ -266,10 +281,37 @@ export function GitHubIssueDetailContent({
   const { startBuildFromGitHubIssue, navigateToPipeline } = buildPipeline;
 
   const [editing, setEditing] = useState(false);
-  const [titleDraft, setTitleDraft] = useState(summary?.title ?? "");
-  const [bodyDraft, setBodyDraft] = useState(summary?.body ?? "");
+  const issueDraftKey = `${repository.owner}/${repository.name}#${issueNumber}`;
+  const [titleDraft, setTitleDraft, clearTitleDraft] = useDurableComposeDraft({
+    ownerType: "project",
+    ownerId: projectId,
+    namespace: "github-issue-title",
+    localKey: issueDraftKey,
+    initialValue: detail?.title ?? summary?.title ?? "",
+    isEmpty: isBlankDraft,
+    isValid: isStringDraft,
+    enabled: editing,
+  });
+  const [bodyDraft, setBodyDraft, clearBodyDraft] = useDurableComposeDraft({
+    ownerType: "project",
+    ownerId: projectId,
+    namespace: "github-issue-body",
+    localKey: issueDraftKey,
+    initialValue: detail?.body ?? summary?.body ?? "",
+    isEmpty: isBlankDraft,
+    isValid: isStringDraft,
+    enabled: editing,
+  });
   const [editError, setEditError] = useState<string | null>(null);
-  const [commentDraft, setCommentDraft] = useState("");
+  const [commentDraft, setCommentDraft, clearCommentDraft] = useDurableComposeDraft({
+    ownerType: "project",
+    ownerId: projectId,
+    namespace: "github-comment",
+    localKey: `${repository.owner}/${repository.name}#${issueNumber}`,
+    initialValue: "",
+    isEmpty: isBlankDraft,
+    isValid: isStringDraft,
+  });
   const [commentError, setCommentError] = useState<string | null>(null);
   const [closeOpen, setCloseOpen] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
@@ -319,6 +361,9 @@ export function GitHubIssueDetailContent({
         title: titleDraft.trim(),
         body: bodyDraft,
       });
+      void Promise.all([clearTitleDraft(), clearBodyDraft()]).catch((clearError) => {
+        console.warn("[GitHubIssueDetail] Failed to clear saved issue drafts:", clearError);
+      });
       setEditing(false);
       toast.success("Issue updated");
     } catch (error) {
@@ -357,7 +402,9 @@ export function GitHubIssueDetailContent({
     setCommentError(null);
     try {
       await addComment(projectId, issueNumber, body);
-      setCommentDraft("");
+      void clearCommentDraft().catch((error) => {
+        console.warn("[GitHubIssueDetail] Failed to clear posted comment draft:", error);
+      });
       toast.success("Comment added");
     } catch (error) {
       setCommentError(errorMessage(error, "Could not add the comment."));
@@ -530,8 +577,8 @@ export function GitHubIssueDetailContent({
                         size="sm"
                         disabled={saving}
                         onClick={() => {
-                          setTitleDraft(detail.title);
-                          setBodyDraft(detail.body);
+                          void Promise.all([clearTitleDraft(), clearBodyDraft()])
+                            .catch(() => undefined);
                           setEditError(null);
                           setEditing(false);
                         }}

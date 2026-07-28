@@ -27,6 +27,9 @@ interface FileDirtyState {
    */
   setContent: (tabId: string, content: string) => void;
 
+  /** Install a backend-restored dirty buffer without an intermediate clean state. */
+  hydrateDraft: (tabId: string, content: string, originalContent: string) => void;
+
   /**
    * Mark a file as saved (resets the dirty state).
    * Call this after successfully saving the file.
@@ -77,6 +80,14 @@ export const useFileDirtyStore = create<FileDirtyState>()((set, get) => ({
         // Content set without original - treat original as empty
         newMap.set(tabId, { content, originalContent: "" });
       }
+      return { dirtyFiles: newMap };
+    });
+  },
+
+  hydrateDraft: (tabId, content, originalContent) => {
+    set((state) => {
+      const newMap = new Map(state.dirtyFiles);
+      newMap.set(tabId, { content, originalContent });
       return { dirtyFiles: newMap };
     });
   },

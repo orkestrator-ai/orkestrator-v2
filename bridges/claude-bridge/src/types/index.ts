@@ -238,6 +238,31 @@ export interface SessionState {
   usage?: SessionUsageSnapshot;
   /** Predicted next prompt emitted by the SDK after a completed turn. */
   promptSuggestion?: string;
+  /**
+   * Whether the UI plan-mode toggle is on for this session.
+   *
+   * Owned here (and mirrored to durable per-session preferences) rather than
+   * in renderer state: plan mode decides whether the next prompt runs with
+   * `plan` or `bypassPermissions`, so a renderer-only value silently reset to
+   * "off" by an app restart would widen what the agent is allowed to do.
+   * Absent means "never set", which callers must treat as off.
+   */
+  planMode?: boolean;
+  /**
+   * Recently accepted idempotent prompt request ids.
+   *
+   * Mirrored to the durable session preferences file. This is deliberately a
+   * bounded set: it protects one-shot launch dispatch without turning session
+   * metadata into an unbounded transcript.
+   */
+  dispatchedRequestIds?: Set<string>;
+  /**
+   * The durable request-id journal existed but could not be trusted.
+   *
+   * Stable-id prompts must remain blocked in this state: treating an unknown
+   * journal as empty could replay destructive launch work after a restart.
+   */
+  dispatchJournalUnavailable?: boolean;
   /** Live background/subagent tasks keyed by provider task id. */
   backgroundTasks?: Record<string, BackgroundTaskSnapshot>;
   /**

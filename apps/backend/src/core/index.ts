@@ -2,6 +2,7 @@ import {
   createCommandRegistry,
   shutdownDiffStatsTracking,
   shutdownLocalServers,
+  shutdownPrMonitorTracking,
   type BackendEmit,
   type CommandContext,
 } from "./commands.js";
@@ -111,6 +112,7 @@ export class OrkestratorBackend {
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     shutdownDiffStatsTracking();
+    shutdownPrMonitorTracking();
     const attempt = shutdownLocalServers();
     this.shutdownPromise = attempt;
     try {

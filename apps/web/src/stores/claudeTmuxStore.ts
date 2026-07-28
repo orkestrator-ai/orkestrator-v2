@@ -27,6 +27,12 @@ import {
   isRootAssistantRecord,
   normalizeBackendModelId,
 } from "@orkestrator/protocol/model-id";
+import {
+  tmuxElicitationDraftKey,
+  tmuxPlanDraftKey,
+  tmuxQuestionDraftKey,
+  usePromptDraftStore,
+} from "./promptDraftStore";
 
 export function createClaudeTmuxStateKey(environmentId: string, tabId: string): string {
   return `env:${environmentId}:tab:${tabId}`;
@@ -254,6 +260,19 @@ function patchTab(
   return { tabs: next };
 }
 
+/**
+ * Draft-store keys for every pending prompt on a tab, so sweeps that drop the
+ * prompts (resetTab, replacePendingHooks) drop their in-progress input too.
+ */
+function tabPromptDraftKeys(tab: TmuxTabState | undefined): string[] {
+  if (!tab) return [];
+  return [
+    ...tab.pendingQuestions.map((q) => tmuxQuestionDraftKey(q.eventId)),
+    ...tab.pendingPlans.map((p) => tmuxPlanDraftKey(p.eventId)),
+    ...tab.pendingElicitations.map((e) => tmuxElicitationDraftKey(e.eventId)),
+  ];
+}
+
 export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
   tabs: new Map(),
   attachments: new Map(),
@@ -274,7 +293,10 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
       })),
     ),
 
-  resetTab: (tabId) =>
+  resetTab: (tabId) => {
+    // The tab's pending prompts are dropped below, so their in-progress input
+    // drafts must not resurface if an event id is ever seen again.
+    const sweptDraftKeys = tabPromptDraftKeys(get().tabs.get(tabId));
     set((state) => {
       const attachments = new Map(state.attachments);
       const draftText = new Map(state.draftText);
@@ -291,7 +313,9 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
         draftMentions,
         messageQueue,
       };
-    }),
+    });
+    usePromptDraftStore.getState().clearDrafts(sweptDraftKeys);
+  },
 
   applyTranscriptLine: (tabId, line) =>
     set((state) =>
@@ -334,13 +358,17 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
       ),
     ),
 
-  removePendingQuestion: (tabId, eventId) =>
+  removePendingQuestion: (tabId, eventId) => {
     set((state) =>
       patchTab(state, tabId, (s) => ({
         ...s,
         pendingQuestions: s.pendingQuestions.filter((q) => q.eventId !== eventId),
       })),
-    ),
+    );
+    // The question is resolved (answered, rejected, or withdrawn), so its
+    // in-progress answer draft goes with it.
+    usePromptDraftStore.getState().clearDraft(tmuxQuestionDraftKey(eventId));
+  },
 
   addPendingPlan: (tabId, plan) =>
     set((state) =>
@@ -351,13 +379,16 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
       ),
     ),
 
-  removePendingPlan: (tabId, eventId) =>
+  removePendingPlan: (tabId, eventId) => {
     set((state) =>
       patchTab(state, tabId, (s) => ({
         ...s,
         pendingPlans: s.pendingPlans.filter((p) => p.eventId !== eventId),
       })),
-    ),
+    );
+    // The plan request is resolved, so its feedback draft goes with it.
+    usePromptDraftStore.getState().clearDraft(tmuxPlanDraftKey(eventId));
+  },
 
   addPendingPermission: (tabId, permission) =>
     set((state) =>
@@ -387,7 +418,7 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
       ),
     ),
 
-  removePendingElicitation: (tabId, eventId) =>
+  removePendingElicitation: (tabId, eventId) => {
     set((state) =>
       patchTab(state, tabId, (s) => ({
         ...s,
@@ -395,9 +426,27 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
           (e) => e.eventId !== eventId,
         ),
       })),
-    ),
+    );
+    // The elicitation is resolved, so its typed field values go with it.
+    usePromptDraftStore.getState().clearDraft(tmuxElicitationDraftKey(eventId));
+  },
 
-  replacePendingHooks: (tabId, pending) =>
+  replacePendingHooks: (tabId, pending) => {
+    // This is the authoritative rehydration path: a prompt missing from the
+    // snapshot was resolved while this tab was not listening, so its draft is
+    // dropped. Prompts still present keep theirs.
+    const keptKeys = new Set(
+      tabPromptDraftKeys({
+        ...emptyTabState(),
+        pendingQuestions: pending.questions,
+        pendingPlans: pending.plans,
+        pendingElicitations: pending.elicitations,
+      }),
+    );
+    const withdrawnDraftKeys = tabPromptDraftKeys(get().tabs.get(tabId)).filter(
+      (draftKey) => !keptKeys.has(draftKey),
+    );
+
     set((state) =>
       patchTab(state, tabId, (s) => ({
         ...s,
@@ -407,7 +456,9 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
         pendingPermissions: pending.permissions,
         pendingElicitations: pending.elicitations,
       })),
-    ),
+    );
+    usePromptDraftStore.getState().clearDrafts(withdrawnDraftKeys);
+  },
 
   pushInfoEvent: (tabId, event) =>
     set((state) =>

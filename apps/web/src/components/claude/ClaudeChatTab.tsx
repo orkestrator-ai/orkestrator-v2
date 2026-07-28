@@ -8,6 +8,7 @@ import {
   type RefreshSessionOptions,
 } from "@/hooks/useManualSessionRefresh";
 import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
+import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { createUuid } from "@/lib/uuid";
@@ -47,6 +48,8 @@ import {
   type PlanApprovalRespondedEventData,
   type SystemMessageEventData,
   type ClaudeEffortLevel,
+  dismissPromptSuggestion,
+  updateSessionPreferences,
 } from "@/lib/claude-client";
 import {
   extractContextUsage,
@@ -218,7 +221,12 @@ export function ClaudeChatTab({
    */
   const backgroundRefreshSequenceRef = useRef(0);
   const resumeSequenceRef = useRef(0);
-  const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => Promise<void>) | null>(null);
+  const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean, requestId?: string) => Promise<void>) | null>(null);
+  const planPreferenceWriteRef = useRef<Promise<void>>(Promise.resolve());
+  // Retain the newest successfully requested value until an authoritative
+  // snapshot confirms it. A GET started before the PUT may otherwise land
+  // afterwards and visually undo the user's toggle with stale data.
+  const desiredPlanPreferenceRef = useRef(new Map<string, boolean>());
 
   // Narrow, per-key subscriptions (mirrors CodexChatTab): store actions are
   // referentially stable, and value reads are scoped so unrelated store writes
@@ -322,6 +330,7 @@ export function ClaudeChatTab({
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
   const sessionKey = useMemo(() => createSessionKey(environmentId, tabId), [environmentId, tabId]);
+  useNativeComposeDraftPersistence("claude", environmentId, sessionKey, useClaudeStore);
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
@@ -376,14 +385,12 @@ export function ClaudeChatTab({
   /**
    * Apply a server-delivered suggestion unless this session already consumed it.
    *
-   * The bridge does not clear `session.promptSuggestion` once a turn has
-   * produced one, so every authoritative snapshot — mount, restore, reconnect
-   * and each `session.idle` — re-delivers it. The "already consumed" latch
+   * The bridge clears a dismissed suggestion authoritatively, but an older
+   * snapshot can still race that request. The "already consumed" latch
    * therefore lives in the store, not in a component ref: consuming the chip
-   * and then switching environments unmounts this tab, and a ref would let the
-   * next mount resurrect the chip from the replayed snapshot. Remembering the
-   * exact string (not just "dismissed") means a genuinely new suggestion still
-   * gets through.
+   * and then switching environments unmounts this tab, and a stale response
+   * must not resurrect it on the next mount. Remembering the exact string (not
+   * just "dismissed") means a genuinely new suggestion still gets through.
    */
   const applyPromptSuggestion = useCallback(
     (key: string, suggestion: string | undefined) => {
@@ -422,6 +429,15 @@ export function ClaudeChatTab({
       ) {
         applyPromptSuggestion(key, serverSession.promptSuggestion);
       }
+      if (!invalidFields.has("planMode") && typeof serverSession.planMode === "boolean") {
+        const desired = desiredPlanPreferenceRef.current.get(key);
+        if (desired === undefined || desired === serverSession.planMode) {
+          if (desired === serverSession.planMode) {
+            desiredPlanPreferenceRef.current.delete(key);
+          }
+          setPlanMode(key, serverSession.planMode);
+        }
+      }
       if (invalidFields.has("backgroundTasks")) {
         // Preserve the last valid snapshot when only this optional wire field
         // was malformed.
@@ -434,7 +450,7 @@ export function ClaudeChatTab({
         }
       }
     },
-    [applyPromptSuggestion, setBackgroundTasks, setContextUsage],
+    [applyPromptSuggestion, setBackgroundTasks, setContextUsage, setPlanMode],
   );
   const showAddressAll = Boolean(
     isReviewTab &&
@@ -1346,6 +1362,7 @@ export function ClaudeChatTab({
               effort: effortLevel,
               permissionMode,
               fastMode: fastModeEnabled && modelSupportsFastMode,
+              requestId: `initial-prompt:${environmentId}:${tabId}`,
             });
 
             if (!shouldReconcileClaudePrompt(success)) {
@@ -1677,13 +1694,15 @@ export function ClaudeChatTab({
                 sessionUpdate
                 && "promptSuggestion" in sessionUpdate
                 && (
-                  sessionUpdate.promptSuggestion === undefined
+                  sessionUpdate.promptSuggestion === null
                   || typeof sessionUpdate.promptSuggestion === "string"
                 )
               ) {
                 applyPromptSuggestion(
                   sessionTabId,
-                  sessionUpdate.promptSuggestion as string | undefined,
+                  typeof sessionUpdate.promptSuggestion === "string"
+                    ? sessionUpdate.promptSuggestion
+                    : undefined,
                 );
               }
               if (sessionUpdate && "backgroundTasks" in sessionUpdate) {
@@ -1817,6 +1836,7 @@ export function ClaudeChatTab({
             const planSessionKey = eventSessionId ? getSessionKeyBySdkSessionId(eventSessionId) : null;
             if (planSessionKey) {
               console.log("[ClaudeChatTab] Plan enter requested, enabling plan mode for session:", planSessionKey);
+              desiredPlanPreferenceRef.current.delete(planSessionKey);
               setPlanMode(planSessionKey, true);
             } else {
               console.warn("[ClaudeChatTab] Could not find session key for plan.enter-requested event, sessionId:", eventSessionId);
@@ -1826,6 +1846,7 @@ export function ClaudeChatTab({
             const planSessionKey = eventSessionId ? getSessionKeyBySdkSessionId(eventSessionId) : null;
             if (planSessionKey) {
               console.log("[ClaudeChatTab] Plan exit requested, disabling plan mode for session:", planSessionKey);
+              desiredPlanPreferenceRef.current.delete(planSessionKey);
               setPlanMode(planSessionKey, false);
             } else {
               console.warn("[ClaudeChatTab] Could not find session key for plan.exit-requested event, sessionId:", eventSessionId);
@@ -1936,7 +1957,7 @@ export function ClaudeChatTab({
   startSharedEventSubscriptionRef.current = startSharedEventSubscription;
 
   const handleSend = useCallback(
-    async (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => {
+    async (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean, requestId?: string) => {
       if (!client || !session) return;
 
       const selectedModel = getSelectedModel(sessionKey);
@@ -2004,6 +2025,7 @@ export function ClaudeChatTab({
           .includesLocalSettings(sessionKey),
         promptSuggestions:
           useClaudeStore.getState().promptSuggestionOptIn.get(sessionKey) === true,
+        requestId,
       });
 
       if (!shouldReconcileClaudePrompt(success)) {
@@ -2076,6 +2098,52 @@ export function ClaudeChatTab({
     }
   }, [client, session, sessionKey, promoteNextQueuedPromptToDraft, setSessionLoading, addMessage]);
 
+  const handlePlanModeChange = useCallback((enabled: boolean) => {
+    if (!client || !session) return;
+    const sdkSessionId = session.sessionId;
+    desiredPlanPreferenceRef.current.set(sessionKey, enabled);
+    const next = planPreferenceWriteRef.current
+      .catch(() => undefined)
+      .then(() => updateSessionPreferences(
+        client,
+        sdkSessionId,
+        { planMode: enabled },
+      ));
+    planPreferenceWriteRef.current = next;
+    void next.catch((error) => {
+      console.warn("[ClaudeChatTab] Failed to persist plan mode:", error);
+      // A newer toggle owns the UI now; its queued write will reconcile in
+      // turn, so this older failure must not roll it back.
+      if (desiredPlanPreferenceRef.current.get(sessionKey) !== enabled) return;
+      desiredPlanPreferenceRef.current.delete(sessionKey);
+      void getSession(client, sdkSessionId)
+        .then((serverSession) => {
+          const currentSession = useClaudeStore.getState().sessions.get(sessionKey);
+          if (currentSession?.sessionId !== sdkSessionId) return;
+          if (serverSession) {
+            applyServerSessionMetadata(sessionKey, serverSession);
+          } else {
+            // If the authoritative state cannot be read, keep permission mode
+            // conservative rather than leaving a failed Build-mode request in
+            // bypassPermissions.
+            setPlanMode(sessionKey, true);
+          }
+        })
+        .catch(() => {
+          const currentSession = useClaudeStore.getState().sessions.get(sessionKey);
+          if (currentSession?.sessionId === sdkSessionId) {
+            setPlanMode(sessionKey, true);
+          }
+        });
+    });
+  }, [
+    applyServerSessionMetadata,
+    client,
+    session,
+    sessionKey,
+    setPlanMode,
+  ]);
+
   useEscapeToStop({
     isActive,
     isLoading: session?.isLoading ?? false,
@@ -2109,7 +2177,14 @@ export function ClaudeChatTab({
       // Also clear the initialPrompt from the pane store to prevent re-submission on remount
       clearTabInitialPrompt(tabId, environmentId);
       console.debug("[ClaudeChatTab] Sending initial prompt on reconnection for tab:", tabId);
-      handleSendRef.current?.(launchPrompt, [], effortValue, planModeEnabledValue, fastModeEnabledValue);
+      handleSendRef.current?.(
+        launchPrompt,
+        [],
+        effortValue,
+        planModeEnabledValue,
+        fastModeEnabledValue,
+        `initial-prompt:${environmentId}:${tabId}`,
+      );
     }
   }, [connectionState, client, session, handoff.ready, launchPrompt, setupPending, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
 
@@ -2188,6 +2263,13 @@ export function ClaudeChatTab({
         const contextUsage = parseClaudeContextUsage(serverSession.contextUsage);
         const backgroundTasks =
           parseClaudeBackgroundTasks(serverSession.backgroundTasks) ?? {};
+        const invalidMetadataFields = new Set(
+          serverSession.invalidMetadataFields ?? [],
+        );
+        // The tab key survives a manual resume, but an optimistic preference
+        // belongs to the bridge session that was just replaced. Let the
+        // resumed session's snapshot establish its own permission mode.
+        desiredPlanPreferenceRef.current.delete(sessionKey);
 
         // Publish the new identity, transcript, and all session-scoped metadata
         // in one store update. No render can pair the resumed session with the
@@ -2229,12 +2311,21 @@ export function ClaudeChatTab({
             tasksBySession.delete(sessionKey);
           }
 
+          const planMode = new Map(state.planMode);
+          planMode.set(
+            sessionKey,
+            invalidMetadataFields.has("planMode")
+              ? true
+              : serverSession.planMode === true,
+          );
+
           return {
             sessions,
             contextUsage: contextUsageBySession,
             promptSuggestions,
             dismissedPromptSuggestions,
             backgroundTasks: tasksBySession,
+            planMode,
           };
         });
         tabSessionIdRef.current = sessionId;
@@ -2405,6 +2496,11 @@ export function ClaudeChatTab({
               );
               store.setDismissedPromptSuggestion(sessionKey, promptSuggestion);
               setPromptSuggestion(sessionKey, undefined);
+              if (client && session?.sessionId) {
+                void dismissPromptSuggestion(client, session.sessionId).catch((error) => {
+                  console.warn("[ClaudeChatTab] Failed to dismiss prompt suggestion:", error);
+                });
+              }
             }}
             className="max-w-[min(70vw,34rem)] truncate rounded-full border border-border/60 bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground"
             title={promptSuggestion}
@@ -2448,6 +2544,7 @@ export function ClaudeChatTab({
           queueLength={queueLength}
           onStop={handleStop}
           onQueue={handleQueue}
+          onPlanModeChange={handlePlanModeChange}
           showAddressAll={showAddressAll}
           layout={centerCompose ? "centered" : "bottom"}
         />

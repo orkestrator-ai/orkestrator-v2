@@ -25,6 +25,7 @@ export type NetworkAccessMode = "full" | "restricted";
 
 /** Type of environment - containerized (Docker) or local (git worktree) */
 export type EnvironmentType = "containerized" | "local";
+export type EnvironmentLifecycleOperation = "deleting" | "merging";
 
 /** Port protocol type for port mappings */
 export type PortProtocol = "tcp" | "udp";
@@ -69,6 +70,11 @@ export interface Environment {
   projectId: string;
   /** Persisted association used to recover a build pipeline after renderer remount. */
   buildPipelineId?: string;
+  /** Backend-owned long-running operation currently affecting this environment. */
+  lifecycleOperation?: EnvironmentLifecycleOperation;
+  lifecycleOperationStartedAt?: string;
+  /** Durable deletion tombstone; deletion resumes or remains visible after reload. */
+  deletionRequestedAt?: string;
   name: string;
   /** Git branch name (defaults to "main" for legacy environments via serde default) */
   branch: string;
@@ -160,8 +166,17 @@ export interface Environment {
   initialReasoningEffort?: string;
   /** Initial prompt used when this environment was created. */
   initialPrompt?: string;
+  /** Images waiting to be written into the workspace before the first prompt. */
+  initialPromptAttachments?: InitialPromptImageAttachment[];
   /** Prompt awaiting a backend-owned rename after the environment starts. */
   pendingRenamePrompt?: string;
+}
+
+export interface InitialPromptImageAttachment {
+  id: string;
+  name: string;
+  previewUrl: string;
+  base64Data: string;
 }
 
 /** Result of testing a domain for DNS resolution */
@@ -222,6 +237,27 @@ export interface PersistedPromptQueue<T = unknown> {
   queueKey: string;
   environmentId: string;
   messages: T[];
+  updatedAt: string;
+  revision: number;
+}
+
+/** Unsent user input persisted by the backend. */
+export interface PersistedComposeDraft<T = unknown> {
+  draftKey: string;
+  ownerType: "environment" | "project";
+  ownerId: string;
+  value: T;
+  updatedAt: string;
+  revision: number;
+}
+
+/** Unsaved file-editor content persisted by the backend. */
+export interface PersistedFileDraft {
+  draftKey: string;
+  environmentId: string;
+  filePath: string;
+  content: string;
+  originalContent: string;
   updatedAt: string;
   revision: number;
 }

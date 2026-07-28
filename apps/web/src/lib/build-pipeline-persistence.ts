@@ -37,6 +37,9 @@ type PipelineSaver = (
  * authoritative for equal revisions.
  */
 const dirtyPipelineFingerprints = new Map<string, string>();
+let coordinatedImmediatePersist:
+  | ((pipelineId: string) => Promise<BuildPipeline>)
+  | null = null;
 
 function pipelineFingerprint(pipeline: BuildPipeline): string {
   const { backendRevision: _backendRevision, ...durable } = pipeline;
@@ -253,12 +256,11 @@ export function migrateLegacyBuildPipelines(
  * client that dies immediately afterwards leaves behind a record that says the
  * attempt was made rather than one that invites a second attempt.
  */
-export async function persistBuildPipelineNow(
+async function persistBuildPipelineSnapshotNow(
   pipelineId: string,
-  options: Pick<BuildPipelinePersistenceOptions, "save" | "load"> = {},
+  save: PipelineSaver,
+  load: PipelineLoader,
 ): Promise<BuildPipeline> {
-  const save = options.save ?? backend.saveBuildPipeline;
-  const load = options.load ?? backend.getBuildPipeline;
   const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId);
   if (!pipeline) throw new Error(`Build pipeline not found: ${pipelineId}`);
   const fingerprint = pipelineFingerprint(pipeline);
@@ -284,6 +286,20 @@ export async function persistBuildPipelineNow(
   markPipelineClean(pipelineId, fingerprint);
   useBuildPipelineStore.getState().setBackendRevision(pipelineId, saved.revision);
   return useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+}
+
+export async function persistBuildPipelineNow(
+  pipelineId: string,
+  options: Pick<BuildPipelinePersistenceOptions, "save" | "load"> = {},
+): Promise<BuildPipeline> {
+  if (!options.save && !options.load && coordinatedImmediatePersist) {
+    return coordinatedImmediatePersist(pipelineId);
+  }
+  return persistBuildPipelineSnapshotNow(
+    pipelineId,
+    options.save ?? backend.saveBuildPipeline,
+    options.load ?? backend.getBuildPipeline,
+  );
 }
 
 export interface BuildPipelinePersistenceOptions {
@@ -407,6 +423,27 @@ export function startBuildPipelinePersistence(
     [...pending.keys()].map((id) => flush(id) ?? Promise.resolve()),
   ).then(() => undefined);
 
+  const persistImmediately = async (pipelineId: string): Promise<BuildPipeline> => {
+    if (!useBuildPipelineStore.getState().pipelines.has(pipelineId)) {
+      throw new Error(`Build pipeline not found: ${pipelineId}`);
+    }
+    cancelTimer(pipelineId);
+    pending.delete(pipelineId);
+
+    let result: BuildPipeline | undefined;
+    const previous = chains.get(pipelineId) ?? Promise.resolve();
+    const next = previous.then(async () => {
+      result = await persistBuildPipelineSnapshotNow(pipelineId, save, load);
+    });
+    chains.set(pipelineId, next);
+    try {
+      await next;
+      return result!;
+    } finally {
+      if (chains.get(pipelineId) === next) chains.delete(pipelineId);
+    }
+  };
+
   const unsubscribe = useBuildPipelineStore.subscribe((state, previous) => {
     const ids = new Set([...state.pipelines.keys(), ...previous.pipelines.keys()]);
     for (const id of ids) {
@@ -459,6 +496,9 @@ export function startBuildPipelinePersistence(
     }, debounceMs));
   }
 
+  const previousImmediatePersist = coordinatedImmediatePersist;
+  coordinatedImmediatePersist = persistImmediately;
+
   const onPageHide = () => {
     void flushAll();
   };
@@ -466,6 +506,9 @@ export function startBuildPipelinePersistence(
 
   return () => {
     stopped = true;
+    if (coordinatedImmediatePersist === persistImmediately) {
+      coordinatedImmediatePersist = previousImmediatePersist;
+    }
     unsubscribe();
     window.removeEventListener("pagehide", onPageHide);
     void flushAll();

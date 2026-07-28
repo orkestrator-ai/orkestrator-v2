@@ -9,6 +9,7 @@ import * as realCodexChatTab from "@/components/codex/CodexChatTab";
 import * as realOpenCodeChatTab from "@/components/opencode/OpenCodeChatTab";
 import * as realBrowserTab from "@/components/browser/BrowserTab";
 import * as realLoopedReviewTab from "@/components/review/LoopedReviewTab";
+import * as realFileViewerTab from "@/components/terminal/FileViewerTab";
 
 const realClaudeChatTabSnapshot = { ...realClaudeChatTab };
 const realClaudeTmuxChatTabSnapshot = { ...realClaudeTmuxChatTab };
@@ -16,6 +17,7 @@ const realCodexChatTabSnapshot = { ...realCodexChatTab };
 const realOpenCodeChatTabSnapshot = { ...realOpenCodeChatTab };
 const realBrowserTabSnapshot = { ...realBrowserTab };
 const realLoopedReviewTabSnapshot = { ...realLoopedReviewTab };
+const realFileViewerTabSnapshot = { ...realFileViewerTab };
 
 mock.module("@dnd-kit/core", () => ({
   DndContext: ({ children }: { children: React.ReactNode }) => children,
@@ -253,6 +255,25 @@ mock.module("@/components/review/LoopedReviewTab", () => ({
   ),
 }));
 
+mock.module("@/components/terminal/FileViewerTab", () => ({
+  FileViewerTab: ({
+    tabId,
+    environmentId,
+    filePath,
+  }: {
+    tabId: string;
+    environmentId?: string;
+    filePath: string;
+  }) => (
+    <div
+      data-testid="file-viewer-tab"
+      data-tab-id={tabId}
+      data-environment-id={environmentId}
+      data-file-path={filePath}
+    />
+  ),
+}));
+
 mock.module("@/stores/terminalPortalStore", () => ({
   createTerminalKey: (environmentId: string, tabId: string) => `${environmentId}::${tabId}`,
   useTerminalPortalStore: <T,>(selector: (state: {
@@ -294,6 +315,10 @@ describe("PaneLeafContainer", () => {
     mock.module(
       "@/components/review/LoopedReviewTab",
       () => realLoopedReviewTabSnapshot,
+    );
+    mock.module(
+      "@/components/terminal/FileViewerTab",
+      () => realFileViewerTabSnapshot,
     );
   });
 
@@ -438,6 +463,40 @@ describe("PaneLeafContainer", () => {
 
     expect(screen.getByTestId("claude-tmux-tab")).toBeDefined();
     expect(screen.getByText("tmux:tab-tmux")).toBeDefined();
+  });
+
+  test("forwards the owning environment to file draft recovery", () => {
+    const filePane = {
+      kind: "leaf" as const,
+      id: "pane-file",
+      tabs: [{
+        id: "tab-file",
+        type: "file" as const,
+        fileData: {
+          filePath: "src/index.ts",
+          isLocalEnvironment: true,
+          worktreePath: "/workspace",
+        },
+      }],
+      activeTabId: "tab-file",
+    };
+
+    render(
+      <PaneLeafContainer
+        pane={filePane}
+        containerId={null}
+        environmentId="env-hidden"
+        isActive
+      />,
+    );
+
+    expect(screen.getByTestId("file-viewer-tab")).toMatchObject({
+      dataset: {
+        tabId: "tab-file",
+        environmentId: "env-hidden",
+        filePath: "src/index.ts",
+      },
+    });
   });
 
   test("grants global shortcut ownership only to the focused pane", () => {

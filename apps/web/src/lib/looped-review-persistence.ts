@@ -31,8 +31,8 @@ type WorkflowSaver = (
 /**
  * Process-local dirty markers prevent an equal-revision backend hydration from
  * replacing a transition which has happened since the renderer started. They
- * deliberately do not mark snapshots restored from localStorage: on startup
- * the backend remains authoritative for equal revisions.
+ * Backend snapshots are never marked dirty: on startup and reconnect the
+ * backend remains authoritative for equal revisions.
  */
 const dirtyWorkflowFingerprints = new Map<string, string>();
 
@@ -302,8 +302,8 @@ export function startLoopedReviewPersistence(
     }
   });
 
-  // Workflows restored from local persistence predate this subscription, so
-  // seed them immediately into the backend if necessary.
+  // A workflow may be created before this subscriber starts in tests or during
+  // app bootstrap, so seed any current entries immediately.
   for (const [id, workflow] of useLoopedReviewStore.getState().workflows) {
     const fingerprint = workflowFingerprint(workflow);
     pending.set(id, { workflow, fingerprint });

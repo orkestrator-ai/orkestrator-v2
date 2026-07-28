@@ -1,6 +1,7 @@
 import { invoke } from "@/lib/native/backend";
 import { getGatewayBaseUrl } from "@/lib/gateway-url";
 import type { EnvironmentDiffStatsSnapshot } from "@orkestrator/protocol/diff-stats";
+import type { PrMonitorMode, PrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
 import type {
   Project,
   Environment,
@@ -28,10 +29,13 @@ import type {
   CodexMode,
   OpenCodeMode,
   EnvironmentSetupSession,
+  InitialPromptImageAttachment,
   PersistedPaneLayout,
   ClaudeModelCatalogSnapshot,
   PersistedLoopedReviewWorkflow,
   PersistedBuildPipeline,
+  PersistedComposeDraft,
+  PersistedFileDraft,
   PersistedPromptQueue,
   PersistedAgentHandoff,
 } from "@/types";
@@ -1324,6 +1328,28 @@ export async function refreshEnvironmentDiffStats(environmentId: string): Promis
   return invoke<void>("refresh_environment_diff_stats", { environmentId });
 }
 
+/**
+ * Authoritative snapshot of the backend PR monitor. Read on mount and on every
+ * event-stream reconnect; also arms monitoring on a freshly started backend.
+ */
+export async function getPrMonitorState(): Promise<PrMonitorSnapshot> {
+  return invoke<PrMonitorSnapshot>("get_pr_monitor_state");
+}
+
+/**
+ * Requests a monitoring mode for an environment (create-pending after the
+ * Create PR button, merge-pending after Merge). Durable in the backend, so the
+ * fast polling continues across renderer reloads and environment switches.
+ */
+export async function prMonitorWatch(environmentId: string, mode: PrMonitorMode): Promise<void> {
+  return invoke<void>("pr_monitor_watch", { environmentId, mode });
+}
+
+/** Requests an immediate PR check for an environment already being monitored. */
+export async function prMonitorRefresh(environmentId: string): Promise<void> {
+  return invoke<void>("pr_monitor_refresh", { environmentId });
+}
+
 /** Get file tree from a local environment (worktree path) */
 export async function getLocalFileTree(worktreePath: string): Promise<FileNode[]> {
   return invoke<FileNode[]>("get_local_file_tree", { worktreePath });
@@ -1402,6 +1428,7 @@ export async function updateEnvironmentAgentSettings(
   pendingAgentLaunch?: boolean,
   initialAgentModel?: string,
   initialReasoningEffort?: string,
+  initialPromptAttachments?: InitialPromptImageAttachment[],
 ): Promise<Environment> {
   return invoke<Environment>("update_environment_agent_settings", {
     environmentId,
@@ -1413,6 +1440,7 @@ export async function updateEnvironmentAgentSettings(
     ...(typeof pendingAgentLaunch === "boolean" ? { pendingAgentLaunch } : {}),
     ...(initialAgentModel ? { initialAgentModel } : {}),
     ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
+    ...(initialPromptAttachments ? { initialPromptAttachments } : {}),
   });
 }
 
@@ -1435,10 +1463,12 @@ export async function setEnvironmentPendingAgentLaunch(
 export async function setEnvironmentInitialPrompt(
   environmentId: string,
   initialPrompt: string,
+  initialPromptAttachments?: InitialPromptImageAttachment[],
 ): Promise<Environment> {
   return invoke<Environment>("set_environment_initial_prompt", {
     environmentId,
     initialPrompt,
+    ...(initialPromptAttachments ? { initialPromptAttachments } : {}),
   });
 }
 
@@ -1752,6 +1782,84 @@ export async function claimPromptQueueHead<T>(
     environmentId,
     expectedMessageId,
     candidateMessages,
+  });
+}
+
+// --- Unsent drafts ---
+
+export async function getComposeDraft<T = unknown>(
+  draftKey: string,
+): Promise<PersistedComposeDraft<T> | null> {
+  return invoke<PersistedComposeDraft<T> | null>("get_compose_draft", { draftKey });
+}
+
+export async function listComposeDrafts<T = unknown>(
+  ownerType: "environment" | "project",
+  ownerId: string,
+): Promise<Array<PersistedComposeDraft<T>>> {
+  return invoke<Array<PersistedComposeDraft<T>>>("list_compose_drafts", {
+    ownerType,
+    ownerId,
+  });
+}
+
+export async function saveComposeDraft<T>(
+  draftKey: string,
+  ownerType: "environment" | "project",
+  ownerId: string,
+  value: T,
+  expectedRevision?: number,
+): Promise<PersistedComposeDraft<T>> {
+  return invoke<PersistedComposeDraft<T>>("save_compose_draft", {
+    draftKey,
+    ownerType,
+    ownerId,
+    value,
+    ...(expectedRevision === undefined ? {} : { expectedRevision }),
+  });
+}
+
+export async function deleteComposeDraft(
+  draftKey: string,
+  expectedRevision?: number,
+): Promise<void> {
+  return invoke("delete_compose_draft", {
+    draftKey,
+    ...(expectedRevision === undefined ? {} : { expectedRevision }),
+  });
+}
+
+export async function getFileDraft(
+  draftKey: string,
+): Promise<PersistedFileDraft | null> {
+  return invoke<PersistedFileDraft | null>("get_file_draft", { draftKey });
+}
+
+export async function saveFileDraft(
+  draftKey: string,
+  environmentId: string,
+  filePath: string,
+  content: string,
+  originalContent: string,
+  expectedRevision?: number,
+): Promise<PersistedFileDraft> {
+  return invoke<PersistedFileDraft>("save_file_draft", {
+    draftKey,
+    environmentId,
+    filePath,
+    content,
+    originalContent,
+    ...(expectedRevision === undefined ? {} : { expectedRevision }),
+  });
+}
+
+export async function deleteFileDraft(
+  draftKey: string,
+  expectedRevision?: number,
+): Promise<void> {
+  return invoke("delete_file_draft", {
+    draftKey,
+    ...(expectedRevision === undefined ? {} : { expectedRevision }),
   });
 }
 
@@ -2092,6 +2200,16 @@ export async function updateFeaturePlan(
   >>,
 ): Promise<FeaturePlan> {
   return invoke<FeaturePlan>("update_feature_plan", { featureId, updates });
+}
+
+export async function claimFeaturePlanBuild(
+  featureId: string,
+  taskId: string,
+): Promise<{ claimed: boolean; feature: FeaturePlan }> {
+  return invoke<{ claimed: boolean; feature: FeaturePlan }>(
+    "claim_feature_plan_build",
+    { featureId, taskId },
+  );
 }
 
 export async function appendFeaturePlanMessage(

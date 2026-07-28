@@ -6,10 +6,16 @@ import {
 import { createSessionKey } from "@/lib/utils";
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { useClaudeStore } from "./claudeStore";
+import {
+  claudePlanApprovalDraftKey,
+  claudeQuestionDraftKey,
+  usePromptDraftStore,
+} from "./promptDraftStore";
 
 const SESSION_KEY = createSessionKey("env-1", "tab-1");
 
 function resetClaudeStore() {
+  usePromptDraftStore.getState().reset();
   useClaudeStore.setState({
     serverStatus: new Map(),
     clients: new Map(),
@@ -179,6 +185,21 @@ describe("claudeStore cleanup and queue helpers", () => {
       id: "approval-b",
       sessionId: "session-b",
     } as any);
+    usePromptDraftStore.getState().setDraftValue(
+      claudeQuestionDraftKey("question-a"),
+      "answer",
+      "target",
+    );
+    usePromptDraftStore.getState().setDraftValue(
+      claudePlanApprovalDraftKey("approval-a"),
+      "feedback",
+      "target",
+    );
+    usePromptDraftStore.getState().setDraftValue(
+      claudeQuestionDraftKey("question-b"),
+      "answer",
+      "other",
+    );
 
     store.clearEnvironment("env-1");
 
@@ -195,6 +216,21 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(store.getPendingQuestion("question-b")).toBeDefined();
     expect(store.getPendingPlanApproval("approval-a")).toBeUndefined();
     expect(store.getPendingPlanApproval("approval-b")).toBeDefined();
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        claudeQuestionDraftKey("question-a"),
+      ),
+    ).toBe(false);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        claudePlanApprovalDraftKey("approval-a"),
+      ),
+    ).toBe(false);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        claudeQuestionDraftKey("question-b"),
+      ),
+    ).toBe(true);
   });
 
   test("clearSession exhaustively removes every session-keyed map and only its pending requests", () => {
@@ -238,6 +274,21 @@ describe("claudeStore cleanup and queue helpers", () => {
         ["approval-other", { id: "approval-other", sessionId: "sdk-other" }],
       ]),
     });
+    usePromptDraftStore.getState().setDraftValue(
+      claudeQuestionDraftKey("question-target"),
+      "answer",
+      "target",
+    );
+    usePromptDraftStore.getState().setDraftValue(
+      claudePlanApprovalDraftKey("approval-target"),
+      "feedback",
+      "target",
+    );
+    usePromptDraftStore.getState().setDraftValue(
+      claudeQuestionDraftKey("question-other"),
+      "answer",
+      "other",
+    );
 
     useClaudeStore.getState().clearSession(targetKey);
 
@@ -263,6 +314,21 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(state.pendingQuestions.has("question-other")).toBe(true);
     expect(state.pendingPlanApprovals.has("approval-target")).toBe(false);
     expect(state.pendingPlanApprovals.has("approval-other")).toBe(true);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        claudeQuestionDraftKey("question-target"),
+      ),
+    ).toBe(false);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        claudePlanApprovalDraftKey("approval-target"),
+      ),
+    ).toBe(false);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        claudeQuestionDraftKey("question-other"),
+      ),
+    ).toBe(true);
   });
 
   test("clearSession leaves pending requests alone when the tab never got a session id", () => {

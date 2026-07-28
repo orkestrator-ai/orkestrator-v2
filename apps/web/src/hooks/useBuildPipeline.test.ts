@@ -80,6 +80,24 @@ const mockUpdateEnvironmentAgentSettings = mock<(
   codexMode: codexMode ?? undefined,
 }));
 const actualBackend = await import("../lib/backend");
+const mockSaveBuildPipeline = mock(
+  async (
+    pipelineId: string,
+    projectId: string,
+    environmentId: string,
+    version: number,
+    snapshot: unknown,
+    expectedRevision = 0,
+  ) => ({
+    id: pipelineId,
+    projectId,
+    environmentId,
+    version,
+    snapshot,
+    revision: expectedRevision + 1,
+    updatedAt: "2026-07-28T00:00:00.000Z",
+  }),
+);
 
 mock.module("@/lib/backend", () => ({
   ...actualBackend,
@@ -135,6 +153,7 @@ mock.module("@/lib/backend", () => ({
   })),
   getKanbanImageData: mock(async () => "data:image/png;base64,ZmFrZQ=="),
   updateEnvironmentAgentSettings: mockUpdateEnvironmentAgentSettings,
+  saveBuildPipeline: mockSaveBuildPipeline,
 }));
 
 const { useBuildPipeline } = await import("./useBuildPipeline");
@@ -194,6 +213,7 @@ describe("useBuildPipeline", () => {
     mockRenameEnvironmentFromPrompt.mockClear();
     mockGetEnvironment.mockClear();
     mockUpdateEnvironmentAgentSettings.mockClear();
+    mockSaveBuildPipeline.mockClear();
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
 
@@ -996,7 +1016,7 @@ describe("useBuildPipeline", () => {
     );
   });
 
-  test("startBuildFromLinearIssue removes the pending pipeline when environment creation fails", async () => {
+  test("startBuildFromLinearIssue preserves a failed durable pipeline when environment creation fails", async () => {
     mockCreateEnvironment.mockImplementationOnce(async () => {
       throw new Error("environment create failed");
     });
@@ -1006,7 +1026,9 @@ describe("useBuildPipeline", () => {
       await result.current.startBuildFromLinearIssue(linearIssue, "project-1", "local");
     });
 
-    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    const [pipeline] = useBuildPipelineStore.getState().pipelines.values();
+    expect(pipeline?.phase).toBe("failed");
+    expect(pipeline?.error).toBe("environment create failed");
     expect(mockToastError).toHaveBeenCalledWith("Failed to start build pipeline", {
       description: "environment create failed",
     });
@@ -1100,7 +1122,7 @@ describe("useBuildPipeline", () => {
     });
   });
 
-  test("startBuildFromGitHubIssue removes the pending pipeline when environment creation fails", async () => {
+  test("startBuildFromGitHubIssue preserves a failed durable pipeline when environment creation fails", async () => {
     mockCreateEnvironment.mockImplementationOnce(async () => {
       throw new Error("github environment create failed");
     });
@@ -1110,10 +1132,75 @@ describe("useBuildPipeline", () => {
       await result.current.startBuildFromGitHubIssue(githubIssue, "project-1", "local");
     });
 
-    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    const [pipeline] = useBuildPipelineStore.getState().pipelines.values();
+    expect(pipeline?.phase).toBe("failed");
+    expect(pipeline?.error).toBe("github environment create failed");
     expect(mockToastError).toHaveBeenCalledWith("Failed to start build pipeline", {
       description: "github environment create failed",
     });
+  });
+
+  test("preserves a failed pipeline when the early source reservation cannot be persisted", async () => {
+    mockSaveBuildPipeline.mockRejectedValueOnce(new Error("reservation unavailable"));
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromGitHubIssue(githubIssue, "project-1", "local");
+    });
+
+    const [pipeline] = useBuildPipelineStore.getState().pipelines.values();
+    expect(pipeline?.phase).toBe("failed");
+    expect(pipeline?.error).toBe("reservation unavailable");
+    expect(mockCreateEnvironment).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith("Failed to start build pipeline", {
+      description: "reservation unavailable",
+    });
+  });
+
+  test("invokes the generic pipeline-linked callback for GitHub builds", async () => {
+    const onPipelineLinked = mock(async () => {});
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromGitHubIssue(
+        githubIssue,
+        "project-1",
+        "containerized",
+        undefined,
+        { onPipelineLinked },
+      );
+    });
+
+    const [pipeline] = useBuildPipelineStore.getState().pipelines.values();
+    expect(onPipelineLinked).toHaveBeenCalledWith({
+      pipelineId: pipeline?.id,
+      environmentId: "env-build",
+    });
+    expect(pipeline?.phase).not.toBe("failed");
+  });
+
+  test("preserves the linked pipeline as failed when the callback rejects", async () => {
+    const onPipelineLinked = mock(async () => {
+      throw new Error("link callback failed");
+    });
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromGitHubIssue(
+        githubIssue,
+        "project-1",
+        "containerized",
+        undefined,
+        { onPipelineLinked },
+      );
+    });
+
+    const [pipeline] = useBuildPipelineStore.getState().pipelines.values();
+    expect(onPipelineLinked).toHaveBeenCalledTimes(1);
+    expect(pipeline?.environmentId).toBe("env-build");
+    expect(pipeline?.phase).toBe("failed");
+    expect(pipeline?.error).toBe("link callback failed");
+    expect(mockStartEnvironment).not.toHaveBeenCalled();
   });
 
   test("startBuild continues when prompt rename fails", async () => {

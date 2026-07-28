@@ -423,7 +423,15 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
     get().workspaceReadyEnvironments.has(environmentId),
 
   isDeleting: (environmentId) =>
-    get().deletingEnvironments.has(environmentId),
+    get().deletingEnvironments.has(environmentId)
+    || get().environments.some(
+      (environment) =>
+        environment.id === environmentId
+        && (
+          environment.lifecycleOperation === "deleting"
+          || Boolean(environment.deletionRequestedAt)
+        ),
+    ),
 
   isSetupCommandsResolved: (environmentId) =>
     get().setupCommandsResolved.has(environmentId),

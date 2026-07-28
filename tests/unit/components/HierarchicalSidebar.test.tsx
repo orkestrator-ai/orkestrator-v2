@@ -1066,6 +1066,7 @@ describe("HierarchicalSidebar", () => {
         true,
         "default",
         undefined,
+        [],
       );
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "");

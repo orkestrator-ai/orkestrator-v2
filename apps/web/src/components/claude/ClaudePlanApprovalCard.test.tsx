@@ -8,6 +8,10 @@ import type {
 } from "@/lib/claude-client";
 import * as realClaudeClient from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
+import {
+  claudePlanApprovalDraftKey,
+  usePromptDraftStore,
+} from "@/stores/promptDraftStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 const realClaudeClientSnapshot = { ...realClaudeClient };
@@ -79,6 +83,9 @@ beforeEach(() => {
   respondToPlanApprovalMock.mockImplementation(async () => "applied");
   mockToastError.mockClear();
   useClaudeStore.setState({ pendingPlanApprovals: new Map() });
+  // Every test reuses approval-1, and the feedback draft persists across
+  // unmount by design; unresolved approvals would leak it into the next test.
+  usePromptDraftStore.getState().reset();
 });
 
 afterEach(cleanup);
@@ -377,6 +384,46 @@ describe("ClaudePlanApprovalCard", () => {
       expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(false),
     );
     expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test("rejection feedback survives the card unmounting and remounting", () => {
+    /**
+     * The approval rehydrates from the store when the user switches back to
+     * this environment, so half-typed feedback must rehydrate with it instead
+     * of silently vanishing.
+     */
+    const { unmount } = renderCard();
+    fireEvent.click(screen.getByRole("button", { name: "Request Changes" }));
+    fireEvent.change(screen.getByPlaceholderText(/describe what you'd like/i), {
+      target: { value: "Add rollback steps" },
+    });
+
+    unmount();
+    renderCard();
+
+    // The feedback form is still open with the draft intact.
+    expect(
+      (screen.getByPlaceholderText(/describe what you'd like/i) as HTMLTextAreaElement).value,
+    ).toBe("Add rollback steps");
+    expect(screen.getByRole("button", { name: "Submit Feedback" })).toBeTruthy();
+  });
+
+  test("resolving the approval clears the feedback draft", async () => {
+    renderCard();
+    fireEvent.click(screen.getByRole("button", { name: "Request Changes" }));
+    fireEvent.change(screen.getByPlaceholderText(/describe what you'd like/i), {
+      target: { value: "stale feedback" },
+    });
+    const draftKey = claudePlanApprovalDraftKey("approval-1");
+    expect(usePromptDraftStore.getState().drafts.has(draftKey)).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit Feedback" }));
+    await waitFor(() =>
+      expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(false),
+    );
+
+    // A future approval that reuses the id must not inherit this draft.
+    expect(usePromptDraftStore.getState().drafts.has(draftKey)).toBe(false);
   });
 
   test("locks every decision while a response is in flight", async () => {

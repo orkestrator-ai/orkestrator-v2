@@ -506,6 +506,7 @@ export interface ClaudeSession {
   error?: string;
   contextUsage?: ContextUsageSnapshot;
   promptSuggestion?: string;
+  planMode?: boolean;
   backgroundTasks?: Record<string, ClaudeBackgroundTask>;
   /**
    * Optional fields omitted because their wire values failed validation.
@@ -836,6 +837,9 @@ export async function lookupSession(
     ) {
       invalidMetadataFields.push("promptSuggestion");
     }
+    if (session.planMode !== undefined && typeof session.planMode !== "boolean") {
+      invalidMetadataFields.push("planMode");
+    }
     if (session.backgroundTasks !== undefined && backgroundTasks === undefined) {
       invalidMetadataFields.push("backgroundTasks");
     } else {
@@ -858,6 +862,10 @@ export async function lookupSession(
           typeof session.promptSuggestion === "string"
             ? session.promptSuggestion
             : undefined,
+        planMode:
+          typeof session.planMode === "boolean"
+            ? session.planMode
+            : undefined,
         backgroundTasks,
         ...(invalidMetadataFields.length > 0 ? { invalidMetadataFields } : {}),
       },
@@ -869,6 +877,39 @@ export async function lookupSession(
         ? error
         : new Error("Failed to get Claude session"),
     };
+  }
+}
+
+export async function updateSessionPreferences(
+  client: ClaudeClient,
+  sessionId: string,
+  preferences: { planMode?: boolean },
+): Promise<void> {
+  const response = await fetchClaude(
+    client,
+    `/session/${sessionId}/preferences`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(preferences),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to update Claude session preferences: HTTP ${response.status}`);
+  }
+}
+
+export async function dismissPromptSuggestion(
+  client: ClaudeClient,
+  sessionId: string,
+): Promise<void> {
+  const response = await fetchClaude(
+    client,
+    `/session/${sessionId}/prompt-suggestion`,
+    { method: "DELETE" },
+  );
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`Failed to dismiss Claude prompt suggestion: HTTP ${response.status}`);
   }
 }
 

@@ -2451,6 +2451,7 @@ describe("OpenCodeChatTab", () => {
           model: "openai/gpt-5.6-sol",
           variant: "xhigh",
           mode: "build",
+          requestId: "initial-prompt:env-1:tab-1",
         }),
       );
     });

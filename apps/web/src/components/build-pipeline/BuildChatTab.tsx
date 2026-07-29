@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -6,20 +6,25 @@ import {
   Loader2,
   Pause,
   Play,
+  RefreshCw,
+  Send,
   Square,
 } from "lucide-react";
 import { toast } from "sonner";
+import { MAX_PIPELINE_USER_MESSAGE_LENGTH } from "@orkestrator/protocol/build-pipeline";
 import type { BuildTabData } from "@/types/paneLayout";
 import {
   useBuildPipelineStore,
   type PipelineSession,
 } from "@/stores/buildPipelineStore";
 import * as backend from "@/lib/backend";
+import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
-import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
+import { BuildCompletionStatus } from "./BuildCompletionStatus";
 
 interface BuildChatTabProps {
   data: BuildTabData;
@@ -107,24 +112,49 @@ export function BuildChatTab({ data }: BuildChatTabProps) {
   );
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [controlPending, setControlPending] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [sendPending, setSendPending] = useState(false);
+  // Distinguishes "the user picked this stage" from "we auto-followed the
+  // pipeline". Without it the first automatic pick — the build stage — pins the
+  // transcript there for the rest of the run, because it stays a valid session.
+  const pinnedSessionRef = useRef(false);
+  const hydrationAttemptedFor = useRef<string | null>(null);
+
+  const selectSession = useCallback((sessionId: string) => {
+    pinnedSessionRef.current = true;
+    setSelectedSessionId(sessionId);
+  }, []);
+
+  // The store is a cache of a backend-owned record, and the only other loader
+  // is App's one-shot per-project hydration. If that failed or has not run for
+  // this project, the tab would otherwise sit on "Loading build pipeline…"
+  // forever, so fetch the authoritative snapshot on mount.
+  useEffect(() => {
+    if (pipeline || hydrationAttemptedFor.current === data.pipelineId) return;
+    hydrationAttemptedFor.current = data.pipelineId;
+    void hydrateBuildPipeline(data.pipelineId).catch((error) => {
+      console.warn("[BuildChatTab] Failed to hydrate build pipeline:", error);
+    });
+  }, [data.pipelineId, pipeline]);
 
   useEffect(() => {
     if (!pipeline?.sessions.length) {
       setSelectedSessionId(null);
+      pinnedSessionRef.current = false;
       return;
     }
-    if (
-      !selectedSessionId
-      || !pipeline.sessions.some(
+    const selectionExists = selectedSessionId !== null
+      && pipeline.sessions.some(
         (session) => session.sdkSessionId === selectedSessionId,
-      )
-    ) {
-      setSelectedSessionId(
-        pipeline.sessions[pipeline.currentSessionIndex]?.sdkSessionId
-        ?? pipeline.sessions.at(-1)?.sdkSessionId
-        ?? null,
       );
-    }
+    // A pinned selection that vanished from the snapshot is no longer a choice
+    // the user can hold on to, so release the pin and follow the pipeline again.
+    if (!selectionExists) pinnedSessionRef.current = false;
+    if (selectionExists && pinnedSessionRef.current) return;
+    const following = pipeline.sessions[pipeline.currentSessionIndex]?.sdkSessionId
+      ?? pipeline.sessions.at(-1)?.sdkSessionId
+      ?? null;
+    if (following !== selectedSessionId) setSelectedSessionId(following);
   }, [pipeline?.currentSessionIndex, pipeline?.sessions, selectedSessionId]);
 
   const selectedSession = pipeline?.sessions.find(
@@ -156,6 +186,42 @@ export function BuildChatTab({ data }: BuildChatTabProps) {
     }
   };
 
+  const retryReview = async (): Promise<void> => {
+    if (!pipeline || controlPending) return;
+    setControlPending(true);
+    try {
+      replacePipeline(await backend.retryBuildPipelineReview(pipeline.id));
+      // The retry starts a new review session; follow it rather than leaving
+      // the user on whichever stage they were reading.
+      pinnedSessionRef.current = false;
+      toast.success("Review restarted");
+    } catch (error) {
+      toast.error("Failed to restart the review", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setControlPending(false);
+    }
+  };
+
+  const sendMessage = async (): Promise<void> => {
+    const text = draft.trim();
+    if (!pipeline || !text || sendPending) return;
+    setSendPending(true);
+    try {
+      replacePipeline(await backend.sendBuildPipelineMessage(pipeline.id, text));
+      // Cleared only after the backend has durably queued it, so a failed send
+      // leaves the user's text in the box to retry rather than losing it.
+      setDraft("");
+    } catch (error) {
+      toast.error("Failed to send the message", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setSendPending(false);
+    }
+  };
+
   if (!pipeline) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -166,6 +232,12 @@ export function BuildChatTab({ data }: BuildChatTabProps) {
 
   const phaseLabel = PHASE_LABELS[pipeline.phase] ?? pipeline.phase;
   const active = !["paused", "complete", "failed"].includes(pipeline.phase);
+  const canRetryReview = pipeline.phase !== "complete"
+    && pipeline.sessions.length > 0
+    && Boolean(pipeline.environmentId);
+  const canSendMessage = pipeline.phase !== "complete"
+    && pipeline.phase !== "failed";
+  const queuedMessages = pipeline.pendingUserMessages?.length ?? 0;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -188,6 +260,17 @@ export function BuildChatTab({ data }: BuildChatTabProps) {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          {canRetryReview && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={controlPending}
+              onClick={() => void retryReview()}
+            >
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              Retry Review
+            </Button>
+          )}
           {active && (
             <Button
               size="sm"
@@ -229,7 +312,7 @@ export function BuildChatTab({ data }: BuildChatTabProps) {
           {pipeline.error}
         </div>
       )}
-      <GitHubCompletionCommentStatus pipeline={pipeline} />
+      <BuildCompletionStatus pipeline={pipeline} />
 
       <div className="flex min-h-0 flex-1">
         <ScrollArea className="w-56 shrink-0 border-r">
@@ -246,7 +329,7 @@ export function BuildChatTab({ data }: BuildChatTabProps) {
                   "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-muted",
                   selectedSessionId === session.sdkSessionId && "bg-muted",
                 )}
-                onClick={() => setSelectedSessionId(session.sdkSessionId)}
+                onClick={() => selectSession(session.sdkSessionId)}
               >
                 <SessionStateIcon session={session} />
                 <span className="min-w-0">
@@ -296,6 +379,46 @@ export function BuildChatTab({ data }: BuildChatTabProps) {
           </div>
         </ScrollArea>
       </div>
+
+      {canSendMessage && (
+        <div className="shrink-0 border-t p-3">
+          {queuedMessages > 0 && (
+            <div className="mb-1.5 text-[11px] text-muted-foreground">
+              {queuedMessages === 1
+                ? "1 message queued — it will be delivered when the agent is next idle."
+                : `${queuedMessages} messages queued — they will be delivered one at a time as the agent goes idle.`}
+            </div>
+          )}
+          <div className="flex items-end gap-2">
+            <Textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              maxLength={MAX_PIPELINE_USER_MESSAGE_LENGTH}
+              rows={2}
+              className="min-h-0 resize-none"
+              placeholder="Send a message to the agent..."
+              aria-label="Send a message to the agent"
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || event.shiftKey) return;
+                event.preventDefault();
+                void sendMessage();
+              }}
+            />
+            <Button
+              type="button"
+              size="sm"
+              title="Send message"
+              aria-label="Send message"
+              disabled={sendPending || draft.trim().length === 0}
+              onClick={() => void sendMessage()}
+            >
+              {sendPending
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <Send className="h-3.5 w-3.5" />}
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -19,11 +19,21 @@ type RequestRecord = {
   init: RequestInit;
 };
 
+const codexConnection: BridgeConnection = {
+  agent: "codex",
+  baseUrl: "http://codex.test",
+  authToken: "codex-token",
+  model: "gpt-5-codex",
+  effort: "high",
+  requestTimeoutMs: 25,
+};
+
 function httpProvider(
   handler: (url: string, init: RequestInit) => Promise<Response> | Response,
+  connection: BridgeConnection = claudeConnection,
 ) {
   const requests: RequestRecord[] = [];
-  const provider = createBuildPipelineProvider(claudeConnection, {
+  const provider = createBuildPipelineProvider(connection, {
     fetch: (async (input, init = {}) => {
       const url = String(input);
       requests.push({ url, init });
@@ -220,6 +230,10 @@ function eventHarness(signal: AbortSignal): EventHarness {
       waiter({ done: true, value: undefined });
     }
   };
+  // A signal that was already aborted before subscribe() ran never fires the
+  // event, so listening alone would leave the stream open forever and hang the
+  // dispose() that did the aborting. A real SSE client rejects outright here.
+  if (signal.aborted) closed = true;
   signal.addEventListener("abort", close, { once: true });
   return {
     stream: {
@@ -247,6 +261,8 @@ function eventHarness(signal: AbortSignal): EventHarness {
 }
 
 type OpenCodeFake = {
+  promptCalls: Array<Record<string, unknown>>;
+  setPromptError(error: unknown): void;
   client: OpencodeClient;
   permissionReplies: Array<Record<string, unknown>>;
   questionRejections: Array<Record<string, unknown>>;
@@ -263,6 +279,8 @@ type OpenCodeFake = {
 
 function openCodeFake(): OpenCodeFake {
   const permissionReplies: Array<Record<string, unknown>> = [];
+  const promptCalls: Array<Record<string, unknown>> = [];
+  let promptError: unknown = null;
   const questionRejections: Array<Record<string, unknown>> = [];
   const subscriptions: EventHarness[] = [];
   let pendingPermissions: Array<Record<string, unknown>> = [];
@@ -307,7 +325,9 @@ function openCodeFake(): OpenCodeFake {
       async create() {
         return { data: { id: "owned-session" } };
       },
-      async promptAsync() {
+      async promptAsync(parameters: Record<string, unknown>) {
+        promptCalls.push(parameters);
+        if (promptError) throw promptError;
         return promptResponse;
       },
       async status() {
@@ -325,8 +345,12 @@ function openCodeFake(): OpenCodeFake {
   return {
     client,
     permissionReplies,
+    promptCalls,
     questionRejections,
     subscriptions,
+    setPromptError(error: unknown) {
+      promptError = error;
+    },
     setPending(permissions, questions) {
       pendingPermissions = permissions;
       pendingQuestions = questions;
@@ -538,6 +562,238 @@ describe("OpenCode build pipeline provider", () => {
         });
     } finally {
       await provider.dispose?.();
+    }
+  });
+});
+
+describe("HTTP build pipeline provider (codex)", () => {
+  test("authenticates with the codex header and its own session payload", async () => {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ sessionId: "codex-1" }),
+      codexConnection,
+    );
+
+    await provider.createSession("review", "Review Session");
+
+    const [request] = requests;
+    expect(request!.url).toBe("http://codex.test/session/create");
+    const headers = new Headers(request!.init.headers);
+    expect(headers.get("X-Orkestrator-Codex-Token")).toBe("codex-token");
+    expect(headers.get("X-Orkestrator-Claude-Token")).toBeNull();
+    expect(JSON.parse(String(request!.init.body))).toEqual({
+      title: "Review Session",
+      model: "gpt-5-codex",
+      modelReasoningEffort: "high",
+      // Review and verify are read-only turns, so they run in plan mode.
+      mode: "plan",
+    });
+  });
+
+  test.each([
+    ["build", "build"],
+    ["review", "plan"],
+    ["verify", "plan"],
+    ["fix", "build"],
+    ["pr", "build"],
+    ["resolve-conflicts", "build"],
+  ] as const)("runs the %s stage in %s mode", async (phase, mode) => {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ sessionId: "codex-1" }),
+      codexConnection,
+    );
+
+    await provider.createSession(phase, "Session");
+
+    expect(JSON.parse(String(requests[0]!.init.body)).mode).toBe(mode);
+  });
+
+  test("reads status from the codex-specific endpoint", async () => {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ status: "running" }),
+      codexConnection,
+    );
+
+    expect(await provider.status("codex-1")).toBe("running");
+    // Claude answers status from /session/:id; codex has a dedicated route, and
+    // asking the wrong one returns a body with no status at all.
+    expect(requests[0]!.url).toBe("http://codex.test/session/codex-1/status");
+  });
+
+  test("sends codex attachments as data URLs without claude-only options", async () => {
+    const { provider, requests } = httpProvider(
+      () => new Response(null, { status: 204 }),
+      codexConnection,
+    );
+
+    await provider.send("codex-1", "Build it", {
+      requestId: "request-1",
+      images: [{ filename: "shot.jpeg", data: "AAAA" }],
+    });
+
+    const body = JSON.parse(String(requests[0]!.init.body));
+    expect(body.attachments).toEqual([{
+      type: "image",
+      filename: "shot.jpeg",
+      dataUrl: "data:image/jpeg;base64,AAAA",
+    }]);
+    // permissionMode/model/effort are claude prompt options; codex takes its
+    // model at session creation and would reject them here.
+    expect(body.permissionMode).toBeUndefined();
+    expect(body.model).toBeUndefined();
+    expect(body.effort).toBeUndefined();
+  });
+
+  test.each([
+    ["shot.png", "image/png"],
+    ["shot.jpg", "image/jpeg"],
+    ["shot.jpeg", "image/jpeg"],
+    ["shot.gif", "image/gif"],
+    ["shot.webp", "image/webp"],
+    ["no-extension", "image/png"],
+  ])("maps %s to %s", async (filename, mime) => {
+    const { provider, requests } = httpProvider(
+      () => new Response(null, { status: 204 }),
+      codexConnection,
+    );
+
+    await provider.send("codex-1", "Build it", {
+      requestId: "request-1",
+      images: [{ filename, data: "AAAA" }],
+    });
+
+    expect(JSON.parse(String(requests[0]!.init.body)).attachments[0].dataUrl)
+      .toBe(`data:${mime};base64,AAAA`);
+  });
+
+  test("escapes session ids in every codex route", async () => {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ messages: [] }),
+      codexConnection,
+    );
+
+    await provider.messages("codex/../admin");
+
+    expect(requests[0]!.url).toBe(
+      "http://codex.test/session/codex%2F..%2Fadmin/messages",
+    );
+  });
+});
+
+describe("OpenCode build pipeline provider dispatch", () => {
+  test("treats a thrown promptAsync as retryable rather than a rejection", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      fake.setPromptError(new Error("socket hang up"));
+
+      // The distinction matters: PromptRejectedError fails the build, while
+      // ProviderUnavailableError keeps the durable attempt and retries the same
+      // request id. A dropped connection may already have delivered the turn.
+      await expect(provider.send("owned-session", "prompt", {
+        requestId: "request-1",
+      })).rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(provider.send("owned-session", "prompt", {
+        requestId: "request-1",
+      })).rejects.not.toBeInstanceOf(PromptRejectedError);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("carries the request id as the durable message id", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await provider.send("owned-session", "Build it", {
+        requestId: "request-42",
+      });
+
+      const [call] = fake.promptCalls;
+      // OpenCode deduplicates on messageID, which is what makes the supervisor's
+      // same-request-id retry safe instead of a second agent turn.
+      expect(call!.messageID).toBe("request-42");
+      expect(call!.sessionID).toBe("owned-session");
+      expect(call!.agent).toBe("build");
+      expect(call!.directory).toBe("/workspace");
+      expect(call!.parts).toEqual([{ type: "text", text: "Build it" }]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("sends images as data-url file parts alongside the prompt", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await provider.send("owned-session", "Build it", {
+        requestId: "request-1",
+        images: [{ filename: "diagram.webp", data: "BBBB" }],
+      });
+
+      expect(fake.promptCalls[0]!.parts).toEqual([
+        { type: "text", text: "Build it" },
+        {
+          type: "file",
+          mime: "image/webp",
+          filename: "diagram.webp",
+          url: "data:image/webp;base64,BBBB",
+        },
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("passes a structured schema through as a json_schema format", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      const schema = { type: "object", properties: {} } as const;
+      await provider.send("owned-session", "Review it", {
+        requestId: "request-1",
+        schema,
+      });
+
+      expect(fake.promptCalls[0]!.format).toEqual({
+        type: "json_schema",
+        schema,
+        retryCount: 2,
+      });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("splits a provider-qualified model and omits an unqualified one", async () => {
+    const fake = openCodeFake();
+    const qualified = createBuildPipelineProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+        model: "anthropic/claude/sonnet",
+      },
+      { openCodeClient: fake.client, monitorRetryMs: 1 },
+    );
+    try {
+      await qualified.send("owned-session", "prompt", { requestId: "r1" });
+      // Only the first segment is the provider; the rest is the model id, which
+      // itself contains slashes.
+      expect(fake.promptCalls[0]!.model).toEqual({
+        providerID: "anthropic",
+        modelID: "claude/sonnet",
+      });
+    } finally {
+      await qualified.dispose?.();
+    }
+
+    const bare = openCodeProvider(fake);
+    try {
+      await bare.send("owned-session", "prompt", { requestId: "r2" });
+      expect(fake.promptCalls[1]!.model).toBeUndefined();
+    } finally {
+      await bare.dispose?.();
     }
   });
 });

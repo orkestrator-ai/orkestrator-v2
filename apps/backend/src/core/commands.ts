@@ -7425,6 +7425,19 @@ export function createCommandRegistry(
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.cancel(asNonBlankString(pipelineId, "pipelineId"));
   });
+  register("send_build_pipeline_message", ({ pipelineId, text }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.sendMessage(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asString(text, "text"),
+    );
+  });
+  register("retry_build_pipeline_review", ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.retryReview(
+      asNonBlankString(pipelineId, "pipelineId"),
+    );
+  });
   register("retry_build_pipeline_completion_comment", ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.retryCompletionComment(

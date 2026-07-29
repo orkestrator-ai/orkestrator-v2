@@ -13,6 +13,8 @@ import {
   isBuildPipeline,
   isActiveBuildPhase,
   isStartBuildPipelineInput,
+  MAX_PIPELINE_USER_MESSAGES,
+  MAX_PIPELINE_USER_MESSAGE_LENGTH,
 } from "@orkestrator/protocol/build-pipeline";
 import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
@@ -145,6 +147,63 @@ type PullRequestDetection = {
   hasMergeConflicts: boolean;
 };
 
+/**
+ * How long a pipeline may stay in reconnect before it is failed.
+ *
+ * Without a bound, a bridge that starts but never answers keeps the pipeline in
+ * "Reconnecting…" for the life of the process: every tick evicts the provider,
+ * rebuilds it, fails again, and nothing ever escalates to the user.
+ */
+const DEFAULT_RECONNECT_DEADLINE_MS = 5 * 60_000;
+
+/**
+ * How long a finished turn may withhold its structured result before the
+ * pipeline fails.
+ *
+ * `provider.structured()` returning null means "not available yet", which is
+ * normal for a tick or two. It is also what a bridge returns after it has
+ * forgotten an in-memory result (a restart mid-turn), and there the session is
+ * idle forever — so polling it without a deadline is a silent livelock.
+ */
+const DEFAULT_STRUCTURED_RESULT_DEADLINE_MS = 2 * 60_000;
+
+/**
+ * Minimum spacing between transcript-only snapshot writes for a running turn.
+ *
+ * Persisting the pipeline rewrites the whole build-pipelines file, so following
+ * a streaming transcript at the tick rate turns every active build into a
+ * continuous full-file rewrite. Status changes and phase transitions still
+ * persist immediately; only a pure transcript delta is throttled.
+ */
+const DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS = 5_000;
+
+/**
+ * Change detector for a transcript snapshot.
+ *
+ * Serializing both sides in full on every tick costs O(transcript) twice per
+ * pass, per pipeline, and transcripts reach megabytes. Provider transcripts
+ * grow by appending and by rewriting the entry currently streaming, so the
+ * length plus the tail entry captures every change they actually make.
+ */
+function transcriptFingerprint(messages: unknown[]): string {
+  if (messages.length === 0) return "0:";
+  let tail: string;
+  try {
+    tail = JSON.stringify(messages[messages.length - 1]) ?? "";
+  } catch {
+    // A transcript that cannot be serialized cannot be persisted either; treat
+    // every observation as a change so the save path reports the real error.
+    tail = String(Date.now());
+  }
+  return `${messages.length}:${tail}`;
+}
+
+function elapsedSince(timestamp: string | undefined): number | null {
+  if (!timestamp) return null;
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? Date.now() - parsed : null;
+}
+
 export class BuildPipelineService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly locks = new Map<string, Promise<void>>();
@@ -160,8 +219,25 @@ export class BuildPipelineService {
     private readonly options: {
       autoAdvance?: boolean;
       provider?: (pipeline: BuildPipeline) => Promise<BuildPipelineProvider>;
+      reconnectDeadlineMs?: number;
+      structuredResultDeadlineMs?: number;
+      transcriptPersistIntervalMs?: number;
     } = {},
   ) {}
+
+  private get reconnectDeadlineMs(): number {
+    return this.options.reconnectDeadlineMs ?? DEFAULT_RECONNECT_DEADLINE_MS;
+  }
+
+  private get structuredResultDeadlineMs(): number {
+    return this.options.structuredResultDeadlineMs
+      ?? DEFAULT_STRUCTURED_RESULT_DEADLINE_MS;
+  }
+
+  private get transcriptPersistIntervalMs(): number {
+    return this.options.transcriptPersistIntervalMs
+      ?? DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS;
+  }
 
   async init(): Promise<void> {
     this.stopped = false;
@@ -180,7 +256,20 @@ export class BuildPipelineService {
         || (record.snapshot as { backendRevision?: unknown }).backendRevision
           !== record.revision
       ) {
-        await this.save(pipeline, record.revision);
+        // One unsaveable record must not take the whole backend down with it.
+        // The realistic case is a pipeline whose environment carries a deletion
+        // tombstone because the app died part-way through deleting it: the save
+        // is rejected on purpose, and re-arming the rest of the pipelines still
+        // matters far more than adopting this one.
+        try {
+          await this.save(pipeline, record.revision);
+        } catch (error) {
+          console.warn(
+            `[build-pipeline] Skipped restoring pipeline ${pipeline.id}:`,
+            errorMessage(error),
+          );
+          continue;
+        }
       }
       if (this.needsTerminalReconciliation(pipeline)) {
         terminalReconciliations.push(this.runLocked(pipeline.id));
@@ -418,6 +507,86 @@ export class BuildPipelineService {
     return pipeline;
   }
 
+  /**
+   * Queues a user message for the pipeline's current agent session.
+   *
+   * The message is durable rather than sent straight through: the agent is
+   * usually mid-turn, the tab that composed it may be unmounted before the turn
+   * ends, and a pause can sit between composing and dispatch. The supervisor
+   * delivers it on the next idle tick, one at a time, through the same
+   * at-most-once attempt record every other prompt uses.
+   */
+  async sendMessage(pipelineId: string, text: string): Promise<BuildPipeline> {
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error("Message must not be blank");
+    if (trimmed.length > MAX_PIPELINE_USER_MESSAGE_LENGTH) {
+      throw new Error(
+        `Message exceeds the ${MAX_PIPELINE_USER_MESSAGE_LENGTH} character limit`,
+      );
+    }
+    let rejection: Error | undefined;
+    const pipeline = await this.mutate(pipelineId, (candidate) => {
+      if (candidate.phase === "complete" || candidate.phase === "failed") {
+        rejection = new Error("This build has finished");
+        return;
+      }
+      const queue = candidate.pendingUserMessages ?? [];
+      if (queue.length >= MAX_PIPELINE_USER_MESSAGES) {
+        rejection = new Error(
+          `Only ${MAX_PIPELINE_USER_MESSAGES} queued messages are allowed`,
+        );
+        return;
+      }
+      candidate.pendingUserMessages = [...queue, {
+        id: randomUUID(),
+        text: trimmed,
+        createdAt: new Date().toISOString(),
+      }];
+    });
+    if (rejection) throw rejection;
+    void this.runLocked(pipelineId);
+    return pipeline;
+  }
+
+  /**
+   * Re-runs the review stage against the current working tree.
+   *
+   * Recorded as a request rather than performed here so the new session is
+   * created inside the same per-pipeline lock every other transition uses; a
+   * direct startStage would race a tick that is already advancing this pipeline.
+   */
+  async retryReview(pipelineId: string): Promise<BuildPipeline> {
+    let rejection: Error | undefined;
+    await this.mutate(pipelineId, (candidate) => {
+      if (candidate.phase === "complete") {
+        rejection = new Error("This build has already completed");
+        return;
+      }
+      if (!candidate.environmentId || candidate.sessions.length === 0) {
+        rejection = new Error("This build has not reached its review stage yet");
+        return;
+      }
+      candidate.reviewRetryRequested = true;
+      if (candidate.phase === "failed" || candidate.phase === "paused") {
+        // A retry is an explicit instruction to keep going, so revive the
+        // pipeline; the requested review starts on the next supervisor pass.
+        candidate.phase = candidate.pausedFromPhase ?? "reviewing";
+        delete candidate.pausedFromPhase;
+        delete candidate.error;
+        delete candidate.failureContext;
+        // The terminal comment for the abandoned outcome has already been
+        // posted. Clearing the bookkeeping lets the eventual new outcome
+        // reconcile again; the post commands dedupe by pipeline id, so this
+        // cannot produce a second comment on the issue.
+        delete candidate.completionCommentStatus;
+        delete candidate.completionCommentError;
+      }
+    });
+    if (rejection) throw rejection;
+    await this.runLocked(pipelineId);
+    return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
+  }
+
   async cancel(pipelineId: string): Promise<BuildPipeline> {
     let abortError: unknown;
     const pipeline = await this.mutate(pipelineId, async (pipeline) => {
@@ -436,6 +605,8 @@ export class BuildPipelineService {
         : "Build cancelled";
       delete pipeline.pendingPromptAttempt;
       delete pipeline.activePromptContext;
+      delete pipeline.pendingUserMessages;
+      delete pipeline.reviewRetryRequested;
     });
     await this.reconcileTerminalState(pipeline);
     if (abortError) throw abortError;
@@ -452,12 +623,22 @@ export class BuildPipelineService {
       await this.cancel(pipelineId);
     }
     await this.storage.deleteBuildPipeline(pipelineId);
-    if (record && isBuildPipeline(record.snapshot)) {
-      const providerKey = `${record.snapshot.environmentId}:${record.snapshot.agentType}`;
-      const provider = this.providers.get(providerKey);
-      this.providers.delete(providerKey);
-      await provider?.dispose?.();
-    }
+    if (!record || !isBuildPipeline(record.snapshot)) return;
+    const providerKey = `${record.snapshot.environmentId}:${record.snapshot.agentType}`;
+    // Providers are keyed by environment and agent, so a sibling pipeline in
+    // the same environment shares this one. Disposing it there would tear down
+    // the OpenCode request monitor out from under a build that is still running.
+    const stillInUse = (await this.storage.listAllBuildPipelines()).some(
+      (candidate) =>
+        candidate.id !== pipelineId
+        && isBuildPipeline(candidate.snapshot)
+        && `${candidate.snapshot.environmentId}:${candidate.snapshot.agentType}`
+          === providerKey,
+    );
+    if (stillInUse) return;
+    const provider = this.providers.get(providerKey);
+    this.providers.delete(providerKey);
+    await provider?.dispose?.();
   }
 
   async retryCompletionComment(pipelineId: string): Promise<BuildPipeline> {
@@ -629,17 +810,44 @@ export class BuildPipelineService {
     }
     if (status === "running") {
       const transcriptChanged = await this.refreshTranscript(session, provider);
-      if (session.status !== "running" || transcriptChanged) {
-        session.status = "running";
+      const statusChanged = session.status !== "running";
+      session.status = "running";
+      // A status change is a state transition and always persists. A pure
+      // transcript delta is throttled: it arrives on every tick of a streaming
+      // turn, and each save rewrites the entire build-pipelines file.
+      if (statusChanged || (transcriptChanged && this.shouldPersistTranscript(session))) {
+        session.messagesPersistedAt = new Date().toISOString();
         await this.save(pipeline, record.revision);
       }
       return;
     }
 
+    const wasRunning = session.status === "running";
     session.status = "idle";
-    await this.refreshTranscript(session, provider);
+    const transcriptChanged = await this.refreshTranscript(session, provider);
     delete pipeline.pendingPromptAttempt;
     delete pipeline.activePromptContext;
+    if (wasRunning || transcriptChanged) {
+      // The turn is over, so this is the final transcript. Persist it now
+      // rather than leaving the throttled tail to whichever branch runs next —
+      // several of them return without saving.
+      session.messagesPersistedAt = new Date().toISOString();
+      await this.save(pipeline, pipeline.backendRevision);
+    }
+
+    if (pipeline.reviewRetryRequested) {
+      delete pipeline.reviewRetryRequested;
+      delete pipeline.structuredReview;
+      delete pipeline.verificationResult;
+      delete pipeline.verificationFeedback;
+      await this.startStage(pipeline, "review", "reviewing");
+      return;
+    }
+
+    if (pipeline.pendingUserMessages?.length) {
+      await this.dispatchUserMessage(pipeline, provider, session);
+      return;
+    }
 
     switch (pipeline.phase) {
       case "building":
@@ -681,12 +889,59 @@ export class BuildPipelineService {
     provider: BuildPipelineProvider,
   ): Promise<boolean> {
     const messages = await provider.messages(session.sdkSessionId);
-    if (JSON.stringify(messages) === JSON.stringify(session.messages ?? [])) {
-      return false;
-    }
+    const fingerprint = transcriptFingerprint(messages);
+    // A snapshot restored before fingerprints existed has none, so fall back to
+    // recomputing it from the stored transcript exactly once.
+    const previous = session.messagesFingerprint
+      ?? (session.messages === undefined
+        ? undefined
+        : transcriptFingerprint(session.messages));
+    if (previous === fingerprint) return false;
     session.messages = messages;
+    session.messagesFingerprint = fingerprint;
     session.messageRevision = (session.messageRevision ?? 0) + 1;
     return true;
+  }
+
+  private shouldPersistTranscript(session: PipelineSession): boolean {
+    const elapsed = elapsedSince(session.messagesPersistedAt);
+    return elapsed === null || elapsed >= this.transcriptPersistIntervalMs;
+  }
+
+  /**
+   * Dispatches the oldest queued user message into the current session.
+   *
+   * The message moves out of the queue and into the durable prompt attempt
+   * before anything is sent, so a dispatch whose response is lost is retried by
+   * the normal pending-attempt path under the same request id rather than being
+   * either dropped or delivered twice.
+   */
+  private async dispatchUserMessage(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<void> {
+    const [next, ...rest] = pipeline.pendingUserMessages ?? [];
+    if (!next) return;
+    const phase = resumablePhase(pipeline.phase);
+    if (!phase) return;
+    if (rest.length) {
+      pipeline.pendingUserMessages = rest;
+    } else {
+      delete pipeline.pendingUserMessages;
+    }
+    const requestId = randomUUID();
+    pipeline.pendingPromptAttempt = {
+      id: next.id,
+      sessionId: session.sdkSessionId,
+      requestId,
+      phase,
+      prompt: next.text,
+      useTaskImages: false,
+      startedAt: new Date().toISOString(),
+    };
+    await this.save(pipeline, pipeline.backendRevision);
+    await this.dispatchPending(pipeline, provider);
   }
 
   private async ensureSourceLink(pipeline: BuildPipeline): Promise<void> {
@@ -891,7 +1146,11 @@ export class BuildPipelineService {
     const requestId = pipeline.structuredReviewRequestId;
     if (!requestId) throw new Error("Review result key is missing");
     const result = await provider.structured<unknown>(session.sdkSessionId, requestId);
-    if (!result) return;
+    if (!result) {
+      await this.awaitStructuredResult(pipeline, session, "review");
+      return;
+    }
+    delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
     const report = parseStructuredReviewReport(result.value, {
       allowLegacyTestResults: true,
@@ -911,10 +1170,10 @@ export class BuildPipelineService {
         startedAt: new Date().toISOString(),
       };
       await this.save(pipeline, pipeline.backendRevision);
-      await provider.send(session.sdkSessionId, prompt, { requestId: request });
-      session.status = "running";
-      delete pipeline.pendingPromptAttempt;
-      await this.save(pipeline, pipeline.backendRevision);
+      // Routed through dispatchPending so a lost response keeps the durable
+      // attempt and retries under the same request id, exactly as every other
+      // dispatch does, instead of failing a review that has already succeeded.
+      await this.dispatchPending(pipeline, provider);
       return;
     }
     await this.startStage(pipeline, "verify", "verifying");
@@ -925,19 +1184,22 @@ export class BuildPipelineService {
     provider: BuildPipelineProvider,
     session: PipelineSession,
   ): Promise<void> {
-    const requestId = session.structuredRequestId
-      ?? pipeline.pendingPromptAttempt?.requestId
-      ?? pipeline.activePromptContext?.requestId;
-    // The prompt attempt is cleared after a confirmed dispatch, so the stable
-    // request key is also retained in the user message/session metadata by all
-    // providers. Prefer the last structured user request when necessary.
-    const resolvedRequestId = requestId ?? this.structuredRequestId(session.messages);
+    // advance() clears pendingPromptAttempt and activePromptContext before it
+    // reaches this branch, so the session's own key is the only durable copy.
+    // A snapshot written before that field existed has none, and there the
+    // providers' own transcript metadata carries the last structured request.
+    const resolvedRequestId = session.structuredRequestId
+      ?? this.structuredRequestId(session.messages);
     if (!resolvedRequestId) throw new Error("Verification result key is missing");
     const result = await provider.structured<{
       complete: boolean;
       rationale: string;
     }>(session.sdkSessionId, resolvedRequestId);
-    if (!result) return;
+    if (!result) {
+      await this.awaitStructuredResult(pipeline, session, "verification");
+      return;
+    }
+    delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
     const complete = result.value?.complete === true;
     const rationale = typeof result.value?.rationale === "string"
@@ -957,6 +1219,35 @@ export class BuildPipelineService {
     }
     pipeline.iteration += 1;
     await this.startStage(pipeline, "fix", "fixing");
+  }
+
+  /**
+   * Records that a finished turn has not produced its structured result yet,
+   * and fails the pipeline once that has gone on too long.
+   *
+   * A null result is normal for a tick or two while the provider finalizes the
+   * turn. It is also what a bridge returns for a result it no longer holds —
+   * after a restart mid-turn, say — and in that case the session stays idle and
+   * the answer never arrives. Without this the supervisor would re-poll an
+   * unchanged snapshot every 1.5 seconds forever, showing the user a stage that
+   * looks live and will never move.
+   */
+  private async awaitStructuredResult(
+    pipeline: BuildPipeline,
+    session: PipelineSession,
+    label: string,
+  ): Promise<void> {
+    const elapsed = elapsedSince(session.structuredWaitStartedAt);
+    if (elapsed === null) {
+      session.structuredWaitStartedAt = new Date().toISOString();
+      await this.save(pipeline, pipeline.backendRevision);
+      return;
+    }
+    if (elapsed >= this.structuredResultDeadlineMs) {
+      throw new Error(
+        `The ${label} finished without returning its required structured result`,
+      );
+    }
   }
 
   private structuredRequestId(messages: unknown[] | undefined): string | undefined {
@@ -1305,14 +1596,28 @@ export class BuildPipelineService {
     const provider = this.providers.get(providerKey);
     this.providers.delete(providerKey);
     await provider?.dispose?.();
+    const startedAt = pipeline.reconnectAttempt?.startedAt
+      ?? new Date().toISOString();
+    const elapsed = elapsedSince(startedAt);
+    if (elapsed !== null && elapsed >= this.reconnectDeadlineMs) {
+      // Retrying forever is indistinguishable from working, from the outside.
+      // Once the bridge has stayed unreachable past the deadline, say so rather
+      // than leaving the user watching a stage that will never advance.
+      await this.fail(
+        pipelineId,
+        new Error(
+          `${pipeline.agentType} stayed unreachable for ${Math.round(elapsed / 1000)}s: ${error.message}`,
+        ),
+      );
+      return;
+    }
     pipeline.backendRevision = record.revision;
     pipeline.reconnectAttempt = {
       id: pipeline.reconnectAttempt?.id ?? randomUUID(),
       phase,
       kind: "stage-transition",
       sessionId: sessionForCurrentPhase(pipeline)?.sdkSessionId,
-      startedAt: pipeline.reconnectAttempt?.startedAt
-        ?? new Date().toISOString(),
+      startedAt,
     };
     pipeline.error = `Reconnecting to ${pipeline.agentType}: ${error.message}`;
     await this.save(pipeline, record.revision);

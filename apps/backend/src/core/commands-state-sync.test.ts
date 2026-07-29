@@ -394,6 +394,15 @@ describe("build pipeline commands", () => {
       id,
     }));
     const remove = mock(async (id: string) => ({ operation: "remove", id }));
+    const sendMessage = mock(async (id: string, text: string) => ({
+      operation: "send",
+      id,
+      text,
+    }));
+    const retryReview = mock(async (id: string) => ({
+      operation: "retry-review",
+      id,
+    }));
     const supervisor = {
       start,
       pause,
@@ -401,6 +410,8 @@ describe("build pipeline commands", () => {
       cancel,
       retryCompletionComment,
       remove,
+      sendMessage,
+      retryReview,
     } as unknown as NonNullable<CommandContext["buildPipelines"]>;
 
     await withCommands(async (invoke, storage) => {
@@ -415,6 +426,17 @@ describe("build pipeline commands", () => {
       await expect(invoke("retry_build_pipeline_completion_comment", {
         pipelineId: "pipeline-1",
       })).resolves.toEqual({ operation: "retry", id: "pipeline-1" });
+      await expect(invoke("send_build_pipeline_message", {
+        pipelineId: "pipeline-1",
+        text: "also update the README",
+      })).resolves.toEqual({
+        operation: "send",
+        id: "pipeline-1",
+        text: "also update the README",
+      });
+      await expect(invoke("retry_build_pipeline_review", {
+        pipelineId: "pipeline-1",
+      })).resolves.toEqual({ operation: "retry-review", id: "pipeline-1" });
 
       await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
         id: "pipeline-1",
@@ -429,6 +451,9 @@ describe("build pipeline commands", () => {
       expect(cancel).toHaveBeenCalledWith("pipeline-1");
       expect(retryCompletionComment).toHaveBeenCalledWith("pipeline-1");
       expect(remove).toHaveBeenCalledWith("pipeline-1");
+      expect(sendMessage)
+        .toHaveBeenCalledWith("pipeline-1", "also update the README");
+      expect(retryReview).toHaveBeenCalledWith("pipeline-1");
     }, { buildPipelines: supervisor });
   });
 
@@ -514,6 +539,11 @@ describe("build pipeline commands", () => {
         ["resume_build_pipeline", { pipelineId: "pipeline-1" }],
         ["cancel_build_pipeline", { pipelineId: "pipeline-1" }],
         ["retry_build_pipeline_completion_comment", { pipelineId: "pipeline-1" }],
+        ["send_build_pipeline_message", {
+          pipelineId: "pipeline-1",
+          text: "hello",
+        }],
+        ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
         ["import_legacy_build_pipelines", {
           projectId: "proj-1",
           snapshots: [],

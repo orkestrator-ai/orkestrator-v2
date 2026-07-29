@@ -9,6 +9,9 @@ import {
 import * as realBackend from "@/lib/backend";
 import type { KanbanTask } from "@/lib/backend";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
+// The shared sonner replacement lives in tests/setup.ts; a competing local
+// mock.module for it would leak through Bun's global module cache.
+import { mockToastWarning } from "../../../../tests/mocks/sonner";
 import { useBuildPipelineStore } from "./buildPipelineStore";
 
 const realBackendSnapshot = { ...realBackend };
@@ -118,7 +121,11 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
     expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
   });
 
-  test("preserves task and renderer state when an authoritative delete fails", async () => {
+  // Deleting a pipeline cancels it first, and cancelling rethrows when the
+  // agent abort cannot be confirmed — the normal state for a task whose
+  // environment is already gone. Unlinking the task is what the user asked for,
+  // so it must not be held hostage to that cleanup.
+  test("still unlinks the task when an authoritative delete fails", async () => {
     const pipeline = buildPipelineFixture({
       id: "pipeline-fail",
       taskId: "task-1",
@@ -134,12 +141,56 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
 
     await useKanbanStore.getState().clearTaskBuildStatus("task-1");
 
-    expect(updateKanbanTaskMock).not.toHaveBeenCalled();
-    expect(useKanbanStore.getState().tasks[0]?.buildPipelineId).toBe(
-      "pipeline-fail",
-    );
+    expect(updateKanbanTaskMock).toHaveBeenCalledTimes(1);
+    expect(useKanbanStore.getState().tasks[0]?.buildPipelineId).toBeUndefined();
     expect(useBuildPipelineStore.getState().pipelines.has("pipeline-fail")).toBe(
-      true,
+      false,
     );
+    expect(mockToastWarning).toHaveBeenCalledTimes(1);
+  });
+
+  test("clears the task without warning when every delete succeeds", async () => {
+    const pipeline = buildPipelineFixture({
+      id: "pipeline-ok",
+      taskId: "task-1",
+    });
+    useKanbanStore.setState({
+      tasks: [task({ buildPipelineId: pipeline.id, environmentId: "env-1" })],
+    });
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[pipeline.id, pipeline]]),
+      buildEnvironmentIds: new Set(["env-1"]),
+    });
+
+    await useKanbanStore.getState().clearTaskBuildStatus("task-1");
+
+    expect(updateKanbanTaskMock).toHaveBeenCalledTimes(1);
+    expect(mockToastWarning).not.toHaveBeenCalled();
+  });
+
+  // A rejection from the task update itself is a different failure: nothing was
+  // unlinked, so the renderer must not pretend it was.
+  test("leaves renderer state alone when the task update itself fails", async () => {
+    const pipeline = buildPipelineFixture({
+      id: "pipeline-update-fail",
+      taskId: "task-1",
+    });
+    useKanbanStore.setState({
+      tasks: [task({ buildPipelineId: pipeline.id, environmentId: "env-1" })],
+    });
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[pipeline.id, pipeline]]),
+      buildEnvironmentIds: new Set(["env-1"]),
+    });
+    updateKanbanTaskMock.mockRejectedValueOnce(new Error("update failed"));
+
+    await useKanbanStore.getState().clearTaskBuildStatus("task-1");
+
+    expect(useKanbanStore.getState().tasks[0]?.buildPipelineId).toBe(
+      "pipeline-update-fail",
+    );
+    expect(
+      useBuildPipelineStore.getState().pipelines.has("pipeline-update-fail"),
+    ).toBe(true);
   });
 });

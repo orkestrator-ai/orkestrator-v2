@@ -457,12 +457,19 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     console.debug("[PaneLayout] Initializing environment:", envId, "with containerId:", containerId);
 
+    const existing = state.environments.get(envId);
+    const existingTabs = existing
+      ? getAllLeaves(existing.root).flatMap((leaf) => leaf.tabs)
+      : [];
     const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, {
-      root: createInitialLayout(),
-      activePaneId: "default",
-      containerId,
-    });
+    // A tab can already be here: the build supervisor inserts its tab as soon
+    // as the backend returns a pipeline, which is before this container mounts.
+    // Replacing the root wholesale would drop it, and nothing re-adds it.
+    // Adopting the existing layout still records the containerId, which is what
+    // the terminal session keys are built from.
+    newEnvs.set(envId, existingTabs.length > 0
+      ? { ...existing!, containerId }
+      : { root: createInitialLayout(), activePaneId: "default", containerId });
     set({ environments: newEnvs });
   },
 

@@ -478,6 +478,97 @@ describe("TerminalContainer", () => {
     ).toBe("build-pipeline-pre-mount");
   });
 
+  /**
+   * The build supervisor inserts its tab as soon as the backend returns a
+   * pipeline, which is always before the environment is running and therefore
+   * always before this container's initial-layout effect can run. Counting that
+   * tab as "already laid out" would skip the whole block: no default terminal,
+   * no setup tab, and no initialize() to record the containerId that terminal
+   * session keys are built from.
+   */
+  test("still seeds the initial layout for a fresh environment that already has a build tab", async () => {
+    const pipeline = buildPipelineFixture({
+      id: "pipeline-fresh",
+      environmentId: "env-hidden",
+      environmentType: "containerized",
+    });
+    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    // Exactly what ensureBuildTab does: create the pane state, then add the tab.
+    // No initialize(), because no container has mounted for this environment.
+    usePaneLayoutStore.getState().setActiveEnvironment("env-hidden");
+    usePaneLayoutStore.getState().addTab("default", {
+      id: "build-pipeline-fresh",
+      type: "claude-build",
+      buildTabData: {
+        pipelineId: pipeline.id,
+        environmentId: "env-hidden",
+        taskId: pipeline.taskId,
+        isLocal: false,
+      },
+    }, "env-hidden");
+    // A brand new environment has no persisted layout to restore.
+    getPaneLayoutMock.mockResolvedValue(null);
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const state = usePaneLayoutStore.getState().environments.get("env-hidden");
+      const tabs = state && state.root.kind === "leaf" ? state.root.tabs : [];
+      expect(tabs.some((tab) => tab.type !== "claude-build")).toBe(true);
+    });
+
+    const seeded = usePaneLayoutStore.getState().environments.get("env-hidden")!;
+    const tabIds = seeded.root.kind === "leaf"
+      ? seeded.root.tabs.map((tab) => tab.id)
+      : [];
+    // The build tab survives the seeding rather than being replaced by it.
+    expect(tabIds).toContain("build-pipeline-fresh");
+    // initialize() ran, so terminal cleanup can build correct session keys.
+    expect(seeded.containerId).toBe("container-hidden");
+  });
+
+  test("initialize keeps tabs added before the container mounted", () => {
+    usePaneLayoutStore.getState().setActiveEnvironment("env-hidden");
+    usePaneLayoutStore.getState().addTab("default", {
+      id: "build-early",
+      type: "claude-build",
+      buildTabData: {
+        pipelineId: "pipeline-early",
+        environmentId: "env-hidden",
+        taskId: "task-1",
+        isLocal: false,
+      },
+    }, "env-hidden");
+
+    usePaneLayoutStore.getState().initialize("container-hidden", "env-hidden");
+
+    const state = usePaneLayoutStore.getState().environments.get("env-hidden")!;
+    const tabIds = state.root.kind === "leaf"
+      ? state.root.tabs.map((tab) => tab.id)
+      : [];
+    // Replacing the root wholesale would drop the tab, and nothing re-adds it.
+    expect(tabIds).toEqual(["build-early"]);
+    expect(state.containerId).toBe("container-hidden");
+  });
+
+  test("initialize still resets an environment that has no tabs", () => {
+    usePaneLayoutStore.getState().initialize("container-hidden", "env-fresh");
+
+    const state = usePaneLayoutStore.getState().environments.get("env-fresh")!;
+    expect(state.root.kind === "leaf" ? state.root.tabs : null).toEqual([]);
+    expect(state.activePaneId).toBe("default");
+    expect(state.containerId).toBe("container-hidden");
+  });
+
   test("rebinds a restored completed setup tab before stale cleanup can replace its PTY", async () => {
     let resolveSetupSession:
       | ((session: EnvironmentSetupSession | null) => void)

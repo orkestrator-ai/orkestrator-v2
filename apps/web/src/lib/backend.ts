@@ -1750,6 +1750,24 @@ export async function cancelBuildPipeline(
   return invoke<BackendBuildPipeline>("cancel_build_pipeline", { pipelineId });
 }
 
+export async function sendBuildPipelineMessage(
+  pipelineId: string,
+  text: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("send_build_pipeline_message", {
+    pipelineId,
+    text,
+  });
+}
+
+export async function retryBuildPipelineReview(
+  pipelineId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("retry_build_pipeline_review", {
+    pipelineId,
+  });
+}
+
 export async function retryBuildPipelineCompletionComment(
   pipelineId: string,
 ): Promise<BackendBuildPipeline> {

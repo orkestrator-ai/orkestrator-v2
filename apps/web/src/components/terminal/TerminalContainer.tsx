@@ -1001,6 +1001,13 @@ export function TerminalContainer({
     const currentTabs = currentEnvState
       ? getAllLeaves(currentEnvState.root).flatMap((leaf) => leaf.tabs)
       : [];
+    // A build tab is inserted by the pipeline supervisor as soon as the backend
+    // returns, which is before this environment is running and therefore always
+    // before this effect can run. It is not part of the layout seeded here, so
+    // counting it would suppress the initial layout entirely: no setup tab, no
+    // default terminal, and initialize() — which records the containerId the
+    // terminal session keys derive from — would never run.
+    const seededTabs = currentTabs.filter((tab) => tab.type !== "claude-build");
     const backendSetupRunning =
       setupScriptsRunning && !environment?.setupScriptsComplete;
 
@@ -1064,7 +1071,7 @@ export function TerminalContainer({
       }
     }
 
-    if (currentTabs.length === 0) {
+    if (seededTabs.length === 0) {
       console.info("[setup-terminal] initial terminal layout decision", {
         environmentId,
         backendSetupRunning,

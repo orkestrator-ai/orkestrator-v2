@@ -178,7 +178,7 @@ describe("buildReviewBody", () => {
 
     for (const expected of [
       "| Prompt generator | `apps/web/src/prompts/git-workflows.ts` → `createReviewPrompt(targetBranch, reviewInstruction?)` |",
-      "| Shared body | `apps/web/src/prompts/review-shared.ts` → `buildReviewBody(opts)` |",
+      "| Shared body | `packages/protocol/src/review-workflow.ts` → `buildReviewBody(opts)`",
       "| Export | `apps/web/src/prompts/index.ts` |",
       "| UI trigger | `apps/web/src/components/layout/ActionBar.tsx` → `handleReview()` |",
       "| Tests | `apps/web/src/prompts/git-workflows.test.ts` |",
@@ -196,15 +196,15 @@ describe("buildReviewBody", () => {
       "| 2 | Run full project test suite; record failures |",
       "| 3 | Diff against `origin/<targetBranch>...HEAD`",
       "| 4 | Audit test coverage for all impacted files",
-      "| Build pipeline review phase | `createBuildReviewPrompt()`",
+      "| Build pipeline review phase | `reviewPrompt()` in `apps/backend/src/core/build-pipeline-prompts.ts` |",
       "| Create PR button | `createPRPrompt()`",
       "| Claude compose `/review` | Claude CLI slash command |",
       "| `docs/second-opinion.md` | Standalone review rubric |",
       "| `docs/code-review-prompt-enhancement-spec.md` | Spec that drove these changes |",
-      "1. `buildReviewBody()` in `apps/web/src/prompts/review-shared.ts`",
+      "1. `buildReviewBody()` in `packages/protocol/src/review-workflow.ts`",
       "2. `createReviewPrompt()` in `apps/web/src/prompts/git-workflows.ts`",
-      "3. `createBuildReviewPrompt()` in `apps/web/src/prompts/build-pipeline.ts`",
-      "4. Assertions in `apps/web/src/prompts/git-workflows.test.ts` and `apps/web/src/prompts/build-pipeline.test.ts`.",
+      "3. `reviewPrompt()` in `apps/backend/src/core/build-pipeline-prompts.ts`",
+      "4. Assertions in `apps/web/src/prompts/git-workflows.test.ts`, `packages/protocol/src/review-workflow.test.ts` and `apps/backend/src/core/build-pipeline-prompts.test.ts`.",
       "5. This file so it stays in sync with the generated template",
       "regenerate with `bun -e",
     ]) {

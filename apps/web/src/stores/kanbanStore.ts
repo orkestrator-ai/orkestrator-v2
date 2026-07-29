@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { toast } from "sonner";
 import {
   getKanbanTasks,
   addKanbanTask,
@@ -131,8 +132,23 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
       // The task link is persisted by the backend and remains authoritative
       // when this renderer missed or has not yet hydrated the pipeline snapshot.
       if (task?.buildPipelineId) pipelineIds.add(task.buildPipelineId);
-      await Promise.all(Array.from(pipelineIds, (pipelineId) =>
-        deleteBuildPipeline(pipelineId)));
+      // Deleting a pipeline cancels it first, and cancelling rethrows when the
+      // agent abort cannot be confirmed — which is exactly the state a task with
+      // a dead environment is in. Unlinking the task is what the user asked for,
+      // so a failed cleanup reports itself and does not block that.
+      const failures = (await Promise.allSettled(
+        Array.from(pipelineIds, (pipelineId) => deleteBuildPipeline(pipelineId)),
+      )).filter((result) => result.status === "rejected");
+      if (failures.length > 0) {
+        console.warn(
+          "[KanbanStore] Some build pipelines could not be deleted:",
+          failures.map((failure) => failure.reason),
+        );
+        toast.warning("Some build pipeline data could not be removed", {
+          description:
+            "The task was unlinked, but its build environment may need clearing manually.",
+        });
+      }
       const updated = await updateKanbanTask(
         taskId,
         undefined,

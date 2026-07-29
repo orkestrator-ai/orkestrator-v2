@@ -33,12 +33,28 @@ const cancelBuildPipelineMock = mock(async (pipelineId: string) => ({
   error: "Build cancelled",
   backendRevision: 11,
 }));
+const sendMessageMock = mock(async (pipelineId: string, text: string) => ({
+  ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+  pendingUserMessages: [
+    { id: "queued-1", text, createdAt: "2026-07-29T00:02:00.000Z" },
+  ],
+  backendRevision: 12,
+}));
+const retryReviewMock = mock(async (pipelineId: string) => ({
+  ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+  phase: "reviewing" as const,
+  backendRevision: 13,
+}));
+const getBuildPipelineMock = mock(async (_pipelineId: string) => null as unknown);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   pauseBuildPipeline: pauseBuildPipelineMock,
   resumeBuildPipeline: resumeBuildPipelineMock,
   cancelBuildPipeline: cancelBuildPipelineMock,
+  sendBuildPipelineMessage: sendMessageMock,
+  retryBuildPipelineReview: retryReviewMock,
+  getBuildPipeline: getBuildPipelineMock,
 }));
 
 const { BuildChatTab } = await import("./BuildChatTab");
@@ -106,6 +122,10 @@ describe("BuildChatTab backend projection", () => {
     pauseBuildPipelineMock.mockClear();
     resumeBuildPipelineMock.mockClear();
     cancelBuildPipelineMock.mockClear();
+    sendMessageMock.mockClear();
+    retryReviewMock.mockClear();
+    getBuildPipelineMock.mockClear();
+    getBuildPipelineMock.mockImplementation(async () => null);
     useBuildPipelineStore.setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set([pipeline.environmentId]),
@@ -258,5 +278,277 @@ describe("BuildChatTab backend projection", () => {
     expect(screen.getByRole("button", {
       name: "Retry GitHub completion comment",
     })).toBeTruthy();
+  });
+});
+
+describe("BuildChatTab rehydration", () => {
+  beforeEach(() => {
+    cleanup();
+    getBuildPipelineMock.mockClear();
+    getBuildPipelineMock.mockImplementation(async () => null);
+    useBuildPipelineStore.setState({
+      pipelines: new Map(),
+      buildEnvironmentIds: new Set(),
+    });
+  });
+
+  test("fetches the authoritative snapshot when the store has none", async () => {
+    // App hydrates pipelines once per project. If that never ran for this
+    // project or failed, the tab would otherwise sit on its loading state
+    // forever with no way back — the rehydrate-on-mount invariant.
+    getBuildPipelineMock.mockImplementation(async () => ({
+      version: 2,
+      id: pipeline.id,
+      projectId: pipeline.projectId,
+      environmentId: pipeline.environmentId,
+      snapshot: pipeline,
+      revision: 8,
+      updatedAt: "2026-07-29T00:00:00.000Z",
+    }));
+
+    render(<BuildChatTab data={{
+      environmentId: "env-1",
+      pipelineId: pipeline.id,
+      taskId: "task-1",
+      isLocal: true,
+    }} />);
+
+    expect(screen.getByText("Loading build pipeline…")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("Backend-owned build")).toBeTruthy();
+    });
+    expect(getBuildPipelineMock).toHaveBeenCalledWith(pipeline.id);
+  });
+
+  test("does not refetch in a loop when the pipeline genuinely does not exist", async () => {
+    render(<BuildChatTab data={{
+      environmentId: "env-1",
+      pipelineId: "missing",
+      taskId: "task-1",
+      isLocal: true,
+    }} />);
+
+    await waitFor(() => expect(getBuildPipelineMock).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(getBuildPipelineMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Loading build pipeline…")).toBeTruthy();
+  });
+
+  test("does not fetch when the store already has the snapshot", async () => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[pipeline.id, pipeline]]),
+      buildEnvironmentIds: new Set(["env-1"]),
+    });
+
+    render(<BuildChatTab data={{
+      environmentId: "env-1",
+      pipelineId: pipeline.id,
+      taskId: "task-1",
+      isLocal: true,
+    }} />);
+
+    expect(screen.getByText("Backend-owned build")).toBeTruthy();
+    expect(getBuildPipelineMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("BuildChatTab stage following", () => {
+  function renderWith(next: BuildPipeline) {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[next.id, next]]),
+      buildEnvironmentIds: new Set([next.environmentId]),
+    });
+  }
+
+  beforeEach(() => {
+    cleanup();
+    renderWith(pipeline);
+  });
+
+  test("follows the pipeline to each new stage until the user picks one", async () => {
+    const building: BuildPipeline = {
+      ...pipeline,
+      phase: "building",
+      sessions: [pipeline.sessions[0]!],
+      currentSessionIndex: 0,
+    };
+    renderWith(building);
+    render(<BuildChatTab data={{
+      environmentId: "env-1",
+      pipelineId: pipeline.id,
+      taskId: "task-1",
+      isLocal: true,
+    }} />);
+    expect(screen.getByText("Implementation complete")).toBeTruthy();
+
+    // The backend advances to the verification stage.
+    renderWith({ ...pipeline, phase: "verifying" });
+
+    await waitFor(() => {
+      expect(screen.getByText("All criteria pass")).toBeTruthy();
+    });
+  });
+
+  test("holds a stage the user selected even as the pipeline advances", async () => {
+    renderWith({ ...pipeline, phase: "verifying" });
+    render(<BuildChatTab data={{
+      environmentId: "env-1",
+      pipelineId: pipeline.id,
+      taskId: "task-1",
+      isLocal: true,
+    }} />);
+    await waitFor(() => expect(screen.getByText("All criteria pass")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Build Session"));
+    await waitFor(() =>
+      expect(screen.getByText("Implementation complete")).toBeTruthy());
+
+    // A new snapshot arrives; the explicit choice must survive it.
+    renderWith({ ...pipeline, phase: "complete", backendRevision: 20 });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(screen.getByText("Implementation complete")).toBeTruthy();
+  });
+
+  test("resumes following when the selected stage leaves the snapshot", async () => {
+    render(<BuildChatTab data={{
+      environmentId: "env-1",
+      pipelineId: pipeline.id,
+      taskId: "task-1",
+      isLocal: true,
+    }} />);
+    fireEvent.click(screen.getByText("Build Session"));
+    await waitFor(() =>
+      expect(screen.getByText("Implementation complete")).toBeTruthy());
+
+    // A retry replaced the session list; the pinned id no longer exists, so
+    // holding it would leave the transcript permanently blank.
+    renderWith({
+      ...pipeline,
+      sessions: [pipeline.sessions[1]!],
+      currentSessionIndex: 0,
+      backendRevision: 30,
+    });
+
+    await waitFor(() => expect(screen.getByText("All criteria pass")).toBeTruthy());
+  });
+});
+
+describe("BuildChatTab agent messaging", () => {
+  const running: BuildPipeline = { ...pipeline, phase: "building" };
+
+  beforeEach(() => {
+    cleanup();
+    sendMessageMock.mockClear();
+    retryReviewMock.mockClear();
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[running.id, running]]),
+      buildEnvironmentIds: new Set(["env-1"]),
+    });
+  });
+
+  function renderTab() {
+    render(<BuildChatTab data={{
+      environmentId: "env-1",
+      pipelineId: running.id,
+      taskId: "task-1",
+      isLocal: true,
+    }} />);
+  }
+
+  test("queues a message through the backend and clears the box", async () => {
+    renderTab();
+    const box = screen.getByLabelText("Send a message to the agent") as HTMLTextAreaElement;
+
+    fireEvent.change(box, { target: { value: "  also update the README  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() =>
+      expect(sendMessageMock).toHaveBeenCalledWith(
+        running.id,
+        "also update the README",
+      ));
+    await waitFor(() => expect(box.value).toBe(""));
+    // The authoritative reply is installed, so the queue depth is visible.
+    await waitFor(() =>
+      expect(screen.getByText(/1 message queued/)).toBeTruthy());
+  });
+
+  test("submits on Enter and inserts a newline on Shift+Enter", async () => {
+    renderTab();
+    const box = screen.getByLabelText("Send a message to the agent");
+
+    fireEvent.change(box, { target: { value: "ship it" } });
+    fireEvent.keyDown(box, { key: "Enter", shiftKey: true });
+    expect(sendMessageMock).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() =>
+      expect(sendMessageMock).toHaveBeenCalledWith(running.id, "ship it"));
+  });
+
+  test("keeps the draft when the backend refuses the message", async () => {
+    sendMessageMock.mockImplementationOnce(async () => {
+      throw new Error("queue is full");
+    });
+    renderTab();
+    const box = screen.getByLabelText("Send a message to the agent") as HTMLTextAreaElement;
+
+    fireEvent.change(box, { target: { value: "do not lose me" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalled());
+    // Losing the user's typing on a transient failure is worse than the failure.
+    expect(box.value).toBe("do not lose me");
+  });
+
+  test("refuses to send an empty or whitespace-only message", () => {
+    renderTab();
+    const button = screen.getByRole("button", {
+      name: "Send message",
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+
+    fireEvent.change(
+      screen.getByLabelText("Send a message to the agent"),
+      { target: { value: "   " } },
+    );
+    expect(button.disabled).toBe(true);
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  test("hides the compose box once the build has finished", () => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[pipeline.id, pipeline]]),
+      buildEnvironmentIds: new Set(["env-1"]),
+    });
+    renderTab();
+
+    expect(screen.queryByLabelText("Send a message to the agent")).toBeNull();
+  });
+
+  test("restarts the review through the backend", async () => {
+    renderTab();
+
+    fireEvent.click(screen.getByRole("button", { name: /Retry Review/ }));
+
+    await waitFor(() => expect(retryReviewMock).toHaveBeenCalledWith(running.id));
+    await waitFor(() =>
+      expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase)
+        .toBe("reviewing"));
+  });
+
+  test("does not offer a review retry before the first stage exists", () => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[running.id, {
+        ...running,
+        sessions: [],
+        currentSessionIndex: -1,
+      }]]),
+      buildEnvironmentIds: new Set(["env-1"]),
+    });
+    renderTab();
+
+    expect(screen.queryByRole("button", { name: /Retry Review/ })).toBeNull();
   });
 });

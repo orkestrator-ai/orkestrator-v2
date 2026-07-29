@@ -59,9 +59,34 @@ export interface PipelineSession {
   /** Provider transcript snapshot. The backend refreshes it; clients only render it. */
   messages?: unknown[];
   messageRevision?: number;
+  /**
+   * Cheap change detector for {@link messages}. Comparing two full transcript
+   * serializations on every supervisor tick is O(transcript) twice per pass;
+   * this collapses that to the length plus the tail entry, which is what an
+   * append-or-stream-the-last-entry transcript actually varies.
+   */
+  messagesFingerprint?: string;
+  /** Last time a transcript-only delta was persisted, used to throttle writes. */
+  messagesPersistedAt?: string;
   /** Stable structured-output key for review and verification turns. */
   structuredRequestId?: string;
+  /**
+   * First tick at which this session was idle with no structured result yet.
+   * A turn that ends without ever producing one would otherwise poll forever.
+   */
+  structuredWaitStartedAt?: string;
 }
+
+/** A message the user sent into a running pipeline, awaiting dispatch. */
+export interface PipelineUserMessage {
+  id: string;
+  text: string;
+  createdAt: string;
+}
+
+export const MAX_PIPELINE_USER_MESSAGES = 20;
+export const MAX_PIPELINE_USER_MESSAGE_LENGTH = 16_000;
+export const MAX_BUILD_PIPELINE_ITERATIONS = 10;
 
 export type BuildPipelineSource =
   | { type: "kanban"; taskId: string }
@@ -135,6 +160,14 @@ export interface BuildPipeline {
   reconnectAttempt?: PipelineReconnectAttempt;
   pendingPromptAttempt?: PipelinePromptAttempt;
   activePromptContext?: PipelineFailureContext;
+  /**
+   * User messages queued for the current session, dispatched one at a time by
+   * the supervisor once the agent goes idle. Queued rather than sent directly
+   * so a message survives an unmounted tab, a paused pipeline and a restart.
+   */
+  pendingUserMessages?: PipelineUserMessage[];
+  /** Set by the retry-review control; consumed by the next supervisor pass. */
+  reviewRetryRequested?: boolean;
   createdAt: string;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
@@ -226,8 +259,20 @@ function isOptionalNonBlankString(value: unknown): value is string | undefined {
     || (typeof value === "string" && value.length > 0);
 }
 
+/**
+ * Every timestamp in a snapshot is produced by {@link Date.toISOString}, so the
+ * guard requires that shape rather than whatever `Date.parse` happens to accept.
+ * A bare `Date.parse` check passes strings like "March 5 2020", which would let
+ * a hand-edited or legacy record through and then compare wrongly against the
+ * deadlines the supervisor derives from these fields.
+ */
+const ISO_DATE_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+
 function isIsoDate(value: unknown): value is string {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
+  return typeof value === "string"
+    && ISO_DATE_PATTERN.test(value)
+    && Number.isFinite(Date.parse(value));
 }
 
 function isPipelineSession(value: unknown): value is PipelineSession {
@@ -246,7 +291,21 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     && (value.messages === undefined || Array.isArray(value.messages))
     && (value.messageRevision === undefined
       || isNonNegativeInteger(value.messageRevision))
-    && isOptionalNonBlankString(value.structuredRequestId);
+    && isOptionalNonBlankString(value.messagesFingerprint)
+    && (value.messagesPersistedAt === undefined
+      || isIsoDate(value.messagesPersistedAt))
+    && isOptionalNonBlankString(value.structuredRequestId)
+    && (value.structuredWaitStartedAt === undefined
+      || isIsoDate(value.structuredWaitStartedAt));
+}
+
+function isUserMessage(value: unknown): value is PipelineUserMessage {
+  if (!isRecord(value)) return false;
+  return isNonBlankString(value.id)
+    && typeof value.text === "string"
+    && value.text.length > 0
+    && value.text.length <= MAX_PIPELINE_USER_MESSAGE_LENGTH
+    && isIsoDate(value.createdAt);
 }
 
 function isTaskSnapshot(value: unknown): value is TaskSnapshot {
@@ -324,6 +383,9 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     || !isNonNegativeInteger(value.iteration)
     || !Number.isSafeInteger(value.maxIterations)
     || (value.maxIterations as number) < 1
+    // Kept in step with isStartBuildPipelineInput: no legitimate record can
+    // exceed the bound the gateway enforces on the way in.
+    || (value.maxIterations as number) > MAX_BUILD_PIPELINE_ITERATIONS
     || !isNonNegativeInteger(value.backendRevision)
     || !isIsoDate(value.createdAt)
     || typeof value.taskTitle !== "string"
@@ -346,6 +408,14 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
       && !isPromptAttempt(value.pendingPromptAttempt))
     || (value.activePromptContext !== undefined
       && !isFailureContext(value.activePromptContext))
+    || (value.pendingUserMessages !== undefined
+      && (
+        !Array.isArray(value.pendingUserMessages)
+        || value.pendingUserMessages.length > MAX_PIPELINE_USER_MESSAGES
+        || !value.pendingUserMessages.every(isUserMessage)
+      ))
+    || (value.reviewRetryRequested !== undefined
+      && typeof value.reviewRetryRequested !== "boolean")
     || (value.source !== undefined && !isPipelineSource(value.source))
     || !isOptionalNonBlankString(value.featurePlanId)
     || (value.sourceLinkedAt !== undefined && !isIsoDate(value.sourceLinkedAt))
@@ -427,6 +497,6 @@ export function isStartBuildPipelineInput(
       || (
         Number.isSafeInteger(value.maxIterations)
         && (value.maxIterations as number) >= 1
-        && (value.maxIterations as number) <= 10
+        && (value.maxIterations as number) <= MAX_BUILD_PIPELINE_ITERATIONS
       ));
 }

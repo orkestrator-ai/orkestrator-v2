@@ -35,30 +35,31 @@ mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   retryBuildPipelineCompletionComment: retryCompletionCommentMock,
 }));
-const { GitHubCompletionCommentStatus } = await import(
-  "./GitHubCompletionCommentStatus"
-);
+const { BuildCompletionStatus } = await import("./BuildCompletionStatus");
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 afterEach(cleanup);
 
-function seedFailedPipeline(source: BuildPipelineSource): string {
-  const id = source.type === "github" ? "github-pipeline" : "linear-pipeline";
+function seedFailedPipeline(
+  source: BuildPipelineSource,
+  overrides: { completionCommentError?: string; phase?: "complete" | "failed" } = {},
+): string {
+  const id = `${source.type}-pipeline`;
   useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
     id,
-    taskId: source.type === "github" ? "github:acme/widget#42" : "linear:ENG-42",
+    taskId: `${source.type}:task`,
     taskTitle: "Build source issue",
     source,
-    phase: "complete",
+    phase: overrides.phase ?? "complete",
     completionCommentStatus: "failed",
-    completionCommentError: "GitHub unavailable",
+    completionCommentError: overrides.completionCommentError ?? "GitHub unavailable",
   }));
   return id;
 }
 
-describe("GitHubCompletionCommentStatus", () => {
+describe("BuildCompletionStatus", () => {
   beforeEach(() => {
     retryCompletionCommentMock.mockReset();
     retryCompletionCommentMock.mockImplementation(async (pipelineId: string) => {
@@ -87,7 +88,7 @@ describe("GitHubCompletionCommentStatus", () => {
     });
     const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
 
-    render(<GitHubCompletionCommentStatus pipeline={pipeline} />);
+    render(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(screen.getByText(/GitHub completion comment failed/)).toBeTruthy();
     fireEvent.click(
@@ -101,22 +102,91 @@ describe("GitHubCompletionCommentStatus", () => {
     });
   });
 
-  test("does not alter the Linear completion UI path", () => {
-    const pipelineId = seedFailedPipeline({
-      type: "linear",
-      issueId: "issue-42",
-      issueIdentifier: "ENG-42",
-    });
+  // Every source has a terminal hand-off the backend can fail at, and it never
+  // retries any of them. A source without a surface here is a build whose
+  // failure is invisible: for kanban that is a card stranded in the wrong
+  // column, which is harder to notice than a missing comment, not easier.
+  test.each([
+    [
+      "linear",
+      { type: "linear", issueId: "issue-42", issueIdentifier: "ENG-42" } as const,
+      /Linear completion comment failed/,
+      "Retry Linear completion comment",
+    ],
+    [
+      "kanban",
+      { type: "kanban", taskId: "task-1" } as const,
+      /Updating the task board failed/,
+      "Retry the task board update",
+    ],
+  ])("retries a failed %s hand-off from the build UI", async (
+    _name,
+    source,
+    label,
+    retryLabel,
+  ) => {
+    const pipelineId = seedFailedPipeline(source);
     const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+
+    render(<BuildCompletionStatus pipeline={pipeline} />);
+
+    expect(screen.getByText(label)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: retryLabel }));
+
+    await waitFor(() => {
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(pipelineId)
+          ?.completionCommentStatus,
+      ).toBeUndefined();
+    });
+  });
+
+  test("renders nothing for a pipeline that has no source", () => {
+    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
+      id: "sourceless",
+      phase: "failed",
+      completionCommentStatus: "failed",
+    }));
+    const pipeline = useBuildPipelineStore.getState().pipelines.get("sourceless")!;
     const { container } = render(
-      <GitHubCompletionCommentStatus pipeline={pipeline} />,
+      <BuildCompletionStatus pipeline={pipeline} />,
     );
 
     expect(container.childElementCount).toBe(0);
+  });
+
+  test("renders nothing while the hand-off has not failed", () => {
+    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
+      id: "posting",
+      phase: "complete",
+      source: { type: "kanban", taskId: "task-1" },
+      completionCommentStatus: "posting",
+    }));
+    const pipeline = useBuildPipelineStore.getState().pipelines.get("posting")!;
+    const { container } = render(
+      <BuildCompletionStatus pipeline={pipeline} />,
+    );
+
+    expect(container.childElementCount).toBe(0);
+  });
+
+  test("falls back to a per-source message when the backend recorded no error", () => {
+    const pipelineId = seedFailedPipeline(
+      { type: "kanban", taskId: "task-1" },
+      { completionCommentError: undefined },
+    );
+    useBuildPipelineStore.getState().replacePipeline({
+      ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+      completionCommentError: undefined,
+      backendRevision: 99,
+    });
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+
+    render(<BuildCompletionStatus pipeline={pipeline} />);
+
     expect(
-      useBuildPipelineStore.getState().pipelines.get(pipelineId)
-        ?.completionCommentStatus,
-    ).toBe("failed");
+      screen.getByText(/The task could not be moved to its final column\./),
+    ).toBeTruthy();
   });
 
   test("keeps retry single-flight while the request is pending", async () => {
@@ -135,7 +205,7 @@ describe("GitHubCompletionCommentStatus", () => {
       new Promise((resolve) => {
         resolveRetry = resolve;
       }));
-    render(<GitHubCompletionCommentStatus pipeline={pipeline} />);
+    render(<BuildCompletionStatus pipeline={pipeline} />);
     const button = screen.getByRole("button", {
       name: "Retry GitHub completion comment",
     }) as HTMLButtonElement;
@@ -166,7 +236,7 @@ describe("GitHubCompletionCommentStatus", () => {
     });
     const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
     retryCompletionCommentMock.mockRejectedValueOnce(new Error("still offline"));
-    render(<GitHubCompletionCommentStatus pipeline={pipeline} />);
+    render(<BuildCompletionStatus pipeline={pipeline} />);
     const button = screen.getByRole("button", {
       name: "Retry GitHub completion comment",
     }) as HTMLButtonElement;

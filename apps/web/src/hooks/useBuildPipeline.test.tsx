@@ -248,3 +248,128 @@ describe("useBuildPipeline", () => {
     );
   });
 });
+
+describe("useBuildPipeline navigation", () => {
+  beforeEach(() => {
+    cleanup();
+    startBuildPipelineMock.mockClear();
+    useBuildPipelineStore.setState({
+      pipelines: new Map(),
+      buildEnvironmentIds: new Set(),
+    });
+    usePaneLayoutStore.setState({
+      environments: new Map(),
+      hydration: new Map(),
+      activeEnvironmentId: null,
+    });
+    useUIStore.setState({
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+      collapsedProjects: ["project-1"],
+    });
+  });
+
+  test("navigates to the pipeline the store holds for a task", async () => {
+    const pipeline = buildPipelineFixture({
+      id: "pipeline-known",
+      environmentId: "env-known",
+      taskId: "task-1",
+      projectId: "project-1",
+    });
+    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.navigateToBuild(task);
+    });
+
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-known");
+    expect(buildTabs("env-known").map((tab) => tab.id))
+      .toContain("build-pipeline-known");
+  });
+
+  test("does nothing when the task has no pipeline in the store", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.navigateToBuild(task);
+    });
+
+    // Silently opening an empty environment would be worse than doing nothing.
+    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(usePaneLayoutStore.getState().environments.size).toBe(0);
+  });
+
+  test("ignores a pipeline that has no environment yet", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.navigateToPipeline({
+        environmentId: "",
+        projectId: "project-1",
+        taskId: "task-1",
+      });
+    });
+
+    expect(usePaneLayoutStore.getState().environments.size).toBe(0);
+  });
+
+  test("marks a containerized pipeline's build tab as not local", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.navigateToPipeline({
+        id: "pipeline-container",
+        environmentId: "env-container",
+        environmentType: "containerized",
+        projectId: "project-1",
+        taskId: "task-1",
+      });
+    });
+
+    const [tab] = buildTabs("env-container");
+    expect(tab?.buildTabData?.isLocal).toBe(false);
+  });
+
+  test("gives up waiting on a hydration that never finishes", async () => {
+    // The wait exists so a restore does not replace the tab we just added. It
+    // must not become an indefinite block when a restore stalls or is dropped.
+    usePaneLayoutStore.setState({
+      environments: new Map(),
+      hydration: new Map([["env-stalled", "pending"]]),
+      activeEnvironmentId: null,
+    });
+    const timeouts: Array<() => void> = [];
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((callback: () => void, delay?: number) => {
+      if (delay === 5_000) {
+        timeouts.push(callback);
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return realSetTimeout(callback, delay);
+    }) as typeof setTimeout;
+
+    try {
+      const { result } = renderHook(() => useBuildPipeline());
+      let navigation!: Promise<void>;
+      await act(async () => {
+        navigation = result.current.navigateToPipeline({
+          id: "pipeline-stalled",
+          environmentId: "env-stalled",
+          environmentType: "local",
+          projectId: "project-1",
+          taskId: "task-1",
+        });
+        await Promise.resolve();
+        expect(timeouts).toHaveLength(1);
+        timeouts[0]!();
+        await navigation;
+      });
+
+      expect(buildTabs("env-stalled").map((tab) => tab.id))
+        .toContain("build-pipeline-stalled");
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  });
+});

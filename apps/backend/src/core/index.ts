@@ -107,7 +107,12 @@ export class OrkestratorBackend {
     );
     // Start durable pipelines only after stale bridge ownership has been
     // reconciled; an immediate resume must never race an orphaned process.
-    await this.buildPipelines.init();
+    // Guarded like every other startup step above: restoring builds is not
+    // worth refusing to boot over, and an unhandled rejection here would take
+    // the gateway with it and leave the user with no application at all.
+    await this.buildPipelines.init().catch((error) => {
+      console.warn("[backend] Failed to restore build pipelines:", error);
+    });
   }
 
   async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -130,8 +135,14 @@ export class OrkestratorBackend {
     shutdownPrMonitorTracking();
     const attempt = (async () => {
       // Pipeline passes may still be writing snapshots or using a bridge.
-      // Drain them before terminating backend-owned local servers.
-      await this.buildPipelines.shutdown();
+      // Drain them before terminating backend-owned local servers — but never
+      // let a failed drain skip that teardown, or every backend-owned bridge
+      // process outlives the backend as an orphan.
+      try {
+        await this.buildPipelines.shutdown();
+      } catch (error) {
+        console.warn("[backend] Failed to drain build pipelines:", error);
+      }
       await shutdownLocalServers();
     })();
     this.shutdownPromise = attempt;

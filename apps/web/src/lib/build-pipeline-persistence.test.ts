@@ -339,3 +339,124 @@ describe("legacy build pipeline migration", () => {
     })).toEqual({ importedIds: [], skipped: 0 });
   });
 });
+
+describe("structured review normalization on hydrate", () => {
+  beforeEach(() => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map(),
+      buildEnvironmentIds: new Set(),
+    });
+  });
+
+  const legacyReport = {
+    reviewScope: {
+      targetBranch: "main",
+      baseRef: "base",
+      commit: { sha: "head", subject: "feat: build" },
+      filesReviewed: [],
+      filesSkipped: [],
+      filesLeftUncommitted: [],
+      commandsRun: [],
+      commandsNotRun: [],
+      limitations: [],
+    },
+    whatChanged: {
+      overview: "o",
+      before: "b",
+      after: "a",
+      keyCodeChanges: [],
+      userImpact: "u",
+    },
+    riskProfile: {
+      changeTypes: ["feature"],
+      riskAreas: [],
+      overallRisk: "low",
+      reasoning: "r",
+    },
+    // The legacy shape the parser is asked to upgrade: no notRun field, which
+    // the current contract requires and the backfill derives.
+    testResults: { total: 3, passed: 2, failed: 0, failures: [] },
+    strengths: [],
+    issues: [],
+    testCoverageGaps: [],
+    verdict: { ready: "yes", reasoning: "r" },
+    summaryOfChange: "s",
+    reviewSummary: "r",
+  };
+
+  test("upgrades a legacy structured review so the snapshot still validates", async () => {
+    const stored = {
+      ...snapshot(),
+      structuredReview: legacyReport,
+    } as unknown as BuildPipeline;
+
+    const hydrated = await hydrateBuildPipeline(
+      "pipeline-1",
+      async () => record(stored, 4),
+    );
+
+    // Without normalization the guard rejects the legacy report and the whole
+    // pipeline silently disappears from the UI with no error anywhere.
+    expect(hydrated).not.toBeNull();
+    expect(hydrated?.structuredReview?.testResults.notRun).toBe(1);
+  });
+
+  test("passes through a snapshot that carries no review at all", async () => {
+    const hydrated = await hydrateBuildPipeline(
+      "pipeline-1",
+      async () => record(snapshot(), 2),
+    );
+
+    expect(hydrated?.structuredReview).toBeUndefined();
+    expect(hydrated?.backendRevision).toBe(2);
+  });
+
+  test("drops a review that cannot be repaired rather than guessing", async () => {
+    const stored = {
+      ...snapshot(),
+      structuredReview: { issues: "not-a-report" },
+    } as unknown as BuildPipeline;
+
+    // The unrepaired value fails isBuildPipeline, so the record is treated as
+    // unusable. Installing it half-parsed would put an invalid report on screen.
+    expect(await hydrateBuildPipeline(
+      "pipeline-1",
+      async () => record(stored, 3),
+    )).toBeNull();
+  });
+});
+
+describe("hydration generation bookkeeping", () => {
+  beforeEach(() => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map(),
+      buildEnvironmentIds: new Set(),
+    });
+  });
+
+  test("keeps deletion markers effective across many distinct pipelines", async () => {
+    // The marker maps are bounded, and an evicted deletion marker re-opens the
+    // resurrect-a-deleted-pipeline case the markers exist to prevent. Prove the
+    // most recent deletion still wins after a burst of unrelated hydrations.
+    const listResult = deferred<Array<ReturnType<typeof record>>>();
+    const projectHydration = hydrateBuildPipelinesForProject(
+      "project-1",
+      () => listResult.promise,
+    );
+
+    for (let index = 0; index < 50; index += 1) {
+      await hydrateBuildPipeline(`filler-${index}`, async () => record(
+        { ...snapshot(`filler-${index}`) },
+        1,
+      ));
+    }
+    expect(await hydrateBuildPipeline("pipeline-1", async () => null)).toBeNull();
+
+    listResult.resolve([record(snapshot("pipeline-1"), 1)]);
+    const restored = await projectHydration;
+
+    expect(restored.map((pipeline) => pipeline.id)).not.toContain("pipeline-1");
+    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1"))
+      .toBe(false);
+  });
+});

@@ -3096,10 +3096,14 @@ export function registerTmuxBackendCommands(
   register("claude_tmux_stop", async ({ tabId, environmentId }) => {
     const envId = asString(environmentId, "environmentId");
     const tab = asString(tabId, "tabId");
-    const session = tmuxManager.remove(envId, tab);
-    if (!session) return;
-    await session.stop();
     await tmuxManager.installLock(envId).runExclusive(async () => {
+      // Start inserts its session before installing hooks and probing the
+      // executables. Removing outside this lock lets stop kill "nothing" while
+      // that start is paused, after which start can launch an untracked tmux
+      // process. Serialize the complete stop transition with start/replace.
+      const session = tmuxManager.remove(envId, tab);
+      if (!session) return;
+      await session.stop();
       if (tmuxManager.sessionsInEnvironment(envId) === 0) {
         await uninstallWorkspaceHooks(session.backend, session.workspaceHookPaths).catch((error) => {
           console.warn("[tmux] uninstallWorkspaceHooks failed", error);

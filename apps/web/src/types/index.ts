@@ -181,6 +181,10 @@ export interface Environment {
     style: "terminal" | "native";
     providerSessionId?: string;
     status: "starting" | "running" | "error";
+    /** One-shot model applied to the backend-created provider session. */
+    model?: string;
+    /** One-shot reasoning effort applied to the backend-created provider session. */
+    reasoningEffort?: string;
     startedAt?: string;
     error?: string;
   };
@@ -272,6 +276,13 @@ export interface PersistedPromptQueue<T = unknown> {
     message: T;
     requestId: string;
     reservedAt: string;
+  };
+  dispatchError?: {
+    requestId: string;
+    messageId: string;
+    messageFingerprint: string;
+    message: string;
+    failedAt: string;
   };
   updatedAt: string;
   revision: number;

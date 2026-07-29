@@ -196,6 +196,12 @@ case "$command" in
       printf '%s\n' 'new session failed' >&2
       exit 2
     fi
+    if [ -n "\${FAKE_TMUX_NEW_SESSION_BARRIER:-}" ]; then
+      : > "$FAKE_TMUX_NEW_SESSION_BARRIER.started"
+      while [ ! -f "$FAKE_TMUX_NEW_SESSION_BARRIER.release" ]; do
+        sleep 0.01
+      done
+    fi
     mkdir -p "$FAKE_TMUX_ALIVE"
     if [ -n "$session_name" ]; then
       touch "$FAKE_TMUX_ALIVE/$session_name"
@@ -331,6 +337,7 @@ exit 0
   const originalTmuxAlive = process.env.FAKE_TMUX_ALIVE;
   const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
   const originalFailNew = process.env.FAKE_TMUX_FAIL_NEW;
+  const originalNewSessionBarrier = process.env.FAKE_TMUX_NEW_SESSION_BARRIER;
   const originalNoMcpConfig = process.env.FAKE_CLAUDE_NO_MCP_CONFIG;
   process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
   process.env.HOME = home;
@@ -372,6 +379,11 @@ exit 0
     else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
     if (originalFailNew === undefined) delete process.env.FAKE_TMUX_FAIL_NEW;
     else process.env.FAKE_TMUX_FAIL_NEW = originalFailNew;
+    if (originalNewSessionBarrier === undefined) {
+      delete process.env.FAKE_TMUX_NEW_SESSION_BARRIER;
+    } else {
+      process.env.FAKE_TMUX_NEW_SESSION_BARRIER = originalNewSessionBarrier;
+    }
     if (originalNoMcpConfig === undefined) delete process.env.FAKE_CLAUDE_NO_MCP_CONFIG;
     else process.env.FAKE_CLAUDE_NO_MCP_CONFIG = originalNoMcpConfig;
   }
@@ -1119,15 +1131,21 @@ describe("Electron tmux backend command registration", () => {
     const handlers = createHandlers();
 
     await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const events: Array<Record<string, unknown>> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
-        emit: () => undefined,
+        emit: (_event: string, payload: unknown) => {
+          if (payload && typeof payload === "object") {
+            events.push(payload as Record<string, unknown>);
+          }
+        },
         appRoot: "",
         resourceRoot: "",
       };
       const args = {
         tabId: "startup-agent",
         environmentId: environment.id,
+        initialPrompt: "Inspect the workspace",
       };
 
       const first = await invoke(
@@ -1144,16 +1162,25 @@ describe("Electron tmux backend command registration", () => {
       ) as { session_id: string };
 
       expect(attached.session_id).toBe(first.session_id);
+      await waitFor(() =>
+        events.some((event) =>
+          event.kind === "initial-prompt-sent"
+          && event.session_id === first.session_id
+        ),
+      );
       let tmuxLog = await fs.readFile(log, "utf8");
       expect(
         tmuxLog.split("\n").filter((line) => line.startsWith("new-session ")),
+      ).toHaveLength(1);
+      expect(
+        tmuxLog.split("\n").filter((line) => line.startsWith("paste-buffer ")),
       ).toHaveLength(1);
       expect(tmuxLog).not.toContain("kill-session");
 
       const replaced = await invoke(
         handlers,
         "claude_tmux_start",
-        { ...args, replaceExisting: true },
+        { ...args, initialPrompt: undefined, replaceExisting: true },
         context,
       ) as { session_id: string };
       expect(replaced.session_id).not.toBe(first.session_id);
@@ -1164,6 +1191,48 @@ describe("Electron tmux backend command registration", () => {
       expect(tmuxLog).toContain("kill-session");
 
       await invoke(handlers, "claude_tmux_stop", args, context);
+    });
+  });
+
+  test("serializes stop behind an in-flight start so no tmux session is orphaned", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log, alive }) => {
+      const barrier = `${log}.new-session`;
+      process.env.FAKE_TMUX_NEW_SESSION_BARRIER = barrier;
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = {
+        tabId: "concurrent-start-stop",
+        environmentId: environment.id,
+      };
+
+      const start = invoke(handlers, "claude_tmux_start", args, context) as Promise<{
+        tmux_session: string;
+      }>;
+      await waitFor(() => existsSync(`${barrier}.started`));
+
+      let stopSettled = false;
+      const stop = invoke(handlers, "claude_tmux_stop", args, context)
+        .finally(() => {
+          stopSettled = true;
+        });
+      await delay(75);
+      const settledBeforeStartReleased = stopSettled;
+      await fs.writeFile(`${barrier}.release`, "");
+
+      const started = await start;
+      await stop;
+
+      expect(settledBeforeStartReleased).toBe(false);
+      expect(existsSync(path.join(alive, started.tmux_session))).toBe(false);
+      await expect(
+        invoke(handlers, "claude_tmux_status", args, context),
+      ).resolves.toBeNull();
     });
   });
 

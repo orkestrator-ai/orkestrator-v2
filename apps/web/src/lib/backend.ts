@@ -1738,6 +1738,7 @@ export async function saveLoopedReviewWorkflow<T>(
   version: number,
   snapshot: T,
   expectedRevision?: number,
+  controllerFence?: { ownerId: string; token: string },
 ): Promise<PersistedLoopedReviewWorkflow<T>> {
   return invoke<PersistedLoopedReviewWorkflow<T>>(
     "save_looped_review_workflow",
@@ -1747,6 +1748,12 @@ export async function saveLoopedReviewWorkflow<T>(
       version,
       snapshot,
       ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      ...(controllerFence
+        ? {
+            controllerOwnerId: controllerFence.ownerId,
+            controllerToken: controllerFence.token,
+          }
+        : {}),
     },
   );
 }
@@ -1761,7 +1768,7 @@ export async function claimLoopedReviewController(
   workflowId: string,
   ownerId: string,
   leaseMs: number,
-): Promise<{ granted: boolean; expiresAt: string }> {
+): Promise<{ granted: boolean; token?: string; expiresAt: string }> {
   return invoke("claim_looped_review_controller", {
     workflowId,
     ownerId,
@@ -1769,13 +1776,27 @@ export async function claimLoopedReviewController(
   });
 }
 
+export async function validateLoopedReviewController(
+  workflowId: string,
+  ownerId: string,
+  token: string,
+): Promise<boolean> {
+  return invoke<boolean>("validate_looped_review_controller", {
+    workflowId,
+    ownerId,
+    token,
+  });
+}
+
 export async function releaseLoopedReviewController(
   workflowId: string,
   ownerId: string,
+  token: string,
 ): Promise<void> {
   return invoke("release_looped_review_controller", {
     workflowId,
     ownerId,
+    token,
   });
 }
 
@@ -1790,6 +1811,21 @@ export async function ensureNativeAgentSession(input: {
 }): Promise<PersistedNativeAgentSession> {
   return invoke<PersistedNativeAgentSession>(
     "ensure_native_agent_session",
+    input,
+  );
+}
+
+export async function adoptNativeAgentSession(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode";
+  logicalSessionKey: string;
+  providerSessionId: string;
+  expectedProviderSessionId?: string;
+  model?: string;
+  reasoningEffort?: string;
+}): Promise<PersistedNativeAgentSession> {
+  return invoke<PersistedNativeAgentSession>(
+    "adopt_native_agent_session",
     input,
   );
 }
@@ -1950,6 +1986,15 @@ export async function claimPromptQueueHead<T>(
     expectedMessageId,
     candidateMessages,
   });
+}
+
+export async function retryPromptQueueDispatch<T = unknown>(
+  queueKey: string,
+): Promise<PersistedPromptQueue<T> | null> {
+  return invoke<PersistedPromptQueue<T> | null>(
+    "retry_prompt_queue_dispatch",
+    { queueKey },
+  );
 }
 
 // --- Unsent drafts ---

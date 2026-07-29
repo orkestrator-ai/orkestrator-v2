@@ -148,6 +148,78 @@ describe("structured review phase permissions", () => {
     }));
   });
 
+  test.each([
+    {
+      agent: "claude" as const,
+      createAdapter: (ensureSession: ReturnType<typeof mock>) =>
+        claudeAdapter(
+          { baseUrl: "http://claude.test" },
+          workflow("claude"),
+          {
+            ensureSession,
+            createSession: mock(async () => {
+              throw new Error("direct creation must not run");
+            }),
+            sendStructuredPrompt: mock(async () => null),
+            getStructuredOutput: mock(async () => null),
+            lookupSession: mock(async () => ({ kind: "missing" as const })),
+            abortSession: mock(async () => true),
+          },
+        ),
+    },
+    {
+      agent: "opencode" as const,
+      createAdapter: (ensureSession: ReturnType<typeof mock>) =>
+        openCodeAdapter(
+          {} as Parameters<typeof openCodeAdapter>[0],
+          workflow("opencode"),
+          {
+            ensureSession,
+            createSession: mock(async () => {
+              throw new Error("direct creation must not run");
+            }),
+            sendStructuredPrompt: mock(async () => ({
+              success: true,
+              requestId: "request-1",
+            })),
+            getStructuredOutput: mock(async () => null),
+            lookupSessionStatus: mock(async () => ({ kind: "missing" as const })),
+            abortSession: mock(async () => true),
+          },
+        ),
+    },
+  ])(
+    "routes $agent looped-review sessions through backend logical admission",
+    async ({ agent, createAdapter }) => {
+      const ensureSession = mock(async () => ({
+        id: "record-1",
+        key: "key-1",
+        environmentId: "env-1",
+        agent,
+        logicalSessionKey: "looped-review:workflow-1:discovery:round-1:pass-1",
+        providerSessionId: `${agent}-provider-session`,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      }));
+      const adapter = createAdapter(ensureSession);
+
+      await expect(
+        adapter.createSession(
+          "discovery",
+          "Discovery",
+          "looped-review:workflow-1:discovery:round-1:pass-1",
+        ),
+      ).resolves.toBe(`${agent}-provider-session`);
+      expect(ensureSession).toHaveBeenCalledWith(expect.objectContaining({
+        environmentId: "env-1",
+        agent,
+        logicalSessionKey:
+          "looped-review:workflow-1:discovery:round-1:pass-1",
+        phase: "review",
+      }));
+    },
+  );
+
   test("OpenCode sends only discovery sessions in plan mode", async () => {
     const modes: string[] = [];
     let nextId = 0;

@@ -16,6 +16,7 @@ import { MentionableInput, type MentionableInputRef } from "@/components/chat/Me
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
 import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
+import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
 import {
   COMPOSE_MAX_INPUT_HEIGHT,
   COMPOSE_MIN_INPUT_HEIGHT,
@@ -129,6 +130,7 @@ export function CodexComposeBar({
       [sessionKey],
     ),
   );
+  const queueRecovery = usePromptQueueDispatchRecovery("codex", sessionKey);
   const contextUsage = useCodexStore(
     useCallback((state) => state.contextUsage.get(sessionKey), [sessionKey]),
   );
@@ -687,6 +689,8 @@ export function CodexComposeBar({
         onEdit={handleQueuedMessageClick}
         onMove={handleMoveQueuedMessage}
         onRemove={handleRemoveQueuedMessage}
+        dispatchError={queueRecovery.dispatchError}
+        onRetryDispatch={queueRecovery.retry}
         renderMeta={(message) => (
           <>
             <span>{message.mode === "plan" ? "Plan" : "Build"}</span>

@@ -103,6 +103,8 @@ export interface StartupAgentSessionSnapshot {
   tabId: "startup-agent";
   agent: DefaultAgent;
   style: AgentStyle;
+  model?: string;
+  reasoningEffort?: string;
   providerSessionId?: string;
   status: "starting" | "running" | "error";
   startedAt?: string;
@@ -268,6 +270,7 @@ export interface PersistedLoopedReviewWorkflow {
   revision: number;
   controllerLease?: {
     ownerId: string;
+    token: string;
     expiresAt: string;
   };
 }
@@ -334,6 +337,23 @@ export interface PersistedPromptQueue {
     message: unknown;
     requestId: string;
     reservedAt: string;
+  };
+  /**
+   * Terminal provider rejection. The original message is restored to the head
+   * of `messages`; this marker prevents unattended retries until a caller
+   * explicitly clears it.
+   */
+  dispatchError?: {
+    requestId: string;
+    /** Stable identity of the restored queue item that was rejected. */
+    messageId: string;
+    /**
+     * SHA-256 of the rejected message's JSON representation. Queue saves keep
+     * the latch only while this exact item is still present unchanged.
+     */
+    messageFingerprint: string;
+    message: string;
+    failedAt: string;
   };
   updatedAt: string;
   revision: number;

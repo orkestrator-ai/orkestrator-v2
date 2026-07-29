@@ -8208,6 +8208,41 @@ export function createCommandRegistry(
     });
   });
 
+  register("adopt_native_agent_session", async (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    return context.nativeAgents.adoptSession({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as "claude" | "codex" | "opencode",
+      logicalSessionKey: asNonBlankString(
+        args.logicalSessionKey,
+        "logicalSessionKey",
+      ),
+      providerSessionId: asNonBlankString(
+        args.providerSessionId,
+        "providerSessionId",
+      ),
+      expectedProviderSessionId:
+        args.expectedProviderSessionId === undefined
+          ? undefined
+          : asNonBlankString(
+              args.expectedProviderSessionId,
+              "expectedProviderSessionId",
+            ),
+      title: typeof args.title === "string" ? args.title : undefined,
+      model: typeof args.model === "string" ? args.model : undefined,
+      reasoningEffort:
+        typeof args.reasoningEffort === "string"
+          ? args.reasoningEffort
+          : undefined,
+      phase:
+        typeof args.phase === "string"
+          ? args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase
+          : undefined,
+    });
+  });
+
   register("dispatch_native_agent_prompt", async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
@@ -8249,7 +8284,15 @@ export function createCommandRegistry(
   );
   register(
     "save_looped_review_workflow",
-    ({ workflowId, environmentId, version, snapshot, expectedRevision }, { storage }) =>
+    ({
+      workflowId,
+      environmentId,
+      version,
+      snapshot,
+      expectedRevision,
+      controllerOwnerId,
+      controllerToken,
+    }, { storage }) =>
       storage.saveLoopedReviewWorkflow(
         asString(workflowId, "workflowId"),
         asString(environmentId, "environmentId"),
@@ -8258,6 +8301,12 @@ export function createCommandRegistry(
         expectedRevision === undefined
           ? undefined
           : asNumber(expectedRevision, "expectedRevision"),
+        controllerOwnerId === undefined && controllerToken === undefined
+          ? undefined
+          : {
+              ownerId: asNonBlankString(controllerOwnerId, "controllerOwnerId"),
+              token: asNonBlankString(controllerToken, "controllerToken"),
+            },
       ),
   );
   register(
@@ -8270,11 +8319,21 @@ export function createCommandRegistry(
       ),
   );
   register(
+    "validate_looped_review_controller",
+    ({ workflowId, ownerId, token }, { storage }) =>
+      storage.validateLoopedReviewController(
+        asNonBlankString(workflowId, "workflowId"),
+        asNonBlankString(ownerId, "ownerId"),
+        asNonBlankString(token, "token"),
+      ),
+  );
+  register(
     "release_looped_review_controller",
-    ({ workflowId, ownerId }, { storage }) =>
+    ({ workflowId, ownerId, token }, { storage }) =>
       storage.releaseLoopedReviewController(
         asNonBlankString(workflowId, "workflowId"),
         asNonBlankString(ownerId, "ownerId"),
+        asNonBlankString(token, "token"),
       ),
   );
   register("delete_looped_review_workflow", ({ workflowId }, { storage }) =>
@@ -8391,6 +8450,9 @@ export function createCommandRegistry(
         asString(expectedMessageId, "expectedMessageId"),
         candidateMessages as unknown[],
       ),
+  );
+  register("retry_prompt_queue_dispatch", ({ queueKey }, { storage }) =>
+    storage.retryPromptQueueDispatch(asString(queueKey, "queueKey")),
   );
   register("get_compose_draft", ({ draftKey }, { storage }) =>
     storage.getComposeDraft(asString(draftKey, "draftKey")),

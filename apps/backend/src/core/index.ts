@@ -227,6 +227,10 @@ export class OrkestratorBackend {
         // process outlives the backend as an orphan.
         try {
           await this.nativeAgents.shutdown();
+        } catch (error) {
+          console.warn("[backend] Failed to drain native agent work:", error);
+        }
+        try {
           await this.buildPipelines.shutdown();
         } catch (error) {
           console.warn("[backend] Failed to drain build pipelines:", error);

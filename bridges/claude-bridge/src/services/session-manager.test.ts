@@ -327,6 +327,8 @@ import {
 
 const {
   createSession,
+  createOrRecoverSession,
+  sessionIdForClientKey,
   getSession,
   listSessions,
   deleteSession,
@@ -563,6 +565,78 @@ describe("session lifecycle", () => {
     expect(
       listSessions().filter((session) => session.id === first.id),
     ).toHaveLength(1);
+  });
+
+  test("recovers a client-key session onto the same SDK rollout after restart", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-client-session-restart-"));
+    setClaudeHomeForTesting(directory);
+    const clientSessionKey = "env-env-1:startup-agent";
+    const first = createSession("Startup agent", clientSessionKey);
+    track(first.id);
+    try {
+      const sdkSessionId = sessionIdForClientKey(clientSessionKey)
+        ?.slice("session-client-".length)
+        .replace(
+          /^(.{8})(.{4})(.{4})(.{4})(.{12})$/,
+          "$1-$2-$3-$4-$5",
+        );
+      expect(sdkSessionId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+      if (!sdkSessionId) throw new Error("client session key did not produce an SDK id");
+
+      const firstPrompt = sendPrompt(first.id, "Inspect the workspace");
+      const firstCall = await nextQueryCall();
+      expect(firstCall.options.sessionId).toBe(sdkSessionId);
+      expect(firstCall.options.resume).toBeUndefined();
+      firstCall.push({
+        type: "system",
+        subtype: "init",
+        session_id: sdkSessionId,
+        mcp_servers: [],
+        plugins: [],
+        slash_commands: [],
+      });
+      firstCall.push({ type: "result", subtype: "success" });
+      firstCall.finish();
+      await firstPrompt;
+
+      expect(await readSessionPreferences(sdkSessionId)).toMatchObject({
+        clientSessionBridgeId: first.id,
+      });
+
+      // Simulate the in-memory registry disappearing while the SDK rollout and
+      // bridge-owned preference file survive.
+      expect(deleteSession(first.id)).toBe(true);
+      mockSdkGetSessionInfo.mockImplementation(async (id) =>
+        id === sdkSessionId
+          ? sdkSessionInfo({
+              sessionId: sdkSessionId,
+              customTitle: "Recovered startup agent",
+            })
+          : undefined);
+
+      const recovered = await createOrRecoverSession(
+        "Ignored retry title",
+        clientSessionKey,
+      );
+      expect(recovered).toMatchObject({
+        id: first.id,
+        sdkSessionId,
+        title: "Recovered startup agent",
+      });
+
+      const followUp = sendPrompt(recovered.id, "Continue the work");
+      const followUpCall = await nextQueryCall();
+      expect(followUpCall.options.resume).toBe(sdkSessionId);
+      expect(followUpCall.options.sessionId).toBeUndefined();
+      followUpCall.push({ type: "result", subtype: "success" });
+      followUpCall.finish();
+      await followUp;
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   test("getSession and listSessions return registered sessions", () => {
@@ -5319,6 +5393,35 @@ describe("reconcilePersistedSessions", () => {
     expect(adopted?.lastActivity.toISOString()).toBe("2026-07-01T00:00:00.000Z");
     // Listing must stay bounded for a large Claude home.
     expect(mockSdkGetSessionMessages).not.toHaveBeenCalled();
+  });
+
+  test("reconciles a persisted client-key rollout under its stable alias", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-reconcile-client-alias-"));
+    setClaudeHomeForTesting(directory);
+    const clientSessionKey = "env-env-1:startup-agent";
+    const alias = sessionIdForClientKey(clientSessionKey)!;
+    const sdkSessionId = alias
+      .slice("session-client-".length)
+      .replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "$1-$2-$3-$4-$5");
+    try {
+      await updateSessionPreferences(sdkSessionId, {
+        clientSessionBridgeId: alias,
+      });
+      mockSdkListSessions.mockImplementation(async () => [
+        sdkSessionInfo({ sessionId: sdkSessionId, cwd: "/repo/env-a" }),
+      ]);
+
+      await withWorkspaceCwd("/repo/env-a", async () => {
+        await reconcilePersistedSessions();
+      });
+      track(alias);
+
+      expect(getSession(alias)).toMatchObject({ sdkSessionId });
+      expect(getSession(`session-${sdkSessionId}`)).toBeUndefined();
+    } finally {
+      setClaudeHomeForTesting(sessionManagerTestHome);
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   test("rehydrates durable plan mode and suppresses a journaled request after restart", async () => {

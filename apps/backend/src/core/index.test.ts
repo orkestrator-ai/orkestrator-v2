@@ -248,6 +248,96 @@ test("startup remains available when the tmux runtime reaper fails", async () =>
   }
 });
 
+test("native-agent restore failure leaves commands available and shutdown still drains pipelines", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-native-lifecycle-"));
+  const calls: string[] = [];
+  const tools = fakeAgentTools({
+    start: async () => {
+      calls.push("tools:start");
+    },
+    stop: async () => {
+      calls.push("tools:stop");
+    },
+  });
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    agentTools: tools,
+    startupReapers: {
+      localServers: async () => [],
+      claudeTmuxRuntimes: async () => [],
+    },
+  });
+  const internals = backend as unknown as {
+    buildPipelines: {
+      init: () => Promise<void>;
+      shutdown: () => Promise<void>;
+    };
+    nativeAgents: {
+      init: () => Promise<void>;
+      shutdown: () => Promise<void>;
+      ensureSession: (input: Record<string, unknown>) => Promise<unknown>;
+    };
+  };
+  internals.buildPipelines.init = mock(async () => {
+    calls.push("pipelines:init");
+  });
+  internals.nativeAgents.init = mock(async () => {
+    calls.push("native:init");
+    throw new Error("restore failed");
+  });
+  internals.nativeAgents.ensureSession = mock(async (input) => ({
+    providerSessionId: "provider-1",
+    ...input,
+  }));
+  internals.nativeAgents.shutdown = mock(async () => {
+    calls.push("native:shutdown");
+    throw new Error("native drain failed");
+  });
+  internals.buildPipelines.shutdown = mock(async () => {
+    calls.push("pipelines:shutdown");
+  });
+
+  const originalWarn = console.warn;
+  console.warn = () => undefined;
+  try {
+    await expect(backend.init()).resolves.toBeUndefined();
+    expect(calls).toEqual([
+      "tools:start",
+      "pipelines:init",
+      "native:init",
+    ]);
+    await expect(backend.invoke("ensure_native_agent_session", {
+      environmentId: "env-1",
+      agent: "codex",
+      logicalSessionKey: "env-env-1:tab-1",
+    })).resolves.toMatchObject({ providerSessionId: "provider-1" });
+    expect(internals.nativeAgents.ensureSession).toHaveBeenCalledWith({
+      environmentId: "env-1",
+      agent: "codex",
+      logicalSessionKey: "env-env-1:tab-1",
+      title: undefined,
+      model: undefined,
+      reasoningEffort: undefined,
+      phase: undefined,
+    });
+
+    await expect(backend.shutdown()).resolves.toBeUndefined();
+    expect(calls.slice(-3)).toEqual([
+      "native:shutdown",
+      "pipelines:shutdown",
+      "tools:stop",
+    ]);
+  } finally {
+    console.warn = originalWarn;
+    await backend.shutdown().catch(() => undefined);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("shutdown clears backend-owned PR watch state before a new backend starts", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-pr-shutdown-"));
   const options = {

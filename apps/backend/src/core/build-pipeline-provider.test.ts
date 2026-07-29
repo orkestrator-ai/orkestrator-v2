@@ -154,6 +154,12 @@ describe("HTTP build pipeline provider", () => {
     const unavailable = httpProvider(() => new Response(null, { status: 503 }));
     await expect(unavailable.provider.send("s", "prompt", { requestId: "r" }))
       .rejects.toBeInstanceOf(ProviderUnavailableError);
+
+    for (const status of [404, 409]) {
+      const raced = httpProvider(() => new Response(null, { status }));
+      await expect(raced.provider.send("s", "prompt", { requestId: "r" }))
+        .rejects.toBeInstanceOf(ProviderUnavailableError);
+    }
   });
 
   test("reads status and messages, dispatches prompts, and aborts sessions", async () => {
@@ -173,6 +179,7 @@ describe("HTTP build pipeline provider", () => {
     ]);
     await provider.send("session/1", "Build it", {
       requestId: "request-1",
+      fastMode: true,
       images: [{ filename: "screen.webp", data: "AA==" }],
     });
     await provider.abort("session/1");
@@ -186,12 +193,25 @@ describe("HTTP build pipeline provider", () => {
     expect(JSON.parse(String(requests[2]!.init.body))).toMatchObject({
       prompt: "Build it",
       requestId: "request-1",
+      fastMode: true,
       permissionMode: "bypassPermissions",
       attachments: [{
         type: "image",
         source: { media_type: "image/webp", data: "AA==" },
       }],
     });
+  });
+
+  test("keeps queued Claude plan turns in plan permission mode", async () => {
+    const { provider, requests } = httpProvider(() =>
+      new Response(null, { status: 204 }));
+
+    await provider.send("session-1", "Inspect only", {
+      requestId: "request-plan",
+      mode: "plan",
+    });
+
+    expect(JSON.parse(String(requests[0]!.init.body)).permissionMode).toBe("plan");
   });
 
   test("rejects malformed session creation responses", async () => {
@@ -510,6 +530,14 @@ describe("OpenCode build pipeline provider", () => {
       await expect(provider.send("owned-session", "prompt", {
         requestId: "request-1",
       })).rejects.toBeInstanceOf(PromptRejectedError);
+
+      fake.setPromptResponse({
+        error: { message: "session restarting" },
+        response: new Response(null, { status: 404 }),
+      });
+      await expect(provider.send("owned-session", "prompt", {
+        requestId: "request-2",
+      })).rejects.toBeInstanceOf(ProviderUnavailableError);
     } finally {
       await provider.dispose?.();
     }
@@ -627,6 +655,7 @@ describe("HTTP build pipeline provider (codex)", () => {
 
     await provider.send("codex-1", "Build it", {
       requestId: "request-1",
+      fastMode: false,
       images: [{ filename: "shot.jpeg", data: "AAAA" }],
     });
 
@@ -636,6 +665,7 @@ describe("HTTP build pipeline provider (codex)", () => {
       filename: "shot.jpeg",
       dataUrl: "data:image/jpeg;base64,AAAA",
     }]);
+    expect(body.fastMode).toBe(false);
     // permissionMode/model/effort are claude prompt options; codex takes its
     // model at session creation and would reject them here.
     expect(body.permissionMode).toBeUndefined();
@@ -716,6 +746,21 @@ describe("OpenCode build pipeline provider dispatch", () => {
       expect(call!.agent).toBe("build");
       expect(call!.directory).toBe("/workspace");
       expect(call!.parts).toEqual([{ type: "text", text: "Build it" }]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("dispatches queued OpenCode plan turns to the plan agent", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await provider.send("owned-session", "Inspect only", {
+        requestId: "request-plan",
+        mode: "plan",
+      });
+
+      expect(fake.promptCalls[0]!.agent).toBe("plan");
     } finally {
       await provider.dispose?.();
     }

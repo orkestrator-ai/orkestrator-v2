@@ -825,10 +825,12 @@ export function TerminalContainer({
   // optimization for the uninterrupted creation path.
   useEffect(() => {
     if (!environment) return;
-    const backendLaunch =
-      environment.startupAgentSession?.status === "running"
-        ? environment.startupAgentSession
-        : undefined;
+    const startupSession = environment.startupAgentSession;
+    // A starting or failed launch is still owned by the backend. In particular,
+    // pendingAgentLaunch is the backend's retry intent after an error, so a
+    // renderer must not project an ordinary text-only launch and clear it.
+    if (startupSession && startupSession.status !== "running") return;
+    const backendLaunch = startupSession;
     if (
       (!environment.pendingAgentLaunch && !backendLaunch)
       || !currentEnvState
@@ -924,6 +926,10 @@ export function TerminalContainer({
           launchMode: "native",
           providerSessionId: backendLaunch.providerSessionId,
           initialPrompt: undefined,
+          model: backendLaunch.model ?? pendingNativeLaunch.model,
+          reasoningEffort:
+            backendLaunch.reasoningEffort
+            ?? pendingNativeLaunch.reasoningEffort,
         });
       }
       return;
@@ -957,8 +963,10 @@ export function TerminalContainer({
         agentType === "claude" && launchMode === "native"
           ? claudeNativeBackend
           : undefined,
-      model: environment.initialAgentModel,
-      reasoningEffort: environment.initialReasoningEffort,
+      model: backendLaunch?.model ?? environment.initialAgentModel,
+      reasoningEffort:
+        backendLaunch?.reasoningEffort
+        ?? environment.initialReasoningEffort,
       providerSessionId: backendLaunch?.providerSessionId,
     });
   }, [

@@ -18,6 +18,7 @@ import type { ClaudeModel } from "@/lib/claude-client";
 import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
 import { parseSlashCommands } from "@/lib/chat/slash-commands";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
+import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
 import {
   COMPOSE_MAX_INPUT_HEIGHT,
   COMPOSE_MIN_INPUT_HEIGHT,
@@ -151,6 +152,7 @@ export function ClaudeComposeBar({
   const queuedMessages = useClaudeStore(
     useCallback((state) => state.getQueuedMessages(sessionKey), [sessionKey]),
   );
+  const queueRecovery = usePromptQueueDispatchRecovery("claude", sessionKey);
   const applyPlanMode = useCallback((enabled: boolean) => {
     setPlanMode(sessionKey, enabled);
     void onPlanModeChange?.(enabled);
@@ -765,6 +767,8 @@ export function ClaudeComposeBar({
         onEdit={handleQueuedMessageClick}
         onMove={handleMoveQueuedMessage}
         onRemove={handleRemoveQueuedMessage}
+        dispatchError={queueRecovery.dispatchError}
+        onRetryDispatch={queueRecovery.retry}
         renderMeta={(message) => (
           <>
             <span>Effort: {EFFORT_LABELS[message.effort]}</span>

@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { isPrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
 import {
+  __testing as commandTesting,
   createCommandRegistry,
   findKanbanTaskForEnvironment,
   getPrMonitorDetectionRequest,
@@ -31,6 +32,7 @@ async function withCommands<T>(
     claudeStatePolls?: ClaudeStatePollManager;
     environment?: Record<string, unknown>;
     buildPipelines?: CommandContext["buildPipelines"];
+    nativeAgents?: CommandContext["nativeAgents"];
   } = {},
 ): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-state-sync-"));
@@ -53,6 +55,7 @@ async function withCommands<T>(
     emit: () => undefined,
     storage,
     buildPipelines: options.buildPipelines,
+    nativeAgents: options.nativeAgents,
   } as unknown as CommandContext;
 
   const invoke = async (command: string, args: Record<string, unknown>) => {
@@ -81,6 +84,20 @@ describe("prompt queue commands", () => {
         .resolves.toMatchObject({ messages: [{ id: "m1" }] });
       await expect(invoke("list_prompt_queues", { environmentId: "e1" }))
         .resolves.toHaveLength(1);
+    });
+  });
+
+  test("explicitly retries a terminal queue dispatch", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.savePromptQueue(KEY, "e1", [{ id: "m1", text: "invalid" }]);
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+      await storage.failPromptQueueDispatch(KEY, "m1");
+
+      await expect(invoke("retry_prompt_queue_dispatch", { queueKey: KEY }))
+        .resolves.toMatchObject({
+          messages: [{ id: "m1", text: "invalid" }],
+        });
+      expect((await storage.getPromptQueue(KEY))?.dispatchError).toBeUndefined();
     });
   });
 
@@ -364,6 +381,309 @@ describe("agent handoff commands", () => {
       })).rejects.toThrow("environmentId");
 
       await expect(storage.getAgentHandoff("kept")).resolves.not.toBeNull();
+    });
+  });
+});
+
+describe("native agent and looped-review controller commands", () => {
+  test("maps native session and dispatch arguments to the backend authority", async () => {
+    const ensureSession = mock(async (input: unknown) => ({
+      operation: "ensure",
+      input,
+    }));
+    const dispatchPrompt = mock(async (input: unknown) => ({
+      operation: "dispatch",
+      input,
+    }));
+    const adoptSession = mock(async (input: unknown) => ({
+      operation: "adopt",
+      input,
+    }));
+    const nativeAgents = {
+      ensureSession,
+      adoptSession,
+      dispatchPrompt,
+    } as unknown as NonNullable<CommandContext["nativeAgents"]>;
+
+    await withCommands(async (invoke) => {
+      await expect(invoke("ensure_native_agent_session", {
+        environmentId: "e1",
+        agent: "codex",
+        logicalSessionKey: "env-e1:tab-1",
+        title: "Review",
+        model: "gpt-test",
+        reasoningEffort: "high",
+        phase: "review",
+      })).resolves.toMatchObject({ operation: "ensure" });
+      expect(ensureSession).toHaveBeenCalledWith({
+        environmentId: "e1",
+        agent: "codex",
+        logicalSessionKey: "env-e1:tab-1",
+        title: "Review",
+        model: "gpt-test",
+        reasoningEffort: "high",
+        phase: "review",
+      });
+
+      await expect(invoke("adopt_native_agent_session", {
+        environmentId: "e1",
+        agent: "opencode",
+        logicalSessionKey: "env-e1:tab-adopted",
+        providerSessionId: "provider-new",
+        expectedProviderSessionId: "provider-old",
+        model: "provider/model",
+        reasoningEffort: "high",
+      })).resolves.toMatchObject({ operation: "adopt" });
+      expect(adoptSession).toHaveBeenCalledWith({
+        environmentId: "e1",
+        agent: "opencode",
+        logicalSessionKey: "env-e1:tab-adopted",
+        providerSessionId: "provider-new",
+        expectedProviderSessionId: "provider-old",
+        title: undefined,
+        model: "provider/model",
+        reasoningEffort: "high",
+        phase: undefined,
+      });
+
+      const schema = { type: "object" };
+      const images = [{ filename: "reference.png", data: "cG5n" }];
+      await expect(invoke("dispatch_native_agent_prompt", {
+        environmentId: "e1",
+        agent: "claude",
+        logicalSessionKey: "env-e1:tab-2",
+        prompt: "Review this",
+        requestId: "request-1",
+        images,
+        schema,
+      })).resolves.toMatchObject({ operation: "dispatch" });
+      expect(dispatchPrompt).toHaveBeenCalledWith({
+        environmentId: "e1",
+        agent: "claude",
+        logicalSessionKey: "env-e1:tab-2",
+        title: undefined,
+        model: undefined,
+        reasoningEffort: undefined,
+        phase: undefined,
+        prompt: "Review this",
+        requestId: "request-1",
+        images,
+        schema,
+      });
+
+      await expect(invoke("dispatch_native_agent_prompt", {
+        environmentId: "e1",
+        agent: "claude",
+        logicalSessionKey: "env-e1:tab-2",
+        prompt: " ",
+        requestId: "request-2",
+      })).rejects.toThrow("non-blank string");
+      await expect(invoke("adopt_native_agent_session", {
+        environmentId: "e1",
+        agent: "opencode",
+        logicalSessionKey: "env-e1:tab-adopted",
+        providerSessionId: " ",
+      })).rejects.toThrow("non-blank string");
+      expect(dispatchPrompt).toHaveBeenCalledTimes(1);
+      expect(adoptSession).toHaveBeenCalledTimes(1);
+    }, { nativeAgents });
+  });
+
+  test("reports unavailable native supervision before accepting work", async () => {
+    await withCommands(async (invoke) => {
+      await expect(invoke("ensure_native_agent_session", {
+        environmentId: "e1",
+        agent: "codex",
+        logicalSessionKey: "env-e1:tab-1",
+      })).rejects.toThrow("Native agent service is unavailable");
+      await expect(invoke("dispatch_native_agent_prompt", {
+        environmentId: "e1",
+        agent: "codex",
+        logicalSessionKey: "env-e1:tab-1",
+        prompt: "Build",
+        requestId: "request-1",
+      })).rejects.toThrow("Native agent service is unavailable");
+      await expect(invoke("adopt_native_agent_session", {
+        environmentId: "e1",
+        agent: "codex",
+        logicalSessionKey: "env-e1:tab-1",
+        providerSessionId: "provider-1",
+      })).rejects.toThrow("Native agent service is unavailable");
+    });
+  });
+
+  test("acknowledges only the startup session identified by optional fencing fields", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        startupAgentSession: {
+          tabId: "startup-agent",
+          agent: "codex",
+          style: "native",
+          providerSessionId: "provider-1",
+          status: "running",
+          startedAt: "2026-07-29T12:00:00.000Z",
+        },
+      });
+
+      await expect(invoke("acknowledge_startup_agent_session", {
+        environmentId: "e1",
+        providerSessionId: "provider-old",
+      })).resolves.toMatchObject({
+        startupAgentSession: { providerSessionId: "provider-1" },
+      });
+      await expect(invoke("acknowledge_startup_agent_session", {
+        environmentId: "e1",
+        providerSessionId: "provider-1",
+        startedAt: "2026-07-29T12:00:00.000Z",
+      })).resolves.toMatchObject({ id: "e1" });
+      expect((await storage.getEnvironment("e1"))?.startupAgentSession)
+        .toBeUndefined();
+
+      await expect(invoke("acknowledge_startup_agent_session", {
+        environmentId: "e1",
+        providerSessionId: " ",
+      })).rejects.toThrow("non-blank string");
+    });
+  });
+
+  test("claims, validates, and releases a fenced looped-review controller lease", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.saveLoopedReviewWorkflow(
+        "workflow-1",
+        "e1",
+        1,
+        { id: "workflow-1", phase: "reviewing" },
+      );
+
+      const claimed = await invoke("claim_looped_review_controller", {
+        workflowId: "workflow-1",
+        ownerId: "desktop",
+        leaseMs: 15_000,
+      }) as { granted: boolean; token: string; expiresAt: string };
+      expect(claimed.granted).toBe(true);
+      expect(typeof claimed.token).toBe("string");
+      expect(claimed.token.length).toBeGreaterThan(0);
+      expect(Number.isFinite(Date.parse(claimed.expiresAt))).toBe(true);
+      const valid = await invoke("validate_looped_review_controller", {
+        workflowId: "workflow-1",
+        ownerId: "desktop",
+        token: claimed.token,
+      });
+      expect(valid).toBe(true);
+      await expect(invoke("save_looped_review_workflow", {
+        workflowId: "workflow-1",
+        environmentId: "e1",
+        version: 1,
+        snapshot: { id: "workflow-1", phase: "fixing" },
+        expectedRevision: 1,
+        controllerOwnerId: "desktop",
+        controllerToken: claimed.token,
+      })).resolves.toMatchObject({
+        revision: 2,
+        snapshot: { id: "workflow-1", phase: "fixing" },
+      });
+      await expect(invoke("save_looped_review_workflow", {
+        workflowId: "workflow-1",
+        environmentId: "e1",
+        version: 1,
+        snapshot: { id: "workflow-1", phase: "stale" },
+        expectedRevision: 2,
+        controllerOwnerId: "desktop",
+      })).rejects.toThrow("controllerToken");
+      await expect(invoke("release_looped_review_controller", {
+        workflowId: "workflow-1",
+        ownerId: "desktop",
+        token: claimed.token,
+      })).resolves.toBeUndefined();
+      await expect(invoke("validate_looped_review_controller", {
+        workflowId: "workflow-1",
+        ownerId: "desktop",
+        token: claimed.token,
+      })).resolves.toBe(false);
+    });
+  });
+
+  test("reconciles a pending launch after setup and re-reads authoritative state", async () => {
+    const reconcileInitialLaunch = mock(async (_environmentId: string) => undefined);
+    const nativeAgents = {
+      reconcileInitialLaunch,
+    } as unknown as NonNullable<CommandContext["nativeAgents"]>;
+
+    await withCommands(async (_invoke, storage) => {
+      reconcileInitialLaunch.mockImplementationOnce(async (environmentId) => {
+        await storage.updateEnvironment(environmentId, {
+          pendingAgentLaunch: false,
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "codex",
+            style: "native",
+            providerSessionId: "provider-1",
+            status: "running",
+          },
+        });
+      });
+      const environment = await storage.getEnvironment("e1");
+      if (!environment) throw new Error("Test environment is missing");
+      const completed = await commandTesting.completeEnvironmentSetup(
+        environment,
+        {
+          storage,
+          emit: () => undefined,
+          appRoot: "",
+          resourceRoot: "",
+          environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+          nativeAgents,
+        },
+      );
+
+      expect(reconcileInitialLaunch).toHaveBeenCalledWith("e1");
+      expect(completed).toMatchObject({
+        setupScriptsComplete: true,
+        pendingAgentLaunch: false,
+        startupAgentSession: {
+          providerSessionId: "provider-1",
+          status: "running",
+        },
+      });
+    }, {
+      nativeAgents,
+      environment: {
+        createdFromCommit: "commit-1",
+        pendingAgentLaunch: true,
+      },
+    });
+  });
+
+  test("keeps setup complete and launch pending when reconciliation fails", async () => {
+    const nativeAgents = {
+      reconcileInitialLaunch: mock(async () => {
+        throw new Error("bridge unavailable");
+      }),
+    } as unknown as NonNullable<CommandContext["nativeAgents"]>;
+
+    await withCommands(async (_invoke, storage) => {
+      const environment = await storage.getEnvironment("e1");
+      if (!environment) throw new Error("Test environment is missing");
+      await expect(commandTesting.completeEnvironmentSetup(
+        environment,
+        {
+          storage,
+          emit: () => undefined,
+          appRoot: "",
+          resourceRoot: "",
+          environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+          nativeAgents,
+        },
+      )).resolves.toMatchObject({
+        setupScriptsComplete: true,
+        pendingAgentLaunch: true,
+      });
+    }, {
+      nativeAgents,
+      environment: {
+        createdFromCommit: "commit-1",
+        pendingAgentLaunch: true,
+      },
     });
   });
 });

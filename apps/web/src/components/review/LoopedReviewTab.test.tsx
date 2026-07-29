@@ -505,15 +505,27 @@ describe("app-lifetime looped-review controller", () => {
   test("advances a restored workflow without a visible tab", async () => {
     const workflow = seedSentReconciliationWorkflow();
     const agent = agentWith(async () => successfulReconciliation);
+    const persistWorkflow = mock(async (
+      workflowId: string,
+      options?: { controllerFence?: { ownerId: string; token: string } },
+    ) => {
+      expect(options?.controllerFence).toMatchObject({
+        token: "lease-token",
+      });
+      return useLoopedReviewStore.getState().workflows.get(workflowId)!;
+    });
     render(
       <LoopedReviewSupervisor
         connectAgent={async () => agent}
         pollIntervalMs={1}
         claimController={async () => ({
           granted: true,
+          token: "lease-token",
           expiresAt: new Date(Date.now() + 15_000).toISOString(),
         })}
+        validateController={async () => true}
         releaseController={async () => undefined}
+        persistWorkflow={persistWorkflow}
       />,
     );
 
@@ -533,6 +545,172 @@ describe("app-lifetime looped-review controller", () => {
         file: TEST_STRUCTURED_REVIEW_REPORT.testCoverageGaps[0]!.file,
       }],
     });
+    expect(persistWorkflow).toHaveBeenCalled();
+  });
+
+  test("does not connect an agent when the controller lease is denied", async () => {
+    seedSentReconciliationWorkflow();
+    const connectAgent = mock(async () => agentWith(async () => null));
+
+    render(
+      <LoopedReviewSupervisor
+        connectAgent={connectAgent}
+        pollIntervalMs={1}
+        claimController={async () => ({
+          granted: false,
+          expiresAt: new Date(Date.now() + 15_000).toISOString(),
+        })}
+        validateController={async () => false}
+        releaseController={async () => undefined}
+      />,
+    );
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(connectAgent).not.toHaveBeenCalled();
+  });
+
+  test("locally expires ownership while a renewal request is hanging", async () => {
+    seedSentReconciliationWorkflow();
+    const hangingRenewal = deferred<never>();
+    let claims = 0;
+    let reads = 0;
+    const agent = agentWith(
+      async () => {
+        reads += 1;
+        return null;
+      },
+      async () => "running",
+    );
+
+    render(
+      <LoopedReviewSupervisor
+        connectAgent={async () => agent}
+        pollIntervalMs={1}
+        controllerLeaseMs={30}
+        controllerRenewMs={5}
+        claimController={async () => {
+          claims += 1;
+          if (claims > 1) return hangingRenewal.promise;
+          return {
+            granted: true,
+            token: "lease-token",
+            expiresAt: new Date(Date.now() + 30).toISOString(),
+          };
+        }}
+        validateController={async () => true}
+        releaseController={async () => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(reads).toBeGreaterThan(0));
+    await waitFor(() => expect(claims).toBe(2));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 45));
+    });
+    const readsAfterExpiry = reads;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    });
+    expect(reads).toBe(readsAfterExpiry);
+  });
+
+  test("drops a structured result that completes after the lease is lost", async () => {
+    const workflow = seedSentReconciliationWorkflow();
+    const pending = deferred<typeof successfulReconciliation>();
+    let reads = 0;
+    let leaseValid = true;
+    const agent = agentWith(async () => {
+      reads += 1;
+      return pending.promise;
+    });
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        driveWorkflow
+        controllerOnly
+        controllerLease={{
+          ownerId: "owner-1",
+          token: "token-1",
+          expiresAt: new Date(Date.now() + 15_000).toISOString(),
+        }}
+        validateControllerLease={async () => leaseValid}
+        connectAgent={async () => agent}
+        pollIntervalMs={1}
+      />,
+    );
+    await waitFor(() => expect(reads).toBe(1));
+
+    leaseValid = false;
+    await act(async () => {
+      pending.resolve(successfulReconciliation);
+      await pending.promise;
+    });
+
+    expect(
+      useLoopedReviewStore.getState().workflows.get(workflow.id),
+    ).toMatchObject({
+      phase: "reconciling",
+      dispatch: { id: "dispatch-1", requestId: "request-1" },
+      activePool: { issues: [], coverageGaps: [] },
+    });
+  });
+
+  test("does not send after ownership is lost during agent connection", async () => {
+    const workflow = seedSentReconciliationWorkflow();
+    useLoopedReviewStore.setState({
+      workflows: new Map([[
+        workflow.id,
+        {
+          ...workflow,
+          dispatch: { ...workflow.dispatch!, state: "prepared" },
+        },
+      ]]),
+    });
+    const connection = deferred<NativeStructuredAgent>();
+    let leaseValid = true;
+    const send = mock(async (
+      _sessionId: string,
+      _prompt: string,
+      _schema: unknown,
+      requestId: string,
+    ) => ({ accepted: true as const, requestId }));
+    const agent: NativeStructuredAgent = {
+      ...agentWith(async () => null),
+      send,
+    };
+    const connectAgent = mock(async () => connection.promise);
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        driveWorkflow
+        controllerOnly
+        controllerLease={{
+          ownerId: "owner-1",
+          token: "token-1",
+          expiresAt: new Date(Date.now() + 15_000).toISOString(),
+        }}
+        validateControllerLease={async () => leaseValid}
+        connectAgent={connectAgent}
+        pollIntervalMs={1}
+      />,
+    );
+
+    await waitFor(() => expect(connectAgent).toHaveBeenCalledTimes(1));
+    leaseValid = false;
+    await act(async () => {
+      connection.resolve(agent);
+      await connection.promise;
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).not.toHaveBeenCalled();
   });
 
   test("preserves a result lease across pause and applies it once after resume", async () => {

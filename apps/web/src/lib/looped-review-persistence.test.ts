@@ -4,6 +4,7 @@ import {
   hydrateLoopedReviewWorkflowsForEnvironment,
   isLoopedReviewWorkflow,
   persistLoopedReviewWorkflowNow,
+  registerLoopedReviewControllerFence,
   startLoopedReviewPersistence,
   type LoopedReviewPersistenceOptions,
 } from "./looped-review-persistence";
@@ -216,6 +217,82 @@ describe("looped-review authoritative persistence", () => {
       }),
       load: mock(async () => persisted(winner, 2)),
     })).resolves.toMatchObject({ phase: "paused", backendRevision: 2 });
+  });
+
+  test("fences controller commits and discards a rejected equal-revision transition", async () => {
+    const authoritative = createWorkflow();
+    useLoopedReviewStore.getState().pauseWorkflow(authoritative.id);
+    const save = mock(async (
+      _id: string,
+      _environmentId: string,
+      _version: number,
+      _snapshot: LoopedReviewWorkflow,
+      _expectedRevision?: number,
+      controllerFence?: { ownerId: string; token: string },
+    ) => {
+      expect(controllerFence).toEqual({
+        ownerId: "controller-a",
+        token: "generation-a",
+      });
+      throw new Error("Looped review controller lease conflict");
+    });
+
+    await expect(persistLoopedReviewWorkflowNow(authoritative.id, {
+      save,
+      load: mock(async () => persisted(authoritative, 0)),
+      controllerFence: {
+        ownerId: "controller-a",
+        token: "generation-a",
+      },
+    })).resolves.toMatchObject({
+      phase: "preparing",
+      backendRevision: 0,
+    });
+    expect(
+      useLoopedReviewStore.getState().workflows.get(authoritative.id),
+    ).toMatchObject({
+      phase: "preparing",
+      backendRevision: 0,
+    });
+  });
+
+  test("captures the active controller fence on debounced transitions", async () => {
+    const workflow = createWorkflow();
+    const save = mock(async (
+      id: string,
+      environmentId: string,
+      version: number,
+      snapshot: LoopedReviewWorkflow,
+      _expectedRevision?: number,
+      controllerFence?: { ownerId: string; token: string },
+    ) => {
+      expect(controllerFence).toEqual({
+        ownerId: "controller-a",
+        token: "generation-a",
+      });
+      return {
+        id,
+        environmentId,
+        version,
+        snapshot,
+        updatedAt: snapshot.updatedAt,
+        revision: 1,
+      };
+    });
+    const unregister = registerLoopedReviewControllerFence(workflow.id, {
+      ownerId: "controller-a",
+      token: "generation-a",
+    });
+    const stop = startLoopedReviewPersistence({
+      debounceMs: 0,
+      save,
+      load: mock(async () => null),
+    });
+
+    await settle();
+    expect(save).toHaveBeenCalledTimes(1);
+    unregister();
+    stop();
   });
 
   test("reports a persistent save outage once without a self-triggering retry loop", async () => {

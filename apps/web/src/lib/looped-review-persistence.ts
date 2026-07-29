@@ -12,6 +12,7 @@ export { isLoopedReviewWorkflow } from "@/stores/loopedReviewStore";
 interface PendingWrite {
   workflow: LoopedReviewWorkflow;
   fingerprint: string;
+  controllerFence?: LoopedReviewControllerFence;
 }
 
 type WorkflowLoader = (
@@ -26,7 +27,13 @@ type WorkflowSaver = (
   version: number,
   snapshot: LoopedReviewWorkflow,
   expectedRevision?: number,
+  controllerFence?: LoopedReviewControllerFence,
 ) => Promise<PersistedLoopedReviewWorkflow<LoopedReviewWorkflow>>;
+
+export interface LoopedReviewControllerFence {
+  ownerId: string;
+  token: string;
+}
 
 /**
  * Process-local dirty markers prevent an equal-revision backend hydration from
@@ -35,6 +42,24 @@ type WorkflowSaver = (
  * backend remains authoritative for equal revisions.
  */
 const dirtyWorkflowFingerprints = new Map<string, string>();
+const activeControllerFences = new Map<string, LoopedReviewControllerFence>();
+
+export function registerLoopedReviewControllerFence(
+  workflowId: string,
+  fence: LoopedReviewControllerFence,
+): () => void {
+  const registered = { ...fence };
+  activeControllerFences.set(workflowId, registered);
+  return () => {
+    const current = activeControllerFences.get(workflowId);
+    if (
+      current?.ownerId === registered.ownerId
+      && current.token === registered.token
+    ) {
+      activeControllerFences.delete(workflowId);
+    }
+  };
+}
 
 function workflowFingerprint(workflow: LoopedReviewWorkflow): string {
   const { backendRevision: _backendRevision, ...durable } = workflow;
@@ -131,10 +156,12 @@ export async function hydrateLoopedReviewWorkflowsForEnvironment(
   return restored;
 }
 
-/** Durably records a dispatch lease before any provider request is written. */
+/** Immediately commits a workflow transition, optionally under a controller fence. */
 export async function persistLoopedReviewWorkflowNow(
   workflowId: string,
-  options: Pick<LoopedReviewPersistenceOptions, "save" | "load"> = {},
+  options: Pick<LoopedReviewPersistenceOptions, "save" | "load"> & {
+    controllerFence?: LoopedReviewControllerFence;
+  } = {},
 ): Promise<LoopedReviewWorkflow> {
   const save = options.save ?? backend.saveLoopedReviewWorkflow;
   const load = options.load ?? backend.getLoopedReviewWorkflow;
@@ -149,12 +176,33 @@ export async function persistLoopedReviewWorkflowNow(
       LOOPED_REVIEW_WORKFLOW_VERSION,
       workflow,
       workflow.backendRevision,
+      options.controllerFence,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("revision conflict")) {
-      const winner = await hydrateLoopedReviewWorkflow(workflowId, load);
-      if (winner) return winner;
+    if (
+      message.includes("revision conflict")
+      || message.includes("controller lease conflict")
+    ) {
+      const persisted = await load(workflowId);
+      if (
+        persisted
+        && persisted.id === workflowId
+        && isLoopedReviewWorkflow(persisted.snapshot)
+        && persisted.snapshot.id === persisted.id
+        && persisted.snapshot.environmentId === persisted.environmentId
+      ) {
+        const winner = {
+          ...persisted.snapshot,
+          backendRevision: persisted.revision,
+        };
+        // A controller lease can change generations without changing the
+        // workflow revision. Replace even an equal-revision dirty snapshot so
+        // the expired owner cannot leave its rejected transition in memory.
+        useLoopedReviewStore.getState().replaceWorkflow(winner);
+        dirtyWorkflowFingerprints.delete(workflowId);
+        return winner;
+      }
     }
     throw error;
   }
@@ -193,7 +241,10 @@ export function startLoopedReviewPersistence(
     timers.delete(workflowId);
   };
 
-  const enqueue = (workflowId: string): Promise<void> => {
+  const enqueue = (
+    workflowId: string,
+    controllerFence?: LoopedReviewControllerFence,
+  ): Promise<void> => {
     const previous = chains.get(workflowId) ?? Promise.resolve();
     const next = previous.then(async () => {
       const current = useLoopedReviewStore.getState().workflows.get(workflowId);
@@ -205,6 +256,7 @@ export function startLoopedReviewPersistence(
           LOOPED_REVIEW_WORKFLOW_VERSION,
           current,
           current.backendRevision,
+          controllerFence,
         );
         const savedFingerprint = workflowFingerprint(current);
         lastSavedFingerprint.set(workflowId, savedFingerprint);
@@ -215,9 +267,18 @@ export function startLoopedReviewPersistence(
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (message.includes("revision conflict")) {
+        if (
+          message.includes("revision conflict")
+          || message.includes("controller lease conflict")
+        ) {
           const winner = await load(workflowId).catch(() => null);
-          if (winner && isLoopedReviewWorkflow(winner.snapshot)) {
+          if (
+            winner
+            && winner.id === workflowId
+            && isLoopedReviewWorkflow(winner.snapshot)
+            && winner.snapshot.id === winner.id
+            && winner.snapshot.environmentId === winner.environmentId
+          ) {
             useLoopedReviewStore.getState().replaceWorkflow({
               ...winner.snapshot,
               backendRevision: winner.revision,
@@ -267,7 +328,7 @@ export function startLoopedReviewPersistence(
     if (!write) return undefined;
     cancelTimer(workflowId);
     pending.delete(workflowId);
-    return enqueue(workflowId);
+    return enqueue(workflowId, write.controllerFence);
   };
 
   const flushAll = () => Promise.all(
@@ -294,7 +355,11 @@ export function startLoopedReviewPersistence(
         continue;
       }
       dirtyWorkflowFingerprints.set(id, fingerprint);
-      pending.set(id, { workflow, fingerprint });
+      pending.set(id, {
+        workflow,
+        fingerprint,
+        controllerFence: activeControllerFences.get(id),
+      });
       cancelTimer(id);
       timers.set(id, setTimeout(() => {
         void flush(id);
@@ -306,7 +371,11 @@ export function startLoopedReviewPersistence(
   // app bootstrap, so seed any current entries immediately.
   for (const [id, workflow] of useLoopedReviewStore.getState().workflows) {
     const fingerprint = workflowFingerprint(workflow);
-    pending.set(id, { workflow, fingerprint });
+    pending.set(id, {
+      workflow,
+      fingerprint,
+      controllerFence: activeControllerFences.get(id),
+    });
     timers.set(id, setTimeout(() => {
       void flush(id);
     }, debounceMs));

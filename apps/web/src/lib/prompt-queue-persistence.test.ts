@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   claimPromptQueueHead,
+  getPromptQueueDispatchError,
   hydratePromptQueue,
   hydratePromptQueuesForEnvironment,
   parsePromptQueueKey,
   promptQueueKey,
   resetPromptQueueRevisions,
+  retryPromptQueueDispatch,
   startPromptQueuePersistence,
   type PromptQueueClaimer,
   type PromptQueueLoader,
@@ -326,6 +328,32 @@ describe("claimPromptQueueHead", () => {
 
     expect(claimed).toBeNull();
     expect(source.read(SESSION)).toEqual([]);
+  });
+});
+
+describe("retryPromptQueueDispatch", () => {
+  test("clears the visible error and applies the authoritative retry revision", async () => {
+    const source = createSource();
+    const key = promptQueueKey("claude", SESSION);
+    const dispatchError = {
+      requestId: "m1",
+      messageId: "m1",
+      messageFingerprint: "a".repeat(64),
+      message: "Rejected",
+      failedAt: "2026-01-01T00:00:00.000Z",
+    };
+    await hydratePromptQueue(key, [source], async () => ({
+      ...persisted(key, [{ id: "m1" }], 2),
+      dispatchError,
+    }));
+    expect(getPromptQueueDispatchError(key)).toEqual(dispatchError);
+
+    const retry = mock(async () => persisted(key, [{ id: "m1" }], 3));
+    await retryPromptQueueDispatch(source, SESSION, retry);
+
+    expect(retry).toHaveBeenCalledWith(key);
+    expect(getPromptQueueDispatchError(key)).toBeUndefined();
+    expect(source.read(SESSION)).toEqual([{ id: "m1" }]);
   });
 });
 

@@ -1,6 +1,7 @@
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import {
   claimPromptQueueHead,
+  retryPromptQueueDispatch,
   type PromptQueueSource,
   type QueuedItem,
 } from "@/lib/prompt-queue-persistence";
@@ -105,4 +106,13 @@ export async function claimAgentPromptQueueHead<TItem extends QueuedItem>(
     source as unknown as PromptQueueSource<TItem>,
     sessionKey,
   );
+}
+
+export async function retryAgentPromptQueueDispatch(
+  agent: string,
+  sessionKey: string,
+): Promise<void> {
+  const source = getSharedSources().find((candidate) => candidate.agent === agent);
+  if (!source) return;
+  await retryPromptQueueDispatch(source, sessionKey);
 }

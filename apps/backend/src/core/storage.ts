@@ -227,6 +227,11 @@ function isStartupAgentSession(
     && isOneOf(value.agent, ["claude", "codex", "opencode"])
     && isOneOf(value.style, ["terminal", "native"])
     && isOneOf(value.status, ["starting", "running", "error"])
+    && (value.model === undefined || typeof value.model === "string")
+    && (
+      value.reasoningEffort === undefined
+      || typeof value.reasoningEffort === "string"
+    )
     && (
       value.providerSessionId === undefined
       || isNonBlankString(value.providerSessionId)
@@ -400,6 +405,10 @@ function isPersistedLoopedReviewWorkflow(
       || (
         isRecord(value.controllerLease)
         && isNonBlankString(value.controllerLease.ownerId)
+        && (
+          value.controllerLease.token === undefined
+          || isNonBlankString(value.controllerLease.token)
+        )
         && typeof value.controllerLease.expiresAt === "string"
         && Number.isFinite(Date.parse(value.controllerLease.expiresAt))
       )
@@ -423,6 +432,27 @@ function isPersistedPromptQueue(
         && isNonBlankString(value.inFlight.requestId)
         && typeof value.inFlight.reservedAt === "string"
         && Number.isFinite(Date.parse(value.inFlight.reservedAt))
+      )
+    )
+    && (
+      value.dispatchError === undefined
+      || (
+        isRecord(value.dispatchError)
+        && isNonBlankString(value.dispatchError.requestId)
+        && (
+          (
+            isNonBlankString(value.dispatchError.messageId)
+            && isNonBlankString(value.dispatchError.messageFingerprint)
+            && /^[a-f0-9]{64}$/.test(value.dispatchError.messageFingerprint)
+          )
+          || (
+            value.dispatchError.messageId === undefined
+            && value.dispatchError.messageFingerprint === undefined
+          )
+        )
+        && isNonBlankString(value.dispatchError.message)
+        && typeof value.dispatchError.failedAt === "string"
+        && Number.isFinite(Date.parse(value.dispatchError.failedAt))
       )
     )
     && typeof value.updatedAt === "string"
@@ -1472,43 +1502,10 @@ export class StorageService {
   }
 
   private async acquireEnvironmentMutationLock(): Promise<() => Promise<void>> {
-    const lockPath = `${this.environmentsFile()}.lock`;
-    const token = randomUUID();
-    const deadline = Date.now() + 20_000;
-    await fs.mkdir(path.dirname(lockPath), { recursive: true });
-
-    while (true) {
-      try {
-        const handle = await fs.open(lockPath, "wx", 0o600);
-        try {
-          await handle.writeFile(token, "utf8");
-        } catch (error) {
-          await handle.close();
-          await fs.rm(lockPath, { force: true });
-          throw error;
-        }
-        return async () => {
-          await handle.close();
-          const currentToken = await fs.readFile(lockPath, "utf8").catch(() => null);
-          if (currentToken === token) {
-            await fs.rm(lockPath, { force: true });
-          }
-        };
-      } catch (error) {
-        const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-        if (code !== "EEXIST") throw error;
-
-        const stat = await fs.stat(lockPath).catch(() => null);
-        if (stat && Date.now() - stat.mtimeMs > 15_000) {
-          await fs.rm(lockPath, { force: true });
-          continue;
-        }
-        if (Date.now() >= deadline) {
-          throw new Error("Timed out waiting for environment storage lock");
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-    }
+    return this.acquireMutationLock(
+      this.environmentsFile(),
+      "environment storage",
+    );
   }
 
   private backupPath(filePath: string, index: number): string {
@@ -2689,6 +2686,7 @@ export class StorageService {
     version: number,
     snapshot: unknown,
     expectedRevision?: number,
+    controllerFence?: { ownerId: string; token: string },
   ): Promise<PersistedLoopedReviewWorkflow> {
     if (!isNonBlankString(workflowId)) {
       throw new Error("Looped review workflow ID must not be blank");
@@ -2704,6 +2702,15 @@ export class StorageService {
     }
     if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
       throw new Error("Looped review expected revision must be a non-negative integer");
+    }
+    if (
+      controllerFence !== undefined
+      && (
+        !isNonBlankString(controllerFence.ownerId)
+        || !isNonBlankString(controllerFence.token)
+      )
+    ) {
+      throw new Error("Looped review controller fence is invalid");
     }
     let serializedSnapshot: string | undefined;
     try {
@@ -2737,6 +2744,16 @@ export class StorageService {
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Looped review workflow belongs to another environment");
       }
+      if (controllerFence) {
+        const lease = previous?.controllerLease;
+        if (
+          lease?.ownerId !== controllerFence.ownerId
+          || lease.token !== controllerFence.token
+          || Date.parse(lease.expiresAt) <= Date.now()
+        ) {
+          throw new Error("Looped review controller lease conflict");
+        }
+      }
       if (
         expectedRevision !== undefined
         && (previous?.revision ?? 0) !== expectedRevision
@@ -2765,7 +2782,7 @@ export class StorageService {
     workflowId: string,
     ownerId: string,
     leaseMs: number,
-  ): Promise<{ granted: boolean; expiresAt: string }> {
+  ): Promise<{ granted: boolean; token: string; expiresAt: string }> {
     if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId)) {
       throw new Error("Looped review controller identity must not be blank");
     }
@@ -2791,24 +2808,63 @@ export class StorageService {
       ) {
         return {
           granted: false,
+          token: "",
           expiresAt: workflow.controllerLease.expiresAt,
         };
       }
+      const token =
+        workflow.controllerLease?.ownerId === ownerId
+        && currentExpiry > now
+        && isNonBlankString(workflow.controllerLease.token)
+          ? workflow.controllerLease.token
+          : randomUUID();
       const expiresAt = new Date(now + leaseMs).toISOString();
       workflows[workflowId] = {
         ...workflow,
-        controllerLease: { ownerId, expiresAt },
+        controllerLease: { ownerId, token, expiresAt },
       };
       await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
-      return { granted: true, expiresAt };
+      return { granted: true, token, expiresAt };
+    });
+  }
+
+  async validateLoopedReviewController(
+    workflowId: string,
+    ownerId: string,
+    token: string,
+  ): Promise<boolean> {
+    if (
+      !isNonBlankString(workflowId)
+      || !isNonBlankString(ownerId)
+      || !isNonBlankString(token)
+    ) {
+      return false;
+    }
+    return this.enqueueLoopedReviewMutation(async () => {
+      const workflows = await this.loadJson<
+        Record<string, PersistedLoopedReviewWorkflow>
+      >(this.loopedReviewsFile(), () => ({}));
+      const workflow = workflows[workflowId];
+      if (!isPersistedLoopedReviewWorkflow(workflow, workflowId)) return false;
+      const lease = workflow.controllerLease;
+      return lease?.ownerId === ownerId
+        && lease.token === token
+        && Date.parse(lease.expiresAt) > Date.now();
     });
   }
 
   async releaseLoopedReviewController(
     workflowId: string,
     ownerId: string,
+    token: string,
   ): Promise<void> {
-    if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId)) return;
+    if (
+      !isNonBlankString(workflowId)
+      || !isNonBlankString(ownerId)
+      || !isNonBlankString(token)
+    ) {
+      return;
+    }
     await this.enqueueLoopedReviewMutation(async () => {
       const workflows = await this.loadJson<
         Record<string, PersistedLoopedReviewWorkflow>
@@ -2817,6 +2873,7 @@ export class StorageService {
       if (
         !isPersistedLoopedReviewWorkflow(workflow, workflowId)
         || workflow.controllerLease?.ownerId !== ownerId
+        || workflow.controllerLease.token !== token
       ) {
         return;
       }
@@ -2964,11 +3021,80 @@ export class StorageService {
       if (!isNonBlankString(providerSessionId)) {
         throw new Error("Provider returned an invalid native session ID");
       }
+      await this.assertEnvironmentAcceptsBackgroundState(
+        input.environmentId,
+        "Native agent session",
+      );
       const now = nowIso();
       const saved: PersistedNativeAgentSession = {
         ...input,
         providerSessionId,
         createdAt: now,
+        updatedAt: now,
+      };
+      sessions[input.key] = saved;
+      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      this.announce("native-agent-session", input.environmentId);
+      return saved;
+    });
+  }
+
+  async adoptNativeAgentSession(
+    input: Pick<
+      PersistedNativeAgentSession,
+      | "key"
+      | "environmentId"
+      | "agent"
+      | "logicalSessionKey"
+      | "providerSessionId"
+    > & { expectedProviderSessionId?: string },
+  ): Promise<PersistedNativeAgentSession> {
+    if (
+      !isNonBlankString(input.key)
+      || !isNonBlankString(input.environmentId)
+      || !isNonBlankString(input.logicalSessionKey)
+      || !isNonBlankString(input.providerSessionId)
+      || !["claude", "codex", "opencode"].includes(input.agent)
+      || (
+        input.expectedProviderSessionId !== undefined
+        && !isNonBlankString(input.expectedProviderSessionId)
+      )
+    ) {
+      throw new Error("Native agent session adoption input is invalid");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(
+        input.environmentId,
+        "Native agent session",
+      );
+      const sessions = await this.loadNativeAgentSessions();
+      const existing = sessions[input.key];
+      if (existing) {
+        if (
+          existing.environmentId !== input.environmentId
+          || existing.agent !== input.agent
+          || existing.logicalSessionKey !== input.logicalSessionKey
+        ) {
+          throw new Error("Native agent session key collision");
+        }
+        if (existing.providerSessionId === input.providerSessionId) {
+          return existing;
+        }
+        if (existing.providerSessionId !== input.expectedProviderSessionId) {
+          throw new Error("Native agent session provider collision");
+        }
+      } else if (input.expectedProviderSessionId !== undefined) {
+        throw new Error("Native agent session replacement target was not found");
+      }
+
+      const now = nowIso();
+      const {
+        expectedProviderSessionId: _expectedProviderSessionId,
+        ...identity
+      } = input;
+      const saved: PersistedNativeAgentSession = {
+        ...identity,
+        createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       };
       sessions[input.key] = saved;
@@ -3054,6 +3180,35 @@ export class StorageService {
     });
   }
 
+  /**
+   * Orders outbound provider work against environment deletion intent across
+   * processes. The callback intentionally runs while the environment file lock
+   * is held so deletion either becomes visible first or waits for the accepted
+   * provider operation to finish.
+   */
+  async runWithLiveEnvironment<T>(
+    environmentId: string,
+    label: string,
+    operation: (environment: Environment) => Promise<T>,
+  ): Promise<T> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error(`${label} environment ID must not be blank`);
+    }
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find(
+        (candidate) => candidate.id === environmentId,
+      );
+      if (!environment) {
+        throw new Error(`${label} environment not found: ${environmentId}`);
+      }
+      if (environment.deletionRequestedAt) {
+        throw new Error(`${label} environment is being deleted: ${environmentId}`);
+      }
+      return operation(environment);
+    });
+  }
+
   private enqueuePromptQueueMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
       const release = await this.acquireMutationLock(
@@ -3111,9 +3266,39 @@ export class StorageService {
       () => ({}),
     );
     return Object.fromEntries(
-      Object.entries(stored).filter(([storedKey, queue]) =>
-        isPersistedPromptQueue(queue, storedKey)
-      ),
+      Object.entries(stored).flatMap(([storedKey, queue]) => {
+        if (!isPersistedPromptQueue(queue, storedKey)) return [];
+        if (
+          !queue.dispatchError
+          || (
+            isNonBlankString(queue.dispatchError.messageId)
+            && isNonBlankString(queue.dispatchError.messageFingerprint)
+          )
+        ) {
+          return [[storedKey, queue]];
+        }
+
+        // Records written by the first dispatch-error implementation did not
+        // identify the rejected queue item. Upgrade those in memory from the
+        // restored message so the first subsequent mutation gets the same
+        // edit/removal semantics as a newly written record.
+        const failedMessage = queue.messages.find((candidate) =>
+          isRecord(candidate)
+          && candidate.id === queue.dispatchError?.requestId
+        );
+        if (!isRecord(failedMessage) || !isNonBlankString(failedMessage.id)) {
+          const { dispatchError: _dispatchError, ...withoutError } = queue;
+          return [[storedKey, withoutError as PersistedPromptQueue]];
+        }
+        return [[storedKey, {
+          ...queue,
+          dispatchError: {
+            ...queue.dispatchError,
+            messageId: failedMessage.id,
+            messageFingerprint: this.promptQueueMessageFingerprint(failedMessage),
+          },
+        }]];
+      }),
     ) as Record<string, PersistedPromptQueue>;
   }
 
@@ -3174,11 +3359,21 @@ export class StorageService {
       ) {
         throw new Error("Prompt queue revision conflict");
       }
+      const failedMessageStillUnchanged = previous?.dispatchError !== undefined
+        && messages.some((candidate) =>
+          isRecord(candidate)
+          && candidate.id === previous.dispatchError?.messageId
+          && this.promptQueueMessageFingerprint(candidate)
+            === previous.dispatchError?.messageFingerprint
+        );
       const saved: PersistedPromptQueue = {
         queueKey,
         environmentId,
         messages,
         ...(previous?.inFlight ? { inFlight: previous.inFlight } : {}),
+        ...(failedMessageStillUnchanged
+          ? { dispatchError: previous!.dispatchError }
+          : {}),
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,
       };
@@ -3212,6 +3407,9 @@ export class StorageService {
       const previous = queues[queueKey];
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
+      }
+      if (previous?.dispatchError) {
+        return { claimed: null, queue: previous };
       }
 
       const messages = previous?.messages ?? candidateMessages;
@@ -3248,6 +3446,7 @@ export class StorageService {
       const queues = await this.loadPromptQueues();
       const previous = queues[queueKey];
       if (!previous) return null;
+      if (previous.dispatchError) return null;
       if (previous.inFlight) return previous.inFlight;
       const message = previous.messages[0];
       if (!isRecord(message) || !isNonBlankString(message.id)) return null;
@@ -3292,6 +3491,75 @@ export class StorageService {
       this.announce("prompt-queue", previous.environmentId);
       return saved;
     });
+  }
+
+  async failPromptQueueDispatch(
+    queueKey: string,
+    requestId: string,
+    message = "Queued prompt was rejected. Edit it or retry explicitly.",
+  ): Promise<PersistedPromptQueue | null> {
+    if (
+      !isNonBlankString(queueKey)
+      || !isNonBlankString(requestId)
+      || !isNonBlankString(message)
+    ) {
+      throw new Error("Prompt queue failure identity must not be blank");
+    }
+    return this.enqueuePromptQueueMutation(async () => {
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
+        return previous ?? null;
+      }
+      const { inFlight, ...withoutInFlight } = previous;
+      if (!isRecord(inFlight.message) || !isNonBlankString(inFlight.message.id)) {
+        return previous;
+      }
+      const saved: PersistedPromptQueue = {
+        ...withoutInFlight,
+        messages: [inFlight.message, ...previous.messages],
+        dispatchError: {
+          requestId,
+          messageId: inFlight.message.id,
+          messageFingerprint: this.promptQueueMessageFingerprint(inFlight.message),
+          message,
+          failedAt: nowIso(),
+        },
+        updatedAt: nowIso(),
+        revision: previous.revision + 1,
+      };
+      queues[queueKey] = saved;
+      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+      this.announce("prompt-queue", previous.environmentId);
+      return saved;
+    });
+  }
+
+  async retryPromptQueueDispatch(
+    queueKey: string,
+  ): Promise<PersistedPromptQueue | null> {
+    if (!isNonBlankString(queueKey)) {
+      throw new Error("Prompt queue key must not be blank");
+    }
+    return this.enqueuePromptQueueMutation(async () => {
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (!previous?.dispatchError) return previous ?? null;
+      const { dispatchError: _dispatchError, ...withoutError } = previous;
+      const saved: PersistedPromptQueue = {
+        ...withoutError,
+        updatedAt: nowIso(),
+        revision: previous.revision + 1,
+      };
+      queues[queueKey] = saved;
+      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+      this.announce("prompt-queue", previous.environmentId);
+      return saved;
+    });
+  }
+
+  private promptQueueMessageFingerprint(message: unknown): string {
+    return createHash("sha256").update(JSON.stringify(message)).digest("hex");
   }
 
   async deletePromptQueuesByEnvironment(environmentId: string): Promise<string[]> {

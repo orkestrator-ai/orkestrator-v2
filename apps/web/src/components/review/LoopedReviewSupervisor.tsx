@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import {
   isLoopedReviewTerminalPhase,
@@ -11,8 +11,11 @@ import { LoopedReviewTab } from "./LoopedReviewTab";
 import {
   claimLoopedReviewController,
   releaseLoopedReviewController,
+  validateLoopedReviewController,
 } from "@/lib/backend";
 import { createUuid } from "@/lib/uuid";
+import type { LoopedReviewControllerLease } from "./LoopedReviewTab";
+import { persistLoopedReviewWorkflowNow } from "@/lib/looped-review-persistence";
 
 /**
  * App-lifetime workflow driver.
@@ -26,7 +29,11 @@ interface LoopedReviewSupervisorProps {
   pollIntervalMs?: number;
   missingSessionPollLimit?: number;
   claimController?: typeof claimLoopedReviewController;
+  validateController?: typeof validateLoopedReviewController;
   releaseController?: typeof releaseLoopedReviewController;
+  persistWorkflow?: typeof persistLoopedReviewWorkflowNow;
+  controllerLeaseMs?: number;
+  controllerRenewMs?: number;
 }
 
 const CONTROLLER_LEASE_MS = 15_000;
@@ -40,7 +47,11 @@ function LoopedReviewController({
   pollIntervalMs,
   missingSessionPollLimit,
   claimController,
+  validateController,
   releaseController,
+  persistWorkflow,
+  controllerLeaseMs,
+  controllerRenewMs,
 }: {
   workflowId: string;
   environmentId: string;
@@ -49,40 +60,100 @@ function LoopedReviewController({
   pollIntervalMs?: number;
   missingSessionPollLimit?: number;
   claimController: typeof claimLoopedReviewController;
+  validateController: typeof validateLoopedReviewController;
   releaseController: typeof releaseLoopedReviewController;
+  persistWorkflow?: typeof persistLoopedReviewWorkflowNow;
+  controllerLeaseMs: number;
+  controllerRenewMs: number;
 }) {
-  const [ownsLease, setOwnsLease] = useState(false);
+  const [lease, setLease] = useState<LoopedReviewControllerLease | null>(null);
+  const leaseRef = useRef<LoopedReviewControllerLease | null>(null);
   const [controllerId] = useState(createUuid);
 
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let renewTimer: ReturnType<typeof setTimeout> | undefined;
+    let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+    const publishLease = (next: LoopedReviewControllerLease | null) => {
+      leaseRef.current = next;
+      setLease(next);
+    };
+    const clearExpiryTimer = () => {
+      if (expiryTimer) clearTimeout(expiryTimer);
+      expiryTimer = undefined;
+    };
+    const installExpiryTimer = (next: LoopedReviewControllerLease) => {
+      clearExpiryTimer();
+      const expiresAtMs = Date.parse(next.expiresAt);
+      const delay = Math.max(0, expiresAtMs - Date.now());
+      expiryTimer = setTimeout(() => {
+        if (
+          leaseRef.current?.token === next.token
+          && Date.parse(leaseRef.current.expiresAt) <= Date.now()
+        ) {
+          publishLease(null);
+        }
+      }, delay);
+    };
     const renew = async () => {
       try {
         const result = await claimController(
           workflowId,
           controllerId,
-          CONTROLLER_LEASE_MS,
+          controllerLeaseMs,
         );
         if (cancelled) return;
-        setOwnsLease(result.granted);
+        const expiresAtMs = Date.parse(result.expiresAt);
+        if (
+          !result.granted
+          || !result.token
+          || !Number.isFinite(expiresAtMs)
+          || expiresAtMs <= Date.now()
+        ) {
+          clearExpiryTimer();
+          publishLease(null);
+        } else {
+          const next = {
+            ownerId: controllerId,
+            token: result.token,
+            expiresAt: result.expiresAt,
+          };
+          publishLease(next);
+          installExpiryTimer(next);
+        }
       } catch {
-        if (!cancelled) setOwnsLease(false);
+        if (!cancelled) {
+          clearExpiryTimer();
+          publishLease(null);
+        }
       }
-      if (!cancelled) timer = setTimeout(renew, CONTROLLER_RENEW_MS);
+      if (!cancelled) renewTimer = setTimeout(renew, controllerRenewMs);
     };
     void renew();
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
-      void releaseController(
-        workflowId,
-        controllerId,
-      );
+      if (renewTimer) clearTimeout(renewTimer);
+      clearExpiryTimer();
+      const currentLease = leaseRef.current;
+      leaseRef.current = null;
+      if (currentLease) {
+        void releaseController(
+          workflowId,
+          controllerId,
+          currentLease.token,
+        );
+      }
     };
-  }, [claimController, controllerId, releaseController, workflowId]);
+  }, [
+    claimController,
+    controllerId,
+    controllerLeaseMs,
+    controllerRenewMs,
+    releaseController,
+    workflowId,
+  ]);
 
-  if (!ownsLease) return null;
+  if (!lease) return null;
   return (
     <LoopedReviewTab
       data={{ workflowId, environmentId, isLocal }}
@@ -92,6 +163,9 @@ function LoopedReviewController({
       connectAgent={connectAgent}
       pollIntervalMs={pollIntervalMs}
       missingSessionPollLimit={missingSessionPollLimit}
+      controllerLease={lease}
+      validateControllerLease={validateController}
+      persistWorkflow={persistWorkflow}
     />
   );
 }
@@ -101,7 +175,11 @@ export function LoopedReviewSupervisor({
   pollIntervalMs,
   missingSessionPollLimit,
   claimController = claimLoopedReviewController,
+  validateController = validateLoopedReviewController,
   releaseController = releaseLoopedReviewController,
+  persistWorkflow,
+  controllerLeaseMs = CONTROLLER_LEASE_MS,
+  controllerRenewMs = CONTROLLER_RENEW_MS,
 }: LoopedReviewSupervisorProps = {}) {
   const workflows = useLoopedReviewStore((state) => state.workflows);
   const environments = useEnvironmentStore((state) => state.environments);
@@ -127,7 +205,11 @@ export function LoopedReviewSupervisor({
               pollIntervalMs={pollIntervalMs}
               missingSessionPollLimit={missingSessionPollLimit}
               claimController={claimController}
+              validateController={validateController}
               releaseController={releaseController}
+              persistWorkflow={persistWorkflow}
+              controllerLeaseMs={controllerLeaseMs}
+              controllerRenewMs={controllerRenewMs}
             />
           );
         })}

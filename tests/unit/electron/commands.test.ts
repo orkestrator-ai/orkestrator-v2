@@ -425,6 +425,7 @@ function createContext(
         if (index >= 0) environments.splice(index, 1);
       }),
       removeSessionsByEnvironment: mock(async () => undefined),
+      deleteNativeAgentSessionsByEnvironment: mock(async () => undefined),
       deleteLoopedReviewWorkflowsByEnvironment: mock(async () => undefined),
       deleteBuildPipelinesByEnvironment: mock(async () => [] as string[]),
       deletePromptQueuesByEnvironment: mock(async () => [] as string[]),
@@ -2861,6 +2862,8 @@ exit 0
       await commands.get("delete_environment")?.({ environmentId: environment.id }, context);
 
       expect(context.storage.deleteLoopedReviewWorkflowsByEnvironment)
+        .toHaveBeenCalledWith(environment.id);
+      expect(context.storage.deleteNativeAgentSessionsByEnvironment)
         .toHaveBeenCalledWith(environment.id);
       expect(context.storage.deletePaneLayout).toHaveBeenCalledWith(environment.id);
 

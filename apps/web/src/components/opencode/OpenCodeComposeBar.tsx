@@ -45,6 +45,7 @@ import { useSlashCommandMenu } from "@/hooks/useSlashCommandMenu";
 import { useNativeComposeSubmit } from "@/hooks/useNativeComposeSubmit";
 import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
+import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
 import {
   COMPOSE_MAX_INPUT_HEIGHT,
   COMPOSE_MIN_INPUT_HEIGHT,
@@ -181,6 +182,7 @@ export function OpenCodeComposeBar({
       [sessionKey]
     )
   );
+  const queueRecovery = usePromptQueueDispatchRecovery("opencode", sessionKey);
 
   // Store getters return stable empties for absent keys, so their results are
   // safe as selector outputs (no per-render churn for untouched sessions).
@@ -932,6 +934,8 @@ export function OpenCodeComposeBar({
         onEdit={handleQueuedMessageClick}
         onMove={handleMoveQueuedMessage}
         onRemove={handleRemoveQueuedMessage}
+        dispatchError={queueRecovery.dispatchError}
+        onRetryDispatch={queueRecovery.retry}
         renderMeta={(message) => (
           <>
             <span>{message.mode === "plan" ? "Planning" : "Build"}</span>

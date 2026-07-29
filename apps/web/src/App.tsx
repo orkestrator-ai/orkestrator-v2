@@ -194,7 +194,7 @@ function App() {
         environment.status === "running"
         && (
           environment.pendingAgentLaunch
-          || environment.startupAgentSession?.status === "running"
+          || environment.startupAgentSession !== undefined
         )
       )
       .map((environment) => environment.id),

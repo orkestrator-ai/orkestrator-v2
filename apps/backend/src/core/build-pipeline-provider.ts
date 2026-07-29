@@ -7,6 +7,7 @@ import type {
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 export type ProviderStatus = "running" | "idle" | "error" | "missing";
+export type ProviderExecutionMode = "plan" | "build";
 
 export class PromptRejectedError extends Error {
   constructor(message: string) {
@@ -44,6 +45,8 @@ export interface BuildPipelineProvider {
       requestId: string;
       images?: TaskSnapshotImage[];
       schema?: JsonSchema;
+      mode?: ProviderExecutionMode;
+      fastMode?: boolean;
     },
   ): Promise<void>;
   status(sessionId: string): Promise<ProviderStatus>;
@@ -188,6 +191,8 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       requestId: string;
       images?: TaskSnapshotImage[];
       schema?: JsonSchema;
+      mode?: ProviderExecutionMode;
+      fastMode?: boolean;
     },
   ): Promise<void> {
     const attachments = options.images?.map((image) => this.agent === "claude"
@@ -218,14 +223,24 @@ class HttpBridgeProvider implements BuildPipelineProvider {
             ? {
                 model: this.connection.model,
                 effort: this.connection.effort,
-                permissionMode: "bypassPermissions",
+                fastMode: options.fastMode,
+                permissionMode:
+                  options.mode === "plan" ? "plan" : "bypassPermissions",
               }
-            : {}),
+            : { fastMode: options.fastMode }),
         }),
       },
       this.fetchImpl,
     );
-    if (isTransientHttpStatus(response.status)) {
+    // A session can briefly disappear while a bridge reconciles a restarted
+    // provider, and an idle status read can race with another client starting a
+    // turn. Both are retryable dispatch races, not validation rejections that
+    // should park the user's prompt indefinitely.
+    if (
+      response.status === 404
+      || response.status === 409
+      || isTransientHttpStatus(response.status)
+    ) {
       throw new ProviderUnavailableError(
         `${this.agent} prompt dispatch is temporarily unavailable (HTTP ${response.status})`,
       );
@@ -472,6 +487,8 @@ class OpenCodeProvider implements BuildPipelineProvider {
       requestId: string;
       images?: TaskSnapshotImage[];
       schema?: JsonSchema;
+      mode?: ProviderExecutionMode;
+      fastMode?: boolean;
     },
   ): Promise<void> {
     const parts: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
@@ -494,7 +511,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
         model: modelParts && modelParts.length > 1
           ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
           : undefined,
-        agent: "build",
+        agent: options.mode ?? "build",
         variant: this.connection.effort,
         format: options.schema
           ? { type: "json_schema", schema: options.schema, retryCount: 2 }
@@ -509,6 +526,16 @@ class OpenCodeProvider implements BuildPipelineProvider {
       );
     }
     if ("error" in response && response.error) {
+      const status = response.response?.status;
+      if (
+        status === 404
+        || status === 409
+        || (status !== undefined && isTransientHttpStatus(status))
+      ) {
+        throw new ProviderUnavailableError(
+          `OpenCode prompt dispatch is temporarily unavailable (HTTP ${status})`,
+        );
+      }
       throw new PromptRejectedError("OpenCode rejected the prompt");
     }
   }

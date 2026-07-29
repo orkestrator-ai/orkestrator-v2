@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueuedPromptsDialog } from "./QueuedPromptsDialog";
 
 afterEach(() => cleanup());
@@ -88,5 +88,26 @@ describe("QueuedPromptsDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  test("surfaces a terminal dispatch error and retries explicitly", async () => {
+    const onRetryDispatch = mock(async () => undefined);
+    render(
+      <QueuedPromptsDialog
+        open
+        onOpenChange={() => {}}
+        messages={messages}
+        onEdit={() => {}}
+        onMove={() => {}}
+        onRemove={() => {}}
+        dispatchError={{ message: "Provider rejected this prompt." }}
+        onRetryDispatch={onRetryDispatch}
+      />,
+    );
+
+    expect(screen.getByRole("alert").textContent)
+      .toContain("Provider rejected this prompt.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(onRetryDispatch).toHaveBeenCalledTimes(1));
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, jest, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -42,6 +42,63 @@ const input = {
 };
 
 describe("StorageService native agent sessions", () => {
+  test("heartbeats a long-held environment mutation lock across backend processes", async () => {
+    await withStorage(async (first, second) => {
+      let signalEntered!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        signalEntered = resolve;
+      });
+      let releaseOperation!: () => void;
+      const operationBarrier = new Promise<void>((resolve) => {
+        releaseOperation = resolve;
+      });
+
+      jest.useFakeTimers();
+      try {
+        const held = first.runWithLiveEnvironment(
+          "env-1",
+          "Held operation",
+          async () => {
+            signalEntered();
+            await operationBarrier;
+          },
+        );
+        await entered;
+
+        // Move beyond the stale-lock threshold. The 5-second heartbeat must
+        // keep the lock's mtime fresh so another process cannot steal it.
+        jest.advanceTimersByTime(16_000);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        let contenderEntered = false;
+        const contender = second.runWithLiveEnvironment(
+          "env-1",
+          "Contending operation",
+          async () => {
+            contenderEntered = true;
+          },
+        );
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          await fs.stat(path.join(
+            (await first.getEnvironment("env-1"))?.worktreePath ?? "",
+            "environments.json.lock",
+          )).catch(() => undefined);
+        }
+        expect(contenderEntered).toBe(false);
+
+        releaseOperation();
+        await held;
+        jest.advanceTimersByTime(25);
+        await contender;
+        expect(contenderEntered).toBe(true);
+      } finally {
+        releaseOperation();
+        jest.useRealTimers();
+      }
+    });
+  });
+
   test("creates one provider session for a logical session across backend processes", async () => {
     await withStorage(async (first, second) => {
       const createProviderSession = mock(async () => {
@@ -90,6 +147,51 @@ describe("StorageService native agent sessions", () => {
         await first.invalidateNativeAgentSession(input.key, "provider-session"),
       ).toBe(true);
       expect(await first.getNativeAgentSession(input.key)).toBeNull();
+    });
+  });
+
+  test("adopts and compare-and-swaps an existing provider session", async () => {
+    await withStorage(async (first) => {
+      const adopted = await first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-old",
+      });
+      expect((await first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-old",
+      })).providerSessionId).toBe(adopted.providerSessionId);
+      await first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "request-old",
+        async () => undefined,
+      );
+      await expect(first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-new",
+      })).rejects.toThrow("provider collision");
+      await expect(first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-new",
+        expectedProviderSessionId: "wrong-old",
+      })).rejects.toThrow("provider collision");
+
+      const replaced = await first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-new",
+        expectedProviderSessionId: "provider-old",
+      });
+      expect(replaced.providerSessionId).toBe("provider-new");
+      expect(replaced.dispatchedRequestIds).toBeUndefined();
+    });
+  });
+
+  test("rejects a replacement expectation when no mapping exists", async () => {
+    await withStorage(async (first) => {
+      await expect(first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-new",
+        expectedProviderSessionId: "provider-old",
+      })).rejects.toThrow("replacement target");
     });
   });
 

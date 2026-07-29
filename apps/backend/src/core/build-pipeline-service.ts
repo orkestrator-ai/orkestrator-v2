@@ -3,6 +3,7 @@ import type {
   BuildPhase,
   BuildPipeline,
   BuildPipelineAgent,
+  BuildPipelineSource,
   PipelineSession,
   PipelineSessionPhase,
   ResumableBuildPhase,
@@ -68,14 +69,38 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function canonicalAdmissionSource(
+  source: BuildPipelineSource | undefined,
+): Record<string, unknown> | null {
+  if (!source) return null;
+  if (source.type === "kanban") {
+    return {
+      type: source.type,
+      taskId: source.taskId.trim(),
+    };
+  }
+  if (source.type === "linear") {
+    return {
+      type: source.type,
+      issueId: source.issueId.trim(),
+    };
+  }
+  return {
+    type: source.type,
+    repositoryOwner: source.repositoryOwner.trim().toLowerCase(),
+    repositoryName: source.repositoryName.trim().toLowerCase(),
+    issueNumber: source.issueNumber,
+  };
+}
+
 function buildAdmissionKey(input: StartBuildPipelineInput): string {
   return createHash("sha256")
     .update(JSON.stringify({
-      projectId: input.projectId,
-      taskId: input.taskId,
-      source: input.source ?? null,
-      existingEnvironmentId: input.existingEnvironmentId ?? null,
-      featurePlanId: input.featurePlanId ?? null,
+      projectId: input.projectId.trim(),
+      taskId: input.taskId.trim(),
+      source: canonicalAdmissionSource(input.source),
+      existingEnvironmentId: input.existingEnvironmentId?.trim() || null,
+      featurePlanId: input.featurePlanId?.trim() || null,
     }))
     .digest("hex");
 }

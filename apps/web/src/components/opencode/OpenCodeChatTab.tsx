@@ -69,6 +69,7 @@ import {
   cacheOpenCodeModelCatalog,
   startLocalOpencodeServer,
   getLocalOpencodeServerStatus,
+  adoptNativeAgentSession,
   ensureNativeAgentSession,
   renameEnvironmentFromPrompt,
   type OpenCodeModelPreferences,
@@ -1097,6 +1098,12 @@ export function OpenCodeChatTab({
           if (data.sessionId) {
             const availableSessions = await listSessions(existingClient);
             if (availableSessions.some((session) => session.id === data.sessionId)) {
+              await adoptNativeAgentSession({
+                environmentId,
+                agent: "opencode",
+                logicalSessionKey: sessionKey,
+                providerSessionId: data.sessionId,
+              });
               const messages = await getSessionMessages(existingClient, data.sessionId);
               if (!mounted) return;
               tabSessionIdRef.current = data.sessionId;
@@ -1322,6 +1329,12 @@ export function OpenCodeChatTab({
         }
 
         if (existingSessionId) {
+          await adoptNativeAgentSession({
+            environmentId,
+            agent: "opencode",
+            logicalSessionKey: sessionKey,
+            providerSessionId: existingSessionId,
+          });
           // Restore session from store - component may have remounted
           tabSessionIdRef.current = existingSessionId;
           updateTabNativeSessionId(tabId, existingSessionId, environmentId);
@@ -2417,6 +2430,13 @@ export function OpenCodeChatTab({
 
       try {
         const messages = await getSessionMessages(client, sessionId);
+        await adoptNativeAgentSession({
+          environmentId,
+          agent: "opencode",
+          logicalSessionKey: sessionKey,
+          providerSessionId: sessionId,
+          expectedProviderSessionId: session?.sessionId,
+        });
 
         tabSessionIdRef.current = sessionId;
         updateTabNativeSessionId(tabId, sessionId, environmentId);
@@ -2457,6 +2477,7 @@ export function OpenCodeChatTab({
       client,
       environmentId,
       models,
+      session?.sessionId,
       sessionKey,
       syncPendingRequests,
       tabId,
@@ -2490,6 +2511,12 @@ export function OpenCodeChatTab({
       );
       const paneStore = usePaneLayoutStore.getState();
       const forkTabId = createUuid();
+      await adoptNativeAgentSession({
+        environmentId,
+        agent: "opencode",
+        logicalSessionKey: createSessionKey(environmentId, forkTabId),
+        providerSessionId: fork.id,
+      });
       if (planned.kind === "prompt") {
         useOpenCodeStore.getState().setDraftText(
           createSessionKey(environmentId, forkTabId),

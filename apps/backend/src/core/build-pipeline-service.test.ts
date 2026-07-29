@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -322,6 +322,262 @@ describe("BuildPipelineService", () => {
       expect(await firstStorage.listBuildPipelines("project-1")).toHaveLength(1);
     } finally {
       await Promise.all([first.shutdown(), second.shutdown()]);
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("canonicalizes immutable admission identity and ignores mutable source metadata", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-canonical-"));
+    const firstStorage = new StorageService(dataDir);
+    const secondStorage = new StorageService(dataDir);
+    await Promise.all([firstStorage.init(), secondStorage.init()]);
+    await firstStorage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "build",
+      branch: "build",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "full",
+      order: 0,
+      environmentType: "local",
+      worktreePath: "/tmp/build",
+      setupScriptsComplete: true,
+    });
+    const invoke = async <T>(): Promise<T> => undefined as T;
+    const first = new BuildPipelineService(firstStorage, invoke, {
+      autoAdvance: false,
+      provider: async () => new FakeProvider(),
+    });
+    const second = new BuildPipelineService(secondStorage, invoke, {
+      autoAdvance: false,
+      provider: async () => new FakeProvider(),
+    });
+    try {
+      const firstInput = startInput({
+        existingEnvironmentId: " env-1 ",
+        featurePlanId: " feature-1 ",
+        source: {
+          type: "linear",
+          issueId: "issue-1",
+          issueIdentifier: "OLD-1",
+          issueUrl: "https://linear.example/old",
+          status: "backlog",
+          teamKey: "OLD",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      });
+      const secondInput = startInput({
+        existingEnvironmentId: "env-1",
+        featurePlanId: "feature-1",
+        source: {
+          type: "linear",
+          issueId: "issue-1",
+          issueIdentifier: "NEW-99",
+          issueUrl: "https://linear.example/new",
+          status: "started",
+          teamKey: "NEW",
+          updatedAt: "2026-07-29T00:00:00.000Z",
+        },
+      });
+
+      const [left, right] = await Promise.all([
+        first.start(firstInput),
+        second.start(secondInput),
+      ]);
+
+      expect(right.id).toBe(left.id);
+      expect(await firstStorage.listBuildPipelines("project-1")).toHaveLength(1);
+    } finally {
+      await Promise.all([first.shutdown(), second.shutdown()]);
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps distinct immutable admission identities separate", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-distinct-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    for (const id of ["env-1", "env-2"]) {
+      await storage.addEnvironment({
+        id,
+        projectId: "project-1",
+        name: id,
+        branch: id,
+        containerId: null,
+        status: "running",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "full",
+        order: id === "env-1" ? 0 : 1,
+        environmentType: "local",
+        worktreePath: `/tmp/${id}`,
+        setupScriptsComplete: true,
+      });
+    }
+    const service = new BuildPipelineService(
+      storage,
+      async <T>(): Promise<T> => undefined as T,
+      {
+        autoAdvance: false,
+        provider: async () => new FakeProvider(),
+      },
+    );
+    try {
+      const source = {
+        type: "linear" as const,
+        issueId: "issue-1",
+        issueIdentifier: "TEAM-1",
+      };
+      const starts = [
+        startInput({ taskId: "task-1", source }),
+        startInput({ taskId: "task-2", source }),
+        startInput({
+          taskId: "task-1",
+          source: { ...source, issueId: "issue-2" },
+        }),
+        startInput({
+          taskId: "task-1",
+          source,
+          existingEnvironmentId: "env-2",
+        }),
+        startInput({
+          taskId: "task-1",
+          source,
+          featurePlanId: "feature-2",
+        }),
+      ];
+      const results = [];
+      for (const input of starts) results.push(await service.start(input));
+
+      expect(new Set(results.map(({ id }) => id)).size).toBe(starts.length);
+      expect(await storage.listBuildPipelines("project-1")).toHaveLength(
+        starts.length,
+      );
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("admits one concurrent new-environment start and preserves its naming prompt", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-new-env-"));
+    const firstStorage = new StorageService(dataDir);
+    const secondStorage = new StorageService(dataDir);
+    await Promise.all([firstStorage.init(), secondStorage.init()]);
+    const createEnvironment = mock(async (args: Record<string, unknown>) => {
+      const environment = {
+        id: "env-created",
+        projectId: "project-1",
+        name: "created",
+        branch: "created",
+        containerId: null,
+        status: "running" as const,
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "full" as const,
+        order: 0,
+        environmentType: "local" as const,
+        worktreePath: "/tmp/env-created",
+        setupScriptsComplete: true,
+      };
+      await firstStorage.addEnvironment(environment);
+      expect(args.namingPrompt).toBe("name this durable build");
+      return environment;
+    });
+    const invoke = async <T>(
+      command: string,
+      args: Record<string, unknown> = {},
+    ): Promise<T> => {
+      if (command === "create_environment") {
+        return await createEnvironment(args) as T;
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    };
+    const first = new BuildPipelineService(firstStorage, invoke, {
+      autoAdvance: false,
+      provider: async () => new FakeProvider(),
+    });
+    const second = new BuildPipelineService(secondStorage, invoke, {
+      autoAdvance: false,
+      provider: async () => new FakeProvider(),
+    });
+    try {
+      const input = startInput({
+        existingEnvironmentId: undefined,
+        namingPrompt: "name this durable build",
+      });
+      const [left, right] = await Promise.all([
+        first.start(input),
+        second.start(input),
+      ]);
+
+      expect(right.id).toBe(left.id);
+      expect(createEnvironment).toHaveBeenCalledTimes(1);
+      expect(await firstStorage.listBuildPipelines("project-1")).toHaveLength(1);
+    } finally {
+      await Promise.all([first.shutdown(), second.shutdown()]);
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a malformed snapshot returned by admission", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-malformed-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "build",
+      branch: "build",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "full",
+      order: 0,
+      environmentType: "local",
+      worktreePath: "/tmp/build",
+      setupScriptsComplete: true,
+    });
+    storage.saveBuildPipeline = mock(async (
+      _pipelineId,
+      projectId,
+      environmentId,
+      version,
+    ) => ({
+      version,
+      id: "admitted-malformed",
+      projectId,
+      environmentId,
+      snapshot: {},
+      updatedAt: new Date().toISOString(),
+      revision: 1,
+    }));
+    const service = new BuildPipelineService(
+      storage,
+      async <T>(): Promise<T> => undefined as T,
+      {
+        autoAdvance: false,
+        provider: async () => new FakeProvider(),
+      },
+    );
+    try {
+      await expect(service.start(startInput())).rejects.toThrow(
+        "Existing build pipeline admission is invalid",
+      );
+    } finally {
+      await service.shutdown();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });

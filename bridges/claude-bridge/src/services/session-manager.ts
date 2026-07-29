@@ -45,6 +45,7 @@ import {
   readSessionPreferences,
   sessionPreferencesUnavailable,
   updateSessionPreferences,
+  type SessionPreferences,
 } from "./session-preferences.js";
 import { debugLog, isDebugLoggingEnabled } from "./logger.js";
 import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
@@ -222,7 +223,43 @@ function generateSessionId(): string {
   return `session-${crypto.randomUUID()}`;
 }
 
+const CLIENT_SESSION_ID_PATTERN = /^session-client-([0-9a-f]{32})$/;
+
+/**
+ * Turn a validated client key into a stable bridge id whose payload is also a
+ * valid v4 UUID. The SDK id can therefore be recovered from the bridge id after
+ * a process restart, without persisting a second global lookup table.
+ */
+export function sessionIdForClientKey(
+  clientSessionKey: string | undefined,
+): string | undefined {
+  if (
+    typeof clientSessionKey !== "string"
+    || clientSessionKey.trim().length === 0
+    || clientSessionKey.length > 512
+  ) {
+    return undefined;
+  }
+  const digest = createHash("sha256").update(clientSessionKey).digest("hex");
+  const uuidPayload =
+    `${digest.slice(0, 12)}4${digest.slice(13, 16)}`
+    + `${((Number.parseInt(digest[16]!, 16) & 0x3) | 0x8).toString(16)}`
+    + digest.slice(17, 32);
+  return `session-client-${uuidPayload}`;
+}
+
 function sdkSessionIdFromBridgeId(sessionId: string): string | null {
+  const clientMatch = CLIENT_SESSION_ID_PATTERN.exec(sessionId);
+  if (clientMatch) {
+    const payload = clientMatch[1]!;
+    return [
+      payload.slice(0, 8),
+      payload.slice(8, 12),
+      payload.slice(12, 16),
+      payload.slice(16, 20),
+      payload.slice(20),
+    ].join("-");
+  }
   const value = sessionId.startsWith("session-")
     ? sessionId.slice("session-".length)
     : sessionId;
@@ -233,6 +270,18 @@ function sdkSessionIdFromBridgeId(sessionId: string): string | null {
 
 function bridgeSessionIdFromSdkId(sessionId: string): string {
   return sessionId.startsWith("session-") ? sessionId : `session-${sessionId}`;
+}
+
+function persistedBridgeSessionId(
+  sdkSessionId: string,
+  preferences: SessionPreferences | undefined,
+): string {
+  const alias = preferences?.clientSessionBridgeId;
+  return alias
+      && sdkSessionIdFromBridgeId(alias)?.toLowerCase()
+        === sdkSessionId.toLowerCase()
+    ? alias
+    : bridgeSessionIdFromSdkId(sdkSessionId);
 }
 
 /**
@@ -1007,17 +1056,7 @@ export function createSession(
   title?: string,
   clientSessionKey?: string,
 ): SessionState {
-  const stableKey =
-    typeof clientSessionKey === "string"
-    && clientSessionKey.trim().length > 0
-    && clientSessionKey.length <= 512
-      ? clientSessionKey
-      : undefined;
-  const id = stableKey
-    ? `session-client-${
-        createHash("sha256").update(stableKey).digest("hex").slice(0, 32)
-      }`
-    : generateSessionId();
+  const id = sessionIdForClientKey(clientSessionKey) ?? generateSessionId();
   const existing = sessions.get(id);
   if (existing) return existing;
   const now = new Date();
@@ -1042,12 +1081,36 @@ export function createSession(
   return session;
 }
 
-/** Persist a plan-mode value before it becomes observable or actionable. */
-async function persistSessionPlanMode(
+/**
+ * Idempotent create used by the HTTP route.
+ *
+ * A bridge restart empties the in-memory registry but leaves the SDK rollout
+ * and its preferences on disk. Point-read that durable identity before
+ * creating a blank state so the next prompt resumes the existing conversation.
+ */
+export async function createOrRecoverSession(
+  title?: string,
+  clientSessionKey?: string,
+): Promise<SessionState> {
+  const stableId = sessionIdForClientKey(clientSessionKey);
+  if (stableId) {
+    const existing = sessions.get(stableId)
+      ?? await ensurePersistedSession(stableId);
+    if (existing) return existing;
+  }
+  return createSession(title, clientSessionKey);
+}
+
+/**
+ * Persist metadata that must survive under the SDK identity.
+ *
+ * A client-key alias is written even when plan mode has never been set so SDK
+ * list reconciliation can adopt the rollout under that alias after restart.
+ */
+async function persistSessionMetadata(
   session: SessionState,
   planMode: boolean | undefined = session.planMode,
 ): Promise<void> {
-  if (planMode === undefined) return;
   const sdkSessionId =
     session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
   if (!sdkSessionId) {
@@ -1056,7 +1119,13 @@ async function persistSessionPlanMode(
       "Session does not have a durable preference key",
     );
   }
-  await updateSessionPreferences(sdkSessionId, { planMode });
+  const update: SessionPreferences = {};
+  if (planMode !== undefined) update.planMode = planMode;
+  if (CLIENT_SESSION_ID_PATTERN.test(session.id)) {
+    update.clientSessionBridgeId = session.id;
+  }
+  if (Object.keys(update).length === 0) return;
+  await updateSessionPreferences(sdkSessionId, update);
 }
 
 /**
@@ -1071,7 +1140,7 @@ async function applySessionPlanMode(
   planMode: boolean,
   persist = true,
 ): Promise<void> {
-  if (persist) await persistSessionPlanMode(session, planMode);
+  if (persist) await persistSessionMetadata(session, planMode);
   session.planMode = planMode;
   eventEmitter.emit({
     type: "session.updated",
@@ -2406,7 +2475,8 @@ export async function reconcilePersistedSessions(): Promise<void> {
     // The rollout was deleted while this listing was in flight. Nothing prunes
     // a re-inserted entry, so adopting it would leave a permanent zombie.
     if (deletedSinceTick(info.sessionId, listStartedAtTick)) continue;
-    const id = bridgeSessionIdFromSdkId(info.sessionId);
+    const storedPreferences = storedPreferencesBySdkId.get(info.sessionId);
+    const id = persistedBridgeSessionId(info.sessionId, storedPreferences);
     const existing = sessions.get(id);
     if (existing) {
       // `summary` is effectively always set, so taking it unconditionally
@@ -2425,7 +2495,6 @@ export async function reconcilePersistedSessions(): Promise<void> {
       existing.sdkSessionId = info.sessionId;
       continue;
     }
-    const storedPreferences = storedPreferencesBySdkId.get(info.sessionId);
     sessions.set(id, {
       id,
       title: info.customTitle || info.summary || `Session ${info.sessionId.slice(-6)}`,
@@ -4829,7 +4898,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           console.log("[session-manager] Session initialized, stored SDK session ID:", sdkSessionId);
           // A plan-mode preference set before the first turn had no durable key
           // to be written under; the id assigned here is that key.
-          if (gainedDurableIdentity) await persistSessionPlanMode(session);
+          if (gainedDurableIdentity) await persistSessionMetadata(session);
         }
 
         // Capture MCP servers and plugins from init message

@@ -2606,6 +2606,8 @@ describe("TerminalContainer", () => {
         style: "native",
         providerSessionId: "provider-session",
         status: "running",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
         startedAt: "2026-07-29T12:00:00.000Z",
       },
     });
@@ -2618,6 +2620,8 @@ describe("TerminalContainer", () => {
       expect(tabs.find((tab) => tab.id === "startup-agent")).toMatchObject({
         type: "codex-native",
         codexNativeData: { sessionId: "provider-session" },
+        initialAgentModel: "gpt-5.6-sol",
+        initialReasoningEffort: "high",
       });
     });
     await waitFor(() => {
@@ -2632,6 +2636,45 @@ describe("TerminalContainer", () => {
     });
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
   });
+
+  test.each(["starting", "error"] as const)(
+    "does not project or clear a backend-owned %s startup session",
+    async (status) => {
+      setupDurableLaunchEnvironment({
+        defaultAgent: "codex",
+        codexMode: "native",
+        pendingAgentLaunch: true,
+        startupAgentSession: {
+          tabId: "startup-agent",
+          agent: "codex",
+          style: "native",
+          status,
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+          ...(status === "error"
+            ? { error: "Agent launch failed; the backend will retry." }
+            : {}),
+        },
+      });
+
+      renderHiddenTerminal();
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
+      expect(
+        usePaneLayoutStore.getState().getAllTabs("env-hidden")
+          .some((tab) => tab.id === "startup-agent"),
+      ).toBe(false);
+      expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
+      expect(acknowledgeStartupAgentSessionMock).not.toHaveBeenCalled();
+      expect(
+        useEnvironmentStore.getState().getEnvironmentById("env-hidden")
+          ?.pendingAgentLaunch,
+      ).toBe(true);
+    },
+  );
 
   test("stops carrying the options once the agent surface acknowledges them", async () => {
     setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });

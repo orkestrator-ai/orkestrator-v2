@@ -639,6 +639,7 @@ describe("ClaudeTmuxChatTab", () => {
         model: "sonnet",
         effort: "high",
         resumeSessionId: undefined,
+        replaceExisting: false,
       },
     ]);
 
@@ -689,6 +690,7 @@ describe("ClaudeTmuxChatTab", () => {
         model: "default",
         effort: "high",
         resumeSessionId: undefined,
+        replaceExisting: false,
       });
     });
   });
@@ -3142,6 +3144,7 @@ Running 1 Explore agent...
         model: "haiku",
         effort: undefined,
         resumeSessionId: undefined,
+        replaceExisting: true,
       });
     });
   });
@@ -3178,6 +3181,7 @@ Running 1 Explore agent...
         model: "haiku",
         effort: undefined,
         resumeSessionId: undefined,
+        replaceExisting: true,
       });
     });
   });
@@ -3249,6 +3253,7 @@ Running 1 Explore agent...
         model: "default",
         effort: "high",
         resumeSessionId: undefined,
+        replaceExisting: true,
       });
     });
   });
@@ -3460,6 +3465,7 @@ Running 1 Explore agent...
         model: "sonnet",
         effort: "max",
         resumeSessionId: undefined,
+        replaceExisting: true,
       });
     });
   });
@@ -4288,6 +4294,7 @@ Running 1 Explore agent...
         model: "sonnet",
         effort: "high",
         resumeSessionId: "resume-1",
+        replaceExisting: true,
       });
     });
   });
@@ -4322,6 +4329,7 @@ Running 1 Explore agent...
         model: "default",
         effort: "high",
         resumeSessionId: "resume-1",
+        replaceExisting: true,
       });
     });
   });

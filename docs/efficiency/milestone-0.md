@@ -84,6 +84,11 @@ Primary files:
       `GET`/`POST` methods.
 - [x] Client metric reports are allowlisted and bounded, and metric labels do
       not retain unknown commands or arbitrary response encodings.
+- [x] The command label budget holds the entire backend command registry.
+- [x] Header, protocol, and label normalizers are covered directly, including
+      `q=0` refusals, absent protocols, and UTF-8 truncation boundaries.
+- [x] Stream gauges survive a drop, a close, and a failed handshake without
+      double-counting.
 - [x] Documentation assertions in
       `tests/unit/docs/remote-gateway-docs.test.ts` pass.
 
@@ -142,10 +147,22 @@ Recorded Tuesday, July 28, 2026:
 - Added `compression?: "off" | "body" | "on"` to gateway construction, wired
   `--compression` and `ORKESTRATOR_GATEWAY_COMPRESSION`, and kept the default
   at `off` so production response encoding remains unchanged.
-- Metric labels are bounded by route classification, terminal event-name
-  normalization, bounded recent samples, and overflow buckets for excess
+- Metric labels are bounded by route classification, per-entity event-name
+  collapsing, bounded recent samples, and overflow buckets for excess
   command/event keys. Unknown commands and uncommon response encodings use
   fixed buckets instead of retaining network-controlled labels.
+- Command labels are gated on backend registry membership rather than on the
+  registry's error text, so a rejected name is never retained even when
+  `invoke` refuses before consulting the registry. The command budget is sized
+  above the registry so no registered command is lost to `__overflow__`.
+- Event names that embed an identifier (`terminal-output-<id>`,
+  `claude-state-<containerId>`) collapse to fixed categories, so per-entity
+  names cannot evict genuine event labels.
+- Event counters are per delivery: `wireBytes` is the bytes actually written,
+  and an emit with no matching subscriber records nothing.
+- `Accept-Encoding` tokens weighted `q=0` are refusals and are not recorded as
+  support, and an unavailable `nextHopProtocol` stays `null` rather than
+  collapsing into `other`.
 - Pending manual work: desktop cold/warm baselines, real iPhone/iPad
   `WKWebView` baselines, main asset raw/gzip/Brotli measurements, inactive-tab
   rehydration verification, and final exit-criteria signoff.

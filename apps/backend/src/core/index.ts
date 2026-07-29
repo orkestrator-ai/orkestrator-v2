@@ -95,6 +95,17 @@ export class OrkestratorBackend {
     );
   }
 
+  /**
+   * Whether `command` is registered, independent of whether it can run now.
+   *
+   * The gateway gates metric labels on this so a name it rejects is never
+   * retained, including when `invoke` refuses for an unrelated reason such as
+   * shutdown and so never reaches the registry lookup below.
+   */
+  hasCommand(command: string): boolean {
+    return this.commands.has(command);
+  }
+
   async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
     if (this.shuttingDown) throw new Error("Backend is shutting down");
     const handler = this.commands.get(command);

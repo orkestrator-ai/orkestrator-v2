@@ -188,6 +188,24 @@ not to contain prompts, terminal contents or output, file contents, attachment
 data, credentials, tokens, resource URLs, or other request/response payloads.
 Do not add such fields to client reports or metric labels.
 
+Two label rules keep that true as the code grows:
+
+- A command label is retained only when the backend registry actually contains
+  that name. Anything else becomes `__unknown__`, so a rejected, network-supplied
+  command name is never stored — including when `invoke` refuses for an unrelated
+  reason and never consults the registry. The command budget is sized to hold the
+  whole registry, because folding real commands into `__overflow__` would make the
+  per-command breakdown incomplete and different on every run.
+- An event name that embeds an identifier is collapsed to a fixed category
+  (`terminal-output`, `terminal-output-tmux`, `claude-state`). Adding a new
+  per-entity event name without a matching rule would spend one label slot per
+  terminal, container, or environment and evict genuine event names.
+
+Event counters are per delivery, not per emit: a frame written to three
+subscribers counts three frames and three frames' worth of `wireBytes`, and an
+event with no matching subscriber is not recorded at all. That is what makes
+`wireBytes` the bytes actually put on the wire.
+
 ## Vercel-hosted public client
 
 `apps/web-public` is a static Vite deployment of the renderer with a backend connection screen. Vercel serves the initial HTML, CSS, JavaScript, fonts, and images only. After that, the browser sends authenticated commands, event streams, and loopback-proxy requests directly to the backend origin selected by the user. There is no Vercel function, rewrite, or relay in the backend traffic path.

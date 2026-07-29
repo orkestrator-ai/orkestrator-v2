@@ -34,13 +34,7 @@ struct RemoteWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.state = $state
-        if case .retrying = state {
-            context.coordinator.authenticate(connection)
-            return
-        }
-        guard context.coordinator.authenticatedConnection != connection,
-              !context.coordinator.isSwitchingThroughBridge else { return }
-        context.coordinator.authenticate(connection)
+        context.coordinator.synchronizeAuthentication(with: connection)
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -129,10 +123,26 @@ struct RemoteWebView: UIViewRepresentable {
         var authenticationTask: Task<Void, Never>?
         var javaScriptEvaluator: ((String) async throws -> Any?)?
         var authenticationStarter: ((RemoteConnection) -> Void)?
+        /// Injected only by tests so the login exchange can be stubbed without
+        /// reaching the network. Nil in production.
+        var loginProtocolClasses: [AnyClass]?
 
         init(model: ConnectionModel, state: Binding<WebViewState>) {
             self.model = model
             self.state = state
+        }
+
+        /// The body of `updateUIView`, kept on the coordinator because a
+        /// `UIViewRepresentableContext` cannot be constructed outside SwiftUI.
+        /// `state` has already been rebound by the caller.
+        func synchronizeAuthentication(with connection: RemoteConnection) {
+            if case .retrying = state.wrappedValue {
+                authenticate(connection)
+                return
+            }
+            guard authenticatedConnection != connection,
+                  !isSwitchingThroughBridge else { return }
+            authenticate(connection)
         }
 
         func authenticate(_ connection: RemoteConnection) {
@@ -182,7 +192,7 @@ struct RemoteWebView: UIViewRepresentable {
             webView = nil
         }
 
-        private func loginCookie(for connection: RemoteConnection) async throws -> HTTPCookie {
+        func loginCookie(for connection: RemoteConnection) async throws -> HTTPCookie {
             let loginURL = connection.address.appending(path: "__orkestrator/login")
             var components = URLComponents()
             components.queryItems = [URLQueryItem(name: "token", value: connection.token)]
@@ -201,6 +211,7 @@ struct RemoteWebView: UIViewRepresentable {
             configuration.httpCookieStorage = nil
             configuration.httpShouldSetCookies = false
             configuration.timeoutIntervalForRequest = 20
+            if let loginProtocolClasses { configuration.protocolClasses = loginProtocolClasses }
             let redirectBlocker = LoginRedirectBlocker()
             let session = URLSession(configuration: configuration, delegate: redirectBlocker, delegateQueue: nil)
             defer { session.finishTasksAndInvalidate() }
@@ -524,7 +535,7 @@ struct RemoteWebView: UIViewRepresentable {
     }
 }
 
-private final class LoginRedirectBlocker: NSObject, URLSessionTaskDelegate {
+final class LoginRedirectBlocker: NSObject, URLSessionTaskDelegate {
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,

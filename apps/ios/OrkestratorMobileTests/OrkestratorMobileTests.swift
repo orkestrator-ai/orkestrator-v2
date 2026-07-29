@@ -295,6 +295,23 @@ private final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+/// `URLProtocol` hands the body back as a stream, so `httpBody` alone is not
+/// enough to see what a request actually sent.
+private func httpBody(of request: URLRequest) -> String {
+    if let body = request.httpBody { return String(decoding: body, as: UTF8.self) }
+    guard let stream = request.httpBodyStream else { return "" }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 1_024)
+    while stream.hasBytesAvailable {
+        let read = stream.read(&buffer, maxLength: buffer.count)
+        if read <= 0 { break }
+        data.append(contentsOf: buffer[0..<read])
+    }
+    return String(decoding: data, as: UTF8.self)
+}
+
 final class GatewayConnectionValidatorTests: XCTestCase {
     private func validator() -> GatewayConnectionValidator {
         let configuration = URLSessionConfiguration.ephemeral
@@ -439,7 +456,8 @@ final class RemoteWebViewPolicyTests: XCTestCase {
 
     private func makeCoordinator(
         model: ConnectionModel? = nil,
-        initialState: WebViewState = .loading
+        initialState: WebViewState = .loading,
+        stubAuthentication: Bool = true
     ) -> (RemoteWebView.Coordinator, StateBox) {
         let state = StateBox(initialState)
         let binding = Binding(
@@ -453,10 +471,28 @@ final class RemoteWebViewPolicyTests: XCTestCase {
             ),
             state: binding
         )
-        coordinator.authenticationStarter = { [weak coordinator] connection in
-            coordinator?.beginAuthenticationState(for: connection)
+        if stubAuthentication {
+            coordinator.authenticationStarter = { [weak coordinator] connection in
+                coordinator?.beginAuthenticationState(for: connection)
+            }
         }
         return (coordinator, state)
+    }
+
+    private func replyScript(id: String, ok: Bool, literal: String) -> String {
+        "window.__orkestratorNativeConnectionReply(\"\(id)\", \(ok), \(literal))"
+    }
+
+    private func rejectionScript(id: String, error: Error) throws -> String {
+        let coordinator = RemoteWebView.Coordinator(
+            model: ConnectionModel(credentialStore: MemoryCredentialStore(), validator: MockValidator()),
+            state: Binding(get: { .loading }, set: { _ in })
+        )
+        return replyScript(
+            id: id,
+            ok: false,
+            literal: try coordinator.jsonLiteral(error.localizedDescription)
+        )
     }
 
     func testPlatformMappingAndInjectedScriptsAreOrderedAndMainFrameOnly() throws {
@@ -657,8 +693,8 @@ final class RemoteWebViewPolicyTests: XCTestCase {
     }
 
     func testBridgeListConnectUseAndForgetActionsReturnEncodedReplies() async throws {
-        let first = connection(address: "https://one.example")
-        let second = connection(address: "https://two.example")
+        let first = connection(address: "https://one.example", token: "gateway-token-one-0001")
+        let second = connection(address: "https://two.example", token: "gateway-token-two-0002")
         let store = MemoryCredentialStore(
             vault: ConnectionVault(activeConnectionID: first.id, connections: [first, second])
         )
@@ -670,10 +706,20 @@ final class RemoteWebViewPolicyTests: XCTestCase {
             return nil
         }
 
+        func assertRedactsTokens(_ script: String, _ tokens: [String], line: UInt = #line) {
+            for token in tokens {
+                XCTAssertFalse(
+                    script.contains(token),
+                    "A bridge reply leaked a gateway token",
+                    line: line
+                )
+            }
+        }
+
         await coordinator.handleBridgeRequest(id: "list-id", action: "list", body: [:])
         XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""list-id", true"#))
         XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""credentialStorage":"secure""#))
-        XCTAssertFalse(try XCTUnwrap(scripts.last).contains(first.token))
+        assertRedactsTokens(try XCTUnwrap(scripts.last), [first.token, second.token])
 
         await coordinator.handleBridgeRequest(
             id: "use-id",
@@ -684,6 +730,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         XCTAssertEqual(coordinator.requestedConnection?.id, second.id)
         XCTAssertFalse(coordinator.isSwitchingThroughBridge)
         XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""use-id", true"#))
+        assertRedactsTokens(try XCTUnwrap(scripts.last), [first.token, second.token])
 
         await coordinator.handleBridgeRequest(
             id: "forget-id",
@@ -692,6 +739,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         )
         XCTAssertEqual(model.vault.connections.map(\.id), [second.id])
         XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""forget-id", true"#))
+        assertRedactsTokens(try XCTUnwrap(scripts.last), [first.token, second.token])
 
         let emptyModel = ConnectionModel(
             credentialStore: MemoryCredentialStore(),
@@ -715,6 +763,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         XCTAssertEqual(connectCoordinator.requestedConnection, emptyModel.activeConnection)
         XCTAssertFalse(connectCoordinator.isSwitchingThroughBridge)
         XCTAssertTrue(try XCTUnwrap(connectScripts.last).contains(#""connect-id", true"#))
+        assertRedactsTokens(try XCTUnwrap(connectScripts.last), ["gateway-token-new-123"])
     }
 
     func testBridgeRejectsInvalidAndUnsupportedRequests() async throws {
@@ -725,14 +774,23 @@ final class RemoteWebViewPolicyTests: XCTestCase {
             return nil
         }
 
-        await coordinator.handleBridgeRequest(
-            id: "bad-connect",
-            action: "connect",
-            body: ["address": "https://desk.example"]
-        )
-        await coordinator.handleBridgeRequest(id: "bad-use", action: "use", body: [:])
-        await coordinator.handleBridgeRequest(id: "bad-forget", action: "forget", body: [:])
-        await coordinator.handleBridgeRequest(id: "bad-action", action: "destroy", body: [:])
+        // Every rejected request must leave the bridge switch flag clear, or a
+        // SwiftUI update would be ignored forever. Arm it before each request so
+        // the assertion observes the failure path clearing it.
+        for request in [
+            ("bad-connect", "connect", ["address": "https://desk.example"]),
+            ("bad-use", "use", [:]),
+            ("bad-forget", "forget", [:]),
+            ("bad-action", "destroy", [:]),
+        ] as [(String, String, [String: Any])] {
+            coordinator.isSwitchingThroughBridge = true
+            await coordinator.handleBridgeRequest(id: request.0, action: request.1, body: request.2)
+            XCTAssertFalse(
+                coordinator.isSwitchingThroughBridge,
+                "\(request.1) left the bridge switch armed"
+            )
+            XCTAssertNil(coordinator.requestedConnection)
+        }
 
         XCTAssertEqual(scripts.count, 4)
         XCTAssertTrue(scripts[0].contains(#""bad-connect", false"#))
@@ -741,18 +799,19 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         XCTAssertTrue(scripts[2].contains(#""bad-forget", false"#))
         XCTAssertTrue(scripts[3].contains(#""bad-action", false"#))
         XCTAssertTrue(scripts[3].contains("action is not supported"))
-        XCTAssertFalse(coordinator.isSwitchingThroughBridge)
     }
 
-    func testBridgeRecoversSwitchWhenJavaScriptEvaluationFails() async {
+    func testBridgeRecoversSwitchWhenJavaScriptEvaluationFails() async throws {
         let model = ConnectionModel(
             credentialStore: MemoryCredentialStore(),
             validator: MockValidator()
         )
-        let (coordinator, _) = makeCoordinator(model: model)
+        let (coordinator, state) = makeCoordinator(model: model, initialState: .ready)
         var evaluations = 0
-        coordinator.javaScriptEvaluator = { _ in
+        var scripts: [String] = []
+        coordinator.javaScriptEvaluator = {
             evaluations += 1
+            scripts.append($0)
             throw TestFailure.expected
         }
 
@@ -768,6 +827,139 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         XCTAssertEqual(evaluations, 2)
         XCTAssertFalse(coordinator.isSwitchingThroughBridge)
         XCTAssertEqual(coordinator.requestedConnection, model.activeConnection)
+        XCTAssertEqual(state.value, .loading)
+        XCTAssertNil(coordinator.authenticatedConnection)
+
+        XCTAssertEqual(scripts.count, 2)
+        XCTAssertTrue(
+            scripts[0].hasPrefix(#"window.__orkestratorNativeConnectionReply("connect-id", true, {"#),
+            "Unexpected resolve script: \(scripts[0])"
+        )
+        XCTAssertEqual(
+            scripts[1],
+            try rejectionScript(id: "connect-id", error: TestFailure.expected)
+        )
+    }
+
+    func testBridgeRecoversUseSwitchWhenJavaScriptEvaluationFails() async throws {
+        let first = connection(address: "https://one.example")
+        let second = connection(address: "https://two.example")
+        let model = ConnectionModel(
+            credentialStore: MemoryCredentialStore(
+                vault: ConnectionVault(activeConnectionID: first.id, connections: [first, second])
+            ),
+            validator: MockValidator()
+        )
+        let (coordinator, state) = makeCoordinator(model: model, initialState: .ready)
+        var scripts: [String] = []
+        coordinator.javaScriptEvaluator = {
+            scripts.append($0)
+            throw TestFailure.expected
+        }
+
+        await coordinator.handleBridgeRequest(
+            id: "use-id",
+            action: "use",
+            body: ["connectionId": second.id.uuidString]
+        )
+
+        XCTAssertFalse(coordinator.isSwitchingThroughBridge)
+        XCTAssertEqual(coordinator.requestedConnection?.id, second.id)
+        XCTAssertEqual(coordinator.requestedConnection, model.activeConnection)
+        XCTAssertEqual(state.value, .loading)
+        XCTAssertNil(coordinator.authenticatedConnection)
+
+        XCTAssertEqual(scripts.count, 2)
+        XCTAssertTrue(
+            scripts[0].hasPrefix(#"window.__orkestratorNativeConnectionReply("use-id", true, {"#),
+            "Unexpected resolve script: \(scripts[0])"
+        )
+        XCTAssertEqual(
+            scripts[1],
+            try rejectionScript(id: "use-id", error: TestFailure.expected)
+        )
+    }
+
+    func testBridgeClearsSwitchWhenTheConnectionModelFailsBeforeReplying() async throws {
+        let first = connection(address: "https://one.example")
+        let second = connection(address: "https://two.example")
+        let validator = MockValidator()
+        let model = ConnectionModel(
+            credentialStore: MemoryCredentialStore(
+                vault: ConnectionVault(activeConnectionID: first.id, connections: [first, second])
+            ),
+            validator: validator
+        )
+        let (coordinator, state) = makeCoordinator(model: model, initialState: .ready)
+        var scripts: [String] = []
+        coordinator.javaScriptEvaluator = {
+            scripts.append($0)
+            return nil
+        }
+        validator.checkError = TestFailure.expected
+
+        // `connect` throws before its `defer` is installed, so only the `catch`
+        // can clear the switch, and nothing may be re-authenticated.
+        await coordinator.handleBridgeRequest(
+            id: "connect-id",
+            action: "connect",
+            body: [
+                "address": "https://new.example",
+                "token": "gateway-token-new-123",
+            ]
+        )
+        XCTAssertFalse(coordinator.isSwitchingThroughBridge)
+        XCTAssertNil(coordinator.requestedConnection)
+        XCTAssertEqual(state.value, .ready)
+        XCTAssertEqual(model.activeConnection?.id, first.id)
+        XCTAssertEqual(scripts.count, 1)
+        XCTAssertEqual(scripts[0], try rejectionScript(id: "connect-id", error: TestFailure.expected))
+
+        await coordinator.handleBridgeRequest(
+            id: "use-id",
+            action: "use",
+            body: ["connectionId": second.id.uuidString]
+        )
+        XCTAssertFalse(coordinator.isSwitchingThroughBridge)
+        XCTAssertNil(coordinator.requestedConnection)
+        XCTAssertEqual(state.value, .ready)
+        XCTAssertEqual(model.activeConnection?.id, first.id)
+        XCTAssertEqual(scripts.count, 2)
+        XCTAssertEqual(scripts[1], try rejectionScript(id: "use-id", error: TestFailure.expected))
+    }
+
+    func testBridgeSwitchAuthenticatesTheNewActiveConnectionForReal() async throws {
+        let model = ConnectionModel(
+            credentialStore: MemoryCredentialStore(),
+            validator: MockValidator()
+        )
+        // No `authenticationStarter`, so the production branch of
+        // `finishBridgeSwitch` runs `authenticate(_:)` itself.
+        let (coordinator, state) = makeCoordinator(
+            model: model,
+            initialState: .ready,
+            stubAuthentication: false
+        )
+        coordinator.javaScriptEvaluator = { _ in nil }
+
+        await coordinator.handleBridgeRequest(
+            id: "connect-id",
+            action: "connect",
+            body: [
+                "address": "https://new.example",
+                "token": "gateway-token-new-123",
+            ]
+        )
+
+        XCTAssertFalse(coordinator.isSwitchingThroughBridge)
+        XCTAssertEqual(coordinator.requestedConnection, model.activeConnection)
+        XCTAssertNil(coordinator.authenticatedConnection)
+        XCTAssertEqual(state.value, .loading)
+
+        // The login never leaves the process: the coordinator has no web view,
+        // so the task exits without touching the network or the state.
+        await coordinator.authenticationTask?.value
+        XCTAssertEqual(state.value, .loading)
     }
 
     func testBridgeJSONEncodingFailureIsNormalizedAndJavaScriptStringsAreSafe() throws {
@@ -808,11 +1000,219 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         XCTAssertNil(coordinator.authenticationStarter)
     }
 
+    func testAuthenticateIgnoresRedundantRequestsAndCancelsThePreviousAttempt() async {
+        let other = connection(address: "https://other.example")
+        let (coordinator, state) = makeCoordinator(initialState: .ready)
+        let inFlight = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
+        coordinator.authenticationTask = inFlight
+        coordinator.beginAuthenticationState(for: saved)
+        XCTAssertEqual(state.value, .loading)
+
+        // The same connection while it is already loading must not restart.
+        coordinator.authenticate(saved)
+        XCTAssertFalse(inFlight.isCancelled)
+        XCTAssertEqual(coordinator.requestedConnection, saved)
+
+        // A retry of the same connection from a settled state does restart, and
+        // the superseded attempt is cancelled rather than left racing.
+        state.value = .ready
+        coordinator.authenticate(saved)
+        XCTAssertTrue(inFlight.isCancelled)
+        XCTAssertEqual(state.value, .loading)
+        XCTAssertEqual(coordinator.requestedConnection, saved)
+        XCTAssertNil(coordinator.authenticatedConnection)
+        await coordinator.authenticationTask?.value
+
+        // A different connection restarts even while the current one is loading.
+        let superseded = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
+        coordinator.authenticationTask = superseded
+        XCTAssertEqual(state.value, .loading)
+        coordinator.authenticate(other)
+        XCTAssertTrue(superseded.isCancelled)
+        XCTAssertEqual(coordinator.requestedConnection, other)
+        await coordinator.authenticationTask?.value
+    }
+
+    func testAuthenticateReportsLoginFailureAsATerminalState() async {
+        let (coordinator, state) = makeCoordinator(initialState: .ready)
+        let webView = WKWebView()
+        coordinator.webView = webView
+        coordinator.loginProtocolClasses = [StubURLProtocol.self]
+        var loginRequests = 0
+        StubURLProtocol.handler = { request in
+            loginRequests += 1
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: "HTTP/1.1", headerFields: nil)!,
+                Data()
+            )
+        }
+
+        coordinator.authenticate(saved)
+        XCTAssertEqual(state.value, .loading)
+        await coordinator.authenticationTask?.value
+
+        XCTAssertEqual(loginRequests, 1)
+        XCTAssertEqual(state.value, .failed("The saved gateway token was rejected."))
+        XCTAssertNil(coordinator.authenticatedConnection)
+        XCTAssertEqual(coordinator.requestedConnection, saved)
+        withExtendedLifetime(webView) {}
+    }
+
+    func testAuthenticateAbandonsAFailureForASupersededConnection() async {
+        let other = connection(address: "https://other.example")
+        let (coordinator, state) = makeCoordinator(initialState: .ready)
+        let webView = WKWebView()
+        coordinator.webView = webView
+        coordinator.loginProtocolClasses = [StubURLProtocol.self]
+        StubURLProtocol.handler = { _ in throw URLError(.cannotConnectToHost) }
+
+        coordinator.authenticate(saved)
+        let attempt = coordinator.authenticationTask
+        // The user switches server before the first login resolves.
+        coordinator.beginAuthenticationState(for: other)
+        await attempt?.value
+
+        XCTAssertEqual(state.value, .loading)
+        XCTAssertEqual(coordinator.requestedConnection, other)
+        withExtendedLifetime(webView) {}
+    }
+
+    func testViewUpdatesRetryEagerlyAndYieldToBridgeSwitches() async {
+        let other = connection(address: "https://other.example")
+
+        // Already showing the requested connection: no reload.
+        let (settled, settledState) = makeCoordinator(initialState: .ready)
+        settled.authenticatedConnection = saved
+        settled.synchronizeAuthentication(with: saved)
+        XCTAssertNil(settled.requestedConnection)
+        XCTAssertEqual(settled.authenticatedConnection, saved)
+        XCTAssertEqual(settledState.value, .ready)
+
+        // A different connection reloads.
+        settled.synchronizeAuthentication(with: other)
+        XCTAssertEqual(settled.requestedConnection, other)
+        XCTAssertNil(settled.authenticatedConnection)
+        XCTAssertEqual(settledState.value, .loading)
+        await settled.authenticationTask?.value
+
+        // A bridge switch owns authentication; a SwiftUI update must not race it.
+        let (switching, switchingState) = makeCoordinator(initialState: .ready)
+        switching.isSwitchingThroughBridge = true
+        switching.synchronizeAuthentication(with: saved)
+        XCTAssertNil(switching.requestedConnection)
+        XCTAssertEqual(switchingState.value, .ready)
+
+        // Retrying reloads even when that connection is already authenticated.
+        let (retrying, retryingState) = makeCoordinator(initialState: .ready)
+        retrying.authenticatedConnection = saved
+        retryingState.value = .retrying(UUID())
+        retrying.synchronizeAuthentication(with: saved)
+        XCTAssertEqual(retrying.requestedConnection, saved)
+        XCTAssertNil(retrying.authenticatedConnection)
+        XCTAssertEqual(retryingState.value, .loading)
+        await retrying.authenticationTask?.value
+    }
+
+    func testLoginExchangePostsTheTokenInTheBodyAndReturnsTheSessionCookie() async throws {
+        let target = connection(address: "https://desk.example", token: "gateway-token-secret-01")
+        let (coordinator, _) = makeCoordinator()
+        coordinator.loginProtocolClasses = [StubURLProtocol.self]
+        var captured: URLRequest?
+        StubURLProtocol.handler = { request in
+            captured = request
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 303, httpVersion: "HTTP/1.1", headerFields: [
+                    "Location": "https://desk.example/",
+                    "Set-Cookie": "orkestrator_gateway_auth=session-value; Path=/; Secure; HttpOnly; SameSite=Strict",
+                ])!,
+                Data()
+            )
+        }
+
+        let cookie = try await coordinator.loginCookie(for: target)
+        XCTAssertEqual(cookie.name, "orkestrator_gateway_auth")
+        XCTAssertEqual(cookie.value, "session-value")
+
+        let request = try XCTUnwrap(captured)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "https://desk.example/__orkestrator/login"
+        )
+        // The token must never reach a server log or a Referer header.
+        XCTAssertNil(request.url?.query)
+        XCTAssertFalse(try XCTUnwrap(request.url?.absoluteString).contains(target.token))
+        XCTAssertEqual(httpBody(of: request), "token=gateway-token-secret-01")
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Content-Type"),
+            "application/x-www-form-urlencoded; charset=utf-8"
+        )
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
+    }
+
+    func testLoginExchangeSurfacesRejectedTokensAndTransportFailures() async {
+        let target = connection(address: "https://desk.example", token: "gateway-token-secret-01")
+        let (coordinator, _) = makeCoordinator()
+        coordinator.loginProtocolClasses = [StubURLProtocol.self]
+
+        StubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+        await assertAsyncErrorContains("token was rejected") {
+            _ = try await coordinator.loginCookie(for: target)
+        }
+
+        StubURLProtocol.handler = { _ in throw URLError(.timedOut) }
+        await assertAsyncErrorContains("20 seconds") {
+            _ = try await coordinator.loginCookie(for: target)
+        }
+
+        StubURLProtocol.handler = { _ in throw URLError(.serverCertificateUntrusted) }
+        await assertAsyncErrorContains("certificate") {
+            _ = try await coordinator.loginCookie(for: target)
+        }
+    }
+
+    func testLoginRedirectBlockerRefusesToFollowRedirects() {
+        let loginURL = URL(string: "https://desk.example/__orkestrator/login")!
+        let blocker = LoginRedirectBlocker()
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: loginURL)
+        let redirect = HTTPURLResponse(
+            url: loginURL,
+            statusCode: 307,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Location": "https://attacker.example/collect"]
+        )!
+
+        var handled = false
+        var followed: URLRequest? = URLRequest(url: URL(string: "https://attacker.example/collect")!)
+        blocker.urlSession(
+            session,
+            task: task,
+            willPerformHTTPRedirection: redirect,
+            newRequest: URLRequest(url: URL(string: "https://attacker.example/collect")!)
+        ) { request in
+            handled = true
+            followed = request
+        }
+
+        XCTAssertTrue(handled)
+        // A followed 307 would replay the POST body, and the token with it.
+        XCTAssertNil(followed)
+    }
+
     func testBridgeScriptExposesOnlyConnectionSummaries() {
         let script = RemoteWebView.Coordinator.connectionBridgeScript
         XCTAssertTrue(script.contains("list: () => call(\"list\")"))
         XCTAssertTrue(script.contains("forget: (connectionId)"))
-        XCTAssertFalse(script.contains("activeConnection.token"))
+
+        let actions = script
+            .components(separatedBy: "call(\"")
+            .dropFirst()
+            .map { String($0.prefix(while: { $0 != "\"" })) }
+        XCTAssertEqual(actions, ["list", "connect", "use", "forget"])
     }
 }
 

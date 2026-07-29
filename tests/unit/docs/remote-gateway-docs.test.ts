@@ -99,6 +99,10 @@ describe("remote gateway documentation", () => {
       expect(normalizedGuide).toContain(excludedContent);
     }
 
+    expect(normalizedGuide).toContain("retained only when the backend registry actually contains");
+    expect(normalizedGuide).toContain("collapsed to a fixed category");
+    expect(normalizedGuide).toContain("Event counters are per delivery, not per emit");
+
     expect(milestone).toContain("Both metrics routes require authentication");
     expect(milestone).toContain("Client metric reports are allowlisted and bounded");
     expect(milestone).toContain(

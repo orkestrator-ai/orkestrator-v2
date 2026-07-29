@@ -24,6 +24,13 @@ import {
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
+  /**
+   * Whether `command` is in the registry. Metric labels are gated on this so a
+   * rejected, network-supplied name can never be retained — testing the error
+   * message instead would leak any name rejected for some other reason first,
+   * such as during shutdown.
+   */
+  hasCommand?(command: string): boolean;
 };
 
 type NetworkInterfaceMap = NodeJS.Dict<NetworkInterfaceInfo[]>;
@@ -126,11 +133,34 @@ const CORS_ALLOWED_HEADERS =
 const GATEWAY_METRIC_MAP_LIMIT = 128;
 const GATEWAY_METRIC_LABEL_BYTES = 96;
 const GATEWAY_METRIC_TOTAL_LABEL_BYTES = 8 * 1024;
+/**
+ * Command labels are an allowlist, not free text: anything the backend registry
+ * rejects is recorded as `__unknown__`, so the only labels that can ever reach
+ * this map are registered command names. The budget therefore has to clear the
+ * whole registry — a limit below it silently folds legitimate commands into
+ * `__overflow__` in invocation order, which makes the per-command byte and
+ * timing breakdown both incomplete and different on every run.
+ * `tests/unit/electron/gateway.test.ts` pins these against the real registry.
+ */
+export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 512;
+export const GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES = 32 * 1024;
 const GATEWAY_METRIC_SAMPLE_LIMIT = 32;
 const MAX_CLIENT_METRICS_BODY_BYTES = 64 * 1024;
 const METRIC_OVERFLOW_KEY = "__overflow__";
 const METRIC_INVALID_KEY = "__invalid__";
 const METRIC_UNKNOWN_COMMAND_KEY = "__unknown__";
+/**
+ * Keepalive writes are not an event, but a client dropped while flushing one
+ * still needs attributing somewhere. A reserved label keeps that out of the
+ * bucket for a real event that happens to be named `events`.
+ */
+const METRIC_KEEPALIVE_KEY = "__keepalive__";
+const METRIC_RESERVED_KEYS: readonly string[] = [
+  METRIC_OVERFLOW_KEY,
+  METRIC_INVALID_KEY,
+  METRIC_UNKNOWN_COMMAND_KEY,
+  METRIC_KEEPALIVE_KEY,
+];
 
 class InvalidRequestBodyError extends Error {}
 class RequestBodyTooLargeError extends Error {}
@@ -172,12 +202,6 @@ type GatewayStreamMetrics = {
 
 type GatewayCompressionMetrics = {
   configuredMode: GatewayCompressionMode;
-  timingHooks: {
-    count: number;
-    totalMs: number;
-    encodedBytes: number;
-    sourceBytes: number;
-  };
 };
 
 type GatewayClientBootReport = {
@@ -259,39 +283,67 @@ function appendBoundedSample<T>(target: T[], sample: T, limit = GATEWAY_METRIC_S
   if (target.length > limit) target.splice(0, target.length - limit);
 }
 
-function boundedMetricKey<T>(
-  map: Map<string, T>,
-  key: string,
-  limit = GATEWAY_METRIC_MAP_LIMIT,
-): string {
-  if (map.has(key)) return key;
+/**
+ * A `Map` whose key set is bounded by both entry count and total label bytes.
+ *
+ * The running byte total matters: recomputing it per miss made every emit for
+ * an unseen label walk the whole key set, and `recordEvent` runs once per
+ * connected client per frame.
+ */
+export class BoundedMetricMap<T> {
+  private readonly map = new Map<string, T>();
+  private labelBytes = 0;
 
-  // Reserve one slot and its bytes for overflow from the outset. This keeps
-  // both limits true after the first overflowing label instead of allowing the
-  // overflow bucket to become an unaccounted (limit + 1)th entry.
-  const overflowBytes = Buffer.byteLength(METRIC_OVERFLOW_KEY);
-  const usedLabelBytes = [...map.keys()].reduce(
-    (total, existing) => total + Buffer.byteLength(existing),
-    0,
-  );
-  if (
-    map.size < limit - 1
-    && Buffer.byteLength(key) <= GATEWAY_METRIC_LABEL_BYTES
-    && usedLabelBytes + Buffer.byteLength(key) <= GATEWAY_METRIC_TOTAL_LABEL_BYTES - overflowBytes
-  ) {
-    return key;
+  constructor(
+    private readonly limit = GATEWAY_METRIC_MAP_LIMIT,
+    private readonly totalLabelBytes = GATEWAY_METRIC_TOTAL_LABEL_BYTES,
+  ) {}
+
+  /**
+   * Resolves the label this key will actually be recorded under.
+   *
+   * One slot and its bytes are reserved for overflow from the outset, so both
+   * limits stay true after the first overflowing label instead of letting the
+   * overflow bucket become an unaccounted (limit + 1)th entry.
+   */
+  resolveKey(key: string): string {
+    if (this.map.has(key)) return key;
+    const keyBytes = Buffer.byteLength(key);
+    const overflowBytes = Buffer.byteLength(METRIC_OVERFLOW_KEY);
+    if (
+      this.map.size < this.limit - 1
+      && keyBytes <= GATEWAY_METRIC_LABEL_BYTES
+      && this.labelBytes + keyBytes <= this.totalLabelBytes - overflowBytes
+    ) {
+      return key;
+    }
+    return METRIC_OVERFLOW_KEY;
   }
-  return METRIC_OVERFLOW_KEY;
+
+  get(key: string): T | undefined {
+    return this.map.get(key);
+  }
+
+  set(key: string, value: T): void {
+    if (!this.map.has(key)) this.labelBytes += Buffer.byteLength(key);
+    this.map.set(key, value);
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
+
+  get usedLabelBytes(): number {
+    return this.labelBytes;
+  }
+
+  entries(): IterableIterator<[string, T]> {
+    return this.map.entries();
+  }
 }
 
-function normalizeMetricLabel(value: string): string {
-  if (
-    value === METRIC_UNKNOWN_COMMAND_KEY
-    || value === METRIC_INVALID_KEY
-    || value === METRIC_OVERFLOW_KEY
-  ) {
-    return value;
-  }
+export function normalizeMetricLabel(value: string): string {
+  if (METRIC_RESERVED_KEYS.includes(value)) return value;
   const trimmed = value.trim();
   return (
     Buffer.byteLength(trimmed) <= GATEWAY_METRIC_LABEL_BYTES
@@ -301,13 +353,26 @@ function normalizeMetricLabel(value: string): string {
     : METRIC_INVALID_KEY;
 }
 
-function truncateUtf8(value: string, maxBytes: number): string {
+/**
+ * Truncates to a byte budget without emitting a replacement character.
+ *
+ * The cut is walked back to the start of the partial sequence rather than
+ * decoding and stripping a trailing U+FFFD, because that cannot tell a decode
+ * artifact from a U+FFFD the caller actually sent.
+ */
+export function truncateUtf8(value: string, maxBytes: number): string {
   const buffer = Buffer.from(value);
   if (buffer.length <= maxBytes) return value;
-  return buffer.subarray(0, maxBytes).toString("utf8").replace(/\uFFFD$/, "");
+  let end = maxBytes;
+  // If the first dropped byte is a continuation byte (0b10xxxxxx) the cut fell
+  // inside a sequence, so walk back to that sequence's lead byte and drop it
+  // whole. A sequence split this way can never fit, so no refit check is
+  // needed. At most 3 continuation bytes can precede a lead byte.
+  while (end > 0 && (buffer[end]! & 0xc0) === 0x80) end -= 1;
+  return buffer.subarray(0, end).toString("utf8");
 }
 
-function normalizeContentEncoding(value: string | null): "identity" | "gzip" | "br" | "deflate" | "other" {
+export function normalizeContentEncoding(value: string | null): "identity" | "gzip" | "br" | "deflate" | "other" {
   const encoding = value?.trim().toLowerCase() || "identity";
   if (encoding === "identity" || encoding === "gzip" || encoding === "br" || encoding === "deflate") {
     return encoding;
@@ -315,7 +380,7 @@ function normalizeContentEncoding(value: string | null): "identity" | "gzip" | "
   return "other";
 }
 
-function normalizeHttpMethod(value: string): string {
+export function normalizeHttpMethod(value: string): string {
   const method = value.trim().toUpperCase();
   return (
     method === "DELETE"
@@ -330,28 +395,41 @@ function normalizeHttpMethod(value: string): string {
     : "OTHER";
 }
 
-function normalizeHttpVersion(value: string): string {
+export function normalizeHttpVersion(value: string): string {
   const version = value.trim();
   return version === "1.0" || version === "1.1" || version === "2.0" || version === "3.0"
     ? version
     : "other";
 }
 
-function normalizeAcceptEncoding(value: string | null): string | null {
+/**
+ * `q=0` means "not acceptable" (RFC 9110 §12.5.3), so a token weighted that way
+ * is a refusal and must not be recorded as support. This label exists to decide
+ * whether compression can be turned on for a client, and counting a refusal as
+ * support would err in exactly the direction that breaks one.
+ */
+export function normalizeAcceptEncoding(value: string | null): string | null {
   if (value === null) return null;
   const encodings = new Set<string>();
   for (const entry of value.toLowerCase().split(",")) {
-    const encoding = entry.split(";", 1)[0]?.trim();
+    const [token, ...parameters] = entry.split(";");
+    const encoding = token?.trim();
+    if (!encoding) continue;
+    const refused = parameters.some((parameter) => {
+      const [name, weight] = parameter.split("=", 2);
+      return name?.trim() === "q" && Number.parseFloat(weight ?? "") === 0;
+    });
+    if (refused) continue;
     if (encoding === "br" || encoding === "gzip" || encoding === "deflate" || encoding === "identity") {
       encodings.add(encoding);
-    } else if (encoding) {
+    } else {
       encodings.add("other");
     }
   }
   return encodings.size > 0 ? [...encodings].sort().join(",") : null;
 }
 
-function normalizeCacheControl(value: string | null): string | null {
+export function normalizeCacheControl(value: string | null): string | null {
   if (value === null) return null;
   const allowed = new Set([
     "immutable",
@@ -376,7 +454,7 @@ function normalizeCacheControl(value: string | null): string | null {
   return directives.size > 0 ? [...directives].sort().join(",") : null;
 }
 
-function normalizeContentType(value: string | null): string | null {
+export function normalizeContentType(value: string | null): string | null {
   if (value === null) return null;
   const mimeType = value.split(";", 1)[0]?.trim().toLowerCase();
   if (!mimeType) return null;
@@ -399,9 +477,15 @@ function normalizeContentType(value: string | null): string | null {
   return "other";
 }
 
-function normalizeNextHopProtocol(value: unknown): string | null {
+export function normalizeNextHopProtocol(value: unknown): string | null {
+  // `stringOrNull` yields null and the optional call then yields undefined, so
+  // this must test falsiness rather than `=== null`: reporting an unavailable
+  // protocol as "other" would make it indistinguishable from one we simply do
+  // not recognise, which is the HTTP/2-vs-1.1 signal being measured. A
+  // `WKWebView` with no navigation entry, and any cross-origin navigation
+  // without `Timing-Allow-Origin`, both take this path.
   const protocol = stringOrNull(value, 24)?.toLowerCase();
-  if (protocol === null) return null;
+  if (!protocol) return null;
   if (
     protocol === "h2"
     || protocol === "h3"
@@ -473,9 +557,22 @@ function classifyGatewayRoute(pathname: string): GatewayRouteKey {
   return "static";
 }
 
-function normalizeGatewayEventMetricKey(event: string): string {
-  if (event.startsWith(`${DROPPABLE_EVENT_PREFIX}tmux:`)) return "terminal-output-tmux";
-  if (event.startsWith(DROPPABLE_EVENT_PREFIX)) return "terminal-output";
+/**
+ * Event names that embed an identifier have unbounded cardinality, so each one
+ * would otherwise consume a label slot per terminal, container or environment
+ * and push genuinely distinct event names into `__overflow__`. Collapse them to
+ * a fixed category the way the terminal families already are.
+ */
+const PER_ENTITY_EVENT_PREFIXES: readonly [prefix: string, label: string][] = [
+  [`${DROPPABLE_EVENT_PREFIX}tmux:`, "terminal-output-tmux"],
+  [DROPPABLE_EVENT_PREFIX, "terminal-output"],
+  ["claude-state-", "claude-state"],
+];
+
+export function normalizeGatewayEventMetricKey(event: string): string {
+  for (const [prefix, label] of PER_ENTITY_EVENT_PREFIXES) {
+    if (event.startsWith(prefix)) return label;
+  }
   return normalizeMetricLabel(event);
 }
 
@@ -505,7 +602,7 @@ function sanitizeClientBootReport(
     recordedAt: new Date().toISOString(),
     platform,
     navigationType,
-    httpVersion,
+    httpVersion: normalizeHttpVersion(httpVersion),
     nextHopProtocol: normalizeNextHopProtocol(input.nextHopProtocol),
     transferSize: numberOrNull(input.transferSize),
     encodedBodySize: numberOrNull(input.encodedBodySize),
@@ -526,10 +623,13 @@ function sanitizeClientBootReport(
   };
 }
 
-class GatewayMetricsStore {
+export class GatewayMetricsStore {
   private readonly routes = new Map<GatewayRouteKey, GatewayRouteMetrics>();
-  private readonly commands = new Map<string, GatewayCommandMetrics>();
-  private readonly events = new Map<string, GatewayEventMetrics>();
+  private readonly commands = new BoundedMetricMap<GatewayCommandMetrics>(
+    GATEWAY_COMMAND_METRIC_MAP_LIMIT,
+    GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES,
+  );
+  private readonly events = new BoundedMetricMap<GatewayEventMetrics>();
   private readonly recentRouteSamples: GatewayRouteSample[] = [];
   private readonly recentClientBootReports: GatewayClientBootReport[] = [];
   private readonly stream: GatewayStreamMetrics = {
@@ -545,15 +645,7 @@ class GatewayMetricsStore {
   private readonly compression: GatewayCompressionMetrics;
 
   constructor(configuredMode: GatewayCompressionMode) {
-    this.compression = {
-      configuredMode,
-      timingHooks: {
-        count: 0,
-        totalMs: 0,
-        encodedBytes: 0,
-        sourceBytes: 0,
-      },
-    };
+    this.compression = { configuredMode };
   }
 
   setConfiguredCompressionMode(mode: GatewayCompressionMode): void {
@@ -626,7 +718,7 @@ class GatewayMetricsStore {
     durationMs: number,
     success: boolean,
   ): void {
-    const key = boundedMetricKey(this.commands, normalizeMetricLabel(command));
+    const key = this.commands.resolveKey(normalizeMetricLabel(command));
     const bucket = this.commands.get(key) ?? {
       count: 0,
       requestBytes: 0,
@@ -643,7 +735,7 @@ class GatewayMetricsStore {
   }
 
   recordEvent(event: string, wireBytes: number): void {
-    const key = boundedMetricKey(this.events, normalizeGatewayEventMetricKey(event));
+    const key = this.events.resolveKey(normalizeGatewayEventMetricKey(event));
     const bucket = this.events.get(key) ?? {
       frames: 0,
       wireBytes: 0,
@@ -656,7 +748,7 @@ class GatewayMetricsStore {
   }
 
   recordDroppedEventFrame(event: string): void {
-    const key = boundedMetricKey(this.events, normalizeGatewayEventMetricKey(event));
+    const key = this.events.resolveKey(normalizeGatewayEventMetricKey(event));
     const bucket = this.events.get(key) ?? {
       frames: 0,
       wireBytes: 0,
@@ -668,7 +760,7 @@ class GatewayMetricsStore {
   }
 
   recordDroppedEventClient(event: string): void {
-    const key = boundedMetricKey(this.events, normalizeGatewayEventMetricKey(event));
+    const key = this.events.resolveKey(normalizeGatewayEventMetricKey(event));
     const bucket = this.events.get(key) ?? {
       frames: 0,
       wireBytes: 0,
@@ -689,10 +781,19 @@ class GatewayMetricsStore {
     this.stream.opened += 1;
   }
 
+  /**
+   * A stream that reached `open` already left `connecting` in
+   * `recordStreamOpened`, so this must not decrement it again — that double
+   * count would silently undercount concurrent handshakes.
+   */
   recordStreamClosed(): void {
-    this.stream.connecting = Math.max(0, this.stream.connecting - 1);
     this.stream.open = Math.max(0, this.stream.open - 1);
     this.stream.closed += 1;
+  }
+
+  /** Releases the gauge for a handshake that never reached `open`. */
+  recordStreamConnectFailed(): void {
+    this.stream.connecting = Math.max(0, this.stream.connecting - 1);
   }
 
   recordStreamDropped(): void {
@@ -711,13 +812,6 @@ class GatewayMetricsStore {
     this.stream.keepalives += 1;
   }
 
-  recordCompressionTiming(durationMs: number, sourceBytes: number, encodedBytes: number): void {
-    this.compression.timingHooks.count += 1;
-    this.compression.timingHooks.totalMs += durationMs;
-    this.compression.timingHooks.sourceBytes += sourceBytes;
-    this.compression.timingHooks.encodedBytes += encodedBytes;
-  }
-
   recordClientBootReport(report: GatewayClientBootReport): void {
     appendBoundedSample(this.recentClientBootReports, report);
   }
@@ -728,10 +822,7 @@ class GatewayMetricsStore {
       commands: Object.fromEntries([...this.commands.entries()].sort(([left], [right]) => left.localeCompare(right))),
       events: Object.fromEntries([...this.events.entries()].sort(([left], [right]) => left.localeCompare(right))),
       stream: { ...this.stream },
-      compression: {
-        configuredMode: this.compression.configuredMode,
-        timingHooks: { ...this.compression.timingHooks },
-      },
+      compression: { configuredMode: this.compression.configuredMode },
       recentRouteSamples: [...this.recentRouteSamples],
       recentClientBootReports: [...this.recentClientBootReports],
     };
@@ -2127,6 +2218,19 @@ export class OrkestratorGateway {
     response.end();
   }
 
+  /**
+   * Whether a failed command may be retained as a metric label.
+   *
+   * `hasCommand` is authoritative when the backend provides it. Backends that
+   * do not — only test stubs, in practice — fall back to the registry's error
+   * contract, which is what this check replaced.
+   */
+  private commandIsRegistered(command: string, errorMessage: string): boolean {
+    const hasCommand = this.backend.hasCommand;
+    if (hasCommand) return hasCommand.call(this.backend, command);
+    return !errorMessage.startsWith("Unknown backend command:");
+  }
+
   private async handleInvoke(
     request: IncomingMessage,
     response: ServerResponse,
@@ -2184,13 +2288,14 @@ export class OrkestratorGateway {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const responseBody = JSON.stringify({ error: message });
-      // OrkestratorBackend rejects names absent from its command registry with
-      // this stable error prefix. Never retain the rejected, network-supplied
-      // value: syntactically valid token-like strings are just as sensitive as
-      // obviously malformed labels.
-      const metricCommand = message.startsWith("Unknown backend command:")
-        ? METRIC_UNKNOWN_COMMAND_KEY
-        : command;
+      // Never retain the rejected, network-supplied value: a syntactically
+      // valid token-like string is just as sensitive as an obviously malformed
+      // label. Gate on registry membership rather than on the error text, so a
+      // name rejected before the registry is even consulted — during shutdown,
+      // say — still cannot become a label.
+      const metricCommand = this.commandIsRegistered(command, message)
+        ? command
+        : METRIC_UNKNOWN_COMMAND_KEY;
       this.metrics.recordInvoke(
         metricCommand,
         requestBytes,
@@ -2210,13 +2315,20 @@ export class OrkestratorGateway {
     }
 
     this.metrics.recordStreamConnecting();
-    response.writeHead(200, {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-store, no-transform",
-      connection: "keep-alive",
-      "x-accel-buffering": "no",
-    });
-    response.write(": connected\n\n");
+    try {
+      response.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store, no-transform",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      });
+      response.write(": connected\n\n");
+    } catch (error) {
+      // A handshake that never reaches `open` still has to release the gauge,
+      // otherwise `connecting` climbs for the lifetime of the process.
+      this.metrics.recordStreamConnectFailed();
+      throw error;
+    }
     this.metrics.recordStreamOpened();
     const state: GatewayEventClient = {
       prefixes: parseEventSubscriptionFilter(url.searchParams.get("events")),
@@ -2243,7 +2355,7 @@ export class OrkestratorGateway {
     this.keepalive ??= setInterval(() => {
       for (const client of this.clients.keys()) {
         if (client.writableLength > SSE_CLIENT_HARD_BUFFER_BYTES) {
-          this.dropBufferedClient(client, "events", client.writableLength);
+          this.dropBufferedClient(client, METRIC_KEEPALIVE_KEY, client.writableLength);
           continue;
         }
         this.metrics.recordKeepalive();

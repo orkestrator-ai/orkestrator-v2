@@ -170,17 +170,17 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     for (const callback of callbacks) callback(undefined);
   };
 
+  const clearBootMetricsTimers = () => {
+    if (bootMetricsTimeout) clearTimeout(bootMetricsTimeout);
+    bootMetricsTimeout = null;
+    if (bootMetricsDeferredTimer) clearTimeout(bootMetricsDeferredTimer);
+    bootMetricsDeferredTimer = null;
+  };
+
   const sendBootMetrics = async () => {
     if (bootMetricsReported || !options.reportBootMetrics || typeof performance === "undefined") return;
     bootMetricsReported = true;
-    if (bootMetricsTimeout) {
-      clearTimeout(bootMetricsTimeout);
-      bootMetricsTimeout = null;
-    }
-    if (bootMetricsDeferredTimer) {
-      clearTimeout(bootMetricsDeferredTimer);
-      bootMetricsDeferredTimer = null;
-    }
+    clearBootMetricsTimers();
 
     const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
     const resources = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
@@ -227,9 +227,25 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     }).catch(() => undefined);
   };
 
+  /**
+   * Re-reads `document.readyState` rather than trusting the value captured when
+   * this API was constructed. Construction happens at module evaluation, long
+   * before anything subscribes, so the snapshot is almost always `"loading"`;
+   * if the load event then fires before the first `listen()`, the listener
+   * registered below is attached too late to ever run and the flag would stay
+   * false forever, stranding the report on the 15s fallback.
+   */
+  const bootMetricsLoadHasHappened = () => {
+    if (bootMetricsLoadObserved) return true;
+    if (typeof document !== "undefined" && document.readyState === "complete") {
+      bootMetricsLoadObserved = true;
+    }
+    return bootMetricsLoadObserved;
+  };
+
   const maybeSendBootMetrics = () => {
     if (!options.reportBootMetrics || bootMetricsReported) return;
-    if (!bootMetricsLoadObserved) return;
+    if (!bootMetricsLoadHasHappened()) return;
     if (bootMetricsEventStreamConnectedMs === null) return;
     if (bootMetricsDeferredTimer) return;
     // `PerformanceNavigationTiming.loadEventEnd` remains zero while the
@@ -243,14 +259,15 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   const startBootMetricsReporter = () => {
-    if (!options.reportBootMetrics || bootMetricsTimeout) return;
-    if (!bootMetricsLoadObserved) {
+    if (!options.reportBootMetrics || bootMetricsReported || bootMetricsTimeout) return;
+    if (!bootMetricsLoadHasHappened()) {
       window.addEventListener("load", () => {
         bootMetricsLoadObserved = true;
         maybeSendBootMetrics();
       }, { once: true });
     }
     bootMetricsTimeout = setTimeout(() => {
+      bootMetricsTimeout = null;
       if (bootMetricsReported) return;
       void sendBootMetrics();
     }, 15_000);
@@ -351,6 +368,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     streamAbortController = null;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = null;
+    // Nothing is listening any more, so there is no boot left to measure. A
+    // surviving timer would hold this whole closure and still report for a
+    // session that has already torn down.
+    clearBootMetricsTimers();
   };
 
   const resolveTerminalStreamReady = (stream: TerminalEventStream) => {

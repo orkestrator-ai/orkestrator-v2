@@ -173,6 +173,225 @@ describe("web gateway browser API", () => {
     });
   });
 
+  test("enables boot metrics for every installed browser client", async () => {
+    // The install path is the only place production turns boot metrics on, so
+    // dropping the flag here would disable the feature everywhere.
+    const metricsFetch = mock(async () => new Response(null, { status: 202 }));
+    globalThis.fetch = metricsFetch as unknown as typeof fetch;
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const fakeWindow: TestGatewayWindow = {
+      location: { protocol: "https:" },
+      orkestrator: undefined,
+      orkestratorGateway: undefined,
+    };
+
+    installBrowserGatewayApi(fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">);
+    const installed = fakeWindow.orkestrator as Window["orkestrator"];
+    const stop = installed!.listen("menu-zoom", () => undefined);
+    MockEventSource.instances[0]?.open();
+    window.dispatchEvent(new Event("load"));
+    await waitForCondition(
+      () => metricsFetch.mock.calls.length === 1,
+      "The installed client did not report boot metrics",
+    );
+
+    // Explicitly opting out must still be honoured.
+    const optedOut = mock(async () => new Response(null, { status: 202 }));
+    globalThis.fetch = optedOut as unknown as typeof fetch;
+    const quiet = createBrowserGatewayApi({});
+    const stopQuiet = quiet.listen("menu-zoom", () => undefined);
+    MockEventSource.instances.at(-1)?.open();
+    window.dispatchEvent(new Event("load"));
+    await new Promise((resolve) => originalSetTimeout(resolve, 5));
+    expect(optedOut).toHaveBeenCalledTimes(0);
+
+    stop();
+    stopQuiet();
+  });
+
+  test("reports boot metrics when the page finished loading before anything subscribed", async () => {
+    // The API is constructed at module evaluation, long before the first
+    // listen(), so a readyState captured then is stale. If load already fired,
+    // a listener registered now never runs and the report would be stranded on
+    // the 15s fallback.
+    Object.defineProperty(document, "readyState", { configurable: true, value: "loading" });
+    const metricsFetch = mock(async () => new Response(null, { status: 202 }));
+    globalThis.fetch = metricsFetch as unknown as typeof fetch;
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    let fallbackScheduled = false;
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+      if (delay === 15_000) {
+        fallbackScheduled = true;
+        return 15_000 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return originalSetTimeout(handler, delay, ...args);
+    }) as typeof setTimeout;
+
+    try {
+      const api = createBrowserGatewayApi({ reportBootMetrics: true });
+      Object.defineProperty(document, "readyState", { configurable: true, value: "complete" });
+
+      const stop = api.listen("menu-zoom", () => undefined);
+      MockEventSource.instances[0]?.open();
+      await waitForCondition(
+        () => metricsFetch.mock.calls.length === 1,
+        "Boot metrics were stranded on the 15s fallback",
+      );
+      expect(fallbackScheduled).toBe(true);
+      stop();
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+  });
+
+  test("reports through the fallback when the event stream never connects, then stops on teardown", async () => {
+    Object.defineProperty(document, "readyState", { configurable: true, value: "complete" });
+    const metricsFetch = mock(async () => new Response(null, { status: 202 }));
+    globalThis.fetch = metricsFetch as unknown as typeof fetch;
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    let fallback: (() => void) | undefined;
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+      if (delay === 15_000 && typeof handler === "function") {
+        fallback = () => handler(...args);
+        return 15_000 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return originalSetTimeout(handler, delay, ...args);
+    }) as typeof setTimeout;
+
+    try {
+      const api = createBrowserGatewayApi({ reportBootMetrics: true });
+      const stop = api.listen("menu-zoom", () => undefined);
+      // Deliberately never open the EventSource: this is the case the fallback
+      // exists for, where eventStreamConnectedMs is still null.
+      expect(fallback).toBeDefined();
+      fallback?.();
+      await waitForCondition(
+        () => metricsFetch.mock.calls.length === 1,
+        "The fallback did not report without a connected stream",
+      );
+      const payload = JSON.parse(
+        String((metricsFetch.mock.calls[0] as unknown as [string, RequestInit])[1]?.body),
+      ) as Record<string, unknown>;
+      expect(payload.eventStreamConnectedMs).toBeNull();
+
+      stop();
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+  });
+
+  test("disarms the boot metrics fallback when the last listener goes away", async () => {
+    // Nothing is listening any more, so there is no boot left to measure. A
+    // surviving 15s timer would hold this whole closure and still report for a
+    // session that has already torn down.
+    Object.defineProperty(document, "readyState", { configurable: true, value: "loading" });
+    globalThis.fetch = mock(async () => new Response(null, { status: 202 })) as unknown as typeof fetch;
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const FALLBACK_TIMER_ID = 15_000 as unknown as ReturnType<typeof setTimeout>;
+    const cleared: unknown[] = [];
+    const originalClearTimeout = globalThis.clearTimeout;
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => (
+      delay === 15_000
+        ? FALLBACK_TIMER_ID
+        : originalSetTimeout(handler, delay, ...args)
+    )) as typeof setTimeout;
+    globalThis.clearTimeout = ((id?: unknown) => {
+      cleared.push(id);
+      if (id !== FALLBACK_TIMER_ID) originalClearTimeout(id as ReturnType<typeof setTimeout>);
+    }) as typeof clearTimeout;
+
+    try {
+      const api = createBrowserGatewayApi({ reportBootMetrics: true });
+      const stop = api.listen("menu-zoom", () => undefined);
+      expect(cleared).not.toContain(FALLBACK_TIMER_ID);
+
+      stop();
+      expect(cleared).toContain(FALLBACK_TIMER_ID);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+    }
+  });
+
+  test("posts boot metrics as a keepalive JSON beacon", async () => {
+    Object.defineProperty(document, "readyState", { configurable: true, value: "complete" });
+    const metricsFetch = mock(async () => new Response(null, { status: 202 }));
+    globalThis.fetch = metricsFetch as unknown as typeof fetch;
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+
+    const api = createBrowserGatewayApi({ reportBootMetrics: true });
+    const stop = api.listen("menu-zoom", () => undefined);
+    MockEventSource.instances[0]?.open();
+    await waitForCondition(() => metricsFetch.mock.calls.length === 1, "Boot metrics were not reported");
+
+    const [url, init] = metricsFetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/__orkestrator/client-metrics");
+    expect(init.method).toBe("POST");
+    // `keepalive` is the only reason the beacon survives a tab closed mid-boot,
+    // which is exactly the boot this metric measures.
+    expect(init.keepalive).toBe(true);
+    expect(new Headers(init.headers).get("content-type")).toBe("application/json");
+    stop();
+  });
+
+  test("prefers the injected native platform over the WebKit sniff", async () => {
+    Object.defineProperty(document, "readyState", { configurable: true, value: "complete" });
+    const platforms: unknown[] = [];
+    globalThis.fetch = mock(async (_input, init) => {
+      platforms.push((JSON.parse(String(init?.body)) as Record<string, unknown>).platform);
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+
+    // Both signals present: the iPad/iPhone distinction only exists in the
+    // injected value, so the sniff must not win.
+    Object.defineProperty(window, "webkit", { configurable: true, value: {} });
+    window.__orkestratorClientPlatform = "ipad-wkwebview";
+    const api = createBrowserGatewayApi({ reportBootMetrics: true });
+    const stop = api.listen("menu-zoom", () => undefined);
+    MockEventSource.instances[0]?.open();
+    await waitForCondition(() => platforms.length === 1, "Boot metrics were not reported");
+
+    expect(platforms).toEqual(["ipad-wkwebview"]);
+    stop();
+  });
+
+  test("attributes stylesheet resources by initiator type as well as by name", async () => {
+    Object.defineProperty(document, "readyState", { configurable: true, value: "complete" });
+    let payload: Record<string, unknown> | null = null;
+    globalThis.fetch = mock(async (_input, init) => {
+      payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    Object.defineProperty(performance, "getEntriesByType", {
+      configurable: true,
+      value: mock((entryType: string) => (entryType === "resource"
+        ? [
+          // A hashed bundle URL has no .css suffix, so only initiatorType
+          // classifies it.
+          { name: "https://cdn.test/a1b2c3", initiatorType: "css", transferSize: 10, decodedBodySize: 20 },
+          { name: "https://cdn.test/app.css", initiatorType: "link", transferSize: 5, decodedBodySize: 6 },
+          { name: "https://cdn.test/app.js", initiatorType: "script", transferSize: 7, decodedBodySize: 8 },
+        ]
+        : [])),
+    });
+
+    const api = createBrowserGatewayApi({ reportBootMetrics: true });
+    const stop = api.listen("menu-zoom", () => undefined);
+    MockEventSource.instances[0]?.open();
+    await waitForCondition(() => payload !== null, "Boot metrics were not reported");
+
+    expect(payload).toMatchObject({
+      resourceCount: 3,
+      cssTransferSize: 15,
+      cssDecodedBodySize: 26,
+      jsTransferSize: 7,
+      jsDecodedBodySize: 8,
+    });
+    stop();
+  });
+
   test("invokes backend commands through the gateway", async () => {
     globalThis.fetch = mock(async (input, init) => {
       expect(input).toBe("/__orkestrator/invoke");
@@ -283,13 +502,24 @@ describe("web gateway browser API", () => {
     });
 
     const reportedMetrics = metricsPayload;
+    // Every aggregate is asserted, not just a sample: encoded-vs-decoded size
+    // is the compression ratio this milestone exists to measure, so swapping
+    // the two reducers has to fail here.
     expect(reportedMetrics).toMatchObject({
       platform: "iphone-wkwebview",
       navigationType: "reload",
       nextHopProtocol: "http/1.1",
       transferSize: 321,
+      encodedBodySize: 222,
+      decodedBodySize: 654,
+      resourceCount: 2,
+      resourceTransferSize: 123 + 45,
+      resourceEncodedBodySize: 111 + 33,
+      resourceDecodedBodySize: 222 + 44,
       jsTransferSize: 123,
+      jsDecodedBodySize: 222,
       cssTransferSize: 45,
+      cssDecodedBodySize: 44,
       domContentLoadedMs: 11,
       loadEventMs: 19,
       firstPaintMs: 7,

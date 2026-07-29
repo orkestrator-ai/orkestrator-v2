@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -428,7 +428,7 @@ describe("PaneLeafContainer", () => {
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-visible");
   });
 
-  test("renders ClaudeTmuxChatTab for claude-tmux tabs", () => {
+  test("renders ClaudeTmuxChatTab for claude-tmux tabs", async () => {
     const tmuxPane = {
       kind: "leaf" as const,
       id: "pane-tmux",
@@ -461,11 +461,11 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
-    expect(screen.getByTestId("claude-tmux-tab")).toBeDefined();
+    expect(await screen.findByTestId("claude-tmux-tab")).toBeDefined();
     expect(screen.getByText("tmux:tab-tmux")).toBeDefined();
   });
 
-  test("forwards the owning environment to file draft recovery", () => {
+  test("forwards the owning environment to file draft recovery", async () => {
     const filePane = {
       kind: "leaf" as const,
       id: "pane-file",
@@ -490,7 +490,7 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
-    expect(screen.getByTestId("file-viewer-tab")).toMatchObject({
+    expect(await screen.findByTestId("file-viewer-tab")).toMatchObject({
       dataset: {
         tabId: "tab-file",
         environmentId: "env-hidden",
@@ -499,7 +499,7 @@ describe("PaneLeafContainer", () => {
     });
   });
 
-  test("grants global shortcut ownership only to the focused pane", () => {
+  test("grants global shortcut ownership only to the focused pane", async () => {
     const chatPane = {
       kind: "leaf" as const,
       id: "pane-chat",
@@ -531,17 +531,17 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
-    expect(
-      screen.getByTestId("codex-tab").getAttribute("data-owns-global-shortcuts"),
-    ).toBe("false");
+    const codexTab = await screen.findByTestId("codex-tab");
+
+    expect(codexTab.getAttribute("data-owns-global-shortcuts")).toBe("false");
 
     fireEvent.click(view.container.firstElementChild as HTMLElement);
-    expect(
-      screen.getByTestId("codex-tab").getAttribute("data-owns-global-shortcuts"),
-    ).toBe("true");
+    await waitFor(() => {
+      expect(codexTab.getAttribute("data-owns-global-shortcuts")).toBe("true");
+    });
   });
 
-  test("forwards review-tab state to native chat tabs", () => {
+  test("forwards review-tab state to native chat tabs", async () => {
     const reviewPane = {
       kind: "leaf" as const,
       id: "pane-review",
@@ -597,36 +597,36 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
-    expect(screen.getByTestId("claude-tab").dataset.reviewTab).toBe("true");
-    expect(screen.getByTestId("claude-tmux-tab").dataset.reviewTab).toBe("true");
-    expect(screen.getByTestId("codex-tab").dataset.reviewTab).toBe("true");
-    expect(screen.getByTestId("opencode-tab").dataset.reviewTab).toBe("true");
+    expect((await screen.findByTestId("claude-tab")).dataset.reviewTab).toBe("true");
+    expect((await screen.findByTestId("claude-tmux-tab")).dataset.reviewTab).toBe("true");
+    expect((await screen.findByTestId("codex-tab")).dataset.reviewTab).toBe("true");
+    expect((await screen.findByTestId("opencode-tab")).dataset.reviewTab).toBe("true");
     for (const provider of ["claude", "codex", "opencode"] as const) {
-      const tab = screen.getByTestId(`${provider}-tab`);
+      const tab = await screen.findByTestId(`${provider}-tab`);
       expect(tab.dataset.agentHandoffId).toBe(`handoff-${provider}`);
       // The consumed id is what keeps a resumed tab's bootstrap prompt hidden,
       // so it has to reach the chat tab alongside the live reference.
       expect(tab.dataset.consumedAgentHandoffId).toBe(`consumed-${provider}`);
     }
-    expect(screen.getByTestId("claude-tab").dataset).toMatchObject({
+    expect((await screen.findByTestId("claude-tab")).dataset).toMatchObject({
       agentModel: "claude-review",
       reasoningEffort: "high",
     });
-    expect(screen.getByTestId("claude-tmux-tab").dataset).toMatchObject({
+    expect((await screen.findByTestId("claude-tmux-tab")).dataset).toMatchObject({
       agentModel: "claude-tmux-review",
       reasoningEffort: "xhigh",
     });
-    expect(screen.getByTestId("codex-tab").dataset).toMatchObject({
+    expect((await screen.findByTestId("codex-tab")).dataset).toMatchObject({
       agentModel: "codex-review",
       reasoningEffort: "medium",
     });
-    expect(screen.getByTestId("opencode-tab").dataset).toMatchObject({
+    expect((await screen.findByTestId("opencode-tab")).dataset).toMatchObject({
       agentModel: "provider/opencode-review",
       reasoningEffort: "deep",
     });
   });
 
-  test("renders a looped-review tab with authoritative workflow identity", () => {
+  test("renders a looped-review tab with authoritative workflow identity", async () => {
     const pane = {
       kind: "leaf" as const,
       id: "pane-looped",
@@ -650,7 +650,7 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
-    expect(screen.getByTestId("looped-review-tab")).toMatchObject({
+    expect(await screen.findByTestId("looped-review-tab")).toMatchObject({
       dataset: {
         environmentId: "env-hidden",
         workflowId: "workflow-1",
@@ -659,7 +659,7 @@ describe("PaneLeafContainer", () => {
     });
   });
 
-  test("forwards independent repeated refresh requests to every refreshable tab", () => {
+  test("forwards independent repeated refresh requests to every refreshable tab", async () => {
     const agentPane = {
       kind: "leaf" as const,
       id: "pane-agents",
@@ -704,7 +704,7 @@ describe("PaneLeafContainer", () => {
 
     const testIds = ["claude-tab", "claude-tmux-tab", "codex-tab", "opencode-tab", "browser-tab"];
     for (const testId of testIds) {
-      expect(screen.getByTestId(testId).dataset.refreshRequestId).toBe("0");
+      expect((await screen.findByTestId(testId)).dataset.refreshRequestId).toBe("0");
     }
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh Claude tab" }));
@@ -712,16 +712,16 @@ describe("PaneLeafContainer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh Codex tab" }));
     fireEvent.click(screen.getByRole("button", { name: "Refresh OpenCode tab" }));
     fireEvent.click(screen.getByRole("button", { name: "Refresh Browser tab" }));
-    expect(screen.getByTestId("claude-tab").dataset.refreshRequestId).toBe("1");
-    expect(screen.getByTestId("claude-tmux-tab").dataset.refreshRequestId).toBe("1");
-    expect(screen.getByTestId("codex-tab").dataset.refreshRequestId).toBe("1");
-    expect(screen.getByTestId("opencode-tab").dataset.refreshRequestId).toBe("1");
-    expect(screen.getByTestId("browser-tab").dataset.refreshRequestId).toBe("1");
+    expect((await screen.findByTestId("claude-tab")).dataset.refreshRequestId).toBe("1");
+    expect((await screen.findByTestId("claude-tmux-tab")).dataset.refreshRequestId).toBe("1");
+    expect((await screen.findByTestId("codex-tab")).dataset.refreshRequestId).toBe("1");
+    expect((await screen.findByTestId("opencode-tab")).dataset.refreshRequestId).toBe("1");
+    expect((await screen.findByTestId("browser-tab")).dataset.refreshRequestId).toBe("1");
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh Claude tab" }));
     fireEvent.click(screen.getByRole("button", { name: "Refresh Browser tab" }));
-    expect(screen.getByTestId("claude-tab").dataset.refreshRequestId).toBe("2");
-    expect(screen.getByTestId("codex-tab").dataset.refreshRequestId).toBe("1");
-    expect(screen.getByTestId("browser-tab").dataset.refreshRequestId).toBe("2");
+    expect((await screen.findByTestId("claude-tab")).dataset.refreshRequestId).toBe("2");
+    expect((await screen.findByTestId("codex-tab")).dataset.refreshRequestId).toBe("1");
+    expect((await screen.findByTestId("browser-tab")).dataset.refreshRequestId).toBe("2");
   });
 });

@@ -13,7 +13,14 @@ import type { Socket } from "node:net";
 import path from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { pipeline, type Readable, type Transform } from "node:stream";
-import { createBrotliDecompress, createUnzip } from "node:zlib";
+import { promisify } from "node:util";
+import {
+  brotliCompress,
+  constants as zlibConstants,
+  createBrotliDecompress,
+  createUnzip,
+  gzip,
+} from "node:zlib";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import {
   GatewayTokenValidationError,
@@ -103,6 +110,10 @@ const MAX_BROWSER_PREVIEW_BODY_BYTES = 8 * 1024 * 1024;
  */
 const MAX_INVOKE_BODY_BYTES = 48 * 1024 * 1024;
 const KEEPALIVE_MS = 25_000;
+const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
+const REVALIDATED_DOCUMENT_CACHE_CONTROL = "no-cache";
+const STATIC_FALLBACK_BROTLI_QUALITY = 4;
+const STATIC_FALLBACK_GZIP_LEVEL = 6;
 /**
  * Events whose payload is a raw byte stream rather than authoritative state.
  *
@@ -164,6 +175,9 @@ const METRIC_RESERVED_KEYS: readonly string[] = [
 
 class InvalidRequestBodyError extends Error {}
 class RequestBodyTooLargeError extends Error {}
+
+type StaticCompressionEncoding = "gzip" | "br";
+type StaticContentEncoding = "identity" | StaticCompressionEncoding;
 
 type GatewayRouteMetrics = {
   requests: number;
@@ -975,6 +989,155 @@ function mimeType(filePath: string): string {
     default:
       return "application/octet-stream";
   }
+}
+
+const brotliCompressAsync = promisify(brotliCompress);
+const gzipAsync = promisify(gzip);
+
+export function appendVary(existing: string | null, value: string): string {
+  const values = [
+    ...String(existing ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+    ...value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  ];
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of values) {
+    const normalized = entry.toLowerCase();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    deduped.push(entry);
+  }
+  return deduped.join(", ");
+}
+
+function appendResponseVary(response: ServerResponse, value: string): void {
+  response.setHeader("vary", appendVary(headerValueToString(response.getHeader("vary")), value));
+}
+
+function appendHeadersVary(headers: OutgoingHttpHeaders, value: string): void {
+  headers.vary = appendVary(headerValueToString(headers.vary), value);
+}
+
+function isCompressibleStaticContentType(contentType: string): boolean {
+  const normalized = contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return (
+    normalized === "application/javascript"
+    || normalized === "application/json"
+    || normalized === "image/svg+xml"
+    || normalized === "text/css"
+    || normalized === "text/html"
+    || normalized === "text/javascript"
+    || normalized === "text/plain"
+    || normalized.endsWith("+json")
+    || normalized.endsWith("+xml")
+  );
+}
+
+function isImmutableHashedAsset(pathname: string, filePath: string): boolean {
+  return pathname.startsWith("/assets/")
+    && /-[A-Za-z0-9_-]{8,}\./.test(path.basename(filePath));
+}
+
+function httpDateFromMtimeMs(mtimeMs: number): string {
+  return new Date(Math.floor(mtimeMs / 1000) * 1000).toUTCString();
+}
+
+function etagForStaticVariant(
+  sourceMtimeMs: number,
+  sourceSize: number,
+  encoding: StaticContentEncoding,
+): string {
+  return `"${Math.floor(sourceMtimeMs).toString(16)}-${sourceSize.toString(16)}-${encoding}"`;
+}
+
+function staticEncodingQuality(
+  acceptEncoding: string | null,
+  encoding: StaticContentEncoding,
+): number {
+  if (!acceptEncoding) return encoding === "identity" ? 1 : 0;
+  let specific: number | null = null;
+  let wildcard: number | null = null;
+  let identity: number | null = null;
+  for (const entry of acceptEncoding.split(",")) {
+    const [token, ...parameterEntries] = entry.trim().toLowerCase().split(";");
+    if (!token) continue;
+    let weight = 1;
+    for (const parameter of parameterEntries) {
+      const [name, rawValue] = parameter.split("=", 2);
+      if (name?.trim() !== "q") continue;
+      const parsed = Number.parseFloat(rawValue ?? "");
+      if (Number.isFinite(parsed)) weight = Math.max(0, Math.min(1, parsed));
+    }
+    if (token === encoding) {
+      specific = specific === null ? weight : Math.max(specific, weight);
+    } else if (token === "*") {
+      wildcard = wildcard === null ? weight : Math.max(wildcard, weight);
+    } else if (token === "identity") {
+      identity = identity === null ? weight : Math.max(identity, weight);
+    }
+  }
+  if (specific !== null) return specific;
+  if (encoding === "identity") return identity ?? wildcard ?? 1;
+  return wildcard ?? 0;
+}
+
+function preferredStaticCompressionEncodings(
+  acceptEncoding: string | null,
+): StaticCompressionEncoding[] {
+  const encodings = [
+    { encoding: "br", quality: staticEncodingQuality(acceptEncoding, "br") },
+    { encoding: "gzip", quality: staticEncodingQuality(acceptEncoding, "gzip") },
+  ] satisfies Array<{ encoding: StaticCompressionEncoding; quality: number }>;
+  const acceptedEncodings = encodings.filter((candidate) => candidate.quality > 0);
+  acceptedEncodings.sort((left, right) => {
+    if (right.quality !== left.quality) return right.quality - left.quality;
+    return left.encoding === "br" ? -1 : 1;
+  });
+  return acceptedEncodings.map((candidate) => candidate.encoding);
+}
+
+function compressedStaticSiblingPath(
+  filePath: string,
+  encoding: StaticCompressionEncoding,
+): string {
+  return `${filePath}.${encoding === "br" ? "br" : "gz"}`;
+}
+
+function ifNoneMatchMatches(header: string | string[] | undefined, etag: string): boolean {
+  const value = Array.isArray(header) ? header.join(",") : header;
+  if (!value) return false;
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .some((candidate) => candidate === "*" || candidate === etag);
+}
+
+function ifModifiedSinceMatches(header: string | string[] | undefined, mtimeMs: number): boolean {
+  const value = Array.isArray(header) ? header[0] : header;
+  if (!value) return false;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return false;
+  return Math.floor(mtimeMs / 1000) * 1000 <= parsed;
+}
+
+async function compressStaticBuffer(
+  source: Buffer,
+  encoding: StaticCompressionEncoding,
+): Promise<Buffer> {
+  if (encoding === "br") {
+    return brotliCompressAsync(source, {
+      params: {
+        [zlibConstants.BROTLI_PARAM_QUALITY]: STATIC_FALLBACK_BROTLI_QUALITY,
+      },
+    });
+  }
+  return gzipAsync(source, { level: STATIC_FALLBACK_GZIP_LEVEL });
 }
 
 function jsonResponse(
@@ -1907,7 +2070,7 @@ export class OrkestratorGateway {
     if (!this.isOriginAllowed(request, origin)) return false;
 
     response.setHeader("access-control-allow-origin", origin);
-    response.setHeader("vary", "Origin");
+    appendResponseVary(response, "Origin");
     return true;
   }
 
@@ -1926,7 +2089,10 @@ export class OrkestratorGateway {
       ...(request.headers["access-control-request-private-network"] === "true"
         ? { "access-control-allow-private-network": "true" }
         : {}),
-      vary: "Origin, Access-Control-Request-Private-Network",
+      vary: appendVary(
+        null,
+        "Origin, Access-Control-Request-Private-Network",
+      ),
     });
     response.end();
   }
@@ -1945,7 +2111,10 @@ export class OrkestratorGateway {
       ...(request.headers["access-control-request-private-network"] === "true"
         ? { "access-control-allow-private-network": "true" }
         : {}),
-      vary: "Origin, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
+      vary: appendVary(
+        null,
+        "Origin, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
+      ),
     });
     response.end();
   }
@@ -2004,12 +2173,12 @@ export class OrkestratorGateway {
         const redirectHeaders: OutgoingHttpHeaders = {
           location: `${previewPrefix}${url.pathname}${url.search}`,
           "cache-control": "no-store",
-          vary: "Referer",
+          vary: appendVary(null, "Referer"),
         };
         if (request.headers.origin === "null") {
           redirectHeaders["access-control-allow-origin"] = "null";
           redirectHeaders["access-control-allow-credentials"] = "true";
-          redirectHeaders.vary = "Origin, Referer";
+          appendHeadersVary(redirectHeaders, "Origin");
         }
         response.writeHead(307, redirectHeaders);
         response.end();
@@ -2095,7 +2264,12 @@ export class OrkestratorGateway {
       return;
     }
 
-    await this.serveStatic(request, url, response);
+    await this.serveStatic(
+      request,
+      url,
+      response,
+      compressionModeForListener(this.compression, listenerKind) !== "off",
+    );
   }
 
   private async handleGatewaySettings(
@@ -2502,7 +2676,7 @@ export class OrkestratorGateway {
           if (request.headers.origin === "null") {
             responseHeaders["access-control-allow-origin"] = "null";
             responseHeaders["access-control-allow-credentials"] = "true";
-            responseHeaders.vary = "Origin";
+            appendHeadersVary(responseHeaders, "Origin");
           } else {
             responseHeaders["access-control-allow-origin"] = "*";
           }
@@ -2633,7 +2807,12 @@ export class OrkestratorGateway {
     });
   }
 
-  private async serveStatic(request: IncomingMessage, url: URL, response: ServerResponse): Promise<void> {
+  private async serveStatic(
+    request: IncomingMessage,
+    url: URL,
+    response: ServerResponse,
+    allowCompression: boolean,
+  ): Promise<void> {
     if (this.rendererDevServerUrl) {
       const target = new URL(this.rendererDevServerUrl);
       target.pathname = url.pathname;
@@ -2667,10 +2846,82 @@ export class OrkestratorGateway {
       return;
     }
 
-    response.writeHead(200, {
-      "content-type": mimeType(filePath),
-      "content-length": fileStat.size,
-    });
-    createReadStream(filePath).pipe(response);
+    const contentType = mimeType(filePath);
+    const lastModified = httpDateFromMtimeMs(fileStat.mtimeMs);
+    const cacheControl = isImmutableHashedAsset(url.pathname, filePath)
+      ? IMMUTABLE_ASSET_CACHE_CONTROL
+      : REVALIDATED_DOCUMENT_CACHE_CONTROL;
+    const preferredEncodings = allowCompression && isCompressibleStaticContentType(contentType)
+      ? preferredStaticCompressionEncodings(headerValueToString(request.headers["accept-encoding"]))
+      : [];
+    let selectedEncoding: StaticContentEncoding = "identity";
+    let bodyPath = filePath;
+    let bodyLength = fileStat.size;
+    let bodyBuffer: Buffer | null = null;
+
+    for (const encoding of preferredEncodings) {
+      const siblingPath = compressedStaticSiblingPath(filePath, encoding);
+      const siblingStat = await stat(siblingPath).catch(() => null);
+      if (
+        siblingStat?.isFile()
+        && siblingStat.mtimeMs >= fileStat.mtimeMs
+        && siblingStat.size < fileStat.size
+      ) {
+        selectedEncoding = encoding;
+        bodyPath = siblingPath;
+        bodyLength = siblingStat.size;
+        break;
+      }
+    }
+
+    if (selectedEncoding === "identity") {
+      let sourceBuffer: Buffer | null = null;
+      for (const encoding of preferredEncodings) {
+        sourceBuffer ??= await readFile(filePath);
+        const compressed = await compressStaticBuffer(sourceBuffer, encoding);
+        if (compressed.byteLength >= sourceBuffer.byteLength) continue;
+        selectedEncoding = encoding;
+        bodyLength = compressed.byteLength;
+        bodyBuffer = compressed;
+        break;
+      }
+    }
+
+    const headers: OutgoingHttpHeaders = {
+      "cache-control": cacheControl,
+      "content-type": contentType,
+      "content-length": bodyLength,
+      etag: etagForStaticVariant(fileStat.mtimeMs, fileStat.size, selectedEncoding),
+      "last-modified": lastModified,
+    };
+    appendHeadersVary(headers, "Accept-Encoding");
+    if (selectedEncoding !== "identity") {
+      headers["content-encoding"] = selectedEncoding;
+    }
+
+    if (ifNoneMatchMatches(request.headers["if-none-match"], String(headers.etag))) {
+      response.writeHead(304, headers);
+      response.end();
+      return;
+    }
+    if (
+      request.headers["if-none-match"] === undefined
+      && ifModifiedSinceMatches(request.headers["if-modified-since"], fileStat.mtimeMs)
+    ) {
+      response.writeHead(304, headers);
+      response.end();
+      return;
+    }
+
+    response.writeHead(200, headers);
+    if (request.method === "HEAD") {
+      response.end();
+      return;
+    }
+    if (bodyBuffer) {
+      response.end(bodyBuffer);
+      return;
+    }
+    createReadStream(bodyPath).pipe(response);
   }
 }

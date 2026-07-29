@@ -1151,13 +1151,13 @@ describe("ActionBar toolbar interactions", () => {
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
-    expect(screen.getByText("Global settings dialog")).toBeTruthy();
+    expect(await screen.findByText("Global settings dialog")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Docker configuration" }));
-    expect(screen.getByText("Docker configuration dialog")).toBeTruthy();
+    expect(await screen.findByText("Docker configuration dialog")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
-    expect(screen.getByText("Repository settings for repo")).toBeTruthy();
+    expect(await screen.findByText("Repository settings for repo")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Update mock repository" }));
     await waitFor(() => expect(updateProjectMock).toHaveBeenCalledWith({
       ...selectedProject,
@@ -1165,7 +1165,7 @@ describe("ActionBar toolbar interactions", () => {
     }));
 
     fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
-    expect(screen.getByText("Environment settings for feature-env")).toBeTruthy();
+    expect(await screen.findByText("Environment settings for feature-env")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Update mock environment" }));
     expect(updateEnvironmentMock).toHaveBeenCalledWith(
       "env-1",

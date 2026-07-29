@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useId, useMemo, useRef, type ComponentType, type ReactNode } from "react";
+import { Suspense, lazy, memo, useState, useEffect, useId, useMemo, useRef, type ComponentType, type ReactNode } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
@@ -33,11 +33,14 @@ import {
   parseUsableAgentActivityTime,
   useAgentActivityStore,
 } from "@/stores/agentActivityStore";
-import { EnvironmentSettingsDialog } from "./EnvironmentSettingsDialog";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+
+const LazyEnvironmentSettingsDialog = lazy(async () => ({
+  default: (await import("./EnvironmentSettingsDialog")).EnvironmentSettingsDialog,
+}));
 
 /** Below this width the row shows an explicit actions button; a right-click
  *  context menu is not reachable on touch. Matches Tailwind's `md` breakpoint. */
@@ -611,13 +614,15 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       {/* Environment Settings Dialog — mounted only while open so a sidebar
           with many rows does not pay for a dialog per row. */}
       {showSettingsDialog && (
-        <EnvironmentSettingsDialog
-          open={showSettingsDialog}
-          onOpenChange={setShowSettingsDialog}
-          environment={environment}
-          onUpdate={handleEnvironmentUpdate}
-          onRestart={backend.recreateEnvironment}
-        />
+        <Suspense fallback={null}>
+          <LazyEnvironmentSettingsDialog
+            open={showSettingsDialog}
+            onOpenChange={setShowSettingsDialog}
+            environment={environment}
+            onUpdate={handleEnvironmentUpdate}
+            onRestart={backend.recreateEnvironment}
+          />
+        </Suspense>
       )}
     </>
   );

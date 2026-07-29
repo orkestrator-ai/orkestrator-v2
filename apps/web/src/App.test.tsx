@@ -587,6 +587,13 @@ describe("App background processing mounts", () => {
       selectedProjectId: null,
       selectedEnvironmentId: null,
     });
+    useLoopedReviewStore.getState().createWorkflow({
+      environmentId: "env-looped",
+      projectId: "project-looped",
+      agent: "codex",
+      model: "gpt-5.4",
+      targetBranch: "main",
+    });
 
     render(<App />);
 

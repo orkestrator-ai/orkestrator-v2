@@ -316,7 +316,7 @@ describe("FileViewerTab component", () => {
       />,
     );
 
-    expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+    expect(await screen.findByTestId("diff-viewer")).toBeTruthy();
     expect(readLocalFileMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "View file" }));
     expect(await screen.findByTestId("markdown-file-editor")).toBeTruthy();

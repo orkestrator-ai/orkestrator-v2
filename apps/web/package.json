@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bunx tsc && bunx vite build",
+    "build": "bunx tsc && bunx vite build && bun run scripts/precompress.ts",
     "dev": "bunx vite --host 127.0.0.1",
     "dev:web": "bunx vite --host 127.0.0.1",
     "preview": "bunx vite preview",

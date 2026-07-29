@@ -1,8 +1,10 @@
 import {
   cloneElement,
   createContext,
+  lazy,
   useContext,
   useState,
+  Suspense,
   useEffect,
   useCallback,
   useRef,
@@ -72,8 +74,6 @@ import {
   createResolveConflictsPrompt,
   createOrkestratorScriptPrompt,
 } from "@/prompts";
-import { RepositorySettings, SettingsPage } from "@/components/settings";
-import { EnvironmentSettingsDialog } from "@/components/environments/EnvironmentSettingsDialog";
 import { DockerStatsDialog } from "@/components/docker";
 import * as backend from "@/lib/backend";
 import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
@@ -89,6 +89,16 @@ import {
   buildReviewModelCatalog,
   resolveDefaultReviewTabType,
 } from "@/lib/review-launch-options";
+
+const LazyRepositorySettings = lazy(async () => ({
+  default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
+}));
+const LazySettingsPage = lazy(async () => ({
+  default: (await import("@/components/settings/SettingsPage")).SettingsPage,
+}));
+const LazyEnvironmentSettingsDialog = lazy(async () => ({
+  default: (await import("@/components/environments/EnvironmentSettingsDialog")).EnvironmentSettingsDialog,
+}));
 
 function isEditableShortcutTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -1863,26 +1873,37 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       />
 
       {/* Settings Dialogs */}
-      <SettingsPage open={globalSettingsOpen} onOpenChange={setGlobalSettingsOpen} />
+      {globalSettingsOpen && (
+        <Suspense fallback={null}>
+          <LazySettingsPage
+            open={globalSettingsOpen}
+            onOpenChange={setGlobalSettingsOpen}
+          />
+        </Suspense>
+      )}
       <DockerStatsDialog open={dockerStatsOpen} onOpenChange={setDockerStatsOpen} />
 
-      {selectedProject && (
-        <RepositorySettings
-          project={selectedProject}
-          open={repoSettingsOpen}
-          onOpenChange={setRepoSettingsOpen}
-          onUpdateProject={updateProject}
-        />
+      {selectedProject && repoSettingsOpen && (
+        <Suspense fallback={null}>
+          <LazyRepositorySettings
+            project={selectedProject}
+            open={repoSettingsOpen}
+            onOpenChange={setRepoSettingsOpen}
+            onUpdateProject={updateProject}
+          />
+        </Suspense>
       )}
 
-      {selectedEnvironment && (
-        <EnvironmentSettingsDialog
-          open={envSettingsOpen}
-          onOpenChange={setEnvSettingsOpen}
-          environment={selectedEnvironment}
-          onUpdate={(updated) => updateEnvironment(updated.id, updated)}
-          onRestart={backend.recreateEnvironment}
-        />
+      {selectedEnvironment && envSettingsOpen && (
+        <Suspense fallback={null}>
+          <LazyEnvironmentSettingsDialog
+            open={envSettingsOpen}
+            onOpenChange={setEnvSettingsOpen}
+            environment={selectedEnvironment}
+            onUpdate={(updated) => updateEnvironment(updated.id, updated)}
+            onRestart={backend.recreateEnvironment}
+          />
+        </Suspense>
       )}
 
       {/* Editor Error Dialog */}

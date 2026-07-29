@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
@@ -6,7 +6,6 @@ import { Loader2, AlertCircle, FileCode, Image as ImageIcon } from "lucide-react
 import { useConfigStore, useFileDirtyStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { useFileSave } from "@/hooks/useFileSave";
-import { MarkdownEditorTab } from "@/components/markdown/MarkdownEditorTab";
 import {
   discardFileDraft,
   getFileDraftRevisionState,
@@ -16,9 +15,19 @@ import {
   resolveFileDraftSaveConflict,
 } from "@/lib/file-draft-persistence";
 import { DraftRevisionConflictError } from "@/lib/draft-conflict";
-import { DiffViewerTab } from "./DiffViewerTab";
-import { MonacoFileEditor } from "./MonacoFileEditor";
 import type { GitFileStatus } from "@/types/paneLayout";
+
+const LazyMarkdownEditorTab = lazy(async () => ({
+  default: (await import("@/components/markdown/MarkdownEditorTab")).MarkdownEditorTab,
+}));
+
+const LazyDiffViewerTab = lazy(async () => ({
+  default: (await import("./DiffViewerTab")).DiffViewerTab,
+}));
+
+const LazyMonacoFileEditor = lazy(async () => ({
+  default: (await import("./MonacoFileEditor")).MonacoFileEditor,
+}));
 
 /** Image file extensions that should be rendered as images */
 const IMAGE_EXTENSIONS = new Set([
@@ -250,6 +259,21 @@ export function FileViewerTab({
     });
   }, [reportFileDraftError]);
 
+  const renderEditorFallback = useCallback((message: string) => (
+    <div
+      className={cn(
+        "absolute inset-0 flex items-center justify-center",
+        !isActive && "pointer-events-none opacity-0",
+      )}
+      style={{ backgroundColor: terminalAppearance.backgroundColor }}
+    >
+      <div className="flex flex-col items-center gap-2 text-muted-foreground">
+        <Loader2 className="h-6 w-6 animate-spin" />
+        <p className="text-sm">{message}</p>
+      </div>
+    </div>
+  ), [isActive, terminalAppearance.backgroundColor]);
+
   // An environment switch commonly unmounts this component while the tab and
   // its editor buffer are still real. Do not clear on unmount; explicit tab
   // closure owns discarding the buffer.
@@ -412,17 +436,19 @@ export function FileViewerTab({
   // Image files can't be diffed in Monaco, so they fall through to the image preview
   if (viewerKind === "diff" && gitStatus && baseBranch) {
     return (
-      <DiffViewerTab
-        filePath={filePath}
-        containerId={containerId}
-        worktreePath={worktreePath}
-        isLocalEnvironment={isLocalEnvironment}
-        baseBranch={baseBranch}
-        gitStatus={gitStatus}
-        isActive={isActive}
-        language={language}
-        onSwitchToFileView={() => setShowDiff(false)}
-      />
+      <Suspense fallback={renderEditorFallback("Loading diff viewer...")}>
+        <LazyDiffViewerTab
+          filePath={filePath}
+          containerId={containerId}
+          worktreePath={worktreePath}
+          isLocalEnvironment={isLocalEnvironment}
+          baseBranch={baseBranch}
+          gitStatus={gitStatus}
+          isActive={isActive}
+          language={language}
+          onSwitchToFileView={() => setShowDiff(false)}
+        />
+      </Suspense>
     );
   }
 
@@ -463,15 +489,17 @@ export function FileViewerTab({
 
   if (isMarkdown && content !== null) {
     return (
-      <MarkdownEditorTab
-        tabId={tabId}
-        filePath={filePath}
-        initialContent={content}
-        language={detectedLanguage}
-        isActive={isActive}
-        isSaving={isSaving}
-        onSave={saveFile}
-      />
+      <Suspense fallback={renderEditorFallback("Loading Markdown editor...")}>
+        <LazyMarkdownEditorTab
+          tabId={tabId}
+          filePath={filePath}
+          initialContent={content}
+          language={detectedLanguage}
+          isActive={isActive}
+          isSaving={isSaving}
+          onSave={saveFile}
+        />
+      </Suspense>
     );
   }
 
@@ -512,12 +540,14 @@ export function FileViewerTab({
       {/* Monaco Editor for text files */}
       {!isImage && (
         <div className="min-h-0 flex-1">
-          <MonacoFileEditor
-            language={detectedLanguage}
-            value={dirtyContent ?? content ?? ""}
-            onChange={(nextContent) => setDirtyContent(tabId, nextContent)}
-            onSave={saveFile}
-          />
+          <Suspense fallback={renderEditorFallback("Loading editor...")}>
+            <LazyMonacoFileEditor
+              language={detectedLanguage}
+              value={dirtyContent ?? content ?? ""}
+              onChange={(nextContent) => setDirtyContent(tabId, nextContent)}
+              onSave={saveFile}
+            />
+          </Suspense>
         </div>
       )}
     </div>

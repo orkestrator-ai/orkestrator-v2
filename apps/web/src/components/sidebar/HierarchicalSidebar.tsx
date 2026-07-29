@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import { Suspense, lazy, useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   DndContext,
   closestCenter,
@@ -34,7 +34,6 @@ import { useProjects } from "@/hooks/useProjects";
 import { useEnvironments } from "@/hooks/useEnvironments";
 import { useEnvironmentListSync } from "@/hooks/useEnvironmentListSync";
 import { useUIStore } from "@/stores";
-import { RepositorySettings } from "@/components/settings/RepositorySettings";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { Environment, Project } from "@/types";
@@ -53,6 +52,9 @@ import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
 import { cn } from "@/lib/utils";
 
 const NO_ENVIRONMENTS: Environment[] = [];
+const LazyRepositorySettings = lazy(async () => ({
+  default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
+}));
 
 export type SidebarReorderResult =
   | { type: "project"; ids: string[] }
@@ -1059,13 +1061,15 @@ export function HierarchicalSidebar() {
       </AlertDialog>
 
       {/* Repository Settings Dialog */}
-      {settingsProject && (
-        <RepositorySettings
-          project={settingsProject}
-          open={showSettingsDialog}
-          onOpenChange={setShowSettingsDialog}
-          onUpdateProject={handleUpdateProject}
-        />
+      {settingsProject && showSettingsDialog && (
+        <Suspense fallback={null}>
+          <LazyRepositorySettings
+            project={settingsProject}
+            open={showSettingsDialog}
+            onOpenChange={setShowSettingsDialog}
+            onUpdateProject={handleUpdateProject}
+          />
+        </Suspense>
       )}
     </div>
   );

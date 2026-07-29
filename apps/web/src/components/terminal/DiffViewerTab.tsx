@@ -18,6 +18,7 @@ import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { Button } from "@/components/ui/button";
 import { useMediaQuery } from "@/hooks";
 import type { GitFileStatus } from "@/types/paneLayout";
+import { ensureMonacoConfigured, isMonacoConfigured } from "@/lib/monaco-loader";
 
 interface DiffViewerTabProps {
   filePath: string;
@@ -77,6 +78,7 @@ export function DiffViewerTab({
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [diffMode, setDiffMode] = useState<DiffMode>("side-by-side");
+  const [monacoReady, setMonacoReady] = useState(isMonacoConfigured);
 
   // Two columns of code cannot fit on a phone, so the mode toggle is hidden there
   // and the view is pinned to inline regardless of the remembered desktop mode.
@@ -188,6 +190,17 @@ export function DiffViewerTab({
   const isNewFile = gitStatus === "?" || gitStatus === "A";
   const isDeletedFile = gitStatus === "D";
 
+  useEffect(() => {
+    if (monacoReady) return;
+    let cancelled = false;
+    void ensureMonacoConfigured().then(() => {
+      if (!cancelled) setMonacoReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [monacoReady]);
+
   // Fetch both original and modified content
   useEffect(() => {
     let cancelled = false;
@@ -267,7 +280,7 @@ export function DiffViewerTab({
   ]);
 
   // Loading state
-  if (isLoading) {
+  if (isLoading || !monacoReady) {
     return (
       <div
         className={cn(

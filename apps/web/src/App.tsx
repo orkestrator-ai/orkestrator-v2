@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@/lib/native/events";
 import { exit } from "@/lib/native/process";
 import { toast } from "sonner";
@@ -44,7 +44,6 @@ import {
 } from "@/lib/prompt-queue-persistence";
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
-import { LoopedReviewSupervisor } from "@/components/review/LoopedReviewSupervisor";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
@@ -65,6 +64,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
+
+const LazyLoopedReviewSupervisor = lazy(async () => ({
+  default: (await import("@/components/review/LoopedReviewSupervisor")).LoopedReviewSupervisor,
+}));
 
 function App() {
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
@@ -218,6 +221,9 @@ function App() {
   const claudeTmuxMessageQueue = useClaudeTmuxStore((state) => state.messageQueue);
   const codexMessageQueue = useCodexStore((state) => state.messageQueue);
   const openCodeMessageQueue = useOpenCodeStore((state) => state.messageQueue);
+  const loopedReviewWorkflowCount = useLoopedReviewStore(
+    (state) => state.workflows.size,
+  );
   const loadingNativeSessionEnvironmentIds = useMemo(() => {
     const environmentIds = new Set<string>();
     const sessionMaps = [claudeSessions, codexSessions, openCodeSessions];
@@ -624,7 +630,11 @@ function App() {
     <TooltipProvider>
       <TerminalProvider>
         <AppShell>
-          <LoopedReviewSupervisor />
+          {loopedReviewWorkflowCount > 0 && (
+            <Suspense fallback={null}>
+              <LazyLoopedReviewSupervisor />
+            </Suspense>
+          )}
           {selectedEnvironment ? (
             <div className="relative h-full bg-background">
               <div className="absolute inset-0 z-10 bg-background">

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Editor, {
   type BeforeMount,
   type OnChange,
@@ -7,6 +7,7 @@ import Editor, {
 import { Loader2 } from "lucide-react";
 import { useConfigStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
+import { ensureMonacoConfigured, isMonacoConfigured } from "@/lib/monaco-loader";
 
 interface MonacoFileEditorProps {
   language: string;
@@ -60,10 +61,22 @@ export function MonacoFileEditor({
     useConfigStore((state) => state.config.global.terminalAppearance) ||
     DEFAULT_TERMINAL_APPEARANCE;
   const onSaveRef = useRef(onSave);
+  const [monacoReady, setMonacoReady] = useState(isMonacoConfigured);
 
   useEffect(() => {
     onSaveRef.current = onSave;
   }, [onSave]);
+
+  useEffect(() => {
+    if (monacoReady) return;
+    let cancelled = false;
+    void ensureMonacoConfigured().then(() => {
+      if (!cancelled) setMonacoReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [monacoReady]);
 
   const handleEditorWillMount: BeforeMount = useCallback(
     disableMonacoFileDiagnostics,
@@ -77,6 +90,14 @@ export function MonacoFileEditor({
   const handleEditorChange: OnChange = useCallback((nextValue) => {
     forwardMonacoFileChange(nextValue, onChange);
   }, [onChange]);
+
+  const loading = (
+    <div className="flex h-full items-center justify-center">
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+    </div>
+  );
+
+  if (!monacoReady) return loading;
 
   return (
     <Editor
@@ -101,11 +122,7 @@ export function MonacoFileEditor({
           horizontalScrollbarSize: 10,
         },
       }}
-      loading={
-        <div className="flex h-full items-center justify-center">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
-      }
+      loading={loading}
     />
   );
 }

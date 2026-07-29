@@ -833,7 +833,7 @@ describe("EnvironmentItem copy initial prompt", () => {
 });
 
 describe("EnvironmentItem menu actions and selection", () => {
-  test("context menu Settings opens the settings dialog", () => {
+  test("context menu Settings opens the settings dialog", async () => {
     const env = makeEnvironment();
     const { container } = renderItem(env);
 
@@ -841,7 +841,9 @@ describe("EnvironmentItem menu actions and selection", () => {
     expect(settingsItem).not.toBeUndefined();
 
     fireEvent.click(settingsItem!);
-    expect(container.querySelector('[data-testid="settings-dialog"]')).not.toBeNull();
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="settings-dialog"]')).not.toBeNull();
+    });
     expect(settingsDialogPropsMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ open: true }),
     );

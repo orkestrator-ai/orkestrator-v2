@@ -449,31 +449,26 @@ function App() {
     }
   };
 
-  // Prefer Chromium's real page zoom in Electron. Unlike CSS `zoom`, native
-  // page zoom changes the layout viewport as well as the painted pixels, so
-  // 100%-height shells and bottom-pinned compose bars stay inside the window.
-  // Browser clients retain a compensated CSS fallback because they do not have
-  // access to Electron's webContents.
+  // Prefer Chromium's real page zoom in Electron. Unlike CSS `zoom`, native page
+  // zoom changes the layout viewport as well as the painted pixels, so the app
+  // renders at the device pixel ratio rather than being upscaled. Browser
+  // clients fall back to CSS `zoom`, which sizes correctly as long as the shell
+  // measures itself against its container instead of viewport units.
   useEffect(() => {
     let active = true;
     const rootStyle = document.documentElement.style;
     const applyCssFallback = () => {
       rootStyle.zoom = `${zoomLevel}%`;
-      rootStyle.setProperty("--app-viewport-width", `${10_000 / zoomLevel}dvw`);
-      rootStyle.setProperty("--app-viewport-height", `${10_000 / zoomLevel}dvh`);
     };
 
     void getCurrentWindow()
       .setZoomFactor(zoomLevel / 100)
       .then((appliedNatively) => {
         if (!active) return;
-        if (!appliedNatively) {
-          applyCssFallback();
-          return;
-        }
-        rootStyle.zoom = "";
-        rootStyle.removeProperty("--app-viewport-width");
-        rootStyle.removeProperty("--app-viewport-height");
+        // Clear any fallback left over from a client that could not zoom
+        // natively; leaving it set would compound with the native factor.
+        if (appliedNatively) rootStyle.zoom = "";
+        else applyCssFallback();
       })
       .catch((error) => {
         if (!active) return;

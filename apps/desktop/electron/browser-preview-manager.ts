@@ -131,14 +131,14 @@ function assertTabId(tabId: unknown): asserts tabId is string {
   }
 }
 
-function validateBounds(bounds: BrowserPreviewBounds): Rectangle {
+function validateBounds(bounds: BrowserPreviewBounds, zoomFactor: number): Rectangle {
   const values = [bounds.x, bounds.y, bounds.width, bounds.height];
   if (!values.every(Number.isFinite)) throw new Error("Expected finite browser preview bounds");
   return {
-    x: Math.max(0, Math.round(bounds.x)),
-    y: Math.max(0, Math.round(bounds.y)),
-    width: Math.max(0, Math.round(bounds.width)),
-    height: Math.max(0, Math.round(bounds.height)),
+    x: Math.max(0, Math.round(bounds.x * zoomFactor)),
+    y: Math.max(0, Math.round(bounds.y * zoomFactor)),
+    width: Math.max(0, Math.round(bounds.width * zoomFactor)),
+    height: Math.max(0, Math.round(bounds.height * zoomFactor)),
   };
 }
 
@@ -148,11 +148,26 @@ export class BrowserPreviewManager {
 
   constructor(private readonly options: BrowserPreviewManagerOptions) {}
 
+  /**
+   * The renderer measures the preview host with `getBoundingClientRect()`, which
+   * reports CSS pixels. `WebContentsView.setBounds` takes window DIPs, and the
+   * host's native page zoom is exactly the factor between them, so every rect
+   * from the renderer has to be scaled by it. Falls back to 1 whenever the
+   * window cannot be asked, which is also the CSS-zoom fallback's factor: there
+   * the renderer is not natively zoomed, so its rects are already DIPs.
+   */
+  private hostZoomFactor(): number {
+    const window = this.options.getWindow();
+    if (!window || window.isDestroyed()) return 1;
+    const factor = window.webContents?.getZoomFactor?.();
+    return typeof factor === "number" && Number.isFinite(factor) && factor > 0 ? factor : 1;
+  }
+
   async attach(input: BrowserPreviewAttachInput): Promise<BrowserPreviewState> {
     assertTabId(input.tabId);
     const navigationScope = previewNavigationScope(input.url);
     if (!navigationScope) throw new Error("Browser previews require a loopback or authenticated gateway-preview URL");
-    const bounds = validateBounds(input.bounds);
+    const bounds = validateBounds(input.bounds, this.hostZoomFactor());
     let preview = this.previews.get(input.tabId);
 
     if (!preview) {
@@ -174,7 +189,7 @@ export class BrowserPreviewManager {
 
   setBounds(tabId: string, bounds: BrowserPreviewBounds): BrowserPreviewState {
     const preview = this.get(tabId);
-    const normalized = validateBounds(bounds);
+    const normalized = validateBounds(bounds, this.hostZoomFactor());
     preview.view.setBounds(normalized);
     if (normalized.width <= 0 || normalized.height <= 0) {
       this.clipboardUserActivations.delete(preview.view.webContents);

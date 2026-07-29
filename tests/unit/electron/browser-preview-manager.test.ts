@@ -81,7 +81,12 @@ function createHarness(options: {
   };
   let windowAvailable = true;
   let windowDestroyed = false;
-  const window = { isDestroyed: () => windowDestroyed, contentView };
+  let hostZoomFactor = 1;
+  const window = {
+    isDestroyed: () => windowDestroyed,
+    contentView,
+    webContents: { getZoomFactor: () => hostZoomFactor },
+  };
   const emitState = mock(() => undefined);
   const emitOpenLink = mock(() => undefined);
   const openExternal = mock(() => undefined);
@@ -123,6 +128,9 @@ function createHarness(options: {
     },
     setWindowDestroyed(value: boolean) {
       windowDestroyed = value;
+    },
+    setHostZoomFactor(value: number) {
+      hostZoomFactor = value;
     },
   };
 }
@@ -752,6 +760,33 @@ describe("BrowserPreviewManager", () => {
     expect(view.webContents.loadURL).toHaveBeenLastCalledWith("http://127.0.0.1:4000/next");
     expect(changed.url).toBe("http://127.0.0.1:4000/next");
     expect(view.visible).toBe(false);
+  });
+
+  test("scales renderer CSS-pixel bounds by the host page zoom factor", async () => {
+    const harness = createHarness();
+    harness.setHostZoomFactor(2);
+    await harness.manager.attach({
+      ...input,
+      bounds: { x: 10, y: 20, width: 300, height: 400 },
+    });
+    const view = harness.views[0]!;
+
+    // The renderer measures with getBoundingClientRect(), which reports CSS
+    // pixels; setBounds takes window DIPs. Native page zoom is the factor
+    // between them, so an unscaled rect would place the view at half size.
+    expect(view.bounds).toEqual({ x: 20, y: 40, width: 600, height: 800 });
+
+    harness.setHostZoomFactor(0.5);
+    harness.manager.setBounds(input.tabId, { x: 10, y: 20, width: 300, height: 400 });
+    expect(view.bounds).toEqual({ x: 5, y: 10, width: 150, height: 200 });
+
+    // With no window to ask, the renderer cannot be natively zoomed either, so
+    // its rects are already DIPs and have to pass through unscaled.
+    harness.setHostZoomFactor(3);
+    harness.setWindowAvailable(false);
+    harness.manager.setBounds(input.tabId, { x: 10, y: 20, width: 300, height: 400 });
+    expect(view.bounds).toEqual({ x: 10, y: 20, width: 300, height: 400 });
+    harness.setWindowAvailable(true);
   });
 
   test("clears clipboard activation when reattaching changes URL or makes the preview unusable", async () => {

@@ -484,8 +484,6 @@ function resetAppMocks() {
     return Promise.resolve(mockAppUnlisten);
   });
   document.documentElement.style.zoom = "";
-  document.documentElement.style.removeProperty("--app-viewport-width");
-  document.documentElement.style.removeProperty("--app-viewport-height");
 }
 
 afterAll(() => {
@@ -1528,12 +1526,6 @@ describe("App startup checks and global events", () => {
     });
     await waitFor(() => {
       expect(document.documentElement.style.zoom).toBe("110%");
-      expect(document.documentElement.style.getPropertyValue("--app-viewport-width")).toBe(
-        `${10_000 / 110}dvw`,
-      );
-      expect(document.documentElement.style.getPropertyValue("--app-viewport-height")).toBe(
-        `${10_000 / 110}dvh`,
-      );
     });
 
     act(() => {
@@ -1557,14 +1549,15 @@ describe("App startup checks and global events", () => {
     });
   });
 
-  test("uses native page zoom without leaving CSS viewport compensation active", async () => {
+  test("switches from the CSS fallback to native page zoom and clears the fallback", async () => {
     resetStores({
       environments: [],
       selectedProjectId: null,
       selectedEnvironmentId: null,
     });
     const originalOrkestrator = window.orkestrator;
-    const setZoomFactor = mock(async () => true);
+    let nativeZoomSupported = false;
+    const setZoomFactor = mock(async () => nativeZoomSupported);
     window.orkestrator = {
       window: {
         startDragging: async () => undefined,
@@ -1574,21 +1567,65 @@ describe("App startup checks and global events", () => {
 
     try {
       render(<App />);
-      await waitFor(() => expect(setZoomFactor).toHaveBeenCalledWith(1));
 
+      // A client that cannot zoom natively reports false, so the CSS fallback
+      // is applied and has to stay in place.
+      await waitFor(() => {
+        expect(setZoomFactor).toHaveBeenCalledWith(1);
+        expect(document.documentElement.style.zoom).toBe("100%");
+      });
+
+      // Once native zoom takes over, the stale fallback has to be cleared: the
+      // compositor is already applying a factor, so leaving CSS zoom set would
+      // compound the two.
+      nativeZoomSupported = true;
+      await waitFor(() => expect(appEventCallbacks.has("menu-zoom")).toBe(true));
       act(() => {
         appEventCallbacks.get("menu-zoom")?.({ payload: "in" });
       });
-      await waitFor(() => expect(setZoomFactor).toHaveBeenCalledWith(1.1));
 
-      expect(document.documentElement.style.zoom).toBe("");
-      expect(
-        document.documentElement.style.getPropertyValue("--app-viewport-width"),
-      ).toBe("");
-      expect(
-        document.documentElement.style.getPropertyValue("--app-viewport-height"),
-      ).toBe("");
+      await waitFor(() => {
+        expect(setZoomFactor).toHaveBeenCalledWith(1.1);
+        expect(document.documentElement.style.zoom).toBe("");
+      });
     } finally {
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
+  test("falls back to CSS zoom when the native zoom bridge rejects", async () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+    const originalOrkestrator = window.orkestrator;
+    const originalConsoleWarn = console.warn;
+    const consoleWarn = mock(() => undefined);
+    console.warn = consoleWarn;
+    const setZoomFactor = mock(async () => {
+      throw new Error("Expected zoom factor to be a finite number greater than zero");
+    });
+    window.orkestrator = {
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor,
+      },
+    } as unknown as Window["orkestrator"];
+
+    try {
+      render(<App />);
+
+      await waitFor(() => {
+        expect(setZoomFactor).toHaveBeenCalledWith(1);
+        expect(document.documentElement.style.zoom).toBe("100%");
+      });
+      expect(consoleWarn).toHaveBeenCalledWith(
+        "[App] Failed to apply native zoom; using CSS fallback:",
+        expect.any(Error),
+      );
+    } finally {
+      console.warn = originalConsoleWarn;
       window.orkestrator = originalOrkestrator;
     }
   });

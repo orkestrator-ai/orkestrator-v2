@@ -42,6 +42,29 @@ describe("native dialog/window/process wrappers", () => {
     await expect(getCurrentWindow().startDragging()).resolves.toBeUndefined();
   });
 
+  test("applies native page zoom through the preload bridge", async () => {
+    const { getCurrentWindow } = await loadNativeWindow();
+    const setZoomFactor = mock(async () => true);
+    window.orkestrator = { window: { startDragging: mock(async () => undefined), setZoomFactor } } as never;
+
+    await expect(getCurrentWindow().setZoomFactor(1.5)).resolves.toBe(true);
+    expect(setZoomFactor).toHaveBeenCalledWith(1.5);
+  });
+
+  test("reports no native page zoom without the preload bridge", async () => {
+    const { getCurrentWindow } = await loadNativeWindow();
+    await expect(getCurrentWindow().setZoomFactor(1.5)).resolves.toBe(false);
+  });
+
+  test("reports no native page zoom when the bridge predates the method", async () => {
+    // The renderer can be served by a preload build that has `window` but not
+    // `setZoomFactor`; it must fall back to CSS zoom rather than throwing.
+    const { getCurrentWindow } = await loadNativeWindow();
+    window.orkestrator = { window: { startDragging: mock(async () => undefined) } } as never;
+
+    await expect(getCurrentWindow().setZoomFactor(1.5)).resolves.toBe(false);
+  });
+
   test("exits through the preload bridge or falls back to window.close", async () => {
     const { exit } = await loadNativeProcess();
     const exitMock = mock(async () => undefined);

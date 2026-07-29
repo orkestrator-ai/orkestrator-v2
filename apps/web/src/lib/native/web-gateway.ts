@@ -704,7 +704,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       startDragging(): Promise<void> {
         return Promise.resolve();
       },
-      setZoomFactor(): Promise<boolean> {
+      // No webContents to zoom in a browser tab. Reporting false is what routes
+      // the renderer to its CSS `zoom` fallback.
+      setZoomFactor(_factor: number): Promise<boolean> {
         return Promise.resolve(false);
       },
     },

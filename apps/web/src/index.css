@@ -87,9 +87,15 @@ body {
   touch-action: manipulation;
 }
 
+/*
+ * Percentages, not viewport units. When CSS `zoom` applies to the root element
+ * Chromium scales the initial containing block to match, so this chain stays
+ * exactly one viewport tall at any zoom level. `dvh`/`vw` would not: they
+ * resolve against the unzoomed viewport and are then scaled, overflowing the
+ * window by the zoom factor.
+ */
 #root {
-  height: var(--app-viewport-height, 100%);
-  width: var(--app-viewport-width, 100%);
+  height: 100%;
   overflow: hidden;
 }
 

@@ -12,6 +12,13 @@ export interface PersistedPaneLayout {
   revision: number;
 }
 
+export interface PersistedPaneLayoutInput {
+  version: number;
+  containerId: string | null;
+  activePaneId: string;
+  root: PaneNode;
+}
+
 // Git file status for diff context
 export type GitFileStatus = "M" | "A" | "D" | "?" | "R" | "C";
 

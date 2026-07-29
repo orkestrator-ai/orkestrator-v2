@@ -135,6 +135,51 @@ describe("standalone backend service", () => {
     expect(webResponse.headers.get("content-type")).toContain("text/html");
   });
 
+  test("passes CLI compression through to gateway metrics for each listener", async () => {
+    const { url, token, readyMessage } = await startBackend(
+      [
+        "--control-host", "127.0.0.1",
+        "--control-port", "0",
+        "--compression", "on",
+      ],
+      { ORKESTRATOR_GATEWAY_COMPRESSION: "body" },
+    );
+    const browserUrl = readyMessage.browserUrl;
+    expect(browserUrl).toBeString();
+    const authorization = { authorization: `Bearer ${token}` };
+
+    const controlStatus = await Bun.fetch(new URL("/__orkestrator/status", url), { headers: authorization });
+    const browserStatus = await Bun.fetch(
+      new URL("/__orkestrator/status", browserUrl as string),
+      { headers: authorization },
+    );
+    expect(controlStatus.status).toBe(200);
+    expect(browserStatus.status).toBe(200);
+
+    const metricsResponse = await Bun.fetch(new URL("/__orkestrator/metrics", url), {
+      headers: authorization,
+    });
+    expect(metricsResponse.status).toBe(200);
+    const metrics = await metricsResponse.json() as {
+      compression: { configuredMode: string };
+      recentRouteSamples: Array<{
+        route: string;
+        listenerKind: string;
+        effectiveCompressionMode: string;
+      }>;
+    };
+    expect(metrics.compression.configuredMode).toBe("on");
+    const statusSamples = metrics.recentRouteSamples.filter((sample) => sample.route === "status");
+    expect(statusSamples).toContainEqual(expect.objectContaining({
+      listenerKind: "control",
+      effectiveCompressionMode: "off",
+    }));
+    expect(statusSamples).toContainEqual(expect.objectContaining({
+      listenerKind: "browser",
+      effectiveCompressionMode: "on",
+    }));
+  });
+
   test("stops cleanly when a service manager sends SIGTERM", async () => {
     const { child } = await startBackend();
     child.kill("SIGTERM");

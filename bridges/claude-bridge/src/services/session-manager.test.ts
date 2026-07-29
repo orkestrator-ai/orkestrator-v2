@@ -351,6 +351,7 @@ const {
   getLastIdleTranscriptSweep,
   startIdleTranscriptSweep,
   IDLE_TRANSCRIPT_EVICTION_MS,
+  MAX_TERMINAL_BACKGROUND_TASKS,
   STRUCTURED_USAGE_REQUEST_TIMEOUT_MS,
   deleteSessionDurably,
   renameSessionDurably,
@@ -3406,6 +3407,35 @@ describe("sendPrompt", () => {
     }
   });
 
+  test("maps file-open failure after canonical validation to an actionable read failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-open-race-"));
+    const imagePath = join(directory, "removed-after-canonical.png");
+    await writeFile(imagePath, "image-data");
+    const session = createSession("open-race");
+    track(session.id);
+    try {
+      await withWorkspaceCwd(directory, async () => {
+        await expect(sendPrompt(
+          session.id,
+          "describe",
+          { attachments: [{ type: "image", path: imagePath }] },
+          {
+            afterAttachmentCanonicalValidation: async () => {
+              await rm(imagePath);
+            },
+          },
+        )).rejects.toMatchObject({
+          name: "ClaudeAttachmentError",
+          code: "attachment_read_failed",
+          message: "Image attachment could not be read safely from the workspace.",
+        });
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("reports attachment_changed when a disk image mutates during the bounded read", async () => {
     const directory = await mkdtemp(join(tmpdir(), "claude-bridge-changed-image-"));
     const imagePath = join(directory, "changed.png");
@@ -5721,6 +5751,287 @@ describe("hydratePersistedSessionMessages", () => {
     ]);
   });
 
+  test("rehydrates correlated terminal background-task lifecycle records", async () => {
+    const state = await materializePersistedSession();
+    mockSdkGetSessionMessages.mockImplementation(async () => [
+      {
+        type: "system",
+        uuid: "task-start",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_started",
+          task_id: "task-1",
+          description: "Review",
+          timestamp: "2026-07-28T10:00:00.000Z",
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "system",
+        uuid: "task-progress",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_progress",
+          task_id: "task-1",
+          tool_use_id: "tool-agent-1",
+          description: "Reviewing",
+          timestamp: "2026-07-28T10:01:00.000Z",
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "system",
+        uuid: "task-end",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_notification",
+          task_id: "task-1",
+          status: "failed",
+          summary: "Review failed",
+          timestamp: "2026-07-28T10:02:00.000Z",
+        },
+        parent_tool_use_id: null,
+      },
+    ]);
+
+    await hydratePersistedSessionMessages(state.id);
+
+    expect(state.backgroundTasks?.["task-1"]).toMatchObject({
+      id: "task-1",
+      toolUseId: "tool-agent-1",
+      description: "Reviewing",
+      status: "failed",
+      error: "Review failed",
+      startedAt: Date.parse("2026-07-28T10:00:00.000Z"),
+      endedAt: Date.parse("2026-07-28T10:02:00.000Z"),
+    });
+  });
+
+  test("settles persisted live tasks after process loss, including older records without tool ids", async () => {
+    const state = await materializePersistedSession();
+    mockSdkGetSessionMessages.mockImplementation(async () => [
+      {
+        type: "system",
+        uuid: "old-start",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_started",
+          task_id: "task-old",
+          description: "Older task",
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "system",
+        uuid: "orphan-progress",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_progress",
+          task_id: "task-progress-only",
+          tool_use_id: "tool-progress",
+          description: "Recovered from progress",
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "system",
+        uuid: "orphan-notification",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_notification",
+          task_id: "task-notification-only",
+          tool_use_id: "tool-notification",
+          status: "completed",
+          summary: "Done",
+        },
+        parent_tool_use_id: null,
+      },
+    ]);
+
+    await hydratePersistedSessionMessages(state.id);
+
+    expect(state.backgroundTasks?.["task-old"]).toMatchObject({
+      status: "killed",
+      description: "Older task",
+    });
+    expect(state.backgroundTasks?.["task-old"]?.toolUseId).toBeUndefined();
+    expect(state.backgroundTasks?.["task-progress-only"]).toMatchObject({
+      status: "killed",
+      toolUseId: "tool-progress",
+      description: "Recovered from progress",
+    });
+    expect(state.backgroundTasks?.["task-notification-only"]).toMatchObject({
+      status: "completed",
+      toolUseId: "tool-notification",
+      description: "Done",
+    });
+  });
+
+  test("does not treat malformed persisted notifications as successful completion", async () => {
+    const state = await materializePersistedSession();
+    mockSdkGetSessionMessages.mockImplementation(async () => [
+      {
+        type: "system",
+        uuid: "started-before-invalid-notification",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_started",
+          task_id: "task-invalid-terminal",
+          description: "Still unresolved",
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "system",
+        uuid: "missing-status",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_notification",
+          task_id: "task-invalid-terminal",
+          summary: "Must not imply success",
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "system",
+        uuid: "unknown-status",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_notification",
+          task_id: "task-unknown-terminal",
+          status: "succeeded",
+          summary: "Unknown status",
+        },
+        parent_tool_use_id: null,
+      },
+    ]);
+
+    await hydratePersistedSessionMessages(state.id);
+
+    expect(state.backgroundTasks?.["task-invalid-terminal"]).toMatchObject({
+      status: "killed",
+      description: "Still unresolved",
+    });
+    expect(state.backgroundTasks?.["task-unknown-terminal"]).toBeUndefined();
+  });
+
+  test("sanitizes malformed persisted lifecycle fields before publishing snapshots", async () => {
+    const state = await materializePersistedSession();
+    const beforeHydration = Date.now();
+    const longSummary = `\u0000${"a".repeat(4_095)}😀`;
+    mockSdkGetSessionMessages.mockImplementation(async () => [
+      {
+        type: "system",
+        uuid: "malformed-start",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_started",
+          task_id: " task-malformed ",
+          tool_use_id: 42,
+          description: { text: "not a string" },
+          timestamp: Number.POSITIVE_INFINITY,
+          patch: {
+            status: "finished",
+            description: ["not", "text"],
+            end_time: Number.POSITIVE_INFINITY,
+            error: { message: "not text" },
+            is_backgrounded: "true",
+          },
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "system",
+        uuid: "valid-failure-with-hostile-optionals",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_notification",
+          task_id: "task-malformed",
+          tool_use_id: "tool\u0000poisoned",
+          status: "failed",
+          summary: longSummary,
+          timestamp: "9999-12-31T23:59:59.999Z",
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "system",
+        uuid: "invalid-task-id",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_notification",
+          task_id: `task-${"x".repeat(600)}`,
+          status: "completed",
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "system",
+        uuid: "backwards-start",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_started",
+          task_id: "task-backwards",
+          timestamp: "2026-07-28T10:02:00.000Z",
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "system",
+        uuid: "backwards-notification",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          type: "system",
+          subtype: "task_notification",
+          task_id: "task-backwards",
+          status: "completed",
+          timestamp: "2026-07-28T10:00:00.000Z",
+        },
+        parent_tool_use_id: null,
+      },
+    ]);
+
+    await hydratePersistedSessionMessages(state.id);
+
+    const snapshot = state.backgroundTasks?.["task-malformed"];
+    expect(snapshot).toMatchObject({
+      id: "task-malformed",
+      status: "failed",
+    });
+    expect(snapshot?.toolUseId).toBeUndefined();
+    expect(snapshot?.description).toBe(snapshot?.error);
+    expect(snapshot?.error).not.toContain("\u0000");
+    expect(snapshot?.error?.length).toBeLessThanOrEqual(4_096);
+    expect(snapshot?.error?.charCodeAt((snapshot.error?.length ?? 0) - 1))
+      .not.toBeGreaterThanOrEqual(0xd800);
+    expect(snapshot?.startedAt).toBeGreaterThanOrEqual(beforeHydration);
+    expect(snapshot?.startedAt).toBeLessThanOrEqual(Date.now());
+    expect(snapshot?.endedAt).toBeGreaterThanOrEqual(beforeHydration);
+    expect(snapshot?.endedAt).toBeLessThanOrEqual(Date.now());
+    expect(state.backgroundTasks?.["task-backwards"]).toMatchObject({
+      status: "completed",
+      startedAt: Date.parse("2026-07-28T10:02:00.000Z"),
+    });
+    expect(state.backgroundTasks?.["task-backwards"]?.endedAt).toBeUndefined();
+    expect(Object.keys(state.backgroundTasks ?? {}).sort()).toEqual([
+      "task-backwards",
+      "task-malformed",
+    ]);
+  });
+
   test("generates an id for a record with no uuid and marks it unresolvable", async () => {
     const state = await materializePersistedSession();
     mockSdkGetSessionMessages.mockImplementation(async () => [
@@ -6683,6 +6994,7 @@ describe("background task reducer", () => {
           type: "system",
           subtype: "task_started",
           task_id: "task-1",
+          tool_use_id: "agent-tool-1",
           description: "Run the suite",
         },
       ],
@@ -6691,6 +7003,7 @@ describe("background task reducer", () => {
 
     expect(session.backgroundTasks?.["task-1"]).toMatchObject({
       id: "task-1",
+      toolUseId: "agent-tool-1",
       description: "Run the suite",
       status: "running",
     });
@@ -6722,6 +7035,49 @@ describe("background task reducer", () => {
       description: "Build (backgrounded)",
       status: "running",
       isBackgrounded: true,
+    });
+    await finish();
+  });
+
+  test("accepts lifecycle correlation first reported by progress", async () => {
+    const { session, finish } = await inspectDuringTurn(
+      [
+        { type: "system", subtype: "task_started", task_id: "task-1", description: "Build" },
+        {
+          type: "system",
+          subtype: "task_progress",
+          task_id: "task-1",
+          tool_use_id: "agent-tool-progress",
+          description: "Building",
+        },
+      ],
+      (s) => s.backgroundTasks?.["task-1"]?.toolUseId !== undefined,
+    );
+
+    expect(session.backgroundTasks?.["task-1"]).toMatchObject({
+      toolUseId: "agent-tool-progress",
+      description: "Building",
+      status: "running",
+    });
+    await finish();
+  });
+
+  test("creates a correlated live task from progress without a start edge", async () => {
+    const { session, finish } = await inspectDuringTurn(
+      [{
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-progress-only",
+        tool_use_id: "agent-tool-progress-only",
+        description: "Recovered progress",
+      }],
+      (s) => s.backgroundTasks?.["task-progress-only"] !== undefined,
+    );
+
+    expect(session.backgroundTasks?.["task-progress-only"]).toMatchObject({
+      toolUseId: "agent-tool-progress-only",
+      description: "Recovered progress",
+      status: "running",
     });
     await finish();
   });
@@ -6778,6 +7134,7 @@ describe("background task reducer", () => {
         type: "system",
         subtype: "task_notification",
         task_id: "task-orphan",
+        tool_use_id: "agent-tool-orphan",
         status: "failed",
         summary: "exploded",
         output_file: "/tmp/out",
@@ -6786,10 +7143,47 @@ describe("background task reducer", () => {
 
     expect(session.backgroundTasks?.["task-orphan"]).toMatchObject({
       status: "failed",
+      toolUseId: "agent-tool-orphan",
       description: "exploded",
       error: "exploded",
     });
   });
+
+  for (const { status, expected } of terminalCases) {
+    for (const edgeFirst of [false, true]) {
+      test(`${status} remains ${expected} when the level ${
+        edgeFirst ? "follows" : "precedes"
+      } its terminal edge`, async () => {
+        const notification = {
+          type: "system",
+          subtype: "task_notification",
+          task_id: "task-ordered",
+          tool_use_id: "agent-tool-ordered",
+          status,
+          summary: status === "failed" ? "failed summary" : "done",
+        };
+        const level = {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [],
+        };
+        const { session } = await runPromptWithMessages([
+          {
+            type: "system",
+            subtype: "task_started",
+            task_id: "task-ordered",
+            description: "Ordered task",
+          },
+          ...(edgeFirst ? [notification, level] : [level, notification]),
+        ]);
+
+        expect(session.backgroundTasks?.["task-ordered"]).toMatchObject({
+          status: expected,
+          toolUseId: "agent-tool-ordered",
+        });
+      });
+    }
+  }
 
   test("background_tasks_changed replaces the whole set", async () => {
     const { session, finish } = await inspectDuringTurn(
@@ -6823,6 +7217,42 @@ describe("background task reducer", () => {
     await finish();
   });
 
+  test("background_tasks_changed replaces live membership but retains terminal history", async () => {
+    const { session, finish } = await inspectDuringTurn(
+      [
+        { type: "system", subtype: "task_started", task_id: "task-live-old" },
+        { type: "system", subtype: "task_started", task_id: "task-terminal" },
+        {
+          type: "system",
+          subtype: "task_notification",
+          task_id: "task-terminal",
+          status: "failed",
+          summary: "terminal failure",
+        },
+        {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "task-live-new", task_type: "agent", description: "New" }],
+        },
+      ],
+      (s) => s.backgroundTasks?.["task-live-new"] !== undefined,
+    );
+
+    expect(Object.keys(session.backgroundTasks ?? {}).sort()).toEqual([
+      "task-live-new",
+      "task-terminal",
+    ]);
+    expect(session.backgroundTasks?.["task-terminal"]).toMatchObject({
+      status: "failed",
+      error: "terminal failure",
+    });
+    expect(session.backgroundTasks?.["task-live-new"]).toMatchObject({
+      status: "running",
+      description: "New",
+    });
+    await finish();
+  });
+
   test("an empty background_tasks_changed clears every task", async () => {
     const { session } = await runPromptWithMessages([
       { type: "system", subtype: "task_started", task_id: "task-1", description: "Build" },
@@ -6837,6 +7267,28 @@ describe("background task reducer", () => {
       { type: "system", subtype: "task_notification", status: "completed" },
     ]);
     expect(session.backgroundTasks).toBeUndefined();
+  });
+
+  test("bounds retained terminal lifecycle history", async () => {
+    const messages = Array.from(
+      { length: MAX_TERMINAL_BACKGROUND_TASKS + 7 },
+      (_, index) => ({
+        type: "system",
+        subtype: "task_notification",
+        task_id: `task-terminal-${index}`,
+        status: "completed",
+        summary: `Task ${index}`,
+      }),
+    );
+    const { session } = await runPromptWithMessages(messages);
+
+    expect(Object.keys(session.backgroundTasks ?? {})).toHaveLength(
+      MAX_TERMINAL_BACKGROUND_TASKS,
+    );
+    expect(session.backgroundTasks?.[`task-terminal-${
+      MAX_TERMINAL_BACKGROUND_TASKS + 6
+    }`]).toBeDefined();
+    expect(session.backgroundTasks?.["task-terminal-0"]).toBeUndefined();
   });
 });
 

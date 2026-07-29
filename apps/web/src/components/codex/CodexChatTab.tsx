@@ -824,26 +824,16 @@ export function CodexChatTab({
           reconciliation === "applied"
           && reconciledSession?.isLoading !== true
         ) {
-          const reconciledDispatch = useCodexStore
-            .getState()
-            .unconfirmedDispatches.get(sessionKey);
-          if (reconciledDispatch?.retryable) {
-            retryablePromptRef.current = {
-              fingerprint: reconciledDispatch.fingerprint,
-              requestId: reconciledDispatch.requestId,
-            };
-            return "rejected";
-          }
-          setSessionPhase(sessionKey, undefined);
           if (
             retryablePromptRef.current?.fingerprint === fingerprint
             && retryablePromptRef.current.requestId === requestId
           ) {
-            // The reconcile already settled this no-echo prompt as retryable.
-            // Preserve its key and error instead of overwriting that rejection
-            // merely because the optimistic bubble has now been removed.
+            // The fresh transcript did not echo this prompt. Reconciliation
+            // retained the same idempotency key in both the ref and durable
+            // dispatch store, so expose a safe retry without clearing either.
             return "rejected";
           }
+          setSessionPhase(sessionKey, undefined);
           // The transcript proves the request completed despite the lost
           // response; its idempotency key is now spent.
           retryablePromptRef.current = null;
@@ -1440,6 +1430,7 @@ export function CodexChatTab({
             modelReasoningEffort: resolvedSelection.reasoningEffort,
             mode: resolvedMode,
             fastMode: warmFastMode,
+            clientSessionKey: sessionKey,
           });
           if (!mounted) return;
 
@@ -1588,6 +1579,7 @@ export function CodexChatTab({
             modelReasoningEffort: resolvedReasoningEffort,
             mode: resolvedMode,
             fastMode: coldFastMode,
+            clientSessionKey: sessionKey,
           });
           setSession(sessionKey, {
             sessionId: created.sessionId,

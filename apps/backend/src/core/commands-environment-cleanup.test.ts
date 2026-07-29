@@ -8,6 +8,7 @@ import {
 } from "./commands.js";
 import type { Environment } from "./models.js";
 import { StorageService } from "./storage.js";
+import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 
 function environment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -46,6 +47,7 @@ async function withDeleteCommand<T>(
     appRoot: "",
     resourceRoot: "",
     toolchainBinDir: "",
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
     emit: () => undefined,
   } as CommandContext;
   const invokeDelete = async () => {

@@ -16,6 +16,38 @@ export type ExecResult = {
   stderr: string;
 };
 
+/**
+ * A child process failure with the outcome preserved separately from the text.
+ *
+ * Callers that need to classify a failure (timeout vs. missing binary vs. a
+ * real non-zero exit) must not pattern-match the message: it is whatever the
+ * child wrote to stderr, is locale- and version-dependent, and for a timeout is
+ * empty because the child is killed before it can explain itself.
+ */
+export class CommandFailedError extends Error {
+  readonly timedOut: boolean;
+  readonly executableMissing: boolean;
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+
+  constructor(
+    message: string,
+    details: {
+      timedOut?: boolean;
+      executableMissing?: boolean;
+      exitCode?: number | null;
+      signal?: NodeJS.Signals | null;
+    } = {},
+  ) {
+    super(message);
+    this.name = "CommandFailedError";
+    this.timedOut = details.timedOut ?? false;
+    this.executableMissing = details.executableMissing ?? false;
+    this.exitCode = details.exitCode ?? null;
+    this.signal = details.signal ?? null;
+  }
+}
+
 type RunCommandOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -45,6 +77,31 @@ function redactCommandValues(
   );
 }
 
+/**
+ * `execFile` reports a timeout only through `killed`, never in the message: it
+ * SIGTERMs the child, so stdout/stderr are empty and the message is the generic
+ * "Command failed: <argv>". A missing executable arrives as an ENOENT
+ * `SystemError` with no output fields at all.
+ */
+function commandFailureOutcome(error: unknown): {
+  timedOut: boolean;
+  executableMissing: boolean;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+} {
+  const details = (error ?? {}) as {
+    killed?: boolean;
+    code?: number | string | null;
+    signal?: NodeJS.Signals | null;
+  };
+  return {
+    timedOut: details.killed === true,
+    executableMissing: details.code === "ENOENT",
+    exitCode: typeof details.code === "number" ? details.code : null,
+    signal: details.signal ?? null,
+  };
+}
+
 export async function runCommand(
   command: string,
   args: string[] = [],
@@ -66,18 +123,28 @@ export async function runCommand(
       stderr: redactCommandValues(stderr.toString(), options.redactValues),
     };
   } catch (error) {
+    const outcome = commandFailureOutcome(error);
     if (error && typeof error === "object" && "stdout" in error && "stderr" in error) {
       const withOutput = error as { message?: string; stdout?: Buffer | string; stderr?: Buffer | string };
       const stderr = withOutput.stderr?.toString() ?? "";
       const stdout = withOutput.stdout?.toString() ?? "";
       const message = (stderr || stdout || withOutput.message || "Command failed").trim();
-      throw new Error(redactCommandValues(message, options.redactValues));
+      throw new CommandFailedError(redactCommandValues(message, options.redactValues), outcome);
     }
     if (options.redactValues?.some((value) => typeof value === "string" && value.length > 0)) {
       const message = error instanceof Error ? error.message : String(error);
       // Construct a clean Error instead of returning the original child-process
       // error, which can expose argv through enumerable `cmd`/`spawnargs` fields.
-      throw new Error(redactCommandValues(message || "Command failed", options.redactValues));
+      throw new CommandFailedError(
+        redactCommandValues(message || "Command failed", options.redactValues),
+        outcome,
+      );
+    }
+    if (outcome.timedOut || outcome.executableMissing) {
+      // The outcome is the only thing distinguishing these from an ordinary
+      // non-zero exit, and it is not recoverable from the message.
+      const message = error instanceof Error ? error.message : String(error);
+      throw new CommandFailedError(message || "Command failed", outcome);
     }
     throw error;
   }

@@ -59,6 +59,7 @@ The gateway supports these environment variables:
 | `ORKESTRATOR_GATEWAY_HOST` | first detected Tailscale address | Overrides the bind address. The address must still be a Tailscale address. |
 | `ORKESTRATOR_GATEWAY_PORT` | `34121` | Overrides the gateway port. |
 | `ORKESTRATOR_GATEWAY_TOKEN` | generated token in `gateway-auth.json` | Sets the login token. Must be at least 16 characters. |
+| `ORKESTRATOR_GATEWAY_COMPRESSION` | `off` | Compression rollout mode. Accepts `off`, `body`, or `on`. In this milestone every response still stays identity; the setting only prepares later milestones and metrics. |
 | `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS` | unset | Comma-separated browser origins allowed to call the gateway directly. Supports entries such as `https://orkestrator.example` and `https://*.vercel.app`. |
 | `ORKESTRATOR_TAILSCALE_SERVE=1` | unset | Makes the backend own a tailnet-only HTTPS listener through `tailscale serve`. The browser listener binds to loopback automatically. |
 | `ORKESTRATOR_TAILSCALE_SERVE_PORT` | `443` | HTTPS port configured by backend-managed Tailscale Serve. |
@@ -75,6 +76,34 @@ Without `ORKESTRATOR_GATEWAY_TOKEN`, the app creates or reuses:
 
 Delete that file and restart the app to rotate a generated token.
 
+The standalone backend also accepts:
+
+```bash
+--compression off|body|on
+```
+
+Compression configuration resolves in this order:
+
+1. The standalone `--compression` CLI flag.
+2. `ORKESTRATOR_GATEWAY_COMPRESSION`.
+3. The default, `off`.
+
+When the gateway is embedded, an explicit constructor option takes precedence
+over `ORKESTRATOR_GATEWAY_COMPRESSION` and has the same `off` default. Invalid
+CLI or environment values fail startup and identify the offending setting.
+
+All three modes are intentionally no-op rollout controls in this milestone:
+the gateway does not add response compression in `off`, `body`, or `on`.
+`off` is the immediate rollback mode. Later milestones can make `body` compress
+eligible bounded responses and `on` additionally cover long-lived streams
+without changing this configuration contract.
+
+Compression policy follows the listener's role, not its bind address. A browser
+listener remains a `browser` listener, and therefore retains the configured
+rollout mode, even when `--tailscale-serve` binds it to
+`127.0.0.1`. Electron's separate `control` listener always resolves to `off`,
+so the gateway never adds response compression on desktop IPC/control traffic.
+
 ## What The Gateway Proxies
 
 The gateway reserves the `/__orkestrator` path prefix.
@@ -86,6 +115,8 @@ The gateway reserves the `/__orkestrator` path prefix.
 | `/__orkestrator/status` | Small authenticated connection check used by the public client. |
 | `/__orkestrator/invoke` | Authenticated backend command bridge used by the browser renderer. |
 | `/__orkestrator/events` | Server-sent event stream for backend events. |
+| `GET /__orkestrator/metrics` | Returns authenticated privacy-safe gateway counters, byte totals, timings, and recent sanitized samples for milestone measurements. |
+| `POST /__orkestrator/client-metrics` | Accepts authenticated, sanitized browser and `WKWebView` boot/resource timing reports. |
 | `/__orkestrator/proxy/loopback/<port>/...` | Authenticated proxy to `http://127.0.0.1:<port>/...` on the desktop host. |
 
 All other authenticated routes serve the React renderer. In development, those routes proxy to the Vite dev server. In production, they serve files from the built renderer bundle.
@@ -137,6 +168,43 @@ These rules allow proxied apps to keep their own sessions without receiving or r
 - The gateway does not log the token value.
 
 Traffic is plain HTTP because it is expected to travel over Tailscale. Do not bind the gateway to a public interface or expose it through a public reverse proxy.
+
+## Measurement Notes
+
+Both metrics routes require the same gateway authentication as command and event
+routes. `GET /__orkestrator/metrics` is read-only; methods other than `GET` are
+rejected. `POST /__orkestrator/client-metrics` accepts a small JSON object;
+methods other than `POST`, malformed JSON, and oversized bodies are rejected.
+The ingestion route keeps only an allowlist of aggregate navigation, resource
+size, paint, load, event-stream, platform, and protocol fields. Unknown fields
+are ignored, strings and numbers are normalized and bounded, and recent samples
+are kept in a bounded in-memory ring.
+
+The snapshot contains bounded route, registered-command, normalized-event,
+stream, compression, and boot/resource aggregates. Dynamic metric labels have
+fixed cardinality or overflow buckets; unknown commands and uncommon response
+encodings are grouped rather than retained verbatim. The metrics are designed
+not to contain prompts, terminal contents or output, file contents, attachment
+data, credentials, tokens, resource URLs, or other request/response payloads.
+Do not add such fields to client reports or metric labels.
+
+Two label rules keep that true as the code grows:
+
+- A command label is retained only when the backend registry actually contains
+  that name. Anything else becomes `__unknown__`, so a rejected, network-supplied
+  command name is never stored — including when `invoke` refuses for an unrelated
+  reason and never consults the registry. The command budget is sized to hold the
+  whole registry, because folding real commands into `__overflow__` would make the
+  per-command breakdown incomplete and different on every run.
+- An event name that embeds an identifier is collapsed to a fixed category
+  (`terminal-output`, `terminal-output-tmux`, `claude-state`). Adding a new
+  per-entity event name without a matching rule would spend one label slot per
+  terminal, container, or environment and evict genuine event names.
+
+Event counters are per delivery, not per emit: a frame written to three
+subscribers counts three frames and three frames' worth of `wireBytes`, and an
+event with no matching subscriber is not recorded at all. That is what makes
+`wireBytes` the bytes actually put on the wire.
 
 ## Vercel-hosted public client
 

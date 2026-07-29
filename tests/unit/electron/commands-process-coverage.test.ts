@@ -24,6 +24,8 @@ const originalCodexBridgeToken = process.env.FAKE_CODEX_BRIDGE_TOKEN;
 const originalClaudeBridgeToken = process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
 const originalOpenCodeServerPassword = process.env.FAKE_OPENCODE_SERVER_PASSWORD;
 const originalDockerHostResolves = process.env.FAKE_DOCKER_HOST_RESOLVES;
+const originalDockerHostsOutput = process.env.FAKE_DOCKER_HOSTS_OUTPUT;
+const originalDockerGateway = process.env.FAKE_DOCKER_GATEWAY;
 const originalClaudeAgentToolsFingerprint = process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
 const originalCodexAgentToolsFingerprint = process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
 let root = "";
@@ -56,7 +58,7 @@ if [ "$1" = "inspect" ] && [ "$2" = "-f" ]; then
   exit 0
 fi
 if [ "$1" = "inspect" ] && [ "$2" = "--format" ]; then
-  printf '172.17.0.1\n'
+  printf '%s\n' "\${FAKE_DOCKER_GATEWAY:-172.17.0.1}"
   exit 0
 fi
 if [ "$1" = "ps" ] && [ "$2" = "-a" ]; then
@@ -92,7 +94,13 @@ if [ "$1" = "system" ] && [ "$2" = "prune" ]; then
 fi
 if [ "$1" = "exec" ]; then
   case "$*" in
-    *"getent hosts host.docker.internal"*) [ "\${FAKE_DOCKER_HOST_RESOLVES:-}" = "1" ] && printf '172.17.0.1 host.docker.internal\n' ;;
+    *"getent hosts host.docker.internal"*)
+      if [ -n "\${FAKE_DOCKER_HOSTS_OUTPUT:-}" ]; then
+        printf '%s' "\${FAKE_DOCKER_HOSTS_OUTPUT}"
+      elif [ "\${FAKE_DOCKER_HOST_RESOLVES:-}" = "1" ]; then
+        printf '%s %s\n' "\${FAKE_DOCKER_GATEWAY:-172.17.0.1}" host.docker.internal
+      fi
+      ;;
     *claude-agent-tools-fingerprint*) printf '%s' "\${FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT:-}" ;;
     *codex-agent-tools-fingerprint*) printf '%s' "\${FAKE_CODEX_AGENT_TOOLS_FINGERPRINT:-}" ;;
     *codex-bridge-token*) printf '%s' "\${FAKE_CODEX_BRIDGE_TOKEN:-}" ;;
@@ -297,6 +305,8 @@ beforeEach(async () => {
   delete process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
   delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
   delete process.env.FAKE_DOCKER_HOST_RESOLVES;
+  delete process.env.FAKE_DOCKER_HOSTS_OUTPUT;
+  delete process.env.FAKE_DOCKER_GATEWAY;
   delete process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
   delete process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
 });
@@ -331,6 +341,10 @@ afterAll(async () => {
   else process.env.FAKE_OPENCODE_SERVER_PASSWORD = originalOpenCodeServerPassword;
   if (originalDockerHostResolves === undefined) delete process.env.FAKE_DOCKER_HOST_RESOLVES;
   else process.env.FAKE_DOCKER_HOST_RESOLVES = originalDockerHostResolves;
+  if (originalDockerHostsOutput === undefined) delete process.env.FAKE_DOCKER_HOSTS_OUTPUT;
+  else process.env.FAKE_DOCKER_HOSTS_OUTPUT = originalDockerHostsOutput;
+  if (originalDockerGateway === undefined) delete process.env.FAKE_DOCKER_GATEWAY;
+  else process.env.FAKE_DOCKER_GATEWAY = originalDockerGateway;
   if (originalClaudeAgentToolsFingerprint === undefined) delete process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
   else process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT = originalClaudeAgentToolsFingerprint;
   if (originalCodexAgentToolsFingerprint === undefined) delete process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
@@ -559,8 +573,36 @@ describe("process and platform command behavior", () => {
     await __testing.ensureContainerAgentToolsHost("container-existing");
     const log = await readCommandLog();
     expect(log).toContain("getent hosts host.docker.internal");
-    expect(log).not.toContain("docker inspect --format");
+    expect(log).toContain("docker inspect --format");
     expect(log).not.toContain("docker exec --user root");
+  });
+
+  test("rewrites a stale host.docker.internal mapping before trusting the alias", async () => {
+    process.env.FAKE_DOCKER_HOSTS_OUTPUT = "10.0.0.7 host.docker.internal\n";
+    process.env.FAKE_DOCKER_GATEWAY = "172.17.0.1";
+
+    await __testing.ensureContainerAgentToolsHost("container-existing");
+
+    const log = await readCommandLog();
+    expect(log).toContain("getent hosts host.docker.internal");
+    expect(log).toContain(
+      "docker inspect --format {{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}} container-existing",
+    );
+    expect(log).toContain("docker exec --user root container-existing");
+  });
+
+  test("fails closed when Docker does not report a usable gateway for the alias repair", async () => {
+    process.env.FAKE_DOCKER_GATEWAY = "not-an-ip";
+
+    await expect(
+      __testing.ensureContainerAgentToolsHost("container-existing"),
+    ).rejects.toThrow("Could not determine the Docker host gateway");
+
+    const log = await readCommandLog();
+    expect(log).toContain(
+      "docker inspect --format {{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}} container-existing",
+    );
+    expect(log).not.toContain("docker exec --user root container-existing");
   });
 
   test("status reuses Claude and Codex bridges with the current agent-tools fingerprint", async () => {

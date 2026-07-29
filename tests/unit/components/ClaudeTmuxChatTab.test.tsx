@@ -1088,7 +1088,7 @@ Running 1 Explore agent...
     expect(screen.queryByText("0 updates")).toBeNull();
   });
 
-  test("surfaces token-only usage for completed agents from current Claude tmux rows", async () => {
+  test("keeps successful background launches active while they remain in the tmux roster", async () => {
     mockRunningTmuxStatus();
     getTranscriptMock.mockImplementation(async () => [
       {
@@ -1141,7 +1141,7 @@ Running 1 Explore agent...
     );
 
     expect(await screen.findByText("45.7k tokens")).toBeTruthy();
-    expect(screen.getByText("Success")).toBeTruthy();
+    expect(screen.getByText("Active")).toBeTruthy();
     expect(screen.queryByText("0 tools")).toBeNull();
     expect(screen.queryByText("0 updates")).toBeNull();
   });
@@ -5051,7 +5051,7 @@ Running 1 Explore agent...
 
     expect((lastVirtuosoProps?.data ?? []).map((message: any) => message.id)).toEqual([
       "assistant-agent",
-      "assistant-agent:active-agent:agent-1",
+      "assistant-agent:active-agents",
     ]);
 
     act(() => {

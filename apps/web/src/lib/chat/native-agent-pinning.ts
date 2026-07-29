@@ -5,6 +5,7 @@ import type {
   NativeMessagePart,
   NativeToolGroupPart,
 } from "./native-message-types";
+import { isNativeAgentActive } from "./native-agent-status";
 
 function isAgentPart(
   part: NativeMessagePart,
@@ -12,39 +13,10 @@ function isAgentPart(
   return part.type === "subagent" || part.type === "task-group";
 }
 
-function getAgentPartState(part: NativeMessagePart): string | undefined {
-  if (part.type === "task-group") {
-    return part.task.toolState;
-  }
-
-  return part.toolState;
-}
-
-function isActiveAgentPart(part: NativeMessagePart): boolean {
-  const state = getAgentPartState(part);
-  return isAgentPart(part) && state !== "success" && state !== "failure";
-}
-
-function getAgentPartKey(part: NativeMessagePart, index: number): string {
-  if (part.type === "task-group") {
-    const stableId = part.task.toolUseId ?? part.task.subagentId;
-    if (stableId) return stableId;
-
-    return (
-      part.task.toolName ??
-      part.content ??
-      "agent"
-    ) + `:${index}`;
-  }
-
-  const stableId = part.subagentId ?? part.toolUseId;
-  if (stableId) return stableId;
-
-  return (
-    part.subagentName ??
-    part.content ??
-    "agent"
-  ) + `:${index}`;
+function isActiveAgentPart(
+  part: NativeMessagePart,
+): part is NativeAgentActivityPart {
+  return isAgentPart(part) && isNativeAgentActive(part);
 }
 
 function hasRenderableContent(message: NativeMessage): boolean {
@@ -53,10 +25,10 @@ function hasRenderableContent(message: NativeMessage): boolean {
 
 function extractActiveAgentParts(parts: NativeMessagePart[]): {
   retainedParts: NativeMessagePart[];
-  pinnedParts: NativeMessagePart[];
+  pinnedParts: NativeAgentActivityPart[];
 } {
   const retainedParts: NativeMessagePart[] = [];
-  const pinnedParts: NativeMessagePart[] = [];
+  const pinnedParts: NativeAgentActivityPart[] = [];
 
   for (const part of parts) {
     if (isActiveAgentPart(part)) {
@@ -99,14 +71,24 @@ function extractActiveAgentParts(parts: NativeMessagePart[]): {
 
 function createPinnedAgentMessage(
   source: NativeMessage,
-  part: NativeMessagePart,
-  index: number,
+  parts: NativeAgentActivityPart[],
 ): NativeMessage {
+  const isGroup = parts.length > 1;
+
   return {
     ...source,
-    id: `${source.id}:active-agent:${getAgentPartKey(part, index)}`,
+    // Keep the virtualized row mounted as the active membership changes. Agent
+    // expansion state lives inside NativeMessage, so a singleton-specific id
+    // would collapse an expanded row as soon as a second agent starts.
+    id: `${source.id}:active-agents`,
     content: "",
-    parts: [part],
+    parts: isGroup
+      ? [{
+          type: "agent-group",
+          content: "",
+          parts,
+        }]
+      : [parts[0]!],
   };
 }
 
@@ -133,9 +115,7 @@ export function pinActiveNativeAgentParts(
       renderedMessages.push(retainedMessage);
     }
 
-    pinnedParts.forEach((part, index) => {
-      pinnedMessages.push(createPinnedAgentMessage(message, part, index));
-    });
+    pinnedMessages.push(createPinnedAgentMessage(message, pinnedParts));
   }
 
   return [...renderedMessages, ...pinnedMessages];

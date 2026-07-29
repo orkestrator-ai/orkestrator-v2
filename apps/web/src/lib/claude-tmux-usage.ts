@@ -246,7 +246,8 @@ export function applyTmuxAgentUsageSummaries(
         (summary.toolUseCount === undefined || part.toolUseCount === summary.toolUseCount) &&
         part.tokenCount === summary.tokenCount &&
         part.tokenCountText === summary.tokenCountText &&
-        part.agentUsageDisplay === "token-only"
+        part.agentUsageDisplay === "token-only" &&
+        part.agentState === "active"
       ) {
         return part;
       }
@@ -259,6 +260,9 @@ export function applyTmuxAgentUsageSummaries(
         tokenCount: summary.tokenCount,
         tokenCountText: summary.tokenCountText,
         agentUsageDisplay: "token-only" as const,
+        // A row present in Claude's live TUI agent summary is still working,
+        // even if its background launch tool has already returned success.
+        agentState: "active" as const,
       };
     });
 

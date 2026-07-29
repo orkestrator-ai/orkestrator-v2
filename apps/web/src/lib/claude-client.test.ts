@@ -764,9 +764,36 @@ describe("claude-client", () => {
       expect(parseClaudeBackgroundTasks(null)).toBeUndefined();
     });
 
+    test("accepts every supported background-task lifecycle status", () => {
+      const statuses = [
+        "pending",
+        "running",
+        "paused",
+        "completed",
+        "failed",
+        "killed",
+      ] as const;
+      const tasks = Object.fromEntries(statuses.map((status) => [
+        status,
+        {
+          id: status,
+          status,
+          toolUseId: `tool-${status}`,
+        },
+      ]));
+
+      expect(parseClaudeBackgroundTasks(tasks)).toEqual(tasks);
+    });
+
+    test("accepts empty task snapshots and rejects arrays", () => {
+      expect(parseClaudeBackgroundTasks({})).toEqual({});
+      expect(parseClaudeBackgroundTasks([])).toBeUndefined();
+    });
+
     test("preserves optional background-task fields and drops primitive entries", () => {
       const complete = {
         id: "build",
+        toolUseId: "agent-tool-1",
         description: "Run build",
         status: "failed" as const,
         isBackgrounded: true,
@@ -786,6 +813,7 @@ describe("claude-client", () => {
       const dropped: string[] = [];
       expect(parseClaudeBackgroundTasks({
         description: { id: "description", status: "running", description: 1 },
+        toolUseId: { id: "toolUseId", status: "running", toolUseId: 1 },
         backgrounded: { id: "backgrounded", status: "running", isBackgrounded: "yes" },
         ended: { id: "ended", status: "completed", endedAt: Number.POSITIVE_INFINITY },
         error: { id: "error", status: "failed", error: false },
@@ -799,6 +827,7 @@ describe("claude-client", () => {
         "ended",
         "error",
         "status",
+        "toolUseId",
       ]);
     });
   });

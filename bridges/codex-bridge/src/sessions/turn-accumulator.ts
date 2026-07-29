@@ -19,6 +19,10 @@ import type {
   EngineItem,
   EngineTurnStatus,
 } from "../engine/types.js";
+import {
+  resolveTranscriptToolOutputState,
+  stringifyTranscriptToolOutput,
+} from "../subagent-transcript.js";
 
 export type TurnPhase =
   | "starting"
@@ -222,6 +226,41 @@ export class TurnAccumulator {
       return;
     }
     accumulator.outputDelta += delta;
+  }
+
+  /**
+   * Completes a raw custom-tool fallback only when its matching call introduced
+   * a dynamic item. Structured app-server items use the same call id and remain
+   * authoritative: a later `fileChange` completion replaces this fallback.
+   */
+  onDynamicToolOutput(itemId: string, output: unknown, completedAtMs?: number): boolean {
+    const accumulator = this.items.get(itemId);
+    const item = accumulator?.item;
+    if (
+      !accumulator ||
+      accumulator.completed ||
+      item?.type !== "dynamic_tool_call" ||
+      item.tool.trim().toLowerCase() !== "apply_patch"
+    ) {
+      return false;
+    }
+
+    const serialized = stringifyTranscriptToolOutput(output);
+    const state = resolveTranscriptToolOutputState(
+      item.tool,
+      output,
+      "success",
+    );
+    accumulator.item = {
+      ...item,
+      content_items: serialized
+        ? [{ type: "inputText", text: serialized }]
+        : [],
+      status: state === "failure" ? "failed" : "completed",
+    };
+    accumulator.completed = true;
+    accumulator.completedAt ??= completedAtMs;
+    return true;
   }
 
   onTurnDiff(diff: string): void {

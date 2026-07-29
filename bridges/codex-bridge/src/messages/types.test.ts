@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { APP_SERVER_CAPABILITIES, EngineProcessExitError, EngineUnsupportedError } from "../engine/types.js";
+import {
+  APP_SERVER_CAPABILITIES,
+  EngineProcessExitError,
+  EngineUnsupportedError,
+  type EngineEvent,
+} from "../engine/types.js";
 import { createMessageId, createSessionId } from "./types.js";
 
 describe("normalized and engine factories", () => {
@@ -44,6 +49,28 @@ describe("normalized and engine factories", () => {
       asyncInterrupt: true,
       itemDeltas: true,
       turnDiff: true,
+    });
+  });
+
+  test("dynamic tool output events retain routing metadata and arbitrary output", () => {
+    const event: EngineEvent = {
+      kind: "item.dynamic.output",
+      engineGeneration: 3,
+      handle: "thread-handle",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "call-patch",
+      output: { changed: ["src/example.ts"], ok: true },
+    };
+
+    expect(event).toEqual({
+      kind: "item.dynamic.output",
+      engineGeneration: 3,
+      handle: "thread-handle",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "call-patch",
+      output: { changed: ["src/example.ts"], ok: true },
     });
   });
 });

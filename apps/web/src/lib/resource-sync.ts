@@ -24,10 +24,9 @@ import {
  * looped review) both compare against what they last persisted before
  * enqueuing, so re-applying an identical snapshot enqueues nothing.
  *
- * Pane layout is deliberately absent from the subscriber set. Which panes a
- * window has open is per-window state that merely happens to be persisted so it
- * survives a restart; mirroring it live between two windows would fight the
- * user rather than help them.
+ * Pane/tab snapshots are included in the subscriber set. Their active-pane and
+ * active-tab pointers are preserved locally by the pane-layout binding, so a
+ * tab created on mobile appears on desktop without stealing desktop focus.
  */
 
 type ResourceHandler = (change: ResourceChange) => void;

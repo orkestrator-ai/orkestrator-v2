@@ -39,7 +39,7 @@ describe("pinActiveNativeAgentParts", () => {
     expect(pinned.map((message) => message.id)).toEqual([
       "assistant-1",
       "assistant-2",
-      "assistant-1:active-agent:agent-1",
+      "assistant-1:active-agents",
     ]);
     expect(pinned[0]?.parts.map((part) => part.type)).toEqual(["text", "text"]);
     expect(pinned[2]?.parts).toEqual([
@@ -107,6 +107,116 @@ describe("pinActiveNativeAgentParts", () => {
     ]);
   });
 
+  test("leaves terminal launches in place despite stale descendant tools", () => {
+    const messages: NativeMessage[] = [
+      assistantMessage("assistant-1", [
+        {
+          type: "task-group",
+          content: "Agent",
+          task: {
+            type: "tool-invocation",
+            content: "Agent",
+            toolName: "Agent",
+            toolUseId: "task-1",
+            toolState: "success",
+          },
+          childTools: [
+            {
+              type: "tool-invocation",
+              content: "Run tests",
+              toolName: "Bash",
+              toolState: "pending",
+            },
+          ],
+        },
+      ]),
+      assistantMessage("assistant-2", [{ type: "text", content: "Later message" }]),
+    ];
+
+    const pinned = pinActiveNativeAgentParts(messages);
+
+    expect(pinned.map((message) => message.id)).toEqual([
+      "assistant-1",
+      "assistant-2",
+    ]);
+    expect(pinned[0]?.parts[0]?.type).toBe("task-group");
+  });
+
+  test("pins a successful background launch with authoritative active state", () => {
+    const messages: NativeMessage[] = [
+      assistantMessage("assistant-1", [{
+        type: "task-group",
+        content: "Agent",
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolUseId: "task-background",
+          toolState: "success",
+          agentState: "active",
+        },
+        childTools: [],
+      }]),
+    ];
+
+    expect(pinActiveNativeAgentParts(messages).map((message) => message.id)).toEqual([
+      "assistant-1:active-agents",
+    ]);
+  });
+
+  test("releases an agent when authoritative lifecycle finishes despite stale child work", () => {
+    const messages: NativeMessage[] = [
+      assistantMessage("assistant-1", [{
+        type: "task-group",
+        content: "Agent",
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolUseId: "task-background",
+          toolState: "success",
+          agentState: "finished",
+        },
+        childTools: [{
+          type: "tool-invocation",
+          content: "Stale child",
+          toolName: "Read",
+          toolState: "pending",
+        }],
+      }]),
+    ];
+
+    expect(pinActiveNativeAgentParts(messages).map((message) => message.id)).toEqual([
+      "assistant-1",
+    ]);
+  });
+
+  test("leaves terminal subagents in place despite stale descendant tools", () => {
+    const messages: NativeMessage[] = [
+      assistantMessage("assistant-1", [
+        {
+          type: "subagent",
+          content: "worker",
+          subagentId: "agent-1",
+          toolState: "success",
+          subagentActions: [
+            {
+              type: "tool-invocation",
+              content: "Inspect files",
+              toolName: "Read",
+              toolState: "pending",
+            },
+          ],
+        },
+      ]),
+    ];
+
+    const pinned = pinActiveNativeAgentParts(messages);
+
+    expect(pinned.map((message) => message.id)).toEqual(["assistant-1"]);
+    expect(pinned[0]?.parts[0]?.type).toBe("subagent");
+  });
+
   test("extracts active task groups from legacy tool groups", () => {
     const messages: NativeMessage[] = [
       assistantMessage("assistant-1", [
@@ -136,7 +246,7 @@ describe("pinActiveNativeAgentParts", () => {
 
     expect(pinned.map((message) => message.id)).toEqual([
       "assistant-1",
-      "assistant-1:active-agent:task-1",
+      "assistant-1:active-agents",
     ]);
     expect(pinned[0]?.parts[0]?.type).toBe("tool-group");
     if (pinned[0]?.parts[0]?.type === "tool-group") {
@@ -200,7 +310,7 @@ describe("pinActiveNativeAgentParts", () => {
 
     expect(pinned.map((message) => message.id)).toEqual([
       "assistant-1",
-      "assistant-1:active-agent:agent-active",
+      "assistant-1:active-agents",
     ]);
     expect(pinned[0]?.parts[0]?.type).toBe("agent-group");
     if (pinned[0]?.parts[0]?.type === "agent-group") {
@@ -211,7 +321,7 @@ describe("pinActiveNativeAgentParts", () => {
     }
   });
 
-  test("pins every adjacent active agent after normalization", () => {
+  test("pins adjacent active agents in one shared group", () => {
     const normalized = normalizeOpenCodeNativeMessage(
       assistantMessage("assistant-1", [
         {
@@ -231,20 +341,20 @@ describe("pinActiveNativeAgentParts", () => {
     const pinned = pinActiveNativeAgentParts([normalized]);
 
     expect(pinned.map((message) => message.id)).toEqual([
-      "assistant-1:active-agent:agent-1",
-      "assistant-1:active-agent:agent-2",
+      "assistant-1:active-agents",
     ]);
+    expect(pinned[0]?.parts[0]?.type).toBe("agent-group");
+    if (pinned[0]?.parts[0]?.type === "agent-group") {
+      expect(pinned[0].parts[0].parts.map((part) => part.subagentId)).toEqual([
+        "agent-1",
+        "agent-2",
+      ]);
+    }
   });
 
-  test("generates unique fallback row ids for multiple active agents without stable ids", () => {
+  test("uses the same source-scoped row id for singleton agents without stable child ids", () => {
     const messages: NativeMessage[] = [
       assistantMessage("assistant-1", [
-        {
-          type: "subagent",
-          content: "worker",
-          subagentName: "worker",
-          toolState: "pending",
-        },
         {
           type: "subagent",
           content: "worker",
@@ -257,8 +367,149 @@ describe("pinActiveNativeAgentParts", () => {
     const pinned = pinActiveNativeAgentParts(messages);
 
     expect(pinned.map((message) => message.id)).toEqual([
-      "assistant-1:active-agent:worker:0",
-      "assistant-1:active-agent:worker:1",
+      "assistant-1:active-agents",
     ]);
+    expect(pinned[0]?.parts[0]?.type).toBe("subagent");
+  });
+
+  test("keeps the pinned row stable while grouped agents complete one at a time", () => {
+    const activeMessage = assistantMessage("assistant-1", [
+      {
+        type: "subagent",
+        content: "first",
+        subagentId: "agent-1",
+        toolState: "pending",
+      },
+      {
+        type: "subagent",
+        content: "second",
+        subagentId: "agent-2",
+        toolState: "pending",
+      },
+    ]);
+
+    const grouped = pinActiveNativeAgentParts([activeMessage]);
+    expect(grouped.map((message) => message.id)).toEqual([
+      "assistant-1:active-agents",
+    ]);
+
+    const partiallyComplete = pinActiveNativeAgentParts([
+      {
+        ...activeMessage,
+        parts: activeMessage.parts.map((part) =>
+          part.type === "subagent" && part.subagentId === "agent-2"
+            ? { ...part, toolState: "success" as const }
+            : part
+        ),
+      },
+    ]);
+    expect(partiallyComplete.map((message) => message.id)).toEqual([
+      "assistant-1",
+      "assistant-1:active-agents",
+    ]);
+    expect(partiallyComplete[0]?.parts).toEqual([
+      expect.objectContaining({
+        type: "subagent",
+        subagentId: "agent-2",
+        toolState: "success",
+      }),
+    ]);
+    expect(partiallyComplete[1]?.parts).toEqual([
+      expect.objectContaining({
+        type: "subagent",
+        subagentId: "agent-1",
+        toolState: "pending",
+      }),
+    ]);
+
+    const complete = pinActiveNativeAgentParts([
+      {
+        ...activeMessage,
+        parts: activeMessage.parts.map((part) =>
+          part.type === "subagent"
+            ? { ...part, toolState: "success" as const }
+            : part
+        ),
+      },
+    ]);
+    expect(complete.map((message) => message.id)).toEqual(["assistant-1"]);
+    expect(complete[0]?.parts).toHaveLength(2);
+  });
+
+  test("groups non-adjacent and nested active agents in traversal order", () => {
+    const messages: NativeMessage[] = [
+      assistantMessage("assistant-1", [
+        {
+          type: "subagent",
+          content: "first",
+          subagentId: "agent-1",
+          toolState: "pending",
+        },
+        { type: "text", content: "Parent continued" },
+        {
+          type: "tool-group",
+          content: "",
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "Read",
+              toolName: "Read",
+              toolState: "success",
+            },
+            {
+              type: "task-group",
+              content: "second",
+              task: {
+                type: "tool-invocation",
+                content: "second",
+                toolUseId: "task-2",
+                toolState: "pending",
+              },
+              childTools: [],
+            },
+          ],
+        },
+        {
+          type: "agent-group",
+          content: "",
+          parts: [
+            {
+              type: "subagent",
+              content: "complete",
+              subagentId: "agent-complete",
+              toolState: "success",
+            },
+            {
+              type: "subagent",
+              content: "third",
+              subagentId: "agent-3",
+              toolState: "pending",
+            },
+          ],
+        },
+      ]),
+    ];
+
+    const pinned = pinActiveNativeAgentParts(messages);
+
+    expect(pinned.map((message) => message.id)).toEqual([
+      "assistant-1",
+      "assistant-1:active-agents",
+    ]);
+    expect(pinned[0]?.parts.map((part) => part.type)).toEqual([
+      "text",
+      "tool-group",
+      "agent-group",
+    ]);
+    expect(pinned[1]?.parts[0]?.type).toBe("agent-group");
+    if (pinned[1]?.parts[0]?.type === "agent-group") {
+      expect(
+        pinned[1].parts[0].parts.map((part) =>
+          part.type === "task-group"
+            ? part.task.toolUseId
+            : part.subagentId
+        ),
+      ).toEqual(["agent-1", "task-2", "agent-3"]);
+    }
   });
 });

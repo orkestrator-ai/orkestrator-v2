@@ -962,7 +962,7 @@ describe("NativeMessage task list rendering", () => {
     expect(
       screen.getByText("Review presentation polish (explorer)"),
     ).toBeTruthy();
-    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByText("Active")).toBeTruthy();
     expect(screen.getByText("1 tool")).toBeTruthy();
     expect(screen.getByText("1 update")).toBeTruthy();
     expect(container.textContent).not.toContain('"description"');
@@ -1015,7 +1015,7 @@ describe("NativeMessage task list rendering", () => {
       screen.getByText("Presentation Reviewer (explorer)"),
     ).toBeTruthy();
     expect(screen.getByText("Review presentation polish")).toBeTruthy();
-    expect(screen.getByText("Success")).toBeTruthy();
+    expect(screen.getByText("Finished")).toBeTruthy();
   });
 
   test("falls back to a non-generic tool label when no name or description is present", () => {
@@ -1089,6 +1089,33 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByText("No child actions yet.")).toBeTruthy();
   });
 
+  test("uses the response fallback for a whitespace-only latest text update", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Agent",
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolTitle: "Agent",
+          toolState: "pending",
+        },
+        childTools: [
+          {
+            type: "text",
+            content: "  \n\t  ",
+          },
+        ],
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("Response")).toBeTruthy();
+    expect(screen.queryByText("Waiting for activity.")).toBeNull();
+  });
+
   test("uses external tmux usage counts for agent task rows when available", () => {
     const message = makeMessage([
       {
@@ -1120,33 +1147,44 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("renders adjacent agents inside a compact shared block", () => {
-    const message = makeMessage([
-      {
-        type: "subagent",
-        content: "Reviewer",
-        subagentName: "Reviewer",
-        toolState: "pending",
-        subagentActions: [],
-      },
-      {
-        type: "subagent",
-        content: "Tester",
-        subagentName: "Tester",
-        toolState: "success",
-        subagentActions: [],
-      },
-    ]);
+    const message = makeMessage(
+      [
+        {
+          type: "subagent",
+          content: "Reviewer",
+          subagentName: "Reviewer",
+          toolState: "pending",
+          subagentActions: [],
+        },
+        {
+          type: "subagent",
+          content: "Tester",
+          subagentName: "Tester",
+          toolState: "success",
+          subagentActions: [],
+        },
+      ],
+      { modelId: "gpt-5.6-sol" },
+    );
 
     render(<NativeMessage message={message} />);
 
-    expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
+    const agentGroup = screen.getByRole("region", { name: "2 agents" });
+    const modelLabel = screen.getByText("gpt-5.6-sol");
+
+    expect(agentGroup).toBeTruthy();
     expect(screen.getByText("Agents")).toBeTruthy();
-    expect(screen.getByText("1 running")).toBeTruthy();
+    expect(screen.getByText("1 active")).toBeTruthy();
     expect(screen.getByText("Reviewer")).toBeTruthy();
     expect(screen.getByText("Tester")).toBeTruthy();
+    expect(screen.getAllByText("gpt-5.6-sol")).toHaveLength(1);
+    expect(
+      agentGroup.compareDocumentPosition(modelLabel) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
-  test("counts pending task children and undefined states as running but not terminal agents", () => {
+  test("counts pending task children and undefined states as active but not terminal agents", () => {
     const message = makeMessage([
       {
         type: "task-group",
@@ -1181,10 +1219,10 @@ describe("NativeMessage task list rendering", () => {
     render(<NativeMessage message={message} />);
 
     expect(screen.getByRole("region", { name: "4 agents" })).toBeTruthy();
-    expect(screen.getByText("2 running")).toBeTruthy();
-    expect(screen.getAllByText("Running")).toHaveLength(2);
+    expect(screen.getByText("2 active")).toBeTruthy();
+    expect(screen.getAllByText("Active")).toHaveLength(2);
     expect(screen.getByText("Failed")).toBeTruthy();
-    expect(screen.getByText("Success")).toBeTruthy();
+    expect(screen.getByText("Finished")).toBeTruthy();
     expect(screen.getAllByText("Waiting for activity.")).toHaveLength(2);
     expect(screen.getAllByText("No activity captured.")).toHaveLength(2);
   });
@@ -2004,12 +2042,150 @@ describe("NativeMessage agent status and grouping details", () => {
       />,
     );
 
-    expect(screen.getByText("Running").className).toContain("border-amber-500/30");
-    expect(screen.getByText("Success").className).toContain("border-emerald-500/30");
+    expect(screen.getByText("Active").className).toContain("border-amber-500/30");
+    expect(screen.getByText("Finished").className).toContain("border-emerald-500/30");
     expect(screen.getByText("Failed").className).toContain("border-red-500/30");
   });
 
-  test("omits the running badge when every grouped agent has finished", () => {
+  test("keeps successful terminal agents finished despite stale pending descendants", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "task-group",
+            content: "Task reviewer",
+            task: {
+              type: "tool-invocation",
+              content: "Task reviewer",
+              toolUseId: "task-active-child",
+              toolState: "success",
+            },
+            childTools: [
+              {
+                type: "tool-invocation",
+                content: "Run tests",
+                toolName: "Bash",
+                toolState: "pending",
+              },
+            ],
+          },
+          {
+            type: "subagent",
+            content: "Transcript reviewer",
+            subagentId: "agent-active-child",
+            toolState: "success",
+            subagentActions: [
+              {
+                type: "tool-invocation",
+                content: "Inspect files",
+                toolName: "Read",
+                toolState: "pending",
+              },
+            ],
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.queryByText(/active$/i)).toBeNull();
+    expect(screen.getAllByText("Finished")).toHaveLength(2);
+  });
+
+  test("prefers authoritative agent lifecycle over a successful launch tool", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "subagent",
+          content: "Background reviewer",
+          toolState: "success",
+          agentState: "active",
+          subagentActions: [],
+        }])}
+      />,
+    );
+
+    expect(screen.getByText("Active")).toBeTruthy();
+    expect(screen.queryByText("Finished")).toBeNull();
+    expect(screen.getByText("Waiting for activity.")).toBeTruthy();
+  });
+
+  test("renders an authoritative agent failure even when the launch tool succeeded", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "Background reviewer",
+            subagentId: "authoritative-failure",
+            toolState: "success",
+            agentState: "failed",
+            subagentActions: [],
+          },
+          {
+            type: "subagent",
+            content: "Legacy reviewer",
+            subagentId: "legacy-failure",
+            toolState: "failure",
+            subagentActions: [],
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getAllByText("Failed")).toHaveLength(2);
+    expect(screen.queryByText("Finished")).toBeNull();
+    expect(screen.getAllByText("No activity captured.")).toHaveLength(2);
+  });
+
+  test("expands standalone agents whose identity uses fallback fields", () => {
+    const { rerender } = render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "",
+            toolState: "pending",
+            subagentActions: [],
+          },
+        ], { id: "fallback-subagent" })}
+      />,
+    );
+
+    const subagentTrigger = screen.getByRole("button", {
+      name: /subagent active/i,
+    });
+    expect(subagentTrigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(subagentTrigger);
+    expect(subagentTrigger.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(subagentTrigger);
+    expect(subagentTrigger.getAttribute("aria-expanded")).toBe("false");
+
+    rerender(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "task-group",
+            content: "",
+            task: {
+              type: "tool-invocation",
+              content: "",
+              toolState: "pending",
+            },
+            childTools: [],
+          },
+        ], { id: "fallback-task-group" })}
+      />,
+    );
+
+    const taskTrigger = screen.getByRole("button", {
+      name: /subagent active/i,
+    });
+    expect(taskTrigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(taskTrigger);
+    expect(taskTrigger.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  test("omits the active badge when every grouped agent has finished", () => {
     render(
       <NativeMessage
         message={makeMessage([
@@ -2032,10 +2208,10 @@ describe("NativeMessage agent status and grouping details", () => {
     );
 
     expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
-    expect(screen.queryByText(/running$/i)).toBeNull();
+    expect(screen.queryByText(/active$/i)).toBeNull();
   });
 
-  test("counts running agents across mixed subagent and task-group children", () => {
+  test("counts active agents across mixed subagent and task-group children", () => {
     render(
       <NativeMessage
         message={makeMessage([
@@ -2062,7 +2238,7 @@ describe("NativeMessage agent status and grouping details", () => {
     );
 
     expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
-    expect(screen.getByText("1 running")).toBeTruthy();
+    expect(screen.getByText("1 active")).toBeTruthy();
   });
 
   test("falls back to the generic subagent label with no name, role or content", () => {
@@ -2185,7 +2361,7 @@ describe("NativeMessage agent status and grouping details", () => {
 
     const label = screen.getByText("Presentation Reviewer");
     expect(label.parentElement?.textContent).toBe(
-      "AgentPresentation ReviewerSuccess",
+      "AgentPresentation ReviewerFinished",
     );
   });
 

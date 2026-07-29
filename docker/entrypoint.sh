@@ -8,10 +8,290 @@ set -e
 PROGRESS_FILE="/tmp/.entrypoint-progress"
 echo "" > "$PROGRESS_FILE"
 
-# Function to log progress both to stdout and progress file
+# Function to log progress both to stdout and progress file.
+# The terminal the user actually watches replays PROGRESS_FILE only, so anything
+# they need to act on — a skipped auth.json leaves Codex looking logged out —
+# has to go through here rather than stdout, which is `docker logs` territory.
+# PROGRESS_FILE is initialized above, so every caller below is safe.
 log_progress() {
     echo "$1"
     echo "$1" >> "$PROGRESS_FILE"
+}
+
+# Allowlist entries can be nested ("plugins/cache"), so testing only the final
+# component leaves every parent free to be a link: a symlinked "plugins" holding
+# a real "cache" passed that test and let find/cp resolve straight into excluded
+# runtime state. Walk every component below the source root instead, and treat
+# ".." as unsafe so a future allowlist entry cannot escape the root either.
+codex_path_has_symlink() {
+    local source_root="$1"
+    local relative_path="$2"
+    local current="$source_root"
+    local remainder="$relative_path"
+    local component
+
+    if [ -L "$source_root" ]; then
+        return 0
+    fi
+
+    while [ -n "$remainder" ]; do
+        component="${remainder%%/*}"
+        if [ "$component" = "$remainder" ]; then
+            remainder=""
+        else
+            remainder="${remainder#*/}"
+        fi
+        if [ -z "$component" ]; then
+            continue
+        fi
+        if [ "$component" = ".." ]; then
+            return 0
+        fi
+        current="$current/$component"
+        if [ -L "$current" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# Destination paths are writable container state, so a previous workload can
+# replace the destination root or any component below it with a link between
+# container starts. The root's parents are outside this helper's owned boundary
+# (and standard systems commonly link paths such as /var), so start at the
+# destination root itself.
+codex_destination_path_has_symlink() {
+    local destination_root="$1"
+    local relative_path="$2"
+    local current="$destination_root"
+    local remainder="$relative_path"
+    local component
+
+    if [ -L "$destination_root" ]; then
+        return 0
+    fi
+
+    while [ -n "$remainder" ]; do
+        component="${remainder%%/*}"
+        if [ "$component" = "$remainder" ]; then
+            remainder=""
+        else
+            remainder="${remainder#*/}"
+        fi
+        if [ -z "$component" ] || [ "$component" = "." ]; then
+            continue
+        fi
+        if [ "$component" = ".." ]; then
+            return 0
+        fi
+        current="$current/$component"
+        if [ -L "$current" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+copy_codex_file() {
+    local source_root="$1"
+    local destination_root="$2"
+    local relative_path="$3"
+    local source_path="$source_root/$relative_path"
+    local destination_path="$destination_root/$relative_path"
+    local max_bytes="${CODEX_COPY_MAX_FILE_BYTES:-10485760}"
+    local file_bytes
+    local destination_parent
+    local temporary_path
+
+    # An allowlisted name must be a real file in the mounted Codex home. Following
+    # a link anywhere along the path could turn an allowlisted name into an
+    # arbitrary rollout, log, credential, or other host file.
+    if codex_path_has_symlink "$source_root" "$relative_path"; then
+        log_progress "Warning: Skipping symlinked Codex file: $relative_path"
+        return 0
+    fi
+
+    if [ ! -f "$source_path" ]; then
+        return 0
+    fi
+
+    if codex_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        log_progress "Warning: Skipping Codex file with symlinked destination: $relative_path"
+        return 0
+    fi
+
+    case "$max_bytes" in
+        ''|*[!0-9]*)
+            max_bytes=10485760
+            ;;
+    esac
+    file_bytes="$(wc -c < "$source_path" 2>/dev/null)" || {
+        log_progress "Warning: Failed to inspect Codex file: $relative_path"
+        return 0
+    }
+    # BSD wc pads its count with leading spaces; GNU wc does not.
+    file_bytes="${file_bytes##*[[:space:]]}"
+    if [ "$file_bytes" -gt "$max_bytes" ]; then
+        log_progress "Warning: Skipping oversized Codex file: $relative_path"
+        return 0
+    fi
+
+    if [ -d "$destination_path" ]; then
+        log_progress "Warning: Failed to copy Codex file: $relative_path (destination is a directory)"
+        return 0
+    fi
+    destination_parent="$(dirname "$destination_path")"
+    if ! mkdir -p "$destination_parent" 2>/dev/null; then
+        log_progress "Warning: Failed to create destination for Codex file: $relative_path"
+        return 0
+    fi
+    # Recheck after mkdir, then copy to a fresh regular file and rename it into
+    # place. In particular, cp never receives the allowlisted destination leaf,
+    # so it cannot follow an auth.json/config.toml link if one is present.
+    if codex_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        log_progress "Warning: Skipping Codex file with symlinked destination: $relative_path"
+        return 0
+    fi
+    temporary_path="$(mktemp "$destination_parent/.codex-copy.XXXXXX" 2>/dev/null)" || {
+        log_progress "Warning: Failed to create destination for Codex file: $relative_path"
+        return 0
+    }
+    if ! cp "$source_path" "$temporary_path" 2>/dev/null ||
+        ! mv -f "$temporary_path" "$destination_path" 2>/dev/null; then
+        rm -f "$temporary_path" 2>/dev/null || true
+        log_progress "Warning: Failed to copy Codex file: $relative_path"
+    fi
+}
+
+copy_codex_directory() {
+    local source_root="$1"
+    local destination_root="$2"
+    local relative_path="$3"
+    local source_path="$source_root/$relative_path"
+    local destination_path="$destination_root/$relative_path"
+    local max_entries="${CODEX_COPY_MAX_DIRECTORY_ENTRIES:-5000}"
+    local max_kib="${CODEX_COPY_MAX_DIRECTORY_KIB:-262144}"
+    local entry_scan
+    local entry_marks
+    local entry_count
+    local entry_scan_limit
+    local entry_scan_status
+    local find_status
+    local head_status
+    local directory_kib
+    local found_symlink
+
+    # Do not dereference an allowlist link, at any depth. In particular, a host
+    # can otherwise make "skills" or the "plugins" parent of "plugins/cache"
+    # point at excluded runtime state.
+    if codex_path_has_symlink "$source_root" "$relative_path"; then
+        log_progress "Warning: Skipping symlinked Codex directory: $relative_path"
+        return 0
+    fi
+
+    if [ ! -d "$source_path" ]; then
+        return 0
+    fi
+
+    if codex_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        log_progress "Warning: Skipping Codex directory with symlinked destination: $relative_path"
+        return 0
+    fi
+
+    case "$max_entries" in
+        ''|*[!0-9]*)
+            max_entries=5000
+            ;;
+    esac
+    case "$max_kib" in
+        ''|*[!0-9]*)
+            max_kib=262144
+            ;;
+    esac
+    # Read at most max_entries + 1 one-byte marks. head closes the pipe at that
+    # point, so find stops walking a pathological tree instead of scanning and
+    # buffering it in full. PIPESTATUS is appended after a newline because the
+    # marks themselves never contain one. A producer failure is expected once
+    # the cap is exceeded, but otherwise still fails closed.
+    entry_scan_limit=$((max_entries + 1))
+    entry_scan="$(
+        set +e
+        find -P "$source_path" -mindepth 1 -exec printf '%.0s.' {} + 2>/dev/null |
+            head -c "$entry_scan_limit"
+        entry_pipeline_status=("${PIPESTATUS[@]}")
+        printf '\n%s:%s' "${entry_pipeline_status[0]}" "${entry_pipeline_status[1]}"
+    )"
+    entry_scan_status="${entry_scan##*$'\n'}"
+    entry_marks="${entry_scan%$'\n'*}"
+    find_status="${entry_scan_status%%:*}"
+    head_status="${entry_scan_status#*:}"
+    case "$head_status" in
+        0) ;;
+        *)
+            log_progress "Warning: Failed to inspect Codex directory: $relative_path"
+            return 0
+            ;;
+    esac
+    entry_count="${#entry_marks}"
+    if [ "$entry_count" -gt "$max_entries" ]; then
+        log_progress "Warning: Skipping oversized Codex directory: $relative_path"
+        return 0
+    fi
+    if [ "$find_status" -ne 0 ]; then
+        log_progress "Warning: Failed to inspect Codex directory: $relative_path"
+        return 0
+    fi
+    found_symlink="$(find -P "$source_path" -type l -exec printf x \; -quit 2>/dev/null)" || {
+        log_progress "Warning: Failed to inspect Codex directory: $relative_path"
+        return 0
+    }
+    if [ -n "$found_symlink" ]; then
+        log_progress "Warning: Skipping Codex directory containing symlink: $relative_path"
+        return 0
+    fi
+    # Same reason as above: a partial du failure still prints an undercounted
+    # total, so du's status has to be read before the total is parsed.
+    directory_kib="$(du -sk "$source_path" 2>/dev/null)" || {
+        log_progress "Warning: Failed to inspect Codex directory: $relative_path"
+        return 0
+    }
+    directory_kib="${directory_kib%%[!0-9]*}"
+    case "$directory_kib" in
+        ''|*[!0-9]*)
+            log_progress "Warning: Failed to inspect Codex directory: $relative_path"
+            return 0
+            ;;
+    esac
+    if [ "$directory_kib" -gt "$max_kib" ]; then
+        log_progress "Warning: Skipping oversized Codex directory: $relative_path"
+        return 0
+    fi
+
+    if [ -e "$destination_path" ] && [ ! -d "$destination_path" ]; then
+        log_progress "Warning: Failed to copy Codex directory: $relative_path (destination is not a directory)"
+        return 0
+    fi
+    if ! mkdir -p "$destination_path" 2>/dev/null; then
+        log_progress "Warning: Failed to create destination for Codex directory: $relative_path"
+        return 0
+    fi
+    if codex_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        log_progress "Warning: Skipping Codex directory with symlinked destination: $relative_path"
+        return 0
+    fi
+    found_symlink="$(find -P "$destination_path" -type l -exec printf x \; -quit 2>/dev/null)" || {
+        log_progress "Warning: Failed to inspect Codex directory destination: $relative_path"
+        return 0
+    }
+    if [ -n "$found_symlink" ]; then
+        log_progress "Warning: Skipping Codex directory containing destination symlink: $relative_path"
+        return 0
+    fi
+    if ! cp -R "$source_path/." "$destination_path/" 2>/dev/null; then
+        log_progress "Warning: Failed to copy Codex directory: $relative_path"
+    fi
 }
 
 log_progress "=== Claude Code Environment Initializing ==="
@@ -284,9 +564,38 @@ log_progress "Setting up Codex configuration..."
 mkdir -p "$HOME/.codex"
 
 if [ -d /codex-home ]; then
-    if ! cp -r /codex-home/. "$HOME/.codex/" 2>&1; then
-        echo "Warning: Some Codex files could not be copied from /codex-home"
-    fi
+    # A Codex home contains far more than configuration. Session rollouts, logs,
+    # worktrees, generated images and caches routinely grow to multiple GB. A
+    # recursive copy made every container startup wait on all of that state and
+    # could outlive workspace-setup.sh's initialization timeout. Copy only the
+    # portable inputs a fresh Codex environment needs.
+    for file in \
+        auth.json \
+        config.toml \
+        AGENTS.md \
+        hooks.json \
+        models_cache.json \
+        .codex-global-state.json \
+        cloud-config-bundle-cache.json \
+        cloud-requirements-cache.json
+    do
+        copy_codex_file /codex-home "$HOME/.codex" "$file"
+    done
+
+    # Preserve user-authored extensions and the platform-neutral plugin cache.
+    # Do not copy plugins/.plugin-appserver: it contains host-platform binaries
+    # (Mach-O on macOS) that cannot run inside the Linux container.
+    for dir in \
+        rules \
+        skills \
+        prompts \
+        vendor_imports \
+        plugins/cache
+    do
+        copy_codex_directory /codex-home "$HOME/.codex" "$dir"
+    done
+
+    chmod 600 "$HOME/.codex/auth.json" 2>/dev/null || true
     if [ -n "$DEBUG" ]; then
         echo "Copied Codex files:"
         ls -la "$HOME/.codex/" | head -40

@@ -1760,6 +1760,16 @@ export class StorageService {
           }
         }
       }
+      if ("lifecycleError" in updates) {
+        const value = updates.lifecycleError;
+        if (value === null || value === undefined || typeof value === "string") {
+          // Cleared as an explicit `null`, not `undefined`. Renderers merge
+          // snapshots field-by-field and `JSON.stringify` drops undefined keys
+          // entirely, so a cleared failure would arrive as an absent key and
+          // leave the stale message on screen.
+          environment.lifecycleError = value ?? null;
+        }
+      }
       if ("lifecycleOperation" in updates) {
         if (updates.lifecycleOperation == null) {
           environment.lifecycleOperation = undefined;

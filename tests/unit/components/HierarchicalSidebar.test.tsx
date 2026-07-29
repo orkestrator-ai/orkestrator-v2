@@ -1031,7 +1031,11 @@ describe("HierarchicalSidebar", () => {
       );
       expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled();
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
-      expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "Use this screenshot");
+      expect(startEnvironmentMock).toHaveBeenCalledWith(
+        "env-created",
+        "Use this screenshot",
+        { background: true, silent: true },
+      );
       expect(useClaudeOptionsStore.getState().getOptions("env-created")).toEqual(
         expect.objectContaining({
           launchAgent: true,
@@ -1098,7 +1102,11 @@ describe("HierarchicalSidebar", () => {
         [],
       );
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
-      expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "");
+      expect(startEnvironmentMock).toHaveBeenCalledWith(
+        "env-created",
+        "",
+        { background: true, silent: true },
+      );
       expect(screen.queryByText(/^Create Ork \(Environment\)/)).toBeNull();
     });
 
@@ -1148,7 +1156,11 @@ describe("HierarchicalSidebar", () => {
         "containerized",
         "Implement billing exports",
       );
-      expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "Implement billing exports");
+      expect(startEnvironmentMock).toHaveBeenCalledWith(
+        "env-created",
+        "Implement billing exports",
+        { background: true, silent: true },
+      );
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
       expect(screen.queryByText(/^Create Ork \(Environment\)/)).toBeNull();
     });

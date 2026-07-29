@@ -1003,6 +1003,15 @@ describe("backend command wrapper coverage", () => {
     });
   });
 
+  test("submits backend-owned environment starts with the expected command payload", async () => {
+    await backendWrappers.startEnvironmentInBackground("env-background");
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      "start_environment_background",
+      { environmentId: "env-background" },
+    );
+  });
+
   test("opens browser-gateway links in a client-side tab", async () => {
     const windowOpen = mock(() => null);
     window.open = windowOpen as typeof window.open;

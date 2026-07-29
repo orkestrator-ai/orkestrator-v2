@@ -5,6 +5,7 @@ import path from "node:path";
 import { APP_SLUG } from "../../../apps/backend/src/core/constants";
 import { MAX_BINARY_FILE_BYTES } from "../../../apps/backend/src/core/path-safety";
 import {
+  CommandFailedError,
   commandExists,
   homePath,
   inferLanguage,
@@ -30,6 +31,18 @@ async function createWorkspaceTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(workspacesRoot, prefix));
   tempDirs.push(dir);
   return dir;
+}
+
+async function captureCommandFailure(
+  promise: Promise<unknown>,
+): Promise<CommandFailedError> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(CommandFailedError);
+    return error as CommandFailedError;
+  }
+  throw new Error("Expected command to fail");
 }
 
 afterEach(async () => {
@@ -153,10 +166,27 @@ describe("runCommand", () => {
     expect(stdout).toBe(payload.toString("hex"));
   });
 
-  test("throws with stderr text when the command exits non-zero", async () => {
-    await expect(
-      runCommand("node", ["-e", "process.stderr.write('boom');process.exit(1)"]),
-    ).rejects.toThrow("boom");
+  test("preserves a numeric non-zero exit as structured failure metadata", async () => {
+    const failure = await captureCommandFailure(
+      runCommand("node", ["-e", "process.stderr.write('boom');process.exit(23)"]),
+    );
+
+    expect(failure.message).toBe("boom");
+    expect(failure.timedOut).toBe(false);
+    expect(failure.executableMissing).toBe(false);
+    expect(failure.exitCode).toBe(23);
+    expect(failure.signal).toBeNull();
+  });
+
+  test("preserves timeout and termination signal as structured failure metadata", async () => {
+    const failure = await captureCommandFailure(
+      runCommand("node", ["-e", "setInterval(() => {}, 1_000)"], { timeoutMs: 20 }),
+    );
+
+    expect(failure.timedOut).toBe(true);
+    expect(failure.executableMissing).toBe(false);
+    expect(failure.exitCode).toBeNull();
+    expect(failure.signal).toBe("SIGTERM");
   });
 
   test("redacts sensitive values from successful output and command failures", async () => {
@@ -188,9 +218,13 @@ describe("runCommand", () => {
       failure = error;
     }
 
-    expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toBe("Docker permission denied for [REDACTED]");
-    expect((failure as Error).message).not.toContain(secret);
+    expect(failure).toBeInstanceOf(CommandFailedError);
+    expect((failure as CommandFailedError).message).toBe("Docker permission denied for [REDACTED]");
+    expect((failure as CommandFailedError).message).not.toContain(secret);
+    expect((failure as CommandFailedError).timedOut).toBe(false);
+    expect((failure as CommandFailedError).executableMissing).toBe(false);
+    expect((failure as CommandFailedError).exitCode).toBe(1);
+    expect((failure as CommandFailedError).signal).toBeNull();
 
     let argvFailure: unknown;
     try {
@@ -203,13 +237,24 @@ describe("runCommand", () => {
       argvFailure = error;
     }
 
-    expect(argvFailure).toBeInstanceOf(Error);
-    expect((argvFailure as Error).message).toContain("[REDACTED]");
-    expect((argvFailure as Error).message).not.toContain(secret);
+    expect(argvFailure).toBeInstanceOf(CommandFailedError);
+    expect((argvFailure as CommandFailedError).message).toContain("[REDACTED]");
+    expect((argvFailure as CommandFailedError).message).not.toContain(secret);
+    expect((argvFailure as CommandFailedError).timedOut).toBe(false);
+    expect((argvFailure as CommandFailedError).executableMissing).toBe(false);
+    expect((argvFailure as CommandFailedError).exitCode).toBe(1);
+    expect((argvFailure as CommandFailedError).signal).toBeNull();
   });
 
-  test("rejects when the command does not exist", async () => {
-    await expect(runCommand("orkestrator-no-such-binary-xyz", [])).rejects.toThrow();
+  test("preserves a missing executable as structured failure metadata", async () => {
+    const failure = await captureCommandFailure(
+      runCommand("orkestrator-no-such-binary-xyz", []),
+    );
+
+    expect(failure.timedOut).toBe(false);
+    expect(failure.executableMissing).toBe(true);
+    expect(failure.exitCode).toBeNull();
+    expect(failure.signal).toBeNull();
   });
 
   test("can launch a child in an owned process group", async () => {

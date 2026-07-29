@@ -25,6 +25,7 @@ import {
   useProjectStore,
   useUIStore,
 } from "@/stores";
+import type { StartEnvironmentOptions } from "@/hooks/useEnvironments";
 import type {
   Environment,
   EnvironmentType,
@@ -44,7 +45,11 @@ export interface CreateEnvironmentFlowOperations {
     namingPrompt?: string,
   ) => Promise<Environment>;
   updateEnvironment: (environmentId: string, updates: Partial<Environment>) => void;
-  startEnvironment: (environmentId: string, initialPrompt?: string) => Promise<unknown>;
+  startEnvironment: (
+    environmentId: string,
+    initialPrompt?: string,
+    options?: StartEnvironmentOptions,
+  ) => Promise<unknown>;
 }
 
 interface CreateEnvironmentFlowDialogProps extends CreateEnvironmentFlowOperations {
@@ -241,7 +246,11 @@ export function CreateEnvironmentFlowDialog({
       // and prompt-based naming can continue without blocking the UI.
       onOpenChange(false);
 
-      void startEnvironment(configuredEnvironment.id, options.initialPrompt).catch((startError) => {
+      void startEnvironment(
+        configuredEnvironment.id,
+        options.initialPrompt,
+        { background: true, silent: true },
+      ).catch((startError) => {
         console.error("Failed to auto-start environment:", startError);
       });
     } finally {

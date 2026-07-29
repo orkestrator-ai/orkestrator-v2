@@ -56,12 +56,13 @@ describe("MobileAppShellLayout", () => {
   test("keeps the agent-info slot out of the title bar's drag region", () => {
     // The bar starts a window drag on mouse-down; without the stop, tapping the
     // button drags the window instead of opening the panel.
-    const { props } = renderLayout();
+    const { container, props } = renderLayout();
     fireEvent.mouseDown(screen.getByRole("button", { name: "Agent info" }));
     expect(props.onTitleBarMouseDown).not.toHaveBeenCalled();
 
-    // The bar itself still drags, so the guard is scoped to the slot.
-    fireEvent.mouseDown(screen.getByText("pgstack1 - feature-auth"));
+    // The uncovered bar itself still drags, so the guard is scoped to controls.
+    const titleBar = container.querySelector<HTMLElement>("div[data-backend-drag-region]")!;
+    fireEvent.mouseDown(titleBar);
     expect(props.onTitleBarMouseDown).toHaveBeenCalledTimes(1);
   });
 
@@ -88,6 +89,30 @@ describe("MobileAppShellLayout", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open tools" }));
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Tools" })).toBeNull();
+  });
+
+  test("bounds the mobile title between the header controls and reveals its full text on tap", async () => {
+    const title = "A project and environment name that is far too long for a mobile title bar";
+    const { props } = renderLayout({ title });
+
+    const titleButton = screen.getByRole("button", { name: title });
+    expect(titleButton.classList.contains("truncate")).toBe(true);
+    expect(titleButton.classList.contains("left-12")).toBe(true);
+    expect(titleButton.classList.contains("right-[5.5rem]")).toBe(true);
+
+    fireEvent.mouseDown(titleButton);
+    expect(props.onTitleBarMouseDown).not.toHaveBeenCalled();
+    // A real tap may focus the trigger before click. Clicking must keep that
+    // focus-opened tooltip visible rather than toggling it closed again.
+    fireEvent.focus(titleButton);
+    fireEvent.click(titleButton);
+
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain(title);
+    expect(titleButton.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
   });
 
   test("closes tools for a portaled context-menu action and restores trigger focus", async () => {

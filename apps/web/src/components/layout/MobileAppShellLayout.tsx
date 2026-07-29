@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { Menu, Wrench, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 interface MobileAppShellLayoutProps {
@@ -32,6 +33,7 @@ export function MobileAppShellLayout({
 }: MobileAppShellLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [titleTooltipOpen, setTitleTooltipOpen] = useState(false);
   const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
   const toolsTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreSidebarFocusRef = useRef(false);
@@ -52,7 +54,12 @@ export function MobileAppShellLayout({
     restoreToolsFocusRef.current = false;
     setSidebarOpen(false);
     setToolsOpen(false);
+    setTitleTooltipOpen(false);
   }, [selectedEnvironmentId, selectedProjectId]);
+
+  useEffect(() => {
+    setTitleTooltipOpen(false);
+  }, [title]);
 
   useEffect(() => {
     if (!sidebarOpen && restoreSidebarFocusRef.current) {
@@ -101,12 +108,33 @@ export function MobileAppShellLayout({
         >
           <Menu className="h-5 w-5" />
         </Button>
-        <span
-          className="max-w-[calc(100%_-_6.5rem)] truncate text-sm font-medium text-foreground"
-          data-backend-drag-region
-        >
-          {title}
-        </span>
+        <Tooltip open={titleTooltipOpen} onOpenChange={setTitleTooltipOpen}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="absolute left-12 right-[5.5rem] min-w-0 truncate px-1 text-center text-sm font-medium text-foreground"
+              style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                // Radix closes tooltips on click by default. Cancelling the
+                // default lets a touch tap explicitly open this controlled one.
+                event.preventDefault();
+                setTitleTooltipOpen(true);
+              }}
+              aria-label={title}
+              aria-expanded={titleTooltipOpen}
+            >
+              {title}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent
+            side="bottom"
+            sideOffset={6}
+            className="max-w-[calc(100vw-1rem)] break-words text-center"
+          >
+            {title}
+          </TooltipContent>
+        </Tooltip>
         <Button
           ref={toolsTriggerRef}
           variant={toolsOpen ? "secondary" : "ghost"}

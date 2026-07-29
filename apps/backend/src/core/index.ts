@@ -24,7 +24,10 @@ export class OrkestratorBackend {
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private readonly reapPidServers: typeof reapOrphanedLocalServers;
   private readonly reapTmuxRuntimes: typeof reapOrphanedClaudeTmuxRuntimes;
-  private readonly agentTools: AgentToolsServer;
+  private readonly agentTools: Pick<
+    AgentToolsServer,
+    "connection" | "revokeEnvironment" | "start" | "stop"
+  >;
 
   constructor(options: {
     dataDir: string;
@@ -36,9 +39,13 @@ export class OrkestratorBackend {
       localServers?: typeof reapOrphanedLocalServers;
       claudeTmuxRuntimes?: typeof reapOrphanedClaudeTmuxRuntimes;
     };
+    agentTools?: Pick<
+      AgentToolsServer,
+      "connection" | "revokeEnvironment" | "start" | "stop"
+    >;
   }) {
     const storage = new StorageService(options.dataDir);
-    this.agentTools = new AgentToolsServer(storage);
+    this.agentTools = options.agentTools ?? new AgentToolsServer(storage);
     // Every committed mutation fans out to all connected clients, so a second
     // window or browser converges without polling. `emit` is read lazily by the
     // caller's closure, which is how this survives the gateway not existing yet.

@@ -69,17 +69,21 @@ export function claudeTmuxRuntimeRootPrefix(dataDir: string): string {
 }
 
 export function agentMcpConfigJson(connection: AgentToolConnection): string {
-  // Claude's --mcp-config file uses the same direct server-name mapping as
-  // .mcp.json. The `mcpServers` wrapper belongs to plugin manifests.
   return JSON.stringify({
-    [ORKESTRATOR_AGENT_MCP_SERVER_NAME]: {
-      type: "http",
-      url: connection.url,
-      headers: {
-        Authorization: `Bearer ${connection.token}`,
+    mcpServers: {
+      [ORKESTRATOR_AGENT_MCP_SERVER_NAME]: {
+        type: "http",
+        url: connection.url,
+        headers: {
+          Authorization: `Bearer ${connection.token}`,
+        },
       },
     },
   });
+}
+
+export function agentToolConnectionTarget(kind: BackendKind): "host" | "container" {
+  return kind === "container" ? "container" : "host";
 }
 
 function runtimeRootPrefixForContext(context: CommandContext): string {
@@ -602,6 +606,64 @@ class TmuxBackend {
     await this.ensureDir(pathDirname(this.kind, filePath));
     const out = await this.exec(["sh", "-c", `cat > ${shellArg(filePath)}`], content);
     if (out.status !== 0) throw new Error(out.stderr || `failed to write ${filePath}`);
+  }
+
+  /**
+   * Atomically replace a credential-bearing file with an owner-only file.
+   *
+   * The ordinary writeFile helper intentionally follows the caller's umask.
+   * Agent MCP configs contain a project-scoped bearer token, so they must never
+   * exist with those ordinary permissions, even briefly.
+   */
+  async writePrivateFile(filePath: string, content: string): Promise<void> {
+    const tempPath = `${filePath}.${randomUUID()}.tmp`;
+    if (this.kind === "local") {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      let moved = false;
+      try {
+        const handle = await fs.open(tempPath, "wx", 0o600);
+        try {
+          await handle.writeFile(content);
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        await fs.chmod(tempPath, 0o600);
+        const tempMode = (await fs.stat(tempPath)).mode & 0o777;
+        if (tempMode !== 0o600) {
+          throw new Error(`failed to secure ${filePath}`);
+        }
+        await fs.rename(tempPath, filePath);
+        moved = true;
+        const finalMode = (await fs.stat(filePath)).mode & 0o777;
+        if (finalMode !== 0o600) {
+          throw new Error(`failed to secure ${filePath}`);
+        }
+      } catch (error) {
+        await fs.rm(tempPath, { force: true }).catch(() => undefined);
+        if (moved) await fs.rm(filePath, { force: true }).catch(() => undefined);
+        throw error;
+      }
+      return;
+    }
+
+    await this.ensureDir(pathDirname(this.kind, filePath));
+    const script = [
+      "set -eu",
+      "umask 077",
+      `tmp=${shellArg(tempPath)}`,
+      'trap \'rm -f "$tmp"\' EXIT',
+      'cat > "$tmp"',
+      'chmod 600 "$tmp"',
+      '[ "$(stat -c %a "$tmp")" = "600" ]',
+      `mv -f "$tmp" ${shellArg(filePath)}`,
+      "trap - EXIT",
+    ].join("\n");
+    const out = await this.exec(["sh", "-c", script], content);
+    if (out.status !== 0) {
+      await this.removeFile(tempPath);
+      throw new Error(out.stderr || `failed to securely write ${filePath}`);
+    }
   }
 
   async removeFile(filePath: string): Promise<void> {
@@ -1673,55 +1735,61 @@ class TmuxSession {
     const launchedNew = !alive;
     if (launchedNew) {
       let agentMcpConfigPath: string | undefined;
-      if (context.agentTools && helpText.includes("--mcp-config")) {
-        const environment = await context.storage.getEnvironment(this.environmentId);
-        if (environment) {
-          const connection = context.agentTools.connection(
-            environment.id,
-            environment.projectId,
-            this.backend.kind === "container" ? "container" : "host",
-          );
-          agentMcpConfigPath = `${this.workspaceHookPaths.root}/agent-mcp.json`;
-          await this.backend.writeFile(
-            agentMcpConfigPath,
-            agentMcpConfigJson(connection),
-          );
-          await this.backend.exec(["chmod", "600", agentMcpConfigPath]);
+      try {
+        if (context.agentTools && helpText.includes("--mcp-config")) {
+          const environment = await context.storage.getEnvironment(this.environmentId);
+          if (environment) {
+            const connection = context.agentTools.connection(
+              environment.id,
+              environment.projectId,
+              agentToolConnectionTarget(this.backend.kind),
+            );
+            agentMcpConfigPath = `${this.workspaceHookPaths.root}/agent-mcp.json`;
+            await this.backend.writePrivateFile(
+              agentMcpConfigPath,
+              agentMcpConfigJson(connection),
+            );
+          }
         }
+        const thinkingDisplay = await probeThinkingDisplaySupport(
+          (args, stdin, timeoutMs) => this.backend.exec(args, stdin, timeoutMs),
+          claudeCommand,
+        );
+        const claudeCmd = this.claudeLaunchCommand(
+          claudeCommand,
+          helpText,
+          model,
+          effort,
+          thinkingDisplay,
+          agentMcpConfigPath,
+        );
+        const runtimePrefix = this.backend.kind === "container"
+          ? ". /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true; "
+            + "orkestrator_source_runtime_env 2>/dev/null || true; "
+          : "";
+        const wrapped =
+          `${runtimePrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
+        const out = await this.backend.exec([
+          this.tmuxCommand,
+          "new-session",
+          "-d",
+          "-s",
+          this.tmuxSession,
+          "-x",
+          "200",
+          "-y",
+          "50",
+          "sh",
+          "-c",
+          wrapped,
+        ]);
+        if (out.status !== 0) throw new Error(`tmux new-session failed: ${out.stderr}`);
+      } catch (error) {
+        if (agentMcpConfigPath) {
+          await this.backend.removeFile(agentMcpConfigPath).catch(() => undefined);
+        }
+        throw error;
       }
-      const thinkingDisplay = await probeThinkingDisplaySupport(
-        (args, stdin, timeoutMs) => this.backend.exec(args, stdin, timeoutMs),
-        claudeCommand,
-      );
-      const claudeCmd = this.claudeLaunchCommand(
-        claudeCommand,
-        helpText,
-        model,
-        effort,
-        thinkingDisplay,
-        agentMcpConfigPath,
-      );
-      const runtimePrefix = this.backend.kind === "container"
-        ? ". /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true; "
-          + "orkestrator_source_runtime_env 2>/dev/null || true; "
-        : "";
-      const wrapped =
-        `${runtimePrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
-      const out = await this.backend.exec([
-        this.tmuxCommand,
-        "new-session",
-        "-d",
-        "-s",
-        this.tmuxSession,
-        "-x",
-        "200",
-        "-y",
-        "50",
-        "sh",
-        "-c",
-        wrapped,
-      ]);
-      if (out.status !== 0) throw new Error(`tmux new-session failed: ${out.stderr}`);
     }
 
     this.spawnPollLoop(context);

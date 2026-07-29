@@ -23,6 +23,67 @@ async function withStoragePair<T>(
 }
 
 describe("StorageService Kanban mutation serialization", () => {
+  test("validates initial status and appends direct creations to each project column", async () => {
+    await withStoragePair(async (storage) => {
+      await expect(storage.addKanbanTask(
+        "project-1",
+        "Invalid",
+        "",
+        { status: "invalid" as never },
+      )).rejects.toThrow("status is invalid");
+
+      const implicitDefault = await storage.addKanbanTask(
+        "project-1",
+        "Implicit default",
+        "",
+      );
+      const explicitDefault = await storage.addKanbanTask(
+        "project-1",
+        "Explicit default",
+        "",
+        {},
+      );
+      expect(implicitDefault).toMatchObject({
+        acceptanceCriteria: "",
+        status: "backlog",
+        order: 0,
+      });
+      expect(explicitDefault).toMatchObject({
+        acceptanceCriteria: "",
+        status: "backlog",
+        order: 1,
+      });
+
+      for (const status of ["in-progress", "review", "done"] as const) {
+        const first = await storage.addKanbanTask(
+          "project-1",
+          `${status} first`,
+          "",
+          { acceptanceCriteria: `${status} criteria`, status },
+        );
+        const otherProject = await storage.addKanbanTask(
+          "project-2",
+          `${status} other project`,
+          "",
+          { status },
+        );
+        const second = await storage.addKanbanTask(
+          "project-1",
+          `${status} second`,
+          "",
+          { status },
+        );
+        expect(first).toMatchObject({
+          acceptanceCriteria: `${status} criteria`,
+          status,
+          order: 0,
+        });
+        expect(otherProject).toMatchObject({ status, order: 0 });
+        expect(second).toMatchObject({ status, order: 1 });
+      }
+    });
+  });
+
   test("preserves concurrent task creation across service instances", async () => {
     await withStoragePair(async (first, second) => {
       await Promise.all(Array.from({ length: 12 }, (_, index) =>
@@ -73,6 +134,28 @@ describe("StorageService Kanban mutation serialization", () => {
       expect((await first.getKanbanTasks("project-1")).map(
         (candidate) => candidate.id,
       )).toEqual([task.id]);
+    });
+  });
+
+  test("checks project ownership inside update and comment mutations", async () => {
+    await withStoragePair(async (storage) => {
+      const task = await storage.addKanbanTask("project-1", "Scoped", "");
+
+      await expect(storage.updateKanbanTask(
+        task.id,
+        { title: "Cross-project update" },
+        "project-2",
+      )).rejects.toThrow("Kanban task not found");
+      await expect(storage.addKanbanComment(
+        task.id,
+        "Cross-project comment",
+        "project-2",
+      )).rejects.toThrow("Kanban task not found");
+
+      expect((await storage.getKanbanTasks("project-1"))[0]).toMatchObject({
+        title: "Scoped",
+        comments: [],
+      });
     });
   });
 

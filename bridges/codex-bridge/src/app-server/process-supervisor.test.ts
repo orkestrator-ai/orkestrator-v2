@@ -33,6 +33,11 @@ import type {
   InboundNotification,
   InboundServerRequest,
 } from "./envelope-validation.js";
+import {
+  ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
+  ORKESTRATOR_AGENT_MCP_URL_ENV,
+  codexAppServerConfigOverrides,
+} from "../codex-config.js";
 
 /**
  * Minimal stand-in for a spawned app-server child. Tests control whether
@@ -317,6 +322,39 @@ describe("startup", () => {
     ]);
     expect(spawnCalls[0]!.options.shell).toBe(false);
     expect(spawnCalls[0]!.options.cwd).toBe("/tmp/workspace");
+  });
+
+  test("passes the agent MCP connection to the app-server as safe config overrides", async () => {
+    const spawnCalls: Array<{
+      args: string[];
+      options: Record<string, unknown>;
+    }> = [];
+    const configOverrides = codexAppServerConfigOverrides({
+      [ORKESTRATOR_AGENT_MCP_URL_ENV]: "http://127.0.0.1:4567/mcp",
+      [ORKESTRATOR_AGENT_MCP_TOKEN_ENV]: "project-secret",
+    });
+    const h = harness({
+      supervisor: {
+        configOverrides,
+        spawnProcess: ((
+          _command: string,
+          args: string[],
+          spawnOptions: Record<string, unknown>,
+        ) => {
+          spawnCalls.push({ args, options: spawnOptions });
+          return new FakeChild(4242);
+        }) as unknown as AppServerSupervisorOptions["spawnProcess"],
+      },
+    });
+
+    await h.supervisor.ensureReady();
+
+    expect(spawnCalls[0]!.args).toContain("mcp_servers.orkestrator.url=\"http://127.0.0.1:4567/mcp\"");
+    expect(spawnCalls[0]!.args).toContain(
+      `mcp_servers.orkestrator.bearer_token_env_var="${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}"`,
+    );
+    expect(spawnCalls[0]!.args.join(" ")).not.toContain("project-secret");
+    expect(spawnCalls[0]!.options.shell).toBe(false);
   });
 
   test("reports the codex version from the initialize user agent", async () => {

@@ -279,13 +279,19 @@ export async function getMcpServerInfo(cwd: string): Promise<McpServerInfo[]> {
  * turn. It is the only entry point into this module that `sendPrompt` uses;
  * keep the translation in `toSdkServers` so there is exactly one copy of it.
  */
-export async function getMcpRuntimeConfig(cwd: string): Promise<{
+export async function getMcpRuntimeConfig(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{
   servers: SdkMcpServersConfig;
   names: Set<string>;
 }> {
   const configs = await getMergedMcpServers(cwd);
-  const agentServer = getOrkestratorAgentMcpServer();
+  const agentServer = getOrkestratorAgentMcpServer(env);
   const servers = toSdkServers(configs);
+  // Backend-provided credentials are authoritative for this reserved name.
+  // A project-local config must not be able to redirect the trusted ticket
+  // tools (or capture their bearer token) by claiming the same server name.
   if (agentServer) servers[AGENT_MCP_SERVER_NAME] = agentServer;
 
   // Names come from the merged config, not from `servers`: a server whose

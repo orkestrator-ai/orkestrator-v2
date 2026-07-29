@@ -11,6 +11,11 @@ const MAX_DESCRIPTION_LENGTH = 100_000;
 const MAX_COMMENT_LENGTH = 20_000;
 const DEFAULT_LIST_LIMIT = 100;
 const MAX_LIST_LIMIT = 200;
+const DEFAULT_COMMENT_LIMIT = 10;
+const MAX_COMMENT_LIMIT = 10;
+const MAX_TITLE_OUTPUT_BYTES = 1024;
+const MAX_DESCRIPTION_OUTPUT_BYTES = 96 * 1024;
+const MAX_COMMENT_OUTPUT_BYTES = 24 * 1024;
 const AGENT_MCP_PATH = "/mcp";
 
 export const ORKESTRATOR_AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
@@ -86,9 +91,10 @@ function jsonResponse(
 }
 
 function ticketSummary(task: KanbanTask): Record<string, unknown> {
+  const title = boundedJsonString(task.title, MAX_TITLE_OUTPUT_BYTES);
   return {
     id: task.id,
-    title: task.title,
+    title: title.value,
     status: task.status,
     order: task.order,
     createdAt: task.createdAt,
@@ -97,14 +103,110 @@ function ticketSummary(task: KanbanTask): Record<string, unknown> {
     ...(task.environmentId ? { environmentId: task.environmentId } : {}),
     ...(task.prUrl ? { prUrl: task.prUrl } : {}),
     ...(task.prState ? { prState: task.prState } : {}),
+    ...(title.truncated ? { titleTruncated: true } : {}),
   };
 }
 
-function toolResult(value: Record<string, unknown>) {
+function boundedJsonString(
+  value: string,
+  maxSerializedBytes: number,
+): { value: string; truncated: boolean } {
+  if (Buffer.byteLength(JSON.stringify(value), "utf8") <= maxSerializedBytes) {
+    return { value, truncated: false };
+  }
+
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const candidate = value.slice(0, middle);
+    if (Buffer.byteLength(JSON.stringify(candidate), "utf8") <= maxSerializedBytes) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  let end = low;
+  if (
+    end > 0
+    && end < value.length
+    && value.charCodeAt(end - 1) >= 0xd800
+    && value.charCodeAt(end - 1) <= 0xdbff
+  ) {
+    end -= 1;
+  }
+  return { value: value.slice(0, end), truncated: true };
+}
+
+function ticketDetail(
+  task: KanbanTask,
+  commentOffset: number,
+  commentLimit: number,
+): Record<string, unknown> {
+  const title = boundedJsonString(task.title, MAX_TITLE_OUTPUT_BYTES);
+  const description = boundedJsonString(
+    task.description,
+    MAX_DESCRIPTION_OUTPUT_BYTES,
+  );
+  const acceptanceCriteria = boundedJsonString(
+    task.acceptanceCriteria,
+    MAX_DESCRIPTION_OUTPUT_BYTES,
+  );
+  const comments = task.comments
+    .slice(commentOffset, commentOffset + commentLimit)
+    .map((comment) => {
+      const text = boundedJsonString(comment.text, MAX_COMMENT_OUTPUT_BYTES);
+      return {
+        id: comment.id,
+        text: text.value,
+        createdAt: comment.createdAt,
+        ...(text.truncated ? { textTruncated: true } : {}),
+      };
+    });
+
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(value) }],
+    ...ticketSummary(task),
+    title: title.value,
+    description: description.value,
+    acceptanceCriteria: acceptanceCriteria.value,
+    comments,
+    commentOffset,
+    commentLimit,
+    hasMoreComments: commentOffset + comments.length < task.comments.length,
+    ...(title.truncated ? { titleTruncated: true } : {}),
+    ...(description.truncated ? { descriptionTruncated: true } : {}),
+    ...(acceptanceCriteria.truncated
+      ? { acceptanceCriteriaTruncated: true }
+      : {}),
+    ...(task.buildPipelineId ? { buildPipelineId: task.buildPipelineId } : {}),
+  };
+}
+
+function toolResult(
+  value: Record<string, unknown>,
+  textSummary: Record<string, unknown> = value,
+) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(textSummary) }],
     structuredContent: value,
   };
+}
+
+function ticketResult(
+  task: KanbanTask,
+  commentOffset = 0,
+  commentLimit = DEFAULT_COMMENT_LIMIT,
+) {
+  return toolResult(
+    { ticket: ticketDetail(task, commentOffset, commentLimit) },
+    {
+      ticket: ticketSummary(task),
+      commentsReturned: Math.min(
+        commentLimit,
+        Math.max(0, task.comments.length - commentOffset),
+      ),
+    },
+  );
 }
 
 async function scopedTicket(
@@ -172,9 +274,12 @@ function createTicketServer(
     {
       title: "Read a Kanban ticket",
       description:
-        "Read one Kanban ticket in the current project, including acceptance criteria and comments.",
+        "Read one Kanban ticket in the current project, including acceptance criteria and a paginated comment page.",
       inputSchema: z.object({
         ticketId: z.string().trim().min(1).max(200),
+        commentOffset: z.number().int().min(0).default(0),
+        commentLimit: z.number().int().min(1).max(MAX_COMMENT_LIMIT)
+          .default(DEFAULT_COMMENT_LIMIT),
       }),
       annotations: {
         readOnlyHint: true,
@@ -183,9 +288,9 @@ function createTicketServer(
         openWorldHint: false,
       },
     },
-    async ({ ticketId }) => {
+    async ({ ticketId, commentOffset, commentLimit }) => {
       const ticket = await scopedTicket(storage, scope.projectId, ticketId);
-      return toolResult({ ticket });
+      return ticketResult(ticket, commentOffset, commentLimit);
     },
   );
 
@@ -215,7 +320,7 @@ function createTicketServer(
         description,
         { acceptanceCriteria, status },
       );
-      return toolResult({ ticket });
+      return ticketResult(ticket);
     },
   );
 
@@ -234,7 +339,7 @@ function createTicketServer(
       }),
       annotations: {
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: true,
         openWorldHint: false,
       },
@@ -250,8 +355,12 @@ function createTicketServer(
       if (Object.keys(updates).length === 0) {
         throw new Error("Provide at least one ticket field to update");
       }
-      const ticket = await storage.updateKanbanTask(ticketId, updates);
-      return toolResult({ ticket });
+      const ticket = await storage.updateKanbanTask(
+        ticketId,
+        updates,
+        scope.projectId,
+      );
+      return ticketResult(ticket);
     },
   );
 
@@ -274,8 +383,13 @@ function createTicketServer(
     },
     async ({ ticketId, text }) => {
       await scopedTicket(storage, scope.projectId, ticketId);
-      const ticket = await storage.addKanbanComment(ticketId, text);
-      return toolResult({ ticket });
+      const ticket = await storage.addKanbanComment(
+        ticketId,
+        text,
+        scope.projectId,
+      );
+      const commentOffset = Math.max(0, ticket.comments.length - DEFAULT_COMMENT_LIMIT);
+      return ticketResult(ticket, commentOffset);
     },
   );
 
@@ -294,6 +408,7 @@ export class AgentToolsServer {
   private port: number | null = null;
   private readonly credentialsByEnvironment = new Map<string, StoredCredential>();
   private readonly scopesByDigest = new Map<string, AgentToolScope>();
+  private lifecycle: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly storage: StorageService,
@@ -301,37 +416,41 @@ export class AgentToolsServer {
   ) {}
 
   async start(): Promise<void> {
-    if (this.server) return;
-    const server = createServer((request, response) => {
-      void this.handle(request, response).catch((error: unknown) => {
-        if (!response.headersSent) {
-          jsonResponse(response, 500, {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        } else {
-          response.destroy(error instanceof Error ? error : new Error(String(error)));
-        }
+    const start = this.lifecycle.then(async () => {
+      if (this.server) return;
+      const server = createServer((request, response) => {
+        void this.handle(request, response).catch((error: unknown) => {
+          if (!response.headersSent) {
+            jsonResponse(response, 500, {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          } else {
+            response.destroy(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
       });
-    });
 
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, this.bindAddress, () => {
-        server.off("error", reject);
-        resolve();
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, this.bindAddress, () => {
+          server.off("error", reject);
+          resolve();
+        });
       });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        throw new Error("Agent tools server did not receive a TCP port");
+      }
+      this.server = server;
+      this.port = address.port;
+      // The primary gateway and desktop supervisor own process lifetime. This
+      // auxiliary listener must not keep a partially initialized/test backend
+      // alive by itself.
+      server.unref();
     });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      throw new Error("Agent tools server did not receive a TCP port");
-    }
-    this.server = server;
-    this.port = address.port;
-    // The primary gateway and desktop supervisor own process lifetime. This
-    // auxiliary listener must not keep a partially initialized/test backend
-    // alive by itself.
-    server.unref();
+    this.lifecycle = start.catch(() => undefined);
+    await start;
   }
 
   connection(
@@ -373,16 +492,20 @@ export class AgentToolsServer {
   }
 
   async stop(): Promise<void> {
-    const server = this.server;
-    this.server = null;
-    this.port = null;
-    this.credentialsByEnvironment.clear();
-    this.scopesByDigest.clear();
-    if (!server) return;
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => error ? reject(error) : resolve());
-      server.closeAllConnections?.();
+    const stop = this.lifecycle.then(async () => {
+      const server = this.server;
+      this.server = null;
+      this.port = null;
+      this.credentialsByEnvironment.clear();
+      this.scopesByDigest.clear();
+      if (!server) return;
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+        server.closeAllConnections?.();
+      });
     });
+    this.lifecycle = stop.catch(() => undefined);
+    await stop;
   }
 
   private authenticate(request: IncomingMessage): AgentToolScope | null {

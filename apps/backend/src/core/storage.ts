@@ -3811,7 +3811,11 @@ export class StorageService {
     });
   }
 
-  async updateKanbanTask(taskId: string, updates: Partial<KanbanTask>): Promise<KanbanTask> {
+  async updateKanbanTask(
+    taskId: string,
+    updates: Partial<KanbanTask>,
+    expectedProjectId?: string,
+  ): Promise<KanbanTask> {
     if (
       updates.status !== undefined
       && !isOneOf(updates.status, ["backlog", "in-progress", "review", "done"])
@@ -3827,7 +3831,12 @@ export class StorageService {
     return this.enqueueKanbanMutation(async () => {
       const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
-      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+      if (
+        !task
+        || (expectedProjectId !== undefined && task.projectId !== expectedProjectId)
+      ) {
+        throw new Error(`Kanban task not found: ${taskId}`);
+      }
 
       const oldStatus = task.status;
       Object.assign(task, updates);
@@ -3851,11 +3860,20 @@ export class StorageService {
     });
   }
 
-  async addKanbanComment(taskId: string, text: string): Promise<KanbanTask> {
+  async addKanbanComment(
+    taskId: string,
+    text: string,
+    expectedProjectId?: string,
+  ): Promise<KanbanTask> {
     return this.enqueueKanbanMutation(async () => {
       const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
-      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+      if (
+        !task
+        || (expectedProjectId !== undefined && task.projectId !== expectedProjectId)
+      ) {
+        throw new Error(`Kanban task not found: ${taskId}`);
+      }
       task.comments.push({ id: randomUUID(), text, createdAt: nowIso() });
       await this.saveJson(this.kanbanFile(), tasks);
       this.announce("kanban", task.projectId);

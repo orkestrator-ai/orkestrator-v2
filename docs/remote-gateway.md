@@ -82,15 +82,27 @@ The standalone backend also accepts:
 --compression off|body|on
 ```
 
-The CLI flag wins over `ORKESTRATOR_GATEWAY_COMPRESSION`. `off` preserves the
-existing identity behavior and is the default on Tuesday, July 28, 2026.
-`body` and `on` are rollout modes for later efficiency milestones and are kept
-as no-op controls in this milestone so rollback is already wired before
-response encoding changes.
+Compression configuration resolves in this order:
 
-Even when `--tailscale-serve` makes the browser listener bind to loopback, the
-gateway still treats that listener as remote for future compression rollout.
-Electron's separate control listener always remains identity.
+1. The standalone `--compression` CLI flag.
+2. `ORKESTRATOR_GATEWAY_COMPRESSION`.
+3. The default, `off`.
+
+When the gateway is embedded, an explicit constructor option takes precedence
+over `ORKESTRATOR_GATEWAY_COMPRESSION` and has the same `off` default. Invalid
+CLI or environment values fail startup and identify the offending setting.
+
+All three modes are intentionally no-op rollout controls in this milestone:
+the gateway does not add response compression in `off`, `body`, or `on`.
+`off` is the immediate rollback mode. Later milestones can make `body` compress
+eligible bounded responses and `on` additionally cover long-lived streams
+without changing this configuration contract.
+
+Compression policy follows the listener's role, not its bind address. A browser
+listener remains a `browser` listener, and therefore retains the configured
+rollout mode, even when `--tailscale-serve` binds it to
+`127.0.0.1`. Electron's separate `control` listener always resolves to `off`,
+so the gateway never adds response compression on desktop IPC/control traffic.
 
 ## What The Gateway Proxies
 
@@ -103,8 +115,8 @@ The gateway reserves the `/__orkestrator` path prefix.
 | `/__orkestrator/status` | Small authenticated connection check used by the public client. |
 | `/__orkestrator/invoke` | Authenticated backend command bridge used by the browser renderer. |
 | `/__orkestrator/events` | Server-sent event stream for backend events. |
-| `/__orkestrator/metrics` | Authenticated privacy-safe gateway counters, byte totals, timings, and recent sanitized samples for milestone measurements. |
-| `/__orkestrator/client-metrics` | Authenticated sink for sanitized browser and `WKWebView` boot/resource timing reports. |
+| `GET /__orkestrator/metrics` | Returns authenticated privacy-safe gateway counters, byte totals, timings, and recent sanitized samples for milestone measurements. |
+| `POST /__orkestrator/client-metrics` | Accepts authenticated, sanitized browser and `WKWebView` boot/resource timing reports. |
 | `/__orkestrator/proxy/loopback/<port>/...` | Authenticated proxy to `http://127.0.0.1:<port>/...` on the desktop host. |
 
 All other authenticated routes serve the React renderer. In development, those routes proxy to the Vite dev server. In production, they serve files from the built renderer bundle.
@@ -159,10 +171,22 @@ Traffic is plain HTTP because it is expected to travel over Tailscale. Do not bi
 
 ## Measurement Notes
 
-`/__orkestrator/metrics` is intended for milestone work and local diagnostics.
-It records bounded route, command, stream, event, and boot-timing measurements
-without prompts, terminal contents, file contents, attachment data,
-credentials, or tokens.
+Both metrics routes require the same gateway authentication as command and event
+routes. `GET /__orkestrator/metrics` is read-only; methods other than `GET` are
+rejected. `POST /__orkestrator/client-metrics` accepts a small JSON object;
+methods other than `POST`, malformed JSON, and oversized bodies are rejected.
+The ingestion route keeps only an allowlist of aggregate navigation, resource
+size, paint, load, event-stream, platform, and protocol fields. Unknown fields
+are ignored, strings and numbers are normalized and bounded, and recent samples
+are kept in a bounded in-memory ring.
+
+The snapshot contains bounded route, registered-command, normalized-event,
+stream, compression, and boot/resource aggregates. Dynamic metric labels have
+fixed cardinality or overflow buckets; unknown commands and uncommon response
+encodings are grouped rather than retained verbatim. The metrics are designed
+not to contain prompts, terminal contents or output, file contents, attachment
+data, credentials, tokens, resource URLs, or other request/response payloads.
+Do not add such fields to client reports or metric labels.
 
 ## Vercel-hosted public client
 

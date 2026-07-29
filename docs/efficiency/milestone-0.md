@@ -59,6 +59,7 @@ Primary files:
 - [x] Resolve constructor configuration before
       `ORKESTRATOR_GATEWAY_COMPRESSION`.
 - [x] Add `--compression <mode>` to backend CLI parsing.
+- [x] Resolve standalone configuration as CLI, then environment, then `off`.
 - [x] Default to a mode that leaves existing behavior unchanged in this
       milestone.
 - [x] Gate future compression on `listenerKind`, never on the bind address.
@@ -71,10 +72,18 @@ Primary files:
 
 - [x] Constructor option overrides the environment variable.
 - [x] CLI parsing accepts `off`, `body`, and `on`.
+- [x] CLI compression overrides the environment and absent configuration
+      defaults to `off`.
 - [x] Invalid compression modes fail clearly.
+- [x] `off`, `body`, and `on` do not add response compression in this
+      milestone.
 - [x] The control listener resolves to identity in every mode.
 - [x] A browser listener bound to loopback under Tailscale Serve is still
       treated as remote.
+- [x] Both metrics routes require authentication and enforce their documented
+      `GET`/`POST` methods.
+- [x] Client metric reports are allowlisted and bounded, and metric labels do
+      not retain unknown commands or arbitrary response encodings.
 - [x] Documentation assertions in
       `tests/unit/docs/remote-gateway-docs.test.ts` pass.
 
@@ -103,11 +112,11 @@ bun test tests/unit/docs/remote-gateway-docs.test.ts --parallel
 ## Exit criteria
 
 - [ ] Desktop web and real-device iOS baseline results are recorded below.
-- [ ] Instrumentation covers the agreed success measures without user content.
-- [ ] Compression modes are parsed, documented, and tested.
-- [ ] No production response path has changed encoding yet.
-- [ ] The control listener remains byte-for-byte identity.
-- [ ] Focused tests and typechecks pass.
+- [x] Instrumentation covers the agreed success measures without user content.
+- [x] Compression modes are parsed, documented, and tested.
+- [x] No production response path has changed encoding yet.
+- [x] The control listener remains byte-for-byte identity.
+- [x] Focused tests and typechecks pass.
 
 ## Evidence and decisions
 
@@ -135,11 +144,14 @@ Recorded Tuesday, July 28, 2026:
   at `off` so production response encoding remains unchanged.
 - Metric labels are bounded by route classification, terminal event-name
   normalization, bounded recent samples, and overflow buckets for excess
-  command/event keys.
+  command/event keys. Unknown commands and uncommon response encodings use
+  fixed buckets instead of retaining network-controlled labels.
 - Pending manual work: desktop cold/warm baselines, real iPhone/iPad
   `WKWebView` baselines, main asset raw/gzip/Brotli measurements, inactive-tab
   rehydration verification, and final exit-criteria signoff.
-- Test command results:
-  `bun run --cwd apps/backend typecheck`
-  `bun run --cwd apps/web typecheck`
-  `bun test apps/backend/src/options.test.ts tests/unit/electron/gateway.test.ts apps/web/src/lib/native/web-gateway.test.ts tests/unit/docs/remote-gateway-docs.test.ts --parallel`
+- Automated coverage includes configuration precedence/defaults, all three
+  no-op modes, listener-role semantics, metrics authentication/method handling,
+  input sanitization and bounds, label cardinality, and documentation
+  assertions. The coordinated gateway/docs, backend option/standalone,
+  browser-client, and iOS suites pass, as do the backend, web, and desktop
+  typechecks and both production build targets.

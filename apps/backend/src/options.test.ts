@@ -119,6 +119,7 @@ describe("standalone backend options", () => {
 
     expect(parseOptions([
       "--allowed-origins", "https://cli.example",
+      "--compression", "off",
       "--tailscale-serve-port", "9443",
       "--tailscale-bin", "/cli/tailscale",
     ], {

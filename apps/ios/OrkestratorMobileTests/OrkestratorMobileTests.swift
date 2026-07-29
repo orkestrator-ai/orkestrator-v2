@@ -423,6 +423,140 @@ final class KeychainCredentialStoreTests: XCTestCase {
 final class RemoteWebViewPolicyTests: XCTestCase {
     private let saved = connection(address: "https://desk.example")
 
+    private final class StateBox {
+        var value: WebViewState
+
+        init(_ value: WebViewState) {
+            self.value = value
+        }
+    }
+
+    private struct FailingEncodable: Encodable {
+        func encode(to encoder: Encoder) throws {
+            throw TestFailure.expected
+        }
+    }
+
+    private func makeCoordinator(
+        model: ConnectionModel? = nil,
+        initialState: WebViewState = .loading
+    ) -> (RemoteWebView.Coordinator, StateBox) {
+        let state = StateBox(initialState)
+        let binding = Binding(
+            get: { state.value },
+            set: { state.value = $0 }
+        )
+        let coordinator = RemoteWebView.Coordinator(
+            model: model ?? ConnectionModel(
+                credentialStore: MemoryCredentialStore(),
+                validator: MockValidator()
+            ),
+            state: binding
+        )
+        coordinator.authenticationStarter = { [weak coordinator] connection in
+            coordinator?.beginAuthenticationState(for: connection)
+        }
+        return (coordinator, state)
+    }
+
+    func testPlatformMappingAndInjectedScriptsAreOrderedAndMainFrameOnly() throws {
+        XCTAssertEqual(RemoteWebView.Coordinator.clientPlatform(for: .phone), "iphone-wkwebview")
+        XCTAssertEqual(RemoteWebView.Coordinator.clientPlatform(for: .pad), "ipad-wkwebview")
+        XCTAssertEqual(RemoteWebView.Coordinator.clientPlatform(for: .unspecified), "ios-wkwebview")
+        XCTAssertEqual(RemoteWebView.Coordinator.clientPlatform(for: .tv), "ios-wkwebview")
+
+        let scripts = RemoteWebView.Coordinator.userScripts(for: .pad)
+        XCTAssertEqual(scripts.count, 2)
+        XCTAssertEqual(
+            scripts[0].source,
+            #"window.__orkestratorClientPlatform = "ipad-wkwebview";"#
+        )
+        XCTAssertEqual(scripts[1].source, RemoteWebView.Coordinator.connectionBridgeScript)
+        XCTAssertTrue(scripts.allSatisfy { $0.injectionTime == .atDocumentStart })
+        XCTAssertTrue(scripts.allSatisfy(\.isForMainFrameOnly))
+
+        let quoted = RemoteWebView.Coordinator.quotedJavaScriptString("quote\" slash\\\n\u{2028}😀")
+        let decoded = try JSONDecoder().decode(String.self, from: Data(quoted.utf8))
+        XCTAssertEqual(decoded, "quote\" slash\\\n\u{2028}😀")
+    }
+
+    func testLoginTransportErrorsPreserveCancellationAndMapFailures() {
+        let cancelled = RemoteWebView.Coordinator.loginTransportError(
+            for: URLError(.cancelled),
+            taskIsCancelled: true
+        )
+        XCTAssertTrue(cancelled is CancellationError)
+
+        let externallyCancelled = RemoteWebView.Coordinator.loginTransportError(
+            for: URLError(.cancelled),
+            taskIsCancelled: false
+        )
+        XCTAssertTrue(externallyCancelled.localizedDescription.contains("could not be reached"))
+
+        for (code, message) in [
+            (URLError.timedOut, "20 seconds"),
+            (URLError.serverCertificateUntrusted, "certificate"),
+            (URLError.serverCertificateHasBadDate, "certificate"),
+            (URLError.serverCertificateHasUnknownRoot, "certificate"),
+            (URLError.secureConnectionFailed, "certificate"),
+            (URLError.notConnectedToInternet, "could not be reached"),
+        ] {
+            let error = RemoteWebView.Coordinator.loginTransportError(
+                for: URLError(code),
+                taskIsCancelled: false
+            )
+            XCTAssertTrue(error.localizedDescription.contains(message), "Unexpected error: \(error)")
+        }
+    }
+
+    func testLoginResponseMapsHTTPFailuresAndRequiresAuthenticationCookie() throws {
+        let loginURL = URL(string: "https://desk.example/__orkestrator/login")!
+        func response(_ status: Int, headers: [String: String]? = nil) -> HTTPURLResponse {
+            HTTPURLResponse(
+                url: loginURL,
+                statusCode: status,
+                httpVersion: "HTTP/1.1",
+                headerFields: headers
+            )!
+        }
+
+        let valid = response(303, headers: [
+            "Set-Cookie": "orkestrator_gateway_auth=session-value; Path=/; Secure; HttpOnly; SameSite=Strict",
+        ])
+        XCTAssertEqual(
+            try RemoteWebView.Coordinator.loginCookie(from: valid, loginURL: loginURL).value,
+            "session-value"
+        )
+
+        let invalid = URLResponse(
+            url: loginURL,
+            mimeType: nil,
+            expectedContentLength: 0,
+            textEncodingName: nil
+        )
+        XCTAssertThrowsError(try RemoteWebView.Coordinator.loginCookie(from: invalid, loginURL: loginURL)) {
+            XCTAssertTrue($0.localizedDescription.contains("invalid login response"))
+        }
+
+        for (status, message) in [
+            (401, "token was rejected"),
+            (403, "rejected the native login"),
+            (500, "HTTP 500"),
+        ] {
+            XCTAssertThrowsError(
+                try RemoteWebView.Coordinator.loginCookie(from: response(status), loginURL: loginURL)
+            ) {
+                XCTAssertTrue($0.localizedDescription.contains(message), "Unexpected error: \($0)")
+            }
+        }
+
+        XCTAssertThrowsError(
+            try RemoteWebView.Coordinator.loginCookie(from: response(303), loginURL: loginURL)
+        ) {
+            XCTAssertTrue($0.localizedDescription.contains("did not create a secure web session"))
+        }
+    }
+
     func testOriginComparisonIncludesSchemeHostAndPort() {
         XCTAssertTrue(RemoteWebView.Coordinator.sameOrigin(URL(string: "https://DESK.example/path")!, saved.address))
         XCTAssertFalse(RemoteWebView.Coordinator.sameOrigin(URL(string: "http://desk.example")!, saved.address))
@@ -475,6 +609,182 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         ), .allow)
     }
 
+    func testNavigationStateTransitionsForFinishResponseAndFailures() {
+        let (coordinator, state) = makeCoordinator()
+        coordinator.beginAuthenticationState(for: saved)
+
+        coordinator.navigationDidFinish(at: URL(string: "https://other.example"))
+        XCTAssertEqual(state.value, .loading)
+        XCTAssertNil(coordinator.authenticatedConnection)
+
+        coordinator.navigationDidFinish(at: URL(string: "https://desk.example/projects"))
+        XCTAssertEqual(state.value, .ready)
+        XCTAssertEqual(coordinator.authenticatedConnection, saved)
+
+        state.value = .ready
+        XCTAssertEqual(
+            coordinator.navigationResponsePolicy(statusCode: 401, isMainFrame: false),
+            .allow
+        )
+        XCTAssertEqual(state.value, .ready)
+        XCTAssertEqual(
+            coordinator.navigationResponsePolicy(statusCode: 403, isMainFrame: true),
+            .allow
+        )
+        XCTAssertEqual(
+            coordinator.navigationResponsePolicy(statusCode: 401, isMainFrame: true),
+            .cancel
+        )
+        XCTAssertEqual(state.value, .failed("The saved gateway token was rejected."))
+
+        state.value = .ready
+        coordinator.handleNavigationError(URLError(.cancelled))
+        XCTAssertEqual(state.value, .ready)
+        coordinator.handleNavigationError(URLError(.cannotConnectToHost))
+        XCTAssertEqual(
+            state.value,
+            .failed("The remote app could not be loaded. Check Tailscale and try again.")
+        )
+
+        state.value = .ready
+        coordinator.handleNavigationError(
+            NSError(domain: "unrelated", code: NSURLErrorCancelled)
+        )
+        XCTAssertEqual(
+            state.value,
+            .failed("The remote app could not be loaded. Check Tailscale and try again.")
+        )
+    }
+
+    func testBridgeListConnectUseAndForgetActionsReturnEncodedReplies() async throws {
+        let first = connection(address: "https://one.example")
+        let second = connection(address: "https://two.example")
+        let store = MemoryCredentialStore(
+            vault: ConnectionVault(activeConnectionID: first.id, connections: [first, second])
+        )
+        let model = ConnectionModel(credentialStore: store, validator: MockValidator())
+        let (coordinator, _) = makeCoordinator(model: model, initialState: .ready)
+        var scripts: [String] = []
+        coordinator.javaScriptEvaluator = {
+            scripts.append($0)
+            return nil
+        }
+
+        await coordinator.handleBridgeRequest(id: "list-id", action: "list", body: [:])
+        XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""list-id", true"#))
+        XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""credentialStorage":"secure""#))
+        XCTAssertFalse(try XCTUnwrap(scripts.last).contains(first.token))
+
+        await coordinator.handleBridgeRequest(
+            id: "use-id",
+            action: "use",
+            body: ["connectionId": second.id.uuidString]
+        )
+        XCTAssertEqual(model.activeConnection?.id, second.id)
+        XCTAssertEqual(coordinator.requestedConnection?.id, second.id)
+        XCTAssertFalse(coordinator.isSwitchingThroughBridge)
+        XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""use-id", true"#))
+
+        await coordinator.handleBridgeRequest(
+            id: "forget-id",
+            action: "forget",
+            body: ["connectionId": first.id.uuidString]
+        )
+        XCTAssertEqual(model.vault.connections.map(\.id), [second.id])
+        XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""forget-id", true"#))
+
+        let emptyModel = ConnectionModel(
+            credentialStore: MemoryCredentialStore(),
+            validator: MockValidator()
+        )
+        let (connectCoordinator, _) = makeCoordinator(model: emptyModel)
+        var connectScripts: [String] = []
+        connectCoordinator.javaScriptEvaluator = {
+            connectScripts.append($0)
+            return nil
+        }
+        await connectCoordinator.handleBridgeRequest(
+            id: "connect-id",
+            action: "connect",
+            body: [
+                "address": "https://new.example",
+                "token": "gateway-token-new-123",
+            ]
+        )
+        XCTAssertEqual(emptyModel.activeConnection?.address.absoluteString, "https://new.example")
+        XCTAssertEqual(connectCoordinator.requestedConnection, emptyModel.activeConnection)
+        XCTAssertFalse(connectCoordinator.isSwitchingThroughBridge)
+        XCTAssertTrue(try XCTUnwrap(connectScripts.last).contains(#""connect-id", true"#))
+    }
+
+    func testBridgeRejectsInvalidAndUnsupportedRequests() async throws {
+        let (coordinator, _) = makeCoordinator()
+        var scripts: [String] = []
+        coordinator.javaScriptEvaluator = {
+            scripts.append($0)
+            return nil
+        }
+
+        await coordinator.handleBridgeRequest(
+            id: "bad-connect",
+            action: "connect",
+            body: ["address": "https://desk.example"]
+        )
+        await coordinator.handleBridgeRequest(id: "bad-use", action: "use", body: [:])
+        await coordinator.handleBridgeRequest(id: "bad-forget", action: "forget", body: [:])
+        await coordinator.handleBridgeRequest(id: "bad-action", action: "destroy", body: [:])
+
+        XCTAssertEqual(scripts.count, 4)
+        XCTAssertTrue(scripts[0].contains(#""bad-connect", false"#))
+        XCTAssertTrue(scripts[0].contains("connection details were incomplete"))
+        XCTAssertTrue(scripts[1].contains(#""bad-use", false"#))
+        XCTAssertTrue(scripts[2].contains(#""bad-forget", false"#))
+        XCTAssertTrue(scripts[3].contains(#""bad-action", false"#))
+        XCTAssertTrue(scripts[3].contains("action is not supported"))
+        XCTAssertFalse(coordinator.isSwitchingThroughBridge)
+    }
+
+    func testBridgeRecoversSwitchWhenJavaScriptEvaluationFails() async {
+        let model = ConnectionModel(
+            credentialStore: MemoryCredentialStore(),
+            validator: MockValidator()
+        )
+        let (coordinator, _) = makeCoordinator(model: model)
+        var evaluations = 0
+        coordinator.javaScriptEvaluator = { _ in
+            evaluations += 1
+            throw TestFailure.expected
+        }
+
+        await coordinator.handleBridgeRequest(
+            id: "connect-id",
+            action: "connect",
+            body: [
+                "address": "https://new.example",
+                "token": "gateway-token-new-123",
+            ]
+        )
+
+        XCTAssertEqual(evaluations, 2)
+        XCTAssertFalse(coordinator.isSwitchingThroughBridge)
+        XCTAssertEqual(coordinator.requestedConnection, model.activeConnection)
+    }
+
+    func testBridgeJSONEncodingFailureIsNormalizedAndJavaScriptStringsAreSafe() throws {
+        let (coordinator, _) = makeCoordinator()
+        XCTAssertThrowsError(try coordinator.jsonLiteral(FailingEncodable())) {
+            guard case ConnectionBridgeError.encodingFailed = $0 else {
+                return XCTFail("Unexpected error: \($0)")
+            }
+        }
+
+        let literal = try coordinator.jsonLiteral("id\"\\\n</script>\u{2028}")
+        XCTAssertEqual(
+            try JSONDecoder().decode(String.self, from: Data(literal.utf8)),
+            "id\"\\\n</script>\u{2028}"
+        )
+    }
+
     func testTeardownCancelsAuthenticationAndClearsCoordinatorState() {
         var state = WebViewState.loading
         let binding = Binding(get: { state }, set: { state = $0 })
@@ -484,6 +794,8 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         coordinator.authenticationTask = task
         coordinator.authenticatedConnection = saved
         coordinator.isSwitchingThroughBridge = true
+        coordinator.javaScriptEvaluator = { _ in nil }
+        coordinator.authenticationStarter = { _ in }
 
         coordinator.teardown()
 
@@ -492,6 +804,8 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         XCTAssertNil(coordinator.requestedConnection)
         XCTAssertNil(coordinator.authenticatedConnection)
         XCTAssertFalse(coordinator.isSwitchingThroughBridge)
+        XCTAssertNil(coordinator.javaScriptEvaluator)
+        XCTAssertNil(coordinator.authenticationStarter)
     }
 
     func testBridgeScriptExposesOnlyConnectionSummaries() {

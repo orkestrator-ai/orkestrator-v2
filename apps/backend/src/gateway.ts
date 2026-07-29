@@ -124,8 +124,13 @@ const CORS_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 const CORS_ALLOWED_HEADERS =
   "Authorization, Content-Type, X-Orkestrator-Codex-Token, X-Orkestrator-Claude-Token, X-Orkestrator-OpenCode-Token";
 const GATEWAY_METRIC_MAP_LIMIT = 128;
+const GATEWAY_METRIC_LABEL_BYTES = 96;
+const GATEWAY_METRIC_TOTAL_LABEL_BYTES = 8 * 1024;
 const GATEWAY_METRIC_SAMPLE_LIMIT = 32;
 const MAX_CLIENT_METRICS_BODY_BYTES = 64 * 1024;
+const METRIC_OVERFLOW_KEY = "__overflow__";
+const METRIC_INVALID_KEY = "__invalid__";
+const METRIC_UNKNOWN_COMMAND_KEY = "__unknown__";
 
 class InvalidRequestBodyError extends Error {}
 class RequestBodyTooLargeError extends Error {}
@@ -259,8 +264,162 @@ function boundedMetricKey<T>(
   key: string,
   limit = GATEWAY_METRIC_MAP_LIMIT,
 ): string {
-  if (map.has(key) || map.size < limit) return key;
-  return "__overflow__";
+  if (map.has(key)) return key;
+
+  // Reserve one slot and its bytes for overflow from the outset. This keeps
+  // both limits true after the first overflowing label instead of allowing the
+  // overflow bucket to become an unaccounted (limit + 1)th entry.
+  const overflowBytes = Buffer.byteLength(METRIC_OVERFLOW_KEY);
+  const usedLabelBytes = [...map.keys()].reduce(
+    (total, existing) => total + Buffer.byteLength(existing),
+    0,
+  );
+  if (
+    map.size < limit - 1
+    && Buffer.byteLength(key) <= GATEWAY_METRIC_LABEL_BYTES
+    && usedLabelBytes + Buffer.byteLength(key) <= GATEWAY_METRIC_TOTAL_LABEL_BYTES - overflowBytes
+  ) {
+    return key;
+  }
+  return METRIC_OVERFLOW_KEY;
+}
+
+function normalizeMetricLabel(value: string): string {
+  if (
+    value === METRIC_UNKNOWN_COMMAND_KEY
+    || value === METRIC_INVALID_KEY
+    || value === METRIC_OVERFLOW_KEY
+  ) {
+    return value;
+  }
+  const trimmed = value.trim();
+  return (
+    Buffer.byteLength(trimmed) <= GATEWAY_METRIC_LABEL_BYTES
+    && /^[A-Za-z][A-Za-z0-9_.:-]*$/.test(trimmed)
+  )
+    ? trimmed
+    : METRIC_INVALID_KEY;
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  const buffer = Buffer.from(value);
+  if (buffer.length <= maxBytes) return value;
+  return buffer.subarray(0, maxBytes).toString("utf8").replace(/\uFFFD$/, "");
+}
+
+function normalizeContentEncoding(value: string | null): "identity" | "gzip" | "br" | "deflate" | "other" {
+  const encoding = value?.trim().toLowerCase() || "identity";
+  if (encoding === "identity" || encoding === "gzip" || encoding === "br" || encoding === "deflate") {
+    return encoding;
+  }
+  return "other";
+}
+
+function normalizeHttpMethod(value: string): string {
+  const method = value.trim().toUpperCase();
+  return (
+    method === "DELETE"
+    || method === "GET"
+    || method === "HEAD"
+    || method === "OPTIONS"
+    || method === "PATCH"
+    || method === "POST"
+    || method === "PUT"
+  )
+    ? method
+    : "OTHER";
+}
+
+function normalizeHttpVersion(value: string): string {
+  const version = value.trim();
+  return version === "1.0" || version === "1.1" || version === "2.0" || version === "3.0"
+    ? version
+    : "other";
+}
+
+function normalizeAcceptEncoding(value: string | null): string | null {
+  if (value === null) return null;
+  const encodings = new Set<string>();
+  for (const entry of value.toLowerCase().split(",")) {
+    const encoding = entry.split(";", 1)[0]?.trim();
+    if (encoding === "br" || encoding === "gzip" || encoding === "deflate" || encoding === "identity") {
+      encodings.add(encoding);
+    } else if (encoding) {
+      encodings.add("other");
+    }
+  }
+  return encodings.size > 0 ? [...encodings].sort().join(",") : null;
+}
+
+function normalizeCacheControl(value: string | null): string | null {
+  if (value === null) return null;
+  const allowed = new Set([
+    "immutable",
+    "max-age",
+    "must-revalidate",
+    "no-cache",
+    "no-store",
+    "no-transform",
+    "private",
+    "proxy-revalidate",
+    "public",
+    "s-maxage",
+    "stale-if-error",
+    "stale-while-revalidate",
+  ]);
+  const directives = new Set<string>();
+  for (const entry of value.toLowerCase().split(",")) {
+    const directive = entry.split("=", 1)[0]?.trim();
+    if (directive && allowed.has(directive)) directives.add(directive);
+    else if (directive) directives.add("other");
+  }
+  return directives.size > 0 ? [...directives].sort().join(",") : null;
+}
+
+function normalizeContentType(value: string | null): string | null {
+  if (value === null) return null;
+  const mimeType = value.split(";", 1)[0]?.trim().toLowerCase();
+  if (!mimeType) return null;
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("font/")) return "font";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.startsWith("video/")) return "video";
+  if (
+    mimeType === "application/javascript"
+    || mimeType === "application/json"
+    || mimeType === "application/octet-stream"
+    || mimeType === "text/css"
+    || mimeType === "text/event-stream"
+    || mimeType === "text/html"
+    || mimeType === "text/javascript"
+    || mimeType === "text/plain"
+  ) {
+    return mimeType;
+  }
+  return "other";
+}
+
+function normalizeNextHopProtocol(value: unknown): string | null {
+  const protocol = stringOrNull(value, 24)?.toLowerCase();
+  if (protocol === null) return null;
+  if (
+    protocol === "h2"
+    || protocol === "h3"
+    || protocol === "http/1.0"
+    || protocol === "http/1.1"
+    || protocol === "http/2"
+    || protocol === "http/3"
+    || protocol === "quic"
+  ) {
+    return protocol;
+  }
+  return "other";
+}
+
+function normalizeStatusMetricKey(statusCode: number): string {
+  return Number.isInteger(statusCode) && statusCode >= 100 && statusCode <= 599
+    ? String(statusCode)
+    : "other";
 }
 
 function numberOrNull(value: unknown, max = Number.MAX_SAFE_INTEGER): number | null {
@@ -269,10 +428,10 @@ function numberOrNull(value: unknown, max = Number.MAX_SAFE_INTEGER): number | n
     : null;
 }
 
-function stringOrNull(value: unknown, maxLength = 64): string | null {
+function stringOrNull(value: unknown, maxBytes = 64): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed.slice(0, maxLength) : null;
+  return trimmed.length > 0 ? truncateUtf8(trimmed, maxBytes) : null;
 }
 
 function headerValueToString(value: number | string | string[] | undefined): string | null {
@@ -317,7 +476,7 @@ function classifyGatewayRoute(pathname: string): GatewayRouteKey {
 function normalizeGatewayEventMetricKey(event: string): string {
   if (event.startsWith(`${DROPPABLE_EVENT_PREFIX}tmux:`)) return "terminal-output-tmux";
   if (event.startsWith(DROPPABLE_EVENT_PREFIX)) return "terminal-output";
-  return event;
+  return normalizeMetricLabel(event);
 }
 
 function sanitizeClientBootReport(
@@ -347,7 +506,7 @@ function sanitizeClientBootReport(
     platform,
     navigationType,
     httpVersion,
-    nextHopProtocol: stringOrNull(input.nextHopProtocol, 24),
+    nextHopProtocol: normalizeNextHopProtocol(input.nextHopProtocol),
     transferSize: numberOrNull(input.transferSize),
     encodedBodySize: numberOrNull(input.encodedBodySize),
     decodedBodySize: numberOrNull(input.decodedBodySize),
@@ -413,13 +572,18 @@ class GatewayMetricsStore {
         const sample: GatewayRouteSample = {
           recordedAt: new Date().toISOString(),
           ...meta,
+          method: normalizeHttpMethod(meta.method),
+          httpVersion: normalizeHttpVersion(meta.httpVersion),
+          acceptEncoding: normalizeAcceptEncoding(meta.acceptEncoding),
           requestBytes,
           statusCode: response.statusCode,
           responseBytes,
           durationMs,
-          contentEncoding: headerValueToString(response.getHeader("content-encoding")),
-          cacheControl: headerValueToString(response.getHeader("cache-control")),
-          contentType: headerValueToString(response.getHeader("content-type")),
+          contentEncoding: normalizeContentEncoding(
+            headerValueToString(response.getHeader("content-encoding")),
+          ),
+          cacheControl: normalizeCacheControl(headerValueToString(response.getHeader("cache-control"))),
+          contentType: normalizeContentType(headerValueToString(response.getHeader("content-type"))),
         };
         this.recordRoute(sample);
       },
@@ -448,8 +612,9 @@ class GatewayMetricsStore {
     bucket.requestBytes += sample.requestBytes;
     bucket.responseBytes += sample.responseBytes;
     bucket.durationMs += sample.durationMs;
-    bucket.statusCodes[String(sample.statusCode)] = (bucket.statusCodes[String(sample.statusCode)] ?? 0) + 1;
-    const encoding = sample.contentEncoding ?? "identity";
+    const statusCode = normalizeStatusMetricKey(sample.statusCode);
+    bucket.statusCodes[statusCode] = (bucket.statusCodes[statusCode] ?? 0) + 1;
+    const encoding = normalizeContentEncoding(sample.contentEncoding);
     bucket.encodings[encoding] = (bucket.encodings[encoding] ?? 0) + 1;
     appendBoundedSample(this.recentRouteSamples, sample);
   }
@@ -461,7 +626,7 @@ class GatewayMetricsStore {
     durationMs: number,
     success: boolean,
   ): void {
-    const key = boundedMetricKey(this.commands, command);
+    const key = boundedMetricKey(this.commands, normalizeMetricLabel(command));
     const bucket = this.commands.get(key) ?? {
       count: 0,
       requestBytes: 0,
@@ -532,8 +697,6 @@ class GatewayMetricsStore {
 
   recordStreamDropped(): void {
     this.stream.dropped += 1;
-    this.stream.open = Math.max(0, this.stream.open - 1);
-    this.stream.connecting = Math.max(0, this.stream.connecting - 1);
   }
 
   recordStreamStalled(): void {
@@ -729,12 +892,21 @@ function jsonResponse(
   payload: unknown,
   headers: OutgoingHttpHeaders = {},
 ): void {
+  serializedJsonResponse(response, statusCode, JSON.stringify(payload), headers);
+}
+
+function serializedJsonResponse(
+  response: ServerResponse,
+  statusCode: number,
+  payload: string,
+  headers: OutgoingHttpHeaders = {},
+): void {
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
     ...headers,
   });
-  response.end(JSON.stringify(payload));
+  response.end(payload);
 }
 
 function textResponse(response: ServerResponse, statusCode: number, text: string, contentType = "text/plain; charset=utf-8"): void {
@@ -1505,7 +1677,6 @@ export class OrkestratorGateway {
       if (message === null) {
         message = `data: ${JSON.stringify({ event, payload })}\n\n`;
         messageBytes = Buffer.byteLength(message);
-        this.metrics.recordEvent(event, messageBytes);
       }
 
       if (client.writableLength > SSE_CLIENT_HARD_BUFFER_BYTES) {
@@ -1539,6 +1710,7 @@ export class OrkestratorGateway {
         continue;
       }
       client.write(message);
+      this.metrics.recordEvent(event, messageBytes);
     }
   }
 
@@ -1614,6 +1786,7 @@ export class OrkestratorGateway {
       }
       state.desyncedSessions.delete(sessionId);
       client.write(recoveryFrame);
+      this.metrics.recordEvent(event, Buffer.byteLength(recoveryFrame));
     }
     return true;
   }
@@ -2007,18 +2180,25 @@ export class OrkestratorGateway {
         Math.max(0, Date.now() - startedAt),
         true,
       );
-      jsonResponse(response, 200, { result });
+      serializedJsonResponse(response, 200, responseBody);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const responseBody = JSON.stringify({ error: message });
+      // OrkestratorBackend rejects names absent from its command registry with
+      // this stable error prefix. Never retain the rejected, network-supplied
+      // value: syntactically valid token-like strings are just as sensitive as
+      // obviously malformed labels.
+      const metricCommand = message.startsWith("Unknown backend command:")
+        ? METRIC_UNKNOWN_COMMAND_KEY
+        : command;
       this.metrics.recordInvoke(
-        command,
+        metricCommand,
         requestBytes,
         Buffer.byteLength(responseBody),
         Math.max(0, Date.now() - startedAt),
         false,
       );
-      jsonResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
+      serializedJsonResponse(response, 500, responseBody);
     }
   }
 

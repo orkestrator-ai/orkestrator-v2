@@ -59,6 +59,62 @@ async function requestUrl(
   });
 }
 
+type GatewayMetricsSnapshot = {
+  routes: Record<string, {
+    requests: number;
+    requestBytes: number;
+    responseBytes: number;
+    statusCodes: Record<string, number>;
+    encodings: Record<string, number>;
+  }>;
+  commands: Record<string, {
+    count: number;
+    requestBytes: number;
+    responseBytes: number;
+    failures: number;
+  }>;
+  events: Record<string, {
+    frames: number;
+    wireBytes: number;
+    droppedFrames: number;
+    droppedClients: number;
+  }>;
+  stream: {
+    open: number;
+    connecting: number;
+    opened: number;
+    closed: number;
+    dropped: number;
+    stalled: number;
+    softDesyncs: number;
+    keepalives: number;
+  };
+  recentRouteSamples: Array<{
+    route: string;
+    method: string;
+    statusCode: number;
+    requestBytes: number;
+    responseBytes: number;
+    contentEncoding: string | null;
+    acceptEncoding: string | null;
+  }>;
+  recentClientBootReports: Array<{
+    platform: string;
+    navigationType: string;
+    nextHopProtocol: string | null;
+    resourceCount: number | null;
+    loadEventMs: number | null;
+  }>;
+};
+
+async function readGatewayMetrics(info: { url: string; token: string }): Promise<GatewayMetricsSnapshot> {
+  const response = await requestUrl(`${info.url}__orkestrator/metrics`, {
+    headers: { authorization: `Bearer ${info.token}` },
+  });
+  expect(response.status).toBe(200);
+  return response.json() as GatewayMetricsSnapshot;
+}
+
 function createLogger() {
   return {
     debug: mock(() => undefined),
@@ -222,6 +278,246 @@ describe("remote gateway", () => {
     expect(compressionModeForListener("on", "browser")).toBe("on");
   });
 
+  test("authenticates metrics routes and validates, sanitizes, and evicts client reports", async () => {
+    const { info } = await startGateway();
+    const metricsUrl = `${info.url}__orkestrator/metrics`;
+    const clientMetricsUrl = `${info.url}__orkestrator/client-metrics`;
+    const authorization = { authorization: `Bearer ${info.token}` };
+
+    expect((await requestUrl(metricsUrl)).status).toBe(401);
+    const wrongMetricsMethod = await requestUrl(metricsUrl, {
+      method: "POST",
+      headers: authorization,
+    });
+    expect(wrongMetricsMethod.status).toBe(405);
+    expect(wrongMetricsMethod.headers.allow).toBe("GET");
+
+    expect((await requestUrl(clientMetricsUrl, { method: "POST" })).status).toBe(401);
+    const wrongClientMethod = await requestUrl(clientMetricsUrl, { headers: authorization });
+    expect(wrongClientMethod.status).toBe(405);
+    expect(wrongClientMethod.headers.allow).toBe("POST");
+
+    const headers = {
+      ...authorization,
+      "content-type": "application/json",
+    };
+    const malformed = await requestUrl(clientMetricsUrl, {
+      method: "POST",
+      headers,
+      body: "{",
+    });
+    expect(malformed.status).toBe(400);
+    expect(malformed.json()).toEqual({ error: "Malformed JSON request body" });
+
+    const nonObject = await requestUrl(clientMetricsUrl, {
+      method: "POST",
+      headers,
+      body: "[]",
+    });
+    expect(nonObject.status).toBe(400);
+    expect(nonObject.json()).toEqual({ error: "Expected JSON object body" });
+
+    const oversized = await requestUrl(clientMetricsUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ padding: "x".repeat(64 * 1024) }),
+    });
+    expect(oversized.status).toBe(413);
+    expect(oversized.json()).toEqual({ error: "Request body is too large" });
+
+    const sanitized = await requestUrl(clientMetricsUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        platform: "not-a-platform",
+        navigationType: "not-navigation",
+        nextHopProtocol: "💣".repeat(100),
+        resourceCount: -1,
+        loadEventMs: 700_000,
+      }),
+    });
+    expect(sanitized.status).toBe(202);
+    const sanitizedMetrics = await readGatewayMetrics(info);
+    expect(sanitizedMetrics.recentClientBootReports.at(-1)).toMatchObject({
+      platform: "unknown",
+      navigationType: "unknown",
+      nextHopProtocol: "other",
+      resourceCount: null,
+      loadEventMs: null,
+    });
+
+    for (let resourceCount = 0; resourceCount < 40; resourceCount += 1) {
+      const response = await requestUrl(clientMetricsUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          platform: "desktop-browser",
+          navigationType: "navigate",
+          nextHopProtocol: resourceCount === 39 ? "AValidLookingSecretToken" : "h2",
+          resourceCount,
+        }),
+      });
+      expect(response.status).toBe(202);
+    }
+
+    const metrics = await readGatewayMetrics(info);
+    expect(metrics.recentRouteSamples).toHaveLength(32);
+    expect(metrics.recentClientBootReports).toHaveLength(32);
+    expect(metrics.recentClientBootReports[0]?.resourceCount).toBe(8);
+    expect(metrics.recentClientBootReports.at(-1)?.resourceCount).toBe(39);
+    expect(metrics.recentClientBootReports[0]?.nextHopProtocol).toBe("h2");
+    expect(metrics.recentClientBootReports.at(-1)?.nextHopProtocol).toBe("other");
+    expect(metrics.recentClientBootReports.every((report) => (
+      report.platform === "desktop-browser"
+      && report.navigationType === "navigate"
+    ))).toBe(true);
+    expect(metrics.routes["client-metrics"]).toMatchObject({
+      requests: 46,
+      statusCodes: {
+        "202": 41,
+        "400": 2,
+        "405": 1,
+        "413": 1,
+      },
+    });
+    expect(metrics.routes["client-metrics"]!.requestBytes).toBeGreaterThan(0);
+    expect(metrics.routes["client-metrics"]!.responseBytes).toBeGreaterThan(0);
+  });
+
+  test("bounds and normalizes route status, encoding, and retained header metrics", async () => {
+    const target = createServer((_request, response) => {
+      response.writeHead(299, {
+        "content-encoding": "private-experimental-encoding",
+        "content-type": "text/plain",
+      });
+      response.end("proxy-body");
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const address = target.address();
+    if (!address || typeof address !== "object") throw new Error("Target server did not bind");
+
+    const { info } = await startGateway();
+    const acceptEncoding = "private-accept-value-".repeat(20);
+    const response = await requestUrl(
+      `${info.url}__orkestrator/proxy/loopback/${address.port}/metrics`,
+      {
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "accept-encoding": acceptEncoding,
+        },
+      },
+    );
+    expect(response.status).toBe(299);
+    expect(response.body).toBe("proxy-body");
+
+    const metrics = await readGatewayMetrics(info);
+    expect(metrics.routes["proxy-loopback"]).toMatchObject({
+      requests: 1,
+      responseBytes: Buffer.byteLength("proxy-body"),
+      statusCodes: { "299": 1 },
+      encodings: { other: 1 },
+    });
+    const sample = metrics.recentRouteSamples.find((candidate) => (
+      candidate.route === "proxy-loopback"
+    ));
+    expect(sample).toMatchObject({
+      method: "GET",
+      statusCode: 299,
+      responseBytes: Buffer.byteLength("proxy-body"),
+      contentEncoding: "other",
+    });
+    expect(sample?.acceptEncoding).toBe("other");
+    expect(Object.keys(metrics.routes["proxy-loopback"]!.encodings)).toEqual(["other"]);
+  });
+
+  test("serializes invoke results once and keeps command metrics private and bounded", async () => {
+    let resultSerializations = 0;
+    let errorSerializations = 0;
+    const secretLikeUnknown = "AValidLookingSecretToken1234567890";
+    const backend = {
+      invoke: mock(async (command: string) => {
+        if (command === "serialize_once") {
+          return {
+            toJSON() {
+              resultSerializations += 1;
+              return { ok: true };
+            },
+          };
+        }
+        if (command === secretLikeUnknown) {
+          throw new Error(`Unknown backend command: ${command}`);
+        }
+        if (command === "serialize_error_once") {
+          throw {
+            toString() {
+              errorSerializations += 1;
+              return "backend failed";
+            },
+          };
+        }
+        return null;
+      }),
+    };
+    const { info } = await startGateway({ backend });
+    const endpoint = `${info.url}__orkestrator/invoke`;
+    const headers = {
+      authorization: `Bearer ${info.token}`,
+      "content-type": "application/json",
+    };
+    const invoke = (command: string) => requestUrl(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ command }),
+    });
+
+    const success = await invoke("serialize_once");
+    expect(success.status).toBe(200);
+    expect(success.body).toBe('{"result":{"ok":true}}');
+    expect(resultSerializations).toBe(1);
+
+    const failure = await invoke("serialize_error_once");
+    expect(failure.status).toBe(500);
+    expect(failure.body).toBe('{"error":"backend failed"}');
+    expect(errorSerializations).toBe(1);
+
+    expect((await invoke(secretLikeUnknown)).status).toBe(500);
+    expect((await invoke(`${"x".repeat(10_000)} secret`)).status).toBe(200);
+
+    // Exercise both aggregate label-byte and map-count overflow. All of these
+    // commands are accepted by the test backend, just as registered commands
+    // are by production.
+    for (let index = 0; index < 140; index += 1) {
+      const padded = `command_${String(index).padStart(3, "0")}_${"x".repeat(74)}`;
+      expect((await invoke(padded)).status).toBe(200);
+    }
+
+    const metrics = await readGatewayMetrics(info);
+    const keys = Object.keys(metrics.commands);
+    expect(keys).toContain("__unknown__");
+    expect(keys).toContain("__invalid__");
+    expect(keys).toContain("__overflow__");
+    expect(keys).not.toContain(secretLikeUnknown);
+    expect(keys.every((key) => !key.includes("secret"))).toBe(true);
+    expect(keys.length).toBeLessThanOrEqual(128);
+    expect(keys.every((key) => Buffer.byteLength(key) <= 96)).toBe(true);
+    expect(keys.reduce((total, key) => total + Buffer.byteLength(key), 0)).toBeLessThanOrEqual(8 * 1024);
+
+    const successBody = '{"result":{"ok":true}}';
+    expect(metrics.commands.serialize_once).toMatchObject({
+      count: 1,
+      requestBytes: Buffer.byteLength(JSON.stringify({ command: "serialize_once" })),
+      responseBytes: Buffer.byteLength(successBody),
+      failures: 0,
+    });
+    expect(metrics.commands.serialize_error_once).toMatchObject({
+      count: 1,
+      responseBytes: Buffer.byteLength('{"error":"backend failed"}'),
+      failures: 1,
+    });
+    expect(metrics.commands.__unknown__).toMatchObject({ count: 1, failures: 1 });
+  });
+
   test("filters terminal prefixes while restoring explicitly subscribed sessions", () => {
     expect(parseEventSubscriptionFilter(" terminal-output-one, menu- ")).toEqual([
       "terminal-output-one",
@@ -282,6 +578,89 @@ describe("remote gateway", () => {
 
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain('"event":"terminal-output-one"');
+  });
+
+  test("counts actual event writes, bounds labels, and closes each stream exactly once", async () => {
+    const { gateway, info } = await startGateway();
+    const lagging = await openEventStream(gateway, info);
+    const healthy = await openEventStream(gateway, info);
+    const payload = { bytesBase64: "eA==" };
+    const terminalMessage = `data: ${JSON.stringify({
+      event: "terminal-output-session-a",
+      payload,
+    })}\n\n`;
+
+    pinBufferedBytes(lagging.response, 2 * 1024 * 1024);
+    gateway.emit("terminal-output-session-a", payload);
+    await waitUntil(
+      () => healthy.received().includes("terminal-output-session-a"),
+      "Healthy stream never received the terminal frame",
+    );
+
+    pinBufferedBytes(lagging.response, 8 * 1024 * 1024 + 1);
+    gateway.emit("environment-changed", { id: "env" });
+    await waitUntil(() => lagging.aborted(), "Lagging stream was never dropped");
+    await waitUntil(
+      () => healthy.received().includes("environment-changed"),
+      "Healthy stream never received the authoritative event",
+    );
+
+    let metrics = await readGatewayMetrics(info);
+    expect(metrics.stream).toMatchObject({
+      open: 1,
+      connecting: 0,
+      opened: 2,
+      closed: 1,
+      dropped: 1,
+      stalled: 1,
+      softDesyncs: 1,
+    });
+    expect(metrics.events["terminal-output"]).toEqual({
+      frames: 1,
+      wireBytes: Buffer.byteLength(terminalMessage),
+      droppedFrames: 1,
+      droppedClients: 0,
+    });
+    expect(metrics.events["environment-changed"]).toMatchObject({
+      frames: 1,
+      droppedClients: 1,
+    });
+
+    // Terminal identifiers collapse to fixed categories, and arbitrary labels
+    // can consume neither unbounded bytes nor unbounded map entries.
+    gateway.emit("terminal-output-tmux:env:tab:one", payload);
+    gateway.emit(`${"x".repeat(1_000)} secret`, null);
+    for (let index = 0; index < 150; index += 1) {
+      gateway.emit(`event-${index}`, index);
+    }
+    await waitUntil(
+      () => healthy.received().includes('"event":"event-149"'),
+      "Event cardinality frames did not reach the healthy stream",
+    );
+
+    metrics = await readGatewayMetrics(info);
+    const eventKeys = Object.keys(metrics.events);
+    expect(eventKeys).toContain("terminal-output-tmux");
+    expect(eventKeys).toContain("__invalid__");
+    expect(eventKeys).toContain("__overflow__");
+    expect(eventKeys.every((key) => !key.includes("secret"))).toBe(true);
+    expect(eventKeys).toHaveLength(128);
+    expect(eventKeys.every((key) => Buffer.byteLength(key) <= 96)).toBe(true);
+    expect(eventKeys.reduce((total, key) => total + Buffer.byteLength(key), 0)).toBeLessThanOrEqual(8 * 1024);
+
+    healthy.response.destroy();
+    healthy.close();
+    await waitUntil(
+      () => eventClients(gateway).size === 0,
+      "Healthy stream did not close",
+    );
+    metrics = await readGatewayMetrics(info);
+    expect(metrics.stream).toMatchObject({
+      open: 0,
+      opened: 2,
+      closed: 2,
+      dropped: 1,
+    });
   });
 
   test("drops projected soft-limit terminal frames and flushes a desync notice on drain", async () => {

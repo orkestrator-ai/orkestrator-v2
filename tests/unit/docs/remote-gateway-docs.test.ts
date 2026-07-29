@@ -36,4 +36,74 @@ describe("remote gateway documentation", () => {
       }
     }
   });
+
+  test("documents compression modes, precedence, defaults, and milestone-zero behavior", async () => {
+    const [guide, milestone] = await Promise.all([
+      readFile(path.join(root, "docs", "remote-gateway.md"), "utf8"),
+      readFile(path.join(root, "docs", "efficiency", "milestone-0.md"), "utf8"),
+    ]);
+
+    expect(guide).toContain("ORKESTRATOR_GATEWAY_COMPRESSION");
+    expect(guide).toContain("--compression off|body|on");
+    expect(guide).toContain("The standalone `--compression` CLI flag.");
+    expect(guide).toContain("`ORKESTRATOR_GATEWAY_COMPRESSION`.");
+    expect(guide).toContain("The default, `off`.");
+    expect(guide).toContain("constructor option takes precedence");
+    expect(guide).toContain("All three modes are intentionally no-op rollout controls");
+    expect(guide).toContain("does not add response compression in `off`, `body`, or `on`");
+    expect(guide).toContain("`off` is the immediate rollback mode");
+
+    expect(milestone).toContain("CLI compression overrides the environment");
+    expect(milestone).toContain("defaults to `off`");
+    expect(milestone).toContain("`off`, `body`, and `on` do not add response compression");
+    expect(milestone).toContain("- [x] No production response path has changed encoding yet.");
+  });
+
+  test("documents listener-role compression semantics independently of bind address", async () => {
+    const guide = await readFile(path.join(root, "docs", "remote-gateway.md"), "utf8");
+
+    expect(guide).toContain("Compression policy follows the listener's role, not its bind address.");
+    expect(guide).toMatch(/browser\s+listener remains a `browser` listener/);
+    expect(guide).toContain("`--tailscale-serve` binds it to");
+    expect(guide).toContain("`127.0.0.1`");
+    expect(guide).toContain("`control` listener always resolves to `off`");
+    expect(guide).toContain("never adds response compression on desktop IPC/control traffic");
+  });
+
+  test("documents authenticated metrics methods, bounds, and privacy exclusions", async () => {
+    const [guide, milestone] = await Promise.all([
+      readFile(path.join(root, "docs", "remote-gateway.md"), "utf8"),
+      readFile(path.join(root, "docs", "efficiency", "milestone-0.md"), "utf8"),
+    ]);
+    const normalizedGuide = guide.replace(/\s+/g, " ");
+
+    expect(normalizedGuide).toContain("`GET /__orkestrator/metrics`");
+    expect(normalizedGuide).toContain("`POST /__orkestrator/client-metrics`");
+    expect(normalizedGuide).toContain("Both metrics routes require the same gateway authentication");
+    expect(normalizedGuide).toContain("methods other than `GET` are");
+    expect(normalizedGuide).toContain("methods other than `POST`, malformed JSON, and oversized bodies are rejected");
+    expect(normalizedGuide).toContain("keeps only an allowlist");
+    expect(normalizedGuide).toContain("recent samples are kept in a bounded in-memory ring");
+    expect(normalizedGuide).toContain("unknown commands and uncommon response encodings are grouped");
+
+    for (const excludedContent of [
+      "prompts",
+      "terminal contents or output",
+      "file contents",
+      "attachment data",
+      "credentials",
+      "tokens",
+      "resource URLs",
+      "request/response payloads",
+    ]) {
+      expect(normalizedGuide).toContain(excludedContent);
+    }
+
+    expect(milestone).toContain("Both metrics routes require authentication");
+    expect(milestone).toContain("Client metric reports are allowlisted and bounded");
+    expect(milestone).toContain(
+      "The coordinated gateway/docs, backend option/standalone,",
+    );
+    expect(milestone).toContain("- [x] Focused tests and typechecks pass.");
+  });
 });

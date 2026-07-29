@@ -69,6 +69,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let streamAbortController: AbortController | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let bootMetricsTimeout: ReturnType<typeof setTimeout> | null = null;
+  let bootMetricsDeferredTimer: ReturnType<typeof setTimeout> | null = null;
   let bootMetricsLoadObserved = typeof document === "undefined" || document.readyState === "complete";
   let bootMetricsReported = false;
   let bootMetricsEventStreamConnectedMs: number | null = null;
@@ -176,6 +177,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       clearTimeout(bootMetricsTimeout);
       bootMetricsTimeout = null;
     }
+    if (bootMetricsDeferredTimer) {
+      clearTimeout(bootMetricsDeferredTimer);
+      bootMetricsDeferredTimer = null;
+    }
 
     const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
     const resources = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
@@ -226,7 +231,15 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     if (!options.reportBootMetrics || bootMetricsReported) return;
     if (!bootMetricsLoadObserved) return;
     if (bootMetricsEventStreamConnectedMs === null) return;
-    void sendBootMetrics();
+    if (bootMetricsDeferredTimer) return;
+    // `PerformanceNavigationTiming.loadEventEnd` remains zero while the
+    // browser is dispatching the load event. Always cross a task boundary
+    // before taking the snapshot so a stream that connects during a load
+    // handler cannot permanently report a zero load duration.
+    bootMetricsDeferredTimer = setTimeout(() => {
+      bootMetricsDeferredTimer = null;
+      void sendBootMetrics();
+    }, 0);
   };
 
   const startBootMetricsReporter = () => {

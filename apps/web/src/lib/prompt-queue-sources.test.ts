@@ -13,6 +13,7 @@ import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { PersistedPromptQueue } from "@/types";
+import { isPromptQueueActionError } from "@/lib/prompt-queue-errors";
 
 const realBackendSnapshot = { ...realBackend };
 const enqueuePromptQueueMessage = mock(
@@ -39,6 +40,9 @@ const rejectPromptQueueClaim = mock(
 const transferPromptQueueMessageToComposeDraft = mock(
   async (..._args: unknown[]): Promise<unknown> => undefined,
 );
+const saveComposeDraft = mock(
+  async (..._args: unknown[]): Promise<unknown> => ({ revision: 8 }),
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -50,6 +54,7 @@ mock.module("@/lib/backend", () => ({
   acknowledgePromptQueueClaim,
   rejectPromptQueueClaim,
   transferPromptQueueMessageToComposeDraft,
+  saveComposeDraft,
 }));
 
 const {
@@ -63,6 +68,7 @@ const {
   requeueAgentPrompt,
   transferAgentPromptToComposeDraft,
 } = await import("./prompt-queue-sources");
+const { persistComposeDraft } = await import("@/lib/compose-draft-persistence");
 
 /**
  * Every adapter reaches its store through `as unknown as AnyQueueStore`, so
@@ -344,15 +350,160 @@ describe("backend mutation adapters", () => {
   });
 
   test("rejects unknown agents and unscoped session keys without invoking backend", async () => {
-    await expect(
-      enqueueAgentPrompt("unknown", sessionKey, { id: "m1" }),
-    ).rejects.toThrow("Unknown prompt queue agent");
-    await expect(
-      enqueueAgentPrompt("claude", "unscoped", { id: "m1" }),
-    ).rejects.toThrow("not scoped");
+    /**
+     * Every helper resolves its identity the same way, so every helper has to
+     * refuse the same two inputs: an agent with no adapter cannot be scoped to
+     * a queue key, and a session key carrying no environment cannot be scoped
+     * to an environment — writing either would create a queue nothing can ever
+     * clean up.
+     */
+    const mutations: Array<[string, (agent: string, key: string) => Promise<unknown>]> = [
+      ["enqueue", (agent, key) => enqueueAgentPrompt(agent, key, { id: "m1" })],
+      ["requeue", (agent, key) => requeueAgentPrompt(agent, key, { id: "m1" })],
+      ["remove", (agent, key) => removeAgentPrompt(agent, key, "m1")],
+      ["move", (agent, key) => moveAgentPrompt(agent, key, "m1", "up")],
+      ["acknowledge", (agent, key) => acknowledgeAgentPromptClaim(agent, key, "token")],
+      ["reject", (agent, key) => rejectAgentPromptClaim(agent, key, "token")],
+      [
+        "transfer",
+        (agent, key) => transferAgentPromptToComposeDraft(
+          agent as "claude",
+          key,
+          "m1",
+        ),
+      ],
+    ];
+
+    for (const [label, mutate] of mutations) {
+      await expect(
+        mutate("unknown", sessionKey),
+        `${label} with an unknown agent`,
+      ).rejects.toThrow("Unknown prompt queue agent");
+      await expect(
+        mutate("claude", "unscoped"),
+        `${label} with an unscoped session key`,
+      ).rejects.toThrow("not scoped");
+    }
+
     await expect(claimAgentPromptQueueHead("unknown", sessionKey)).resolves.toBeNull();
     expect(enqueuePromptQueueMessage).not.toHaveBeenCalled();
+    expect(requeuePromptQueueMessage).not.toHaveBeenCalled();
+    expect(removePromptQueueMessage).not.toHaveBeenCalled();
+    expect(movePromptQueueMessage).not.toHaveBeenCalled();
+    expect(acknowledgePromptQueueClaim).not.toHaveBeenCalled();
+    expect(rejectPromptQueueClaim).not.toHaveBeenCalled();
+    expect(transferPromptQueueMessageToComposeDraft).not.toHaveBeenCalled();
     expect(claimPromptQueueHead).not.toHaveBeenCalled();
+  });
+
+  test("scopes a tmux mutation through the tmux key form", async () => {
+    // tmux encodes its environment differently from the three native agents,
+    // and only a mutation proves the adapter translates it rather than the
+    // read-only `environmentIdFor` helper.
+    const tmuxSessionKey = "env:env-9:tab:tab-4";
+    enqueuePromptQueueMessage.mockResolvedValueOnce(
+      snapshot(
+        `claude-tmux\u0000${tmuxSessionKey}`,
+        "env-9",
+        [{ id: "t1", text: "tmux prompt", attachments: [] }],
+        1,
+      ),
+    );
+
+    await enqueueAgentPrompt("claude-tmux", tmuxSessionKey, {
+      id: "t1",
+      text: "tmux prompt",
+      attachments: [],
+    });
+
+    expect(enqueuePromptQueueMessage).toHaveBeenCalledWith(
+      `claude-tmux\u0000${tmuxSessionKey}`,
+      "env-9",
+      { id: "t1", text: "tmux prompt", attachments: [] },
+    );
+    expect(
+      useClaudeTmuxStore.getState().getQueuedMessages(tmuxSessionKey),
+    ).toEqual([{ id: "t1", text: "tmux prompt", attachments: [] }]);
+  });
+
+  test("syncs the compose draft revision cursor after a transfer", async () => {
+    // The transfer creates the draft behind the compose bar's back. Without
+    // adopting its revision the next debounced save is a compare-and-swap
+    // against 0 and loses to the record the transfer just wrote.
+    setClaudeProjection([{ id: "m1" }]);
+    transferPromptQueueMessageToComposeDraft.mockResolvedValueOnce({
+      removed: { id: "m1", text: "edit", attachments: [] },
+      queue: snapshot(queueKey, "env-1", [], 2),
+      draft: {
+        draftKey: "claude:env-1:env-env-1%3Atab-1",
+        ownerType: "environment",
+        ownerId: "env-1",
+        value: { text: "edit", mentions: [], attachments: [] },
+        updatedAt: "2026-07-29T00:00:00.000Z",
+        revision: 7,
+      },
+    });
+
+    await transferAgentPromptToComposeDraft("claude", sessionKey, "m1");
+
+    await persistComposeDraft(
+      "claude:env-1:env-env-1%3Atab-1",
+      "environment",
+      "env-1",
+      { text: "edit", mentions: [], attachments: [] },
+    );
+    expect(saveComposeDraft).toHaveBeenCalledWith(
+      "claude:env-1:env-env-1%3Atab-1",
+      "environment",
+      "env-1",
+      { text: "edit", mentions: [], attachments: [] },
+      7,
+    );
+  });
+
+  test("leaves the revision cursor alone when the transfer returns no draft", async () => {
+    setClaudeProjection([{ id: "m1" }]);
+    transferPromptQueueMessageToComposeDraft.mockResolvedValueOnce({
+      removed: null,
+      queue: snapshot(queueKey, "env-1", [{ id: "m1" }], 2),
+      draft: null,
+    });
+
+    await expect(
+      transferAgentPromptToComposeDraft("claude", sessionKey, "m1"),
+    ).resolves.toBeNull();
+    expect(getClaudeProjection(sessionKey)).toEqual([{ id: "m1" }]);
+  });
+
+  test("reports an occupied composer instead of the backend's raw refusal", async () => {
+    // The dialog shows a `PromptQueueActionError`'s own message; anything else
+    // becomes "wait for the queue to refresh", which never helps here.
+    setClaudeProjection([{ id: "m1" }]);
+    transferPromptQueueMessageToComposeDraft.mockRejectedValueOnce(
+      new Error("Compose draft already exists"),
+    );
+
+    const error = await transferAgentPromptToComposeDraft("claude", sessionKey, "m1")
+      .then(() => null, (thrown: unknown) => thrown);
+
+    expect(isPromptQueueActionError(error)).toBe(true);
+    expect((error as Error).message).toContain(
+      "Send or clear it before editing a queued prompt",
+    );
+    expect(getClaudeProjection(sessionKey)).toEqual([{ id: "m1" }]);
+  });
+
+  test("passes through a transfer failure that the user cannot resolve", async () => {
+    setClaudeProjection([{ id: "m1" }]);
+    transferPromptQueueMessageToComposeDraft.mockRejectedValueOnce(
+      new Error("Queue storage is unavailable"),
+    );
+
+    const error = await transferAgentPromptToComposeDraft("claude", sessionKey, "m1")
+      .then(() => null, (thrown: unknown) => thrown);
+
+    expect(isPromptQueueActionError(error)).toBe(false);
+    expect((error as Error).message).toBe("Queue storage is unavailable");
   });
 
   test("propagates backend rejection without changing the projection", async () => {

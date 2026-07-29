@@ -508,4 +508,94 @@ describe("useNativeMessageQueue", () => {
     store.setState({ sessions: new Map([[SESSION_KEY, { isLoading: false }]]) });
     await waitFor(() => expect(sent).toEqual(["first", "second"]));
   });
+
+  test("stops retrying settlement once the tab unmounts", async () => {
+    /**
+     * The claim is durable and the backend lease re-heads it. An unmounted tab
+     * that kept retrying would be doing recovery work for a UI nobody is
+     * watching, and it can no longer report the outcome.
+     */
+    const store = createStore([{ id: "q-1", text: "first" }]);
+    const rejectClaim = mock(async () => {
+      throw new Error("backend unavailable");
+    });
+
+    const view = render(
+      <Harness store={store} send={() => undefined} rejectClaim={rejectClaim} />,
+    );
+
+    await waitFor(() => expect(rejectClaim).toHaveBeenCalledTimes(1));
+    view.unmount();
+
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(rejectClaim).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not report the same settlement failure on every retry", async () => {
+    /**
+     * The first failure is worth telling the user about. Repeating it once per
+     * backoff step would bury the transcript in duplicates of a message that
+     * has not changed.
+     */
+    const store = createStore([{ id: "q-1", text: "first" }]);
+    const onError = mock(() => {});
+    const acknowledgeClaim = mock(async () => {
+      throw new Error("backend unavailable");
+    });
+
+    render(
+      <Harness
+        store={store}
+        send={async (): Promise<QueueDispatchOutcome> => "accepted"}
+        acknowledgeClaim={acknowledgeClaim}
+        onError={onError}
+      />,
+    );
+
+    await waitFor(
+      () => expect(acknowledgeClaim.mock.calls.length).toBeGreaterThanOrEqual(3),
+      { timeout: 3_000 },
+    );
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  test("a failed acknowledgement does not strand the rest of the queue", async () => {
+    /**
+     * The retry raises the drain guard while it runs. If it ever failed to
+     * lower it — or gave up without re-driving — the prompts behind an
+     * already-dispatched head would sit there with nothing left to wake them.
+     */
+    const store = createStore([
+      { id: "q-1", text: "first" },
+      { id: "q-2", text: "second" },
+    ]);
+    const sent: string[] = [];
+    const send = mock(async (entry: Queued): Promise<QueueDispatchOutcome> => {
+      sent.push(entry.text);
+      return "accepted";
+    });
+    let attempts = 0;
+    const acknowledgeClaim = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("backend unavailable");
+    });
+
+    render(
+      <Harness
+        store={store}
+        send={send}
+        acknowledgeClaim={acknowledgeClaim}
+        onError={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(sent).toEqual(["first", "second"]), {
+      timeout: 2_000,
+    });
+    await waitFor(
+      () => expect(acknowledgeClaim.mock.calls.length).toBeGreaterThanOrEqual(2),
+      { timeout: 2_000 },
+    );
+    expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([]);
+  });
 });

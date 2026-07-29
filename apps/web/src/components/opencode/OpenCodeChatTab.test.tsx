@@ -122,6 +122,7 @@ import type {
   PermissionRequest,
   QuestionRequest,
 } from "@/lib/opencode-client";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 import type {
   OpenCodeModelCatalogSnapshot,
   OpenCodeModelRef,
@@ -2909,7 +2910,7 @@ describe("OpenCodeChatTab", () => {
   });
 
   test("drains queued prompts when the session is idle", async () => {
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Handle the queued prompt",
       attachments: [],
@@ -2972,7 +2973,7 @@ describe("OpenCodeChatTab", () => {
         queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
       };
     });
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-stale",
       text: "Stale projected head",
       attachments: [],
@@ -3001,7 +3002,7 @@ describe("OpenCodeChatTab", () => {
     const originalError = console.error;
     console.error = mock(() => undefined) as unknown as typeof console.error;
     mockClaimPromptQueueHead.mockRejectedValueOnce(new Error("claim unavailable"));
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Keep queued",
       attachments: [],
@@ -3040,7 +3041,7 @@ describe("OpenCodeChatTab", () => {
       success: false,
       error: "OpenCode unavailable",
     }));
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued OpenCode failure",
       attachments: [],
@@ -3084,7 +3085,7 @@ describe("OpenCodeChatTab", () => {
     const originalError = console.error;
     console.error = mock(() => {}) as unknown as typeof console.error;
     mockSendPrompt.mockRejectedValue(new Error("transport rejected"));
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-rejection",
       text: "Queued rejection",
       attachments: [],
@@ -3125,7 +3126,7 @@ describe("OpenCodeChatTab", () => {
   test("does not drain queued prompts while a draft exists", async () => {
     resetStores("review-table");
     useOpenCodeStore.getState().setDraftText(SESSION_KEY, "Keep this OpenCode draft");
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued behind OpenCode draft",
       attachments: [],
@@ -3162,7 +3163,7 @@ describe("OpenCodeChatTab", () => {
       previewUrl: "data:image/png;base64,staged",
       name: "staged.png",
     });
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued behind OpenCode attachment",
       attachments: [],
@@ -3202,7 +3203,7 @@ describe("OpenCodeChatTab", () => {
     };
 
     useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued OpenCode prompt",
       attachments: [queuedAttachment],
@@ -3210,7 +3211,7 @@ describe("OpenCodeChatTab", () => {
       variant: "fast",
       mode: "build",
     });
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-2",
       text: "Second queued OpenCode prompt",
       attachments: [],
@@ -3272,7 +3273,7 @@ describe("OpenCodeChatTab", () => {
       new Error("queue unavailable"),
     );
     useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Keep this OpenCode prompt",
       attachments: [],
@@ -3785,7 +3786,7 @@ describe("OpenCodeChatTab", () => {
       clients: new Map(),
       sessions: new Map(),
     }));
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Run the hidden queued OpenCode prompt",
       attachments: [],
@@ -3815,7 +3816,7 @@ describe("OpenCodeChatTab", () => {
     useEnvironmentStore.setState({
       workspaceReadyEnvironments: new Set(),
     });
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Run after OpenCode setup",
       attachments: [],

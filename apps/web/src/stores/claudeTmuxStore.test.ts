@@ -20,6 +20,7 @@ import {
   tmuxQuestionDraftKey,
   usePromptDraftStore,
 } from "./promptDraftStore";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
 function reset() {
   useClaudeTmuxStore.setState({
@@ -66,7 +67,7 @@ describe("state keys", () => {
       previewUrl: "data:image/png;base64,a",
       name: "a.png",
     });
-    store.addToQueue("tab-a", {
+    seedQueuedPrompt(store, "tab-a", {
       id: "queue-1",
       text: "legacy queue",
       attachments: [],
@@ -135,6 +136,95 @@ describe("state keys", () => {
     expect(migrated.getTab(scopedKey).sessionId).toBe("scoped-session");
     expect(migrated.getDraftText(scopedKey)).toBe("new scoped draft");
     expect(migrated.draftText.has("tab-a")).toBe(false);
+  });
+
+  test("reports no migration when there is nothing to move", () => {
+    const scopedKey = createClaudeTmuxStateKey("env-1", "tab-a");
+
+    // Already scoped: source and destination are the same key.
+    expect(migrateLegacyClaudeTmuxState(scopedKey, scopedKey, "env-1")).toBe(false);
+    // Nothing was ever stored under the bare id.
+    expect(migrateLegacyClaudeTmuxState("tab-a", scopedKey, "env-1")).toBe(false);
+    expect(useClaudeTmuxStore.getState().tabs.has(scopedKey)).toBe(false);
+  });
+
+  test("resolves a bare tab id onto its one scoped tab for every compose accessor", () => {
+    /**
+     * Components that have not been migrated yet still address their state by
+     * bare tab id. Writing that through as its own key would split a tab's
+     * draft and queue across two entries, one of which nothing reads.
+     */
+    const scopedKey = createClaudeTmuxStateKey("env-1", "tab-a");
+    const store = useClaudeTmuxStore.getState();
+    store.setRunning(scopedKey, true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+
+    store.setDraftText("tab-a", "bare draft");
+    store.setDraftMentions("tab-a", [
+      { id: "mention-1", filename: "a.ts", relativePath: "src/a.ts" },
+    ]);
+    store.addAttachment("tab-a", {
+      id: "attachment-1",
+      type: "image",
+      path: "/workspace/a.png",
+      previewUrl: "data:image/png;base64,a",
+      name: "a.png",
+    });
+    store.setEffortLevel("tab-a", "xhigh");
+    seedQueuedPrompt(store, "tab-a", {
+      id: "queue-1",
+      text: "bare queue",
+      attachments: [],
+    });
+
+    const state = useClaudeTmuxStore.getState();
+    expect(state.draftText.has("tab-a")).toBe(false);
+    expect(state.messageQueue.has("tab-a")).toBe(false);
+    expect(state.getDraftText(scopedKey)).toBe("bare draft");
+    expect(state.getDraftMentions(scopedKey)).toHaveLength(1);
+    expect(state.getAttachments(scopedKey).map((item) => item.id)).toEqual([
+      "attachment-1",
+    ]);
+    expect(state.effortLevels.get(scopedKey)).toBe("xhigh");
+    expect(state.getQueuedMessages(scopedKey).map((item) => item.id)).toEqual([
+      "queue-1",
+    ]);
+
+    // The bare id reads back through the same resolution.
+    expect(state.getDraftText("tab-a")).toBe("bare draft");
+    expect(state.getQueueLength("tab-a")).toBe(1);
+    expect(state.getAttachments("tab-a").map((item) => item.id)).toEqual([
+      "attachment-1",
+    ]);
+  });
+
+  test("keeps an ambiguous bare tab id on its own key rather than guessing", () => {
+    /**
+     * The same tab id can exist under two environments. Picking either one
+     * would put a prompt into the wrong environment's queue, so an ambiguous
+     * id stays unresolved.
+     */
+    const store = useClaudeTmuxStore.getState();
+    const keyA = createClaudeTmuxStateKey("env-1", "tab-a");
+    const keyB = createClaudeTmuxStateKey("env-2", "tab-a");
+    store.setRunning(keyA, true, { environmentId: "env-1", sessionId: "a" });
+    store.setRunning(keyB, true, { environmentId: "env-2", sessionId: "b" });
+
+    store.setDraftText("tab-a", "ambiguous");
+    seedQueuedPrompt(store, "tab-a", {
+      id: "queue-1",
+      text: "ambiguous queue",
+      attachments: [],
+    });
+
+    const state = useClaudeTmuxStore.getState();
+    expect(state.draftText.get("tab-a")).toBe("ambiguous");
+    expect(state.getDraftText(keyA)).toBe("");
+    expect(state.getDraftText(keyB)).toBe("");
+    expect(state.getQueueLength(keyA)).toBe(0);
+    expect(state.getQueueLength(keyB)).toBe(0);
   });
 });
 
@@ -1263,15 +1353,15 @@ describe("drafts, attachments, and queue helpers", () => {
     ]);
   });
 
-  test("queues, reorders, removes, drains, and clears messages per scoped tab", () => {
+  test("projects and replaces queued messages per scoped tab", () => {
     const keyA = createClaudeTmuxStateKey("env-a", "tab-1");
     const keyB = createClaudeTmuxStateKey("env-b", "tab-1");
     const store = useClaudeTmuxStore.getState();
 
-    store.addToQueue(keyA, { id: "q-1", text: "first", attachments: [] });
-    store.addToQueue(keyA, { id: "q-2", text: "second", attachments: [] });
-    store.addToQueue(keyA, { id: "q-3", text: "third", attachments: [] });
-    store.addToQueue(keyB, { id: "q-b", text: "other", attachments: [] });
+    seedQueuedPrompt(store, keyA, { id: "q-1", text: "first", attachments: [] });
+    seedQueuedPrompt(store, keyA, { id: "q-2", text: "second", attachments: [] });
+    seedQueuedPrompt(store, keyA, { id: "q-3", text: "third", attachments: [] });
+    seedQueuedPrompt(store, keyB, { id: "q-b", text: "other", attachments: [] });
 
     expect(store.getQueueLength(keyA)).toBe(3);
     expect(store.getQueuedMessages(keyA).map((message) => message.id)).toEqual([
@@ -1280,26 +1370,21 @@ describe("drafts, attachments, and queue helpers", () => {
       "q-3",
     ]);
 
-    store.moveQueueItem(keyA, 2, 0);
+    // Reordering and removal are backend commands; the store only adopts the
+    // snapshot they return, scoped to the tab that owns it.
+    useClaudeTmuxStore.getState().setQueueProjection(keyA, [
+      { id: "q-3", text: "third", attachments: [] },
+      { id: "q-2", text: "second", attachments: [] },
+    ]);
     expect(useClaudeTmuxStore.getState().getQueuedMessages(keyA).map((m) => m.id)).toEqual([
       "q-3",
-      "q-1",
       "q-2",
     ]);
-
-    useClaudeTmuxStore.getState().removeQueueItem(keyA, "q-1");
-    expect(useClaudeTmuxStore.getState().getQueuedMessages(keyA).map((m) => m.id)).toEqual([
-      "q-3",
-      "q-2",
-    ]);
-    expect(useClaudeTmuxStore.getState().removeFromQueue(keyA)?.id).toBe("q-3");
-    expect(useClaudeTmuxStore.getState().removeFromQueue(keyA)?.id).toBe("q-2");
-    expect(useClaudeTmuxStore.getState().removeFromQueue(keyA)).toBeUndefined();
 
     expect(useClaudeTmuxStore.getState().getQueuedMessages(keyB).map((m) => m.id)).toEqual([
       "q-b",
     ]);
-    useClaudeTmuxStore.getState().clearQueue(keyB);
+    useClaudeTmuxStore.getState().setQueueProjection(keyB, []);
     expect(useClaudeTmuxStore.getState().getQueueLength(keyB)).toBe(0);
   });
 });
@@ -1353,7 +1438,7 @@ describe("session lifecycle", () => {
       previewUrl: "data:image/png;base64,att",
       name: "att.png",
     });
-    store.addToQueue("e", {
+    seedQueuedPrompt(store, "e", {
       id: "queue-1",
       text: "queued prompt",
       attachments: [],

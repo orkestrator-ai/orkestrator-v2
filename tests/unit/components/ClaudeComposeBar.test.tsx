@@ -90,6 +90,7 @@ import * as realMentionableInput from "@/components/chat/MentionableInput";
 import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
 import * as realUseFileMentions from "@/hooks/useFileMentions";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 const realSlashCommandMenuSnapshot = { ...realSlashCommandMenu };
 const realMentionableInputSnapshot = { ...realMentionableInput };
 const realFileMentionMenuSnapshot = { ...realFileMentionMenu };
@@ -899,7 +900,7 @@ describe("ClaudeComposeBar", () => {
   });
 
   test("clicking a queued prompt restores its text, settings, and attachments for editing", async () => {
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued follow-up",
       attachments: [
@@ -931,8 +932,7 @@ describe("ClaudeComposeBar", () => {
   });
 
   test("keeps the queue and draft unchanged when restoring a queued prompt fails", async () => {
-    useClaudeStore.getState().setDraftText(SESSION_KEY, "Existing draft");
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-rejected-edit",
       text: "Queued follow-up",
       attachments: [],
@@ -950,11 +950,63 @@ describe("ClaudeComposeBar", () => {
     expect((await screen.findByRole("alert")).textContent).toContain(
       "Could not confirm the prompt queue update",
     );
+    expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("");
+    expect(useClaudeStore.getState().getQueueLength(SESSION_KEY)).toBe(1);
+    expect(screen.getByText("Queued follow-up")).toBeTruthy();
+  });
+
+  test("explains that an occupied composer blocks editing instead of overwriting it", async () => {
+    /**
+     * This used to discard whatever the user had typed. The backend now refuses
+     * to overwrite a draft it did not create, so without a local guard the click
+     * failed with the generic "wait for the queue to refresh" banner — advice
+     * that would never resolve the situation.
+     */
+    useClaudeStore.getState().setDraftText(SESSION_KEY, "Existing draft");
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
+      id: "queue-blocked-edit",
+      text: "Queued follow-up",
+      attachments: [],
+      effort: "high",
+      planModeEnabled: false,
+    });
+
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getByText("Queued follow-up"));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Send or clear it before editing a queued prompt",
+    );
+    expect(mockTransferPromptQueueMessageToComposeDraft).not.toHaveBeenCalled();
     expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe(
       "Existing draft",
     );
     expect(useClaudeStore.getState().getQueueLength(SESSION_KEY)).toBe(1);
-    expect(screen.getByText("Queued follow-up")).toBeTruthy();
+  });
+
+  test("translates the backend's occupied-draft refusal into the same guidance", async () => {
+    // A draft record can outlive the local composer for as long as the compose
+    // bar's debounced discard is still in flight.
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
+      id: "queue-stale-draft",
+      text: "Queued follow-up",
+      attachments: [],
+      effort: "high",
+      planModeEnabled: false,
+    });
+    mockTransferPromptQueueMessageToComposeDraft.mockRejectedValueOnce(
+      new Error("Compose draft already exists"),
+    );
+
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getByText("Queued follow-up"));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Send or clear it before editing a queued prompt",
+    );
+    expect(useClaudeStore.getState().getQueueLength(SESSION_KEY)).toBe(1);
   });
 
   test("serializes file mentions before sending", async () => {
@@ -1249,7 +1301,7 @@ describe("ClaudeComposeBar", () => {
   });
 
   test("removes queued prompts from the dialog", async () => {
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued follow-up",
       attachments: [],
@@ -1276,7 +1328,7 @@ describe("ClaudeComposeBar", () => {
   });
 
   test("renders queued prompt metadata and attachment pluralization", () => {
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "metadata-one",
       text: "Plan carefully",
       attachments: [{
@@ -1290,7 +1342,7 @@ describe("ClaudeComposeBar", () => {
       planModeEnabled: true,
       fastModeEnabled: true,
     });
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "metadata-two",
       text: "Build carefully",
       attachments: [
@@ -1337,7 +1389,7 @@ describe("ClaudeComposeBar", () => {
       ["queue-1", "First queued prompt"],
       ["queue-2", "Second queued prompt"],
     ] as const) {
-      useClaudeStore.getState().addToQueue(SESSION_KEY, {
+      seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
         id,
         text,
         attachments: [],

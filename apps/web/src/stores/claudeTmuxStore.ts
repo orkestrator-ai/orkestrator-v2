@@ -252,11 +252,15 @@ interface ClaudeTmuxState {
   // component's DEFAULT_EFFORT so there is a single source for it.
   setEffortLevel: (tabId: string, effort: ClaudeEffortLevel) => void;
 
-  addToQueue: (tabId: string, message: TmuxQueuedMessage) => void;
-  removeFromQueue: (tabId: string) => TmuxQueuedMessage | undefined;
-  removeQueueItem: (tabId: string, messageId: string) => void;
-  moveQueueItem: (tabId: string, fromIndex: number, toIndex: number) => void;
-  clearQueue: (tabId: string) => void;
+  /**
+   * Overwrite this tab's local view of the backend-owned queue.
+   *
+   * `messageQueue` is a projection, not the queue — see the identically named
+   * member of the native chat stores. Append/remove/reorder helpers used to
+   * live here; they are gone so a caller cannot mutate a queue without telling
+   * the backend, only to have the next hydrate silently revert it.
+   */
+  setQueueProjection: (tabId: string, messages: TmuxQueuedMessage[]) => void;
   getQueueLength: (tabId: string) => number;
   getQueuedMessages: (tabId: string) => TmuxQueuedMessage[];
 
@@ -583,68 +587,11 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     return state.draftMentions.get(resolveStateKey(state.tabs, tabId)) ?? EMPTY_MENTIONS;
   },
 
-  addToQueue: (tabId, message) =>
-    set((state) => {
-      const stateKey = resolveStateKey(state.tabs, tabId);
-      const current = state.messageQueue.get(stateKey) ?? [];
-      const next = new Map(state.messageQueue);
-      next.set(stateKey, [...current, message]);
-      return { messageQueue: next };
-    }),
-
-  removeFromQueue: (tabId) => {
-    let removed: TmuxQueuedMessage | undefined;
-    set((state) => {
-      const stateKey = resolveStateKey(state.tabs, tabId);
-      const current = state.messageQueue.get(stateKey) ?? [];
-      if (current.length === 0) return state;
-      const [first, ...rest] = current;
-      removed = first;
-      const next = new Map(state.messageQueue);
-      next.set(stateKey, rest);
-      return { messageQueue: next };
-    });
-    return removed;
-  },
-
-  removeQueueItem: (tabId, messageId) =>
-    set((state) => {
-      const stateKey = resolveStateKey(state.tabs, tabId);
-      const current = state.messageQueue.get(stateKey) ?? [];
-      const filtered = current.filter((m) => m.id !== messageId);
-      if (filtered.length === current.length) return state;
-      const next = new Map(state.messageQueue);
-      next.set(stateKey, filtered);
-      return { messageQueue: next };
-    }),
-
-  moveQueueItem: (tabId, fromIndex, toIndex) =>
-    set((state) => {
-      const stateKey = resolveStateKey(state.tabs, tabId);
-      const current = state.messageQueue.get(stateKey) ?? [];
-      if (
-        fromIndex < 0 ||
-        toIndex < 0 ||
-        fromIndex >= current.length ||
-        toIndex >= current.length ||
-        fromIndex === toIndex
-      ) {
-        return state;
-      }
-      const reordered = [...current];
-      const [moved] = reordered.splice(fromIndex, 1);
-      if (!moved) return state;
-      reordered.splice(toIndex, 0, moved);
-      const next = new Map(state.messageQueue);
-      next.set(stateKey, reordered);
-      return { messageQueue: next };
-    }),
-
-  clearQueue: (tabId) =>
+  setQueueProjection: (tabId, messages) =>
     set((state) => {
       const stateKey = resolveStateKey(state.tabs, tabId);
       const next = new Map(state.messageQueue);
-      next.set(stateKey, []);
+      next.set(stateKey, messages);
       return { messageQueue: next };
     }),
 

@@ -239,6 +239,51 @@ describe("prompt queue commands", () => {
     });
   });
 
+  test("rejects malformed reorder, removal, and requeue arguments", async () => {
+    // Each of these coerces at the registry boundary, so a bad payload must
+    // fail there rather than reaching storage as a plausible-looking value.
+    await withCommands(async (invoke) => {
+      await expect(invoke("move_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", messageId: "m1", direction: 1,
+      })).rejects.toThrow("direction");
+      await expect(invoke("move_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", messageId: "m1",
+      })).rejects.toThrow("direction");
+      await expect(invoke("move_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", messageId: "m1", direction: "sideways",
+      })).rejects.toThrow("must be up or down");
+      await expect(invoke("remove_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", messageId: 7,
+      })).rejects.toThrow("messageId");
+      await expect(invoke("requeue_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", message: "bad",
+      })).rejects.toThrow("non-blank ID");
+    });
+  });
+
+  test("rejects a non-numeric expected draft revision before the transfer runs", async () => {
+    await withCommands(async (invoke, storage) => {
+      await invoke("enqueue_prompt_queue_message", {
+        queueKey: KEY,
+        environmentId: "e1",
+        message: { id: "m1", text: "queued", attachments: [] },
+      });
+
+      await expect(invoke("transfer_prompt_queue_message_to_compose_draft", {
+        queueKey: KEY,
+        environmentId: "e1",
+        messageId: "m1",
+        draftKey: "compose:e1:tab-1",
+        ownerType: "environment",
+        ownerId: "e1",
+        expectedDraftRevision: "1",
+      })).rejects.toThrow("expectedDraftRevision");
+
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [{ id: "m1" }] });
+      expect(await storage.getComposeDraft("compose:e1:tab-1")).toBeNull();
+    });
+  });
+
   test("rejects blank identifiers", async () => {
     await withCommands(async (invoke) => {
       await expect(invoke("enqueue_prompt_queue_message", {

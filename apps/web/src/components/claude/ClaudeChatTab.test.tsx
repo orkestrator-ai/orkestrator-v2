@@ -21,6 +21,7 @@ import * as realResumeSessionDialog from "./ResumeSessionDialog";
 // The SSE and metadata paths run payloads through the real helpers, so the
 // module mock hands back the genuine module and overrides only what it must.
 import * as realClaudeClient from "@/lib/claude-client";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
 const realClaudeClientSnapshot = { ...realClaudeClient };
 const mockForkClaudeSession = mock<
@@ -3931,7 +3932,7 @@ describe("ClaudeChatTab", () => {
 
   test("drains queued prompts when the session is idle", async () => {
     mockSendPrompt.mockImplementation(async () => true as any);
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Run the queued review",
       attachments: [],
@@ -3966,7 +3967,7 @@ describe("ClaudeChatTab", () => {
   test("renames compact Electron timestamp environments before draining the first queued prompt", async () => {
     resetStores("202604151234567");
     mockSendPrompt.mockImplementation(async () => true as any);
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Run the queued rename",
       attachments: [],
@@ -3997,7 +3998,7 @@ describe("ClaudeChatTab", () => {
     useEnvironmentStore.setState({
       workspaceReadyEnvironments: new Set(),
     });
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Run after Claude setup",
       attachments: [],
@@ -4045,7 +4046,7 @@ describe("ClaudeChatTab", () => {
     const consoleError = mock(() => {});
     console.error = consoleError as unknown as typeof console.error;
     mockSendPrompt.mockImplementation(async () => false as any);
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued Claude failure",
       attachments: [],
@@ -4090,7 +4091,7 @@ describe("ClaudeChatTab", () => {
       outcome: "unknown",
       requestId: "queue-ambiguous",
     } as any);
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-ambiguous",
       text: "Queued Claude ambiguity",
       attachments: [],
@@ -4130,7 +4131,7 @@ describe("ClaudeChatTab", () => {
     const sendError = new Error("Claude bridge rejected the queued prompt");
     console.error = consoleError as unknown as typeof console.error;
     mockSendPrompt.mockRejectedValue(sendError);
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-rejection",
       text: "Queued Claude rejection",
       attachments: [],
@@ -4181,7 +4182,7 @@ describe("ClaudeChatTab", () => {
 
   test("does not drain queued prompts while a draft exists", async () => {
     useClaudeStore.getState().setDraftText(SESSION_KEY, "Keep this Claude draft");
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued behind Claude draft",
       attachments: [],
@@ -4218,7 +4219,7 @@ describe("ClaudeChatTab", () => {
       previewUrl: "data:image/png;base64,staged",
       name: "staged.png",
     });
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued behind Claude attachment",
       attachments: [],
@@ -4259,7 +4260,7 @@ describe("ClaudeChatTab", () => {
     };
 
     useClaudeStore.getState().setSessionLoading(SESSION_KEY, true);
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued Claude prompt",
       attachments: [queuedAttachment],
@@ -4267,7 +4268,7 @@ describe("ClaudeChatTab", () => {
       planModeEnabled: false,
       fastModeEnabled: false,
     });
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-2",
       text: "Second queued Claude prompt",
       attachments: [],
@@ -4338,7 +4339,7 @@ describe("ClaudeChatTab", () => {
       new Error("queue unavailable"),
     );
     useClaudeStore.getState().setSessionLoading(SESSION_KEY, true);
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Keep this Claude prompt",
       attachments: [],

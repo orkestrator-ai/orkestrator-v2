@@ -3,6 +3,7 @@ import {
   createClaudeTmuxStateKey,
   useClaudeTmuxStore,
 } from "../../../apps/web/src/stores/claudeTmuxStore";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
 describe("claudeTmuxStore", () => {
   beforeEach(() => {
@@ -138,7 +139,7 @@ describe("claudeTmuxStore", () => {
     test("clears per-tab drafts and queue but preserves the effort preference", () => {
       const state = useClaudeTmuxStore.getState();
       state.setDraftText("tab-1", "unsent");
-      state.addToQueue("tab-1", {
+      seedQueuedPrompt(state, "tab-1", {
         id: "q-1",
         text: "queued",
         attachments: [],

@@ -40,6 +40,7 @@ import {
   removeAgentPrompt,
   transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
+import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 
 const EFFORT_LABELS: Record<ClaudeEffortLevel, string> = {
   low: "Low",
@@ -424,6 +425,12 @@ export function ClaudeComposeBar({
 
   const handleQueuedMessageClick = useCallback(
     async (message: QueuedMessage) => {
+      // Editing loads the prompt into the composer, so anything already there
+      // would be destroyed. Refusing with a reason beats the silent overwrite
+      // this used to do and beats the backend's opaque rejection downstream.
+      if (text.trim().length > 0 || attachments.length > 0) {
+        throw composerOccupiedError();
+      }
       const removed = await transferAgentPromptToComposeDraft<QueuedMessage>(
         "claude",
         sessionKey,
@@ -442,7 +449,7 @@ export function ClaudeComposeBar({
       setQueueDialogOpen(false);
       inputRef.current?.focus();
     },
-    [sessionKey, clearAttachments, addAttachment, setDraftText, setDraftMentions, setEffort, applyPlanMode, setFastMode]
+    [text, attachments, sessionKey, clearAttachments, addAttachment, setDraftText, setDraftMentions, setEffort, applyPlanMode, setFastMode]
   );
 
   const handleRemoveAttachment = (id: string) => {

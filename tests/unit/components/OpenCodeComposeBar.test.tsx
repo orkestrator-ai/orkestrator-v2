@@ -16,6 +16,7 @@ import {
   setMobileViewport,
 } from "../../mocks/match-media";
 import { mockToastError } from "../../mocks/sonner";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
 const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
@@ -597,14 +598,14 @@ describe("OpenCodeComposeBar", () => {
       percentUsed: 80,
     });
     store.addAttachment(tabB, stagedAttachmentB);
-    store.addToQueue(tabA, {
+    seedQueuedPrompt(store, tabA, {
       id: "queue-a",
       text: "Queued for A",
       attachments: [attachmentA],
       model: "claude-sonnet",
       mode: "build",
     });
-    store.addToQueue(tabB, {
+    seedQueuedPrompt(store, tabB, {
       id: "queue-b",
       text: "Queued for B",
       attachments: [attachmentB],
@@ -663,6 +664,11 @@ describe("OpenCodeComposeBar", () => {
     expect(useOpenCodeStore.getState().getQueueLength(tabA)).toBe(1);
     expect(useOpenCodeStore.getState().getQueueLength(tabB)).toBe(1);
 
+    // Editing loads the queued prompt into the composer, which is refused while
+    // the composer still holds something else. Clear it the way a user would.
+    fireEvent.change(tabAView.getByTestId("mentionable-input"), {
+      target: { value: "" },
+    });
     fireEvent.click(tabAView.getByText("+1 queued"));
     fireEvent.click(await screen.findByTitle("Click to edit this message"));
 
@@ -1117,7 +1123,7 @@ describe("OpenCodeComposeBar", () => {
   });
 
   test("removes queued prompts from the dialog", async () => {
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued openCode task",
       attachments: [],
@@ -1135,7 +1141,7 @@ describe("OpenCodeComposeBar", () => {
   });
 
   test("reports a rejected queue removal without changing the projection", async () => {
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-rejected-remove",
       text: "Keep this queued",
       attachments: [],
@@ -1157,8 +1163,33 @@ describe("OpenCodeComposeBar", () => {
     expect(screen.getByText("Keep this queued")).toBeTruthy();
   });
 
+  test("explains that an occupied composer blocks editing a queued prompt", async () => {
+    // Loading the queued prompt would overwrite the composer, so the click is
+    // refused with the reason rather than the generic retry banner.
+    useOpenCodeStore.getState().setDraftText(SESSION_KEY, "half-written thought");
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
+      id: "queue-blocked-edit",
+      text: "Keep this queued",
+      attachments: [],
+      model: "gpt-5",
+      mode: "build",
+    });
+
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getByText("Keep this queued"));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Send or clear it before editing a queued prompt",
+    );
+    expect(mockTransferPromptQueueMessageToComposeDraft).not.toHaveBeenCalled();
+    expect(useOpenCodeStore.getState().getDraftText(SESSION_KEY)).toBe(
+      "half-written thought",
+    );
+  });
+
   test("prevents duplicate queue actions while a mutation is pending", async () => {
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-pending-remove",
       text: "Remove once",
       attachments: [],
@@ -1204,7 +1235,7 @@ describe("OpenCodeComposeBar", () => {
   });
 
   test("renders queued prompt model fallbacks and metadata", () => {
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-known",
       text: "Known model",
       attachments: [
@@ -1214,7 +1245,7 @@ describe("OpenCodeComposeBar", () => {
       variant: "high",
       mode: "plan",
     });
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-unknown",
       text: "Unknown model",
       attachments: [
@@ -1224,7 +1255,7 @@ describe("OpenCodeComposeBar", () => {
       model: "future-model",
       mode: "build",
     });
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-default",
       text: "Default model task",
       attachments: [],
@@ -1965,7 +1996,7 @@ describe("OpenCodeComposeBar", () => {
   });
 
   test("reorders queued prompts from the dialog", async () => {
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "First queued task",
       attachments: [],
@@ -1973,7 +2004,7 @@ describe("OpenCodeComposeBar", () => {
       variant: "high",
       mode: "build",
     });
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "queue-2",
       text: "Second queued task",
       attachments: [],
@@ -2001,7 +2032,7 @@ describe("OpenCodeComposeBar", () => {
   });
 
   test("disables both reorder directions for a single queued prompt", () => {
-    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
       id: "only-item",
       text: "Only queued task",
       attachments: [],

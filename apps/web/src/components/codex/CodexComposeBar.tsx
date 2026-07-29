@@ -39,6 +39,7 @@ import {
   removeAgentPrompt,
   transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
+import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 
 const EMPTY_ATTACHMENTS: CodexAttachment[] = [];
 const EMPTY_MENTIONS: FileMention[] = [];
@@ -315,6 +316,12 @@ export function CodexComposeBar({
 
   const handleQueuedMessageClick = useCallback(
     async (message: CodexQueuedMessage) => {
+      // Editing loads the prompt into the composer, so anything already there
+      // would be destroyed. Refusing with a reason beats the silent overwrite
+      // this used to do and beats the backend's opaque rejection downstream.
+      if (text.trim().length > 0 || attachments.length > 0) {
+        throw composerOccupiedError();
+      }
       const removed = await transferAgentPromptToComposeDraft<CodexQueuedMessage>(
         "codex",
         sessionKey,
@@ -335,12 +342,14 @@ export function CodexComposeBar({
     },
     [
       addAttachment,
+      attachments,
       clearAttachments,
       fastModeEnabled,
       onFastModeChange,
       sessionKey,
       setDraftMentions,
       setDraftText,
+      text,
     ],
   );
 

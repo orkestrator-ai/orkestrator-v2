@@ -34,6 +34,7 @@ import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { mockReadImage } from "../../mocks/clipboard";
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import type { Environment, FileCandidate } from "@/types";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
 const realTmuxClientSnapshot = { ...realTmuxClient };
 const realBackendSnapshot = { ...realBackend };
@@ -4622,12 +4623,12 @@ Running 1 Explore agent...
     });
     store.setBusy("tab-1", true);
     store.setDraftText("tab-1", "new legacy prompt");
-    store.addToQueue("tab-1", {
+    seedQueuedPrompt(store, "tab-1", {
       id: "legacy-queue-1",
       text: "first legacy queued",
       attachments: [],
     });
-    store.addToQueue("tab-1", {
+    seedQueuedPrompt(store, "tab-1", {
       id: "legacy-queue-2",
       text: "second legacy queued",
       attachments: [],
@@ -4694,7 +4695,7 @@ Running 1 Explore agent...
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    store.addToQueue("tab-1", {
+    seedQueuedPrompt(store, "tab-1", {
       id: "legacy-claim",
       text: "drain migrated prompt",
       attachments: [],
@@ -4811,7 +4812,7 @@ Running 1 Explore agent...
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    store.addToQueue(stateKey, {
+    seedQueuedPrompt(store, stateKey, {
       id: "queue-1",
       text: "queued behind draft",
       attachments: [],
@@ -4852,7 +4853,7 @@ Running 1 Explore agent...
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    store.addToQueue(stateKey, {
+    seedQueuedPrompt(store, stateKey, {
       id: "queue-1",
       text: "queued behind attachment",
       attachments: [],
@@ -4897,9 +4898,9 @@ Running 1 Explore agent...
       sessionId: "session-1",
     });
     store.setBusy(stateKey, true);
-    store.addToQueue(stateKey, { id: "queue-1", text: "first queued", attachments: [] });
-    store.addToQueue(stateKey, { id: "queue-2", text: "second queued", attachments: [] });
-    store.addToQueue(stateKey, { id: "queue-3", text: "third queued", attachments: [] });
+    seedQueuedPrompt(store, stateKey, { id: "queue-1", text: "first queued", attachments: [] });
+    seedQueuedPrompt(store, stateKey, { id: "queue-2", text: "second queued", attachments: [] });
+    seedQueuedPrompt(store, stateKey, { id: "queue-3", text: "third queued", attachments: [] });
 
     render(
       <ClaudeTmuxChatTab
@@ -4948,12 +4949,12 @@ Running 1 Explore agent...
       sessionId: "session-1",
     });
     store.setBusy(stateKey, true);
-    store.addToQueue(stateKey, {
+    seedQueuedPrompt(store, stateKey, {
       id: "queue-1",
       text: "first queued",
       attachments: [],
     });
-    store.addToQueue(stateKey, {
+    seedQueuedPrompt(store, stateKey, {
       id: "queue-2",
       text: "second queued",
       attachments: [],
@@ -4998,7 +4999,7 @@ Running 1 Explore agent...
       sessionId: "session-1",
     });
     store.setBusy(stateKey, true);
-    store.addToQueue(stateKey, {
+    seedQueuedPrompt(store, stateKey, {
       id: "queue-image",
       text: "edit queued with image",
       attachments: [
@@ -5039,7 +5040,7 @@ Running 1 Explore agent...
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    store.addToQueue(stateKey, {
+    seedQueuedPrompt(store, stateKey, {
       id: "queue-image",
       text: "use this screenshot",
       attachments: [
@@ -5081,7 +5082,7 @@ Running 1 Explore agent...
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    store.addToQueue(stateKey, {
+    seedQueuedPrompt(store, stateKey, {
       id: "queue-fail",
       text: "will fail",
       attachments: [],
@@ -5123,7 +5124,7 @@ Running 1 Explore agent...
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    store.addToQueue(stateKey, {
+    seedQueuedPrompt(store, stateKey, {
       id: "queue-requeue-fail",
       text: "recover in draft",
       attachments: [],
@@ -5165,7 +5166,7 @@ Running 1 Explore agent...
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    store.addToQueue(stateKey, {
+    seedQueuedPrompt(store, stateKey, {
       id: "queue-ack-fail",
       text: "send exactly once",
       attachments: [],
@@ -5196,7 +5197,12 @@ Running 1 Explore agent...
     expect(submitMock).toHaveBeenCalledTimes(1);
   });
 
-  test("restores an unsettled rejected claim to the draft when the tab unmounts", async () => {
+  test("leaves an unsettled rejected claim to the backend lease when the tab unmounts", async () => {
+    /**
+     * The prompt is still held by a durable backend claim, which re-heads it
+     * when the lease expires. Copying it into this tab's draft as well would
+     * put the same prompt in two places and send it twice.
+     */
     submitMock.mockRejectedValueOnce(new Error("tmux unavailable"));
     rejectPromptQueueClaimMock.mockRejectedValue(
       new Error("queue storage unavailable"),
@@ -5207,7 +5213,7 @@ Running 1 Explore agent...
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    store.addToQueue(stateKey, {
+    seedQueuedPrompt(store, stateKey, {
       id: "queue-unmount-recovery",
       text: "recover after unmount",
       attachments: [],
@@ -5226,10 +5232,15 @@ Running 1 Explore agent...
         "Failed to send queued prompt and return it to the queue yet: queue storage unavailable",
       ),
     ).toBeTruthy();
+    const rejectAttemptsAtUnmount = rejectPromptQueueClaimMock.mock.calls.length;
     view.unmount();
 
-    expect(useClaudeTmuxStore.getState().getDraftText(stateKey)).toBe(
-      "recover after unmount",
+    expect(useClaudeTmuxStore.getState().getDraftText(stateKey)).toBe("");
+    // No further settlement work either: the unmounted tab has released the
+    // claim to the lease rather than keeping a retry alive.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(rejectPromptQueueClaimMock.mock.calls.length).toBe(
+      rejectAttemptsAtUnmount,
     );
   });
 
@@ -5241,7 +5252,7 @@ Running 1 Explore agent...
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    store.addToQueue(stateKey, {
+    seedQueuedPrompt(store, stateKey, {
       id: "queue-claim-fail",
       text: "retry after storage recovers",
       attachments: [],
@@ -5268,6 +5279,57 @@ Running 1 Explore agent...
     expect(useClaudeTmuxStore.getState().getTab(stateKey).busy).toBe(false);
   });
 
+  test("retries the same head on a cooldown after a failed send", async () => {
+    /**
+     * A rejected claim restores a byte-identical head, so retrying immediately
+     * spins against whatever refused the send. Holding the pause until the head
+     * changed was the other extreme: a prompt that failed once would never
+     * drain again, however healthy the session became.
+     */
+    submitMock.mockImplementationOnce(async () => {
+      throw new Error("tmux briefly unavailable");
+    });
+    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    const store = useClaudeTmuxStore.getState();
+    store.setRunning(stateKey, true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    seedQueuedPrompt(store, stateKey, {
+      id: "queue-transient-failure",
+      text: "retry me",
+      attachments: [],
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        "Failed to send queued prompt. It was returned to the queue.",
+      ),
+    ).toBeTruthy();
+    expect(submitMock).toHaveBeenCalledTimes(1);
+
+    // Nothing re-drives it immediately...
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(submitMock).toHaveBeenCalledTimes(1);
+
+    // ...but the cooldown releases the same head with no further user input.
+    await waitFor(
+      () => expect(submitMock.mock.calls.length).toBeGreaterThanOrEqual(2),
+      { timeout: 5_000 },
+    );
+    await waitFor(() => {
+      expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey)).toEqual([]);
+    });
+  });
+
   test("interrupt promotes the next queued tmux prompt to the draft", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
     const store = useClaudeTmuxStore.getState();
@@ -5276,12 +5338,12 @@ Running 1 Explore agent...
       sessionId: "session-1",
     });
     store.setBusy(stateKey, true);
-    store.addToQueue(stateKey, {
+    seedQueuedPrompt(store, stateKey, {
       id: "queue-first",
       text: "edit after interrupt",
       attachments: [],
     });
-    store.addToQueue(stateKey, {
+    seedQueuedPrompt(store, stateKey, {
       id: "queue-second",
       text: "stay queued",
       attachments: [],
@@ -5318,7 +5380,7 @@ Running 1 Explore agent...
       sessionId: "session-1",
     });
     store.setBusy("tab-1", true);
-    store.addToQueue("tab-1", {
+    seedQueuedPrompt(store, "tab-1", {
       id: "legacy-interrupt",
       text: "migrated interrupt draft",
       attachments: [],

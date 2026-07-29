@@ -83,6 +83,7 @@ import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
 import * as realHooks from "@/hooks";
 import * as realUseFileMentions from "@/hooks/useFileMentions";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 const realFileMentionMenuSnapshot = { ...realFileMentionMenu };
 const realHooksSnapshot = { ...realHooks };
 const realUseFileMentionsSnapshot = { ...realUseFileMentions };
@@ -1026,7 +1027,7 @@ describe("CodexComposeBar", () => {
     useCodexStore.getState().setDraftMentions(SESSION_KEY, [
       { id: "old-mention", filename: "old.ts", relativePath: "src/old.ts" },
     ]);
-    useCodexStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued codex task",
       attachments: [
@@ -1060,7 +1061,7 @@ describe("CodexComposeBar", () => {
   });
 
   test("restores the authoritative removed prompt instead of a stale rendered row", async () => {
-    useCodexStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
       id: "queue-authoritative",
       text: "Stale rendered text",
       attachments: [],
@@ -1111,7 +1112,7 @@ describe("CodexComposeBar", () => {
   });
 
   test("keeps an equal queued fast-mode setting without dispatching a redundant change", async () => {
-    useCodexStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
       id: "queue-equal-fast",
       text: "Keep fast mode unchanged",
       attachments: [],
@@ -1413,7 +1414,7 @@ describe("CodexComposeBar", () => {
   });
 
   test("reorders and removes queued prompts from the dialog", async () => {
-    useCodexStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "First queued task",
       attachments: [],
@@ -1422,7 +1423,7 @@ describe("CodexComposeBar", () => {
       reasoningEffort: "high",
       fastMode: false,
     });
-    useCodexStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
       id: "queue-2",
       text: "Second queued task",
       attachments: [],
@@ -1453,6 +1454,88 @@ describe("CodexComposeBar", () => {
     });
   });
 
+  test("reports a rejected queue mutation without changing the projection", async () => {
+    // Codex is the only compose bar that had no failure-path coverage, so a
+    // rejection that silently emptied its projection would have gone unnoticed.
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
+      id: "queue-1",
+      text: "First queued task",
+      attachments: [],
+      model: "gpt-5.3-codex",
+      mode: "build",
+      reasoningEffort: "high",
+      fastMode: false,
+    });
+    mockRemovePromptQueueMessage.mockRejectedValueOnce(
+      new Error("Queue storage is unavailable"),
+    );
+
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getAllByTitle("Remove queued prompt")[0]!);
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Could not confirm the prompt queue update",
+    );
+    expect(useCodexStore.getState().getQueueLength(SESSION_KEY)).toBe(1);
+  });
+
+  test("explains that an occupied composer blocks editing a queued prompt", async () => {
+    useCodexStore.getState().setDraftText(SESSION_KEY, "half-written thought");
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
+      id: "queue-1",
+      text: "First queued task",
+      attachments: [],
+      model: "gpt-5.3-codex",
+      mode: "build",
+      reasoningEffort: "high",
+      fastMode: false,
+    });
+
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getByText("First queued task"));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Send or clear it before editing a queued prompt",
+    );
+    expect(mockTransferPromptQueueMessageToComposeDraft).not.toHaveBeenCalled();
+    expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe(
+      "half-written thought",
+    );
+  });
+
+  test("leaves the composer untouched when the backend no longer has the prompt", async () => {
+    // Another client took it first. The dialog row is stale, and loading an
+    // empty payload into the composer would look like the prompt was lost.
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
+      id: "queue-1",
+      text: "First queued task",
+      attachments: [],
+      model: "gpt-5.3-codex",
+      mode: "build",
+      reasoningEffort: "high",
+      fastMode: false,
+    });
+    mockTransferPromptQueueMessageToComposeDraft.mockImplementationOnce(
+      async (queueKey: string, environmentId: string) => ({
+        removed: null,
+        queue: codexQueueSnapshot(queueKey, environmentId, []),
+        draft: null,
+      }),
+    );
+
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getByText("First queued task"));
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().getQueueLength(SESSION_KEY)).toBe(0);
+    });
+    expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   test("shows an empty queue when the indicator count is stale", () => {
     renderComposeBar({ queueLength: 1 });
     fireEvent.click(screen.getByTitle("View queued prompts"));
@@ -1461,7 +1544,7 @@ describe("CodexComposeBar", () => {
   });
 
   test("disables both reorder controls for a single queued prompt", () => {
-    useCodexStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
       id: "only",
       text: "Only queued task",
       attachments: [],
@@ -1478,7 +1561,7 @@ describe("CodexComposeBar", () => {
   });
 
   test("renders queued prompt metadata and attachment pluralization", () => {
-    useCodexStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
       id: "metadata-one",
       text: "Plan quickly",
       attachments: [{
@@ -1492,7 +1575,7 @@ describe("CodexComposeBar", () => {
       reasoningEffort: "xhigh",
       fastMode: true,
     });
-    useCodexStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
       id: "metadata-two",
       text: "Build carefully",
       attachments: [

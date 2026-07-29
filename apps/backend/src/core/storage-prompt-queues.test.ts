@@ -867,3 +867,208 @@ describe("StorageService prompt queues", () => {
     });
   });
 });
+
+describe("StorageService prompt queue claim leases", () => {
+  test("refuses a non-positive or non-finite claim lease", () => {
+    for (const promptQueueClaimLeaseMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => new StorageService("/tmp/unused", { promptQueueClaimLeaseMs }))
+        .toThrow("Prompt queue claim lease must be positive");
+    }
+  });
+
+  test("rejects a settlement whose token does not match the outstanding claim", async () => {
+    // The acknowledge path already guards this; a mismatched *reject* is the
+    // one that would hand a live prompt back to a client that never held it.
+    await withStorage(async (storage) => {
+      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
+      await storage.claimPromptQueueHead(KEY, "e1", "m1");
+
+      await expect(storage.rejectPromptQueueClaim(KEY, "e1", "wrong-token"))
+        .rejects.toThrow("does not match");
+      expect((await storage.getPromptQueue(KEY))?.outstandingClaim?.message)
+        .toMatchObject({ id: "m1" });
+    });
+  });
+
+  test("recovers an expired claim inline when the next claim arrives first", async () => {
+    // Neither restart nor the lease timer has run yet: the claim path itself
+    // has to re-head the abandoned message before it can grant a new claim.
+    await withStorage(async (storage) => {
+      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
+      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m2" });
+      await storage.claimPromptQueueHead(KEY, "e1", "m1");
+
+      const file = path.join(storage.getDataDir(), "prompt-queues.json");
+      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<
+        string,
+        { outstandingClaim?: { expiresAt: string } }
+      >;
+      stored[KEY]!.outstandingClaim!.expiresAt = new Date(1).toISOString();
+      await fs.writeFile(file, JSON.stringify(stored));
+
+      const reclaimed = await storage.claimPromptQueueHead(KEY, "e1", "m1");
+      expect(reclaimed.claimed).toMatchObject({ id: "m1" });
+      expect(reclaimed.claimToken).toBeTruthy();
+      expect(reclaimed.queue?.messages).toMatchObject([{ id: "m2" }]);
+    });
+  });
+
+  test("recovers every expired claim and announces each owning environment", async () => {
+    await withStorage(async (storage) => {
+      const otherKey = "claude env-e2:tab-1";
+      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
+      await storage.enqueuePromptQueueMessage(otherKey, "e2", { id: "m2" });
+      await storage.claimPromptQueueHead(KEY, "e1", "m1");
+      await storage.claimPromptQueueHead(otherKey, "e2", "m2");
+
+      const file = path.join(storage.getDataDir(), "prompt-queues.json");
+      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<
+        string,
+        { outstandingClaim?: { expiresAt: string } }
+      >;
+      for (const record of Object.values(stored)) {
+        record.outstandingClaim!.expiresAt = new Date(1).toISOString();
+      }
+      await fs.writeFile(file, JSON.stringify(stored));
+
+      const events: Array<{ resource: string; id: string }> = [];
+      const restarted = new StorageService(storage.getDataDir());
+      restarted.setResourceChangeListener((event) => events.push(event));
+      await restarted.init();
+
+      expect(await restarted.getPromptQueue(KEY)).toMatchObject({
+        messages: [{ id: "m1" }],
+      });
+      expect(await restarted.getPromptQueue(otherKey)).toMatchObject({
+        messages: [{ id: "m2" }],
+      });
+      const announced = events
+        .filter((event) => event.resource === "prompt-queue")
+        .map((event) => event.id);
+      expect(new Set(announced)).toEqual(new Set(["e1", "e2"]));
+    });
+  });
+
+  test("drops a whole record whose stored claim is malformed", async () => {
+    // A half-written claim cannot be reasoned about: leaving the messages
+    // readable while the claim is unusable would let the same prompt be
+    // dispatched from the queue and recovered from the claim.
+    for (const outstandingClaim of [
+      { token: "  ", message: { id: "m1" }, claimedAt: new Date(0).toISOString(), expiresAt: new Date(1).toISOString() },
+      { token: "t", message: { id: "m1" }, claimedAt: "not-a-date", expiresAt: new Date(1).toISOString() },
+      { token: "t", message: { id: "m1" }, claimedAt: new Date(0).toISOString(), expiresAt: "not-a-date" },
+      { token: "t", claimedAt: new Date(0).toISOString(), expiresAt: new Date(1).toISOString() },
+    ]) {
+      await withStorage(async (storage) => {
+        const file = path.join(storage.getDataDir(), "prompt-queues.json");
+        await fs.writeFile(file, JSON.stringify({
+          [KEY]: {
+            queueKey: KEY,
+            environmentId: "e1",
+            messages: [{ id: "m1" }],
+            outstandingClaim,
+            updatedAt: new Date(0).toISOString(),
+            revision: 1,
+          },
+        }));
+
+        expect(await storage.getPromptQueue(KEY)).toBeNull();
+      });
+    }
+  });
+
+  test("keeps the claim discarded and re-arms recovery when its queue is deleted", async () => {
+    await withStorage(async (storage) => {
+      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1", text: "SENSITIVE" });
+      await storage.claimPromptQueueHead(KEY, "e1", "m1");
+
+      expect(await storage.deletePromptQueuesByEnvironment("e1")).toEqual([KEY]);
+      expect(await storage.getPromptQueue(KEY)).toBeNull();
+
+      // Nothing is left for the lease timer to restore.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(await storage.getPromptQueue(KEY)).toBeNull();
+    });
+  });
+});
+
+describe("StorageService prompt queue transfer validation", () => {
+  const DRAFT_KEY = "claude:e1:tab-1";
+
+  test("rejects malformed draft identity arguments before touching either store", async () => {
+    await withStorage(async (storage) => {
+      await storage.enqueuePromptQueueMessage(KEY, "e1", {
+        id: "m1",
+        text: "keep me queued",
+        attachments: [],
+      });
+
+      await expect(storage.transferPromptQueueMessageToComposeDraft(
+        KEY, "e1", "m1", "  ", "environment", "e1",
+      )).rejects.toThrow("Compose draft key must not be blank");
+      await expect(storage.transferPromptQueueMessageToComposeDraft(
+        KEY, "e1", "m1", DRAFT_KEY, "workspace" as "environment", "e1",
+      )).rejects.toThrow("Compose draft owner type is invalid");
+      await expect(storage.transferPromptQueueMessageToComposeDraft(
+        KEY, "e1", "m1", DRAFT_KEY, "environment", "  ",
+      )).rejects.toThrow("Compose draft owner ID must not be blank");
+      await expect(storage.transferPromptQueueMessageToComposeDraft(
+        KEY, "e1", "m1", DRAFT_KEY, "environment", "e1", 1.5,
+      )).rejects.toThrow("Compose draft expected revision must be a non-negative integer");
+      await expect(storage.transferPromptQueueMessageToComposeDraft(
+        KEY, "e1", "m1", DRAFT_KEY, "environment", "e1", -1,
+      )).rejects.toThrow("Compose draft expected revision must be a non-negative integer");
+
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({
+        messages: [{ id: "m1" }],
+        revision: 1,
+      });
+      expect(await storage.getComposeDraft(DRAFT_KEY)).toBeNull();
+    });
+  });
+
+  test("refuses to transfer into a draft slot owned by someone else", async () => {
+    await withStorage(async (storage) => {
+      await storage.enqueuePromptQueueMessage(KEY, "e1", {
+        id: "m1",
+        text: "keep me queued",
+        attachments: [],
+      });
+      await storage.saveComposeDraft(DRAFT_KEY, "environment", "e2", { text: "other env draft" });
+
+      await expect(storage.transferPromptQueueMessageToComposeDraft(
+        KEY, "e1", "m1", DRAFT_KEY, "environment", "e1",
+      )).rejects.toThrow("Compose draft belongs to another owner");
+      expect(await storage.getComposeDraft(DRAFT_KEY))
+        .toMatchObject({ value: { text: "other env draft" } });
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [{ id: "m1" }] });
+    });
+  });
+
+  test("drops a persisted draft whose transfer provenance is malformed or oversized", async () => {
+    for (const sourcePromptQueue of [
+      "not-a-record",
+      { queueKey: "  ", messageId: "m1" },
+      { queueKey: KEY, messageId: "  " },
+      { queueKey: "k".repeat(4 * 1024 + 1), messageId: "m1" },
+      { queueKey: KEY, messageId: "m".repeat(1024 + 1) },
+    ]) {
+      await withStorage(async (storage) => {
+        const file = path.join(storage.getDataDir(), "compose-drafts.json");
+        await fs.writeFile(file, JSON.stringify({
+          [DRAFT_KEY]: {
+            draftKey: DRAFT_KEY,
+            ownerType: "environment",
+            ownerId: "e1",
+            value: { text: "hi" },
+            sourcePromptQueue,
+            updatedAt: new Date(0).toISOString(),
+            revision: 1,
+          },
+        }));
+
+        expect(await storage.getComposeDraft(DRAFT_KEY)).toBeNull();
+      });
+    }
+  });
+});

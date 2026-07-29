@@ -60,6 +60,7 @@ import {
   removeAgentPrompt,
   transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
+import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 
 interface OpenCodeComposeBarProps {
   environmentId: string;
@@ -474,6 +475,12 @@ export function OpenCodeComposeBar({
    */
   const handleQueuedMessageClick = useCallback(
     async (message: OpenCodeQueuedMessage) => {
+      // Editing loads the prompt into the composer, so anything already there
+      // would be destroyed. Refusing with a reason beats the silent overwrite
+      // this used to do and beats the backend's opaque rejection downstream.
+      if (text.trim().length > 0 || attachments.length > 0) {
+        throw composerOccupiedError();
+      }
       const removed = await transferAgentPromptToComposeDraft<OpenCodeQueuedMessage>(
         "opencode",
         sessionKey,
@@ -495,7 +502,7 @@ export function OpenCodeComposeBar({
       setQueueDialogOpen(false);
       inputRef.current?.focus();
     },
-    [sessionKey],
+    [attachments, sessionKey, text],
   );
 
   const handleModeChange = (mode: string) => {

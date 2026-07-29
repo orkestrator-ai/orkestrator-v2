@@ -61,40 +61,67 @@ export function composeDraftKey(
   return `${namespace}:${environmentId}:${encodeURIComponent(localKey)}`;
 }
 
-function enqueue(draftKey: string, operation: () => Promise<unknown>): Promise<void> {
+/**
+ * Serialize one operation per draft key and hand back its result.
+ *
+ * Everything that reads or writes `DraftRevisionState.revision` has to go
+ * through here. The revision is a compare-and-swap cursor, so two operations
+ * interleaving on it produce a swap against a revision the backend has already
+ * moved past.
+ */
+function enqueue<TResult>(
+  draftKey: string,
+  operation: () => Promise<TResult>,
+): Promise<TResult> {
   const previous = writeChains.get(draftKey) ?? Promise.resolve();
-  const next = previous
+  const result = previous
     .catch(() => undefined)
-    .then(operation)
-    .then(() => undefined);
-  writeChains.set(draftKey, next);
-  void next.then(
-    () => {
-      if (writeChains.get(draftKey) === next) writeChains.delete(draftKey);
-    },
-    () => {
-      if (writeChains.get(draftKey) === next) writeChains.delete(draftKey);
-    },
-  );
-  return next;
+    .then(operation);
+  // The chain itself must never reject, or one failure would skip every
+  // operation queued behind it. Callers still see `result`'s rejection.
+  const settled = result.then(() => undefined, () => undefined);
+  writeChains.set(draftKey, settled);
+  void settled.then(() => {
+    if (writeChains.get(draftKey) === settled) writeChains.delete(draftKey);
+  });
+  return result;
 }
 
 /**
- * Read a draft after every save/delete already queued for the same key.
+ * Settle everything already queued for one draft key.
  *
- * This matters when a tab is closed and immediately reopened: the new mount
- * must not hydrate the value that the close path has already queued to delete.
+ * Callers that mutate a draft through some *other* backend command have to wait
+ * for this first: an in-flight save makes that command see an occupied draft,
+ * and an in-flight delete makes it see one that the composer has already
+ * discarded. Do not call this from inside a queued operation — it waits on the
+ * chain that operation is a member of.
  */
-export async function loadComposeDraft<T>(
+export async function awaitComposeDraftWrites(draftKey: string): Promise<void> {
+  await (writeChains.get(draftKey) ?? Promise.resolve()).catch(() => undefined);
+}
+
+/**
+ * Read a draft, ordered against every save and delete for the same key.
+ *
+ * Ordering matters twice over. A tab closed and immediately reopened must not
+ * hydrate the value the close path has queued to delete. And because this read
+ * publishes the revision cursor every later compare-and-swap uses, it cannot be
+ * allowed to overlap a save: a read that started first but resolved second used
+ * to overwrite the revision that save had just advanced, leaving the cursor
+ * behind the backend. The next save then failed as a phantom conflict, and a
+ * discard-on-submit failed too — so a submitted draft survived to resurface.
+ */
+export function loadComposeDraft<T>(
   draftKey: string,
   revisionState?: DraftRevisionState,
 ): Promise<Awaited<ReturnType<typeof backend.getComposeDraft<T>>>> {
-  await (writeChains.get(draftKey) ?? Promise.resolve()).catch(() => undefined);
-  const draft = await backend.getComposeDraft<T>(draftKey);
-  const state = revisionStateFor(draftKey, revisionState);
-  state.revision = draft?.revision ?? 0;
-  state.conflictRevision = null;
-  return draft;
+  return enqueue(draftKey, async () => {
+    const draft = await backend.getComposeDraft<T>(draftKey);
+    const state = revisionStateFor(draftKey, revisionState);
+    state.revision = draft?.revision ?? 0;
+    state.conflictRevision = null;
+    return draft;
+  });
 }
 
 export function persistComposeDraft<T>(

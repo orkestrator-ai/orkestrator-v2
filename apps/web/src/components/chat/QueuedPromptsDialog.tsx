@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { isPromptQueueActionError } from "@/lib/prompt-queue-errors";
 
 interface QueuedPromptsDialogProps<TQueued extends { id: string; text: string }> {
   open: boolean;
@@ -59,9 +60,13 @@ export function QueuedPromptsDialog<
     setActionError(null);
     try {
       await action();
-    } catch {
+    } catch (error) {
       setActionError(
-        "Could not confirm the prompt queue update. Wait for the queue to refresh before retrying.",
+        // A refusal the user can resolve carries its own instruction; telling
+        // them to wait for a refresh would be actively misleading.
+        isPromptQueueActionError(error)
+          ? error.message
+          : "Could not confirm the prompt queue update. Wait for the queue to refresh before retrying.",
       );
     } finally {
       pendingActionRef.current = null;

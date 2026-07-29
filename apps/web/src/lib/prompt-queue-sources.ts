@@ -8,9 +8,14 @@ import {
   type QueuedItem,
 } from "@/lib/prompt-queue-persistence";
 import {
+  awaitComposeDraftWrites,
   composeDraftKey,
   recordComposeDraftRevision,
 } from "@/lib/compose-draft-persistence";
+import {
+  composerOccupiedError,
+  isComposeDraftOccupiedBackendError,
+} from "@/lib/prompt-queue-errors";
 import * as backend from "@/lib/backend";
 import { useClaudeStore } from "@/stores/claudeStore";
 import {
@@ -242,24 +247,42 @@ export async function transferAgentPromptToComposeDraft<
   const source = sourceFor<TItem>(agent);
   if (!source) throw new Error(`Unknown prompt queue agent: ${agent}`);
   const identity = queueIdentity(source, sessionKey);
-  const result = await backend.transferPromptQueueMessageToComposeDraft<TItem>(
-    identity.queueKey,
-    identity.environmentId,
-    messageId,
-    composeDraftKey(agent, identity.environmentId, sessionKey),
-    "environment",
-    identity.environmentId,
-  );
+  const draftKey = composeDraftKey(agent, identity.environmentId, sessionKey);
+
+  // The composer persists its own draft on a debounce. Transferring before those
+  // writes settle makes the backend judge the draft slot against a stale record:
+  // an unfinished save looks like an occupied composer, and an unfinished delete
+  // looks like an empty one.
+  await awaitComposeDraftWrites(draftKey);
+
+  let result: Awaited<
+    ReturnType<typeof backend.transferPromptQueueMessageToComposeDraft<TItem>>
+  >;
+  try {
+    result = await backend.transferPromptQueueMessageToComposeDraft<TItem>(
+      identity.queueKey,
+      identity.environmentId,
+      messageId,
+      draftKey,
+      "environment",
+      identity.environmentId,
+    );
+  } catch (error) {
+    // The backend never overwrites a draft it did not create. That is a state
+    // the user can clear themselves, so it must not surface as an opaque
+    // "could not confirm" failure.
+    if (isComposeDraftOccupiedBackendError(error)) {
+      throw composerOccupiedError({ cause: error });
+    }
+    throw error;
+  }
   if (result.queue) {
     applyPromptQueueSnapshot(source, result.queue);
   } else {
     source.setQueue(sessionKey, []);
   }
   if (result.draft && typeof result.draft.revision === "number") {
-    recordComposeDraftRevision(
-      composeDraftKey(agent, identity.environmentId, sessionKey),
-      result.draft.revision,
-    );
+    recordComposeDraftRevision(draftKey, result.draft.revision);
   }
   return result.removed;
 }

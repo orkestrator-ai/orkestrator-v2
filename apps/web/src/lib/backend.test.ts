@@ -674,6 +674,27 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
+  test("omits the expected draft revision entirely when the caller has none", async () => {
+    /**
+     * Sending `expectedDraftRevision: undefined` would be indistinguishable
+     * from 0 after JSON serialization, and 0 asserts "no draft exists yet" —
+     * turning an unconditional transfer into one that fails against any
+     * existing draft.
+     */
+    await backendWrappers.transferPromptQueueMessageToComposeDraft(
+      "codex env-1:tab-1",
+      "env-1",
+      "message-1",
+      "codex:env-1:env-1%3Atab-1",
+      "environment",
+      "env-1",
+    );
+
+    const [command, payload] = invokeMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(command).toBe("transfer_prompt_queue_message_to_compose_draft");
+    expect("expectedDraftRevision" in payload).toBe(false);
+  });
+
   test("forwards draft compare-and-swap revisions exactly", async () => {
     await backendWrappers.saveComposeDraft(
       "compose:env-1:tab",

@@ -1087,10 +1087,10 @@ describe("App background processing mounts", () => {
     expect(screen.getByTestId("terminal-env-queued-opencode").getAttribute("data-active")).toBe("false");
 
     act(() => {
-      useClaudeStore.getState().clearQueue(claudeSessionKey);
-      useClaudeTmuxStore.getState().clearQueue(tmuxStateKey);
-      useCodexStore.getState().clearQueue(codexSessionKey);
-      useOpenCodeStore.getState().clearQueue(openCodeSessionKey);
+      useClaudeStore.getState().setQueueProjection(claudeSessionKey, []);
+      useClaudeTmuxStore.getState().setQueueProjection(tmuxStateKey, []);
+      useCodexStore.getState().setQueueProjection(codexSessionKey, []);
+      useOpenCodeStore.getState().setQueueProjection(openCodeSessionKey, []);
     });
 
     await waitFor(() => {

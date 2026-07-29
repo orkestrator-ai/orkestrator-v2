@@ -217,6 +217,27 @@ describe("backend-owned prompt queue projections", () => {
     }
   });
 
+  test("refuses a claimed message that arrived without a usable claim token", async () => {
+    /**
+     * The token is the only handle on the durable claim: dispatching without
+     * one would send a prompt this client can never acknowledge or return, so
+     * it would sit in the backend until its lease expired and then be sent
+     * again.
+     */
+    for (const claimToken of [null, "", "   "]) {
+      const source = createSource();
+      source.setQueue(SESSION, [{ id: "expected" }]);
+      await expect(
+        claimPromptQueueHead(source, SESSION, async (key, environmentId) => ({
+          claimed: { id: "expected" },
+          claimToken,
+          queue: persisted(key, [], 2, environmentId),
+        })),
+      ).resolves.toBeNull();
+      expect(source.read()).toEqual([]);
+    }
+  });
+
   test("allows only one of two clients to claim an authoritative head", async () => {
     const first = createSource();
     const second = createSource();

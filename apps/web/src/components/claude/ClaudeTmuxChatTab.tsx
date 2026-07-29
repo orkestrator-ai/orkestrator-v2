@@ -125,6 +125,7 @@ import {
   rejectAgentPromptClaim,
   removeAgentPrompt,
 } from "@/lib/prompt-queue-sources";
+import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 import {
   getClaudeModelCatalog,
   renameEnvironmentFromPrompt,
@@ -227,6 +228,11 @@ const EFFORT_DESCRIPTIONS: Record<ClaudeEffortLevel, string> = {
   max: "Maximum effort (select models only)",
 };
 const DEFAULT_EFFORT: ClaudeEffortLevel = "high";
+/**
+ * First cooldown before a queue head that failed to send is retried. Doubles
+ * per consecutive failure on the same head, capped at 30s.
+ */
+const PAUSED_QUEUE_HEAD_BASE_DELAY_MS = 500;
 
 function resolveTmuxModelPreference(
   modelId: string | undefined,
@@ -416,16 +422,23 @@ export function ClaudeTmuxChatTab({
   const startedRef = useRef(false);
   const permissionModeEventVersionRef = useRef(0);
   const isProcessingQueueRef = useRef(false);
-  const pausedQueueHeadIdRef = useRef<string | null>(null);
+  /**
+   * Head this tab has stopped retrying, and for how many consecutive failures.
+   *
+   * A restored head is byte-identical to the one that just failed, so an
+   * unconditional re-drive would spin against an unavailable session. The pause
+   * is released on a backoff rather than held until the head changes: a send
+   * that failed once must still drain when the session recovers.
+   */
+  const pausedQueueHeadRef = useRef<{ id: string; attempts: number } | null>(null);
+  const pausedQueueHeadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pauseQueueHeadRef = useRef<(headId: string) => void>(() => {});
   const queueMountedRef = useRef(true);
   const claimSettlementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingClaimSettlementRef = useRef<{
     operation: "acknowledge" | "reject";
     claim: { entry: TmuxQueuedMessage; claimToken: string };
   } | null>(null);
-  const restoreClaimedPromptToDraftRef = useRef<(message: TmuxQueuedMessage) => void>(
-    () => {},
-  );
   const retryClaimSettlementRef = useRef<
     (
       operation: "acknowledge" | "reject",
@@ -1062,27 +1075,45 @@ export function ClaudeTmuxChatTab({
     [storeKey],
   );
 
-  const restoreClaimedPromptToDraft = useCallback(
-    (message: TmuxQueuedMessage) => {
-      const store = useClaudeTmuxStore.getState();
-      const currentText = store.getDraftText(storeKey);
-      const currentAttachments = store.getAttachments(storeKey);
-      store.setDraftText(
-        storeKey,
-        currentText.trim()
-          ? `${message.text}\n\n${currentText}`
-          : message.text,
-      );
-      store.clearAttachments(storeKey);
-      for (const attachment of [...message.attachments, ...currentAttachments]) {
-        if (!store.getAttachments(storeKey).some((item) => item.id === attachment.id)) {
-          store.addAttachment(storeKey, attachment);
-        }
+  const clearPausedQueueHead = useCallback(() => {
+    pausedQueueHeadRef.current = null;
+    if (pausedQueueHeadTimerRef.current) {
+      clearTimeout(pausedQueueHeadTimerRef.current);
+      pausedQueueHeadTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Stop retrying one head for a bounded cooldown, then drain again.
+   *
+   * Without the cooldown a sender that keeps refusing would be re-claimed as
+   * fast as the backend can answer; without the automatic release the queue
+   * would stay stalled behind a prompt whose only problem was transient.
+   */
+  const pauseQueueHead = useCallback((headId: string) => {
+    const previous = pausedQueueHeadRef.current;
+    const attempts = previous?.id === headId ? previous.attempts + 1 : 1;
+    pausedQueueHeadRef.current = { id: headId, attempts };
+    if (pausedQueueHeadTimerRef.current) {
+      clearTimeout(pausedQueueHeadTimerRef.current);
+    }
+    pausedQueueHeadTimerRef.current = setTimeout(() => {
+      pausedQueueHeadTimerRef.current = null;
+      if (pausedQueueHeadRef.current?.id !== headId || !queueMountedRef.current) {
+        return;
       }
-    },
-    [storeKey],
-  );
-  restoreClaimedPromptToDraftRef.current = restoreClaimedPromptToDraft;
+      if (pendingClaimSettlementRef.current) {
+        // A settlement retry still owns the durable claim, so resuming would
+        // race it for the same message. Wait again rather than returning: the
+        // cooldown is the only thing that will restart this head.
+        pauseQueueHeadRef.current(headId);
+        return;
+      }
+      pausedQueueHeadRef.current = null;
+      processQueueRef.current();
+    }, Math.min(PAUSED_QUEUE_HEAD_BASE_DELAY_MS * (2 ** (attempts - 1)), 30_000));
+  }, []);
+  pauseQueueHeadRef.current = pauseQueueHead;
 
   retryClaimSettlementRef.current = async (
     operation,
@@ -1095,7 +1126,7 @@ export function ClaudeTmuxChatTab({
     // Zustand subscribers can render synchronously during that application;
     // the guard must already be visible when their queue effect runs.
     if (operation === "reject") {
-      pausedQueueHeadIdRef.current = claim.entry.id;
+      pauseQueueHead(claim.entry.id);
     }
     try {
       if (operation === "acknowledge") {
@@ -1112,7 +1143,11 @@ export function ClaudeTmuxChatTab({
         );
       }
       pendingClaimSettlementRef.current = null;
-      if (operation === "reject" && queueMountedRef.current) {
+      if (operation === "acknowledge") {
+        // The head advanced, so the cooldown taken for an earlier failure on
+        // this tab no longer describes anything.
+        clearPausedQueueHead();
+      } else if (queueMountedRef.current) {
         setError("Failed to send queued prompt. It was returned to the queue.");
       }
       return true;
@@ -1129,9 +1164,9 @@ export function ClaudeTmuxChatTab({
         );
       }
       if (!queueMountedRef.current) {
-        if (operation === "reject") {
-          restoreClaimedPromptToDraftRef.current(claim.entry);
-        }
+        // Leave the durable claim alone. Copying the prompt back into this
+        // tab's draft would duplicate it: the backend lease still holds the
+        // same message and re-heads it when the lease expires.
         pendingClaimSettlementRef.current = null;
         return false;
       }
@@ -1169,14 +1204,13 @@ export function ClaudeTmuxChatTab({
 
     const tmuxState = useClaudeTmuxStore.getState();
     const currentHeadId = tmuxState.getQueuedMessages(storeKey)[0]?.id ?? null;
-    if (
-      pausedQueueHeadIdRef.current &&
-      pausedQueueHeadIdRef.current === currentHeadId
-    ) {
-      return;
-    }
-    if (pausedQueueHeadIdRef.current && pausedQueueHeadIdRef.current !== currentHeadId) {
-      pausedQueueHeadIdRef.current = null;
+    const paused = pausedQueueHeadRef.current;
+    if (paused) {
+      // Still cooling down on the head that failed; its timer will re-drive.
+      if (paused.id === currentHeadId) return;
+      // A different head means the queue moved on under us, so the cooldown
+      // and its retry count no longer apply.
+      clearPausedQueueHead();
     }
     if (
       tmuxState.getDraftText(storeKey).trim().length > 0 ||
@@ -1221,7 +1255,7 @@ export function ClaudeTmuxChatTab({
         );
       })
       .catch((e) => {
-        pausedQueueHeadIdRef.current = headBeforeClaimId ?? null;
+        if (headBeforeClaimId) pauseQueueHead(headBeforeClaimId);
         setError(
           `Failed to send queued prompt: ${
             e instanceof Error ? e.message : "Unknown error"
@@ -1240,9 +1274,11 @@ export function ClaudeTmuxChatTab({
       });
   }, [
     backendHydrated,
+    clearPausedQueueHead,
     isThinking,
     modelSwitching,
     effortSwitching,
+    pauseQueueHead,
     running,
     sending,
     setTabBusy,
@@ -1257,19 +1293,21 @@ export function ClaudeTmuxChatTab({
     queueMountedRef.current = true;
     return () => {
       queueMountedRef.current = false;
-      let cancelledScheduledRetry = false;
+      /*
+       * Drop this tab's timers and forget any unsettled claim, but never touch
+       * the prompt itself. The backend still owns it under a lease and re-heads
+       * it when that lease expires, so restoring it locally as well would put
+       * the same prompt in both the composer and the queue and send it twice.
+       */
       if (claimSettlementTimerRef.current) {
         clearTimeout(claimSettlementTimerRef.current);
         claimSettlementTimerRef.current = null;
-        cancelledScheduledRetry = true;
       }
-      const pending = pendingClaimSettlementRef.current;
-      if (cancelledScheduledRetry) {
-        pendingClaimSettlementRef.current = null;
+      if (pausedQueueHeadTimerRef.current) {
+        clearTimeout(pausedQueueHeadTimerRef.current);
+        pausedQueueHeadTimerRef.current = null;
       }
-      if (cancelledScheduledRetry && pending?.operation === "reject") {
-        restoreClaimedPromptToDraftRef.current(pending.claim.entry);
-      }
+      pendingClaimSettlementRef.current = null;
     };
   }, []);
 
@@ -2933,7 +2971,12 @@ function TmuxComposeBar({
 
   const handleQueuedMessageClick = useCallback(
     async (message: TmuxQueuedMessage) => {
-      if (value.trim() || attachments.length > 0) return;
+      // Editing loads the prompt into the composer, so anything already there
+      // would be destroyed. This used to return silently, which read as the
+      // click simply not working.
+      if (value.trim() || attachments.length > 0) {
+        throw composerOccupiedError();
+      }
       try {
         const removed = await removeAgentPrompt<TmuxQueuedMessage>(
           "claude-tmux",

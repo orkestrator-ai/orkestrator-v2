@@ -280,6 +280,52 @@ function startInput(
 }
 
 describe("BuildPipelineService", () => {
+  test("admits one equivalent start across two backend processes", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-admission-"));
+    const firstStorage = new StorageService(dataDir);
+    const secondStorage = new StorageService(dataDir);
+    await Promise.all([firstStorage.init(), secondStorage.init()]);
+    await firstStorage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "build",
+      branch: "build",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "full",
+      order: 0,
+      environmentType: "local",
+      worktreePath: "/tmp/build",
+      setupScriptsComplete: true,
+    });
+    const invoke = async <T>(): Promise<T> => {
+      throw new Error("No backend command should run during admission");
+    };
+    const first = new BuildPipelineService(firstStorage, invoke, {
+      autoAdvance: false,
+      provider: async () => new FakeProvider(),
+    });
+    const second = new BuildPipelineService(secondStorage, invoke, {
+      autoAdvance: false,
+      provider: async () => new FakeProvider(),
+    });
+    try {
+      const [left, right] = await Promise.all([
+        first.start(startInput()),
+        second.start(startInput()),
+      ]);
+      expect(right.id).toBe(left.id);
+      expect(await firstStorage.listBuildPipelines("project-1")).toHaveLength(1);
+    } finally {
+      await Promise.all([first.shutdown(), second.shutdown()]);
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("owns and advances the complete pipeline without a renderer", async () => {
     await withService(async (service, storage, provider) => {
       const started = await service.start({

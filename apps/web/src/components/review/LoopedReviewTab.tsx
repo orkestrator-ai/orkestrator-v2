@@ -597,7 +597,11 @@ export function LoopedReviewTab({
   ): Promise<string> => {
     const agent = await connect(current);
     const label = sessionLabel(phase, current.currentRound, pass);
-    const providerSessionId = await agent.createSession(phase, label);
+    const providerSessionId = await agent.createSession(
+      phase,
+      label,
+      `looped-review:${current.id}:${phase}:round-${current.currentRound}:pass-${pass ?? 0}`,
+    );
     const id = useLoopedReviewStore.getState().addSession(current.id, {
       phase,
       round: current.currentRound,
@@ -662,6 +666,7 @@ export function LoopedReviewTab({
         const providerSessionId = await agent.createSession(
           "discovery",
           sessionLabel("discovery", current.currentRound, current.currentPass),
+          `looped-review:${current.id}:discovery:round-${current.currentRound}:pass-${current.currentPass}`,
         );
         useLoopedReviewStore.getState().updateSession(
           current.id,

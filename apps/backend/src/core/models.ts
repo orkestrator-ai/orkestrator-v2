@@ -99,6 +99,16 @@ export interface InitialPromptImageAttachment {
   base64Data: string;
 }
 
+export interface StartupAgentSessionSnapshot {
+  tabId: "startup-agent";
+  agent: DefaultAgent;
+  style: AgentStyle;
+  providerSessionId?: string;
+  status: "starting" | "running" | "error";
+  startedAt?: string;
+  error?: string;
+}
+
 export interface Environment {
   id: string;
   projectId: string;
@@ -201,6 +211,8 @@ export interface Environment {
   initialPrompt?: string;
   /** Images waiting to be written into the workspace before the first prompt. */
   initialPromptAttachments?: InitialPromptImageAttachment[];
+  /** Backend-owned result of consuming pendingAgentLaunch. */
+  startupAgentSession?: StartupAgentSessionSnapshot;
   /** Prompt awaiting a backend-owned rename after the environment starts. */
   pendingRenamePrompt?: string;
 }
@@ -254,6 +266,10 @@ export interface PersistedLoopedReviewWorkflow {
   snapshot: unknown;
   updatedAt: string;
   revision: number;
+  controllerLease?: {
+    ownerId: string;
+    expiresAt: string;
+  };
 }
 
 /**
@@ -277,6 +293,24 @@ export interface PersistedBuildPipeline {
   revision: number;
 }
 
+export type NativeAgentProvider = "claude" | "codex" | "opencode";
+
+/**
+ * Durable mapping between a logical UI tab and the provider session that owns
+ * its transcript. The backend creates this mapping atomically, so any number of
+ * renderers asking for the same tab receive the same provider session.
+ */
+export interface PersistedNativeAgentSession {
+  key: string;
+  environmentId: string;
+  agent: NativeAgentProvider;
+  logicalSessionKey: string;
+  providerSessionId: string;
+  dispatchedRequestIds?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 /**
  * Prompts a user has committed to sending but which have not been dispatched
  * yet, for one agent tab.
@@ -291,6 +325,16 @@ export interface PersistedPromptQueue {
   queueKey: string;
   environmentId: string;
   messages: unknown[];
+  /**
+   * A backend-owned dispatch lease. The item remains durable here until the
+   * provider acknowledges its stable request id, so a backend restart cannot
+   * lose a prompt between dequeue and network dispatch.
+   */
+  inFlight?: {
+    message: unknown;
+    requestId: string;
+    reservedAt: string;
+  };
   updatedAt: string;
   revision: number;
 }

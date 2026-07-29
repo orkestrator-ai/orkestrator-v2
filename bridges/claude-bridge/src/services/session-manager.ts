@@ -52,6 +52,7 @@ import { getMcpRuntimeConfig } from "./mcp-config.js";
 import { getPluginsForSdk } from "./plugin-config.js";
 import type { McpToolMetadata } from "../types/mcp.js";
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { constants, existsSync, type Stats } from "node:fs";
 import { lstat, open, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -1002,8 +1003,23 @@ async function generateAndSetSessionTitle(
 /**
  * Create a new session
  */
-export function createSession(title?: string): SessionState {
-  const id = generateSessionId();
+export function createSession(
+  title?: string,
+  clientSessionKey?: string,
+): SessionState {
+  const stableKey =
+    typeof clientSessionKey === "string"
+    && clientSessionKey.trim().length > 0
+    && clientSessionKey.length <= 512
+      ? clientSessionKey
+      : undefined;
+  const id = stableKey
+    ? `session-client-${
+        createHash("sha256").update(stableKey).digest("hex").slice(0, 32)
+      }`
+    : generateSessionId();
+  const existing = sessions.get(id);
+  if (existing) return existing;
   const now = new Date();
 
   const session: SessionState = {

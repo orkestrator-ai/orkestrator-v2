@@ -878,7 +878,7 @@ export function ClaudeTmuxChatTab({
   // Common "start the tmux session" path used by both auto-start (initial
   // prompt present) and the explicit "Start fresh" / "Resume" buttons.
   const launchSession = useCallback(
-    (resumeSessionId?: string) => {
+    (resumeSessionId?: string, replaceExisting = false) => {
       if (startedRef.current) return;
       startedRef.current = true;
       startSession(tabId, environmentId, {
@@ -886,6 +886,7 @@ export function ClaudeTmuxChatTab({
         model: selectedModel,
         effort: effortOptions.length > 0 ? effectiveEffort : undefined,
         resumeSessionId,
+        replaceExisting,
       })
         .catch((e) => {
           // Re-arm so the user can retry from the start screen.
@@ -1265,7 +1266,7 @@ export function ClaudeTmuxChatTab({
 
   const handleResume = (sessionId: string) => {
     setResumeDialogOpen(false);
-    launchSession(sessionId);
+    launchSession(sessionId, true);
   };
 
   // Claude Code silently downgrades an unsupported effort level, so when a
@@ -1499,7 +1500,7 @@ export function ClaudeTmuxChatTab({
                 !centerCompose && !hasPendingHookCards ? (
                   showStartScreen ? (
                     <StartScreen
-                      onStartFresh={() => launchSession()}
+                      onStartFresh={() => launchSession(undefined, true)}
                       onPickResume={() => setResumeDialogOpen(true)}
                       selectedModel={selectedModelObj.name}
                       effortLabel={
@@ -1646,7 +1647,7 @@ export function ClaudeTmuxChatTab({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => launchSession()}
+                  onClick={() => launchSession(undefined, true)}
                   className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
                   aria-hidden={!centerCompose}
                   tabIndex={centerCompose ? 0 : -1}

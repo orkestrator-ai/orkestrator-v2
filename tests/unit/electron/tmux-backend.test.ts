@@ -848,7 +848,7 @@ describe("Electron tmux backend command registration", () => {
         storage: {
           getEnvironment: async () => {
             environmentReads += 1;
-            return environmentReads < 4 ? environment : undefined;
+            return environmentReads < 3 ? environment : undefined;
           },
         },
         emit: () => undefined,
@@ -1112,6 +1112,58 @@ describe("Electron tmux backend command registration", () => {
         { tabId: "tab-1782973296000-2", environmentId: environment.id },
         context,
       );
+    });
+  });
+
+  test("attaches duplicate client starts to one tmux session unless replacement is explicit", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = {
+        tabId: "startup-agent",
+        environmentId: environment.id,
+      };
+
+      const first = await invoke(
+        handlers,
+        "claude_tmux_start",
+        args,
+        context,
+      ) as { session_id: string };
+      const attached = await invoke(
+        handlers,
+        "claude_tmux_start",
+        args,
+        context,
+      ) as { session_id: string };
+
+      expect(attached.session_id).toBe(first.session_id);
+      let tmuxLog = await fs.readFile(log, "utf8");
+      expect(
+        tmuxLog.split("\n").filter((line) => line.startsWith("new-session ")),
+      ).toHaveLength(1);
+      expect(tmuxLog).not.toContain("kill-session");
+
+      const replaced = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { ...args, replaceExisting: true },
+        context,
+      ) as { session_id: string };
+      expect(replaced.session_id).not.toBe(first.session_id);
+      tmuxLog = await fs.readFile(log, "utf8");
+      expect(
+        tmuxLog.split("\n").filter((line) => line.startsWith("new-session ")),
+      ).toHaveLength(2);
+      expect(tmuxLog).toContain("kill-session");
+
+      await invoke(handlers, "claude_tmux_stop", args, context);
     });
   });
 

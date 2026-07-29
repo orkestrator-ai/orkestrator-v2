@@ -59,6 +59,19 @@ describe("mergePersistedPaneLayouts", () => {
     ]);
   });
 
+  test("converges concurrent additions with the same logical tab id", () => {
+    const base = input(leaf("default", ["setup"]));
+    const local = input(leaf("default", ["setup", "startup-agent"]));
+    const remote = input(leaf("default", ["setup", "startup-agent"]));
+
+    const merged = mergePersistedPaneLayouts(base, local, remote);
+
+    expect(tabs(merged.root).map(({ id }) => id)).toEqual([
+      "setup",
+      "startup-agent",
+    ]);
+  });
+
   test("a deletion wins over a concurrent metadata update", () => {
     const base = input(leaf("default", ["base", "closed"]));
     const local = input(leaf("default", ["base"]));

@@ -174,6 +174,8 @@ export interface BuildPipeline {
   source?: BuildPipelineSource;
   /** Optional feature-plan association maintained by the backend supervisor. */
   featurePlanId?: string;
+  /** Stable backend admission identity for concurrent equivalent starts. */
+  admissionKey?: string;
   /** Set after all source/task/feature associations have committed. */
   sourceLinkedAt?: string;
   completionCommentStatus?: CompletionCommentStatus;
@@ -418,6 +420,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
       && typeof value.reviewRetryRequested !== "boolean")
     || (value.source !== undefined && !isPipelineSource(value.source))
     || !isOptionalNonBlankString(value.featurePlanId)
+    || !isOptionalNonBlankString(value.admissionKey)
     || (value.sourceLinkedAt !== undefined && !isIsoDate(value.sourceLinkedAt))
     || (value.completionCommentStatus !== undefined
       && value.completionCommentStatus !== "posting"

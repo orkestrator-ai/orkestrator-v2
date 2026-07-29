@@ -11,6 +11,8 @@ function workflow(
   agent: LoopedReviewWorkflow["agent"],
 ): LoopedReviewWorkflow {
   return {
+    id: "workflow-1",
+    environmentId: "env-1",
     agent,
     model: "default",
     sessions: [],
@@ -99,6 +101,51 @@ describe("structured review phase permissions", () => {
       await adapter.createSession(phase, phase);
     }
     expect(modes).toEqual(["plan", "build", "build", "build"]);
+  });
+
+  test("routes looped-review session creation through backend logical admission", async () => {
+    const ensureSession = mock(async () => ({
+      id: "record-1",
+      key: "key-1",
+      environmentId: "env-1",
+      agent: "codex" as const,
+      logicalSessionKey: "looped-review:workflow-1:discovery:round-1:pass-1",
+      providerSessionId: "provider-session",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    }));
+    const adapter = codexAdapter(
+      { baseUrl: "http://codex.test" },
+      workflow("codex"),
+      {
+        ensureSession,
+        createSession: mock(async () => {
+          throw new Error("direct creation must not run");
+        }),
+        sendPrompt: mock(async () => ({
+          outcome: "accepted" as const,
+          status: "processing" as const,
+        })),
+        getStructuredOutput: mock(async () => null),
+        lookupSessionStatus: mock(async () => ({ kind: "missing" as const })),
+        abortSession: mock(async () => ({ status: "accepted" as const })),
+      },
+    );
+
+    await expect(
+      adapter.createSession(
+        "discovery",
+        "Discovery",
+        "looped-review:workflow-1:discovery:round-1:pass-1",
+      ),
+    ).resolves.toBe("provider-session");
+    expect(ensureSession).toHaveBeenCalledWith(expect.objectContaining({
+      environmentId: "env-1",
+      agent: "codex",
+      logicalSessionKey:
+        "looped-review:workflow-1:discovery:round-1:pass-1",
+      phase: "review",
+    }));
   });
 
   test("OpenCode sends only discovery sessions in plan mode", async () => {

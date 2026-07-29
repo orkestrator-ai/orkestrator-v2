@@ -7,7 +7,6 @@ import {
   useManualSessionRefresh,
   type RefreshSessionOptions,
 } from "@/hooks/useManualSessionRefresh";
-import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
@@ -62,6 +61,7 @@ import {
   startLocalClaudeServer,
   getLocalClaudeServerStatus,
   getClaudeModelCatalog,
+  ensureNativeAgentSession,
   renameEnvironmentFromPrompt,
 } from "@/lib/backend";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
@@ -79,8 +79,7 @@ import type { ClaudeNativeData } from "@/types/paneLayout";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
-import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
-import type { ClaudeAttachment, QueuedMessage } from "@/stores/claudeStore";
+import type { ClaudeAttachment } from "@/stores/claudeStore";
 import {
   applyClaudeBackgroundTaskStates,
   getClaudeSourceMessageId,
@@ -832,7 +831,29 @@ export function ClaudeChatTab({
     consumedAgentHandoffId,
   );
   const displayMessages = handoff.displayMessages;
-  const launchPrompt = initialPrompt ?? handoff.initialPrompt;
+  const backendOwnsStartupPrompt = useEnvironmentStore((state) => {
+    if (tabId !== "startup-agent") return false;
+    const environment = state.getEnvironmentById(environmentId);
+    return environment?.pendingAgentLaunch === true
+      || environment?.startupAgentSession !== undefined;
+  });
+  const launchPrompt = backendOwnsStartupPrompt
+    ? handoff.initialPrompt
+    : initialPrompt ?? handoff.initialPrompt;
+  useEffect(() => {
+    if (backendOwnsStartupPrompt && initialPrompt) {
+      // NativeAgentService owns the durable initial prompt and its images. A
+      // renderer that materializes the tab first must discard its text-only
+      // copy rather than racing the backend dispatch.
+      clearTabInitialPrompt(tabId, environmentId);
+    }
+  }, [
+    backendOwnsStartupPrompt,
+    clearTabInitialPrompt,
+    environmentId,
+    initialPrompt,
+    tabId,
+  ]);
   /*
    * Initialization is blocked while a handoff loads, so by the time the effect
    * below runs this ref holds the resolved prompt. Reading it through a ref
@@ -879,15 +900,6 @@ export function ClaudeChatTab({
   const queueLength = useClaudeStore(
     useCallback((state) => state.messageQueue.get(sessionKey)?.length ?? 0, [sessionKey])
   );
-  const isQueueBlockedByDraft = useClaudeStore(
-    useCallback(
-      (state) =>
-        (state.draftText.get(sessionKey)?.trim().length ?? 0) > 0 ||
-        (state.attachments.get(sessionKey)?.length ?? 0) > 0,
-      [sessionKey],
-    ),
-  );
-
   // Elapsed timer: counts up while agent is working
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
     session?.isLoading,
@@ -1128,7 +1140,12 @@ export function ClaudeChatTab({
             }
           }
 
-          const newSession = await createSession(bridgeClient);
+          const ensured = await ensureNativeAgentSession({
+            environmentId,
+            agent: "claude",
+            logicalSessionKey: sessionKey,
+          });
+          const newSession = { sessionId: ensured.providerSessionId };
           if (!mounted) return;
 
           if (!newSession) {
@@ -1361,7 +1378,12 @@ export function ClaudeChatTab({
             if (err instanceof SessionNotFoundError) {
               // Session expired on server - create a new one
               console.warn("[ClaudeChatTab] Session expired on server, creating new session");
-              const newSession = await createSession(bridgeClient);
+              const ensured = await ensureNativeAgentSession({
+                environmentId,
+                agent: "claude",
+                logicalSessionKey: sessionKey,
+              });
+              const newSession = { sessionId: ensured.providerSessionId };
               if (!mounted) return;
               if (newSession) {
                 seedInitialFastMode();
@@ -1390,7 +1412,12 @@ export function ClaudeChatTab({
             await syncPendingPrompts(bridgeClient, existingSessionId);
           }
         } else {
-          const newSession = await createSession(bridgeClient);
+          const ensured = await ensureNativeAgentSession({
+            environmentId,
+            agent: "claude",
+            logicalSessionKey: sessionKey,
+          });
+          const newSession = { sessionId: ensured.providerSessionId };
           if (!mounted) return;
 
           if (!newSession) {
@@ -2327,43 +2354,6 @@ export function ClaudeChatTab({
       );
     }
   }, [connectionState, client, session, handoff.ready, launchPrompt, setupPending, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
-
-  useNativeMessageQueue({
-    agentLabel: "Claude",
-    sessionKey,
-    store: useClaudeStore,
-    canDrain:
-      handoff.ready
-      && !setupPending
-      && connectionState === "connected"
-      && !!client,
-    queueLength,
-    isLoading: session?.isLoading ?? false,
-    blockedByDraft: isQueueBlockedByDraft,
-    claimHead: () => claimAgentPromptQueueHead<QueuedMessage>("claude", sessionKey),
-    send: (entry) =>
-      handleSendRef.current?.(
-        entry.text,
-        entry.attachments,
-        entry.effort,
-        entry.planModeEnabled,
-        entry.fastModeEnabled,
-      ),
-    onError: (error) => {
-      const errorText = `Failed to send queued message: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`;
-      const errorMessage: ClaudeMessageType = {
-        id: `${ERROR_MESSAGE_PREFIX}${createUuid()}`,
-        role: "assistant",
-        content: errorText,
-        parts: [{ type: "text", content: errorText }],
-        timestamp: new Date().toISOString(),
-      };
-      addMessage(sessionKey, errorMessage);
-      setSessionLoading(sessionKey, false);
-    },
-  });
 
   const handleRetry = useCallback(() => {
     automaticInitRetryCountRef.current = 0;

@@ -80,6 +80,10 @@ const setEnvironmentPendingAgentLaunchMock = mock(async (environmentId: string, 
         initialReasoningEffort: undefined,
       }),
 }));
+const acknowledgeStartupAgentSessionMock = mock(async (environmentId: string) => ({
+  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+  startupAgentSession: undefined,
+}));
 const setEnvironmentInitialPromptMock = mock(async (environmentId: string, initialPrompt: string) => ({
   ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
   initialPrompt,
@@ -140,6 +144,7 @@ mock.module("@/lib/backend", () => ({
   runEnvironmentSetup: runEnvironmentSetupMock,
   getEnvironmentSetupSession: getEnvironmentSetupSessionMock,
   setEnvironmentPendingAgentLaunch: setEnvironmentPendingAgentLaunchMock,
+  acknowledgeStartupAgentSession: acknowledgeStartupAgentSessionMock,
   setEnvironmentInitialPrompt: setEnvironmentInitialPromptMock,
   savePaneLayout: savePaneLayoutMock,
   getPaneLayout: getPaneLayoutMock,
@@ -307,6 +312,11 @@ describe("TerminalContainer", () => {
             initialAgentModel: undefined,
             initialReasoningEffort: undefined,
           }),
+    }));
+    acknowledgeStartupAgentSessionMock.mockReset();
+    acknowledgeStartupAgentSessionMock.mockImplementation(async (environmentId: string) => ({
+      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+      startupAgentSession: undefined,
     }));
     setEnvironmentInitialPromptMock.mockReset();
     setEnvironmentInitialPromptMock.mockImplementation(async (environmentId: string, initialPrompt: string) => ({
@@ -1675,6 +1685,7 @@ describe("TerminalContainer", () => {
       }
 
       expect(envHidden.root.tabs).toHaveLength(1);
+      expect(envHidden.root.tabs[0]?.id).toBe("startup-agent");
       expect(envHidden.root.tabs[0]?.type).toBe("codex-native");
       expect(envHidden.root.tabs[0]?.initialPrompt).toBe("Ship it");
     });
@@ -1752,6 +1763,7 @@ describe("TerminalContainer", () => {
       const codexTabs = usePaneLayoutStore.getState().getAllTabs("env-hidden")
         .filter((tab) => tab.type === "codex-native");
       expect(codexTabs).toHaveLength(1);
+      expect(codexTabs[0]?.id).toBe("startup-agent");
       expect(codexTabs[0]?.initialPrompt).toContain(
         "/tmp/env-hidden-worktree/.orkestrator/initial-prompt/race.png",
       );
@@ -1890,7 +1902,7 @@ describe("TerminalContainer", () => {
       expect(envHidden.root.tabs[0]?.isSetupTab).toBe(true);
       expect(envHidden.root.tabs[1]?.type).toBe("claude-tmux");
       expect(envHidden.root.tabs[1]?.initialPrompt).toBe("After setup");
-      expect(envHidden.root.activeTabId).toBe("default");
+      expect(envHidden.root.activeTabId).toBe("startup-agent");
     });
 
     expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(
@@ -2327,6 +2339,7 @@ describe("TerminalContainer", () => {
       }
 
       const nativeTab = envHidden.root.tabs.find((tab) => tab.type === "codex-native");
+      expect(nativeTab?.id).toBe("startup-agent");
       expect(nativeTab?.initialPrompt).toBe("Continue after setup");
       expect(nativeTab?.initialAgentModel).toBe("gpt-5.6-sol");
       expect(nativeTab?.initialReasoningEffort).toBe("high");
@@ -2545,6 +2558,9 @@ describe("TerminalContainer", () => {
     await waitFor(() => {
       const codexTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
         .find((tab) => tab.type === "codex-native");
+      // Every renderer must choose the same logical tab so pane-layout merging,
+      // Codex session creation, and initial-prompt dispatch are idempotent.
+      expect(codexTab?.id).toBe("startup-agent");
       expect(codexTab?.initialPrompt).toBe("Recover after mobile reload");
       expect(codexTab?.initialAgentModel).toBe("gpt-5.6-sol");
       expect(codexTab?.initialReasoningEffort).toBe("high");
@@ -2574,6 +2590,47 @@ describe("TerminalContainer", () => {
     expect(JSON.stringify(flushedLayout)).toContain("codex-native");
     expect(JSON.stringify(flushedLayout)).toContain('"initialAgentModel":"gpt-5.6-sol"');
     expect(JSON.stringify(flushedLayout)).toContain('"initialReasoningEffort":"high"');
+  });
+
+  test("projects a backend-created session into one stable tab before acknowledging it", async () => {
+    setupDurableLaunchEnvironment({
+      defaultAgent: "codex",
+      codexMode: "native",
+      pendingAgentLaunch: false,
+      initialPrompt: undefined,
+      initialAgentModel: undefined,
+      initialReasoningEffort: undefined,
+      startupAgentSession: {
+        tabId: "startup-agent",
+        agent: "codex",
+        style: "native",
+        providerSessionId: "provider-session",
+        status: "running",
+        startedAt: "2026-07-29T12:00:00.000Z",
+      },
+    });
+
+    renderHiddenTerminal();
+
+    await waitFor(() => {
+      const tabs = usePaneLayoutStore.getState().getAllTabs("env-hidden");
+      expect(tabs.filter((tab) => tab.id === "startup-agent")).toHaveLength(1);
+      expect(tabs.find((tab) => tab.id === "startup-agent")).toMatchObject({
+        type: "codex-native",
+        codexNativeData: { sessionId: "provider-session" },
+      });
+    });
+    await waitFor(() => {
+      expect(savePaneLayoutMock).toHaveBeenCalled();
+      expect(acknowledgeStartupAgentSessionMock).toHaveBeenCalledWith(
+        "env-hidden",
+        expect.objectContaining({
+          providerSessionId: "provider-session",
+          startedAt: "2026-07-29T12:00:00.000Z",
+        }),
+      );
+    });
+    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
   });
 
   test("stops carrying the options once the agent surface acknowledges them", async () => {

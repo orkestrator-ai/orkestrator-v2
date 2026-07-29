@@ -190,7 +190,13 @@ function App() {
   // cleared by the backend rather than waiting here.
   const durablePendingAgentLaunchEnvironmentIds = useMemo(
     () => environments
-      .filter((environment) => environment.pendingAgentLaunch && environment.status === "running")
+      .filter((environment) =>
+        environment.status === "running"
+        && (
+          environment.pendingAgentLaunch
+          || environment.startupAgentSession?.status === "running"
+        )
+      )
       .map((environment) => environment.id),
     [environments],
   );

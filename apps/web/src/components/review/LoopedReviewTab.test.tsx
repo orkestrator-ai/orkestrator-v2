@@ -509,6 +509,11 @@ describe("app-lifetime looped-review controller", () => {
       <LoopedReviewSupervisor
         connectAgent={async () => agent}
         pollIntervalMs={1}
+        claimController={async () => ({
+          granted: true,
+          expiresAt: new Date(Date.now() + 15_000).toISOString(),
+        })}
+        releaseController={async () => undefined}
       />,
     );
 

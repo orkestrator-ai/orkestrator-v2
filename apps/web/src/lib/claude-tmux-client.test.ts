@@ -76,6 +76,7 @@ describe("claude-tmux-client invoke wrappers", () => {
       model: "sonnet",
       effort: "high",
       resumeSessionId: "sess-resume",
+      replaceExisting: true,
     });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.cmd).toBe("claude_tmux_start");
@@ -86,6 +87,7 @@ describe("claude-tmux-client invoke wrappers", () => {
       model: "sonnet",
       effort: "high",
       resumeSessionId: "sess-resume",
+      replaceExisting: true,
     });
   });
 
@@ -98,6 +100,7 @@ describe("claude-tmux-client invoke wrappers", () => {
       model: undefined,
       effort: undefined,
       resumeSessionId: undefined,
+      replaceExisting: undefined,
     });
   });
 

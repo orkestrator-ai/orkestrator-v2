@@ -32,7 +32,11 @@ export interface BuildPipelineProvider {
    * session not registered here or created through createSession().
    */
   registerSession?(sessionId: string): void;
-  createSession(phase: PipelineSessionPhase, label: string): Promise<string>;
+  createSession(
+    phase: PipelineSessionPhase,
+    label: string,
+    clientSessionKey?: string,
+  ): Promise<string>;
   send(
     sessionId: string,
     prompt: string,
@@ -147,7 +151,11 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     this.agent = connection.agent as "claude" | "codex";
   }
 
-  async createSession(phase: PipelineSessionPhase, label: string): Promise<string> {
+  async createSession(
+    phase: PipelineSessionPhase,
+    label: string,
+    clientSessionKey?: string,
+  ): Promise<string> {
     const response = await bridgeFetch(
       this.connection,
       "/session/create",
@@ -159,8 +167,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
               model: this.connection.model,
               modelReasoningEffort: this.connection.effort,
               mode: phase === "review" || phase === "verify" ? "plan" : "build",
+              clientSessionKey,
             }
-          : { title: label }),
+          : { title: label, clientSessionKey }),
       },
       this.fetchImpl,
     );
@@ -435,7 +444,11 @@ class OpenCodeProvider implements BuildPipelineProvider {
     }
   }
 
-  async createSession(_phase: PipelineSessionPhase, label: string): Promise<string> {
+  async createSession(
+    _phase: PipelineSessionPhase,
+    label: string,
+    _clientSessionKey?: string,
+  ): Promise<string> {
     try {
       const response = await this.client.session.create(
         { title: label },

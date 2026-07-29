@@ -17,6 +17,7 @@ import { AgentToolsServer } from "./agent-tools.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
 import { BuildPipelineService } from "./build-pipeline-service.js";
+import { NativeAgentService } from "./native-agent-service.js";
 import {
   ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS,
   EnvironmentLifecycleTaskTracker,
@@ -27,6 +28,7 @@ export class OrkestratorBackend {
   private readonly commands = createCommandRegistry();
   private readonly context: CommandContext;
   private readonly buildPipelines: BuildPipelineService;
+  private readonly nativeAgents: NativeAgentService;
   private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private shuttingDown = false;
@@ -88,6 +90,15 @@ export class OrkestratorBackend {
       },
     );
     context.buildPipelines = this.buildPipelines;
+    this.nativeAgents = new NativeAgentService(
+      storage,
+      async <T>(command: string, args: Record<string, unknown> = {}) => {
+        const handler = this.commands.get(command);
+        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        return await handler(args, context) as T;
+      },
+    );
+    context.nativeAgents = this.nativeAgents;
     this.reapPidServers =
       options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =
@@ -165,6 +176,9 @@ export class OrkestratorBackend {
     await this.buildPipelines.init().catch((error) => {
       console.warn("[backend] Failed to restore build pipelines:", error);
     });
+    await this.nativeAgents.init().catch((error) => {
+      console.warn("[backend] Failed to restore native agent launches:", error);
+    });
   }
 
   /**
@@ -212,6 +226,7 @@ export class OrkestratorBackend {
         // let a failed drain skip that teardown, or every backend-owned bridge
         // process outlives the backend as an orphan.
         try {
+          await this.nativeAgents.shutdown();
           await this.buildPipelines.shutdown();
         } catch (error) {
           console.warn("[backend] Failed to drain build pipelines:", error);

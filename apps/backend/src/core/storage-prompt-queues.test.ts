@@ -87,6 +87,48 @@ describe("StorageService prompt queues", () => {
     });
   });
 
+  test("reserves one durable in-flight dispatch across backend processes", async () => {
+    await withStorage(async (storage) => {
+      const second = new StorageService(storage.getDataDir());
+      await second.init();
+      await storage.savePromptQueue(KEY, "e1", [
+        { id: "row-1", requestId: "request-1", text: "first" },
+        { id: "row-2", text: "second" },
+      ]);
+
+      const [first, other] = await Promise.all([
+        storage.reservePromptQueueHeadForDispatch(KEY),
+        second.reservePromptQueueHeadForDispatch(KEY),
+      ]);
+
+      expect(first).toEqual(other);
+      expect(first).toMatchObject({
+        requestId: "request-1",
+        message: { id: "row-1", text: "first" },
+      });
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({
+        messages: [{ id: "row-2", text: "second" }],
+        inFlight: { requestId: "request-1" },
+      });
+    });
+  });
+
+  test("preserves in-flight work through renderer queue saves and clears it only by request id", async () => {
+    await withStorage(async (storage) => {
+      await storage.savePromptQueue(KEY, "e1", [{ id: "row-1", text: "first" }]);
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+      await storage.savePromptQueue(KEY, "e1", [{ id: "row-2", text: "second" }]);
+
+      expect(await storage.acknowledgePromptQueueDispatch(KEY, "wrong")).toMatchObject({
+        inFlight: { requestId: "row-1" },
+      });
+      expect(await storage.acknowledgePromptQueueDispatch(KEY, "row-1")).toMatchObject({
+        messages: [{ id: "row-2", text: "second" }],
+      });
+      expect((await storage.getPromptQueue(KEY))?.inFlight).toBeUndefined();
+    });
+  });
+
   test("returns the current queue without mutation when the expected head differs", async () => {
     await withStorage(async (storage) => {
       await storage.savePromptQueue(KEY, "e1", [{ id: "m2" }]);

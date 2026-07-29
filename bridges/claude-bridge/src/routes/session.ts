@@ -92,8 +92,9 @@ session.post("/create", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
     const title = body.title as string | undefined;
+    const clientSessionKey = body.clientSessionKey as string | undefined;
 
-    const newSession = createSession(title);
+    const newSession = createSession(title, clientSessionKey);
     console.debug("[session] Created session", { sessionId: newSession.id, title: newSession.title });
 
     const response: CreateSessionResponse = {

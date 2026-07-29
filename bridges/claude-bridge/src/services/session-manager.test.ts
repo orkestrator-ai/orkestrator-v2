@@ -552,6 +552,19 @@ describe("session lifecycle", () => {
     expect(session.title).toMatch(/^Session /);
   });
 
+  test("createSession reuses one session for the same client key", () => {
+    const first = createSession("First title", "env-env-1:startup-agent");
+    const second = createSession("Second title", "env-env-1:startup-agent");
+    track(first.id);
+
+    expect(first.id).toMatch(/^session-client-/);
+    expect(second).toBe(first);
+    expect(second.title).toBe("First title");
+    expect(
+      listSessions().filter((session) => session.id === first.id),
+    ).toHaveLength(1);
+  });
+
   test("getSession and listSessions return registered sessions", () => {
     const a = createSession("alpha");
     const b = createSession("beta");

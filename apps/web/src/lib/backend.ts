@@ -39,6 +39,7 @@ import type {
   ClaudeModelCatalogSnapshot,
   PersistedLoopedReviewWorkflow,
   PersistedBuildPipeline,
+  PersistedNativeAgentSession,
   PersistedComposeDraft,
   PersistedFileDraft,
   PersistedPromptQueue,
@@ -1503,6 +1504,23 @@ export async function setEnvironmentPendingAgentLaunch(
   });
 }
 
+/** Acknowledge that the backend-created startup session now has a durable tab. */
+export async function acknowledgeStartupAgentSession(
+  environmentId: string,
+  startupSession: {
+    providerSessionId?: string;
+    startedAt?: string;
+  },
+): Promise<Environment> {
+  return invoke<Environment>("acknowledge_startup_agent_session", {
+    environmentId,
+    ...(startupSession.providerSessionId
+      ? { providerSessionId: startupSession.providerSessionId }
+      : {}),
+    ...(startupSession.startedAt ? { startedAt: startupSession.startedAt } : {}),
+  });
+}
+
 /**
  * Persist the initial prompt after the renderer has rewritten it (for example to
  * add references to uploaded attachments), so a recovered launch reads the same
@@ -1737,6 +1755,62 @@ export async function deleteLoopedReviewWorkflow(
   workflowId: string,
 ): Promise<void> {
   return invoke("delete_looped_review_workflow", { workflowId });
+}
+
+export async function claimLoopedReviewController(
+  workflowId: string,
+  ownerId: string,
+  leaseMs: number,
+): Promise<{ granted: boolean; expiresAt: string }> {
+  return invoke("claim_looped_review_controller", {
+    workflowId,
+    ownerId,
+    leaseMs,
+  });
+}
+
+export async function releaseLoopedReviewController(
+  workflowId: string,
+  ownerId: string,
+): Promise<void> {
+  return invoke("release_looped_review_controller", {
+    workflowId,
+    ownerId,
+  });
+}
+
+export async function ensureNativeAgentSession(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode";
+  logicalSessionKey: string;
+  title?: string;
+  model?: string;
+  reasoningEffort?: string;
+  phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
+}): Promise<PersistedNativeAgentSession> {
+  return invoke<PersistedNativeAgentSession>(
+    "ensure_native_agent_session",
+    input,
+  );
+}
+
+export async function dispatchNativeAgentPrompt(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode";
+  logicalSessionKey: string;
+  title?: string;
+  model?: string;
+  reasoningEffort?: string;
+  phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
+  prompt: string;
+  requestId: string;
+  images?: Array<{ filename: string; data: string }>;
+  schema?: Record<string, unknown>;
+}): Promise<PersistedNativeAgentSession> {
+  return invoke<PersistedNativeAgentSession>(
+    "dispatch_native_agent_prompt",
+    input,
+  );
 }
 
 // --- Build Pipeline Persistence ---

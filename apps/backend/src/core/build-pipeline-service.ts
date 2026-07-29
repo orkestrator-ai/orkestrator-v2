@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   BuildPhase,
   BuildPipeline,
@@ -66,6 +66,18 @@ const SESSION_LABELS: Record<PipelineSessionPhase, string> = {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function buildAdmissionKey(input: StartBuildPipelineInput): string {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      projectId: input.projectId,
+      taskId: input.taskId,
+      source: input.source ?? null,
+      existingEnvironmentId: input.existingEnvironmentId ?? null,
+      featurePlanId: input.featurePlanId ?? null,
+    }))
+    .digest("hex");
 }
 
 function sessionForCurrentPhase(pipeline: BuildPipeline): PipelineSession | undefined {
@@ -341,6 +353,7 @@ export class BuildPipelineService {
       taskSnapshot: input.taskSnapshot,
       source: input.source,
       featurePlanId: input.featurePlanId?.trim() || undefined,
+      admissionKey: buildAdmissionKey(input),
       backendRevision: 0,
       controller: "backend",
     };
@@ -349,7 +362,15 @@ export class BuildPipelineService {
       this.provisioningPrompts.set(pipeline.id, input.namingPrompt);
     }
     try {
-      await this.save(pipeline, 0);
+      const admitted = await this.save(pipeline, 0);
+      if (admitted.id !== pipeline.id) {
+        this.provisioningPrompts.delete(pipeline.id);
+        const existing = admitted.snapshot;
+        if (!isBuildPipeline(existing)) {
+          throw new Error("Existing build pipeline admission is invalid");
+        }
+        return existing;
+      }
     } catch (error) {
       this.provisioningPrompts.delete(pipeline.id);
       throw error;
@@ -1652,7 +1673,10 @@ export class BuildPipelineService {
     return record;
   }
 
-  private async save(pipeline: BuildPipeline, expectedRevision: number): Promise<void> {
+  private async save(
+    pipeline: BuildPipeline,
+    expectedRevision: number,
+  ): Promise<PersistedBuildPipeline> {
     pipeline.controller = "backend";
     pipeline.backendRevision = expectedRevision + 1;
     const saved = await this.storage.saveBuildPipeline(
@@ -1664,5 +1688,6 @@ export class BuildPipelineService {
       expectedRevision,
     );
     pipeline.backendRevision = saved.revision;
+    return saved;
   }
 }

@@ -1751,7 +1751,6 @@ export class StorageService {
         "cleanupAfterMergeRequestedAt",
         "cleanupAfterMergeError",
         "lifecycleOperationStartedAt",
-        "lifecycleError",
       ] as const;
       for (const field of optionalStringFields) {
         if (field in updates) {
@@ -1759,6 +1758,16 @@ export class StorageService {
           if (value === null || value === undefined || typeof value === "string") {
             (environment as unknown as Record<string, unknown>)[field] = value ?? undefined;
           }
+        }
+      }
+      if ("lifecycleError" in updates) {
+        const value = updates.lifecycleError;
+        if (value === null || value === undefined || typeof value === "string") {
+          // Cleared as an explicit `null`, not `undefined`. Renderers merge
+          // snapshots field-by-field and `JSON.stringify` drops undefined keys
+          // entirely, so a cleared failure would arrive as an absent key and
+          // leave the stale message on screen.
+          environment.lifecycleError = value ?? null;
         }
       }
       if ("lifecycleOperation" in updates) {

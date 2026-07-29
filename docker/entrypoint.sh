@@ -8,10 +8,52 @@ set -e
 PROGRESS_FILE="/tmp/.entrypoint-progress"
 echo "" > "$PROGRESS_FILE"
 
-# Function to log progress both to stdout and progress file
+# Function to log progress both to stdout and progress file.
+# The terminal the user actually watches replays PROGRESS_FILE only, so anything
+# they need to act on — a skipped auth.json leaves Codex looking logged out —
+# has to go through here rather than stdout, which is `docker logs` territory.
+# PROGRESS_FILE is initialized above, so every caller below is safe.
 log_progress() {
     echo "$1"
     echo "$1" >> "$PROGRESS_FILE"
+}
+
+# Allowlist entries can be nested ("plugins/cache"), so testing only the final
+# component leaves every parent free to be a link: a symlinked "plugins" holding
+# a real "cache" passed that test and let find/cp resolve straight into excluded
+# runtime state. Walk every component below the source root instead, and treat
+# ".." as unsafe so a future allowlist entry cannot escape the root either.
+codex_path_has_symlink() {
+    local source_root="$1"
+    local relative_path="$2"
+    local current="$source_root"
+    local remainder="$relative_path"
+    local component
+
+    if [ -L "$source_root" ]; then
+        return 0
+    fi
+
+    while [ -n "$remainder" ]; do
+        component="${remainder%%/*}"
+        if [ "$component" = "$remainder" ]; then
+            remainder=""
+        else
+            remainder="${remainder#*/}"
+        fi
+        if [ -z "$component" ]; then
+            continue
+        fi
+        if [ "$component" = ".." ]; then
+            return 0
+        fi
+        current="$current/$component"
+        if [ -L "$current" ]; then
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 copy_codex_file() {
@@ -24,10 +66,10 @@ copy_codex_file() {
     local file_bytes
 
     # An allowlisted name must be a real file in the mounted Codex home. Following
-    # a top-level link could turn an allowlisted name into an arbitrary rollout,
-    # log, credential, or other host file.
-    if [ -L "$source_path" ]; then
-        echo "Warning: Skipping symlinked Codex file: $relative_path"
+    # a link anywhere along the path could turn an allowlisted name into an
+    # arbitrary rollout, log, credential, or other host file.
+    if codex_path_has_symlink "$source_root" "$relative_path"; then
+        log_progress "Warning: Skipping symlinked Codex file: $relative_path"
         return 0
     fi
 
@@ -41,25 +83,26 @@ copy_codex_file() {
             ;;
     esac
     file_bytes="$(wc -c < "$source_path" 2>/dev/null)" || {
-        echo "Warning: Failed to inspect Codex file: $relative_path"
+        log_progress "Warning: Failed to inspect Codex file: $relative_path"
         return 0
     }
-    file_bytes="${file_bytes//[[:space:]]/}"
+    # BSD wc pads its count with leading spaces; GNU wc does not.
+    file_bytes="${file_bytes##*[[:space:]]}"
     if [ "$file_bytes" -gt "$max_bytes" ]; then
-        echo "Warning: Skipping oversized Codex file: $relative_path"
+        log_progress "Warning: Skipping oversized Codex file: $relative_path"
         return 0
     fi
 
     if [ -d "$destination_path" ]; then
-        echo "Warning: Failed to copy Codex file: $relative_path (destination is a directory)"
+        log_progress "Warning: Failed to copy Codex file: $relative_path (destination is a directory)"
         return 0
     fi
     if ! mkdir -p "$(dirname "$destination_path")" 2>/dev/null; then
-        echo "Warning: Failed to create destination for Codex file: $relative_path"
+        log_progress "Warning: Failed to create destination for Codex file: $relative_path"
         return 0
     fi
     if ! cp "$source_path" "$destination_path" 2>/dev/null; then
-        echo "Warning: Failed to copy Codex file: $relative_path"
+        log_progress "Warning: Failed to copy Codex file: $relative_path"
     fi
 }
 
@@ -71,14 +114,16 @@ copy_codex_directory() {
     local destination_path="$destination_root/$relative_path"
     local max_entries="${CODEX_COPY_MAX_DIRECTORY_ENTRIES:-5000}"
     local max_kib="${CODEX_COPY_MAX_DIRECTORY_KIB:-262144}"
+    local entry_marks
     local entry_count
     local directory_kib
     local nested_symlinks
 
-    # Do not dereference a top-level allowlist link. In particular, a host can
-    # otherwise make "skills" or "plugins/cache" point at excluded runtime state.
-    if [ -L "$source_path" ]; then
-        echo "Warning: Skipping symlinked Codex directory: $relative_path"
+    # Do not dereference an allowlist link, at any depth. In particular, a host
+    # can otherwise make "skills" or the "plugins" parent of "plugins/cache"
+    # point at excluded runtime state.
+    if codex_path_has_symlink "$source_root" "$relative_path"; then
+        log_progress "Warning: Skipping symlinked Codex directory: $relative_path"
         return 0
     fi
 
@@ -96,52 +141,60 @@ copy_codex_directory() {
             max_kib=262144
             ;;
     esac
-    entry_count="$(find -P "$source_path" -print 2>/dev/null | wc -l)" || {
-        echo "Warning: Failed to inspect Codex directory: $relative_path"
+    # One mark per entry rather than one line per entry: a filename containing a
+    # newline would otherwise inflate the count and skip a legitimate directory.
+    # Capturing find directly (not through a pipe) also keeps find's own exit
+    # status, so a partially unreadable tree fails closed instead of being
+    # measured from a truncated listing.
+    entry_marks="$(find -P "$source_path" -exec printf '%.0s.' {} + 2>/dev/null)" || {
+        log_progress "Warning: Failed to inspect Codex directory: $relative_path"
         return 0
     }
-    entry_count="${entry_count//[[:space:]]/}"
+    entry_count="${#entry_marks}"
     # The first find result is the source directory itself.
     if [ "$entry_count" -gt 0 ]; then
         entry_count=$((entry_count - 1))
     fi
     if [ "$entry_count" -gt "$max_entries" ]; then
-        echo "Warning: Skipping oversized Codex directory: $relative_path"
+        log_progress "Warning: Skipping oversized Codex directory: $relative_path"
         return 0
     fi
     nested_symlinks="$(find -P "$source_path" -type l -print 2>/dev/null)" || {
-        echo "Warning: Failed to inspect Codex directory: $relative_path"
+        log_progress "Warning: Failed to inspect Codex directory: $relative_path"
         return 0
     }
     if [ -n "$nested_symlinks" ]; then
-        echo "Warning: Skipping Codex directory containing symlink: $relative_path"
+        log_progress "Warning: Skipping Codex directory containing symlink: $relative_path"
         return 0
     fi
-    directory_kib="$(du -sk "$source_path" 2>/dev/null | awk '{print $1}')" || {
-        echo "Warning: Failed to inspect Codex directory: $relative_path"
+    # Same reason as above: a partial du failure still prints an undercounted
+    # total, so du's status has to be read before the total is parsed.
+    directory_kib="$(du -sk "$source_path" 2>/dev/null)" || {
+        log_progress "Warning: Failed to inspect Codex directory: $relative_path"
         return 0
     }
+    directory_kib="${directory_kib%%[!0-9]*}"
     case "$directory_kib" in
         ''|*[!0-9]*)
-            echo "Warning: Failed to inspect Codex directory: $relative_path"
+            log_progress "Warning: Failed to inspect Codex directory: $relative_path"
             return 0
             ;;
     esac
     if [ "$directory_kib" -gt "$max_kib" ]; then
-        echo "Warning: Skipping oversized Codex directory: $relative_path"
+        log_progress "Warning: Skipping oversized Codex directory: $relative_path"
         return 0
     fi
 
     if [ -e "$destination_path" ] && [ ! -d "$destination_path" ]; then
-        echo "Warning: Failed to copy Codex directory: $relative_path (destination is not a directory)"
+        log_progress "Warning: Failed to copy Codex directory: $relative_path (destination is not a directory)"
         return 0
     fi
     if ! mkdir -p "$destination_path" 2>/dev/null; then
-        echo "Warning: Failed to create destination for Codex directory: $relative_path"
+        log_progress "Warning: Failed to create destination for Codex directory: $relative_path"
         return 0
     fi
     if ! cp -R "$source_path/." "$destination_path/" 2>/dev/null; then
-        echo "Warning: Failed to copy Codex directory: $relative_path"
+        log_progress "Warning: Failed to copy Codex directory: $relative_path"
     fi
 }
 

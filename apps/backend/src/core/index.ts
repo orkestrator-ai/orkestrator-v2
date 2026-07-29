@@ -1,4 +1,5 @@
 import {
+  closeLocalServerAdmission,
   createCommandRegistry,
   shutdownDiffStatsTracking,
   shutdownLocalServers,
@@ -127,6 +128,11 @@ export class OrkestratorBackend {
     shutdownDiffStatsTracking();
     shutdownPrMonitorTracking();
     const attempt = (async () => {
+      // Both admission gates close together, before either drain begins.
+      // Draining lifecycle work first while local-server starts stayed open
+      // would let a bridge spawn during the very window shutdown exists to
+      // close, and a SIGKILL in that window orphans its process tree.
+      closeLocalServerAdmission();
       await this.environmentLifecycleTasks.beginShutdown();
       await shutdownLocalServers();
     })();

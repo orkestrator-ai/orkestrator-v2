@@ -74,14 +74,17 @@ mock.module("../../../apps/backend/src/core/pty", () => ({ spawnPty: ptySpawn })
 
 const {
   __testing: commandTesting,
+  closeLocalServerAdmission,
   CONTAINER_UNTRACKED_STATS_SCANNER,
   createCommandRegistry,
+  ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   isImmutableCommitRef,
   resolveBrowserOpenCommand,
   shutdownDiffStatsTracking,
   shutdownLocalServers,
   shutdownPrMonitorTracking,
 } = await import("../../../apps/backend/src/core/commands");
+const { CommandFailedError } = await import("../../../apps/backend/src/core/shell");
 
 const tempDirs: string[] = [];
 const SETUP_DONE_OSC = "\u001b]9999;setup_done\u0007";
@@ -3544,6 +3547,66 @@ esac
     });
   });
 
+  test("removes a newly created worktree and its branch when persisting them fails", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    const projectName = "rollback-repo";
+    const branch = `worktree-rollback-${randomUUID().slice(0, 8)}`;
+    const expectedWorktreePath = expectedManagedWorktreePath(projectName, branch);
+    await fs.rm(expectedWorktreePath, { recursive: true, force: true });
+
+    const environment = createEnvironment({
+      id: "env-worktree-persist-compensation",
+      status: "stopped",
+      worktreePath: undefined,
+      branch,
+      environmentType: "local",
+    });
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: projectName,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
+    const originalImplementation = updateEnvironment.getMockImplementation();
+    updateEnvironment.mockImplementation(async (
+      environmentId: string,
+      update: Record<string, unknown>,
+    ) => {
+      // `createLocalWorktree` has already succeeded at this point, so the
+      // compensation under test is the one in `startEnvironmentOnce`, not the
+      // one inside worktree creation.
+      if (update.worktreePath === expectedWorktreePath) {
+        throw new Error("storage unavailable at /private/user/path");
+      }
+      return originalImplementation!(environmentId, update);
+    });
+    const commands = createCommandRegistry();
+
+    try {
+      await expect(commands.get("start_environment")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("storage unavailable");
+
+      expect(environment.status).toBe("error");
+      expect(environment.worktreePath).toBeUndefined();
+      expect(environment.lifecycleError).not.toContain("/private/user/path");
+      // `git worktree add -b` created a branch as well as a directory. Leaving
+      // it behind makes the next start pick `<slug>-1` and drift the branch
+      // name further on every retry.
+      await expectLocalWorktreeRolledBack(worktree, expectedWorktreePath, branch);
+    } finally {
+      updateEnvironment.mockImplementation(originalImplementation!);
+      await fs.rm(expectedWorktreePath, { recursive: true, force: true });
+      await runGit(worktree, ["branch", "-D", branch]).catch(() => undefined);
+    }
+  }, ASYNC_TEST_BUDGET_MS);
+
   test("queues a container stop behind background provisioning", async () => {
     const environment = createEnvironment({
       id: "env-background-stop-race",
@@ -3739,32 +3802,457 @@ esac
     });
   }, ASYNC_TEST_BUDGET_MS);
 
-  test("preserves the old container identity when recreation cannot remove it", async () => {
+  test("classifies each lifecycle failure category from its structured outcome", () => {
+    const classify = commandTesting.environmentLifecycleErrorMessage;
+
+    // `execFile` SIGTERMs a timed-out child, so stdout/stderr are empty and the
+    // message is the generic "Command failed: <argv>". The outcome flag is the
+    // only place the timeout is visible.
+    expect(classify(new CommandFailedError("Command failed: docker start abc", {
+      timedOut: true,
+    }))).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.timedOut);
+    expect(classify(new CommandFailedError("spawn docker ENOENT", {
+      executableMissing: true,
+    }))).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable);
+
+    // Real Docker CLI strings, not paraphrases of them.
+    expect(classify(new Error(
+      "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
+    ))).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable);
+    expect(classify(new Error(
+      "Unable to find image 'orkestrator-v2:latest' locally\ndocker: Error response from daemon: pull access denied",
+    ))).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.imageUnavailable);
+    expect(classify(new Error(
+      "docker: Error response from daemon: manifest unknown",
+    ))).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.imageUnavailable);
+    expect(classify(new Error(
+      "failed to register layer: write /var/lib/docker/x: no space left on device",
+    ))).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.diskFull);
+
+    expect(classify(new Error("Project has no local path - cannot create a local worktree")))
+      .toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.noLocalPath);
+    expect(classify(new Error("Setup script failed")))
+      .toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript);
+
+    // Anything unrecognized collapses to the fallback rather than leaking the
+    // child's own text into a persisted, rendered field.
+    expect(classify(new Error("fatal: could not read Username for 'https://github.com'")))
+      .toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.unknown);
+    expect(classify("a bare string")).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.unknown);
+    expect(classify(undefined)).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.unknown);
+
+    // Every reachable value is one of the fixed constants.
+    expect(Object.values(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES))
+      .toContain(classify(new Error("anything at all")));
+  });
+
+  test("scrubs credentials a child echoed but the caller never named", () => {
+    const scrub = commandTesting.scrubLifecycleLogDetail;
+
+    expect(scrub("fatal: could not read from https://user:private-token@example.invalid/repo.git"))
+      .toBe("fatal: could not read from https://[redacted]@example.invalid/repo.git");
+    expect(scrub("remote: Authorization: Bearer abc123.def-456"))
+      .toBe("remote: Authorization: Bearer [redacted]");
+    expect(scrub("token ghp_abcdefghijklmnop rejected")).toBe("token [redacted] rejected");
+    expect(scrub("token github_pat_11ABCDEFG0abcdefg rejected")).toBe("token [redacted] rejected");
+    expect(scrub("key sk-ant-api03-abcdefghijklmnop rejected")).toBe("key [redacted] rejected");
+
+    // Bounded, so one pathological child cannot flood the log.
+    expect(scrub("x".repeat(2_000))).toHaveLength(501);
+    // Ordinary diagnostics survive intact — the point is to keep them readable.
+    expect(scrub("Cannot connect to the Docker daemon at unix:///var/run/docker.sock"))
+      .toBe("Cannot connect to the Docker daemon at unix:///var/run/docker.sock");
+  });
+
+  test("refuses every foreground lifecycle command once shutdown has begun", async () => {
+    const environment = createEnvironment({
+      id: "env-foreground-shutdown",
+      environmentType: "containerized",
+      containerId: "container-shutdown",
+      status: "running",
+      lifecycleError: "Previous failure",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    await context.environmentLifecycleTasks.beginShutdown();
+
+    for (const command of [
+      "start_environment",
+      "stop_environment",
+      "recreate_environment",
+      "delete_environment",
+    ]) {
+      await expect(commands.get(command)?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("Backend is shutting down");
+    }
+
+    // Refusal is total: nothing was mutated on the way out.
+    expect(environment.status).toBe("running");
+    expect(environment.containerId).toBe("container-shutdown");
+    expect(environment.lifecycleError).toBe("Previous failure");
+    // A refused delete must not keep the tombstone that blocks local-server
+    // starts and merges for this environment.
+    expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(false);
+  });
+
+  test("refuses to delete a merging environment without reserving the tombstone", async () => {
+    const environment = createEnvironment({
+      id: "env-delete-while-merging",
+      environmentType: "local",
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    commandTesting.markEnvironmentMerging(environment.id);
+
+    await expect(commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow("Environment is currently being merged");
+    // Reserving before the refusal would block local-server starts and further
+    // merges for an environment that is not being deleted at all.
+    expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(false);
+  });
+
+  test("refuses deletion while local servers are shutting down", async () => {
+    const environment = createEnvironment({
+      id: "env-delete-during-shutdown",
+      environmentType: "local",
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    closeLocalServerAdmission();
+
+    await expect(commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow("Backend is shutting down");
+    expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(false);
+  });
+
+  test("deduplicates concurrent foreground starts for one environment", async () => {
+    const environment = createEnvironment({
+      id: "env-foreground-deduplicated",
+      environmentType: "containerized",
+      containerId: null,
+      status: "stopped",
+      setupScriptsComplete: true,
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const gateDirectory = await createTempDir("ork-foreground-dedupe-");
+    const releasePath = path.join(gateDirectory, "release");
+
+    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  create)
+    while [ ! -f '${releasePath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
+    printf 'container-foreground-dedupe\\n'
+    ;;
+  start|exec) exit 0 ;;
+esac
+`, async (logs) => {
+        const first = commands.get("start_environment")?.({ environmentId: environment.id }, context);
+        const second = commands.get("start_environment")?.({ environmentId: environment.id }, context);
+        await fs.writeFile(releasePath, "");
+        await Promise.all([first, second]);
+
+        const calls = await fs.readFile(logs.all, "utf8");
+        expect(calls.split("\n").filter((line) => line.startsWith("create "))).toHaveLength(1);
+      });
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("clears a stale failure only once the stop has actually committed", async () => {
+    const environment = createEnvironment({
+      id: "env-stop-clears-failure",
+      environmentType: "containerized",
+      containerId: "container-stop-failure",
+      status: "error",
+      lifecycleError: "The container runtime is unavailable. Start it and retry.",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "stop" ]; then
+  printf 'container runtime refused stop\\n' >&2
+  exit 1
+fi
+exit 0
+`, async () => {
+      await expect(commands.get("stop_environment")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("container runtime refused stop");
+    });
+    // Clearing ahead of the stop would have erased the only explanation the
+    // user has, leaving an environment in `error` with nothing to show.
+    expect(environment.status).toBe("error");
+    expect(environment.lifecycleError).toBe(
+      "The container runtime is unavailable. Start it and retry.",
+    );
+
+    await withFakeDocker("#!/bin/sh\nexit 0\n", async () => {
+      await expect(commands.get("stop_environment")?.(
+        { environmentId: environment.id },
+        context,
+      )).resolves.toBeUndefined();
+    });
+    expect(environment.status).toBe("stopped");
+    expect(environment.lifecycleError).toBeNull();
+  });
+
+  test("keeps a local stop failure's explanation while still recording the stop", async () => {
+    const worktreePath = await createTempDir("ork-electron-stop-local-keeps-error-");
+    const environment = createEnvironment({
+      id: "env-stop-local-keeps-error",
+      environmentType: "local",
+      containerId: null,
+      worktreePath,
+      status: "error",
+      lifecycleError: "Environment start failed. Check the backend logs and retry.",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    commandTesting.setLocalServerProcess(`codex:${environment.id}`, createFakeChild(95010));
+    commandTesting.setTerminateProcessTree(async () => false);
+
+    await expect(commands.get("stop_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow("Failed to stop all local servers");
+
+    // Partial progress is recorded so the environment is not stranded, but the
+    // failure it was already carrying is not silently erased by a stop that
+    // itself failed.
+    expect(environment.status).toBe("stopped");
+    expect(environment.lifecycleError).toBe(
+      "Environment start failed. Check the backend logs and retry.",
+    );
+
+    commandTesting.setTerminateProcessTree(async () => true);
+  });
+
+  test("queues a recreate behind an in-flight start instead of interleaving it", async () => {
+    const environment = createEnvironment({
+      id: "env-start-recreate-race",
+      environmentType: "containerized",
+      containerId: null,
+      status: "stopped",
+      setupScriptsComplete: true,
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const gateDirectory = await createTempDir("ork-start-recreate-race-");
+    const startedPath = path.join(gateDirectory, "started");
+    const releasePath = path.join(gateDirectory, "release");
+
+    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  create)
+    if [ ! -f '${startedPath.replaceAll("'", "'\\''")}' ]; then
+      : > '${startedPath.replaceAll("'", "'\\''")}'
+      while [ ! -f '${releasePath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
+      printf 'container-first\\n'
+    else
+      printf 'container-recreated\\n'
+    fi
+    ;;
+  start|stop|exec|rm) exit 0 ;;
+esac
+`, async (logs) => {
+        await commands.get("start_environment_background")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await waitForCondition(() => existsSync(startedPath), "first container create to begin");
+        const recreate = commands.get("recreate_environment")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await fs.writeFile(releasePath, "");
+        await expect(recreate).resolves.toEqual(expect.objectContaining({
+          setupManagedByBackend: true,
+        }));
+
+        expect(environment.containerId).toBe("container-recreated");
+        expect(environment.status).toBe("running");
+        const calls = await fs.readFile(logs.all, "utf8");
+        // The recreate observed the container the start had produced, which is
+        // only possible if it ran after that start committed rather than
+        // alongside it.
+        expect(calls.indexOf("start container-first")).toBeLessThan(
+          calls.indexOf("rm -f container-first"),
+        );
+      });
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("a start requested after a stop does not join the start the stop will undo", async () => {
+    const environment = createEnvironment({
+      id: "env-start-dedupe-invalidated",
+      environmentType: "containerized",
+      containerId: null,
+      status: "stopped",
+      setupScriptsComplete: true,
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const gateDirectory = await createTempDir("ork-start-dedupe-invalidated-");
+    const startedPath = path.join(gateDirectory, "started");
+    const releasePath = path.join(gateDirectory, "release");
+
+    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  create)
+    : > '${startedPath.replaceAll("'", "'\\''")}'
+    while [ ! -f '${releasePath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
+    printf 'container-dedupe\\n'
+    ;;
+  start|stop|exec) exit 0 ;;
+esac
+`, async () => {
+        await commands.get("start_environment_background")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await waitForCondition(() => existsSync(startedPath), "container create to begin");
+
+        const stop = commands.get("stop_environment")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        // Joining the in-flight start here would resolve as soon as that start
+        // finished — before the stop that is already queued ahead of it — and
+        // report a running environment the user had asked to be stopped.
+        const restart = commands.get("start_environment")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await fs.writeFile(releasePath, "");
+
+        await expect(stop).resolves.toBeUndefined();
+        await expect(restart).resolves.toEqual(expect.objectContaining({
+          setupManagedByBackend: true,
+        }));
+        expect(environment.status).toBe("running");
+      });
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("runs work queued behind a lifecycle operation that rejected", async () => {
+    const environment = createEnvironment({
+      id: "env-queue-not-poisoned",
+      environmentType: "containerized",
+      containerId: null,
+      status: "stopped",
+      setupScriptsComplete: true,
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const gateDirectory = await createTempDir("ork-queue-not-poisoned-");
+    const startedPath = path.join(gateDirectory, "started");
+    const releasePath = path.join(gateDirectory, "release");
+    const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+        await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  create)
+    : > '${startedPath.replaceAll("'", "'\\''")}'
+    while [ ! -f '${releasePath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
+    printf 'provisioning refused\\n' >&2
+    exit 1
+    ;;
+  start|stop|exec) exit 0 ;;
+esac
+`, async () => {
+          await commands.get("start_environment_background")?.(
+            { environmentId: environment.id },
+            context,
+          );
+          await waitForCondition(() => existsSync(startedPath), "container create to begin");
+          // Queued while the predecessor is still running, so it can only run
+          // through the rejected tail.
+          const stop = commands.get("stop_environment")?.(
+            { environmentId: environment.id },
+            context,
+          );
+          await fs.writeFile(releasePath, "");
+
+          await expect(stop).resolves.toBeUndefined();
+          expect(environment.status).toBe("stopped");
+        });
+      });
+    } finally {
+      errorLog.mockRestore();
+    }
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("recreates a container even when the old one cannot be removed", async () => {
     const environment = createEnvironment({
       id: "env-recreate-remove-failure",
       environmentType: "containerized",
       containerId: "container-still-present",
       status: "running",
       setupScriptsComplete: true,
+      networkAccessMode: "full",
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
+    const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
 
-    await withFakeDocker(`#!/bin/sh
-if [ "$1" = "rm" ]; then
-  printf 'container runtime refused removal\\n' >&2
-  exit 1
-fi
-exit 0
+    try {
+      // Recreate is the repair action for an already-broken container, so a
+      // daemon that refuses the removal must not be what makes the environment
+      // permanently unrepairable from the UI.
+      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+        await withFakeDocker(`#!/bin/sh
+case "$1" in
+  rm)
+    printf 'container runtime refused removal\\n' >&2
+    exit 1
+    ;;
+  create) printf 'container-after-recreate\\n' ;;
+  start|exec) exit 0 ;;
+esac
 `, async () => {
-      await expect(commands.get("recreate_environment")?.(
-        { environmentId: environment.id },
-        context,
-      )).rejects.toThrow("container runtime refused removal");
-    });
-    expect(environment.containerId).toBe("container-still-present");
-    expect(environment.status).toBe("running");
-  });
+          await expect(commands.get("recreate_environment")?.(
+            { environmentId: environment.id },
+            context,
+          )).resolves.toEqual(expect.objectContaining({
+            setupManagedByBackend: true,
+          }));
+        });
+      });
+
+      expect(environment.containerId).toBe("container-after-recreate");
+      expect(environment.status).toBe("running");
+      expect(environment.lifecycleError).toBeNull();
+      // The daemon-level cause is still recoverable from the backend logs.
+      expect(JSON.stringify(errorLog.mock.calls)).toContain("container runtime refused removal");
+    } finally {
+      errorLog.mockRestore();
+    }
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("reports whether the selected host GitHub CLI credential is available", async () => {
     const { context } = createContext(createEnvironment());
@@ -13064,7 +13552,11 @@ exit 0
     // does not think a server is already running.
     expect(commandTesting.getLocalServerProcess(`codex:${environment.id}`)).toBeUndefined();
     expect(updates).toContainEqual({ codexBridgePid: null, localCodexPort: null });
-    expect(updates).toContainEqual({ status: "stopped", pendingAgentLaunch: false });
+    expect(updates).toContainEqual({
+      status: "stopped",
+      lifecycleError: null,
+      pendingAgentLaunch: false,
+    });
   });
 
   test("a local environment is still marked stopped when a bridge refuses to die", async () => {

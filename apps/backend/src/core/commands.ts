@@ -69,6 +69,7 @@ import {
 } from "./storage.js";
 import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import {
+  CommandFailedError,
   commandExists,
   homePath,
   inferLanguage,
@@ -3817,7 +3818,9 @@ async function startEnvironmentOnce(
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   let unpersistedContainerId: string | null = null;
-  let unpersistedWorktreePath: string | null = null;
+  // Rolling back a worktree needs the repository it was added to and the branch
+  // it created, not just the directory: `git worktree add -b` makes both.
+  let unpersistedWorktree: { projectPath: string; path: string; branch: string } | null = null;
 
   try {
     await storage.updateEnvironment(environment.id, {
@@ -3846,7 +3849,11 @@ async function startEnvironmentOnce(
         repoConfig.defaultBranch,
         repoConfig.filesToCopy,
       );
-      unpersistedWorktreePath = worktree.path;
+      unpersistedWorktree = {
+        projectPath: project.localPath,
+        path: worktree.path,
+        branch: worktree.branch,
+      };
       const updated = await storage.updateEnvironment(environment.id, {
         worktreePath: worktree.path,
         branch: worktree.branch,
@@ -3854,7 +3861,7 @@ async function startEnvironmentOnce(
         status: "running",
         lifecycleError: null,
       });
-      unpersistedWorktreePath = null;
+      unpersistedWorktree = null;
       const result = await startEnvironmentSetup(updated, context);
       schedulePendingRename(environment.id, context);
       await syncDiffStatsTracking(context);
@@ -3886,6 +3893,7 @@ async function startEnvironmentOnce(
     await syncPrMonitorTracking(context);
     return result;
   } catch (error) {
+    logEnvironmentLifecycleFailure("start", environment.id, error);
     if (unpersistedContainerId) {
       await runCommand(
         "docker",
@@ -3893,12 +3901,23 @@ async function startEnvironmentOnce(
         { timeoutMs: 60_000 },
       ).catch(() => undefined);
     }
-    if (unpersistedWorktreePath) {
-      await removeLocalWorktree(unpersistedWorktreePath).catch(() => undefined);
+    if (unpersistedWorktree) {
+      // `git worktree add -b` created a branch too. Leaving it behind makes the
+      // next start's uniqueness loop pick `<slug>-1`, drifting the environment's
+      // branch name further on every retry.
+      await cleanupFailedLocalWorktree(
+        unpersistedWorktree.projectPath,
+        unpersistedWorktree.path,
+        unpersistedWorktree.branch,
+      ).catch(() => undefined);
     }
     await storage.updateEnvironment(environment.id, {
       status: "error",
       lifecycleError: environmentLifecycleErrorMessage(error),
+      // A start that never reached "running" cannot honour a post-setup agent
+      // launch, and the durable intent would otherwise fire on some later
+      // successful transition the user never connected to this attempt.
+      ...clearPendingAgentLaunchUpdates(),
     }).catch(() => undefined);
     throw error;
   }
@@ -3970,15 +3989,17 @@ async function stopEnvironmentOnce(
   // Discovery runs inside the environment, so its cached result stops being
   // meaningful the moment the environment does.
   invalidateDiscovery(environment.id);
-  if (environment.lifecycleError) {
-    await storage.updateEnvironment(environment.id, { lifecycleError: null });
-  }
+  // The previous failure is cleared with the outcome, not ahead of it: a
+  // `docker stop` that throws would otherwise erase the explanation the user is
+  // reading and leave the environment in `error` with nothing to show.
+  //
   // A stopped environment cannot honour a post-setup agent launch, and the
   // renderer cannot clear the intent for an environment it no longer mounts.
   if (environment.containerId) {
     await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
     await storage.updateEnvironment(environment.id, {
       status: "stopped",
+      lifecycleError: null,
       ...clearPendingAgentLaunchUpdates(),
     });
     shutdownClaudeStatePolling(environment.containerId);
@@ -4003,6 +4024,7 @@ async function stopEnvironmentOnce(
   }
   await storage.updateEnvironment(environment.id, {
     status: "stopped",
+    ...(stopError ? {} : { lifecycleError: null }),
     ...clearPendingAgentLaunchUpdates(),
   });
   if (stopError) throw stopError;
@@ -4030,11 +4052,18 @@ async function recreateEnvironmentOnce(
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment?.containerId) return;
   invalidateDiscovery(environment.id);
+  // Recreate is the user's repair action for a container that is already
+  // broken, so a failing `rm -f` must not be the thing that makes it
+  // unrepairable. Drop the reference and build a fresh container anyway; the
+  // remains are swept by `cleanup_orphaned_containers`. Logged rather than
+  // swallowed so the daemon-level cause is still recoverable.
   await runCommand(
     "docker",
     ["rm", "-f", environment.containerId],
     { timeoutMs: 60_000 },
-  );
+  ).catch((error: unknown) => {
+    logEnvironmentLifecycleFailure("recreate (container removal)", environment.id, error);
+  });
   await context.storage.updateEnvironment(environment.id, {
     containerId: null,
     status: "stopped",
@@ -4852,6 +4881,15 @@ function deleteEnvironmentTask(
   context: CommandContext,
   options: { allowWhileMerging?: boolean } = {},
 ): Promise<void> {
+  // Every reason to refuse the delete is evaluated before the tombstone is
+  // reserved. Reserving first would block local-server starts and merges for
+  // the whole queue wait on behalf of a delete that was never going to run.
+  if (localServerShutdownRequested) {
+    return Promise.reject(new Error("Backend is shutting down; environments cannot be deleted"));
+  }
+  if (mergingEnvironments.has(environmentId) && !options.allowWhileMerging) {
+    return Promise.reject(new Error(`Environment is currently being merged: ${environmentId}`));
+  }
   if (deletingLocalServerEnvironments.has(environmentId)) {
     return Promise.reject(new Error(`Environment is already being deleted: ${environmentId}`));
   }
@@ -4918,6 +4956,19 @@ async function waitForLocalServerEnvironmentOperations(): Promise<void> {
   while (localServerEnvironmentOperations.size > 0) {
     await Promise.allSettled([...new Set(localServerEnvironmentOperations.values())]);
   }
+}
+
+/**
+ * Closes admission for everything that would start new owned processes, without
+ * waiting for any of it to drain.
+ *
+ * Shutdown drains lifecycle work first, and that drain can run for minutes on
+ * queued Docker operations. Leaving local-server and delete admission open for
+ * that whole window would let work start that the subsequent drain then has to
+ * clean up — or that a SIGKILL leaves orphaned.
+ */
+export function closeLocalServerAdmission(): void {
+  localServerShutdownRequested = true;
 }
 
 /** Drains every local agent server still owned by this backend process. */
@@ -6304,33 +6355,102 @@ function cleanupErrorMessage(error: unknown): string {
   return "An unexpected error occurred";
 }
 
-const ENVIRONMENT_LIFECYCLE_ERROR_MAX_CHARS = 200;
+/**
+ * Every value this can return, so the persisted field is a closed set rather
+ * than a bounded slice of child output. Nothing derived from a command,
+ * a path, or a repository ever reaches it.
+ */
+export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
+  unknown: "Environment start failed. Check the backend logs and retry.",
+  noLocalPath: "Project has no local path - cannot create a local worktree",
+  setupScript: "Environment setup script failed.",
+  timedOut: "Environment start timed out. Check the container runtime and retry.",
+  runtimeUnavailable: "The container runtime is unavailable. Start it and retry.",
+  imageUnavailable: "The environment image is unavailable. Rebuild it and retry.",
+  diskFull: "The host has run out of disk space. Free space and retry.",
+} as const;
 
 /**
- * Converts an arbitrary subprocess/storage failure into a bounded message that
- * is safe to persist, render, and log. Raw command errors can contain clone
- * URLs, host paths, environment variables, and child output, so only
- * deliberately selected categories cross that boundary.
+ * Classifies a subprocess/storage failure into a message that is safe to
+ * persist and render. Raw command errors can contain clone URLs, host paths,
+ * environment variables, and child output, so the raw text never crosses this
+ * boundary — the return value is always one of the constants above.
+ *
+ * Classification prefers `CommandFailedError`'s structured outcome over the
+ * message. A timeout in particular is invisible in the text: `execFile` kills
+ * the child, leaving only the generic "Command failed: <argv>".
  */
 function environmentLifecycleErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
-  let safeMessage = "Environment start failed. Check the backend logs and retry.";
-
-  if (message === "Project has no local path - cannot create a local worktree") {
-    safeMessage = message;
-  } else if (message === "Setup script failed") {
-    safeMessage = "Environment setup script failed.";
-  } else if (/\b(?:timed? out|timeout)\b/i.test(message)) {
-    safeMessage = "Environment start timed out. Check the container runtime and retry.";
-  } else if (/\b(?:docker|container runtime)\b.*\b(?:not found|unavailable|not running)\b/i.test(message)) {
-    safeMessage = "The container runtime is unavailable. Start it and retry.";
-  } else if (/\bimage\b.*\b(?:not found|missing|pull)\b/i.test(message)) {
-    safeMessage = "The environment image is unavailable. Rebuild it and retry.";
+  if (error instanceof CommandFailedError) {
+    if (error.timedOut) return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.timedOut;
+    if (error.executableMissing) return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable;
   }
 
-  return safeMessage.length > ENVIRONMENT_LIFECYCLE_ERROR_MAX_CHARS
-    ? `${safeMessage.slice(0, ENVIRONMENT_LIFECYCLE_ERROR_MAX_CHARS - 1)}…`
-    : safeMessage;
+  const message = error instanceof Error ? error.message : "";
+  if (message === ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.noLocalPath) {
+    return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.noLocalPath;
+  }
+  if (message === "Setup script failed") {
+    return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript;
+  }
+  // Matched against what the Docker CLI actually emits, not a paraphrase.
+  if (/cannot connect to the docker daemon|is the docker daemon running|docker daemon is not running|error during connect/i.test(message)) {
+    return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable;
+  }
+  if (/unable to find image|pull access denied|manifest unknown|manifest for .* not found|no such image|repository does not exist/i.test(message)) {
+    return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.imageUnavailable;
+  }
+  if (/no space left on device/i.test(message)) {
+    return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.diskFull;
+  }
+  return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.unknown;
+}
+
+const LIFECYCLE_LOG_DETAIL_MAX_CHARS = 500;
+
+/**
+ * Strips the credential shapes a subprocess failure realistically carries.
+ *
+ * `runCommand` already removes values the caller declared secret, but a child
+ * echoes things the caller never named — most importantly the remote URL of a
+ * failed clone or fetch, which carries its own credentials in userinfo.
+ */
+function scrubLifecycleLogDetail(detail: string): string {
+  const scrubbed = detail
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/gi, "$1[redacted]@")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/gi, "[redacted]")
+    .replace(/\bgh[pousr]_[A-Za-z0-9_]+\b/gi, "[redacted]")
+    .replace(/\bsk-[A-Za-z0-9._-]{16,}\b/gi, "[redacted]")
+    .replace(/\bxox[abposr]-[A-Za-z0-9-]+\b/gi, "[redacted]");
+
+  return scrubbed.length > LIFECYCLE_LOG_DETAIL_MAX_CHARS
+    ? `${scrubbed.slice(0, LIFECYCLE_LOG_DETAIL_MAX_CHARS)}…`
+    : scrubbed;
+}
+
+/**
+ * The persisted message is a fixed category, so without this the cause of a
+ * failed start survives nowhere and "check the backend logs" is a dead end.
+ *
+ * The child's own text is the useful part, so it is logged — scrubbed, and
+ * alongside the structured outcome, which is the only place a timeout or a
+ * missing runtime is distinguishable from an ordinary non-zero exit.
+ */
+function logEnvironmentLifecycleFailure(
+  operation: string,
+  environmentId: string,
+  error: unknown,
+): void {
+  const detail = scrubLifecycleLogDetail(
+    error instanceof Error ? error.message : String(error),
+  );
+  const outcome = error instanceof CommandFailedError
+    ? ` (timedOut=${error.timedOut} executableMissing=${error.executableMissing} exitCode=${error.exitCode} signal=${error.signal})`
+    : "";
+  console.error(
+    `[environment-lifecycle] ${operation} failed for ${environmentId}: ${environmentLifecycleErrorMessage(error)}${outcome} — ${detail}`,
+  );
 }
 
 async function refreshClaudeModelCatalog(
@@ -6859,7 +6979,7 @@ export function createCommandRegistry(
     await storage.updateRepositoryConfig(project.id, { ...repoConfig, lastEnvironmentType: env.environmentType });
     return storage.addEnvironment(env);
   });
-  register("delete_environment", ({ environmentId }, context) => {
+  register("delete_environment", async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
     extensionDiscoveryCache.invalidate(id);
     return deleteEnvironmentTask(id, context);
@@ -6913,7 +7033,10 @@ export function createCommandRegistry(
     }
     return cleared;
   });
-  register("start_environment", ({ environmentId }, context) =>
+  // `admit` refuses synchronously by design, so every lifecycle command is
+  // `async`: a caller that reaches the registry directly must see a rejection
+  // rather than a throw from the call expression itself.
+  register("start_environment", async ({ environmentId }, context) =>
     startEnvironmentTask(
       asString(environmentId, "environmentId"),
       context,
@@ -6930,17 +7053,19 @@ export function createCommandRegistry(
     }
     const task = startEnvironmentTask(id, context, schedulePendingEnvironmentRename);
     void task.catch((error) => {
-      console.error(`[environment-start] Background start failed for ${id}: ${environmentLifecycleErrorMessage(error)}`);
+      // `startEnvironmentOnce` has already logged the cause; this only records
+      // that nobody was awaiting the result, so the rejection is not unhandled.
+      logEnvironmentLifecycleFailure("background start", id, error);
     });
   });
-  register("stop_environment", ({ environmentId }, context) =>
+  register("stop_environment", async ({ environmentId }, context) =>
     stopEnvironmentTask(
       asString(environmentId, "environmentId"),
       context,
       (id) => extensionDiscoveryCache.invalidate(id),
     )
   );
-  register("recreate_environment", ({ environmentId }, context) =>
+  register("recreate_environment", async ({ environmentId }, context) =>
     recreateEnvironmentTask(
       asString(environmentId, "environmentId"),
       context,
@@ -8510,6 +8635,14 @@ export function createCommandRegistry(
 
 export const __testing = {
   createExtensionCommandRunner,
+  environmentLifecycleErrorMessage,
+  scrubLifecycleLogDetail,
+  isEnvironmentDeleting(environmentId: string): boolean {
+    return deletingLocalServerEnvironments.has(environmentId);
+  },
+  markEnvironmentMerging(environmentId: string): void {
+    mergingEnvironments.add(environmentId);
+  },
   resetDockerContainerStateCache(): void {
     dockerContainerStateCache = null;
   },

@@ -69,13 +69,27 @@ interface LoadEnvironmentsOptions {
 }
 
 export interface StartEnvironmentOptions {
-  /** Suppress the success toast for callers that own the surrounding workflow. */
+  /**
+   * Suppress the success toast for callers that own the surrounding workflow.
+   * Only meaningful without `background`, which never reports success at all.
+   */
   silent?: boolean;
   /**
    * Return after the backend accepts the start. Docker provisioning and setup
    * continue in a backend-owned task and publish authoritative state changes.
+   *
+   * Implies no success toast: acceptance is not completion, so there is nothing
+   * truthful to report yet. The outcome reaches the user through the persisted
+   * status and `lifecycleError` instead. A rejected *acceptance* still throws
+   * and still reports, so a bad request is not silently swallowed.
    */
   background?: boolean;
+  /**
+   * Suppress the failure toast for callers that report the failure under their
+   * own title (restart). The failure is still recorded as reported, so the
+   * durable reconciliation below stays quiet either way.
+   */
+  suppressFailureToast?: boolean;
 }
 
 interface EnvironmentCreationState {
@@ -131,13 +145,55 @@ function bindSetupTerminalSession(environment: Environment, sessionId: string): 
 
 let setupSnapshotReconciliation: Promise<void> | null = null;
 let setupSnapshotReconcileRequested = false;
-const reportedLifecycleErrorByEnvironment = new Map<string, string>();
+
+/**
+ * Placeholder for "a foreground start already told the user about this failure".
+ * The backend persists its own sanitized text for the same event, so the two
+ * reports cannot be matched by message; this marker is consumed by whatever
+ * persisted message arrives next for that environment.
+ */
+const FOREGROUND_REPORTED_LIFECYCLE_ERROR = Symbol("foreground-reported-lifecycle-error");
+
+const reportedLifecycleErrorByEnvironment = new Map<
+  string,
+  string | typeof FOREGROUND_REPORTED_LIFECYCLE_ERROR
+>();
+
+/**
+ * Claim the report for an environment's current failure on behalf of a
+ * foreground start. The backend persists a failure for the same start and
+ * announces it, which drives a list refetch; without this claim the
+ * reconciliation below would toast the identical failure a second time.
+ */
+function markLifecycleErrorReportedByForeground(environmentId: string): void {
+  reportedLifecycleErrorByEnvironment.set(
+    environmentId,
+    FOREGROUND_REPORTED_LIFECYCLE_ERROR,
+  );
+}
+
+/**
+ * Resolve a full environment snapshot's `lifecycleError` before it is merged.
+ * The backend normalizes a cleared failure to `undefined` and JSON.stringify
+ * drops undefined keys, so a healthy environment arrives with the key ABSENT.
+ * `updateEnvironment` merges only the keys it is handed, so an absent key would
+ * preserve a stale failure — and with it a permanent reconciliation target. A
+ * full snapshot is authoritative for this field, so make the absence explicit.
+ */
+function withAuthoritativeLifecycleError(snapshot: Environment): Environment {
+  return snapshot.lifecycleError === undefined
+    ? { ...snapshot, lifecycleError: null }
+    : snapshot;
+}
 
 /**
  * Apply durable lifecycle failures from the environment store. Snapshot reads
  * are the authority because the renderer may have been suspended while a
  * backend-owned start failed. A given persisted error is reported once, then a
  * cleared value rearms reporting so a later retry can surface the same reason.
+ *
+ * Every path that writes environments into the store calls this: the project
+ * list load, both setup lifecycle events, and the snapshot reconciliation.
  */
 function reconcileEnvironmentLifecycleErrors(): void {
   const store = useEnvironmentStore.getState();
@@ -162,12 +218,32 @@ function reconcileEnvironmentLifecycleErrors(): void {
     store.consumePendingSetupCommands(environment.id);
     store.setSetupCommandsResolved(environment.id, true);
     store.setSetupScriptsRunning(environment.id, false);
-    store.setWorkspaceReady(environment.id, false);
+    // Unlike the gates above, `setWorkspaceReady` has no no-op guard, and this
+    // runs on every list sync for as long as the failure is persisted.
+    if (store.isWorkspaceReady(environment.id)) {
+      store.setWorkspaceReady(environment.id, false);
+    }
 
-    if (reportedLifecycleErrorByEnvironment.get(environment.id) === message) {
+    // The backend drops the durable launch intent when a start fails; mirror it
+    // and the transient renderer-side one, or a launch that can never happen
+    // auto-dispatches the original prompt the next time this env is started.
+    store.updateEnvironment(environment.id, { pendingAgentLaunch: false });
+    const claudeOptions = useClaudeOptionsStore.getState();
+    if (claudeOptions.pendingNativeLaunches[environment.id]) {
+      claudeOptions.clearPendingNativeLaunch(environment.id);
+    }
+
+    const reported = reportedLifecycleErrorByEnvironment.get(environment.id);
+    if (reported === message) {
       continue;
     }
+    // Record before reporting: the toast action re-enters these stores.
     reportedLifecycleErrorByEnvironment.set(environment.id, message);
+    if (reported === FOREGROUND_REPORTED_LIFECYCLE_ERROR) {
+      // Same failure the foreground start already toasted, wearing the
+      // backend's sanitized wording. Consume the claim instead of repeating it.
+      continue;
+    }
     store.setError(message);
     toast.error("Failed to start environment", {
       description: truncateForToast(message),
@@ -225,10 +301,13 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
       if (!snapshot) return;
 
       const store = useEnvironmentStore.getState();
-      const safeSnapshot = preserveCompletedSetupState(environment.id, snapshot);
+      const safeSnapshot = withAuthoritativeLifecycleError(
+        preserveCompletedSetupState(environment.id, snapshot),
+      );
       store.updateEnvironment(environment.id, safeSnapshot);
-      reconcileEnvironmentLifecycleErrors();
 
+      // A failed start has no setup plan to read; the reconciliation below
+      // resolves its gates once every snapshot has been merged.
       if (safeSnapshot.lifecycleError) {
         return;
       }
@@ -255,7 +334,12 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
         error,
       );
     }
-  })).then(() => undefined).finally(() => {
+  })).then(() => {
+    // Once, after every snapshot has been merged. The reconciliation scans the
+    // whole store, so calling it per target was O(targets x environments) work
+    // — and that many store notifications — for one pass.
+    reconcileEnvironmentLifecycleErrors();
+  }).finally(() => {
     setupSnapshotReconciliation = null;
     if (setupSnapshotReconcileRequested) {
       setupSnapshotReconcileRequested = false;
@@ -277,11 +361,10 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
  * registration serves every consumer.
  */
 export function useEnvironmentLifecycleService(): void {
-  // Rehydrate a failure already present in the first environment snapshot.
-  // Periodic list syncs call the same reconciliation after every merge.
-  useEffect(() => {
-    reconcileEnvironmentLifecycleErrors();
-  }, []);
+  // No mount-time lifecycle-error pass on purpose: the environment store has no
+  // persisted state, so at mount it is still the empty initial array. The first
+  // failure this renderer can see arrives with the first authoritative read,
+  // and every one of those reconciles after its own merge.
 
   // Listen for backend-owned setup lifecycle events. Setup can run while the
   // terminal UI is unmounted, so these events are only incremental updates; the
@@ -303,7 +386,10 @@ export function useEnvironmentLifecycleService(): void {
         });
         const store = useEnvironmentStore.getState();
         if (environment) {
-          store.updateEnvironment(environment_id, environment);
+          store.updateEnvironment(
+            environment_id,
+            withAuthoritativeLifecycleError(environment),
+          );
           reconcileEnvironmentLifecycleErrors();
           bindSetupTerminalSession(environment, session_id);
         }
@@ -328,7 +414,9 @@ export function useEnvironmentLifecycleService(): void {
         if (environment) {
           store.updateEnvironment(
             environment_id,
-            preserveCompletedSetupState(environment_id, environment),
+            withAuthoritativeLifecycleError(
+              preserveCompletedSetupState(environment_id, environment),
+            ),
           );
           reconcileEnvironmentLifecycleErrors();
         }
@@ -743,15 +831,21 @@ export function useEnvironments(
         setSetupCommandsResolved(environmentId, true);
         console.error("[useEnvironments] Error starting environment:", err);
         const message = getErrorMessage(err, "Failed to start environment");
+        // The backend persisted its own sanitized text for this same failure
+        // before rejecting, and announcing it drives a list refetch. Claim the
+        // report here or that refetch reports the failure all over again.
+        markLifecycleErrorReportedByForeground(environmentId);
         setError(message);
         updateStatusInStore(environmentId, "error");
-        toast.error("Failed to start environment", {
-          description: truncateForToast(message),
-          action: {
-            label: "Details",
-            onClick: () => showError("Failed to start environment", message, initialPrompt),
-          },
-        });
+        if (!options?.suppressFailureToast) {
+          toast.error("Failed to start environment", {
+            description: truncateForToast(message),
+            action: {
+              label: "Details",
+              onClick: () => showError("Failed to start environment", message, initialPrompt),
+            },
+          });
+        }
         throw new Error(message);
       }
     },
@@ -892,9 +986,13 @@ export function useEnvironments(
         // Disconnect all sessions since container is stopped
         await disconnectEnvironmentSessions(environmentId);
 
-        // Re-use startEnvironment which handles setup commands centrally.
-        // Pass silent to suppress the "started" toast; we show "restarted" instead.
-        await startEnvironment(environmentId, undefined, { silent: true });
+        // Re-use startEnvironment which handles setup commands centrally. Both
+        // of its toasts are suppressed: this caller owns the user-visible
+        // outcome under the "restarted" wording, either way.
+        await startEnvironment(environmentId, undefined, {
+          silent: true,
+          suppressFailureToast: true,
+        });
         toast.success("Environment restarted");
       } catch (err) {
         console.error("[useEnvironments] Error restarting environment:", err);

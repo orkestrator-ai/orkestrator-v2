@@ -399,7 +399,15 @@ describe("Electron StorageService", () => {
     expect((await storage.getEnvironment(firstEnvironment.id))?.initialReasoningEffort).toBeUndefined();
     expect((await storage.getEnvironment(firstEnvironment.id))?.cleanupAfterMergeRequestedAt).toBeUndefined();
     expect((await storage.getEnvironment(firstEnvironment.id))?.cleanupAfterMergeError).toBeUndefined();
-    expect((await storage.getEnvironment(firstEnvironment.id))?.lifecycleError).toBeUndefined();
+    // Explicitly null rather than undefined: JSON.stringify drops undefined
+    // keys, so a cleared failure would reach the renderer as an absent key and
+    // leave the stale message on screen through a field-by-field merge.
+    expect((await storage.getEnvironment(firstEnvironment.id))?.lifecycleError).toBeNull();
+    await storage.updateEnvironment(firstEnvironment.id, { lifecycleError: undefined });
+    expect((await storage.getEnvironment(firstEnvironment.id))?.lifecycleError).toBeNull();
+    expect(
+      JSON.stringify(await storage.getEnvironment(firstEnvironment.id)),
+    ).toContain("\"lifecycleError\":null");
     await expect(storage.updateEnvironment("missing", {})).rejects.toThrow("Environment not found");
     expect((await storage.reorderEnvironments(firstProject.id, [secondEnvironment.id])).map((environment) => environment.id)).toEqual([
       secondEnvironment.id,

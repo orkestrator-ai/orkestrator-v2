@@ -207,3 +207,57 @@ test("startup reconciles a persisted creating environment before accepting comma
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test("startup fails closed when reconciliation cannot persist its result", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-lifecycle-failclosed-"));
+  const seed = new StorageService(dataDir);
+  await seed.init();
+  await seed.addEnvironment({
+    id: "interrupted",
+    projectId: "project",
+    name: "Interrupted",
+    branch: "interrupted",
+    containerId: null,
+    status: "creating",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: new Date(0).toISOString(),
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "local",
+  });
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    startupReapers: {
+      localServers: async () => [],
+      claudeTmuxRuntimes: async () => [],
+    },
+  });
+  const storage = (backend as unknown as {
+    context: { storage: StorageService };
+  }).context.storage;
+  const realUpdate = storage.updateEnvironment.bind(storage);
+  storage.updateEnvironment = (async () => {
+    throw new Error("environments.json is read-only");
+  }) as StorageService["updateEnvironment"];
+
+  try {
+    // Serving commands on top of a `creating` record this backend can never
+    // finish would report progress that will never arrive, so init must reject
+    // rather than continue past a failed reconciliation.
+    await expect(backend.init()).rejects.toThrow("environments.json is read-only");
+    storage.updateEnvironment = realUpdate;
+    await expect(storage.getEnvironment("interrupted")).resolves.toMatchObject({
+      status: "creating",
+    });
+  } finally {
+    storage.updateEnvironment = realUpdate;
+    await backend.shutdown().catch(() => undefined);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

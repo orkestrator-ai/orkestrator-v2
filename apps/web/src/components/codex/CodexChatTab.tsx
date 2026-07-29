@@ -1430,6 +1430,7 @@ export function CodexChatTab({
             modelReasoningEffort: resolvedSelection.reasoningEffort,
             mode: resolvedMode,
             fastMode: warmFastMode,
+            clientSessionKey: sessionKey,
           });
           if (!mounted) return;
 
@@ -1578,6 +1579,7 @@ export function CodexChatTab({
             modelReasoningEffort: resolvedReasoningEffort,
             mode: resolvedMode,
             fastMode: coldFastMode,
+            clientSessionKey: sessionKey,
           });
           setSession(sessionKey, {
             sessionId: created.sessionId,

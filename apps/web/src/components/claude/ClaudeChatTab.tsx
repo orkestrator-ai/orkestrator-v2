@@ -82,6 +82,7 @@ import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import type { ClaudeAttachment, QueuedMessage } from "@/stores/claudeStore";
 import {
+  applyClaudeBackgroundTaskStates,
   getClaudeSourceMessageId,
   normalizeClaudeMessagesForDisplay,
 } from "@/lib/chat/native-message-adapters";
@@ -114,6 +115,7 @@ const UNMATCHED_EVENT_WARNING_EXEMPT = new Set([
   "system.compact",
   "system.message",
 ]);
+const EMPTY_BACKGROUND_TASKS = {};
 
 type SessionPendingPrompts = {
   questions: Map<string, ClaudeQuestionRequest>;
@@ -668,6 +670,8 @@ export function ClaudeChatTab({
 
     const stateBeforeAttempt = useClaudeStore.getState();
     const sessionBeforeAttempt = stateBeforeAttempt.sessions.get(sessionKey);
+    const backgroundTaskRevisionBeforeAttempt =
+      stateBeforeAttempt.backgroundTaskRevisions.get(sessionKey) ?? 0;
     if (
       stateBeforeAttempt.clients.get(environmentId) !== activeClient ||
       sessionBeforeAttempt?.sessionId !== sessionId
@@ -708,6 +712,23 @@ export function ClaudeChatTab({
        */
       if (manual) {
         throw new Error("Claude session changed while refreshing; try again");
+      }
+      return;
+    }
+    if (
+      (stateAfterAttempt.backgroundTaskRevisions.get(sessionKey) ?? 0)
+      !== backgroundTaskRevisionBeforeAttempt
+    ) {
+      /**
+       * Background-task lifecycle is stored independently from the session
+       * object. A live `session.updated` frame can therefore settle a task
+       * without tripping the session reference guard above. Its monotonic
+       * revision also detects absent → present → absent ABA updates that a task
+       * record comparison would miss. Do not let a REST request that started
+       * before those frames resurrect a task as running.
+       */
+      if (manual) {
+        throw new Error("Claude background tasks changed while refreshing; try again");
       }
       return;
     }
@@ -787,11 +808,21 @@ export function ClaudeChatTab({
   // Memoize messages separately to provide stable reference for child components
   // This prevents unnecessary recalculations when other session properties change
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
+  const backgroundTasks = useClaudeStore(
+    useCallback(
+      (state) => state.backgroundTasks.get(sessionKey) ?? EMPTY_BACKGROUND_TASKS,
+      [sessionKey],
+    ),
+  );
+  const lifecycleMessages = useMemo(
+    () => applyClaudeBackgroundTaskStates(sessionMessages, backgroundTasks),
+    [backgroundTasks, sessionMessages],
+  );
   const providerDisplayMessages = useMemo(
     () => pinActiveNativeAgentParts(
-      normalizeClaudeMessagesForDisplay(sessionMessages),
+      normalizeClaudeMessagesForDisplay(lifecycleMessages),
     ),
-    [sessionMessages],
+    [lifecycleMessages],
   );
   const handoff = useAgentHandoff(
     agentHandoffId,
@@ -2432,6 +2463,12 @@ export function ClaudeChatTab({
           } else {
             tasksBySession.delete(sessionKey);
           }
+          const backgroundTaskRevisions = new Map(
+            state.backgroundTaskRevisions,
+          );
+          // This transaction replaces the provider identity. Revisions from
+          // the previous session must not become the new session's baseline.
+          backgroundTaskRevisions.delete(sessionKey);
 
           const planMode = new Map(state.planMode);
           planMode.set(
@@ -2448,6 +2485,7 @@ export function ClaudeChatTab({
             promptSuggestions,
             dismissedPromptSuggestions,
             backgroundTasks: tasksBySession,
+            backgroundTaskRevisions,
             planMode,
           };
         });

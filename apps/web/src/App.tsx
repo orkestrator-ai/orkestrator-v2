@@ -27,6 +27,7 @@ import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { getBackgroundProcessingEnvironments } from "@/lib/background-pipelines";
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
+import { startPaneSelectionPersistence } from "@/lib/pane-selection-storage";
 import { startResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
 import {
@@ -101,6 +102,9 @@ function App() {
   useEffect(() => startResourceSync(), []);
   useEffect(() => startStoreResourceSync(), []);
   useEffect(() => startPaneLayoutPersistence(), []);
+  // Selection is renderer-local by design, so it needs its own mirror to
+  // survive a restart.
+  useEffect(() => startPaneSelectionPersistence(), []);
   useEffect(() => startLoopedReviewPersistence(), []);
   useEffect(() => {
     void migrateLegacyBuildPipelines().catch((error) => {

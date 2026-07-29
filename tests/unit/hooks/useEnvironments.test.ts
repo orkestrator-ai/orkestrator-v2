@@ -6,6 +6,9 @@ import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentSto
 import { useClaudeOptionsStore } from "../../../apps/web/src/stores/claudeOptionsStore";
 import { useLoopedReviewStore } from "../../../apps/web/src/stores/loopedReviewStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
+import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
+import { useSessionStore } from "../../../apps/web/src/stores/sessionStore";
+import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, StartEnvironmentResult } from "../../../apps/web/src/types";
 import { createMockEnvironment } from "../utils/testFactories";
 
@@ -68,6 +71,7 @@ const mockCreateEnvironment = mock<(
 );
 const mockDeleteEnvironment = mock<(environmentId: string) => Promise<void>>(() => Promise.resolve());
 const mockStartEnvironment = mock<(environmentId: string) => Promise<StartEnvironmentResult>>(() => Promise.resolve({ setupCommands: undefined }));
+const mockStartEnvironmentInBackground = mock<(environmentId: string) => Promise<void>>(() => Promise.resolve());
 const mockStopEnvironment = mock<(environmentId: string) => Promise<void>>(() => Promise.resolve());
 const mockSyncEnvironmentStatus = mock<(environmentId: string) => Promise<Environment>>((environmentId) =>
   Promise.resolve(createMockEnvironment({ id: environmentId, containerId: "container-123", status: "running" }))
@@ -88,6 +92,7 @@ mock.module("@/lib/backend", () => ({
   createEnvironment: mockCreateEnvironment,
   deleteEnvironment: mockDeleteEnvironment,
   startEnvironment: mockStartEnvironment,
+  startEnvironmentInBackground: mockStartEnvironmentInBackground,
   stopEnvironment: mockStopEnvironment,
   syncEnvironmentStatus: mockSyncEnvironmentStatus,
   reorderEnvironments: mockReorderEnvironments,
@@ -126,6 +131,7 @@ describe("useEnvironments", () => {
       buildEnvironmentIds: new Set(),
     });
     useLoopedReviewStore.setState({ workflows: new Map() });
+    useErrorDialogStore.setState({ error: null });
     useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
     useConfigStore.setState({
       config: {
@@ -148,12 +154,14 @@ describe("useEnvironments", () => {
     mockCreateEnvironment.mockClear();
     mockDeleteEnvironment.mockClear();
     mockStartEnvironment.mockClear();
+    mockStartEnvironmentInBackground.mockClear();
     mockStopEnvironment.mockClear();
     mockSyncEnvironmentStatus.mockClear();
     mockReorderEnvironments.mockClear();
     mockUpdatePortMappings.mockClear();
     mockClearEnvironmentPr.mockClear();
     mockListen.mockClear();
+    mockToastSuccess.mockClear();
 
     // Reset to default implementations
     mockGetEnvironments.mockImplementation(() => Promise.resolve([]));
@@ -165,6 +173,7 @@ describe("useEnvironments", () => {
     );
     mockDeleteEnvironment.mockImplementation(() => Promise.resolve());
     mockStartEnvironment.mockImplementation(() => Promise.resolve({ setupCommands: undefined }));
+    mockStartEnvironmentInBackground.mockImplementation(() => Promise.resolve());
     mockStopEnvironment.mockImplementation(() => Promise.resolve());
     mockSyncEnvironmentStatus.mockImplementation((environmentId) =>
       Promise.resolve(createMockEnvironment({ id: environmentId, containerId: "container-123", status: "running" }))
@@ -596,6 +605,212 @@ describe("useEnvironments", () => {
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
   });
 
+  test("hands background starts to the backend without awaiting Docker provisioning", async () => {
+    const existingEnv = createMockEnvironment({
+      id: "env-background",
+      projectId: "project-1",
+      status: "stopped",
+    });
+    useEnvironmentStore.setState({ environments: [existingEnv] });
+    mockGetEnvironments.mockResolvedValue([existingEnv]);
+
+    const { result } = renderHook(() => useEnvironments("project-1"));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.startEnvironment(
+        "env-background",
+        "Launch after setup",
+        { background: true, silent: true },
+      );
+    });
+
+    expect(mockStartEnvironmentInBackground).toHaveBeenCalledWith("env-background");
+    expect(mockStartEnvironment).not.toHaveBeenCalled();
+    expect(
+      useEnvironmentStore.getState().getEnvironmentById("env-background")?.status,
+    ).toBe("creating");
+    expect(
+      useEnvironmentStore.getState().isSetupCommandsResolved("env-background"),
+    ).toBe(false);
+  });
+
+  test("never reports success for a background start, even without silent", async () => {
+    const existingEnv = createMockEnvironment({
+      id: "env-background-not-silent",
+      projectId: "project-1",
+      status: "stopped",
+    });
+    useEnvironmentStore.setState({ environments: [existingEnv] });
+    mockGetEnvironments.mockResolvedValue([existingEnv]);
+
+    const { result } = renderHook(() => useEnvironments("project-1"));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.startEnvironment(existingEnv.id, undefined, { background: true });
+    });
+
+    // Acceptance is not completion. "Environment started" here would be a claim
+    // the backend has not yet earned; the real outcome arrives through the
+    // persisted status and lifecycleError.
+    expect(mockStartEnvironmentInBackground).toHaveBeenCalledWith(existingEnv.id);
+    expect(mockToastSuccess).not.toHaveBeenCalled();
+  });
+
+  test("reports background admission failures and releases the setup gate", async () => {
+    const existingEnv = createMockEnvironment({
+      id: "env-background-rejected",
+      projectId: "project-1",
+      status: "stopped",
+    });
+    useEnvironmentStore.setState({ environments: [existingEnv] });
+    mockStartEnvironmentInBackground.mockRejectedValue(
+      new Error("background start rejected"),
+    );
+    const { result } = renderHook(() => useEnvironments(null));
+
+    let thrownError: Error | undefined;
+    try {
+      await act(async () => {
+        await result.current.startEnvironment(
+          existingEnv.id,
+          undefined,
+          { background: true, silent: true },
+        );
+      });
+    } catch (error) {
+      thrownError = error as Error;
+    }
+
+    const state = useEnvironmentStore.getState();
+    expect(thrownError?.message).toBe("background start rejected");
+    expect(state.getEnvironmentById(existingEnv.id)?.status).toBe("error");
+    expect(state.isSetupCommandsResolved(existingEnv.id)).toBe(true);
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to start environment",
+      expect.any(Object),
+    );
+  });
+
+  test("reports a retry's durable failure after a background admission rejection", async () => {
+    const existingEnv = createMockEnvironment({
+      id: "env-background-reject-retry",
+      projectId: "project-1",
+      status: "stopped",
+    });
+    useEnvironmentStore.setState({ environments: [existingEnv] });
+    let admission = 0;
+    mockStartEnvironmentInBackground.mockImplementation(() => {
+      admission += 1;
+      return admission === 1
+        ? Promise.reject(new Error("background start rejected"))
+        : Promise.resolve();
+    });
+    const { result } = renderHook(() => useEnvironments(null));
+
+    await act(async () => {
+      await expect(
+        result.current.startEnvironment(existingEnv.id, undefined, {
+          background: true,
+          silent: true,
+        }),
+      ).rejects.toThrow("background start rejected");
+    });
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await result.current.startEnvironment(existingEnv.id, undefined, {
+        background: true,
+        silent: true,
+      });
+    });
+
+    mockGetEnvironmentSnapshots.mockResolvedValue([
+      {
+        ...existingEnv,
+        status: "error",
+        lifecycleError: "Environment start failed.",
+      },
+    ]);
+    await act(async () => {
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    });
+
+    // The admission failure is immediate and the retry's backend-owned failure
+    // is durable. Each outcome is reported once.
+    expect(mockToastError).toHaveBeenCalledTimes(2);
+    expect(useEnvironmentStore.getState().error).toBe("Environment start failed.");
+  });
+
+  test("does not let a pre-retry snapshot restore the prior lifecycle failure", async () => {
+    const environment = createMockEnvironment({
+      id: "env-stale-retry-snapshot",
+      projectId: "project-1",
+      status: "error",
+      lifecycleError: "Environment start failed.",
+      pendingAgentLaunch: true,
+    });
+    const staleSnapshot = createDeferred<Environment[]>();
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupCommandsResolved: new Set([environment.id]),
+    });
+    useClaudeOptionsStore.setState({
+      options: {},
+      pendingNativeLaunches: {
+        [environment.id]: {
+          containerId: null,
+          environmentId: environment.id,
+          targetPaneId: "default",
+          agentType: "claude",
+          launchMode: "native",
+        } as any,
+      },
+    });
+    mockGetEnvironmentSnapshots.mockImplementation(() => staleSnapshot.promise);
+    const { result } = renderHook(() => useEnvironments(null));
+
+    let loadPromise!: Promise<void>;
+    act(() => {
+      loadPromise = result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    });
+    await waitFor(() => expect(mockGetEnvironmentSnapshots).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await result.current.startEnvironment(environment.id, undefined, {
+        background: true,
+        silent: true,
+      });
+    });
+    await act(async () => {
+      staleSnapshot.resolve([environment]);
+      await loadPromise;
+    });
+
+    const state = useEnvironmentStore.getState();
+    expect(state.getEnvironmentById(environment.id)).toMatchObject({
+      status: "creating",
+      lifecycleError: null,
+      pendingAgentLaunch: true,
+    });
+    expect(state.isSetupCommandsResolved(environment.id)).toBe(false);
+    expect(
+      useClaudeOptionsStore.getState().pendingNativeLaunches[environment.id],
+    ).toBeDefined();
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
   test("startEnvironment clears the setup placeholder when there are no setup commands", async () => {
     const existingEnv = createMockEnvironment({
       id: "env-1",
@@ -967,6 +1182,70 @@ describe("useEnvironments", () => {
     expect(result.current.allEnvironments[0]?.status).toBe("error");
   });
 
+  test("restartEnvironment reports a start failure after stop succeeds", async () => {
+    const existingEnv = createMockEnvironment({
+      id: "env-restart-start-fails",
+      projectId: "project-1",
+      status: "running",
+    });
+    useEnvironmentStore.setState({ environments: [existingEnv] });
+    mockStartEnvironment.mockRejectedValue(new Error("replacement start failed"));
+    const { result } = renderHook(() => useEnvironments(null));
+
+    let thrownError: Error | undefined;
+    try {
+      await act(async () => {
+        await result.current.restartEnvironment(existingEnv.id);
+      });
+    } catch (error) {
+      thrownError = error as Error;
+    }
+
+    expect(mockStopEnvironment).toHaveBeenCalledWith(existingEnv.id);
+    expect(mockStartEnvironment).toHaveBeenCalledWith(existingEnv.id);
+    expect(thrownError?.message).toBe("replacement start failed");
+    expect(result.current.error).toBe("replacement start failed");
+    expect(result.current.allEnvironments[0]?.status).toBe("error");
+  });
+
+  test("restartEnvironment reports a session-disconnect failure after stop succeeds", async () => {
+    const existingEnv = createMockEnvironment({
+      id: "env-restart-disconnect-fails",
+      projectId: "project-1",
+      status: "running",
+    });
+    const originalDisconnect =
+      useSessionStore.getState().disconnectEnvironmentSessions;
+    useEnvironmentStore.setState({ environments: [existingEnv] });
+    useSessionStore.setState({
+      disconnectEnvironmentSessions: async () => {
+        throw new Error("session disconnect failed");
+      },
+    });
+
+    try {
+      const { result } = renderHook(() => useEnvironments(null));
+      let thrownError: Error | undefined;
+      try {
+        await act(async () => {
+          await result.current.restartEnvironment(existingEnv.id);
+        });
+      } catch (error) {
+        thrownError = error as Error;
+      }
+
+      expect(mockStopEnvironment).toHaveBeenCalledWith(existingEnv.id);
+      expect(mockStartEnvironment).not.toHaveBeenCalled();
+      expect(thrownError?.message).toBe("session disconnect failed");
+      expect(result.current.error).toBe("session disconnect failed");
+      expect(result.current.allEnvironments[0]?.status).toBe("error");
+    } finally {
+      useSessionStore.setState({
+        disconnectEnvironmentSessions: originalDisconnect,
+      });
+    }
+  });
+
   test("setEnvironmentPR updates PR state", async () => {
     const existingEnv = createMockEnvironment({ id: "env-1", projectId: "project-1" });
     useEnvironmentStore.setState({ environments: [existingEnv] });
@@ -980,6 +1259,48 @@ describe("useEnvironments", () => {
       prUrl: "https://github.com/acme/repo/pull/1",
       prState: "open",
     });
+  });
+
+  test("setEnvironmentPR reports persistence failures", async () => {
+    const existingEnv = createMockEnvironment({
+      id: "env-pr-failure",
+      projectId: "project-1",
+    });
+    const originalSetEnvironmentPR =
+      useEnvironmentStore.getState().setEnvironmentPR;
+    useEnvironmentStore.setState({
+      environments: [existingEnv],
+      setEnvironmentPR: () => {
+        throw new Error("PR persistence failed");
+      },
+    });
+
+    try {
+      const { result } = renderHook(() => useEnvironments(null));
+      let thrownError: Error | undefined;
+      try {
+        await act(async () => {
+          await result.current.setEnvironmentPR(
+            existingEnv.id,
+            "https://github.com/acme/repo/pull/2",
+            "open",
+          );
+        });
+      } catch (error) {
+        thrownError = error as Error;
+      }
+
+      expect(thrownError?.message).toBe("PR persistence failed");
+      expect(result.current.error).toBe("PR persistence failed");
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Failed to set PR URL",
+        expect.any(Object),
+      );
+    } finally {
+      useEnvironmentStore.setState({
+        setEnvironmentPR: originalSetEnvironmentPR,
+      });
+    }
   });
 
   test("reorderEnvironments persists and merges the backend order", async () => {
@@ -1191,6 +1512,388 @@ describe("useEnvironments", () => {
     expect(state.isSetupScriptsRunning("env-1")).toBe(false);
     expect(state.isWorkspaceReady("env-1")).toBe(true);
     expect(mockGetEnvironmentSetupSession).not.toHaveBeenCalled();
+  });
+
+  test("rehydrates a late background-start failure from the authoritative snapshot", async () => {
+    const environment = createMockEnvironment({
+      id: "env-late-background-failure",
+      projectId: "project-1",
+      status: "creating",
+      setupScriptsComplete: false,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      pendingSetupCommands: new Map([[environment.id, []]]),
+      setupCommandsResolved: new Set(),
+      setupScriptsRunning: new Set([environment.id]),
+      workspaceReadyEnvironments: new Set([environment.id]),
+    });
+    mockGetEnvironment.mockResolvedValue({
+      ...environment,
+      status: "error",
+      lifecycleError: "Docker provisioning failed",
+    });
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    const state = useEnvironmentStore.getState();
+    expect(state.getEnvironmentById(environment.id)).toMatchObject({
+      status: "error",
+      lifecycleError: "Docker provisioning failed",
+    });
+    expect(state.pendingSetupCommands.has(environment.id)).toBe(false);
+    expect(state.isSetupCommandsResolved(environment.id)).toBe(true);
+    expect(state.isSetupScriptsRunning(environment.id)).toBe(false);
+    expect(state.isWorkspaceReady(environment.id)).toBe(false);
+    expect(state.error).toBe("Docker provisioning failed");
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+    const toastOptions = mockToastError.mock.calls[0]?.[1] as {
+      action?: { onClick?: () => void };
+    };
+    act(() => {
+      toastOptions.action?.onClick?.();
+    });
+    expect(useErrorDialogStore.getState().error).toMatchObject({
+      title: "Failed to start environment",
+      message: "Docker provisioning failed",
+    });
+  });
+
+  test("reports each persisted lifecycle failure once and rearms after it clears", async () => {
+    const environment = createMockEnvironment({
+      id: "env-repeated-background-failure",
+      projectId: "project-1",
+      status: "error",
+      lifecycleError: "Git worktree creation failed",
+    });
+    mockGetEnvironmentSnapshots.mockResolvedValue([environment]);
+    const { result } = renderHook(() => useEnvironments(null));
+
+    await act(async () => {
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    });
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+
+    mockGetEnvironmentSnapshots.mockResolvedValue([
+      { ...environment, lifecycleError: null },
+    ]);
+    await act(async () => {
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    });
+
+    mockGetEnvironmentSnapshots.mockResolvedValue([environment]);
+    await act(async () => {
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    });
+    expect(mockToastError).toHaveBeenCalledTimes(2);
+  });
+
+  test("reports a foreground start failure once when the backend persists it too", async () => {
+    const environment = createMockEnvironment({
+      id: "env-foreground-start-failure",
+      projectId: "project-1",
+      status: "stopped",
+    });
+    useEnvironmentStore.setState({ environments: [environment] });
+    mockStartEnvironment.mockRejectedValue(new Error("Docker daemon is not running"));
+    // The backend persists its own sanitized wording for the very same failure,
+    // and announcing it drives a silent list refetch.
+    mockGetEnvironmentSnapshots.mockResolvedValue([
+      { ...environment, status: "error", lifecycleError: "Environment start failed." },
+    ]);
+    const { result } = renderHook(() => useEnvironments(null));
+
+    await act(async () => {
+      await expect(result.current.startEnvironment(environment.id)).rejects.toThrow(
+        "Docker daemon is not running",
+      );
+    });
+    await act(async () => {
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    });
+
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+    expect(mockToastError.mock.calls[0]?.[0]).toBe("Failed to start environment");
+
+    // A later failure for a different reason is a new thing to say.
+    mockGetEnvironmentSnapshots.mockResolvedValue([
+      { ...environment, status: "error", lifecycleError: "Git worktree creation failed" },
+    ]);
+    await act(async () => {
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    });
+    expect(mockToastError).toHaveBeenCalledTimes(2);
+  });
+
+  test("reports a foreground restart failure once, under the restart title", async () => {
+    const environment = createMockEnvironment({
+      id: "env-foreground-restart-failure",
+      projectId: "project-1",
+      status: "running",
+    });
+    useEnvironmentStore.setState({ environments: [environment] });
+    mockStartEnvironment.mockRejectedValue(new Error("container start failed"));
+    mockGetEnvironmentSnapshots.mockResolvedValue([
+      { ...environment, status: "error", lifecycleError: "Environment start failed." },
+    ]);
+    const { result } = renderHook(() => useEnvironments(null));
+
+    await act(async () => {
+      await expect(result.current.restartEnvironment(environment.id)).rejects.toThrow(
+        "container start failed",
+      );
+    });
+    await act(async () => {
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    });
+
+    // One actionable toast for one failure: not "start", "restart" and "start".
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+    expect(mockToastError.mock.calls[0]?.[0]).toBe("Failed to restart environment");
+  });
+
+  test("forgets reported failures for environments that no longer exist", async () => {
+    const environment = createMockEnvironment({
+      id: "env-pruned-failure",
+      projectId: "project-1",
+      status: "error",
+      lifecycleError: "Git worktree creation failed",
+    });
+    const refresh = (result: { current: ReturnType<typeof useEnvironments> }) =>
+      act(async () => {
+        await result.current.loadEnvironments("project-1", {
+          silent: true,
+          reconcileStatus: false,
+        });
+      });
+    mockGetEnvironmentSnapshots.mockResolvedValue([environment]);
+    const { result } = renderHook(() => useEnvironments(null));
+
+    await refresh(result);
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+
+    // The report map is module-global and lives for the process lifetime, so a
+    // deleted environment must take its entry with it.
+    mockGetEnvironmentSnapshots.mockResolvedValue([]);
+    await refresh(result);
+
+    mockGetEnvironmentSnapshots.mockResolvedValue([environment]);
+    await refresh(result);
+    expect(mockToastError).toHaveBeenCalledTimes(2);
+  });
+
+  test("clears a stale lifecycle failure from a snapshot that omits the field", async () => {
+    const environment = createMockEnvironment({
+      id: "env-cleared-lifecycle-error",
+      projectId: "project-1",
+      status: "error",
+      lifecycleError: "Docker provisioning failed",
+    });
+    useEnvironmentStore.setState({ environments: [environment] });
+    // A cleared failure is normalized to undefined, and JSON.stringify drops
+    // undefined keys, so the healthy snapshot arrives with the key absent.
+    const healthy: Environment = { ...environment, status: "stopped" };
+    delete (healthy as { lifecycleError?: string | null }).lifecycleError;
+    mockGetEnvironment.mockResolvedValue(healthy);
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    expect(mockGetEnvironment).toHaveBeenCalledWith(environment.id);
+    expect(
+      useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lifecycleError,
+    ).toBeNull();
+
+    // Left stale, the environment would stay a reconciliation target forever.
+    mockGetEnvironment.mockClear();
+    await reconcileEnvironmentSetupSnapshots();
+    expect(mockGetEnvironment).not.toHaveBeenCalled();
+  });
+
+  test("targets a failed environment that is neither creating nor running", async () => {
+    const environment = createMockEnvironment({
+      id: "env-error-status-target",
+      projectId: "project-1",
+      status: "error",
+      lifecycleError: "Environment start failed.",
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+    mockGetEnvironment.mockResolvedValue(environment);
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    expect(mockGetEnvironment).toHaveBeenCalledWith(environment.id);
+    // A failed start has no setup plan, so nothing reads a setup session.
+    expect(mockGetEnvironmentSetupSession).not.toHaveBeenCalled();
+    expect(
+      useEnvironmentStore.getState().isSetupCommandsResolved(environment.id),
+    ).toBe(true);
+  });
+
+  test("drops the pending agent launch when a start failure is reconciled", async () => {
+    const environment = createMockEnvironment({
+      id: "env-failed-launch-intent",
+      projectId: "project-1",
+      status: "creating",
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({ environments: [environment] });
+    useClaudeOptionsStore.setState({
+      options: {},
+      pendingNativeLaunches: {
+        [environment.id]: {
+          containerId: null,
+          environmentId: environment.id,
+          targetPaneId: "default",
+          agentType: "claude",
+          launchMode: "native",
+        } as any,
+      },
+    });
+    mockGetEnvironment.mockResolvedValue({
+      ...environment,
+      status: "error",
+      lifecycleError: "Docker provisioning failed",
+    });
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    // A launch that can never happen must not survive, in either store, or it
+    // auto-dispatches the original prompt the next time this env is started.
+    expect(
+      useEnvironmentStore.getState().getEnvironmentById(environment.id)?.pendingAgentLaunch,
+    ).toBe(false);
+    expect(
+      useClaudeOptionsStore.getState().pendingNativeLaunches[environment.id],
+    ).toBeUndefined();
+  });
+
+  test("reports a lifecycle failure carried by a setup-started event", async () => {
+    const environment = createMockEnvironment({
+      id: "env-setup-started-failure",
+      projectId: "project-1",
+      status: "creating",
+    });
+    useEnvironmentStore.setState({ environments: [environment] });
+    const callbacks = new Map<string, (event: { payload: any }) => void>();
+    mockListen.mockImplementation((eventName: string, callback: (event: { payload: any }) => void) => {
+      callbacks.set(eventName, callback);
+      return Promise.resolve(() => {});
+    });
+    renderHook(() => useEnvironmentLifecycleService());
+    await waitFor(() => expect(callbacks.has("environment-setup-started")).toBe(true));
+
+    act(() => {
+      callbacks.get("environment-setup-started")?.({
+        payload: {
+          environment_id: environment.id,
+          session_id: "setup-1",
+          environment: {
+            ...environment,
+            status: "error",
+            lifecycleError: "Docker provisioning failed",
+          },
+        },
+      });
+    });
+
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+    expect(mockToastError.mock.calls[0]?.[0]).toBe("Failed to start environment");
+    expect(useEnvironmentStore.getState().error).toBe("Docker provisioning failed");
+  });
+
+  test("reports a lifecycle failure carried by a setup-complete event", async () => {
+    const environment = createMockEnvironment({
+      id: "env-setup-complete-failure",
+      projectId: "project-1",
+      status: "creating",
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      workspaceReadyEnvironments: new Set([environment.id]),
+    });
+    let completeCallback: ((event: { payload: any }) => void) | undefined;
+    mockListen.mockImplementation((eventName: string, callback: (event: { payload: any }) => void) => {
+      if (eventName === "environment-setup-complete") completeCallback = callback;
+      return Promise.resolve(() => {});
+    });
+    renderHook(() => useEnvironmentLifecycleService());
+    await waitFor(() => expect(completeCallback).toBeDefined());
+
+    act(() => {
+      completeCallback?.({
+        payload: {
+          environment_id: environment.id,
+          success: false,
+          environment: {
+            ...environment,
+            status: "error",
+            lifecycleError: "Docker provisioning failed",
+          },
+        },
+      });
+    });
+
+    const state = useEnvironmentStore.getState();
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+    expect(state.isSetupCommandsResolved(environment.id)).toBe(true);
+    expect(state.isWorkspaceReady(environment.id)).toBe(false);
+    expect(state.getEnvironmentById(environment.id)?.pendingAgentLaunch).toBe(false);
+  });
+
+  test("does not report a persisted failure until an authoritative read delivers it", async () => {
+    const environment = createMockEnvironment({
+      id: "env-mount-time-failure",
+      projectId: "project-1",
+      status: "error",
+      lifecycleError: "Environment start failed.",
+    });
+    // The environment store has no persisted state, so in the real app this
+    // array is still empty when the service mounts. Reporting is owned by the
+    // reads that deliver environments, not by mounting.
+    useEnvironmentStore.setState({ environments: [environment] });
+    mockGetEnvironmentSnapshots.mockResolvedValue([environment]);
+
+    const { result } = renderHook(() => {
+      useEnvironmentLifecycleService();
+      return useEnvironments(null);
+    });
+    await waitFor(() => expect(mockListen).toHaveBeenCalled());
+    expect(mockToastError).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    });
+    expect(mockToastError).toHaveBeenCalledTimes(1);
   });
 
   test("does not mark the workspace ready after a failed setup completion event", async () => {

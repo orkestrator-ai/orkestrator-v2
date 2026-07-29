@@ -282,14 +282,14 @@ describe("CodexApprovalCard", () => {
       () => {
         expect(screen.queryByText(/\d+:\d+/)).toBeNull();
       },
-      // The countdown ticks on a real one-second interval, so this needs room for
-      // more than one tick: under a loaded parallel run a 1.5s budget can expire
-      // between ticks and fail a card that does expire correctly.
-      { timeout: 5_000 },
+      // The countdown ticks on a real one-second interval. The repository-wide
+      // suite also runs bridge workers concurrently, which can starve this
+      // informational timer for several seconds without changing its behavior.
+      { timeout: 10_000 },
     );
     expect(screen.getByRole("button", { name: "Decline" })).toBeTruthy();
     expect(screen.queryByText("This request expired and was declined.")).toBeNull();
-  });
+  }, 15_000);
 
   test("mentions the requested grant root when there is one", () => {
     renderCard(makeApproval({ grantRoot: "/workspace" }));

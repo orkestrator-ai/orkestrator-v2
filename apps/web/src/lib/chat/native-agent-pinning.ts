@@ -5,6 +5,7 @@ import type {
   NativeMessagePart,
   NativeToolGroupPart,
 } from "./native-message-types";
+import { isNativeAgentActive } from "./native-agent-status";
 
 function isAgentPart(
   part: NativeMessagePart,
@@ -12,19 +13,10 @@ function isAgentPart(
   return part.type === "subagent" || part.type === "task-group";
 }
 
-function getAgentPartState(part: NativeMessagePart): string | undefined {
-  if (part.type === "task-group") {
-    return part.task.toolState;
-  }
-
-  return part.toolState;
-}
-
 function isActiveAgentPart(
   part: NativeMessagePart,
 ): part is NativeAgentActivityPart {
-  const state = getAgentPartState(part);
-  return isAgentPart(part) && state !== "success" && state !== "failure";
+  return isAgentPart(part) && isNativeAgentActive(part);
 }
 
 function hasRenderableContent(message: NativeMessage): boolean {

@@ -1,8 +1,62 @@
 import { expect, test } from "bun:test";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { __testing as commandTesting } from "./commands.js";
 import { OrkestratorBackend } from "./index.js";
+import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import { StorageService } from "./storage.js";
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function createFakeChild(pid: number): ChildProcessWithoutNullStreams {
+  return {
+    pid,
+    exitCode: null,
+    signalCode: null,
+    kill: () => true,
+  } as unknown as ChildProcessWithoutNullStreams;
+}
+
+async function waitForCondition(
+  condition: () => boolean | Promise<boolean>,
+  description: string,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function resolvesWithin(
+  promise: Promise<unknown>,
+  timeoutMs: number,
+): Promise<"resolved" | "timeout"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => "resolved" as const),
+      new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 test("startup runs the tmux reaper after the PID reaper even when PID reaping fails", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-init-"));
@@ -108,6 +162,312 @@ test("shutdown clears backend-owned PR watch state before a new backend starts",
   } finally {
     await first.shutdown().catch(() => undefined);
     await second?.shutdown().catch(() => undefined);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("shutdown closes lifecycle admission before draining accepted work", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-lifecycle-shutdown-"));
+  const lifecycleTasks = new EnvironmentLifecycleTaskTracker();
+  let finishOperation!: () => void;
+  const operationBlocked = new Promise<void>((resolve) => {
+    finishOperation = resolve;
+  });
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    environmentLifecycleTasks: lifecycleTasks,
+    startupReapers: {
+      localServers: async () => [],
+      claudeTmuxRuntimes: async () => [],
+    },
+  });
+  try {
+    await backend.init();
+    const operation = lifecycleTasks.admit(() => operationBlocked);
+    const shutdown = backend.shutdown();
+    let shutdownFinished = false;
+    void shutdown.then(() => {
+      shutdownFinished = true;
+    });
+
+    await Promise.resolve();
+    expect(shutdownFinished).toBe(false);
+    expect(lifecycleTasks.isAccepting()).toBe(false);
+    await expect(backend.invoke("greet", { name: "late" })).rejects.toThrow(
+      "Backend is shutting down",
+    );
+
+    finishOperation();
+    await operation;
+    await expect(shutdown).resolves.toBeUndefined();
+    expect(shutdownFinished).toBe(true);
+  } finally {
+    finishOperation();
+    await backend.shutdown().catch(() => undefined);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("startup reconciles a persisted creating environment before accepting commands", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-lifecycle-recovery-"));
+  const storage = new StorageService(dataDir);
+  await storage.init();
+  await storage.addEnvironment({
+    id: "interrupted",
+    projectId: "project",
+    name: "Interrupted",
+    branch: "interrupted",
+    containerId: null,
+    status: "creating",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: new Date(0).toISOString(),
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "local",
+  });
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    startupReapers: {
+      localServers: async () => [],
+      claudeTmuxRuntimes: async () => [],
+    },
+  });
+  try {
+    await backend.init();
+    await expect(backend.invoke<{ status: string; lifecycleError?: string }[]>(
+      "get_environments",
+      { projectId: "project" },
+    )).resolves.toEqual([
+      expect.objectContaining({
+        id: "interrupted",
+        status: "error",
+        lifecycleError: expect.stringContaining("interrupted"),
+      }),
+    ]);
+  } finally {
+    await backend.shutdown().catch(() => undefined);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("startup re-admits interrupted deletion while its tombstone continues blocking writes", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-delete-recovery-"));
+  const storage = new StorageService(dataDir);
+  const releaseTermination = deferred<void>();
+  const terminationStarted = deferred<void>();
+  const environmentId = "interrupted-delete";
+  const originalWarn = console.warn;
+  commandTesting.resetLocalServerLifecycle();
+  await storage.init();
+  await storage.addEnvironment({
+    id: environmentId,
+    projectId: "project",
+    name: "Interrupted delete",
+    branch: "interrupted-delete",
+    containerId: null,
+    status: "stopped",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: new Date(0).toISOString(),
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "local",
+    worktreePath: path.join(dataDir, "interrupted-delete-worktree"),
+    deletionRequestedAt: new Date(1).toISOString(),
+    lifecycleOperation: "deleting",
+    lifecycleOperationStartedAt: new Date(1).toISOString(),
+  });
+  commandTesting.setLocalServerProcess(
+    `codex:${environmentId}`,
+    createFakeChild(96001),
+  );
+  commandTesting.setTerminateProcessTree(async () => {
+    terminationStarted.resolve();
+    await releaseTermination.promise;
+    return true;
+  });
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    startupReapers: {
+      localServers: async () => [],
+      claudeTmuxRuntimes: async () => [],
+    },
+  });
+
+  try {
+    // An empty fixture worktree has no tmux runtime to clean up. That
+    // best-effort warning is unrelated to lifecycle recovery under test.
+    console.warn = () => undefined;
+    await backend.init();
+    await terminationStarted.promise;
+
+    await expect(storage.savePromptQueue(
+      `codex env-${environmentId}:tab-1`,
+      environmentId,
+      [{ id: "late" }],
+    )).rejects.toThrow("being deleted");
+    await expect(storage.getEnvironment(environmentId)).resolves.toMatchObject({
+      deletionRequestedAt: expect.any(String),
+      lifecycleOperation: "deleting",
+    });
+
+    releaseTermination.resolve();
+    await waitForCondition(
+      async () => await storage.getEnvironment(environmentId) === null,
+      "re-admitted deletion to remove the environment",
+    );
+    expect(commandTesting.getLocalServerProcess(`codex:${environmentId}`)).toBeUndefined();
+  } finally {
+    console.warn = originalWarn;
+    releaseTermination.resolve();
+    await backend.shutdown().catch(() => undefined);
+    commandTesting.resetLocalServerLifecycle();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("shutdown applies one deadline across lifecycle and local-operation drains", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-shutdown-deadline-"));
+  const storage = new StorageService(dataDir);
+  const releaseFirstTermination = deferred<void>();
+  const firstTerminationStarted = deferred<void>();
+  const environmentId = "blocked-delete";
+  let terminationAttempts = 0;
+  const originalWarn = console.warn;
+  commandTesting.resetLocalServerLifecycle();
+  await storage.init();
+  await storage.addEnvironment({
+    id: environmentId,
+    projectId: "project",
+    name: "Blocked delete",
+    branch: "blocked-delete",
+    containerId: null,
+    status: "stopped",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: new Date(0).toISOString(),
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "local",
+    worktreePath: path.join(dataDir, "blocked-delete-worktree"),
+  });
+  commandTesting.setLocalServerProcess(
+    `codex:${environmentId}`,
+    createFakeChild(96002),
+  );
+  commandTesting.setTerminateProcessTree(async () => {
+    terminationAttempts += 1;
+    if (terminationAttempts === 1) {
+      firstTerminationStarted.resolve();
+      await releaseFirstTermination.promise;
+    }
+    return true;
+  });
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    environmentLifecycleDrainTimeoutMs: 20,
+    startupReapers: {
+      localServers: async () => [],
+      claudeTmuxRuntimes: async () => [],
+    },
+  });
+
+  let deletion: Promise<void> | undefined;
+  try {
+    // An empty fixture worktree has no tmux runtime to clean up. That
+    // best-effort warning is unrelated to shutdown coordination under test.
+    console.warn = () => undefined;
+    await backend.init();
+    deletion = backend.invoke("delete_environment", { environmentId });
+    await firstTerminationStarted.promise;
+
+    const shutdown = backend.shutdown();
+    await expect(resolvesWithin(shutdown, 1_000)).resolves.toBe("resolved");
+    expect(terminationAttempts).toBe(2);
+    expect(commandTesting.getLocalServerProcess(`codex:${environmentId}`)).toBeUndefined();
+
+    releaseFirstTermination.resolve();
+    await expect(deletion).resolves.toBeUndefined();
+  } finally {
+    console.warn = originalWarn;
+    releaseFirstTermination.resolve();
+    await deletion?.catch(() => undefined);
+    await backend.shutdown().catch(() => undefined);
+    commandTesting.resetLocalServerLifecycle();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("startup fails closed when reconciliation cannot persist its result", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-lifecycle-failclosed-"));
+  const seed = new StorageService(dataDir);
+  await seed.init();
+  await seed.addEnvironment({
+    id: "interrupted",
+    projectId: "project",
+    name: "Interrupted",
+    branch: "interrupted",
+    containerId: null,
+    status: "creating",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: new Date(0).toISOString(),
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "local",
+  });
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    startupReapers: {
+      localServers: async () => [],
+      claudeTmuxRuntimes: async () => [],
+    },
+  });
+  const storage = (backend as unknown as {
+    context: { storage: StorageService };
+  }).context.storage;
+  const realUpdate = storage.updateEnvironment.bind(storage);
+  storage.updateEnvironment = (async () => {
+    throw new Error("environments.json is read-only");
+  }) as StorageService["updateEnvironment"];
+
+  try {
+    // Serving commands on top of a `creating` record this backend can never
+    // finish would report progress that will never arrive, so init must reject
+    // rather than continue past a failed reconciliation.
+    await expect(backend.init()).rejects.toThrow("environments.json is read-only");
+    storage.updateEnvironment = realUpdate;
+    await expect(storage.getEnvironment("interrupted")).resolves.toMatchObject({
+      status: "creating",
+    });
+  } finally {
+    storage.updateEnvironment = realUpdate;
+    await backend.shutdown().catch(() => undefined);
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });

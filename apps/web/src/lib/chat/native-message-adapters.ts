@@ -1,4 +1,8 @@
-import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
+import type {
+  ClaudeBackgroundTask,
+  ClaudeMessage,
+  ClaudeMessagePart,
+} from "@/lib/claude-client";
 import type {
   NativeAgentActivityPart,
   NativeAgentGroupPart,
@@ -86,6 +90,7 @@ function toNativeToolInvocationPart(
     toolName: part.toolName,
     toolArgs: part.toolArgs,
     toolState: part.toolState,
+    agentState: part.agentState,
     toolTitle: part.toolTitle,
     toolOutput: part.toolOutput,
     toolError: part.toolError,
@@ -412,6 +417,69 @@ function normalizeClaudeMessageUncached(message: ClaudeMessage): NativeMessage {
 
 export function normalizeClaudeMessages(messages: ClaudeMessage[]): NativeMessage[] {
   return messages.map(normalizeClaudeMessage);
+}
+
+function backgroundTaskAgentState(
+  status: ClaudeBackgroundTask["status"],
+): NonNullable<ClaudeMessagePart["agentState"]> {
+  switch (status) {
+    case "pending":
+    case "running":
+    case "paused":
+      return "active";
+    case "completed":
+      return "finished";
+    case "failed":
+    case "killed":
+      return "failed";
+  }
+}
+
+/**
+ * Join Claude's authoritative background-task lifecycle back onto the
+ * Task/Agent tool row that launched it.
+ *
+ * A background Agent tool_result means "launched successfully", not "the
+ * child finished". The SDK's task events carry `tool_use_id`, which is the
+ * stable correlation key; descriptions are intentionally never guessed.
+ */
+export function applyClaudeBackgroundTaskStates(
+  messages: ClaudeMessage[],
+  backgroundTasks: Record<string, ClaudeBackgroundTask>,
+): ClaudeMessage[] {
+  const tasksByToolUseId = new Map<string, ClaudeBackgroundTask>();
+  for (const task of Object.values(backgroundTasks)) {
+    if (task.toolUseId) tasksByToolUseId.set(task.toolUseId, task);
+  }
+  if (tasksByToolUseId.size === 0) return messages;
+
+  let messagesChanged = false;
+  const nextMessages = messages.map((message) => {
+    let partsChanged = false;
+    const parts = message.parts.map((part) => {
+      if (
+        part.type !== "tool-invocation"
+        || !isTaskTool(part.toolName)
+        || !part.toolUseId
+      ) {
+        return part;
+      }
+
+      const task = tasksByToolUseId.get(part.toolUseId);
+      if (!task) return part;
+      const agentState = backgroundTaskAgentState(task.status);
+      if (part.agentState === agentState) return part;
+
+      partsChanged = true;
+      return { ...part, agentState };
+    });
+
+    if (!partsChanged) return message;
+    messagesChanged = true;
+    return { ...message, parts };
+  });
+
+  return messagesChanged ? nextMessages : messages;
 }
 
 const CLAUDE_TEXT_BLOCK_GROUP_WINDOW_MS = 2 * 60 * 1000;

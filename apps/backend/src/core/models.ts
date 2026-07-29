@@ -124,6 +124,18 @@ export interface Environment {
   /** Backend-owned long-running operation currently affecting this environment. */
   lifecycleOperation?: EnvironmentLifecycleOperation;
   lifecycleOperationStartedAt?: string;
+  /**
+   * Sanitized failure from the most recent backend-owned lifecycle operation.
+   *
+   * This is intentionally safe to persist and render — it is always one of the
+   * fixed `ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES` values. Detailed subprocess
+   * output and command arguments remain backend-only because they may contain
+   * repository credentials or private host paths.
+   *
+   * Cleared as an explicit `null` so the absence of a failure survives JSON
+   * serialization and field-by-field snapshot merges in the renderer.
+   */
+  lifecycleError?: string | null;
   name: string;
   branch: string;
   containerId: string | null;

@@ -18,6 +18,7 @@ import {
   getReviewInstructionValidationError,
   parseReviewInstruction,
 } from "@orkestrator/protocol/review-instruction";
+import { paneLayoutRevisionConflictMessage } from "@orkestrator/protocol/pane-layout";
 import type { ResourceChange, ResourceKind } from "@orkestrator/protocol/resource-events";
 import {
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
@@ -1298,6 +1299,23 @@ export class StorageService {
     return next;
   }
 
+  private enqueuePaneLayoutMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.paneLayoutsFile(),
+        "pane layout storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.paneLayoutMutation.then(run, run);
+    this.paneLayoutMutation = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
   private async acquireMutationLock(
     targetPath: string,
     description: string,
@@ -1758,6 +1776,16 @@ export class StorageService {
           if (value === null || value === undefined || typeof value === "string") {
             (environment as unknown as Record<string, unknown>)[field] = value ?? undefined;
           }
+        }
+      }
+      if ("lifecycleError" in updates) {
+        const value = updates.lifecycleError;
+        if (value === null || value === undefined || typeof value === "string") {
+          // Cleared as an explicit `null`, not `undefined`. Renderers merge
+          // snapshots field-by-field and `JSON.stringify` drops undefined keys
+          // entirely, so a cleared failure would arrive as an absent key and
+          // leave the stale message on screen.
+          environment.lifecycleError = value ?? null;
         }
       }
       if ("lifecycleOperation" in updates) {
@@ -2423,7 +2451,11 @@ export class StorageService {
   async savePaneLayout(
     environmentId: string,
     layout: Pick<PersistedPaneLayout, "version" | "containerId" | "activePaneId" | "root">,
+    expectedRevision: number,
   ): Promise<PersistedPaneLayout> {
+    if (!isNonNegativeInteger(expectedRevision)) {
+      throw new Error("Pane layout expected revision must be a non-negative integer");
+    }
     let serializedRoot: string | undefined;
     try {
       serializedRoot = JSON.stringify(layout.root);
@@ -2437,7 +2469,7 @@ export class StorageService {
       throw new Error("Pane layout root exceeds the 256 KB limit");
     }
 
-    const run = this.paneLayoutMutation.then(async () => {
+    return this.enqueuePaneLayoutMutation(async () => {
       if (!await this.getEnvironment(environmentId)) {
         throw new Error(`Environment not found: ${environmentId}`);
       }
@@ -2447,6 +2479,12 @@ export class StorageService {
         () => ({}),
       );
       const previous = layouts[environmentId];
+      const currentRevision = previous?.revision ?? 0;
+      if (currentRevision !== expectedRevision) {
+        throw new Error(
+          paneLayoutRevisionConflictMessage(expectedRevision, currentRevision),
+        );
+      }
       const saved: PersistedPaneLayout = {
         version: layout.version,
         environmentId,
@@ -2454,15 +2492,13 @@ export class StorageService {
         activePaneId: layout.activePaneId,
         root: layout.root,
         updatedAt: nowIso(),
-        revision: (previous?.revision ?? 0) + 1,
+        revision: currentRevision + 1,
       };
       layouts[environmentId] = saved;
       await this.saveJson(this.paneLayoutsFile(), layouts);
       this.announce("pane-layout", environmentId);
       return saved;
     });
-    this.paneLayoutMutation = run.then(() => undefined, () => undefined);
-    return run;
   }
 
   async getLoopedReviewWorkflow(
@@ -3621,7 +3657,7 @@ export class StorageService {
   }
 
   async deletePaneLayout(environmentId: string): Promise<void> {
-    const run = this.paneLayoutMutation.then(async () => {
+    return this.enqueuePaneLayoutMutation(async () => {
       const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
         this.paneLayoutsFile(),
         () => ({}),
@@ -3631,8 +3667,6 @@ export class StorageService {
       await this.saveJson(this.paneLayoutsFile(), layouts);
       this.announce("pane-layout", environmentId);
     });
-    this.paneLayoutMutation = run.then(() => undefined, () => undefined);
-    return run;
   }
 
   async getSession(sessionId: string): Promise<Session | null> {

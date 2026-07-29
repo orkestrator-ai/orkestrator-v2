@@ -471,7 +471,7 @@ export function capActionOutput(text: string): string {
   );
 }
 
-function stringifyTranscriptToolOutput(value: unknown): string | undefined {
+export function stringifyTranscriptToolOutput(value: unknown): string | undefined {
   if (typeof value === "string") {
     return capActionOutput(value);
   }
@@ -485,6 +485,50 @@ function stringifyTranscriptToolOutput(value: unknown): string | undefined {
   } catch {
     return capActionOutput(String(value));
   }
+}
+
+function transcriptToolOutputText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  return value
+    .filter(isRecord)
+    .filter((item) => item.type === "input_text")
+    .map((item) => typeof item.text === "string" ? item.text : "")
+    .join("\n");
+}
+
+/**
+ * A custom-tool call's `status: "completed"` means the model finished emitting
+ * the call, not that the tool operation succeeded. `apply_patch` reports its
+ * execution failure only in the paired output, so correct that one known shape
+ * without guessing outcomes for arbitrary tools.
+ */
+export function resolveTranscriptToolOutputState(
+  toolName: string | undefined,
+  output: unknown,
+  claimedState: ToolState | null,
+): ToolState | null {
+  if (claimedState === "failure") return "failure";
+  if (toolName?.trim().toLowerCase() !== "apply_patch") return claimedState;
+
+  const text = transcriptToolOutputText(output) || (typeof output === "string" ? output : "");
+  if (
+    /^apply_patch verification failed\b/im.test(text)
+    || /^failed to find (?:expected )?(?:lines|context)\b/im.test(text)
+    || /^invalid (?:patch|context)(?:\b| \d)/im.test(text)
+    || /^patch (?:application )?(?:failed|did not apply)\b/im.test(text)
+    || /^(?:unable|failed) to apply (?:the )?patch\b/im.test(text)
+    || /^error applying (?:the )?patch\b/im.test(text)
+    || /^failed to read file to (?:update|delete)\b/im.test(text)
+    || /^failed to (?:write|delete|move) file\b/im.test(text)
+    || /^failed to create parent directories for\b/im.test(text)
+    || /^invalid (?:add|delete|update) file line\b/im.test(text)
+    || /^invalid (?:eof )?context line\b/im.test(text)
+    || /^(?:missing end of file|duplicate path|move target already exists)\b/im.test(text)
+  ) {
+    return "failure";
+  }
+  return claimedState;
 }
 
 function createActionPart(
@@ -638,7 +682,11 @@ function parseChildTranscript(
 
       if (payloadType === "custom_tool_call" && (initialState === "success" || initialState === "failure")) {
         const output = payload.output;
-        actions.push(applyTranscriptToolOutput(part, output, initialState));
+        actions.push(applyTranscriptToolOutput(
+          part,
+          output,
+          resolveTranscriptToolOutputState(toolName, output, initialState),
+        ));
       } else {
         actions.push(part);
       }
@@ -664,7 +712,13 @@ function parseChildTranscript(
       actions[actionIndex] = applyTranscriptToolOutput(
         existing,
         payload.output,
-        payloadType === "custom_tool_call_output" ? (existing.toolState ?? null) : null,
+        payloadType === "custom_tool_call_output"
+          ? resolveTranscriptToolOutputState(
+              existing.toolName,
+              payload.output,
+              existing.toolState ?? null,
+            )
+          : null,
       );
       continue;
     }

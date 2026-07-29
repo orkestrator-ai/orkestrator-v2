@@ -35,6 +35,7 @@ import type {
   EnvironmentSetupSession,
   InitialPromptImageAttachment,
   PersistedPaneLayout,
+  PersistedPaneLayoutInput,
   ClaudeModelCatalogSnapshot,
   PersistedLoopedReviewWorkflow,
   PersistedBuildPipeline,
@@ -176,6 +177,15 @@ export async function deleteEnvironment(environmentId: string): Promise<void> {
 
 export async function startEnvironment(environmentId: string): Promise<StartEnvironmentResult> {
   return invoke<StartEnvironmentResult>("start_environment", { environmentId });
+}
+
+/**
+ * Accept an environment start without keeping the renderer transport open for
+ * Docker provisioning. Progress and completion are observed through the
+ * authoritative environment snapshot and setup lifecycle events.
+ */
+export async function startEnvironmentInBackground(environmentId: string): Promise<void> {
+  return invoke<void>("start_environment_background", { environmentId });
 }
 
 export async function stopEnvironment(environmentId: string): Promise<void> {
@@ -1670,9 +1680,14 @@ export async function getPaneLayout(
 
 export async function savePaneLayout(
   environmentId: string,
-  layout: Pick<PersistedPaneLayout, "version" | "containerId" | "activePaneId" | "root">,
+  layout: PersistedPaneLayoutInput,
+  expectedRevision: number,
 ): Promise<PersistedPaneLayout> {
-  return invoke<PersistedPaneLayout>("save_pane_layout", { environmentId, layout });
+  return invoke<PersistedPaneLayout>("save_pane_layout", {
+    environmentId,
+    layout,
+    expectedRevision,
+  });
 }
 
 export async function deletePaneLayout(environmentId: string): Promise<void> {

@@ -40,6 +40,8 @@ export interface EnvironmentPaneState {
   root: PaneNode;
   activePaneId: string;
   containerId: string | null;
+  /** Last backend revision incorporated into this renderer's pane tree. */
+  backendRevision?: number;
 }
 
 export type PaneLayoutHydrationStatus = "pending" | "done";
@@ -196,6 +198,10 @@ interface PaneLayoutState {
   reset: (environmentId?: string) => void;
   beginHydration: (environmentId: string) => void;
   finishHydration: (environmentId: string, restored?: EnvironmentPaneState) => void;
+  applyAuthoritativeLayout: (
+    environmentId: string,
+    restored: EnvironmentPaneState,
+  ) => void;
 
   // Tab management
   addTab: (paneId: string, tab: TabInfo, environmentId?: string) => void;
@@ -376,6 +382,53 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
   }
 }
 
+/**
+ * Reclaims renderer-owned state after an authoritative layout removes a tab.
+ *
+ * Native provider sessions are only evicted locally because the initiating
+ * client owns their deletion. Terminal PTYs are different: only the renderer
+ * with the live terminal-session entry knows the exact PTY id, so that owner
+ * closes/detaches it and records the persistent session as disconnected.
+ */
+function cleanupLocalTabResources(
+  envId: string,
+  containerId: string | null,
+  tab: TabInfo,
+): void {
+  useTerminalPortalStore.getState().disposeTerminal(envId, tab.id);
+
+  if (tab.type === "browser") {
+    destroyBrowserPreview(tab.id).catch((err) => {
+      console.debug("[PaneLayout] Error destroying browser preview:", err);
+    });
+    return;
+  }
+
+  if (TERMINAL_TAB_TYPES.has(tab.type)) {
+    cleanupTerminalTab(envId, containerId, tab.id);
+    return;
+  }
+
+  const sessionKey = createSessionKey(envId, tab.id);
+  if (tab.type === "claude-native") {
+    useClaudeStore.getState().clearSession(sessionKey);
+    return;
+  }
+  if (tab.type === "opencode-native") {
+    useOpenCodeStore.getState().clearSession(sessionKey);
+    return;
+  }
+  if (tab.type === "codex-native") {
+    useCodexStore.getState().clearSession(sessionKey);
+    return;
+  }
+  if (tab.type === "claude-tmux") {
+    const store = useClaudeTmuxStore.getState();
+    store.resetTab(createClaudeTmuxStateKey(envId, tab.id));
+    store.resetTab(tab.id);
+  }
+}
+
 function tabHandoffIds(tab: TabInfo): string[] {
   return tab.agentHandoffId ? [tab.agentHandoffId] : [];
 }
@@ -397,6 +450,25 @@ function deleteUnreferencedAgentHandoffs(
     backend.deleteAgentHandoff(handoffId, envId).catch((error) => {
       console.debug("[PaneLayout] Error deleting agent handoff:", error);
     });
+  }
+}
+
+function forgetUnreferencedAgentHandoffs(
+  previousRoot: PaneNode,
+  remainingRoot: PaneNode,
+): void {
+  const previousHandoffIds = new Set(
+    getAllLeaves(previousRoot)
+      .flatMap((leaf) => leaf.tabs)
+      .flatMap(tabHandoffIds),
+  );
+  const remainingHandoffIds = new Set(
+    getAllLeaves(remainingRoot)
+      .flatMap((leaf) => leaf.tabs)
+      .flatMap(tabHandoffIds),
+  );
+  for (const handoffId of previousHandoffIds) {
+    if (!remainingHandoffIds.has(handoffId)) forgetAgentHandoff(handoffId);
   }
 }
 
@@ -440,6 +512,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
         root: createInitialLayout(),
         activePaneId: "default",
         containerId: null,
+        backendRevision: 0,
       });
       set({ environments: newEnvs, activeEnvironmentId: environmentId });
     } else {
@@ -469,7 +542,12 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     // the terminal session keys are built from.
     newEnvs.set(envId, existingTabs.length > 0
       ? { ...existing!, containerId }
-      : { root: createInitialLayout(), activePaneId: "default", containerId });
+      : {
+          root: createInitialLayout(),
+          activePaneId: "default",
+          containerId,
+          backendRevision: 0,
+        });
     set({ environments: newEnvs });
   },
 
@@ -498,6 +576,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       root: createInitialLayout(),
       activePaneId: "default",
       containerId: null,
+      backendRevision: 0,
     });
     set({ environments: newEnvs });
   },
@@ -534,6 +613,41 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     environments.set(environmentId, reconciled);
     set({ environments, hydration });
     pruneUnreferencedAgentHandoffs(environmentId, reconciled.root);
+  },
+
+  applyAuthoritativeLayout: (environmentId, restored) => {
+    const state = get();
+    if (
+      state.hydration.get(environmentId) !== "done"
+      || !state.environments.has(environmentId)
+    ) {
+      return;
+    }
+
+    const current = state.environments.get(environmentId);
+    if (!current) return;
+
+    const restoredTabs = getAllLeaves(restored.root).flatMap((leaf) => leaf.tabs);
+    const restoredTabIds = new Set(restoredTabs.map((tab) => tab.id));
+    const removedTabs = getAllLeaves(current.root)
+      .flatMap((leaf) => leaf.tabs)
+      .filter((tab) => !restoredTabIds.has(tab.id));
+
+    for (const tab of removedTabs) {
+      cleanupLocalTabResources(environmentId, current.containerId, tab);
+    }
+    if (
+      removedTabs.some((tab) => tab.isSetupTab)
+      && !restoredTabs.some((tab) => tab.isSetupTab)
+    ) {
+      useEnvironmentStore.getState().setSetupScriptsRunning(environmentId, false);
+    }
+
+    const environments = new Map(state.environments);
+    environments.set(environmentId, restored);
+    set({ environments });
+    forgetUnreferencedAgentHandoffs(current.root, restored.root);
+    pruneUnreferencedAgentHandoffs(environmentId, restored.root);
   },
 
   addTab: (paneId, tab, environmentId) => {
@@ -583,19 +697,8 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const leaf = findLeaf(envState.root, paneId);
     if (!leaf) return;
 
-    const terminalPortalStore = useTerminalPortalStore.getState();
     const closedTab = leaf.tabs.find((t) => t.id === tabId);
-    if (closedTab) {
-      cleanupTabResources(envId, envState.containerId, closedTab);
-    }
-
-    // Dispose the terminal instance from portal store
-    terminalPortalStore.disposeTerminal(envId, tabId);
-
-    // If this was a setup tab, clear the setupScriptsRunning flag so the play button isn't stuck disabled
-    if (closedTab?.isSetupTab) {
-      useEnvironmentStore.getState().setSetupScriptsRunning(envId, false);
-    }
+    if (!closedTab) return;
 
     const remainingTabs = leaf.tabs.filter((t) => t.id !== tabId);
 
@@ -605,6 +708,11 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       if (parentSplit) {
         get().closePane(paneId, envId);
       } else {
+        cleanupTabResources(envId, envState.containerId, closedTab);
+        useTerminalPortalStore.getState().disposeTerminal(envId, tabId);
+        if (closedTab.isSetupTab) {
+          useEnvironmentStore.getState().setSetupScriptsRunning(envId, false);
+        }
         const newRoot = updateLeaf(envState.root, paneId, () => ({
           ...leaf,
           tabs: [],
@@ -613,11 +721,15 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
         const newEnvs = new Map(state.environments);
         newEnvs.set(envId, { ...envState, root: newRoot });
         set({ environments: newEnvs });
-        if (closedTab) {
-          deleteUnreferencedAgentHandoffs(envId, [closedTab], newRoot);
-        }
+        deleteUnreferencedAgentHandoffs(envId, [closedTab], newRoot);
       }
       return;
+    }
+
+    cleanupTabResources(envId, envState.containerId, closedTab);
+    useTerminalPortalStore.getState().disposeTerminal(envId, tabId);
+    if (closedTab.isSetupTab) {
+      useEnvironmentStore.getState().setSetupScriptsRunning(envId, false);
     }
 
     // Update the leaf with remaining tabs
@@ -634,9 +746,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
-    if (closedTab) {
-      deleteUnreferencedAgentHandoffs(envId, [closedTab], newRoot);
-    }
+    deleteUnreferencedAgentHandoffs(envId, [closedTab], newRoot);
   },
 
   setActiveTab: (paneId, tabId, environmentId) => {
@@ -646,6 +756,8 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     const envState = state.environments.get(envId);
     if (!envState) return;
+    const pane = findLeaf(envState.root, paneId);
+    if (!pane || !pane.tabs.some((tab) => tab.id === tabId)) return;
 
     const newRoot = updateLeaf(envState.root, paneId, (leaf) => ({
       ...leaf,
@@ -700,8 +812,14 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     // If source pane will be empty, we need to close it
     if (remainingTabs.length === 0) {
-      // First add to target, then close source
-      let newRoot = updateLeaf(envState.root, toPaneId, (leaf) => {
+      // Remove the tab before collapsing the source so moving a live tab does
+      // not look like closing it and trigger resource cleanup.
+      let newRoot = updateLeaf(envState.root, fromPaneId, (leaf) => ({
+        ...leaf,
+        tabs: [],
+        activeTabId: null,
+      }));
+      newRoot = updateLeaf(newRoot, toPaneId, (leaf) => {
         const newTabs = [...leaf.tabs];
         if (toIndex !== undefined) {
           newTabs.splice(toIndex, 0, tab);
@@ -714,13 +832,18 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
           activeTabId: tab.id,
         };
       });
+      const sourceParent = findParentSplit(newRoot, fromPaneId);
+      if (!sourceParent) return;
+      const siblingIndex = sourceParent.children[0].id === fromPaneId ? 1 : 0;
+      newRoot = replaceNode(
+        newRoot,
+        sourceParent.id,
+        sourceParent.children[siblingIndex],
+      );
 
       const newEnvs = new Map(state.environments);
       newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: toPaneId });
       set({ environments: newEnvs });
-
-      // Then close empty source pane
-      get().closePane(fromPaneId, envId);
       return;
     }
 
@@ -1178,6 +1301,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     pane.tabs.forEach((tab) => {
       cleanupTabResources(envId, envState.containerId, tab);
+      useTerminalPortalStore.getState().disposeTerminal(envId, tab.id);
     });
 
     // Find the sibling
@@ -1186,6 +1310,14 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     // Replace parent split with sibling
     const newRoot = replaceNode(envState.root, parentSplit.id, sibling);
+    if (
+      pane.tabs.some((tab) => tab.isSetupTab)
+      && !getAllLeaves(newRoot).some((leaf) =>
+        leaf.tabs.some((tab) => tab.isSetupTab)
+      )
+    ) {
+      useEnvironmentStore.getState().setSetupScriptsRunning(envId, false);
+    }
 
     // Update active pane if needed
     let newActivePaneId = envState.activePaneId;
@@ -1207,6 +1339,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     const envState = state.environments.get(envId);
     if (!envState) return;
+    if (!findLeaf(envState.root, paneId)) return;
 
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, activePaneId: paneId });

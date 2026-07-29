@@ -1,4 +1,5 @@
 import {
+  closeLocalServerAdmission,
   createCommandRegistry,
   shutdownDiffStatsTracking,
   shutdownLocalServers,
@@ -15,11 +16,18 @@ import { StorageService } from "./storage.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
 import { BuildPipelineService } from "./build-pipeline-service.js";
+import {
+  ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS,
+  EnvironmentLifecycleTaskTracker,
+  reconcileInterruptedEnvironmentLifecycleTasks,
+} from "./environment-lifecycle-tasks.js";
 
 export class OrkestratorBackend {
   private readonly commands = createCommandRegistry();
   private readonly context: CommandContext;
   private readonly buildPipelines: BuildPipelineService;
+  private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
+  private readonly environmentLifecycleDrainTimeoutMs: number;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
@@ -36,8 +44,15 @@ export class OrkestratorBackend {
       localServers?: typeof reapOrphanedLocalServers;
       claudeTmuxRuntimes?: typeof reapOrphanedClaudeTmuxRuntimes;
     };
+    environmentLifecycleTasks?: EnvironmentLifecycleTaskTracker;
+    environmentLifecycleDrainTimeoutMs?: number;
   }) {
     const storage = new StorageService(options.dataDir);
+    this.environmentLifecycleTasks =
+      options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
+    this.environmentLifecycleDrainTimeoutMs =
+      options.environmentLifecycleDrainTimeoutMs
+      ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
     // Every committed mutation fans out to all connected clients, so a second
     // window or browser converges without polling. `emit` is read lazily by the
     // caller's closure, which is how this survives the gateway not existing yet.
@@ -50,6 +65,7 @@ export class OrkestratorBackend {
       appRoot: options.appRoot,
       resourceRoot: options.resourceRoot,
       emit: options.emit,
+      environmentLifecycleTasks: this.environmentLifecycleTasks,
     } as CommandContext;
     this.context = context;
     this.buildPipelines = new BuildPipelineService(
@@ -70,6 +86,11 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
+    // Do not accept commands while durable state claims work is still running
+    // from a previous process. If this write fails, startup fails closed rather
+    // than exposing progress that this backend can never complete.
+    const lifecycleRecovery =
+      await reconcileInterruptedEnvironmentLifecycleTasks(this.context.storage);
     // No renderer can be alive yet, so every persisted `frontend` activity
     // snapshot belongs to a process that is gone. They cannot be retracted
     // later — the aggregate is a max — so a renderer that quit mid-turn would
@@ -105,14 +126,44 @@ export class OrkestratorBackend {
         console.warn("[backend] Failed to reap orphaned claude-tmux runtimes:", error);
       },
     );
-    // Start durable pipelines only after stale bridge ownership has been
-    // reconciled; an immediate resume must never race an orphaned process.
-    // Guarded like every other startup step above: restoring builds is not
-    // worth refusing to boot over, and an unhandled rejection here would take
-    // the gateway with it and leave the user with no application at all.
+    // The durable deletion tombstone stays in place across a crash so queues,
+    // pipelines, and starts remain blocked. Once orphaned processes have been
+    // reaped, re-admit the ordinary idempotent delete path; it owns every child
+    // cleanup and removes the tombstone only by removing the environment.
+    const deleteEnvironment = this.commands.get("delete_environment");
+    if (!deleteEnvironment && lifecycleRecovery.deletionRecoveryEnvironmentIds.length > 0) {
+      throw new Error("Delete command is unavailable during lifecycle recovery");
+    }
+    for (const environmentId of lifecycleRecovery.deletionRecoveryEnvironmentIds) {
+      const recovery = Promise.resolve(
+        deleteEnvironment?.({ environmentId }, this.context),
+      );
+      void recovery.catch(() => {
+        // Detailed subprocess failures are logged at their owning boundary.
+        // Keep this coordination log free of paths, command output, or secrets.
+        console.warn(
+          `[backend] Interrupted deletion remains pending for ${environmentId}`,
+        );
+      });
+    }
+
+    // Start durable pipelines only after stale bridge ownership and interrupted
+    // environment deletion have been reconciled. A doomed pipeline is skipped
+    // without preventing the gateway from becoming available.
     await this.buildPipelines.init().catch((error) => {
       console.warn("[backend] Failed to restore build pipelines:", error);
     });
+  }
+
+  /**
+   * Whether `command` is registered, independent of whether it can run now.
+   *
+   * The gateway gates metric labels on this so a name it rejects is never
+   * retained, including when `invoke` refuses for an unrelated reason such as
+   * shutdown and so never reaches the registry lookup below.
+   */
+  hasCommand(command: string): boolean {
+    return this.commands.has(command);
   }
 
   async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -134,6 +185,15 @@ export class OrkestratorBackend {
     shutdownDiffStatsTracking();
     shutdownPrMonitorTracking();
     const attempt = (async () => {
+      const lifecycleDeadline =
+        Date.now() + this.environmentLifecycleDrainTimeoutMs;
+      // Close both admission gates before waiting on any in-flight work.
+      // Starting the pipeline drain immediately also prevents its scheduler
+      // from admitting more backend-owned work during shutdown.
+      closeLocalServerAdmission();
+      const lifecycleDrain = this.environmentLifecycleTasks.beginShutdown(
+        this.environmentLifecycleDrainTimeoutMs,
+      );
       // Pipeline passes may still be writing snapshots or using a bridge.
       // Drain them before terminating backend-owned local servers — but never
       // let a failed drain skip that teardown, or every backend-owned bridge
@@ -143,7 +203,10 @@ export class OrkestratorBackend {
       } catch (error) {
         console.warn("[backend] Failed to drain build pipelines:", error);
       }
-      await shutdownLocalServers();
+      await lifecycleDrain;
+      await shutdownLocalServers({
+        operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
+      });
     })();
     this.shutdownPromise = attempt;
     try {

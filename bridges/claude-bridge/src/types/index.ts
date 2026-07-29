@@ -360,6 +360,8 @@ export interface SessionUsageSnapshot {
 
 export interface BackgroundTaskSnapshot {
   id: string;
+  /** Originating Task/Agent tool call, when supplied by the Agent SDK. */
+  toolUseId?: string;
   description?: string;
   status: "pending" | "running" | "completed" | "failed" | "killed" | "paused";
   isBackgrounded?: boolean;

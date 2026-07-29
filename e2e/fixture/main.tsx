@@ -10,6 +10,7 @@ import { CodexComposeBar } from "../../apps/web/src/components/codex/CodexCompos
 import { AgentThinkingIndicator } from "../../apps/web/src/components/chat/AgentThinkingIndicator";
 import { DiffViewerTab } from "../../apps/web/src/components/terminal/DiffViewerTab";
 import { ChangedFileItem } from "../../apps/web/src/components/files-panel/ChangedFileItem";
+import { MobileAppShellLayout } from "../../apps/web/src/components/layout/MobileAppShellLayout";
 import {
   ReviewLaunchDialog,
   type ReviewLaunchSelection,
@@ -221,6 +222,44 @@ function GlobalStylesFixture() {
   );
 }
 
+const mobileShellTitle =
+  "A project and environment name that is far too long for a mobile title bar";
+
+function MobileAppShellFixture() {
+  const [dragStarts, setDragStarts] = useState(0);
+  const desktop = new URLSearchParams(window.location.search).has("desktop");
+
+  if (desktop) {
+    delete window.orkestrator;
+    window.orkestratorGateway = { enabled: true, desktop: true };
+  } else {
+    delete window.orkestrator;
+    window.orkestratorGateway = { enabled: true };
+  }
+
+  return (
+    <main className="flex h-screen flex-col bg-background text-foreground">
+      <MobileAppShellLayout
+        selectedProjectId="project-1"
+        selectedEnvironmentId="environment-1"
+        title={mobileShellTitle}
+        filesPanelOpen={false}
+        centralPanelStyle={{ backgroundColor: "rgb(1, 2, 3)" }}
+        actionBar={<button type="button">Action</button>}
+        agentInfoButton={<button type="button">Agent info</button>}
+        sidebar={<div>Projects</div>}
+        filesPanel={<div>Files</div>}
+        onTitleBarMouseDown={() => setDragStarts((count) => count + 1)}
+      >
+        <div>Workspace</div>
+      </MobileAppShellLayout>
+      <output data-testid="mobile-shell-drag-starts" className="sr-only">
+        {dragStarts}
+      </output>
+    </main>
+  );
+}
+
 const pathFixtures = {
   posix: "packages/a-very-long-directory-name/src/components/ImportantButton.tsx",
   windows: String.raw`packages\a-very-long-directory-name\src\components\ImportantPanel.tsx`,
@@ -380,6 +419,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/diff-viewer") return <DiffViewerFixture />;
   if (window.location.pathname === "/codex-compose") return <CodexComposeFixture />;
+  if (window.location.pathname === "/mobile-shell") return <MobileAppShellFixture />;
   if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;

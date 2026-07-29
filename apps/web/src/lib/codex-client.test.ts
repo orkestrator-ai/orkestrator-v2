@@ -267,6 +267,7 @@ describe("codex-client createSession", () => {
     await createSession(client, {
       model: "gpt-5.6-sol",
       modelReasoningEffort: "ultra",
+      clientSessionKey: "env-1:tab-1",
     });
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
@@ -275,6 +276,7 @@ describe("codex-client createSession", () => {
         body: JSON.stringify({
           model: "gpt-5.6-sol",
           modelReasoningEffort: "ultra",
+          clientSessionKey: "env-1:tab-1",
         }),
       }),
     );

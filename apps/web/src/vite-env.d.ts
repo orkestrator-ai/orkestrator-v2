@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 interface Window {
+  __orkestratorClientPlatform?: "desktop-browser" | "ios-wkwebview" | "ipad-wkwebview" | "iphone-wkwebview";
   orkestratorGateway?: {
     enabled: boolean;
     /** True when gateway metadata was supplied by the Electron preload. */

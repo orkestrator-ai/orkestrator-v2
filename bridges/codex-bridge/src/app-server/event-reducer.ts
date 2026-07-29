@@ -110,8 +110,9 @@ const IGNORED_METHODS = new Set([
   "model/verification",
   "model/safetyBuffering/updated",
   "turn/moderationMetadata",
-  // Raw response passthrough — the item stream is the rendered source of truth.
-  "rawResponseItem/completed",
+  // Raw response completion is otherwise redundant with the structured item
+  // stream. `rawResponseItem/completed` is handled narrowly below for custom
+  // apply_patch failures, which app-server does not promote to `fileChange`.
   "rawResponse/completed",
   // Bookkeeping the bridge tracks itself.
   "serverRequest/resolved",
@@ -427,6 +428,50 @@ export function reduceNotification(
           { kind: "item.command.outputDelta", threadId, turnId, itemId, delta, ...base },
         ],
       };
+    }
+
+    case "rawResponseItem/completed": {
+      if (!isRecord(params) || !turnId || !isRecord(params.item)) {
+        return { events: [] };
+      }
+      const rawItem = params.item;
+      const payloadType = str(rawItem.type);
+      const callId = str(rawItem.call_id);
+      if (!callId) return { events: [] };
+
+      if (payloadType === "custom_tool_call" && str(rawItem.name) === "apply_patch") {
+        return {
+          events: [{
+            kind: "item.started",
+            threadId,
+            turnId,
+            item: {
+              id: callId,
+              type: "dynamic_tool_call",
+              tool: "apply_patch",
+              arguments: rawItem.input,
+              content_items: [],
+              status: "in_progress",
+            },
+            ...base,
+          }],
+        };
+      }
+
+      if (payloadType === "custom_tool_call_output") {
+        return {
+          events: [{
+            kind: "item.dynamic.output",
+            threadId,
+            turnId,
+            itemId: callId,
+            output: rawItem.output,
+            ...base,
+          }],
+        };
+      }
+
+      return { events: [] };
     }
 
     /**

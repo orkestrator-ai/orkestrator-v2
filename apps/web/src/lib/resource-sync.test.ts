@@ -14,18 +14,23 @@ import * as realEvents from "@/lib/native/events";
 const realEventsSnapshot = { ...realEvents };
 
 type Handler = (event: NativeEvent<unknown>) => void;
+type ListenMode = "immediate" | "deferred" | "reject";
 
 let listenCalls: Array<{ event: string; handler: Handler }> = [];
 let unlistenCount = 0;
-let resolveListen: ((stop: UnlistenFn) => void) | null = null;
-let listenMode: "immediate" | "deferred" | "reject" = "immediate";
+let listenMode: ListenMode = "immediate";
+let listenModesByEvent = new Map<string, ListenMode>();
+let deferredListens: Array<{ event: string; resolve: () => void }> = [];
 
 const listenMock = mock((event: string, handler: Handler): Promise<UnlistenFn> => {
   listenCalls.push({ event, handler });
   const stop: UnlistenFn = () => { unlistenCount += 1; };
-  if (listenMode === "reject") return Promise.reject(new Error("no transport"));
-  if (listenMode === "deferred") {
-    return new Promise<UnlistenFn>((resolve) => { resolveListen = () => resolve(stop); });
+  const mode = listenModesByEvent.get(event) ?? listenMode;
+  if (mode === "reject") return Promise.reject(new Error("no transport"));
+  if (mode === "deferred") {
+    return new Promise<UnlistenFn>((resolve) => {
+      deferredListens.push({ event, resolve: () => resolve(stop) });
+    });
   }
   return Promise.resolve(stop);
 });
@@ -65,8 +70,9 @@ beforeEach(() => {
   resetResourceSync();
   listenCalls = [];
   unlistenCount = 0;
-  resolveListen = null;
   listenMode = "immediate";
+  listenModesByEvent = new Map();
+  deferredListens = [];
   listenMock.mockClear();
 });
 
@@ -235,6 +241,18 @@ describe("resetResourceSync", () => {
 
     expect(calls).toBe(0);
   });
+
+  test("stops every active transport and remains idempotent", async () => {
+    startResourceSync();
+    startResourceSync();
+    await tick(0);
+
+    resetResourceSync();
+    expect(unlistenCount).toBe(4);
+
+    resetResourceSync();
+    expect(unlistenCount).toBe(4);
+  });
 });
 
 describe("onResourceResync", () => {
@@ -302,17 +320,22 @@ describe("startResourceSync", () => {
     expect(unlistenCount).toBe(2);
   });
 
-  test("detaches a subscription that resolves after disposal", async () => {
-    // The listen promise can settle after the component that started it has
-    // gone; leaking that subscription would double-refetch on the next mount.
+  test("detaches both subscriptions when they resolve after disposal in either order", async () => {
+    // Each listen has its own promise. A single stored resolver would leave one
+    // subscription untested and could conceal a late-listener leak.
     listenMode = "deferred";
     const stop = startResourceSync();
     stop();
 
-    resolveListen?.(() => {});
+    expect(deferredListens.map(({ event }) => event)).toEqual([
+      "resource-changed",
+      "native-event-stream-connected",
+    ]);
+    deferredListens[1]!.resolve();
+    deferredListens[0]!.resolve();
     await tick(0);
 
-    expect(unlistenCount).toBe(1);
+    expect(unlistenCount).toBe(2);
   });
 
   test("survives a transport that never attaches", async () => {
@@ -331,6 +354,42 @@ describe("startResourceSync", () => {
     await tick(10);
 
     expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not duplicate the fallback resync when connection arrives before the second listener attaches", async () => {
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+    listenModesByEvent.set("resource-changed", "deferred");
+
+    startResourceSync();
+    await tick(0);
+    expect(deferredListens).toHaveLength(1);
+
+    const connected = listenCalls.find(
+      ({ event }) => event === "native-event-stream-connected",
+    );
+    connected?.handler({ payload: undefined });
+    expect(resync).toHaveBeenCalledTimes(1);
+
+    deferredListens[0]!.resolve();
+    await tick(10);
+
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not run the zero-delay fallback after the transport is stopped", async () => {
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+    const stop = startResourceSync();
+    // Let both listen promises attach and schedule the zero-delay fallback,
+    // then dispose before that task gets a chance to run.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    stop();
+    await tick(10);
+
+    expect(resync).not.toHaveBeenCalled();
   });
 
   test("deduplicates the initial connection signal and resyncs on reconnect", async () => {

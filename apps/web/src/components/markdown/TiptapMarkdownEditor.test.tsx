@@ -99,11 +99,17 @@ describe("TiptapMarkdownEditor", () => {
       inputType: "insertText",
     });
 
-    await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 350));
-    });
-
-    expect(onChange).toHaveBeenCalledWith("Updated in rendered mode");
+    await waitFor(
+      () => {
+        expect(onChange).toHaveBeenCalledWith("Updated in rendered mode");
+      },
+      {
+        // The production debounce is 300ms. Under the repository's parallel
+        // aggregate suite the event loop can be delayed beyond a fixed 350ms
+        // sleep even though the callback is correctly queued.
+        timeout: 2_000,
+      },
+    );
   });
 
   test("flushes a pending rich edit on save", async () => {

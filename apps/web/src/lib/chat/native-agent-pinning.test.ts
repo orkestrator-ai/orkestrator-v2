@@ -107,6 +107,116 @@ describe("pinActiveNativeAgentParts", () => {
     ]);
   });
 
+  test("leaves terminal launches in place despite stale descendant tools", () => {
+    const messages: NativeMessage[] = [
+      assistantMessage("assistant-1", [
+        {
+          type: "task-group",
+          content: "Agent",
+          task: {
+            type: "tool-invocation",
+            content: "Agent",
+            toolName: "Agent",
+            toolUseId: "task-1",
+            toolState: "success",
+          },
+          childTools: [
+            {
+              type: "tool-invocation",
+              content: "Run tests",
+              toolName: "Bash",
+              toolState: "pending",
+            },
+          ],
+        },
+      ]),
+      assistantMessage("assistant-2", [{ type: "text", content: "Later message" }]),
+    ];
+
+    const pinned = pinActiveNativeAgentParts(messages);
+
+    expect(pinned.map((message) => message.id)).toEqual([
+      "assistant-1",
+      "assistant-2",
+    ]);
+    expect(pinned[0]?.parts[0]?.type).toBe("task-group");
+  });
+
+  test("pins a successful background launch with authoritative active state", () => {
+    const messages: NativeMessage[] = [
+      assistantMessage("assistant-1", [{
+        type: "task-group",
+        content: "Agent",
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolUseId: "task-background",
+          toolState: "success",
+          agentState: "active",
+        },
+        childTools: [],
+      }]),
+    ];
+
+    expect(pinActiveNativeAgentParts(messages).map((message) => message.id)).toEqual([
+      "assistant-1:active-agents",
+    ]);
+  });
+
+  test("releases an agent when authoritative lifecycle finishes despite stale child work", () => {
+    const messages: NativeMessage[] = [
+      assistantMessage("assistant-1", [{
+        type: "task-group",
+        content: "Agent",
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolUseId: "task-background",
+          toolState: "success",
+          agentState: "finished",
+        },
+        childTools: [{
+          type: "tool-invocation",
+          content: "Stale child",
+          toolName: "Read",
+          toolState: "pending",
+        }],
+      }]),
+    ];
+
+    expect(pinActiveNativeAgentParts(messages).map((message) => message.id)).toEqual([
+      "assistant-1",
+    ]);
+  });
+
+  test("leaves terminal subagents in place despite stale descendant tools", () => {
+    const messages: NativeMessage[] = [
+      assistantMessage("assistant-1", [
+        {
+          type: "subagent",
+          content: "worker",
+          subagentId: "agent-1",
+          toolState: "success",
+          subagentActions: [
+            {
+              type: "tool-invocation",
+              content: "Inspect files",
+              toolName: "Read",
+              toolState: "pending",
+            },
+          ],
+        },
+      ]),
+    ];
+
+    const pinned = pinActiveNativeAgentParts(messages);
+
+    expect(pinned.map((message) => message.id)).toEqual(["assistant-1"]);
+    expect(pinned[0]?.parts[0]?.type).toBe("subagent");
+  });
+
   test("extracts active task groups from legacy tool groups", () => {
     const messages: NativeMessage[] = [
       assistantMessage("assistant-1", [

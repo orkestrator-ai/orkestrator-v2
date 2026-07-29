@@ -437,8 +437,12 @@ describe("BrowserTab", () => {
     expect(iframe?.hasAttribute("referrerpolicy")).toBe(false);
   });
 
-  test("shows an unsupported notice instead of a loading preview on iOS", () => {
-    window.__orkestratorClientPlatform = "iphone-wkwebview";
+  test.each([
+    ["ios-wkwebview"],
+    ["ipad-wkwebview"],
+    ["iphone-wkwebview"],
+  ] as const)("shows an unsupported notice instead of a loading preview on %s", (platform) => {
+    window.__orkestratorClientPlatform = platform;
     window.orkestratorGateway = {
       enabled: true,
       baseUrl: "https://workstation.tailnet.ts.net/",
@@ -505,6 +509,45 @@ describe("BrowserTab", () => {
     await waitFor(() => expect(devToolsButton.hasAttribute("disabled")).toBe(false));
     fireEvent.click(devToolsButton);
     await waitFor(() => expect(openDevTools).toHaveBeenCalledWith("browser-1"));
+  });
+
+  test("hides an attached native preview when the client becomes unsupported", async () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+    const native = installNativePreview();
+    setBrowserTab("http://localhost:3000/");
+    const view = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+    native.browserPreview.setVisible.mockClear();
+
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+    view.rerender(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+
+    expect(screen.getByText("Browser tabs aren’t supported here")).toBeDefined();
+    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]')).toBeNull();
+    await waitFor(() => {
+      expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false);
+    });
   });
 
   test("refuses to preview the app's own origin", () => {
@@ -793,7 +836,17 @@ describe("BrowserTab", () => {
       baseUrl: "https://workstation.tailnet.ts.net/",
     };
     setBrowserTab("http://localhost:3000/");
-    const { container } = render(
+    const view = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive={false}
+      />,
+    );
+
+    expect(view.container.firstElementChild?.className).toContain("hidden");
+    view.rerender(
       <BrowserTab
         tabId="browser-1"
         environmentId="env-1"
@@ -802,10 +855,39 @@ describe("BrowserTab", () => {
       />,
     );
 
-    expect(container.querySelector("iframe")).toBeNull();
+    expect(view.container.querySelector("iframe")).toBeNull();
     expect(screen.getByText("Browser tabs aren’t supported here")).toBeDefined();
     expect(screen.getByText(/Open this browser tab in the Orkestrator desktop app/)).toBeDefined();
     expect(screen.queryByRole("textbox", { name: "Browser address" })).toBeNull();
+    expect(view.container.querySelector(".animate-spin")).toBeNull();
+
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      const addressShortcut = new KeyboardEvent("keydown", {
+        key: "l",
+        bubbles: true,
+        cancelable: true,
+        ...modifier,
+      });
+      window.dispatchEvent(addressShortcut);
+      expect(addressShortcut.defaultPrevented).toBe(false);
+    }
+  });
+
+  test("shows a persisted malformed address as an error without loading forever", () => {
+    setBrowserTab("not a preview address");
+    const { container } = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "not a preview address" }}
+        isActive
+      />,
+    );
+
+    expect(screen.getByRole("alert").textContent).toContain("Enter an address such as");
+    expect(screen.getByRole("textbox", { name: "Browser address" }).getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByRole("button", { name: "Reload preview" }).hasAttribute("disabled")).toBe(true);
+    expect(container.querySelector("iframe")).toBeNull();
     expect(container.querySelector(".animate-spin")).toBeNull();
   });
 
@@ -921,6 +1003,44 @@ describe("BrowserTab", () => {
     await Promise.resolve();
     expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
       "http://localhost:3000/direct?q=1#result",
+    );
+  });
+
+  test("maps a native default-port root and ignores gateway URLs with a malformed display address", async () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+    const native = installNativePreview();
+    setBrowserTab("http://localhost/start");
+    const view = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost/start" }} isActive />,
+    );
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+
+    native.emitState(previewState({
+      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/80",
+    }));
+    await waitFor(() => {
+      expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
+        "http://localhost/",
+      );
+    });
+
+    view.unmount();
+    setBrowserTab("not a preview address");
+    render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "not a preview address" }} isActive />,
+    );
+    expect(screen.getByRole("alert")).toBeDefined();
+    native.emitState(previewState({
+      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/80/ignored",
+    }));
+    await Promise.resolve();
+
+    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
+      "not a preview address",
     );
   });
 
@@ -1093,6 +1213,41 @@ describe("BrowserTab", () => {
     expect(native.browserPreview.attach).not.toHaveBeenCalled();
   });
 
+  test("reports a native visibility failure while no preview host is available", async () => {
+    const setVisible = mock(async () => {
+      throw new Error("visibility failed");
+    });
+    installNativePreview({ setVisible });
+
+    const { container } = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
+    );
+
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("visibility failed"));
+    expect(setVisible).toHaveBeenCalledWith("browser-1", false);
+    expect(container.querySelector(".animate-spin")).toBeNull();
+  });
+
+  test("contains a native visibility rejection during cleanup", async () => {
+    const setVisible = mock(async () => {
+      throw "cleanup visibility failed";
+    });
+    const native = installNativePreview({ setVisible });
+    setBrowserTab("http://localhost:3000/");
+    const view = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+    );
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+    consoleErrorSpy?.mockClear();
+
+    view.unmount();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(setVisible).toHaveBeenCalledWith("browser-1", false);
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+  });
+
   test("synchronizes native bounds and visibility across resize, scroll, overlays, and activation", async () => {
     const native = installNativePreview();
     setBrowserTab("http://localhost:3000/");
@@ -1171,6 +1326,76 @@ describe("BrowserTab", () => {
     view.unmount();
     expect(native.unsubscribe).toHaveBeenCalled();
     expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false);
+  });
+
+  test("treats closing overlays hidden by layout and ancestor state as non-blocking", async () => {
+    const native = installNativePreview();
+    setBrowserTab("http://localhost:3000/");
+    const view = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+    );
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+      expect.objectContaining({ visible: true }),
+    ));
+
+    const roots: HTMLElement[] = [];
+    const cases: Array<{
+      name: string;
+      hide: (overlay: HTMLElement, ancestor: HTMLElement) => void;
+    }> = [
+      {
+        name: "hidden attribute",
+        hide: (overlay) => {
+          overlay.hidden = true;
+        },
+      },
+      {
+        name: "display none",
+        hide: (overlay) => {
+          overlay.style.display = "none";
+        },
+      },
+      {
+        name: "collapsed visibility",
+        hide: (overlay) => {
+          overlay.style.visibility = "collapse";
+        },
+      },
+      {
+        name: "hidden ancestor",
+        hide: (_overlay, ancestor) => {
+          ancestor.style.display = "none";
+        },
+      },
+    ];
+
+    try {
+      for (const testCase of cases) {
+        const ancestor = document.createElement("div");
+        const overlay = document.createElement("div");
+        overlay.setAttribute("role", "dialog");
+        overlay.dataset.visibilityCase = testCase.name;
+        ancestor.append(overlay);
+        document.body.append(ancestor);
+        roots.push(ancestor);
+        fireEvent.transitionRun(overlay);
+        await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+          expect.objectContaining({ visible: false }),
+        ));
+
+        overlay.setAttribute("aria-hidden", "true");
+        testCase.hide(overlay, ancestor);
+        fireEvent.transitionEnd(overlay);
+        await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+          expect.objectContaining({ visible: true }),
+        ));
+
+        ancestor.remove();
+      }
+    } finally {
+      for (const root of roots) root.remove();
+      view.unmount();
+    }
   });
 
   test("tracks the painted lifecycle of dialogs, menus, listboxes, and multiple overlays", async () => {

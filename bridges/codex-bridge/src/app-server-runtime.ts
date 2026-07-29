@@ -11,6 +11,7 @@
  *   - coalesced UI snapshots
  *   - history and models, with the rollout parser and model cache as fallbacks
  */
+import { createHash } from "node:crypto";
 import type { AppServerEngine } from "./engine/app-server-engine.js";
 import type {
   ApprovalDecision,
@@ -1471,6 +1472,14 @@ export class AppServerRuntime {
         this.stateFor(threadId).coalescer.schedule(this.now());
         return;
       }
+      case "item.dynamic.output": {
+        const turn = context.activeTurn;
+        if (!turn || !turn.accepts(event)) return;
+        if (turn.onDynamicToolOutput(event.itemId, event.output)) {
+          void this.stateFor(threadId).coalescer.flushNow();
+        }
+        return;
+      }
       case "turn.diff": {
         const turn = context.activeTurn;
         if (turn && turn.accepts(event)) turn.onTurnDiff(event.diff);
@@ -1968,9 +1977,31 @@ export class AppServerRuntime {
   }
 
   createSession(body: Record<string, unknown>): { sessionId: string; title?: string } {
+    const clientSessionKey =
+      typeof body.clientSessionKey === "string"
+      && body.clientSessionKey.trim().length > 0
+      && body.clientSessionKey.length <= 512
+        ? body.clientSessionKey
+        : undefined;
+    const sessionId = clientSessionKey
+      ? `session-client-${
+          createHash("sha256")
+            .update(this.options.cwd)
+            .update("\0")
+            .update(clientSessionKey)
+            .digest("hex")
+            .slice(0, 32)
+        }`
+      : createSessionId();
+    const existing = this.registry.getSession(sessionId);
+    if (existing) {
+      this.registry.touch(sessionId);
+      return { sessionId, title: existing.title };
+    }
+
     const title = typeof body.title === "string" ? body.title : undefined;
     const session = this.registry.createSession({
-      id: createSessionId(),
+      id: sessionId,
       // No Codex thread yet: an abandoned session must not appear in history.
       threadId: null,
       config: this.toEngineConfig(body),

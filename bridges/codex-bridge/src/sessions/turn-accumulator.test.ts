@@ -1,6 +1,13 @@
 import { describe, test, expect } from "bun:test";
-import { TurnAccumulator } from "./turn-accumulator.js";
+import {
+  TurnAccumulator,
+  unconfirmedTurnId,
+} from "./turn-accumulator.js";
 import type { EngineItem } from "../engine/types.js";
+import {
+  MAX_SUBAGENT_ACTION_OUTPUT_CHARS,
+  SUBAGENT_OUTPUT_TRUNCATION_NOTICE,
+} from "../subagent-transcript.js";
 
 function accumulator(overrides: Partial<{ turnId: string; generation: number }> = {}): TurnAccumulator {
   return new TurnAccumulator({
@@ -14,6 +21,17 @@ function accumulator(overrides: Partial<{ turnId: string; generation: number }> 
 
 function agentMessage(id: string, text: string): EngineItem {
   return { id, type: "agent_message", text } as unknown as EngineItem;
+}
+
+function startPatch(turn: TurnAccumulator, id = "call-patch"): void {
+  turn.onItemStarted({
+    id,
+    type: "dynamic_tool_call",
+    tool: "apply_patch",
+    arguments: "*** Begin Patch",
+    content_items: [],
+    status: "in_progress",
+  });
 }
 
 describe("staleness guards", () => {
@@ -121,6 +139,166 @@ describe("item/completed is authoritative", () => {
     expect(turn.items.get("item-1")!.completed).toBe(true);
   });
 
+  test("a raw failed patch remains visible until a structured item supersedes it", () => {
+    const turn = accumulator();
+    startPatch(turn);
+
+    expect(turn.onDynamicToolOutput(
+      "call-patch",
+      "apply_patch verification failed: Failed to find expected lines",
+    )).toBe(true);
+    expect(turn.items.get("call-patch")?.item).toMatchObject({
+      type: "dynamic_tool_call",
+      tool: "apply_patch",
+      arguments: "*** Begin Patch",
+      status: "failed",
+      content_items: [{
+        type: "inputText",
+        text: "apply_patch verification failed: Failed to find expected lines",
+      }],
+    });
+
+    turn.onItemCompleted({
+      id: "call-patch",
+      type: "file_change",
+      changes: [{ path: "src/example.ts", kind: "update" }],
+      status: "completed",
+    });
+    expect(turn.itemOrder).toEqual(["call-patch"]);
+    expect(turn.items.get("call-patch")?.item).toMatchObject({
+      type: "file_change",
+      status: "completed",
+    });
+  });
+
+  test("a successful raw patch output completes the matching call", () => {
+    const turn = accumulator();
+    startPatch(turn);
+
+    expect(turn.onDynamicToolOutput("call-patch", "Done!", 100)).toBe(true);
+    expect(turn.items.get("call-patch")).toMatchObject({
+      completed: true,
+      completedAt: 100,
+      item: {
+        type: "dynamic_tool_call",
+        tool: "apply_patch",
+        status: "completed",
+        content_items: [{ type: "inputText", text: "Done!" }],
+      },
+    });
+  });
+
+  test.each([
+    ["empty string", ""],
+    ["undefined", undefined],
+  ] as const)("an %s raw patch output completes without a content item", (_label, output) => {
+    const turn = accumulator();
+    startPatch(turn);
+
+    expect(turn.onDynamicToolOutput("call-patch", output)).toBe(true);
+    expect(turn.items.get("call-patch")?.item).toMatchObject({
+      type: "dynamic_tool_call",
+      status: "completed",
+      content_items: [],
+    });
+  });
+
+  test("a structured raw patch output is retained as readable JSON", () => {
+    const turn = accumulator();
+    startPatch(turn);
+
+    expect(turn.onDynamicToolOutput("call-patch", {
+      changed: ["src/example.ts"],
+      count: 1,
+    })).toBe(true);
+    expect(turn.items.get("call-patch")?.item).toMatchObject({
+      type: "dynamic_tool_call",
+      status: "completed",
+      content_items: [{
+        type: "inputText",
+        text: '{\n  "changed": [\n    "src/example.ts"\n  ],\n  "count": 1\n}',
+      }],
+    });
+  });
+
+  test("a circular raw patch output falls back to a safe string representation", () => {
+    const turn = accumulator();
+    startPatch(turn);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(turn.onDynamicToolOutput("call-patch", circular)).toBe(true);
+    expect(turn.items.get("call-patch")?.item).toMatchObject({
+      type: "dynamic_tool_call",
+      status: "completed",
+      content_items: [{ type: "inputText", text: "[object Object]" }],
+    });
+  });
+
+  test("an oversized raw patch output is bounded and marked as truncated", () => {
+    const turn = accumulator();
+    startPatch(turn);
+    const oversized = "x".repeat(MAX_SUBAGENT_ACTION_OUTPUT_CHARS + 1);
+
+    expect(turn.onDynamicToolOutput("call-patch", oversized)).toBe(true);
+    const item = turn.items.get("call-patch")?.item;
+    expect(item).toMatchObject({
+      type: "dynamic_tool_call",
+      status: "completed",
+    });
+    if (item?.type !== "dynamic_tool_call") {
+      throw new Error("expected a dynamic tool call");
+    }
+    const content = item.content_items[0];
+    expect(content).toEqual({
+      type: "inputText",
+      text:
+        "x".repeat(MAX_SUBAGENT_ACTION_OUTPUT_CHARS)
+        + SUBAGENT_OUTPUT_TRUNCATION_NOTICE,
+    });
+  });
+
+  test("duplicate raw patch outputs cannot overwrite the first completion", () => {
+    const turn = accumulator();
+    startPatch(turn);
+
+    expect(turn.onDynamicToolOutput("call-patch", "Done!", 100)).toBe(true);
+    expect(turn.onDynamicToolOutput("call-patch", "late conflicting output", 200)).toBe(false);
+
+    expect(turn.itemOrder).toEqual(["call-patch"]);
+    expect(turn.items.get("call-patch")?.completedAt).toBe(100);
+    expect(turn.items.get("call-patch")?.item).toMatchObject({
+      type: "dynamic_tool_call",
+      status: "completed",
+      content_items: [{ type: "inputText", text: "Done!" }],
+    });
+  });
+
+  test("an unrelated raw output cannot create an orphan tool item", () => {
+    const turn = accumulator();
+    expect(turn.onDynamicToolOutput("unknown-call", "output")).toBe(false);
+    expect(turn.itemOrder).toEqual([]);
+  });
+
+  test("raw custom output cannot overwrite another dynamic tool", () => {
+    const turn = accumulator();
+    turn.onItemStarted({
+      id: "exec-1",
+      type: "dynamic_tool_call",
+      tool: "exec_command",
+      arguments: { cmd: "true" },
+      content_items: [],
+      status: "in_progress",
+    });
+
+    expect(turn.onDynamicToolOutput("exec-1", "completed")).toBe(false);
+    expect(turn.items.get("exec-1")?.item).toMatchObject({
+      type: "dynamic_tool_call",
+      tool: "exec_command",
+      status: "in_progress",
+    });
+  });
+
   test("a repeated item/started does not reset streamed text", () => {
     const turn = accumulator();
     turn.onItemStarted(agentMessage("item-1", ""));
@@ -151,6 +329,14 @@ describe("item/completed is authoritative", () => {
 });
 
 describe("turn lifecycle", () => {
+  test("builds and recognizes the unconfirmed turn id for a request", () => {
+    const id = unconfirmedTurnId("request-123");
+    const turn = accumulator({ turnId: id });
+
+    expect(id).toBe("unconfirmed:request-123");
+    expect(turn.isUnconfirmed()).toBe(true);
+  });
+
   test("starts in starting and binds the real turn id when it arrives", () => {
     const turn = accumulator({ turnId: "provisional" });
     expect(turn.phase).toBe("starting");

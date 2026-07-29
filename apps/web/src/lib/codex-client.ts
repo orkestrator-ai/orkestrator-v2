@@ -618,6 +618,11 @@ export async function createSession(
     modelReasoningEffort?: CodexReasoningEffort;
     mode?: CodexConversationMode;
     fastMode?: boolean;
+    /**
+     * Stable logical tab key. The bridge hashes this into an idempotent session
+     * id so concurrent React mounts cannot create two Codex threads.
+     */
+    clientSessionKey?: string;
   },
 ): Promise<CodexSession> {
   const response = await fetchCodex(client, "/session/create", {
@@ -629,6 +634,7 @@ export async function createSession(
       modelReasoningEffort: options?.modelReasoningEffort,
       mode: options?.mode,
       fastMode: options?.fastMode,
+      clientSessionKey: options?.clientSessionKey,
     }),
   });
   if (!response.ok) {

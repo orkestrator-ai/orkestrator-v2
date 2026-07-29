@@ -302,6 +302,17 @@ export type EngineEvent = EngineEventMeta &
         itemId: string;
         delta: string;
       }
+    | {
+        /**
+         * Raw custom-tool result used only when app-server has no structured
+         * item for the call. The accumulator pairs it with the call by item id.
+         */
+        kind: "item.dynamic.output";
+        threadId: string | null;
+        turnId: string;
+        itemId: string;
+        output: unknown;
+      }
     | { kind: "turn.diff"; threadId: string | null; turnId: string; diff: string }
     | {
         kind: "turn.completed";

@@ -246,6 +246,7 @@ describe("session collection route outcomes", () => {
       async () => {
         const valid = await jsonRequest("/session/create", "POST", {
           title: "New session",
+          clientSessionKey: "env-1:tab-1",
         });
         expect(valid.status).toBe(201);
         expect(await valid.json()).toEqual({ sessionId: "session-1" });
@@ -259,7 +260,10 @@ describe("session collection route outcomes", () => {
         expect(await malformed.json()).toEqual({ sessionId: "session-2" });
       },
     );
-    expect(bodies).toEqual([{ title: "New session" }, {}]);
+    expect(bodies).toEqual([{
+      title: "New session",
+      clientSessionKey: "env-1:tab-1",
+    }, {}]);
   });
 
   test("maps missing and successful resume outcomes", async () => {

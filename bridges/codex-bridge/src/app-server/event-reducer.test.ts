@@ -76,6 +76,35 @@ describe("thread and turn lifecycle", () => {
     }
   });
 
+  test("thread/name/updated publishes a name and preserves an explicit clear", () => {
+    expect(reduce("thread/name/updated", {
+      threadId: "t1",
+      threadName: "Investigate patch failures",
+    })).toEqual([{
+      kind: "thread.name.updated",
+      threadId: "t1",
+      name: "Investigate patch failures",
+      engineGeneration: 1,
+      handle: "handle-1",
+    }]);
+
+    expect(reduce("thread/name/updated", {
+      threadId: "t1",
+      threadName: null,
+    })).toEqual([{
+      kind: "thread.name.updated",
+      threadId: "t1",
+      name: undefined,
+      engineGeneration: 1,
+      handle: "handle-1",
+    }]);
+  });
+
+  test("thread/name/updated without a thread id is dropped", () => {
+    expect(reduce("thread/name/updated", { threadName: "orphan" })).toEqual([]);
+    expect(reduce("thread/name/updated", undefined)).toEqual([]);
+  });
+
   test("turn/completed maps each terminal status", () => {
     for (const [status, expected] of [
       ["completed", "completed"],
@@ -423,6 +452,15 @@ describe("deltas", () => {
     expect(content[0]).toMatchObject({ channel: "content", index: 3 });
   });
 
+  test("reasoning summary part additions are boundary markers, not transcript events", () => {
+    expect(reduce("item/reasoning/summaryPartAdded", {
+      threadId: "t1",
+      turnId: "turn-1",
+      itemId: "r1",
+      summaryIndex: 2,
+    })).toEqual([]);
+  });
+
   test("an empty delta is preserved, but a missing one is dropped", () => {
     expect(
       reduce("item/agentMessage/delta", {
@@ -445,6 +483,164 @@ describe("deltas", () => {
       delta: "line\n",
     });
     expect(events[0]).toMatchObject({ kind: "item.command.outputDelta", delta: "line\n" });
+  });
+
+  test("raw apply_patch calls provide a fallback when no fileChange item exists", () => {
+    expect(reduce("rawResponseItem/completed", {
+      threadId: "t1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call",
+        call_id: "call-patch",
+        name: "apply_patch",
+        input: "*** Begin Patch",
+        status: "completed",
+      },
+    })).toEqual([{
+      kind: "item.started",
+      threadId: "t1",
+      turnId: "turn-1",
+      item: {
+        id: "call-patch",
+        type: "dynamic_tool_call",
+        tool: "apply_patch",
+        arguments: "*** Begin Patch",
+        content_items: [],
+        status: "in_progress",
+      },
+      engineGeneration: 1,
+      handle: "handle-1",
+    }]);
+
+    expect(reduce("rawResponseItem/completed", {
+      threadId: "t1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call_output",
+        call_id: "call-patch",
+        output: "apply_patch verification failed: missing context",
+      },
+    })).toEqual([{
+      kind: "item.dynamic.output",
+      threadId: "t1",
+      turnId: "turn-1",
+      itemId: "call-patch",
+      output: "apply_patch verification failed: missing context",
+      engineGeneration: 1,
+      handle: "handle-1",
+    }]);
+  });
+
+  test("raw non-patch calls are not introduced as duplicate transcript items", () => {
+    expect(reduce("rawResponseItem/completed", {
+      threadId: "t1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call",
+        call_id: "call-exec",
+        name: "exec",
+        input: "tools.exec_command({ cmd: 'git status' })",
+        status: "completed",
+      },
+    })).toEqual([]);
+  });
+
+  test("malformed raw response items are dropped", () => {
+    for (const params of [
+      undefined,
+      "not an object",
+      {},
+      { threadId: "t1", item: {} },
+      {
+        threadId: "t1",
+        item: {
+          type: "custom_tool_call",
+          call_id: "call-patch",
+          name: "apply_patch",
+        },
+      },
+      { threadId: "t1", turnId: "turn-1" },
+      { threadId: "t1", turnId: "turn-1", item: null },
+      {
+        threadId: "t1",
+        turnId: "turn-1",
+        item: { type: "custom_tool_call", name: "apply_patch" },
+      },
+      {
+        threadId: "t1",
+        turnId: "turn-1",
+        item: { type: "custom_tool_call_output", call_id: "" },
+      },
+    ]) {
+      expect(reduce("rawResponseItem/completed", params)).toEqual([]);
+    }
+  });
+
+  test("raw tool outputs preserve array and unknown payload shapes", () => {
+    for (const output of [
+      [{ type: "input_text", text: "first" }, { type: "input_text", text: "second" }],
+      { nested: { diagnostic: "failed" } },
+      null,
+      undefined,
+    ]) {
+      expect(reduce("rawResponseItem/completed", {
+        threadId: "t1",
+        turnId: "turn-1",
+        item: {
+          type: "custom_tool_call_output",
+          call_id: "call-patch",
+          output,
+        },
+      })).toEqual([{
+        kind: "item.dynamic.output",
+        threadId: "t1",
+        turnId: "turn-1",
+        itemId: "call-patch",
+        output,
+        engineGeneration: 1,
+        handle: "handle-1",
+      }]);
+    }
+  });
+
+  test("raw output reduction is order-independent and does not deduplicate notifications", () => {
+    const outputParams = {
+      threadId: "t1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call_output",
+        call_id: "call-patch",
+        output: "Done!",
+      },
+    };
+
+    const beforeCall = reduce("rawResponseItem/completed", outputParams);
+    const duplicate = reduce("rawResponseItem/completed", outputParams);
+
+    expect(beforeCall).toEqual([{
+      kind: "item.dynamic.output",
+      threadId: "t1",
+      turnId: "turn-1",
+      itemId: "call-patch",
+      output: "Done!",
+      engineGeneration: 1,
+      handle: "handle-1",
+    }]);
+    expect(duplicate).toEqual(beforeCall);
+
+    expect(reduce("rawResponseItem/completed", {
+      threadId: "t1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call",
+        call_id: "call-patch",
+        name: "apply_patch",
+        input: "*** Begin Patch",
+      },
+    })[0]).toMatchObject({
+      kind: "item.started",
+      item: { id: "call-patch", tool: "apply_patch" },
+    });
   });
 
   test("turn diff", () => {
@@ -489,6 +685,7 @@ describe("unknown and ignored notifications", () => {
       "item/started",
       "item/completed",
       "item/agentMessage/delta",
+      "rawResponseItem/completed",
       "turn/diff/updated",
       "thread/settings/updated",
       "model/rerouted",

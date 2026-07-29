@@ -11,14 +11,31 @@ import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
+  BoundedMetricMap,
+  compressionModeForListener,
   eventMatchesSubscription,
+  GATEWAY_COMMAND_METRIC_MAP_LIMIT,
+  GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES,
+  GatewayMetricsStore,
   isTailscaleAddress,
   loadOrCreateGatewayToken,
+  normalizeAcceptEncoding,
+  normalizeCacheControl,
+  normalizeContentEncoding,
+  normalizeContentType,
+  normalizeGatewayEventMetricKey,
+  normalizeHttpMethod,
+  normalizeHttpVersion,
+  normalizeMetricLabel,
+  normalizeNextHopProtocol,
   OrkestratorGateway,
   parseEventSubscriptionFilter,
+  resolveGatewayCompressionMode,
   rewriteBrowserPreviewBody,
   selectTailscaleBindAddress,
+  truncateUtf8,
 } from "../../../apps/backend/src/gateway";
+import { createCommandRegistry } from "../../../apps/backend/src/core/commands";
 
 const tempDirs: string[] = [];
 const gateways: OrkestratorGateway[] = [];
@@ -55,6 +72,67 @@ async function requestUrl(
     if (options.body) request.write(options.body);
     request.end();
   });
+}
+
+type GatewayMetricsSnapshot = {
+  routes: Record<string, {
+    requests: number;
+    requestBytes: number;
+    responseBytes: number;
+    statusCodes: Record<string, number>;
+    encodings: Record<string, number>;
+  }>;
+  commands: Record<string, {
+    count: number;
+    requestBytes: number;
+    responseBytes: number;
+    failures: number;
+  }>;
+  events: Record<string, {
+    frames: number;
+    wireBytes: number;
+    droppedFrames: number;
+    droppedClients: number;
+  }>;
+  stream: {
+    open: number;
+    connecting: number;
+    opened: number;
+    closed: number;
+    dropped: number;
+    stalled: number;
+    softDesyncs: number;
+    keepalives: number;
+  };
+  compression: { configuredMode: string };
+  recentRouteSamples: Array<{
+    route: string;
+    method: string;
+    httpVersion: string;
+    statusCode: number;
+    requestBytes: number;
+    responseBytes: number;
+    contentEncoding: string | null;
+    cacheControl: string | null;
+    contentType: string | null;
+    acceptEncoding: string | null;
+  }>;
+  recentClientBootReports: Array<{
+    platform: string;
+    navigationType: string;
+    httpVersion: string | null;
+    nextHopProtocol: string | null;
+    resourceCount: number | null;
+    loadEventMs: number | null;
+  }>;
+};
+
+async function readGatewayMetrics(info: { url: string; token: string }): Promise<GatewayMetricsSnapshot> {
+  const response = await requestUrl(`${info.url}__orkestrator/metrics`, {
+    headers: { authorization: `Bearer ${info.token}` },
+  });
+  expect(response.status).toBe(200);
+  return response.json() as GatewayMetricsSnapshot;
 }
 
 function createLogger() {
@@ -209,6 +287,550 @@ afterEach(async () => {
 });
 
 describe("remote gateway", () => {
+  test("prefers explicit compression configuration over the environment", () => {
+    expect(resolveGatewayCompressionMode("off", {
+      ORKESTRATOR_GATEWAY_COMPRESSION: "on",
+    })).toBe("off");
+    expect(resolveGatewayCompressionMode(undefined, {
+      ORKESTRATOR_GATEWAY_COMPRESSION: "body",
+    })).toBe("body");
+    expect(compressionModeForListener("on", "control")).toBe("off");
+    expect(compressionModeForListener("on", "browser")).toBe("on");
+  });
+
+  test("leaves every response uncompressed in all three modes", async () => {
+    // The milestone documents `off`, `body` and `on` as no-op rollout controls.
+    // Asserting that in prose is not the same as proving no response path adds
+    // an encoding, which is what makes `off` a real rollback lever.
+    for (const compression of ["off", "body", "on"] as const) {
+      const { info } = await startGateway({
+        compression,
+        backend: { invoke: mock(async () => ({ ok: true })) },
+      });
+      const authorization = { authorization: `Bearer ${info.token}` };
+      const acceptsEverything = { ...authorization, "accept-encoding": "gzip, deflate, br" };
+
+      const responses = [
+        await requestUrl(`${info.url}__orkestrator/status`, { headers: acceptsEverything }),
+        await requestUrl(`${info.url}__orkestrator/metrics`, { headers: acceptsEverything }),
+        await requestUrl(`${info.url}__orkestrator/invoke`, {
+          method: "POST",
+          headers: { ...acceptsEverything, "content-type": "application/json" },
+          body: JSON.stringify({ command: "noop" }),
+        }),
+        await requestUrl(info.url, { headers: acceptsEverything }),
+      ];
+
+      for (const response of responses) {
+        expect(response.status).toBeLessThan(400);
+        expect(response.headers["content-encoding"]).toBeUndefined();
+      }
+      // The recorded label agrees: nothing was encoded on any route.
+      const metrics = await readGatewayMetrics(info);
+      const encodings = Object.values(metrics.routes).flatMap((route) => Object.keys(route.encodings));
+      expect([...new Set(encodings)]).toEqual(["identity"]);
+      expect(metrics.compression.configuredMode).toBe(compression);
+    }
+  });
+
+  test("tracks stream gauges without double-counting a handshake", () => {
+    const metrics = new GatewayMetricsStore("off");
+    const stream = () => metrics.snapshot().stream;
+
+    // Two concurrent handshakes are both in flight before either completes.
+    metrics.recordStreamConnecting();
+    metrics.recordStreamConnecting();
+    expect(stream()).toMatchObject({ connecting: 2, open: 0, opened: 0 });
+
+    metrics.recordStreamOpened();
+    expect(stream()).toMatchObject({ connecting: 1, open: 1, opened: 1 });
+
+    // Closing an open stream must not touch `connecting`: that handshake
+    // already left the gauge, and decrementing again would silently undercount
+    // the handshake still in flight.
+    metrics.recordStreamClosed();
+    expect(stream()).toMatchObject({ connecting: 1, open: 0, closed: 1 });
+
+    // A handshake that never reaches `open` releases the gauge explicitly.
+    metrics.recordStreamConnectFailed();
+    expect(stream()).toMatchObject({ connecting: 0, open: 0, closed: 1 });
+
+    // Gauges never go negative, however unbalanced the calls.
+    metrics.recordStreamClosed();
+    metrics.recordStreamConnectFailed();
+    expect(stream()).toMatchObject({ connecting: 0, open: 0, closed: 2 });
+
+    // Dropping a client counts the drop and nothing else; the socket close
+    // handler is what releases `open`.
+    metrics.recordStreamConnecting();
+    metrics.recordStreamOpened();
+    metrics.recordStreamDropped();
+    expect(stream()).toMatchObject({ connecting: 0, open: 1, dropped: 1 });
+    metrics.recordStreamClosed();
+    expect(stream()).toMatchObject({ connecting: 0, open: 0, dropped: 1 });
+  });
+
+  test("sizes the command label budget to hold the whole backend registry", () => {
+    const registry = createCommandRegistry();
+    const names = [...registry.keys()];
+
+    // Command labels are an allowlist: unregistered names become `__unknown__`,
+    // so every label this map can ever hold comes from here. A budget below the
+    // registry would fold real commands into `__overflow__` in invocation
+    // order, making the per-command breakdown incomplete and run-dependent.
+    expect(names.length).toBeGreaterThan(0);
+    // One slot is reserved for `__overflow__`, plus `__unknown__`/`__invalid__`.
+    expect(names.length).toBeLessThanOrEqual(GATEWAY_COMMAND_METRIC_MAP_LIMIT - 3);
+    expect(names.reduce((total, name) => total + Buffer.byteLength(name), 0))
+      .toBeLessThanOrEqual(GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES - 128);
+    // Every registered name must survive normalization, or it would be filed
+    // as `__invalid__` and vanish from the breakdown.
+    const misnormalized = names.filter((name) => normalizeMetricLabel(name) !== name);
+    expect(misnormalized).toEqual([]);
+  });
+
+  test("bounds a metric map by entry count and by total label bytes", () => {
+    const byCount = new BoundedMetricMap<number>(8, 8 * 1024);
+    for (let index = 0; index < 50; index += 1) {
+      byCount.set(byCount.resolveKey(`event-${index}`), index);
+    }
+    expect(byCount.size).toBe(8);
+    expect(byCount.get("__overflow__")).toBeDefined();
+    expect(byCount.get("event-0")).toBe(0);
+
+    // 30-byte labels against a 96-byte budget: the byte bound binds first.
+    const byBytes = new BoundedMetricMap<number>(1_000, 96);
+    for (let index = 0; index < 50; index += 1) {
+      byBytes.set(byBytes.resolveKey(`label-${String(index).padStart(3, "0")}-xxxxxxxxxxxxxxxxxxxx`), index);
+    }
+    expect(byBytes.size).toBeLessThan(1_000);
+    expect(byBytes.usedLabelBytes).toBeLessThanOrEqual(96);
+    expect(byBytes.get("__overflow__")).toBeDefined();
+
+    // A key already present is always returned, never rerouted to overflow.
+    const saturated = new BoundedMetricMap<number>(2, 8 * 1024);
+    saturated.set(saturated.resolveKey("first"), 1);
+    expect(saturated.resolveKey("first")).toBe("first");
+    expect(saturated.resolveKey("second")).toBe("__overflow__");
+
+    // Oversized single labels overflow regardless of remaining budget.
+    const roomy = new BoundedMetricMap<number>(1_000, 1_000_000);
+    expect(roomy.resolveKey("x".repeat(97))).toBe("__overflow__");
+    expect(roomy.resolveKey("x".repeat(96))).toBe("x".repeat(96));
+  });
+
+  test("normalizes request and response header labels to fixed cardinality", () => {
+    expect(normalizeHttpMethod("get")).toBe("GET");
+    expect(normalizeHttpMethod(" post ")).toBe("POST");
+    for (const method of ["DELETE", "HEAD", "OPTIONS", "PATCH", "PUT"]) {
+      expect(normalizeHttpMethod(method)).toBe(method);
+    }
+    expect(normalizeHttpMethod("PROPFIND")).toBe("OTHER");
+    expect(normalizeHttpMethod("")).toBe("OTHER");
+
+    expect(normalizeHttpVersion("1.1")).toBe("1.1");
+    expect(normalizeHttpVersion(" 2.0 ")).toBe("2.0");
+    expect(normalizeHttpVersion("3.0")).toBe("3.0");
+    expect(normalizeHttpVersion("1.0")).toBe("1.0");
+    expect(normalizeHttpVersion("0.9")).toBe("other");
+
+    expect(normalizeContentEncoding(null)).toBe("identity");
+    expect(normalizeContentEncoding("")).toBe("identity");
+    expect(normalizeContentEncoding(" GZIP ")).toBe("gzip");
+    expect(normalizeContentEncoding("br")).toBe("br");
+    expect(normalizeContentEncoding("deflate")).toBe("deflate");
+    expect(normalizeContentEncoding("zstd")).toBe("other");
+
+    // `q=0` is a refusal, not support: recording it as support would be the
+    // one error direction that wrongly enables compression for that client.
+    expect(normalizeAcceptEncoding(null)).toBeNull();
+    expect(normalizeAcceptEncoding("")).toBeNull();
+    expect(normalizeAcceptEncoding("gzip, deflate, br")).toBe("br,deflate,gzip");
+    expect(normalizeAcceptEncoding("GZIP;q=1.0, br;q=0.8")).toBe("br,gzip");
+    expect(normalizeAcceptEncoding("gzip;q=0, identity")).toBe("identity");
+    expect(normalizeAcceptEncoding("gzip;q=0.0")).toBeNull();
+    expect(normalizeAcceptEncoding("*")).toBe("other");
+    expect(normalizeAcceptEncoding("gzip, zstd")).toBe("gzip,other");
+    // Duplicates collapse and ordering is stable regardless of input order.
+    expect(normalizeAcceptEncoding("br, gzip, br")).toBe("br,gzip");
+    expect(normalizeAcceptEncoding("gzip, br")).toBe(normalizeAcceptEncoding("br, gzip"));
+
+    expect(normalizeCacheControl(null)).toBeNull();
+    expect(normalizeCacheControl("")).toBeNull();
+    expect(normalizeCacheControl("max-age=31536000, immutable")).toBe("immutable,max-age");
+    expect(normalizeCacheControl("no-store")).toBe("no-store");
+    expect(normalizeCacheControl("public, s-maxage=60")).toBe("public,s-maxage");
+    expect(normalizeCacheControl("surrogate-key=abc123")).toBe("other");
+
+    expect(normalizeContentType(null)).toBeNull();
+    expect(normalizeContentType("   ")).toBeNull();
+    expect(normalizeContentType("text/html; charset=utf-8")).toBe("text/html");
+    expect(normalizeContentType("TEXT/CSS")).toBe("text/css");
+    expect(normalizeContentType("text/event-stream")).toBe("text/event-stream");
+    expect(normalizeContentType("application/json")).toBe("application/json");
+    expect(normalizeContentType("image/avif")).toBe("image");
+    expect(normalizeContentType("font/woff2")).toBe("font");
+    expect(normalizeContentType("audio/mpeg")).toBe("audio");
+    expect(normalizeContentType("video/mp4")).toBe("video");
+    expect(normalizeContentType("application/x-tar")).toBe("other");
+
+    // An unavailable protocol must stay distinguishable from an unrecognised
+    // one; `WKWebView` with no navigation entry sends null, and a cross-origin
+    // navigation without `Timing-Allow-Origin` sends "".
+    expect(normalizeNextHopProtocol(null)).toBeNull();
+    expect(normalizeNextHopProtocol(undefined)).toBeNull();
+    expect(normalizeNextHopProtocol("")).toBeNull();
+    expect(normalizeNextHopProtocol("   ")).toBeNull();
+    expect(normalizeNextHopProtocol(42)).toBeNull();
+    expect(normalizeNextHopProtocol("H2")).toBe("h2");
+    expect(normalizeNextHopProtocol("http/1.1")).toBe("http/1.1");
+    expect(normalizeNextHopProtocol("quic")).toBe("quic");
+    expect(normalizeNextHopProtocol("spdy/3")).toBe("other");
+  });
+
+  test("truncates to a byte budget on UTF-8 boundaries without inventing characters", () => {
+    expect(truncateUtf8("abc", 8)).toBe("abc");
+    expect(truncateUtf8("abcdef", 3)).toBe("abc");
+    // Multi-byte sequences are dropped whole rather than decoded to U+FFFD.
+    expect(truncateUtf8("€uro", 2)).toBe("");
+    expect(truncateUtf8("a€", 2)).toBe("a");
+    expect(truncateUtf8("a€", 3)).toBe("a");
+    expect(truncateUtf8("a€", 4)).toBe("a€");
+    expect(truncateUtf8("💣x", 4)).toBe("💣");
+    for (const maxBytes of [1, 2, 3]) {
+      expect(truncateUtf8("💣x", maxBytes)).toBe("");
+    }
+    // A U+FFFD the caller actually sent must survive, which post-hoc stripping
+    // of a trailing replacement character could not guarantee.
+    expect(truncateUtf8("ab�zz", 5)).toBe("ab�");
+    expect(truncateUtf8("�", 3)).toBe("�");
+    // The result never exceeds the budget and is always valid UTF-8.
+    for (const value of ["💣💣💣", "aé€💣", "��"]) {
+      for (let maxBytes = 0; maxBytes <= Buffer.byteLength(value); maxBytes += 1) {
+        const truncated = truncateUtf8(value, maxBytes);
+        expect(Buffer.byteLength(truncated)).toBeLessThanOrEqual(maxBytes);
+        expect(truncated).toBe(Buffer.from(truncated).toString("utf8"));
+        expect(value.startsWith(truncated)).toBe(true);
+      }
+    }
+  });
+
+  test("collapses per-entity event names and rejects unusable labels", () => {
+    expect(normalizeGatewayEventMetricKey("terminal-output-session-1")).toBe("terminal-output");
+    expect(normalizeGatewayEventMetricKey("terminal-output-tmux:env:tab")).toBe("terminal-output-tmux");
+    // One label per container would otherwise evict genuine event names.
+    expect(normalizeGatewayEventMetricKey("claude-state-abc123")).toBe("claude-state");
+    expect(normalizeGatewayEventMetricKey("claude-state-def456")).toBe("claude-state");
+    expect(normalizeGatewayEventMetricKey("environment-renamed")).toBe("environment-renamed");
+    expect(normalizeGatewayEventMetricKey("container-log")).toBe("container-log");
+
+    expect(normalizeMetricLabel("get_environments")).toBe("get_environments");
+    expect(normalizeMetricLabel("  spaced  ")).toBe("spaced");
+    expect(normalizeMetricLabel("ok.name:v1-2")).toBe("ok.name:v1-2");
+    expect(normalizeMetricLabel("9leading")).toBe("__invalid__");
+    expect(normalizeMetricLabel("has space")).toBe("__invalid__");
+    expect(normalizeMetricLabel("")).toBe("__invalid__");
+    expect(normalizeMetricLabel("x".repeat(97))).toBe("__invalid__");
+    // `__proto__` must not survive into a label that later becomes an object key.
+    expect(normalizeMetricLabel("__proto__")).toBe("__invalid__");
+    // Reserved buckets pass through even though they fail the label pattern.
+    for (const reserved of ["__overflow__", "__invalid__", "__unknown__", "__keepalive__"]) {
+      expect(normalizeMetricLabel(reserved)).toBe(reserved);
+    }
+  });
+
+  test("authenticates metrics routes and validates, sanitizes, and evicts client reports", async () => {
+    const { info } = await startGateway();
+    const metricsUrl = `${info.url}__orkestrator/metrics`;
+    const clientMetricsUrl = `${info.url}__orkestrator/client-metrics`;
+    const authorization = { authorization: `Bearer ${info.token}` };
+
+    expect((await requestUrl(metricsUrl)).status).toBe(401);
+    const wrongMetricsMethod = await requestUrl(metricsUrl, {
+      method: "POST",
+      headers: authorization,
+    });
+    expect(wrongMetricsMethod.status).toBe(405);
+    expect(wrongMetricsMethod.headers.allow).toBe("GET");
+
+    expect((await requestUrl(clientMetricsUrl, { method: "POST" })).status).toBe(401);
+    const wrongClientMethod = await requestUrl(clientMetricsUrl, { headers: authorization });
+    expect(wrongClientMethod.status).toBe(405);
+    expect(wrongClientMethod.headers.allow).toBe("POST");
+
+    const headers = {
+      ...authorization,
+      "content-type": "application/json",
+    };
+    const malformed = await requestUrl(clientMetricsUrl, {
+      method: "POST",
+      headers,
+      body: "{",
+    });
+    expect(malformed.status).toBe(400);
+    expect(malformed.json()).toEqual({ error: "Malformed JSON request body" });
+
+    const nonObject = await requestUrl(clientMetricsUrl, {
+      method: "POST",
+      headers,
+      body: "[]",
+    });
+    expect(nonObject.status).toBe(400);
+    expect(nonObject.json()).toEqual({ error: "Expected JSON object body" });
+
+    const oversized = await requestUrl(clientMetricsUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ padding: "x".repeat(64 * 1024) }),
+    });
+    expect(oversized.status).toBe(413);
+    expect(oversized.json()).toEqual({ error: "Request body is too large" });
+
+    const sanitized = await requestUrl(clientMetricsUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        platform: "not-a-platform",
+        navigationType: "not-navigation",
+        nextHopProtocol: "💣".repeat(100),
+        resourceCount: -1,
+        loadEventMs: 700_000,
+      }),
+    });
+    expect(sanitized.status).toBe(202);
+    const sanitizedMetrics = await readGatewayMetrics(info);
+    expect(sanitizedMetrics.recentClientBootReports.at(-1)).toMatchObject({
+      platform: "unknown",
+      navigationType: "unknown",
+      nextHopProtocol: "other",
+      resourceCount: null,
+      loadEventMs: null,
+    });
+
+    for (let resourceCount = 0; resourceCount < 40; resourceCount += 1) {
+      const response = await requestUrl(clientMetricsUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          platform: "desktop-browser",
+          navigationType: "navigate",
+          nextHopProtocol: resourceCount === 39 ? "AValidLookingSecretToken" : "h2",
+          resourceCount,
+        }),
+      });
+      expect(response.status).toBe(202);
+    }
+
+    const metrics = await readGatewayMetrics(info);
+    expect(metrics.recentRouteSamples).toHaveLength(32);
+    expect(metrics.recentClientBootReports).toHaveLength(32);
+    expect(metrics.recentClientBootReports[0]?.resourceCount).toBe(8);
+    expect(metrics.recentClientBootReports.at(-1)?.resourceCount).toBe(39);
+    expect(metrics.recentClientBootReports[0]?.nextHopProtocol).toBe("h2");
+    expect(metrics.recentClientBootReports.at(-1)?.nextHopProtocol).toBe("other");
+    expect(metrics.recentClientBootReports.every((report) => (
+      report.platform === "desktop-browser"
+      && report.navigationType === "navigate"
+    ))).toBe(true);
+    expect(metrics.routes["client-metrics"]).toMatchObject({
+      requests: 46,
+      statusCodes: {
+        "202": 41,
+        "400": 2,
+        "405": 1,
+        "413": 1,
+      },
+    });
+    expect(metrics.routes["client-metrics"]!.requestBytes).toBeGreaterThan(0);
+    expect(metrics.routes["client-metrics"]!.responseBytes).toBeGreaterThan(0);
+  });
+
+  test("bounds and normalizes route status, encoding, and retained header metrics", async () => {
+    const target = createServer((_request, response) => {
+      response.writeHead(299, {
+        "content-encoding": "private-experimental-encoding",
+        "content-type": "text/plain; charset=utf-8",
+        // A proxied origin can return any header at all, so the retained
+        // cache-control label has to survive an unrecognised directive and a
+        // value-carrying one without keeping either verbatim.
+        "cache-control": "max-age=31536000, immutable, surrogate-key=private-value",
+      });
+      response.end("proxy-body");
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const address = target.address();
+    if (!address || typeof address !== "object") throw new Error("Target server did not bind");
+
+    const { info } = await startGateway();
+    const acceptEncoding = "private-accept-value-".repeat(20);
+    const response = await requestUrl(
+      `${info.url}__orkestrator/proxy/loopback/${address.port}/metrics`,
+      {
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "accept-encoding": acceptEncoding,
+        },
+      },
+    );
+    expect(response.status).toBe(299);
+    expect(response.body).toBe("proxy-body");
+
+    const metrics = await readGatewayMetrics(info);
+    expect(metrics.routes["proxy-loopback"]).toMatchObject({
+      requests: 1,
+      responseBytes: Buffer.byteLength("proxy-body"),
+      statusCodes: { "299": 1 },
+      encodings: { other: 1 },
+    });
+    const sample = metrics.recentRouteSamples.find((candidate) => (
+      candidate.route === "proxy-loopback"
+    ));
+    expect(sample).toMatchObject({
+      method: "GET",
+      httpVersion: "1.1",
+      statusCode: 299,
+      responseBytes: Buffer.byteLength("proxy-body"),
+      contentEncoding: "other",
+      // Parameters are stripped and unrecognised directives bucketed, so no
+      // origin-supplied value is retained.
+      cacheControl: "immutable,max-age,other",
+      contentType: "text/plain",
+    });
+    expect(sample?.acceptEncoding).toBe("other");
+    expect(JSON.stringify(sample)).not.toContain("private-value");
+    expect(JSON.stringify(sample)).not.toContain("private-accept-value");
+    expect(Object.keys(metrics.routes["proxy-loopback"]!.encodings)).toEqual(["other"]);
+    expect(metrics.compression.configuredMode).toBe("off");
+  });
+
+  test("never retains a rejected command name, including when the registry is not consulted", async () => {
+    const secretLikeName = "AValidLookingSecretToken1234567890";
+    // Mirrors OrkestratorBackend: shutdown is refused before the registry
+    // lookup, so the error text says nothing about whether the name is known.
+    let shuttingDown = false;
+    const backend = {
+      invoke: mock(async (command: string) => {
+        if (shuttingDown) throw new Error("Backend is shutting down");
+        if (command !== "registered_command") {
+          throw new Error(`Unknown backend command: ${command}`);
+        }
+        return { ok: true };
+      }),
+      hasCommand: (command: string) => command === "registered_command",
+    };
+    const { info } = await startGateway({ backend });
+    const invoke = (command: string) => requestUrl(`${info.url}__orkestrator/invoke`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ command }),
+    });
+
+    expect((await invoke(secretLikeName)).status).toBe(500);
+    shuttingDown = true;
+    expect((await invoke(`${secretLikeName}Shutdown`)).status).toBe(500);
+    expect((await invoke("registered_command")).status).toBe(500);
+
+    const metrics = await readGatewayMetrics(info);
+    const keys = Object.keys(metrics.commands);
+    expect(keys.some((key) => key.includes("SecretToken"))).toBe(false);
+    expect(metrics.commands.__unknown__).toMatchObject({ count: 2, failures: 2 });
+    // A registered command keeps its own bucket even when it fails.
+    expect(metrics.commands.registered_command).toMatchObject({ count: 1, failures: 1 });
+  });
+
+  test("serializes invoke results once and keeps command metrics private and bounded", async () => {
+    let resultSerializations = 0;
+    let errorSerializations = 0;
+    const secretLikeUnknown = "AValidLookingSecretToken1234567890";
+    const backend = {
+      invoke: mock(async (command: string) => {
+        if (command === "serialize_once") {
+          return {
+            toJSON() {
+              resultSerializations += 1;
+              return { ok: true };
+            },
+          };
+        }
+        if (command === secretLikeUnknown) {
+          throw new Error(`Unknown backend command: ${command}`);
+        }
+        if (command === "serialize_error_once") {
+          throw {
+            toString() {
+              errorSerializations += 1;
+              return "backend failed";
+            },
+          };
+        }
+        return null;
+      }),
+    };
+    const { info } = await startGateway({ backend });
+    const endpoint = `${info.url}__orkestrator/invoke`;
+    const headers = {
+      authorization: `Bearer ${info.token}`,
+      "content-type": "application/json",
+    };
+    const invoke = (command: string) => requestUrl(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ command }),
+    });
+
+    const success = await invoke("serialize_once");
+    expect(success.status).toBe(200);
+    expect(success.body).toBe('{"result":{"ok":true}}');
+    expect(resultSerializations).toBe(1);
+
+    const failure = await invoke("serialize_error_once");
+    expect(failure.status).toBe(500);
+    expect(failure.body).toBe('{"error":"backend failed"}');
+    expect(errorSerializations).toBe(1);
+
+    expect((await invoke(secretLikeUnknown)).status).toBe(500);
+    expect((await invoke(`${"x".repeat(10_000)} secret`)).status).toBe(200);
+
+    // Exercise both aggregate label-byte and map-count overflow. All of these
+    // commands are accepted by the test backend, just as registered commands
+    // are by production. 96-byte labels exhaust the 32 KiB byte budget well
+    // before the 512-entry count budget, so this drives the byte bound.
+    for (let index = 0; index < 400; index += 1) {
+      const padded = `command_${String(index).padStart(3, "0")}_${"x".repeat(74)}`;
+      expect((await invoke(padded)).status).toBe(200);
+    }
+
+    const metrics = await readGatewayMetrics(info);
+    const keys = Object.keys(metrics.commands);
+    expect(keys).toContain("__unknown__");
+    expect(keys).toContain("__invalid__");
+    expect(keys).toContain("__overflow__");
+    expect(keys).not.toContain(secretLikeUnknown);
+    expect(keys.every((key) => !key.includes("secret"))).toBe(true);
+    expect(keys.length).toBeLessThanOrEqual(GATEWAY_COMMAND_METRIC_MAP_LIMIT);
+    expect(keys.every((key) => Buffer.byteLength(key) <= 96)).toBe(true);
+    expect(keys.reduce((total, key) => total + Buffer.byteLength(key), 0))
+      .toBeLessThanOrEqual(GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES);
+
+    const successBody = '{"result":{"ok":true}}';
+    expect(metrics.commands.serialize_once).toMatchObject({
+      count: 1,
+      requestBytes: Buffer.byteLength(JSON.stringify({ command: "serialize_once" })),
+      responseBytes: Buffer.byteLength(successBody),
+      failures: 0,
+    });
+    expect(metrics.commands.serialize_error_once).toMatchObject({
+      count: 1,
+      responseBytes: Buffer.byteLength('{"error":"backend failed"}'),
+      failures: 1,
+    });
+    expect(metrics.commands.__unknown__).toMatchObject({ count: 1, failures: 1 });
+  });
+
   test("filters terminal prefixes while restoring explicitly subscribed sessions", () => {
     expect(parseEventSubscriptionFilter(" terminal-output-one, menu- ")).toEqual([
       "terminal-output-one",
@@ -269,6 +891,197 @@ describe("remote gateway", () => {
 
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain('"event":"terminal-output-one"');
+  });
+
+  test("counts one event frame per delivery, and none when nobody receives it", async () => {
+    const { gateway, info } = await startGateway();
+
+    // No clients at all: nothing was put on the wire, so nothing is recorded
+    // and the label is not even materialized.
+    gateway.emit("environment-renamed", { id: "env" });
+    let metrics = await readGatewayMetrics(info);
+    expect(metrics.events["environment-renamed"]).toBeUndefined();
+
+    const first = await openEventStream(gateway, info);
+    const second = await openEventStream(gateway, info);
+    const payload = { id: "env" };
+    const frameBytes = Buffer.byteLength(
+      `data: ${JSON.stringify({ event: "environment-renamed", payload })}\n\n`,
+    );
+
+    // Two healthy subscribers: the frame really is written twice, so both the
+    // count and the byte total scale with deliveries rather than with emits.
+    gateway.emit("environment-renamed", payload);
+    await waitUntil(
+      () => first.received().includes("environment-renamed")
+        && second.received().includes("environment-renamed"),
+      "Both streams should have received the frame",
+    );
+    metrics = await readGatewayMetrics(info);
+    expect(metrics.events["environment-renamed"]).toEqual({
+      frames: 2,
+      wireBytes: frameBytes * 2,
+      droppedFrames: 0,
+      droppedClients: 0,
+    });
+
+    // A subscriber that filters the event out is not a delivery.
+    const filtered = await openEventStream(gateway, info, "?events=menu-");
+    gateway.emit("environment-renamed", payload);
+    await waitUntil(
+      () => (first.received().match(/environment-renamed/g) ?? []).length === 2,
+      "The subscribed stream should have received the second frame",
+    );
+    metrics = await readGatewayMetrics(info);
+    expect(metrics.events["environment-renamed"]).toMatchObject({
+      frames: 4,
+      wireBytes: frameBytes * 4,
+    });
+    expect(filtered.received()).not.toContain("environment-renamed");
+
+    first.close();
+    second.close();
+    filtered.close();
+  });
+
+  test("attributes keepalive drops to a reserved label and counts keepalives", async () => {
+    const { gateway, info } = await startGateway({ keepaliveMs: 5 });
+    const lagging = await openEventStream(gateway, info);
+    const healthy = await openEventStream(gateway, info);
+
+    await waitUntil(
+      () => healthy.received().includes(": keepalive"),
+      "Healthy stream never received a keepalive",
+    );
+
+    pinBufferedBytes(lagging.response, 8 * 1024 * 1024 + 1);
+    await waitUntil(() => lagging.aborted(), "Lagging stream was never dropped by the keepalive");
+
+    const metrics = await readGatewayMetrics(info);
+    expect(metrics.stream.keepalives).toBeGreaterThan(0);
+    expect(metrics.stream.dropped).toBe(1);
+    // A keepalive is not an event, so the drop must not land in a bucket that
+    // a real event named `events` would share.
+    expect(metrics.events.events).toBeUndefined();
+    expect(metrics.events.__keepalive__).toMatchObject({ droppedClients: 1, frames: 0 });
+
+    releaseBufferedBytes(lagging.response);
+    healthy.close();
+  });
+
+  test("counts a desync recovery frame and keeps the connecting gauge released", async () => {
+    const { gateway, info } = await startGateway();
+    const client = await openEventStream(gateway, info);
+    const payload = { bytesBase64: "eA==" };
+
+    // Force a soft-limit drop so the session is marked desynced, then release
+    // the buffer so the recovery notice is actually written.
+    pinBufferedBytes(client.response, 2 * 1024 * 1024);
+    gateway.emit("terminal-output-session-a", payload);
+
+    let metrics = await readGatewayMetrics(info);
+    expect(metrics.events["terminal-output"]).toMatchObject({ droppedFrames: 1, frames: 0 });
+
+    releaseBufferedBytes(client.response);
+    gateway.emit("terminal-output-session-a", payload);
+    await waitUntil(
+      () => client.received().includes("desynced"),
+      "Recovery notice was never flushed",
+    );
+
+    metrics = await readGatewayMetrics(info);
+    // The recovery notice and the frame that followed it are both real writes.
+    expect(metrics.events["terminal-output"]!.frames).toBeGreaterThanOrEqual(1);
+    expect(metrics.events["terminal-output"]!.wireBytes).toBeGreaterThan(0);
+    // Every handshake reached `open`, so nothing is left parked in `connecting`.
+    expect(metrics.stream.connecting).toBe(0);
+    expect(metrics.stream.opened).toBe(1);
+    expect(metrics.stream.open).toBe(1);
+
+    client.close();
+  });
+
+  test("counts actual event writes, bounds labels, and closes each stream exactly once", async () => {
+    const { gateway, info } = await startGateway();
+    const lagging = await openEventStream(gateway, info);
+    const healthy = await openEventStream(gateway, info);
+    const payload = { bytesBase64: "eA==" };
+    const terminalMessage = `data: ${JSON.stringify({
+      event: "terminal-output-session-a",
+      payload,
+    })}\n\n`;
+
+    pinBufferedBytes(lagging.response, 2 * 1024 * 1024);
+    gateway.emit("terminal-output-session-a", payload);
+    await waitUntil(
+      () => healthy.received().includes("terminal-output-session-a"),
+      "Healthy stream never received the terminal frame",
+    );
+
+    pinBufferedBytes(lagging.response, 8 * 1024 * 1024 + 1);
+    gateway.emit("environment-changed", { id: "env" });
+    await waitUntil(() => lagging.aborted(), "Lagging stream was never dropped");
+    await waitUntil(
+      () => healthy.received().includes("environment-changed"),
+      "Healthy stream never received the authoritative event",
+    );
+
+    let metrics = await readGatewayMetrics(info);
+    expect(metrics.stream).toMatchObject({
+      open: 1,
+      connecting: 0,
+      opened: 2,
+      closed: 1,
+      dropped: 1,
+      stalled: 1,
+      softDesyncs: 1,
+    });
+    expect(metrics.events["terminal-output"]).toEqual({
+      frames: 1,
+      wireBytes: Buffer.byteLength(terminalMessage),
+      droppedFrames: 1,
+      droppedClients: 0,
+    });
+    expect(metrics.events["environment-changed"]).toMatchObject({
+      frames: 1,
+      droppedClients: 1,
+    });
+
+    // Terminal identifiers collapse to fixed categories, and arbitrary labels
+    // can consume neither unbounded bytes nor unbounded map entries.
+    gateway.emit("terminal-output-tmux:env:tab:one", payload);
+    gateway.emit(`${"x".repeat(1_000)} secret`, null);
+    for (let index = 0; index < 150; index += 1) {
+      gateway.emit(`event-${index}`, index);
+    }
+    await waitUntil(
+      () => healthy.received().includes('"event":"event-149"'),
+      "Event cardinality frames did not reach the healthy stream",
+    );
+
+    metrics = await readGatewayMetrics(info);
+    const eventKeys = Object.keys(metrics.events);
+    expect(eventKeys).toContain("terminal-output-tmux");
+    expect(eventKeys).toContain("__invalid__");
+    expect(eventKeys).toContain("__overflow__");
+    expect(eventKeys.every((key) => !key.includes("secret"))).toBe(true);
+    expect(eventKeys).toHaveLength(128);
+    expect(eventKeys.every((key) => Buffer.byteLength(key) <= 96)).toBe(true);
+    expect(eventKeys.reduce((total, key) => total + Buffer.byteLength(key), 0)).toBeLessThanOrEqual(8 * 1024);
+
+    healthy.response.destroy();
+    healthy.close();
+    await waitUntil(
+      () => eventClients(gateway).size === 0,
+      "Healthy stream did not close",
+    );
+    metrics = await readGatewayMetrics(info);
+    expect(metrics.stream).toMatchObject({
+      open: 0,
+      opened: 2,
+      closed: 2,
+      dropped: 1,
+    });
   });
 
   test("drops projected soft-limit terminal frames and flushes a desync notice on drain", async () => {
@@ -842,6 +1655,44 @@ describe("remote gateway", () => {
     const browserResponse = await requestUrl(info.browserUrl!, { headers });
     expect(controlResponse.status).toBe(200);
     expect(browserResponse.status).toBe(200);
+  });
+
+  test("treats a loopback browser listener as remote for compression rollout while control stays identity", async () => {
+    const { info } = await startGateway({
+      bindAddress: "127.0.0.1",
+      controlBindAddress: "127.0.0.1",
+      controlPort: 0,
+      compression: "on",
+    });
+    expect(info.browserUrl).toBeTruthy();
+
+    await requestUrl(`${info.url}__orkestrator/status`, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    await requestUrl(`${info.browserUrl!}__orkestrator/status`, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+
+    const metrics = await requestUrl(`${info.url}__orkestrator/metrics`, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    const samples = ((metrics.json() as {
+      recentRouteSamples: Array<{
+        route: string;
+        listenerKind: string;
+        effectiveCompressionMode: string;
+      }>;
+    }).recentRouteSamples)
+      .filter((sample) => sample.route === "status");
+
+    expect(samples).toContainEqual(expect.objectContaining({
+      listenerKind: "control",
+      effectiveCompressionMode: "off",
+    }));
+    expect(samples).toContainEqual(expect.objectContaining({
+      listenerKind: "browser",
+      effectiveCompressionMode: "on",
+    }));
   });
 
   test("allows only the authenticated control listener to manage Electron web access", async () => {

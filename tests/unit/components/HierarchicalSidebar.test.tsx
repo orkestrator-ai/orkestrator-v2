@@ -1591,6 +1591,9 @@ describe("HierarchicalSidebar", () => {
     fireEvent.contextMenu(projectButton);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Repository Settings" }));
 
+    expect(
+      screen.getByRole("status", { name: "Loading repository settings…" }),
+    ).toBeTruthy();
     await waitFor(() => {
       expect(screen.queryByLabelText("Name") || screen.queryByTestId("settings-layout")).toBeTruthy();
     });

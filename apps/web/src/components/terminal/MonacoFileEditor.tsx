@@ -4,10 +4,11 @@ import Editor, {
   type OnChange,
   type OnMount,
 } from "@monaco-editor/react";
-import { Loader2 } from "lucide-react";
+import { AlertCircle, Loader2 } from "lucide-react";
 import { useConfigStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { ensureMonacoConfigured, isMonacoConfigured } from "@/lib/monaco-loader";
+import { Button } from "@/components/ui/button";
 
 interface MonacoFileEditorProps {
   language: string;
@@ -62,6 +63,8 @@ export function MonacoFileEditor({
     DEFAULT_TERMINAL_APPEARANCE;
   const onSaveRef = useRef(onSave);
   const [monacoReady, setMonacoReady] = useState(isMonacoConfigured);
+  const [monacoFailed, setMonacoFailed] = useState(false);
+  const [monacoAttempt, setMonacoAttempt] = useState(0);
 
   useEffect(() => {
     onSaveRef.current = onSave;
@@ -70,13 +73,19 @@ export function MonacoFileEditor({
   useEffect(() => {
     if (monacoReady) return;
     let cancelled = false;
-    void ensureMonacoConfigured().then(() => {
-      if (!cancelled) setMonacoReady(true);
-    });
+    setMonacoFailed(false);
+    void ensureMonacoConfigured().then(
+      () => {
+        if (!cancelled) setMonacoReady(true);
+      },
+      () => {
+        if (!cancelled) setMonacoFailed(true);
+      },
+    );
     return () => {
       cancelled = true;
     };
-  }, [monacoReady]);
+  }, [monacoAttempt, monacoReady]);
 
   const handleEditorWillMount: BeforeMount = useCallback(
     disableMonacoFileDiagnostics,
@@ -96,6 +105,26 @@ export function MonacoFileEditor({
       <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
     </div>
   );
+
+  if (monacoFailed) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+        <AlertCircle className="h-7 w-7 text-red-400" />
+        <p className="text-sm text-red-400">Failed to load editor</p>
+        <p className="max-w-md text-xs text-muted-foreground">
+          The editor resources could not be loaded.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setMonacoAttempt((attempt) => attempt + 1)}
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  }
 
   if (!monacoReady) return loading;
 

@@ -601,6 +601,40 @@ describe("App background processing mounts", () => {
     expect(mockLoopedReviewSupervisorRender).toHaveBeenCalled();
   });
 
+  test("mounts the looped-review supervisor on the first workflow and removes it with the last", async () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+
+    render(<App />);
+
+    expect(screen.queryByTestId("looped-review-supervisor")).toBeNull();
+    expect(mockLoopedReviewSupervisorRender).not.toHaveBeenCalled();
+
+    let workflowId = "";
+    act(() => {
+      workflowId = useLoopedReviewStore.getState().createWorkflow({
+        environmentId: "env-looped",
+        projectId: "project-looped",
+        agent: "codex",
+        model: "gpt-5.4",
+        targetBranch: "main",
+      });
+    });
+
+    expect(await screen.findByTestId("looped-review-supervisor")).toBeTruthy();
+
+    act(() => {
+      useLoopedReviewStore.getState().removeWorkflow(workflowId);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("looped-review-supervisor")).toBeNull();
+    });
+  });
+
   test("starts and cleans up the authoritative resource synchronization listeners", async () => {
     resetStores({
       environments: [],

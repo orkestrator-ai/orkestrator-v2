@@ -1,4 +1,10 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
@@ -16,6 +22,7 @@ import {
 } from "@/lib/file-draft-persistence";
 import { DraftRevisionConflictError } from "@/lib/draft-conflict";
 import type { GitFileStatus } from "@/types/paneLayout";
+import { LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 
 const LazyMarkdownEditorTab = lazy(async () => ({
   default: (await import("@/components/markdown/MarkdownEditorTab")).MarkdownEditorTab,
@@ -436,7 +443,9 @@ export function FileViewerTab({
   // Image files can't be diffed in Monaco, so they fall through to the image preview
   if (viewerKind === "diff" && gitStatus && baseBranch) {
     return (
-      <Suspense fallback={renderEditorFallback("Loading diff viewer...")}>
+      <LazyLoadBoundary
+        loadingFallback={renderEditorFallback("Loading diff viewer...")}
+      >
         <LazyDiffViewerTab
           filePath={filePath}
           containerId={containerId}
@@ -448,7 +457,7 @@ export function FileViewerTab({
           language={language}
           onSwitchToFileView={() => setShowDiff(false)}
         />
-      </Suspense>
+      </LazyLoadBoundary>
     );
   }
 
@@ -489,7 +498,9 @@ export function FileViewerTab({
 
   if (isMarkdown && content !== null) {
     return (
-      <Suspense fallback={renderEditorFallback("Loading Markdown editor...")}>
+      <LazyLoadBoundary
+        loadingFallback={renderEditorFallback("Loading Markdown editor...")}
+      >
         <LazyMarkdownEditorTab
           tabId={tabId}
           filePath={filePath}
@@ -499,7 +510,7 @@ export function FileViewerTab({
           isSaving={isSaving}
           onSave={saveFile}
         />
-      </Suspense>
+      </LazyLoadBoundary>
     );
   }
 
@@ -540,14 +551,16 @@ export function FileViewerTab({
       {/* Monaco Editor for text files */}
       {!isImage && (
         <div className="min-h-0 flex-1">
-          <Suspense fallback={renderEditorFallback("Loading editor...")}>
+          <LazyLoadBoundary
+            loadingFallback={renderEditorFallback("Loading editor...")}
+          >
             <LazyMonacoFileEditor
               language={detectedLanguage}
               value={dirtyContent ?? content ?? ""}
               onChange={(nextContent) => setDirtyContent(tabId, nextContent)}
               onSave={saveFile}
             />
-          </Suspense>
+          </LazyLoadBoundary>
         </div>
       )}
     </div>

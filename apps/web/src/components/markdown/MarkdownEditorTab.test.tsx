@@ -84,6 +84,9 @@ describe("MarkdownEditorTab", () => {
     expect(useFileDirtyStore.getState().isDirty(TAB_ID)).toBe(false);
     expect(rawTab.getAttribute("data-state")).toBe("active");
     expect(
+      screen.getByRole("status", { name: "Loading raw editor…" }),
+    ).toBeTruthy();
+    expect(
       (await screen.findByRole("textbox", {
         name: "Raw Markdown source",
       }) as HTMLTextAreaElement).value,

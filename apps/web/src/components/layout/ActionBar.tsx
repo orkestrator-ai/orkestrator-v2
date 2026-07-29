@@ -4,7 +4,6 @@ import {
   lazy,
   useContext,
   useState,
-  Suspense,
   useEffect,
   useCallback,
   useRef,
@@ -89,6 +88,11 @@ import {
   buildReviewModelCatalog,
   resolveDefaultReviewTabType,
 } from "@/lib/review-launch-options";
+import type { Environment, Project } from "@/types";
+import {
+  LazyDialogLoadingFallback,
+  LazyLoadBoundary,
+} from "@/components/LazyLoadBoundary";
 
 const LazyRepositorySettings = lazy(async () => ({
   default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
@@ -222,6 +226,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     (state) => state.setProjectBoardNotesOpen,
   );
   const updateEnvironment = useEnvironmentStore((state) => state.updateEnvironment);
+  const getEnvironmentById = useEnvironmentStore((state) => state.getEnvironmentById);
   const selectedEnvironment = useEnvironmentStore((state) =>
     selectedEnvironmentId
       ? state.environments.find((environment) => environment.id === selectedEnvironmentId)
@@ -245,9 +250,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const toggleFilesPanel = useFilesPanelStore((state) => state.togglePanel);
   const changes = useFilesPanelStore((state) => state.changes);
 
-  const [repoSettingsOpen, setRepoSettingsOpen] = useState(false);
+  const [repoSettingsTarget, setRepoSettingsTarget] = useState<Project | null>(null);
   const [globalSettingsOpen, setGlobalSettingsOpen] = useState(false);
-  const [envSettingsOpen, setEnvSettingsOpen] = useState(false);
+  const [envSettingsTarget, setEnvSettingsTarget] = useState<Environment | null>(null);
   const [dockerStatsOpen, setDockerStatsOpen] = useState(false);
   const [isOpeningEditor, setIsOpeningEditor] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
@@ -279,6 +284,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   const selectedProject = selectedProjectId
     ? getProjectById(selectedProjectId)
+    : null;
+  const repoSettingsProject = repoSettingsTarget
+    ? getProjectById(repoSettingsTarget.id) ?? repoSettingsTarget
+    : null;
+  const envSettingsEnvironment = envSettingsTarget
+    ? getEnvironmentById(envSettingsTarget.id) ?? envSettingsTarget
     : null;
   const isProjectBoardView = !!selectedProject && !selectedEnvironment;
   const isCleanupTargetDeleting = Boolean(
@@ -1051,7 +1062,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  onClick={() => setRepoSettingsOpen(true)}
+                  onClick={() => setRepoSettingsTarget(selectedProject ?? null)}
                   aria-label="Repository settings"
                   disabled={!selectedProject}
                 >
@@ -1067,7 +1078,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  onClick={() => setEnvSettingsOpen(true)}
+                  onClick={() => setEnvSettingsTarget(selectedEnvironment ?? null)}
                   aria-label="Environment settings"
                   disabled={!selectedEnvironment}
                 >
@@ -1874,36 +1885,55 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
       {/* Settings Dialogs */}
       {globalSettingsOpen && (
-        <Suspense fallback={null}>
+        <LazyLoadBoundary
+          loadingFallback={
+            <LazyDialogLoadingFallback label="Loading global settings…" />
+          }
+        >
           <LazySettingsPage
             open={globalSettingsOpen}
             onOpenChange={setGlobalSettingsOpen}
           />
-        </Suspense>
+        </LazyLoadBoundary>
       )}
       <DockerStatsDialog open={dockerStatsOpen} onOpenChange={setDockerStatsOpen} />
 
-      {selectedProject && repoSettingsOpen && (
-        <Suspense fallback={null}>
+      {repoSettingsProject && (
+        <LazyLoadBoundary
+          loadingFallback={
+            <LazyDialogLoadingFallback label="Loading repository settings…" />
+          }
+        >
           <LazyRepositorySettings
-            project={selectedProject}
-            open={repoSettingsOpen}
-            onOpenChange={setRepoSettingsOpen}
+            project={repoSettingsProject}
+            open
+            onOpenChange={(open) => {
+              if (!open) setRepoSettingsTarget(null);
+            }}
             onUpdateProject={updateProject}
           />
-        </Suspense>
+        </LazyLoadBoundary>
       )}
 
-      {selectedEnvironment && envSettingsOpen && (
-        <Suspense fallback={null}>
+      {envSettingsEnvironment && (
+        <LazyLoadBoundary
+          loadingFallback={
+            <LazyDialogLoadingFallback label="Loading environment settings…" />
+          }
+        >
           <LazyEnvironmentSettingsDialog
-            open={envSettingsOpen}
-            onOpenChange={setEnvSettingsOpen}
-            environment={selectedEnvironment}
-            onUpdate={(updated) => updateEnvironment(updated.id, updated)}
+            open
+            onOpenChange={(open) => {
+              if (!open) setEnvSettingsTarget(null);
+            }}
+            environment={envSettingsEnvironment}
+            onUpdate={(updated) => {
+              setEnvSettingsTarget(updated);
+              updateEnvironment(updated.id, updated);
+            }}
             onRestart={backend.recreateEnvironment}
           />
-        </Suspense>
+        </LazyLoadBoundary>
       )}
 
       {/* Editor Error Dialog */}

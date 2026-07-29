@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import { lazy, useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   DndContext,
   closestCenter,
@@ -50,6 +50,10 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
 import { cn } from "@/lib/utils";
+import {
+  LazyDialogLoadingFallback,
+  LazyLoadBoundary,
+} from "@/components/LazyLoadBoundary";
 
 const NO_ENVIRONMENTS: Environment[] = [];
 const LazyRepositorySettings = lazy(async () => ({
@@ -1062,14 +1066,18 @@ export function HierarchicalSidebar() {
 
       {/* Repository Settings Dialog */}
       {settingsProject && showSettingsDialog && (
-        <Suspense fallback={null}>
+        <LazyLoadBoundary
+          loadingFallback={
+            <LazyDialogLoadingFallback label="Loading repository settings…" />
+          }
+        >
           <LazyRepositorySettings
             project={settingsProject}
             open={showSettingsDialog}
             onOpenChange={setShowSettingsDialog}
             onUpdateProject={handleUpdateProject}
           />
-        </Suspense>
+        </LazyLoadBoundary>
       )}
     </div>
   );

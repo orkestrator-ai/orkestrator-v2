@@ -841,6 +841,9 @@ describe("EnvironmentItem menu actions and selection", () => {
     expect(settingsItem).not.toBeUndefined();
 
     fireEvent.click(settingsItem!);
+    expect(
+      screen.getByRole("status", { name: "Loading environment settings…" }),
+    ).toBeTruthy();
     await waitFor(() => {
       expect(container.querySelector('[data-testid="settings-dialog"]')).not.toBeNull();
     });

@@ -10,6 +10,7 @@ import * as realOpenCodeChatTab from "@/components/opencode/OpenCodeChatTab";
 import * as realBrowserTab from "@/components/browser/BrowserTab";
 import * as realLoopedReviewTab from "@/components/review/LoopedReviewTab";
 import * as realFileViewerTab from "@/components/terminal/FileViewerTab";
+import * as realBuildChatTab from "@/components/build-pipeline/BuildChatTab";
 
 const realClaudeChatTabSnapshot = { ...realClaudeChatTab };
 const realClaudeTmuxChatTabSnapshot = { ...realClaudeTmuxChatTab };
@@ -18,6 +19,7 @@ const realOpenCodeChatTabSnapshot = { ...realOpenCodeChatTab };
 const realBrowserTabSnapshot = { ...realBrowserTab };
 const realLoopedReviewTabSnapshot = { ...realLoopedReviewTab };
 const realFileViewerTabSnapshot = { ...realFileViewerTab };
+const realBuildChatTabSnapshot = { ...realBuildChatTab };
 
 mock.module("@dnd-kit/core", () => ({
   DndContext: ({ children }: { children: React.ReactNode }) => children,
@@ -274,6 +276,23 @@ mock.module("@/components/terminal/FileViewerTab", () => ({
   ),
 }));
 
+mock.module("@/components/build-pipeline/BuildChatTab", () => ({
+  BuildChatTab: ({
+    data,
+    isActive,
+  }: {
+    data: { pipelineId: string; environmentId: string };
+    isActive: boolean;
+  }) => (
+    <div
+      data-testid="build-chat-tab"
+      data-pipeline-id={data.pipelineId}
+      data-environment-id={data.environmentId}
+      data-active={String(isActive)}
+    />
+  ),
+}));
+
 mock.module("@/stores/terminalPortalStore", () => ({
   createTerminalKey: (environmentId: string, tabId: string) => `${environmentId}::${tabId}`,
   useTerminalPortalStore: <T,>(selector: (state: {
@@ -319,6 +338,10 @@ describe("PaneLeafContainer", () => {
     mock.module(
       "@/components/terminal/FileViewerTab",
       () => realFileViewerTabSnapshot,
+    );
+    mock.module(
+      "@/components/build-pipeline/BuildChatTab",
+      () => realBuildChatTabSnapshot,
     );
   });
 
@@ -654,6 +677,41 @@ describe("PaneLeafContainer", () => {
       dataset: {
         environmentId: "env-hidden",
         workflowId: "workflow-1",
+        active: "true",
+      },
+    });
+  });
+
+  test("shows a visible fallback while loading and renders a build tab", async () => {
+    const pane = {
+      kind: "leaf" as const,
+      id: "pane-build",
+      tabs: [{
+        id: "tab-build",
+        type: "claude-build" as const,
+        buildTabData: {
+          pipelineId: "pipeline-1",
+          environmentId: "env-hidden",
+          taskId: "task-1",
+        },
+      }],
+      activeTabId: "tab-build",
+    };
+
+    render(
+      <PaneLeafContainer
+        pane={pane}
+        environmentId="env-hidden"
+        containerId="container-hidden"
+        isActive
+      />,
+    );
+
+    expect(screen.getByText("Loading tab...")).toBeTruthy();
+    expect(await screen.findByTestId("build-chat-tab")).toMatchObject({
+      dataset: {
+        pipelineId: "pipeline-1",
+        environmentId: "env-hidden",
         active: "true",
       },
     });

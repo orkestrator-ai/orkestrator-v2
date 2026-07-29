@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import http, {
   createServer,
   type IncomingHttpHeaders,
@@ -114,6 +114,9 @@ const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const REVALIDATED_DOCUMENT_CACHE_CONTROL = "no-cache";
 const STATIC_FALLBACK_BROTLI_QUALITY = 4;
 const STATIC_FALLBACK_GZIP_LEVEL = 6;
+export const MAX_STATIC_FALLBACK_SOURCE_BYTES = 8 * 1024 * 1024;
+const MAX_STATIC_FALLBACK_OUTPUT_BYTES = MAX_STATIC_FALLBACK_SOURCE_BYTES + 64 * 1024;
+export const MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS = 4;
 /**
  * Events whose payload is a raw byte stream rather than authoritative state.
  *
@@ -178,6 +181,10 @@ class RequestBodyTooLargeError extends Error {}
 
 type StaticCompressionEncoding = "gzip" | "br";
 type StaticContentEncoding = "identity" | StaticCompressionEncoding;
+type StaticCompressionResult = {
+  encoding: StaticCompressionEncoding;
+  buffer: Buffer;
+};
 
 type GatewayRouteMetrics = {
   requests: number;
@@ -966,11 +973,17 @@ function mimeType(filePath: string): string {
     case ".html":
       return "text/html; charset=utf-8";
     case ".js":
+    case ".mjs":
       return "text/javascript; charset=utf-8";
     case ".css":
       return "text/css; charset=utf-8";
     case ".json":
+    case ".map":
       return "application/json; charset=utf-8";
+    case ".txt":
+      return "text/plain; charset=utf-8";
+    case ".xml":
+      return "application/xml; charset=utf-8";
     case ".svg":
       return "image/svg+xml";
     case ".png":
@@ -1029,6 +1042,7 @@ function isCompressibleStaticContentType(contentType: string): boolean {
   return (
     normalized === "application/javascript"
     || normalized === "application/json"
+    || normalized === "application/xml"
     || normalized === "image/svg+xml"
     || normalized === "text/css"
     || normalized === "text/html"
@@ -1052,8 +1066,10 @@ function etagForStaticVariant(
   sourceMtimeMs: number,
   sourceSize: number,
   encoding: StaticContentEncoding,
+  variantMtimeMs = sourceMtimeMs,
+  variantSize = sourceSize,
 ): string {
-  return `"${Math.floor(sourceMtimeMs).toString(16)}-${sourceSize.toString(16)}-${encoding}"`;
+  return `W/"${Math.floor(sourceMtimeMs).toString(16)}-${sourceSize.toString(16)}-${encoding}-${Math.floor(variantMtimeMs).toString(16)}-${variantSize.toString(16)}"`;
 }
 
 function staticEncodingQuality(
@@ -1071,8 +1087,10 @@ function staticEncodingQuality(
     for (const parameter of parameterEntries) {
       const [name, rawValue] = parameter.split("=", 2);
       if (name?.trim() !== "q") continue;
-      const parsed = Number.parseFloat(rawValue ?? "");
-      if (Number.isFinite(parsed)) weight = Math.max(0, Math.min(1, parsed));
+      const normalizedValue = rawValue?.trim() ?? "";
+      weight = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(normalizedValue)
+        ? Number.parseFloat(normalizedValue)
+        : 0;
     }
     if (token === encoding) {
       specific = specific === null ? weight : Math.max(specific, weight);
@@ -1090,11 +1108,23 @@ function staticEncodingQuality(
 function preferredStaticCompressionEncodings(
   acceptEncoding: string | null,
 ): StaticCompressionEncoding[] {
+  const explicitlyPreferredIdentity = acceptEncoding
+    && acceptEncoding
+      .split(",")
+      .some((entry) => entry.trim().toLowerCase().split(";", 1)[0] === "identity")
+    ? staticEncodingQuality(acceptEncoding, "identity")
+    : null;
   const encodings = [
     { encoding: "br", quality: staticEncodingQuality(acceptEncoding, "br") },
     { encoding: "gzip", quality: staticEncodingQuality(acceptEncoding, "gzip") },
   ] satisfies Array<{ encoding: StaticCompressionEncoding; quality: number }>;
-  const acceptedEncodings = encodings.filter((candidate) => candidate.quality > 0);
+  const acceptedEncodings = encodings.filter((candidate) => (
+    candidate.quality > 0
+    && (
+      explicitlyPreferredIdentity === null
+      || candidate.quality >= explicitlyPreferredIdentity
+    )
+  ));
   acceptedEncodings.sort((left, right) => {
     if (right.quality !== left.quality) return right.quality - left.quality;
     return left.encoding === "br" ? -1 : 1;
@@ -1109,13 +1139,30 @@ function compressedStaticSiblingPath(
   return `${filePath}.${encoding === "br" ? "br" : "gz"}`;
 }
 
-function ifNoneMatchMatches(header: string | string[] | undefined, etag: string): boolean {
+function ifNoneMatchMatches(
+  header: string | string[] | undefined,
+  etag: string | undefined,
+): boolean {
   const value = Array.isArray(header) ? header.join(",") : header;
   if (!value) return false;
-  return value
+  const candidates = value
     .split(",")
-    .map((entry) => entry.trim())
-    .some((candidate) => candidate === "*" || candidate === etag);
+    .map((entry) => entry.trim());
+  if (candidates.includes("*")) return true;
+  if (!etag) return false;
+  const currentOpaqueTag = weakEntityTagValue(etag);
+  if (currentOpaqueTag === null) return false;
+  return candidates.some(
+    (candidate) => weakEntityTagValue(candidate) === currentOpaqueTag,
+  );
+}
+
+function weakEntityTagValue(value: string): string | null {
+  const candidate = value.startsWith("W/") ? value.slice(2) : value;
+  if (candidate.length < 2 || candidate[0] !== "\"" || candidate.at(-1) !== "\"") {
+    return null;
+  }
+  return candidate;
 }
 
 function ifModifiedSinceMatches(header: string | string[] | undefined, mtimeMs: number): boolean {
@@ -1132,12 +1179,135 @@ async function compressStaticBuffer(
 ): Promise<Buffer> {
   if (encoding === "br") {
     return brotliCompressAsync(source, {
+      maxOutputLength: MAX_STATIC_FALLBACK_OUTPUT_BYTES,
       params: {
         [zlibConstants.BROTLI_PARAM_QUALITY]: STATIC_FALLBACK_BROTLI_QUALITY,
       },
     });
   }
-  return gzipAsync(source, { level: STATIC_FALLBACK_GZIP_LEVEL });
+  return gzipAsync(source, {
+    level: STATIC_FALLBACK_GZIP_LEVEL,
+    maxOutputLength: MAX_STATIC_FALLBACK_OUTPUT_BYTES,
+  });
+}
+
+const staticFallbackCompressions = new Map<string, Promise<StaticCompressionResult | null>>();
+
+export async function readStaticFileWithinLimit(
+  filePath: string,
+  expectedMtimeMs: number,
+  expectedSize: number,
+): Promise<Buffer | null> {
+  if (expectedSize < 0 || expectedSize > MAX_STATIC_FALLBACK_SOURCE_BYTES) {
+    return null;
+  }
+
+  try {
+    const handle = await open(filePath, "r");
+    try {
+      const current = await handle.stat();
+      if (
+        !current.isFile()
+        || current.size !== expectedSize
+        || current.mtimeMs !== expectedMtimeMs
+      ) {
+        return null;
+      }
+
+      const source = Buffer.allocUnsafe(expectedSize);
+      let offset = 0;
+      while (offset < source.byteLength) {
+        const { bytesRead } = await handle.read(
+          source,
+          offset,
+          source.byteLength - offset,
+          offset,
+        );
+        if (bytesRead === 0) return null;
+        offset += bytesRead;
+      }
+
+      // Detect growth after fstat without ever allocating or reading more than
+      // the configured source limit plus one probe byte.
+      const probe = Buffer.allocUnsafe(1);
+      const { bytesRead: trailingBytes } = await handle.read(
+        probe,
+        0,
+        1,
+        expectedSize,
+      );
+      return trailingBytes === 0 ? source : null;
+    } finally {
+      await handle.close().catch(() => {});
+    }
+  } catch {
+    // Static compression is optional. Races with asset replacement or a read
+    // failure fall back to identity rather than exposing filesystem details.
+    return null;
+  }
+}
+
+async function compressStaticFileWithinLimits(
+  filePath: string,
+  sourceMtimeMs: number,
+  sourceSize: number,
+  encodings: StaticCompressionEncoding[],
+  requireEncodedRepresentation: boolean,
+): Promise<StaticCompressionResult | null> {
+  if (
+    sourceSize > MAX_STATIC_FALLBACK_SOURCE_BYTES
+    || sourceSize < 0
+    || encodings.length === 0
+  ) {
+    return null;
+  }
+
+  const key = [
+    filePath,
+    sourceMtimeMs,
+    sourceSize,
+    encodings.join(","),
+    requireEncodedRepresentation ? "required" : "optional",
+  ].join("\0");
+  const existing = staticFallbackCompressions.get(key);
+  if (existing) return existing;
+  if (!canStartStaticFallbackCompression(staticFallbackCompressions.size)) {
+    return null;
+  }
+
+  const compression = (async (): Promise<StaticCompressionResult | null> => {
+    const source = await readStaticFileWithinLimit(filePath, sourceMtimeMs, sourceSize);
+    if (!source) return null;
+    for (const encoding of encodings) {
+      try {
+        const compressed = await compressStaticBuffer(source, encoding);
+        if (
+          (!requireEncodedRepresentation && compressed.byteLength >= source.byteLength)
+          || compressed.byteLength > MAX_STATIC_FALLBACK_OUTPUT_BYTES
+        ) {
+          continue;
+        }
+        return { encoding, buffer: compressed };
+      } catch {
+        // Compression is an optimization. A codec failure must not prevent the
+        // identity representation from being served when the client accepts it.
+      }
+    }
+    return null;
+  })();
+  staticFallbackCompressions.set(key, compression);
+  try {
+    return await compression;
+  } finally {
+    if (staticFallbackCompressions.get(key) === compression) {
+      staticFallbackCompressions.delete(key);
+    }
+  }
+}
+
+export function canStartStaticFallbackCompression(activeCount: number): boolean {
+  return activeCount >= 0
+    && activeCount < MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS;
 }
 
 function jsonResponse(
@@ -2813,6 +2983,12 @@ export class OrkestratorGateway {
     response: ServerResponse,
     allowCompression: boolean,
   ): Promise<void> {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      response.writeHead(405, { allow: "GET, HEAD" });
+      response.end();
+      return;
+    }
+
     if (this.rendererDevServerUrl) {
       const target = new URL(this.rendererDevServerUrl);
       target.pathname = url.pathname;
@@ -2851,13 +3027,21 @@ export class OrkestratorGateway {
     const cacheControl = isImmutableHashedAsset(url.pathname, filePath)
       ? IMMUTABLE_ASSET_CACHE_CONTROL
       : REVALIDATED_DOCUMENT_CACHE_CONTROL;
+    const acceptEncoding = headerValueToString(request.headers["accept-encoding"]);
     const preferredEncodings = allowCompression && isCompressibleStaticContentType(contentType)
-      ? preferredStaticCompressionEncodings(headerValueToString(request.headers["accept-encoding"]))
+      ? preferredStaticCompressionEncodings(acceptEncoding)
       : [];
+    const identityQuality = allowCompression
+      ? staticEncodingQuality(acceptEncoding, "identity")
+      : 1;
     let selectedEncoding: StaticContentEncoding = "identity";
     let bodyPath = filePath;
     let bodyLength = fileStat.size;
     let bodyBuffer: Buffer | null = null;
+    let omitContentLength = false;
+    let omitValidator = false;
+    let variantMtimeMs = fileStat.mtimeMs;
+    let variantSize = fileStat.size;
 
     for (const encoding of preferredEncodings) {
       const siblingPath = compressedStaticSiblingPath(filePath, encoding);
@@ -2870,36 +3054,76 @@ export class OrkestratorGateway {
         selectedEncoding = encoding;
         bodyPath = siblingPath;
         bodyLength = siblingStat.size;
+        variantMtimeMs = siblingStat.mtimeMs;
+        variantSize = siblingStat.size;
         break;
       }
     }
 
-    if (selectedEncoding === "identity") {
-      let sourceBuffer: Buffer | null = null;
-      for (const encoding of preferredEncodings) {
-        sourceBuffer ??= await readFile(filePath);
-        const compressed = await compressStaticBuffer(sourceBuffer, encoding);
-        if (compressed.byteLength >= sourceBuffer.byteLength) continue;
-        selectedEncoding = encoding;
-        bodyLength = compressed.byteLength;
-        bodyBuffer = compressed;
-        break;
+    if (selectedEncoding === "identity" && request.method !== "HEAD") {
+      const compressed = await compressStaticFileWithinLimits(
+        filePath,
+        fileStat.mtimeMs,
+        fileStat.size,
+        preferredEncodings,
+        identityQuality <= 0,
+      );
+      if (compressed) {
+        selectedEncoding = compressed.encoding;
+        bodyLength = compressed.buffer.byteLength;
+        bodyBuffer = compressed.buffer;
       }
+    }
+
+    if (
+      selectedEncoding === "identity"
+      && request.method === "HEAD"
+      && preferredEncodings[0]
+      && fileStat.size <= MAX_STATIC_FALLBACK_SOURCE_BYTES
+    ) {
+      // Whether optional compression is worthwhile is known only after
+      // generating the GET payload. HEAD must not pay that CPU/memory cost, so
+      // omit the representation-dependent fields HTTP permits it to omit. If
+      // identity is forbidden, GET necessarily uses the bounded coded form and
+      // its encoding can be selected without generating the body.
+      if (identityQuality <= 0) selectedEncoding = preferredEncodings[0];
+      else omitValidator = true;
+      omitContentLength = true;
+    }
+
+    if (selectedEncoding === "identity" && identityQuality <= 0) {
+      response.writeHead(406, {
+        "cache-control": "no-store",
+        vary: "Accept-Encoding",
+      });
+      response.end();
+      return;
     }
 
     const headers: OutgoingHttpHeaders = {
       "cache-control": cacheControl,
       "content-type": contentType,
-      "content-length": bodyLength,
-      etag: etagForStaticVariant(fileStat.mtimeMs, fileStat.size, selectedEncoding),
       "last-modified": lastModified,
     };
+    if (!omitValidator) {
+      headers.etag = etagForStaticVariant(
+        fileStat.mtimeMs,
+        fileStat.size,
+        selectedEncoding,
+        variantMtimeMs,
+        variantSize,
+      );
+    }
+    if (!omitContentLength) headers["content-length"] = bodyLength;
     appendHeadersVary(headers, "Accept-Encoding");
     if (selectedEncoding !== "identity") {
       headers["content-encoding"] = selectedEncoding;
     }
 
-    if (ifNoneMatchMatches(request.headers["if-none-match"], String(headers.etag))) {
+    if (ifNoneMatchMatches(
+      request.headers["if-none-match"],
+      headers.etag === undefined ? undefined : String(headers.etag),
+    )) {
       response.writeHead(304, headers);
       response.end();
       return;
@@ -2915,6 +3139,7 @@ export class OrkestratorGateway {
 
     response.writeHead(200, headers);
     if (request.method === "HEAD") {
+      if (omitContentLength) response.flushHeaders();
       response.end();
       return;
     }

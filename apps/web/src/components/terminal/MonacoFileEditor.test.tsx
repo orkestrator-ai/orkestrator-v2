@@ -9,8 +9,10 @@ import {
 } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as realMonacoReact from "@monaco-editor/react";
+import * as realMonacoLoader from "@/lib/monaco-loader";
 
 const realMonacoReactSnapshot = { ...realMonacoReact };
+const realMonacoLoaderSnapshot = { ...realMonacoLoader };
 
 interface MockEditorProps {
   height?: string;
@@ -25,6 +27,8 @@ interface MockEditorProps {
 }
 
 let renderedEditorProps: MockEditorProps | null = null;
+let monacoConfigured = true;
+const ensureMonacoConfiguredMock = mock(async () => {});
 
 mock.module("@monaco-editor/react", () => ({
   ...realMonacoReactSnapshot,
@@ -40,6 +44,12 @@ mock.module("@monaco-editor/react", () => ({
   },
 }));
 
+mock.module("@/lib/monaco-loader", () => ({
+  ...realMonacoLoaderSnapshot,
+  isMonacoConfigured: () => monacoConfigured,
+  ensureMonacoConfigured: ensureMonacoConfiguredMock,
+}));
+
 const {
   MonacoFileEditor,
   disableMonacoFileDiagnostics,
@@ -49,6 +59,9 @@ const {
 
 beforeEach(() => {
   renderedEditorProps = null;
+  monacoConfigured = true;
+  ensureMonacoConfiguredMock.mockReset();
+  ensureMonacoConfiguredMock.mockImplementation(async () => {});
 });
 
 afterEach(() => {
@@ -57,6 +70,7 @@ afterEach(() => {
 
 afterAll(() => {
   mock.module("@monaco-editor/react", () => realMonacoReactSnapshot);
+  mock.module("@/lib/monaco-loader", () => realMonacoLoaderSnapshot);
 });
 
 describe("MonacoFileEditor integration helpers", () => {
@@ -195,5 +209,75 @@ describe("MonacoFileEditor component", () => {
     command?.();
     expect(firstSave).toHaveBeenCalledTimes(1);
     expect(latestSave).toHaveBeenCalledTimes(1);
+  });
+
+  test("waits for browser Monaco configuration before mounting the editor", async () => {
+    monacoConfigured = false;
+    let resolveConfiguration!: () => void;
+    ensureMonacoConfiguredMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      resolveConfiguration = resolve;
+    }));
+
+    render(
+      <MonacoFileEditor
+        language="typescript"
+        value="const value = 1"
+        onChange={() => {}}
+        onSave={() => {}}
+      />,
+    );
+
+    expect(screen.queryByRole("textbox", { name: "Mock Monaco editor" })).toBeNull();
+    resolveConfiguration();
+    expect(
+      await screen.findByRole("textbox", { name: "Mock Monaco editor" }),
+    ).toBeTruthy();
+  });
+
+  test("shows a recoverable Monaco error and retries configuration", async () => {
+    monacoConfigured = false;
+    ensureMonacoConfiguredMock
+      .mockRejectedValueOnce(new Error("worker chunk unavailable"))
+      .mockResolvedValueOnce(undefined);
+
+    render(
+      <MonacoFileEditor
+        language="typescript"
+        value=""
+        onChange={() => {}}
+        onSave={() => {}}
+      />,
+    );
+
+    expect(await screen.findByText("Failed to load editor")).toBeTruthy();
+    expect(screen.queryByText("worker chunk unavailable")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(
+      await screen.findByRole("textbox", { name: "Mock Monaco editor" }),
+    ).toBeTruthy();
+    expect(ensureMonacoConfiguredMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("ignores a configuration completion after unmount", async () => {
+    monacoConfigured = false;
+    let resolveConfiguration!: () => void;
+    ensureMonacoConfiguredMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      resolveConfiguration = resolve;
+    }));
+    const view = render(
+      <MonacoFileEditor
+        language="typescript"
+        value=""
+        onChange={() => {}}
+        onSave={() => {}}
+      />,
+    );
+
+    view.unmount();
+    resolveConfiguration();
+    await Promise.resolve();
+
+    expect(renderedEditorProps).toBeNull();
   });
 });

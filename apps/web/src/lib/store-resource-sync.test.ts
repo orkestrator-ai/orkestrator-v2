@@ -653,12 +653,23 @@ describe("pane-layout binding", () => {
     useEnvironmentStore.setState({
       environments: [containerEnvironment("container-b")],
     });
-    usePaneLayoutStore.getState().initialize("container-b", "env-1");
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "container-b-tab", type: "plain" },
-      "env-1",
-    );
+    // initialize() deliberately preserves tabs that may have been inserted
+    // before a container mounts. Model an actual container replacement here
+    // by installing the new authoritative renderer state, rather than relying
+    // on initialize() to discard container A's tabs.
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-1", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [{ id: "container-b-tab", type: "plain" }],
+          activeTabId: "container-b-tab",
+        },
+        activePaneId: "default",
+        containerId: "container-b",
+        backendRevision: 0,
+      }),
+    }));
     resolveLayout({
       version: 1,
       environmentId: "env-1",

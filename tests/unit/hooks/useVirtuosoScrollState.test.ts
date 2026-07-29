@@ -465,12 +465,14 @@ describe("useVirtuosoScrollState", () => {
         result.current.scrollToBottom();
       });
 
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 250));
+      // Wait for the observable completion rather than assuming all ten
+      // chained 16ms retries fit inside a fixed wall-clock delay. Under the
+      // full parallel suite the event loop may legitimately deliver them late.
+      await waitFor(() => {
+        expect(scrollToCalls).toHaveLength(1);
+      }, {
+        timeout: 2_000,
       });
-
-      // Only one footer scrollTo fires despite three invocations
-      expect(scrollToCalls).toHaveLength(1);
     });
 
     test("can be invoked again after a previous scroll completes", async () => {

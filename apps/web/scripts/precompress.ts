@@ -8,7 +8,12 @@ const gzipAsync = promisify(gzip);
 
 const distRoot = path.resolve(import.meta.dir, "../dist");
 
-function contentTypeFor(filePath: string): string {
+export interface PrecompressResult {
+  compressedCount: number;
+  processedFileCount: number;
+}
+
+export function contentTypeFor(filePath: string): string {
   switch (path.extname(filePath).toLowerCase()) {
     case ".css":
       return "text/css";
@@ -32,7 +37,7 @@ function contentTypeFor(filePath: string): string {
   }
 }
 
-function shouldPrecompress(filePath: string): boolean {
+export function shouldPrecompress(filePath: string): boolean {
   const contentType = contentTypeFor(filePath);
   if (contentType === "application/octet-stream") return false;
   if (contentType.startsWith("font/")) return false;
@@ -40,7 +45,7 @@ function shouldPrecompress(filePath: string): boolean {
   return !filePath.endsWith(".br") && !filePath.endsWith(".gz");
 }
 
-async function* walk(root: string): AsyncGenerator<string> {
+export async function* walk(root: string): AsyncGenerator<string> {
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const entryPath = path.join(root, entry.name);
     if (entry.isDirectory()) {
@@ -65,11 +70,13 @@ async function removeVariant(sourcePath: string, extension: ".br" | ".gz"): Prom
   await rm(`${sourcePath}${extension}`, { force: true });
 }
 
-async function main(): Promise<void> {
-  await stat(distRoot);
+export async function precompressDirectory(root: string): Promise<PrecompressResult> {
+  await stat(root);
   let compressedCount = 0;
-  for await (const filePath of walk(distRoot)) {
+  let processedFileCount = 0;
+  for await (const filePath of walk(root)) {
     if (!shouldPrecompress(filePath)) continue;
+    processedFileCount += 1;
     const source = await readFile(filePath);
 
     const brotli = await brotliCompressAsync(source, {
@@ -93,7 +100,15 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(`[precompress] Wrote ${compressedCount} compressed asset variants in ${distRoot}`);
+  return { compressedCount, processedFileCount };
 }
 
-await main();
+export async function main(root = distRoot): Promise<PrecompressResult> {
+  const result = await precompressDirectory(root);
+  console.log(`[precompress] Wrote ${result.compressedCount} compressed asset variants in ${root}`);
+  return result;
+}
+
+if (import.meta.main) {
+  await main();
+}

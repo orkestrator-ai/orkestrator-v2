@@ -1,4 +1,4 @@
-import { Suspense, lazy, memo, useCallback, useRef, useLayoutEffect, useState } from "react";
+import { lazy, memo, useCallback, useRef, useLayoutEffect, useState } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
 import { usePaneLayoutStore, useEnvironmentStore, useConfigStore } from "@/stores";
@@ -8,6 +8,7 @@ import { createTabbarDroppableId } from "@/types/paneLayout";
 import { cn } from "@/lib/utils";
 import { DraggableTabBar } from "./DraggableTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
+import { LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 
 const LazyFileViewerTab = lazy(async () => ({
   default: (await import("@/components/terminal/FileViewerTab")).FileViewerTab,
@@ -25,7 +26,7 @@ const LazyCodexChatTab = lazy(async () => ({
   default: (await import("@/components/codex")).CodexChatTab,
 }));
 const LazyBuildChatTab = lazy(async () => ({
-  default: (await import("@/components/build-pipeline")).BuildChatTab,
+  default: (await import("@/components/build-pipeline/BuildChatTab")).BuildChatTab,
 }));
 const LazyLoopedReviewTab = lazy(async () => ({
   default: (await import("@/components/review/LoopedReviewTab")).LoopedReviewTab,
@@ -178,9 +179,9 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
           // File viewer tabs
           if (tab.type === "file" && tab.fileData) {
             return (
-              <Suspense
+              <LazyLoadBoundary
                 key={tab.id}
-                fallback={renderTabFallback(isTabActive && isActive)}
+                loadingFallback={renderTabFallback(isTabActive && isActive)}
               >
                 <LazyFileViewerTab
                   tabId={tab.id}
@@ -195,16 +196,16 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   gitStatus={tab.fileData.gitStatus}
                   baseBranch={tab.fileData.isDiff ? comparisonRef : tab.fileData.baseBranch}
                 />
-              </Suspense>
+              </LazyLoadBoundary>
             );
           }
 
           // Backend-local browser preview tabs
           if (tab.type === "browser" && tab.browserData) {
             return (
-              <Suspense
+              <LazyLoadBoundary
                 key={tab.id}
-                fallback={renderTabFallback(isTabActive && isActive)}
+                loadingFallback={renderTabFallback(isTabActive && isActive)}
               >
                 <LazyBrowserTab
                   tabId={tab.id}
@@ -213,7 +214,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isActive={isTabActive && isActive}
                   refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                 />
-              </Suspense>
+              </LazyLoadBoundary>
             );
           }
 
@@ -227,7 +228,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
                 )}
               >
-                <Suspense fallback={renderTabFallback(isTabActive && isActive)}>
+                <LazyLoadBoundary loadingFallback={renderTabFallback(isTabActive && isActive)}>
                   <LazyOpenCodeChatTab
                     tabId={tab.id}
                     data={tab.openCodeNativeData}
@@ -241,7 +242,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     consumedAgentHandoffId={tab.consumedAgentHandoffId}
                     refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                   />
-                </Suspense>
+                </LazyLoadBoundary>
               </div>
             );
           }
@@ -256,7 +257,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
                 )}
               >
-                <Suspense fallback={renderTabFallback(isTabActive && isActive)}>
+                <LazyLoadBoundary loadingFallback={renderTabFallback(isTabActive && isActive)}>
                   <LazyClaudeChatTab
                     tabId={tab.id}
                     data={tab.claudeNativeData}
@@ -270,7 +271,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     consumedAgentHandoffId={tab.consumedAgentHandoffId}
                     refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                   />
-                </Suspense>
+                </LazyLoadBoundary>
               </div>
             );
           }
@@ -285,7 +286,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
                 )}
               >
-                <Suspense fallback={renderTabFallback(isTabActive && isActive)}>
+                <LazyLoadBoundary loadingFallback={renderTabFallback(isTabActive && isActive)}>
                   <LazyClaudeTmuxChatTab
                     tabId={tab.id}
                     data={tab.claudeTmuxData}
@@ -297,7 +298,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     initialReasoningEffort={tab.initialReasoningEffort}
                     refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                   />
-                </Suspense>
+                </LazyLoadBoundary>
               </div>
             );
           }
@@ -312,7 +313,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
                 )}
               >
-                <Suspense fallback={renderTabFallback(isTabActive && isActive)}>
+                <LazyLoadBoundary loadingFallback={renderTabFallback(isTabActive && isActive)}>
                   <LazyCodexChatTab
                     tabId={tab.id}
                     data={tab.codexNativeData}
@@ -326,7 +327,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     consumedAgentHandoffId={tab.consumedAgentHandoffId}
                     refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                   />
-                </Suspense>
+                </LazyLoadBoundary>
               </div>
             );
           }
@@ -341,12 +342,12 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
                 )}
               >
-                <Suspense fallback={renderTabFallback(isTabActive && isActive)}>
+                <LazyLoadBoundary loadingFallback={renderTabFallback(isTabActive && isActive)}>
                   <LazyBuildChatTab
                     data={tab.buildTabData}
                     isActive={isTabActive && isActive}
                   />
-                </Suspense>
+                </LazyLoadBoundary>
               </div>
             );
           }
@@ -360,12 +361,12 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
                 )}
               >
-                <Suspense fallback={renderTabFallback(isTabActive && isActive)}>
+                <LazyLoadBoundary loadingFallback={renderTabFallback(isTabActive && isActive)}>
                   <LazyLoopedReviewTab
                     data={tab.loopedReviewTabData}
                     isActive={isTabActive && isActive}
                   />
-                </Suspense>
+                </LazyLoadBoundary>
               </div>
             );
           }

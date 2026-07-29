@@ -17,10 +17,12 @@ import {
 } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
 import * as realMonacoReact from "@monaco-editor/react";
+import * as realMonacoLoader from "@/lib/monaco-loader";
 import { useConfigStore } from "@/stores";
 
 const realBackendSnapshot = { ...realBackend };
 const realMonacoReactSnapshot = { ...realMonacoReact };
+const realMonacoLoaderSnapshot = { ...realMonacoLoader };
 type MockFileContent = Omit<realBackend.FileContent, "path"> & { path?: string };
 
 const readLocalFileMock = mock(async (_worktreePath: string, _filePath: string) => ({
@@ -62,6 +64,8 @@ interface MockDiffEditorProps {
 }
 
 let renderedDiffEditorProps: MockDiffEditorProps | null = null;
+let monacoConfigured = true;
+const ensureMonacoConfiguredMock = mock(async () => {});
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -85,6 +89,12 @@ mock.module("@monaco-editor/react", () => ({
       />
     );
   },
+}));
+
+mock.module("@/lib/monaco-loader", () => ({
+  ...realMonacoLoaderSnapshot,
+  isMonacoConfigured: () => monacoConfigured,
+  ensureMonacoConfigured: ensureMonacoConfiguredMock,
 }));
 
 const { DiffViewerTab, formatBaseRef } = await import("./DiffViewerTab");
@@ -153,6 +163,9 @@ beforeEach(() => {
   installMatchMedia();
   useConfigStore.setState({ config: originalConfig });
   renderedDiffEditorProps = null;
+  monacoConfigured = true;
+  ensureMonacoConfiguredMock.mockReset();
+  ensureMonacoConfiguredMock.mockImplementation(async () => {});
   readLocalFileMock.mockClear();
   readLocalFileAtBranchMock.mockClear();
   readContainerFileMock.mockClear();
@@ -184,6 +197,7 @@ afterAll(() => {
   useConfigStore.setState({ config: originalConfig });
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@monaco-editor/react", () => realMonacoReactSnapshot);
+  mock.module("@/lib/monaco-loader", () => realMonacoLoaderSnapshot);
 });
 
 describe("DiffViewerTab content loading", () => {
@@ -570,6 +584,57 @@ describe("DiffViewerTab content loading", () => {
 });
 
 describe("DiffViewerTab editor lifecycle and controls", () => {
+  test("waits for Monaco configuration before mounting the diff editor", async () => {
+    monacoConfigured = false;
+    const configuration = deferred<void>();
+    ensureMonacoConfiguredMock.mockImplementationOnce(() => configuration.promise);
+
+    render(<DiffViewerTab {...baseProps} containerId="container-1" />);
+
+    expect(screen.getByText("Loading diff...")).toBeTruthy();
+    await waitFor(() => expect(readFileAtBranchMock).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("diff-editor")).toBeNull();
+
+    await act(async () => {
+      configuration.resolve();
+      await configuration.promise;
+    });
+    expect(await screen.findByTestId("diff-editor")).toBeTruthy();
+  });
+
+  test("reports a Monaco configuration failure and retries", async () => {
+    monacoConfigured = false;
+    ensureMonacoConfiguredMock
+      .mockRejectedValueOnce(new Error("diff worker unavailable"))
+      .mockResolvedValueOnce(undefined);
+
+    render(<DiffViewerTab {...baseProps} containerId="container-1" />);
+
+    expect(await screen.findByText("Failed to load diff editor")).toBeTruthy();
+    expect(screen.queryByText("diff worker unavailable")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByTestId("diff-editor")).toBeTruthy();
+    expect(ensureMonacoConfiguredMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("ignores Monaco completion after the diff viewer unmounts", async () => {
+    monacoConfigured = false;
+    const configuration = deferred<void>();
+    ensureMonacoConfiguredMock.mockImplementationOnce(() => configuration.promise);
+    const view = render(
+      <DiffViewerTab {...baseProps} containerId="container-1" />,
+    );
+
+    view.unmount();
+    await act(async () => {
+      configuration.resolve();
+      await configuration.promise;
+    });
+
+    expect(renderedDiffEditorProps).toBeNull();
+  });
+
   test("disables diagnostics before mount and disposes the editor on unmount", async () => {
     const setTypeScriptOptions = mock((_options: unknown) => {});
     const setJavaScriptOptions = mock((_options: unknown) => {});

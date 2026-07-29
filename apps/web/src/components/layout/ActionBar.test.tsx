@@ -1151,6 +1151,9 @@ describe("ActionBar toolbar interactions", () => {
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
+    expect(
+      screen.getByRole("status", { name: "Loading global settings…" }),
+    ).toBeTruthy();
     expect(await screen.findByText("Global settings dialog")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Docker configuration" }));
@@ -1173,6 +1176,40 @@ describe("ActionBar toolbar interactions", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Restart mock environment" }));
     await waitFor(() => expect(recreateEnvironmentMock).toHaveBeenCalledWith("env-1"));
+  });
+
+  test("keeps environment settings pinned to the environment that opened them", async () => {
+    const view = render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
+    expect(
+      await screen.findByText("Environment settings for feature-env"),
+    ).toBeTruthy();
+
+    currentEnvironment = {
+      ...selectedEnvironment,
+      id: "env-2",
+      name: "second-env",
+    };
+    currentSelectedEnvironmentId = currentEnvironment.id;
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByText("Environment settings for feature-env")).toBeTruthy();
+    expect(screen.queryByText("Environment settings for second-env")).toBeNull();
+  });
+
+  test("keeps repository settings pinned when project selection changes", async () => {
+    const view = render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
+    expect(
+      await screen.findByText("Repository settings for repo"),
+    ).toBeTruthy();
+
+    currentSelectedProjectId = "project-2";
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByText("Repository settings for repo")).toBeTruthy();
   });
 
   test("supports drag scrolling and ends dragging on mouse up or leave", () => {

@@ -1,4 +1,4 @@
-import { Suspense, lazy, memo, useState, useEffect, useId, useMemo, useRef, type ComponentType, type ReactNode } from "react";
+import { lazy, memo, useState, useEffect, useId, useMemo, useRef, type ComponentType, type ReactNode } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
@@ -37,6 +37,10 @@ import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import {
+  LazyDialogLoadingFallback,
+  LazyLoadBoundary,
+} from "@/components/LazyLoadBoundary";
 
 const LazyEnvironmentSettingsDialog = lazy(async () => ({
   default: (await import("./EnvironmentSettingsDialog")).EnvironmentSettingsDialog,
@@ -614,7 +618,11 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       {/* Environment Settings Dialog — mounted only while open so a sidebar
           with many rows does not pay for a dialog per row. */}
       {showSettingsDialog && (
-        <Suspense fallback={null}>
+        <LazyLoadBoundary
+          loadingFallback={
+            <LazyDialogLoadingFallback label="Loading environment settings…" />
+          }
+        >
           <LazyEnvironmentSettingsDialog
             open={showSettingsDialog}
             onOpenChange={setShowSettingsDialog}
@@ -622,7 +630,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
             onUpdate={handleEnvironmentUpdate}
             onRestart={backend.recreateEnvironment}
           />
-        </Suspense>
+        </LazyLoadBoundary>
       )}
     </>
   );

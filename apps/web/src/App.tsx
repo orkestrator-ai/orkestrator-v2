@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@/lib/native/events";
 import { exit } from "@/lib/native/process";
 import { toast } from "sonner";
@@ -64,6 +64,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
+import { LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 
 const LazyLoopedReviewSupervisor = lazy(async () => ({
   default: (await import("@/components/review/LoopedReviewSupervisor")).LoopedReviewSupervisor,
@@ -631,9 +632,9 @@ function App() {
       <TerminalProvider>
         <AppShell>
           {loopedReviewWorkflowCount > 0 && (
-            <Suspense fallback={null}>
+            <LazyLoadBoundary>
               <LazyLoopedReviewSupervisor />
-            </Suspense>
+            </LazyLoadBoundary>
           )}
           {selectedEnvironment ? (
             <div className="relative h-full bg-background">

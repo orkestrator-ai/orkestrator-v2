@@ -899,6 +899,13 @@ describe("rollout public helpers (continued)", () => {
       ], "assistant"),
     ).toBe("one\ntwo");
     expect(extractPersistedMessageText("bad", "assistant")).toBeNull();
+    expect(extractPersistedMessageText([], "assistant")).toBeNull();
+    expect(
+      extractPersistedMessageText(
+        [{ type: "input_text", text: "wrong role shape" }, { type: "output_text", text: 42 }],
+        "assistant",
+      ),
+    ).toBeNull();
     expect(extractPersistedMessageText([{ type: "input_text", text: "  " }], "user"))
       .toBeNull();
     expect(
@@ -1088,6 +1095,54 @@ describe("rollout public helpers (continued)", () => {
       const hydrated = await hydrateMessagesFromPersistedSession("thread-generated");
       expect(hydrated.title).toBe("Generated title");
       expect(hydrated.titleSource).toBe("generated");
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+    }
+  });
+
+  test("direct hydration ignores malformed and malformed matching session-index entries", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-index-defensive-"));
+    temporaryDirectories.push(root);
+    const path = join(root, "sessions", "thread-index-defensive.jsonl");
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${[
+      JSON.stringify(sessionMeta("thread-index-defensive")),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Prompt fallback" }],
+        },
+      }),
+    ].join("\n")}\n`, "utf8");
+    await writeFile(
+      join(root, "session_index.jsonl"),
+      [
+        "null",
+        "[]",
+        "{malformed",
+        JSON.stringify({
+          id: "thread-index-defensive",
+          thread_name: { malformed: true },
+          updated_at: 42,
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    const previousHome = process.env.CODEX_HOME;
+    const previousCwd = process.env.CWD;
+    process.env.CODEX_HOME = root;
+    process.env.CWD = "/workspace";
+    try {
+      const hydrated = await hydrateMessagesFromPersistedSession("thread-index-defensive");
+      expect(hydrated.title).toBe("Prompt fallback");
+      expect(hydrated.titleSource).toBe("prompt");
+      expect(hydrated.messages).toHaveLength(1);
     } finally {
       if (previousHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousHome;
@@ -1487,6 +1542,60 @@ describe("rollout public helpers (continued)", () => {
       toolOutput: undefined,
       toolError: "apply_patch verification failed: Failed to find expected lines",
     });
+  });
+
+  test("rehydrates paired and inline apply_patch diagnostics as failures", async () => {
+    const hydrated = await hydrateRollout("thread-patch-inline-and-paired", [
+      sessionMeta("thread-patch-inline-and-paired"),
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "apply_patch",
+          call_id: "call-inline-patch",
+          input: "*** Begin Patch",
+          output: "Failed to read file to update src/inline.ts: permission denied",
+          status: "completed",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "apply_patch",
+          call_id: "call-paired-patch",
+          input: "*** Begin Patch",
+          status: "completed",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "call-paired-patch",
+          output: [{ type: "input_text", text: "Invalid Update File Line: broken" }],
+        },
+      },
+    ]);
+
+    expect(hydrated.messages[0]?.parts).toEqual([
+      expect.objectContaining({
+        toolName: "apply_patch",
+        toolState: "failure",
+        toolOutput: undefined,
+        toolError: "Failed to read file to update src/inline.ts: permission denied",
+      }),
+      expect.objectContaining({
+        toolName: "apply_patch",
+        toolState: "failure",
+        toolOutput: undefined,
+        toolError: JSON.stringify(
+          [{ type: "input_text", text: "Invalid Update File Line: broken" }],
+          null,
+          2,
+        ),
+      }),
+    ]);
   });
 
   test("a failed tool result with no output text still reports an error", async () => {

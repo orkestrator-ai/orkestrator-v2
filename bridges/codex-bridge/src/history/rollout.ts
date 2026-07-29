@@ -747,7 +747,11 @@ function createPersistedToolPart(
   // Only a `custom_tool_call` can carry both a terminal outcome and an inline
   // result on the call record itself; a `function_call` never does.
   return payload.type === "custom_tool_call" && toolState !== "pending"
-    ? applyTranscriptToolOutput(part, payload.output, toolState)
+    ? applyTranscriptToolOutput(
+        part,
+        payload.output,
+        resolveTranscriptToolOutputState(toolName, payload.output, toolState),
+      )
     : part;
 }
 
@@ -785,12 +789,14 @@ async function findSessionIndexEntry(
   const lines = await readTranscriptLines(join(getCodexHomeDir(), "session_index.jsonl"));
   let match: { threadName?: string; updatedAt?: string } | null = null;
   for (const line of lines) {
-    let entry: PersistedSessionIndexEntry;
+    let parsed: unknown;
     try {
-      entry = JSON.parse(line) as PersistedSessionIndexEntry;
+      parsed = JSON.parse(line);
     } catch {
       continue;
     }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+    const entry = parsed as PersistedSessionIndexEntry;
     if (entry.id !== threadId) continue;
     match = {
       threadName: typeof entry.thread_name === "string" ? entry.thread_name : undefined,

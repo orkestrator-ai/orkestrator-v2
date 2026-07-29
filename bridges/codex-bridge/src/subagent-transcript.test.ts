@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  applyTranscriptToolOutput,
   capActionOutput,
   deriveSubagentPartsFromTranscriptRecords,
   extractExecCommandPreview,
@@ -8,6 +9,8 @@ import {
   normalizeTranscriptToolArgs,
   parseSubAgentActivityRecords,
   parseTranscriptRecords,
+  resolveTranscriptToolOutputState,
+  stringifyTranscriptToolOutput,
   SUBAGENT_OUTPUT_TRUNCATION_NOTICE,
   type TranscriptRecord,
 } from "./subagent-transcript.js";
@@ -327,6 +330,115 @@ describe("parseSubAgentActivityRecords", () => {
       ...records,
     ], new Map());
     expect(parts[0]?.subagentId).toBe("child-1");
+  });
+});
+
+describe("resolveTranscriptToolOutputState", () => {
+  const failureDiagnostics = [
+    "apply_patch verification failed: missing context",
+    "Failed to find expected lines in src/example.ts",
+    "Failed to find context in src/example.ts",
+    "Invalid patch text",
+    "Invalid Context 3:\nconst value = 1;",
+    "Patch application failed",
+    "Patch did not apply",
+    "Unable to apply the patch",
+    "Failed to apply patch",
+    "Error applying the patch",
+    "Failed to read file to update src/example.ts: permission denied",
+    "Failed to read file to delete src/example.ts: permission denied",
+    "Failed to write file src/example.ts",
+    "Failed to delete file src/example.ts",
+    "Failed to move file src/old.ts",
+    "Failed to create parent directories for src/nested/example.ts",
+    "Invalid Add File Line: const value = 1;",
+    "Invalid Delete File Line: const value = 1;",
+    "Invalid Update File Line: const value = 1;",
+    "Invalid Context Line: const value = 1;",
+    "Invalid EOF Context Line: const value = 1;",
+    "Missing End of File",
+    "Duplicate Path: src/example.ts",
+    "Move target already exists: src/example.ts",
+  ] as const;
+
+  test("classifies every supported string diagnostic as a failed patch", () => {
+    for (const diagnostic of failureDiagnostics) {
+      expect(
+        resolveTranscriptToolOutputState("apply_patch", diagnostic, "success"),
+      ).toBe("failure");
+    }
+  });
+
+  test("classifies input_text array diagnostics as failed patches", () => {
+    for (const diagnostic of failureDiagnostics) {
+      expect(
+        resolveTranscriptToolOutputState(
+          " APPLY_PATCH ",
+          [{ type: "input_text", text: diagnostic }],
+          "success",
+        ),
+      ).toBe("failure");
+    }
+  });
+
+  test("preserves explicit failures, non-patch outcomes, and successful near-matches", () => {
+    expect(
+      resolveTranscriptToolOutputState("apply_patch", "Patch applied successfully", "failure"),
+    ).toBe("failure");
+    expect(
+      resolveTranscriptToolOutputState("exec", "Failed to write file src/example.ts", "success"),
+    ).toBe("success");
+
+    for (const output of [
+      "Patch applied successfully",
+      "The log explains why a previous patch application failed.",
+      "No invalid patch was emitted.",
+      "Successfully wrote file src/example.ts",
+      [{ type: "output_text", text: "Failed to write file src/example.ts" }],
+    ]) {
+      expect(resolveTranscriptToolOutputState("apply_patch", output, "success")).toBe("success");
+    }
+  });
+});
+
+describe("transcript tool output helpers", () => {
+  test("stringifies primitive and structured output without inventing missing output", () => {
+    expect(stringifyTranscriptToolOutput(undefined)).toBeUndefined();
+    expect(stringifyTranscriptToolOutput("plain text")).toBe("plain text");
+    expect(stringifyTranscriptToolOutput({ ok: true })).toBe('{\n  "ok": true\n}');
+
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(stringifyTranscriptToolOutput(circular)).toBe("[object Object]");
+  });
+
+  test("applies success, failure, and unknown states consistently", () => {
+    const part = {
+      toolState: "pending" as const,
+      toolOutput: "old output",
+      toolError: "old error",
+    };
+
+    expect(applyTranscriptToolOutput(part, "done", "success")).toEqual({
+      toolState: "success",
+      toolOutput: "done",
+      toolError: undefined,
+    });
+    expect(applyTranscriptToolOutput(part, "denied", "failure")).toEqual({
+      toolState: "failure",
+      toolOutput: undefined,
+      toolError: "denied",
+    });
+    expect(applyTranscriptToolOutput(part, undefined, "failure")).toEqual({
+      toolState: "failure",
+      toolOutput: undefined,
+      toolError: "Tool failed",
+    });
+    expect(applyTranscriptToolOutput(part, "ambiguous", null)).toEqual({
+      toolState: undefined,
+      toolOutput: "ambiguous",
+      toolError: undefined,
+    });
   });
 });
 
@@ -1212,6 +1324,65 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
         toolState: "failure",
         toolOutput: undefined,
         toolError: "Tool failed",
+      }),
+    ]);
+  });
+
+  test("classifies paired and inline apply_patch failures in child transcripts", () => {
+    const childRecords: TranscriptRecord[] = [
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "apply_patch",
+          input: "*** Begin Patch",
+          output: "Failed to write file src/inline.ts",
+          status: "completed",
+          call_id: "inline-patch",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "apply_patch",
+          input: "*** Begin Patch",
+          status: "completed",
+          call_id: "paired-patch",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "paired-patch",
+          output: [{ type: "input_text", text: "Invalid Add File Line: broken" }],
+        },
+      },
+    ];
+    const [part] = deriveSubagentPartsFromTranscriptRecords([
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "spawn_agent", call_id: "spawn" },
+      },
+    ], new Map([["agent", childRecords]]), new Map([["spawn", "agent"]]));
+
+    expect(part?.subagentActions).toEqual([
+      expect.objectContaining({
+        toolName: "apply_patch",
+        toolState: "failure",
+        toolOutput: undefined,
+        toolError: "Failed to write file src/inline.ts",
+      }),
+      expect.objectContaining({
+        toolName: "apply_patch",
+        toolState: "failure",
+        toolOutput: undefined,
+        toolError: JSON.stringify(
+          [{ type: "input_text", text: "Invalid Add File Line: broken" }],
+          null,
+          2,
+        ),
       }),
     ]);
   });

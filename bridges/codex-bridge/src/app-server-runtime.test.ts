@@ -38,6 +38,34 @@ import type { EngineEvent } from "./engine/types.js";
  */
 const NO_RESPONSE = Symbol("no-response");
 
+async function waitUntil(
+  predicate: () => boolean,
+  message: string,
+  timeoutMs = 500,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
+async function captureConsoleErrors(
+  work: (errors: unknown[][]) => Promise<void>,
+): Promise<unknown[][]> {
+  const original = console.error;
+  const errors: unknown[][] = [];
+  console.error = (...args: unknown[]) => {
+    errors.push(args);
+  };
+  try {
+    await work(errors);
+    return errors;
+  } finally {
+    console.error = original;
+  }
+}
+
 test("large message snapshots use a progressively lower streaming cadence", () => {
   expect(messageSnapshotIntervalMs(255 * 1024)).toBe(100);
   expect(messageSnapshotIntervalMs(256 * 1024)).toBe(250);
@@ -1022,7 +1050,11 @@ describe("session lifecycle", () => {
       { deferStart: true },
     );
     const started = h.runtime.start();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitUntil(
+      () => h.children.length === 1
+        && h.child().requests.some((request) => request.method === "thread/resume"),
+      "startup recovery did not reach thread/resume",
+    );
 
     // `idle` here would let the build pipeline advance on a turn that may still
     // be executing.
@@ -1159,14 +1191,19 @@ describe("session lifecycle", () => {
   });
 
   test("create is idempotent for one stable client tab key", async () => {
-    const h = await harness();
+    let clock = 1_000;
+    const h = await harness({}, { now: () => clock });
     const first = h.runtime.createSession({
       mode: "build",
       clientSessionKey: "env-1:tab-1",
+      title: "First writer",
     });
+    const createdAt = h.runtime.getRegistry().getSession(first.sessionId)!.createdAt;
+    clock = 2_000;
     const duplicate = h.runtime.createSession({
       mode: "plan",
       clientSessionKey: "env-1:tab-1",
+      title: "Racing writer",
     });
     const otherTab = h.runtime.createSession({
       mode: "build",
@@ -1178,7 +1215,113 @@ describe("session lifecycle", () => {
     expect(h.runtime.getRegistry().listSessions()).toHaveLength(2);
     // The first accepted create owns configuration; a racing duplicate must
     // not mutate a logical tab before its first prompt.
-    expect(h.runtime.getRegistry().getSession(first.sessionId)?.config.mode).toBe("build");
+    expect(h.runtime.getRegistry().getSession(first.sessionId)).toMatchObject({
+      title: "First writer",
+      titleSource: "explicit",
+      createdAt,
+      lastAccessed: 2_000,
+      config: { mode: "build", sandbox: "danger-full-access" },
+    });
+    expect(duplicate.title).toBe("First writer");
+  });
+
+  test("client tab keys enforce type, content, and length boundaries", async () => {
+    const h = await harness();
+    const accepted512 = "k".repeat(512);
+    const stable = h.runtime.createSession({
+      mode: "build",
+      clientSessionKey: accepted512,
+    });
+    expect(h.runtime.createSession({
+      mode: "plan",
+      clientSessionKey: accepted512,
+    }).sessionId).toBe(stable.sessionId);
+    expect(stable.sessionId).toMatch(/^session-client-[a-f0-9]{32}$/);
+
+    const invalidKeys: unknown[] = [
+      undefined,
+      null,
+      42,
+      {},
+      "",
+      " \t\n ",
+      "k".repeat(513),
+    ];
+    const fallbackIds = invalidKeys.map((clientSessionKey) =>
+      h.runtime.createSession({ mode: "build", clientSessionKey }).sessionId
+    );
+    expect(new Set(fallbackIds).size).toBe(invalidKeys.length);
+    for (const id of fallbackIds) {
+      expect(id).toMatch(/^session-/);
+      expect(id.startsWith("session-client-")).toBe(false);
+    }
+  });
+
+  test("deleting a keyed session permits a clean recreation with the same identity", async () => {
+    const h = await harness();
+    const first = h.runtime.createSession({
+      mode: "build",
+      title: "Old session",
+      clientSessionKey: "env-1:tab-recreated",
+    });
+
+    expect(await h.runtime.deleteSession(first.sessionId)).toBe(true);
+    expect(h.runtime.getStatus(first.sessionId)).toBeNull();
+    expect(await h.runtime.deleteSession(first.sessionId)).toBe(false);
+
+    const recreated = h.runtime.createSession({
+      mode: "plan",
+      title: "New session",
+      clientSessionKey: "env-1:tab-recreated",
+    });
+    expect(recreated).toEqual({
+      sessionId: first.sessionId,
+      title: "New session",
+    });
+    expect(h.runtime.getRegistry().getSession(recreated.sessionId)).toMatchObject({
+      title: "New session",
+      config: { mode: "plan", sandbox: "read-only" },
+    });
+  });
+
+  test("a keyed materialized session converges on its durable identity after restart", async () => {
+    const key = "env-1:tab-durable";
+    const first = await harness();
+    const created = first.runtime.createSession({
+      mode: "plan",
+      title: "Durable first writer",
+      clientSessionKey: key,
+    });
+    await first.runtime.prompt(created.sessionId, {
+      prompt: "materialize",
+      requestId: "req-durable-key",
+      attachments: [],
+    });
+    first.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await first.drain();
+    await first.runtime.stop();
+
+    const second = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-1") }),
+    });
+    const duplicate = second.runtime.createSession({
+      mode: "build",
+      title: "Must not replace persisted state",
+      clientSessionKey: key,
+    });
+    expect(duplicate).toEqual({
+      sessionId: created.sessionId,
+      title: "Durable first writer",
+    });
+    expect(second.runtime.getRegistry().getSession(created.sessionId)).toMatchObject({
+      threadId: "thread-1",
+      title: "Durable first writer",
+      config: { mode: "plan", sandbox: "read-only" },
+    });
+    await second.runtime.stop();
   });
 
   test("the first prompt creates the thread and dispatches a turn", async () => {
@@ -1701,6 +1844,158 @@ describe("session lifecycle", () => {
     // spliced in — otherwise the user watches an empty box.
     expect(toolPart.toolOutput).toBe("total 8\n");
     expect(toolPart.toolState).toBe("pending");
+  });
+
+  test("raw patch failure is visible once and a structured file change supersedes it", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "patch the file",
+      requestId: "req-raw-patch",
+      attachments: [],
+    });
+    const child = h.child();
+    const rawOutput = {
+      type: "custom_tool_call_output",
+      call_id: "patch-1",
+      output: "Failed to read file to update: missing.ts",
+    };
+
+    // Output-before-call cannot invent an item. Repeated call/output delivery
+    // must still converge on one fallback rather than duplicating transcript UI.
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: rawOutput,
+    });
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call",
+        call_id: "patch-1",
+        name: "apply_patch",
+        input: "*** Begin Patch\n*** Update File: missing.ts\n",
+        status: "completed",
+      },
+    });
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call",
+        call_id: "patch-1",
+        name: "apply_patch",
+        input: "*** Begin Patch\n*** Update File: missing.ts\n",
+        status: "completed",
+      },
+    });
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: rawOutput,
+    });
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: rawOutput,
+    });
+    await h.drain();
+
+    let messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.parts).toHaveLength(1);
+    expect(messages[1]!.parts[0]).toMatchObject({
+      toolName: "apply_patch",
+      toolState: "failure",
+      toolError: "Failed to read file to update: missing.ts",
+    });
+
+    child.notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "patch-1",
+        type: "fileChange",
+        status: "completed",
+        changes: [{ path: "fixed.ts", kind: { type: "add" } }],
+      },
+    });
+    await h.drain();
+
+    messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.parts).toHaveLength(1);
+    expect(messages[1]!.parts[0]).toMatchObject({
+      toolName: "apply_patch",
+      toolState: "success",
+      toolTitle: "add: fixed.ts",
+      toolOutput: "add: fixed.ts",
+    });
+    expect(messages[1]!.parts[0]!.toolError).toBeUndefined();
+  });
+
+  test("a coalesced publish rejection is contained and reported", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "stream",
+      requestId: "req-publish-rejection",
+      attachments: [],
+    });
+    const runtime = h.runtime as unknown as {
+      publishAssistantMessage: (threadId: string) => Promise<void>;
+    };
+    runtime.publishAssistantMessage = async () => {
+      throw new Error("render rejected");
+    };
+
+    const errors = await captureConsoleErrors(async () => {
+      h.child().notify("item/agentMessage/delta", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "message-1",
+        delta: "partial",
+      });
+      await h.drain();
+    });
+
+    expect(errors.some(
+      ([message, error]) =>
+        message === "[codex-bridge] Failed to publish message update:"
+        && error instanceof Error
+        && error.message === "render rejected",
+    )).toBe(true);
+  });
+
+  test("a terminal finalization rejection is contained and removed from pending work", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "finish",
+      requestId: "req-finalize-rejection",
+      attachments: [],
+    });
+    const runtime = h.runtime as unknown as {
+      finalizeTurn: () => Promise<void>;
+      pendingFinalizations: Set<Promise<void>>;
+    };
+    runtime.finalizeTurn = async () => {
+      throw new Error("journal unavailable");
+    };
+
+    const errors = await captureConsoleErrors(async () => {
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed" },
+      });
+      await h.drain();
+    });
+
+    expect(errors.some(
+      ([message, error]) =>
+        message === "[codex-bridge] Failed to finalize turn turn-1:"
+        && error === "journal unavailable",
+    )).toBe(true);
+    expect(runtime.pendingFinalizations.size).toBe(0);
   });
 
   test("tool-heavy snapshots change runtime cadence and terminal events still flush immediately", async () => {
@@ -2993,6 +3288,34 @@ describe("notifications that race the turn/start response", () => {
 });
 
 describe("crash recovery", () => {
+  test("an unexpected generation recovery rejection is contained and reported", async () => {
+    const h = await harness();
+    const runtime = h.runtime as unknown as {
+      recoverAfterGenerationChange: (generation: number) => Promise<void>;
+    };
+    runtime.recoverAfterGenerationChange = async () => {
+      throw new Error("recovery invariant failed");
+    };
+    const engine = h.engine as unknown as { emit: (event: EngineEvent) => void };
+
+    const errors = await captureConsoleErrors(async () => {
+      engine.emit({
+        kind: "engine.generation",
+        generation: 2,
+        previous: 1,
+        engineGeneration: 2,
+      });
+      await h.runtime.drainPendingWork();
+    });
+
+    expect(errors.some(
+      ([message, error]) =>
+        message === "[codex-bridge] Generation recovery failed:"
+        && error instanceof Error
+        && error.message === "recovery invariant failed",
+    )).toBe(true);
+  });
+
   test("generation recovery durably clears an unmaterialized thread binding", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
@@ -4594,6 +4917,50 @@ describe("titles", () => {
 });
 
 describe("slash commands", () => {
+  test("/models lists descriptions and marks the configured model", async () => {
+    const h = await harness({
+      "model/list": () => ({
+        data: [
+          {
+            id: "model-a",
+            displayName: "Model A",
+            description: "Fast general-purpose model",
+            supportedReasoningEfforts: [],
+            defaultReasoningEffort: null,
+            isDefault: false,
+          },
+          {
+            id: "model-b",
+            displayName: "Model B",
+            description: null,
+            supportedReasoningEfforts: [],
+            defaultReasoningEffort: null,
+            isDefault: true,
+          },
+        ],
+        nextCursor: null,
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      model: "model-a",
+    });
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "/models",
+      requestId: "req-models",
+      attachments: [],
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    const messages = await h.runtime.getMessages(sessionId);
+    expect(messages?.[1]?.content).toContain(
+      "- model-a (current): Fast general-purpose model",
+    );
+    expect(messages?.[1]?.content).toContain("- model-b");
+    expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
+  });
+
   test("/help is answered locally without reaching Codex", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
@@ -4895,6 +5262,32 @@ describe("interactive approvals", () => {
       .toBe(true);
   });
 
+  test("an abort rejection after cancelling an approval is contained and reported", async () => {
+    const { h, sessionId } = await withPendingApproval();
+    const approvalId = h.runtime.listApprovals(sessionId)[0]!.approvalId;
+    const runtime = h.runtime as unknown as {
+      abort: (targetSessionId: string) => Promise<unknown>;
+    };
+    runtime.abort = async () => {
+      throw new Error("abort dispatch rejected");
+    };
+
+    const errors = await captureConsoleErrors(async (captured) => {
+      expect(h.runtime.respondToApproval(sessionId, approvalId, "cancel")).toBe("applied");
+      await waitUntil(
+        () => captured.length > 0,
+        "approval cancellation rejection was not reported",
+      );
+    });
+
+    expect(errors.some(
+      ([message, error]) =>
+        message === "[codex-bridge] Failed to cancel turn after approval response:"
+        && error instanceof Error
+        && error.message === "abort dispatch rejected",
+    )).toBe(true);
+  });
+
   test("a failed interrupt after cancelling an approval surfaces a terminal error", async () => {
     const h = await harness({
       "turn/interrupt": () => {
@@ -4923,7 +5316,10 @@ describe("interactive approvals", () => {
 
     const approvalId = h.runtime.listApprovals(sessionId)[0]!.approvalId;
     expect(h.runtime.respondToApproval(sessionId, approvalId, "cancel")).toBe("applied");
-    await Bun.sleep(90);
+    await waitUntil(
+      () => h.runtime.getStatus(sessionId)?.phase === "failed",
+      "failed interrupt did not settle the turn",
+    );
 
     expect(h.runtime.listApprovals(sessionId)).toHaveLength(0);
     expect(h.runtime.getStatus(sessionId)).toMatchObject({

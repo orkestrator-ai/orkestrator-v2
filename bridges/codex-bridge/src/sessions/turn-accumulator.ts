@@ -238,6 +238,7 @@ export class TurnAccumulator {
     const item = accumulator?.item;
     if (
       !accumulator ||
+      accumulator.completed ||
       item?.type !== "dynamic_tool_call" ||
       item.tool.trim().toLowerCase() !== "apply_patch"
     ) {

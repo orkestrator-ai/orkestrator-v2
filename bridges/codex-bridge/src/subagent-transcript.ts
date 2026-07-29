@@ -513,12 +513,18 @@ export function resolveTranscriptToolOutputState(
 
   const text = transcriptToolOutputText(output) || (typeof output === "string" ? output : "");
   if (
-    /apply_patch verification failed/i.test(text)
-    || /failed to find expected (?:lines|context)/i.test(text)
-    || /invalid (?:patch|context)/i.test(text)
-    || /patch (?:application )?(?:failed|did not apply)/i.test(text)
-    || /(?:unable|failed) to apply (?:the )?patch/i.test(text)
-    || /error applying (?:the )?patch/i.test(text)
+    /^apply_patch verification failed\b/im.test(text)
+    || /^failed to find (?:expected )?(?:lines|context)\b/im.test(text)
+    || /^invalid (?:patch|context)(?:\b| \d)/im.test(text)
+    || /^patch (?:application )?(?:failed|did not apply)\b/im.test(text)
+    || /^(?:unable|failed) to apply (?:the )?patch\b/im.test(text)
+    || /^error applying (?:the )?patch\b/im.test(text)
+    || /^failed to read file to (?:update|delete)\b/im.test(text)
+    || /^failed to (?:write|delete|move) file\b/im.test(text)
+    || /^failed to create parent directories for\b/im.test(text)
+    || /^invalid (?:add|delete|update) file line\b/im.test(text)
+    || /^invalid (?:eof )?context line\b/im.test(text)
+    || /^(?:missing end of file|duplicate path|move target already exists)\b/im.test(text)
   ) {
     return "failure";
   }
@@ -676,7 +682,11 @@ function parseChildTranscript(
 
       if (payloadType === "custom_tool_call" && (initialState === "success" || initialState === "failure")) {
         const output = payload.output;
-        actions.push(applyTranscriptToolOutput(part, output, initialState));
+        actions.push(applyTranscriptToolOutput(
+          part,
+          output,
+          resolveTranscriptToolOutputState(toolName, output, initialState),
+        ));
       } else {
         actions.push(part);
       }

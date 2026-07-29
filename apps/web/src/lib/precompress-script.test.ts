@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  chmod,
   mkdtemp,
   mkdir,
   readFile,
@@ -13,6 +14,7 @@ import path from "node:path";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import {
   contentTypeFor,
+  main,
   precompressDirectory,
   shouldPrecompress,
   walk,
@@ -151,6 +153,82 @@ describe("precompressDirectory", () => {
       "orphan.js.br",
       "orphan.js.gz",
     ]);
+  });
+});
+
+describe("precompressDirectory failure handling", () => {
+  test("names the missing renderer build instead of surfacing a raw ENOENT", async () => {
+    const root = await createTempDirectory();
+    const missing = path.join(root, "dist");
+
+    await expect(precompressDirectory(missing)).rejects.toThrow(
+      /is not a directory\. Run the renderer build first\./,
+    );
+  });
+
+  test("rejects when the root is a file rather than a build output directory", async () => {
+    const root = await createTempDirectory();
+    const notADirectory = await writeFixture(root, "dist", "not a directory");
+
+    await expect(precompressDirectory(notADirectory)).rejects.toThrow(
+      /is not a directory/,
+    );
+  });
+
+  test("surfaces an unreadable asset instead of silently skipping it", async () => {
+    if (process.getuid?.() === 0) return;
+    const root = await createTempDirectory();
+    await writeFixture(root, "assets/readable.js", "console.log('readable');".repeat(200));
+    const unreadablePath = await writeFixture(root, "assets/unreadable.js", "x".repeat(4096));
+    await chmod(unreadablePath, 0o000);
+
+    try {
+      // Reporting success on a partially compressed dist/ would ship assets
+      // whose .br/.gz siblings silently disagree with their sources, so the
+      // build has to fail loudly instead.
+      await expect(precompressDirectory(root)).rejects.toThrow();
+      await expect(stat(`${unreadablePath}.br`)).rejects.toThrow();
+      await expect(stat(`${unreadablePath}.gz`)).rejects.toThrow();
+    } finally {
+      await chmod(unreadablePath, 0o600);
+    }
+  });
+});
+
+describe("main", () => {
+  test("reports the variant count for the directory it compressed", async () => {
+    const root = await createTempDirectory();
+    await writeFixture(root, "app.js", "console.log('main');".repeat(400));
+    const logged: string[] = [];
+    const originalLog = console.log;
+    console.log = ((message: string) => {
+      logged.push(message);
+    }) as typeof console.log;
+
+    try {
+      const result = await main(root);
+      expect(result).toEqual({ compressedCount: 2, processedFileCount: 1 });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(logged).toEqual([
+      `[precompress] Wrote 2 compressed asset variants in ${root}`,
+    ]);
+  });
+
+  test("does not compress anything when the module is merely imported", () => {
+    // `main()` is guarded by `import.meta.main`. Without that guard, importing
+    // the module for its helpers would compress the real dist/ as a side
+    // effect — or throw when dist/ does not exist yet.
+    const scriptPath = path.resolve(import.meta.dir, "../../scripts/precompress.ts");
+    const imported = Bun.spawnSync(
+      ["bun", "-e", `await import(${JSON.stringify(scriptPath)})`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+
+    expect(imported.exitCode).toBe(0);
+    expect(new TextDecoder().decode(imported.stdout)).toBe("");
   });
 });
 

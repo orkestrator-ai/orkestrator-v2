@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import {
   createServer,
   request as httpRequest,
@@ -19,6 +19,7 @@ import {
   GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES,
   GatewayMetricsStore,
   canStartStaticFallbackCompression,
+  compressStaticFileWithinLimits,
   isTailscaleAddress,
   loadOrCreateGatewayToken,
   MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS,
@@ -667,7 +668,20 @@ describe("remote gateway", () => {
     expect(response.status).toBe(200);
     expect(response.rawBody.byteLength).toBe(0);
     expect(response.headers["content-encoding"]).toBe("gzip");
+    // Identity is forbidden, so GET must answer with the coded form. Its
+    // encoding is known without compressing; only its length is withheld.
     expect(response.headers["content-length"]).toBeUndefined();
+    expect(response.headers.etag).toBeTruthy();
+
+    const getResponse = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        "accept-encoding": "gzip, identity;q=0",
+      },
+    });
+    expect(getResponse.status).toBe(response.status);
+    expect(getResponse.headers["content-encoding"]).toBe("gzip");
+    expect(getResponse.headers.etag).toBe(String(response.headers.etag));
   });
 
   test("merges Vary values without clobbering Origin", () => {
@@ -738,15 +752,28 @@ describe("remote gateway", () => {
     expect(identity.headers["content-encoding"]).toBeUndefined();
     expect(identity.body).toBe("x");
 
+    // Identity is acceptable here, so the identity metadata HEAD reports is
+    // already accurate and nothing is withheld: the response stays usable for
+    // revalidation and for discovering the resource size.
     const tinyHead = await requestUrl(`${info.url}assets/tiny-12345678.txt`, {
       method: "HEAD",
       headers: { ...authorization, "accept-encoding": "br, gzip" },
     });
     expect(tinyHead.status).toBe(200);
     expect(tinyHead.headers["content-encoding"]).toBeUndefined();
-    expect(tinyHead.headers["content-length"]).toBeUndefined();
-    expect(tinyHead.headers.etag).toBeUndefined();
+    expect(tinyHead.headers["content-length"]).toBe("1");
+    expect(tinyHead.headers.etag).toBe(String(identity.headers.etag));
     expect(tinyHead.rawBody.byteLength).toBe(0);
+
+    const tinyHeadRevalidated = await requestUrl(`${info.url}assets/tiny-12345678.txt`, {
+      headers: {
+        ...authorization,
+        "accept-encoding": "br, gzip",
+        "if-none-match": String(tinyHead.headers.etag),
+      },
+    });
+    expect(tinyHeadRevalidated.status).toBe(304);
+    expect(tinyHeadRevalidated.rawBody.byteLength).toBe(0);
 
     const wildcardHead = await requestUrl(`${info.url}assets/tiny-12345678.txt`, {
       method: "HEAD",
@@ -787,6 +814,175 @@ describe("remote gateway", () => {
     expect(response.status).toBe(200);
     expect(response.headers["content-encoding"]).toBeUndefined();
     expect(response.rawBody.byteLength).toBe(source.byteLength);
+  });
+
+  test("serves identity when a coded form was acceptable but the server declined it", async () => {
+    const dataDir = await createTempDir("ork-static-declined-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const source = Buffer.alloc(MAX_STATIC_FALLBACK_SOURCE_BYTES + 1, 0x61);
+    await writeRendererAsset(rendererRoot, "assets/large-12345678.js", source);
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const authorization = { authorization: `Bearer ${info.token}` };
+    // The client refused identity and br/gzip were both acceptable, so a 406
+    // would be a lie: the asset is representable, this server just will not
+    // spend 8MB+ of CPU and memory doing it.
+    const response = await requestUrl(`${info.url}assets/large-12345678.js`, {
+      headers: { ...authorization, "accept-encoding": "br, gzip, identity;q=0" },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers["content-encoding"]).toBeUndefined();
+    expect(response.rawBody.byteLength).toBe(source.byteLength);
+
+    const head = await requestUrl(`${info.url}assets/large-12345678.js`, {
+      method: "HEAD",
+      headers: { ...authorization, "accept-encoding": "br, gzip, identity;q=0" },
+    });
+    expect(head.status).toBe(response.status);
+    expect(head.headers["content-encoding"]).toBeUndefined();
+    expect(head.headers["content-length"]).toBe(String(source.byteLength));
+
+    // Only a request that accepts *nothing* is a real 406.
+    const unrepresentable = await requestUrl(`${info.url}assets/large-12345678.js`, {
+      headers: { ...authorization, "accept-encoding": "identity;q=0" },
+    });
+    expect(unrepresentable.status).toBe(406);
+  });
+
+  test("keeps serving identity to identity-refusing clients while the compression pool is saturated", async () => {
+    const dataDir = await createTempDir("ork-static-declined-saturated-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const assetCount = MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS * 3;
+    for (let index = 0; index < assetCount; index += 1) {
+      await writeRendererAsset(
+        rendererRoot,
+        `assets/saturate-${String(index).padStart(8, "0")}.js`,
+        `console.log('saturate-${index}');`.repeat(75_000),
+      );
+    }
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const responses = await Promise.all(
+      Array.from({ length: assetCount }, (_, index) => (
+        requestUrl(`${info.url}assets/saturate-${String(index).padStart(8, "0")}.js`, {
+          headers: {
+            authorization: `Bearer ${info.token}`,
+            "accept-encoding": "br, gzip, identity;q=0",
+          },
+        })
+      )),
+    );
+
+    // Admission is bounded, so some of these are certainly declined. None may
+    // become a 406: the status must not depend on unrelated concurrent load.
+    expect(responses.map((response) => response.status)).toEqual(
+      Array.from({ length: assetCount }, () => 200),
+    );
+    for (const response of responses) {
+      expect(decodeResponseBody(response)).toContain("saturate-");
+    }
+  });
+
+  test("classifies fallback compression outcomes as compressed, not-beneficial, or declined", async () => {
+    const root = await createTempDir("ork-static-outcome-");
+    const compressiblePath = path.join(root, "app.js");
+    await writeFile(compressiblePath, "console.log('outcome');".repeat(256));
+    const compressibleStat = await stat(compressiblePath);
+    const incompressiblePath = path.join(root, "tiny.txt");
+    await writeFile(incompressiblePath, "x");
+    const incompressibleStat = await stat(incompressiblePath);
+
+    expect(await compressStaticFileWithinLimits(
+      compressiblePath,
+      compressibleStat.mtimeMs,
+      compressibleStat.size,
+      ["br", "gzip"],
+      false,
+    )).toMatchObject({ status: "compressed", encoding: "br" });
+
+    // No encoding the client accepts is a property of the request, not of this
+    // server's budget, so it must not be reported as a decline.
+    expect(await compressStaticFileWithinLimits(
+      compressiblePath,
+      compressibleStat.mtimeMs,
+      compressibleStat.size,
+      [],
+      false,
+    )).toEqual({ status: "not-beneficial" });
+
+    expect(await compressStaticFileWithinLimits(
+      incompressiblePath,
+      incompressibleStat.mtimeMs,
+      incompressibleStat.size,
+      ["br", "gzip"],
+      false,
+    )).toEqual({ status: "not-beneficial" });
+
+    // Over the source cap, and a read that cannot be satisfied, are both
+    // server-side declines rather than statements about the representation.
+    expect(await compressStaticFileWithinLimits(
+      compressiblePath,
+      compressibleStat.mtimeMs,
+      MAX_STATIC_FALLBACK_SOURCE_BYTES + 1,
+      ["br"],
+      false,
+    )).toEqual({ status: "declined" });
+
+    expect(await compressStaticFileWithinLimits(
+      path.join(root, "missing.js"),
+      compressibleStat.mtimeMs,
+      compressibleStat.size,
+      ["br"],
+      true,
+    )).toEqual({ status: "declined" });
+
+    // A forbidden identity forces a coded form even when it is larger.
+    const forced = await compressStaticFileWithinLimits(
+      incompressiblePath,
+      incompressibleStat.mtimeMs,
+      incompressibleStat.size,
+      ["gzip"],
+      true,
+    );
+    expect(forced).toMatchObject({ status: "compressed", encoding: "gzip" });
+  });
+
+  test("does not crash the gateway when a validated asset becomes unreadable mid-response", async () => {
+    if (process.getuid?.() === 0) return;
+    const dataDir = await createTempDir("ork-static-stream-error-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    // A .png is not compressible, so this reaches the streaming path directly
+    // rather than being buffered by the on-the-fly fallback.
+    const assetPath = await writeRendererAsset(
+      rendererRoot,
+      "assets/broken-12345678.png",
+      Buffer.alloc(4096, 0x7f),
+    );
+    await writeRendererAsset(rendererRoot, "assets/intact-12345678.png", Buffer.alloc(64, 0x01));
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const authorization = { authorization: `Bearer ${info.token}` };
+    // stat() still succeeds (it only needs the directory), so the handler
+    // commits 200 headers and only then discovers it cannot read the body.
+    await chmod(assetPath, 0o000);
+    const outcome = await requestUrl(`${info.url}assets/broken-12345678.png`, {
+      headers: authorization,
+    }).catch((error: unknown) => error);
+    // Whether the client surfaces this as a transport error or as a truncated
+    // read is its own business. What must never happen is a complete-looking
+    // 4096-byte payload the client would cache as the immutable asset.
+    if (!(outcome instanceof Error)) {
+      expect(outcome.rawBody.byteLength).toBeLessThan(4096);
+    }
+
+    // The unreadable read must not have taken the process or the listener with
+    // it: an unhandled stream 'error' event would have crashed the gateway.
+    const intact = await requestUrl(`${info.url}assets/intact-12345678.png`, {
+      headers: authorization,
+    });
+    expect(intact.status).toBe(200);
+    expect(intact.rawBody.byteLength).toBe(64);
+    await chmod(assetPath, 0o600);
   });
 
   test("reads fallback sources through a stat-verified bounded file handle", async () => {

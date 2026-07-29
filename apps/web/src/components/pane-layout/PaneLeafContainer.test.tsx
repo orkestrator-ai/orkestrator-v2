@@ -276,6 +276,9 @@ mock.module("@/components/terminal/FileViewerTab", () => ({
   ),
 }));
 
+/** Set to make the build tab throw during render, modelling a chunk failure. */
+let buildChatTabFailure: Error | null = null;
+
 mock.module("@/components/build-pipeline/BuildChatTab", () => ({
   BuildChatTab: ({
     data,
@@ -283,7 +286,7 @@ mock.module("@/components/build-pipeline/BuildChatTab", () => ({
   }: {
     data: { pipelineId: string; environmentId: string };
     isActive: boolean;
-  }) => (
+  }) => buildChatTabFailure ? (() => { throw buildChatTabFailure; })() : (
     <div
       data-testid="build-chat-tab"
       data-pipeline-id={data.pipelineId}
@@ -715,6 +718,94 @@ describe("PaneLeafContainer", () => {
         active: "true",
       },
     });
+  });
+
+  test("scopes a tab load failure to its own pane instead of covering the app", async () => {
+    buildChatTabFailure = new Error(
+      "Failed to fetch dynamically imported module: /assets/build-1234.js",
+    );
+    const originalError = console.error;
+    console.error = mock(() => undefined) as typeof console.error;
+    const pane = {
+      kind: "leaf" as const,
+      id: "pane-build",
+      tabs: [{
+        id: "tab-build",
+        type: "claude-build" as const,
+        buildTabData: {
+          pipelineId: "pipeline-1",
+          environmentId: "env-hidden",
+          taskId: "task-1",
+        },
+      }],
+      activeTabId: "tab-build",
+    };
+
+    try {
+      render(
+        <PaneLeafContainer
+          pane={pane}
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isActive={false}
+        />,
+      );
+
+      const alert = await screen.findByRole("alert");
+      expect(screen.getByText("This part of the app failed to load")).toBeTruthy();
+      // The pane is not on screen, so its failure must stay inside the pane box
+      // and stay hidden rather than becoming a full-screen application modal.
+      const surface = alert.parentElement!;
+      expect(surface.className).toContain("absolute");
+      expect(surface.className).toContain("hidden");
+      expect(surface.className).not.toContain("fixed");
+      // The chunk URL must never reach the DOM.
+      expect(screen.queryByText(/assets\/build-1234\.js/)).toBeNull();
+    } finally {
+      console.error = originalError;
+      buildChatTabFailure = null;
+    }
+  });
+
+  test("shows a visible, correctly attributed failure for an active tab that throws", async () => {
+    buildChatTabFailure = new Error("Cannot read properties of undefined (reading 'steps')");
+    const originalError = console.error;
+    console.error = mock(() => undefined) as typeof console.error;
+    const pane = {
+      kind: "leaf" as const,
+      id: "pane-build",
+      tabs: [{
+        id: "tab-build",
+        type: "claude-build" as const,
+        buildTabData: {
+          pipelineId: "pipeline-1",
+          environmentId: "env-hidden",
+          taskId: "task-1",
+        },
+      }],
+      activeTabId: "tab-build",
+    };
+
+    try {
+      render(
+        <PaneLeafContainer
+          pane={pane}
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isActive
+        />,
+      );
+
+      const alert = await screen.findByRole("alert");
+      // The module loaded fine and then threw, so reloading for a fresh copy is
+      // not the diagnosis and must not be presented as one.
+      expect(screen.getByText("Something went wrong in this view")).toBeTruthy();
+      expect(screen.queryByText("This part of the app failed to load")).toBeNull();
+      expect(alert.parentElement!.className).not.toContain("hidden");
+    } finally {
+      console.error = originalError;
+      buildChatTabFailure = null;
+    }
   });
 
   test("forwards independent repeated refresh requests to every refreshable tab", async () => {

@@ -7,7 +7,7 @@ import {
   mock,
   test,
 } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realMonacoReact from "@monaco-editor/react";
 import * as realMonacoLoader from "@/lib/monaco-loader";
 
@@ -257,6 +257,37 @@ describe("MonacoFileEditor component", () => {
       await screen.findByRole("textbox", { name: "Mock Monaco editor" }),
     ).toBeTruthy();
     expect(ensureMonacoConfiguredMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps the retry usable after a second consecutive failure", async () => {
+    monacoConfigured = false;
+    ensureMonacoConfiguredMock
+      .mockRejectedValueOnce(new Error("first failure"))
+      .mockRejectedValueOnce(new Error("second failure"))
+      .mockResolvedValueOnce(undefined);
+
+    render(
+      <MonacoFileEditor
+        language="typescript"
+        value=""
+        onChange={() => {}}
+        onSave={() => {}}
+      />,
+    );
+
+    expect(await screen.findByText("Failed to load editor")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    // A retry that fails again must return to the error state rather than
+    // latching on a stale "retrying" render with no way forward.
+    await waitFor(() => expect(ensureMonacoConfiguredMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("Failed to load editor")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(
+      await screen.findByRole("textbox", { name: "Mock Monaco editor" }),
+    ).toBeTruthy();
+    expect(ensureMonacoConfiguredMock).toHaveBeenCalledTimes(3);
   });
 
   test("ignores a configuration completion after unmount", async () => {

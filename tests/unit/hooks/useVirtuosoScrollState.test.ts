@@ -452,8 +452,9 @@ describe("useVirtuosoScrollState", () => {
       });
 
       const scrollToCalls: any[] = [];
+      const scrollToIndexCalls: any[] = [];
       result.current.virtuosoRef.current = {
-        scrollToIndex: () => {},
+        scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
         scrollTo: (opts: any) => scrollToCalls.push(opts),
         getState: () => {},
       } as any;
@@ -465,14 +466,18 @@ describe("useVirtuosoScrollState", () => {
         result.current.scrollToBottom();
       });
 
-      // Wait for the observable completion rather than assuming all ten
-      // chained 16ms retries fit inside a fixed wall-clock delay. Under the
-      // full parallel suite the event loop may legitimately deliver them late.
+      // Wait on the retry counter, not on the footer scroll. `scrollTo` fires
+      // once per chain at the very end, so waiting for it to reach 1 would
+      // resolve the instant the *first* chain finished and never observe the
+      // extra chains a broken guard would have started. Exactly MAX_ATTEMPTS
+      // retries is only reachable when a single chain ran; three chains would
+      // reach 30 and this condition would never hold.
       await waitFor(() => {
-        expect(scrollToCalls).toHaveLength(1);
+        expect(scrollToIndexCalls).toHaveLength(10);
       }, {
         timeout: 2_000,
       });
+      expect(scrollToCalls).toHaveLength(1);
     });
 
     test("can be invoked again after a previous scroll completes", async () => {

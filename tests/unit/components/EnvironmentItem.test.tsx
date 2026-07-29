@@ -844,9 +844,12 @@ describe("EnvironmentItem menu actions and selection", () => {
     expect(
       screen.getByRole("status", { name: "Loading environment settings…" }),
     ).toBeTruthy();
+    // The dialog is a lazily imported chunk now, so resolving it is a real
+    // async boundary rather than a render tick. The default 1s waitFor is not
+    // enough headroom for that under a loaded parallel suite.
     await waitFor(() => {
       expect(container.querySelector('[data-testid="settings-dialog"]')).not.toBeNull();
-    });
+    }, { timeout: 3_000 });
     expect(settingsDialogPropsMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ open: true }),
     );
@@ -1227,9 +1230,12 @@ describe("EnvironmentItem mobile actions menu", () => {
     const menu = await findActionsMenu();
 
     await selectActionsMenuItem(menu, "Settings");
+    // The dialog is a lazily imported chunk now, so resolving it is a real
+    // async boundary rather than a render tick. The default 1s waitFor is not
+    // enough headroom for that under a loaded parallel suite.
     await waitFor(() => {
       expect(container.querySelector('[data-testid="settings-dialog"]')).not.toBeNull();
-    });
+    }, { timeout: 3_000 });
   });
 
   test("Delete asks for confirmation instead of deleting immediately", async () => {

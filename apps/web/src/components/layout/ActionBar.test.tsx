@@ -117,6 +117,15 @@ const selectedProject: Project = {
 let currentEnvironment: Environment = selectedEnvironment;
 let currentSelectedEnvironmentId: string | null = selectedEnvironment.id;
 let currentSelectedProjectId: string | null = selectedProject.id;
+/**
+ * Environments and projects that exist in the store but are not the current
+ * selection. Settings dialogs pin by id and read the store reactively, so a
+ * pinned entity has to keep existing in the list independently of selection.
+ */
+let currentOtherEnvironments: Environment[] = [];
+let currentOtherProjects: Project[] = [];
+/** Projects removed from the store, to model a deletion while a dialog is open. */
+let currentDeletedProjectIds = new Set<string>();
 let currentProjectBoardTab: "kanban" | "github" | "linear" | "features" = "kanban";
 let currentChanges: unknown[] = [];
 let currentFilesPanelOpen = false;
@@ -396,7 +405,10 @@ mock.module("@/stores", () => ({
   }) => T) =>
     selectState(
       {
-        environments: currentSelectedEnvironmentId ? [currentEnvironment] : [],
+        environments: [
+          ...(currentSelectedEnvironmentId ? [currentEnvironment] : []),
+          ...currentOtherEnvironments,
+        ],
         workspaceReadyEnvironments: currentWorkspaceReady
           ? new Set([currentEnvironment.id])
           : new Set<string>(),
@@ -426,12 +438,19 @@ mock.module("@/stores", () => ({
       selector,
     ),
   useProjectStore: <T,>(selector?: (state: {
+    projects: Project[];
     getProjectById: (projectId: string) => Project | undefined;
   }) => T) =>
     selectState(
       {
+        projects: [...currentOtherProjects, selectedProject].filter(
+          (project) => !currentDeletedProjectIds.has(project.id),
+        ),
         getProjectById: (projectId: string) =>
-          projectId === selectedProject.id ? selectedProject : undefined,
+          projectId === selectedProject.id
+            && !currentDeletedProjectIds.has(projectId)
+            ? selectedProject
+            : currentOtherProjects.find((project) => project.id === projectId),
       },
       selector,
     ),
@@ -590,6 +609,9 @@ beforeEach(() => {
   currentEnvironment = { ...selectedEnvironment };
   currentSelectedEnvironmentId = currentEnvironment.id;
   currentSelectedProjectId = selectedProject.id;
+  currentOtherEnvironments = [];
+  currentOtherProjects = [];
+  currentDeletedProjectIds = new Set<string>();
   currentProjectBoardTab = "kanban";
   currentChanges = [];
   currentFilesPanelOpen = false;
@@ -1186,6 +1208,8 @@ describe("ActionBar toolbar interactions", () => {
       await screen.findByText("Environment settings for feature-env"),
     ).toBeTruthy();
 
+    // The pinned environment still exists; only the selection moved on.
+    currentOtherEnvironments = [{ ...selectedEnvironment }];
     currentEnvironment = {
       ...selectedEnvironment,
       id: "env-2",
@@ -1196,6 +1220,61 @@ describe("ActionBar toolbar interactions", () => {
 
     expect(screen.getByText("Environment settings for feature-env")).toBeTruthy();
     expect(screen.queryByText("Environment settings for second-env")).toBeNull();
+  });
+
+  test("reflects a background update to a pinned environment that is no longer selected", async () => {
+    const view = render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
+    expect(
+      await screen.findByText("Environment settings for feature-env"),
+    ).toBeTruthy();
+
+    currentOtherEnvironments = [{ ...selectedEnvironment }];
+    currentEnvironment = { ...selectedEnvironment, id: "env-2", name: "second-env" };
+    currentSelectedEnvironmentId = currentEnvironment.id;
+    view.rerender(<ActionBar />);
+
+    // The pin resolves through the store on every render, so a background sync
+    // that renames the pinned environment must reach the open dialog.
+    currentOtherEnvironments = [{ ...selectedEnvironment, name: "renamed-by-sync" }];
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByText("Environment settings for renamed-by-sync")).toBeTruthy();
+    expect(screen.queryByText("Environment settings for feature-env")).toBeNull();
+  });
+
+  test("closes environment settings when the pinned environment is deleted", async () => {
+    const view = render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
+    expect(
+      await screen.findByText("Environment settings for feature-env"),
+    ).toBeTruthy();
+
+    // Deleted from the store. Keeping a stale snapshot open would let the user
+    // edit an environment that no longer exists, and updateEnvironment would
+    // discard the edit without reporting anything.
+    currentOtherEnvironments = [];
+    currentSelectedEnvironmentId = null;
+    view.rerender(<ActionBar />);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Environment settings for feature-env")).toBeNull();
+    });
+    expect(updateEnvironmentMock).not.toHaveBeenCalled();
+  });
+
+  test("forwards environment settings updates to the store", async () => {
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update mock environment" }));
+
+    expect(updateEnvironmentMock).toHaveBeenCalledWith(
+      "env-1",
+      expect.objectContaining({ id: "env-1", name: "updated-env" }),
+    );
   });
 
   test("keeps repository settings pinned when project selection changes", async () => {
@@ -1210,6 +1289,23 @@ describe("ActionBar toolbar interactions", () => {
     view.rerender(<ActionBar />);
 
     expect(screen.getByText("Repository settings for repo")).toBeTruthy();
+  });
+
+  test("closes repository settings when the pinned project is deleted", async () => {
+    const view = render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
+    expect(
+      await screen.findByText("Repository settings for repo"),
+    ).toBeTruthy();
+
+    currentDeletedProjectIds = new Set([selectedProject.id]);
+    currentSelectedProjectId = null;
+    view.rerender(<ActionBar />);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Repository settings for repo")).toBeNull();
+    });
   });
 
   test("supports drag scrolling and ends dragging on mouse up or leave", () => {

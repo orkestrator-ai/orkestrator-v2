@@ -618,6 +618,26 @@ describe("DiffViewerTab editor lifecycle and controls", () => {
     expect(ensureMonacoConfiguredMock).toHaveBeenCalledTimes(2);
   });
 
+  test("keeps the diff editor retry usable after a second consecutive failure", async () => {
+    monacoConfigured = false;
+    ensureMonacoConfiguredMock
+      .mockRejectedValueOnce(new Error("first diff failure"))
+      .mockRejectedValueOnce(new Error("second diff failure"))
+      .mockResolvedValueOnce(undefined);
+
+    render(<DiffViewerTab {...baseProps} containerId="container-1" />);
+
+    expect(await screen.findByText("Failed to load diff editor")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(ensureMonacoConfiguredMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("Failed to load diff editor")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByTestId("diff-editor")).toBeTruthy();
+    expect(ensureMonacoConfiguredMock).toHaveBeenCalledTimes(3);
+  });
+
   test("ignores Monaco completion after the diff viewer unmounts", async () => {
     monacoConfigured = false;
     const configuration = deferred<void>();

@@ -71,7 +71,14 @@ async function removeVariant(sourcePath: string, extension: ".br" | ".gz"): Prom
 }
 
 export async function precompressDirectory(root: string): Promise<PrecompressResult> {
-  await stat(root);
+  const rootStat = await stat(root).catch(() => null);
+  if (!rootStat?.isDirectory()) {
+    // A bare ENOENT here reads as a script bug. The real cause is almost always
+    // that the Vite build did not run, so say that instead.
+    throw new Error(
+      `[precompress] ${root} is not a directory. Run the renderer build first.`,
+    );
+  }
   let compressedCount = 0;
   let processedFileCount = 0;
   for await (const filePath of walk(root)) {

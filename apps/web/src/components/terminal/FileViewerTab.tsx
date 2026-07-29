@@ -22,7 +22,11 @@ import {
 } from "@/lib/file-draft-persistence";
 import { DraftRevisionConflictError } from "@/lib/draft-conflict";
 import type { GitFileStatus } from "@/types/paneLayout";
-import { LazyLoadBoundary } from "@/components/LazyLoadBoundary";
+import {
+  LazyLoadBoundary,
+  LazyLoadInlineErrorFallback,
+  type LazyLoadErrorDetails,
+} from "@/components/LazyLoadBoundary";
 
 const LazyMarkdownEditorTab = lazy(async () => ({
   default: (await import("@/components/markdown/MarkdownEditorTab")).MarkdownEditorTab,
@@ -281,6 +285,12 @@ export function FileViewerTab({
     </div>
   ), [isActive, terminalAppearance.backgroundColor]);
 
+  // This tab may be off screen while still mounted, so its editor chunks fail
+  // into the tab's own box rather than over the whole application.
+  const renderEditorError = useCallback((details: LazyLoadErrorDetails) => (
+    <LazyLoadInlineErrorFallback {...details} isVisible={isActive} />
+  ), [isActive]);
+
   // An environment switch commonly unmounts this component while the tab and
   // its editor buffer are still real. Do not clear on unmount; explicit tab
   // closure owns discarding the buffer.
@@ -445,6 +455,7 @@ export function FileViewerTab({
     return (
       <LazyLoadBoundary
         loadingFallback={renderEditorFallback("Loading diff viewer...")}
+        renderError={renderEditorError}
       >
         <LazyDiffViewerTab
           filePath={filePath}
@@ -500,6 +511,7 @@ export function FileViewerTab({
     return (
       <LazyLoadBoundary
         loadingFallback={renderEditorFallback("Loading Markdown editor...")}
+        renderError={renderEditorError}
       >
         <LazyMarkdownEditorTab
           tabId={tabId}
@@ -553,6 +565,7 @@ export function FileViewerTab({
         <div className="min-h-0 flex-1">
           <LazyLoadBoundary
             loadingFallback={renderEditorFallback("Loading editor...")}
+            renderError={renderEditorError}
           >
             <LazyMonacoFileEditor
               language={detectedLanguage}

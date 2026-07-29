@@ -810,10 +810,9 @@ export function TerminalContainer({
       // Persist the tab before clearing the launch intent. If the page is
       // evicted between these operations, the still-pending flag retries; if
       // clearing succeeds, rehydration is guaranteed to find the agent tab.
-      // The write goes through the persistence loop's per-environment chain:
-      // save_pane_layout is last-writer-wins, so an unsynchronized write here
-      // could be overtaken by an older debounced one and lose the agent tab
-      // after the flag had already been cleared.
+      // The write goes through the persistence loop's per-environment chain so
+      // it uses the latest revision and cannot conflict with an older debounced
+      // write after the launch flag has already been cleared.
       //
       // This flush is also what makes it safe to drop the backend's one-shot
       // `initialAgentModel`/`initialReasoningEffort` here even though the agent

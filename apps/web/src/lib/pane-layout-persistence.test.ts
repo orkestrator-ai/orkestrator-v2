@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import type { PersistedPaneLayout } from "@/types/paneLayout";
+import {
+  type EnvironmentPaneState,
+  usePaneLayoutStore,
+} from "@/stores/paneLayoutStore";
+import type { PaneLeaf, PersistedPaneLayout } from "@/types/paneLayout";
 import {
   adoptPersistedPaneLayout,
   createPersistedPaneLayoutInput,
@@ -198,7 +201,11 @@ describe("pane layout persistence", () => {
     await waitForTimers();
 
     expect(save).toHaveBeenCalledTimes(1);
-    expect(save).toHaveBeenCalledWith("env-1", expect.objectContaining({ activePaneId: "default" }));
+    expect(save).toHaveBeenCalledWith(
+      "env-1",
+      expect.objectContaining({ activePaneId: "default" }),
+      0,
+    );
   });
 
   test("persists hydrated environments independently", async () => {
@@ -348,7 +355,11 @@ describe("pane layout persistence", () => {
   });
 
   test("flushPaneLayoutNow falls back to a direct save when no persistence loop is running", async () => {
-    const directSave = mock(async (environmentId: string, layout: LayoutInput) =>
+    const directSave = mock(async (
+      environmentId: string,
+      layout: LayoutInput,
+      _expectedRevision: number,
+    ) =>
       createSaved(environmentId, layout)
     );
     const store = usePaneLayoutStore.getState();
@@ -360,9 +371,102 @@ describe("pane layout persistence", () => {
       "env-1",
       createPersistedPaneLayoutInput(usePaneLayoutStore.getState().environments.get("env-1")!),
       directSave,
+      async () => null,
     );
     expect(directSave).toHaveBeenCalledTimes(1);
     expect(directSave.mock.calls[0]?.[0]).toBe("env-1");
+    expect(directSave.mock.calls[0]?.[2]).toBe(0);
+  });
+
+  test("refuses a divergent direct flush without an authoritative merge base", async () => {
+    const localRoot: PaneLeaf = {
+      kind: "leaf",
+      id: "default",
+      tabs: [{ id: "local", type: "plain" }],
+      activeTabId: "local",
+    };
+    const state: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "default",
+      root: localRoot,
+    };
+    const input = createPersistedPaneLayoutInput(state);
+    const remoteInput = createPersistedPaneLayoutInput({
+      ...state,
+      root: {
+        ...localRoot,
+        tabs: [
+          ...localRoot.tabs,
+          { id: "remote", type: "plain" },
+        ],
+      },
+    });
+    const directSave = mock(async (
+      environmentId: string,
+      layout: LayoutInput,
+      _expectedRevision: number,
+    ) => createSaved(environmentId, layout));
+
+    await expect(flushPaneLayoutNow(
+      "env-1",
+      input,
+      directSave,
+      async () => ({
+        ...remoteInput,
+        environmentId: "env-1",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        revision: 2,
+      }),
+    )).rejects.toThrow("authoritative merge base");
+    expect(directSave).not.toHaveBeenCalled();
+  });
+
+  test("seeds a pre-hydrated environment as the first write's CAS base", async () => {
+    const hydrated: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "default",
+      backendRevision: 5,
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "remote-existing", type: "plain" }],
+        activeTabId: "remote-existing",
+      },
+    };
+    usePaneLayoutStore.setState({
+      environments: new Map([["env-1", hydrated]]),
+      hydration: new Map([["env-1", "done"]]),
+      activeEnvironmentId: "env-1",
+    });
+    const load = mock(async () => {
+      throw new Error("the pre-hydrated base should avoid a fresh read");
+    });
+    const save = mock(async (
+      environmentId: string,
+      layout: LayoutInput,
+      _expectedRevision: number,
+    ) => ({
+      ...layout,
+      environmentId,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 6,
+    }));
+    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "local-new", type: "plain" },
+      "env-1",
+    );
+    await waitForTimers();
+
+    expect(load).not.toHaveBeenCalled();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0]?.[2]).toBe(5);
+    expect(save.mock.calls[0]?.[1].root).toMatchObject({
+      tabs: [{ id: "remote-existing" }, { id: "local-new" }],
+    });
+    stop();
   });
 
   test("flushPaneLayoutNow prefers the active write chain over the direct save", async () => {
@@ -388,7 +492,533 @@ describe("pane layout persistence", () => {
       "env-1",
       createPersistedPaneLayoutInput(usePaneLayoutStore.getState().environments.get("env-1")!),
       directSave,
+      async () => null,
     );
     expect(directSave).toHaveBeenCalledTimes(1);
+  });
+
+  test("canonicalizes every split selection and strips every native host port", () => {
+    const state = {
+      containerId: "container-1",
+      activePaneId: "right",
+      root: {
+        kind: "split" as const,
+        id: "split",
+        direction: "horizontal" as const,
+        sizes: [40, 60] as [number, number],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf" as const,
+            id: "left",
+            tabs: [
+              {
+                id: "claude",
+                type: "claude-native" as const,
+                claudeNativeData: { environmentId: "env-1", hostPort: 1 },
+              },
+              {
+                id: "codex",
+                type: "codex-native" as const,
+                codexNativeData: { environmentId: "env-1", hostPort: 2 },
+              },
+            ],
+            activeTabId: "codex",
+          },
+          {
+            kind: "leaf" as const,
+            id: "right",
+            tabs: [{
+              id: "opencode",
+              type: "opencode-native" as const,
+              openCodeNativeData: { environmentId: "env-1", hostPort: 3 },
+            }],
+            activeTabId: "opencode",
+          },
+        ],
+      },
+    } satisfies EnvironmentPaneState;
+
+    const persisted = createPersistedPaneLayoutInput(state);
+
+    expect(persisted.activePaneId).toBe("left");
+    expect(persisted.root).toMatchObject({
+      children: [
+        { activeTabId: "claude" },
+        { activeTabId: "opencode" },
+      ],
+    });
+    expect(JSON.stringify(persisted)).not.toContain("hostPort");
+    expect(state.activePaneId).toBe("right");
+    expect(state.root.children[0].activeTabId).toBe("codex");
+  });
+
+  test("rebases a conflicting local addition over a remote addition", async () => {
+    const baseState = {
+      containerId: "container-1",
+      activePaneId: "default",
+      backendRevision: 1,
+      root: {
+        kind: "leaf" as const,
+        id: "default",
+        tabs: [{ id: "base", type: "plain" as const }],
+        activeTabId: "base",
+      },
+    };
+    const remoteInput = createPersistedPaneLayoutInput({
+      ...baseState,
+      root: {
+        ...baseState.root,
+        tabs: [
+          ...baseState.root.tabs,
+          { id: "remote", type: "plain" as const },
+        ],
+      },
+    });
+    const save = mock(async (
+      environmentId: string,
+      layout: LayoutInput,
+      expectedRevision: number,
+    ) => {
+      if (save.mock.calls.length === 1) {
+        throw new Error(
+          `Pane layout revision conflict: expected ${expectedRevision}, current 2`,
+        );
+      }
+      return {
+        ...layout,
+        environmentId,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        revision: 3,
+      };
+    });
+    const load = mock(async () => ({
+      ...remoteInput,
+      environmentId: "env-1",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 2,
+    }));
+    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1", baseState);
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "local", type: "plain" },
+      "env-1",
+    );
+
+    await waitForTimers();
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls.map((call) => call[2])).toEqual([1, 2]);
+    expect(
+      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> })
+        .tabs.map(({ id }) => id),
+    ).toEqual(["base", "remote", "local"]);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["base", "remote", "local"]);
+
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "later-local", type: "plain" },
+      "env-1",
+    );
+    await waitForTimers();
+    expect(save).toHaveBeenCalledTimes(3);
+    expect(save.mock.calls[2]?.[2]).toBe(3);
+    expect(save.mock.calls[2]?.[1].root).toMatchObject({
+      tabs: [
+        { id: "base" },
+        { id: "remote" },
+        { id: "local" },
+        { id: "later-local" },
+      ],
+    });
+    stop();
+  });
+
+  test("treats a revision-zero hydrated layout as unsaved on conflict", async () => {
+    const localState: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "default",
+      backendRevision: 0,
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "setup", type: "plain" }],
+        activeTabId: "setup",
+      },
+    };
+    const remoteInput = createPersistedPaneLayoutInput({
+      ...localState,
+      backendRevision: 2,
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "remote", type: "plain" }],
+        activeTabId: "remote",
+      },
+    });
+    const save = mock(async (
+      environmentId: string,
+      layout: LayoutInput,
+      expectedRevision: number,
+    ) => {
+      if (save.mock.calls.length === 1) {
+        throw new Error(
+          `Pane layout revision conflict: expected ${expectedRevision}, current 2`,
+        );
+      }
+      return {
+        ...layout,
+        environmentId,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        revision: 3,
+      };
+    });
+    const load = mock(async () => ({
+      ...remoteInput,
+      environmentId: "env-1",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 2,
+    }));
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1", localState);
+    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "new-local", type: "plain" },
+      "env-1",
+    );
+    await waitForTimers();
+
+    expect(save.mock.calls.map((call) => call[2])).toEqual([0, 2]);
+    expect(
+      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> })
+        .tabs.map(({ id }) => id),
+    ).toEqual(["remote", "setup", "new-local"]);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["remote", "setup", "new-local"]);
+    stop();
+  });
+
+  test("recognizes and retries a revision conflict wrapped by Electron IPC", async () => {
+    const baseRoot = {
+      kind: "leaf" as const,
+      id: "default",
+      tabs: [{ id: "base", type: "plain" as const }],
+      activeTabId: "base",
+    };
+    const baseState: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "default",
+      backendRevision: 1,
+      root: baseRoot,
+    };
+    const remoteInput = createPersistedPaneLayoutInput({
+      ...baseState,
+      root: {
+        ...baseRoot,
+        tabs: [
+          ...baseRoot.tabs,
+          { id: "remote", type: "plain" as const },
+        ],
+      },
+    });
+    const save = mock(async (
+      environmentId: string,
+      layout: LayoutInput,
+      expectedRevision: number,
+    ) => {
+      if (save.mock.calls.length === 1) {
+        throw new Error(
+          "Error invoking remote method 'orkestrator:invoke': Error: "
+            + `Pane layout revision conflict: expected ${expectedRevision}, current 2`,
+        );
+      }
+      return {
+        ...createSaved(environmentId, layout),
+        revision: 3,
+      };
+    });
+    const load = mock(async () => ({
+      ...remoteInput,
+      environmentId: "env-1",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 2,
+    }));
+    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1", baseState);
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "local", type: "plain" },
+      "env-1",
+    );
+
+    await waitForTimers();
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls.map((call) => call[2])).toEqual([1, 2]);
+    expect(
+      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> })
+        .tabs.map(({ id }) => id),
+    ).toEqual(["base", "remote", "local"]);
+    stop();
+  });
+
+  test("replaces a conflicting layout from an older container generation", async () => {
+    const oldState = {
+      containerId: "container-old",
+      activePaneId: "default",
+      backendRevision: 1,
+      root: {
+        kind: "leaf" as const,
+        id: "default",
+        tabs: [{ id: "old-session", type: "claude-native" as const }],
+        activeTabId: "old-session",
+      },
+    };
+    const remoteOldInput = createPersistedPaneLayoutInput({
+      ...oldState,
+      root: {
+        ...oldState.root,
+        tabs: [
+          ...oldState.root.tabs,
+          { id: "remote-old-session", type: "plain" as const },
+        ],
+      },
+    });
+    const save = mock(async (
+      environmentId: string,
+      layout: LayoutInput,
+      expectedRevision: number,
+    ) => {
+      if (save.mock.calls.length === 1) {
+        throw new Error(
+          `Pane layout revision conflict: expected ${expectedRevision}, current 2`,
+        );
+      }
+      return {
+        ...layout,
+        environmentId,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        revision: 3,
+      };
+    });
+    const load = mock(async () => ({
+      ...remoteOldInput,
+      environmentId: "env-1",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 2,
+    }));
+    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-old", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1", oldState);
+
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-1", {
+        containerId: "container-new",
+        activePaneId: "default",
+        backendRevision: 0,
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [{ id: "new-session", type: "plain" }],
+          activeTabId: "new-session",
+        },
+      }),
+    }));
+    await waitForTimers();
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls.map((call) => call[2])).toEqual([1, 2]);
+    const retried = save.mock.calls[1]![1];
+    expect(retried.containerId).toBe("container-new");
+    expect(
+      (retried.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id),
+    ).toEqual(["new-session"]);
+    stop();
+  });
+
+  test("bounds repeated conflict retries", async () => {
+    let remoteRevision = 1;
+    const save = mock(async () => {
+      throw new Error(
+        `Pane layout revision conflict: expected ${remoteRevision - 1}, current ${remoteRevision}`,
+      );
+    });
+    const load = mock(async () => {
+      const input = createPersistedPaneLayoutInput(
+        usePaneLayoutStore.getState().environments.get("env-1")!,
+      );
+      return {
+        ...input,
+        environmentId: "env-1",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        revision: remoteRevision++,
+      };
+    });
+    const stop = startPaneLayoutPersistence({
+      save,
+      load,
+      debounceMs: 5,
+      maxConflictRetries: 1,
+    });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "local", type: "plain" }, "env-1");
+
+    await waitForTimers();
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(load).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  test("accepts an idle authoritative revision without echoing it", async () => {
+    const save = mock(async (environmentId: string, input: LayoutInput) =>
+      ({ ...createSaved(environmentId, input), revision: 3 })
+    );
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    const authoritative = {
+      containerId: "container-1",
+      activePaneId: "default",
+      backendRevision: 2,
+      root: {
+        kind: "leaf" as const,
+        id: "default",
+        tabs: [{ id: "remote", type: "plain" as const }],
+        activeTabId: "remote",
+      },
+    };
+
+    expect(adoptPersistedPaneLayout("env-1", authoritative)).toBe(true);
+    usePaneLayoutStore.getState().applyAuthoritativeLayout(
+      "env-1",
+      authoritative,
+    );
+    await waitForTimers();
+
+    expect(save).not.toHaveBeenCalled();
+    stop();
+  });
+
+  test("rejects adoption while a save is already in flight", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const save = mock(async (environmentId: string, input: LayoutInput) => {
+      await blocked;
+      return createSaved(environmentId, input);
+    });
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "local", type: "plain" }, "env-1");
+    await waitForTimers();
+
+    expect(adoptPersistedPaneLayout("env-1", {
+      containerId: "container-1",
+      activePaneId: "default",
+      backendRevision: 2,
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "remote", type: "plain" }],
+        activeTabId: "remote",
+      },
+    })).toBe(false);
+    release();
+    await waitForTimers();
+    stop();
+  });
+
+  test("flushes pending writes on pagehide and hidden visibility", async () => {
+    const save = mock(async (environmentId: string, input: LayoutInput) =>
+      createSaved(environmentId, input)
+    );
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 60_000 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "pagehide", type: "plain" }, "env-1");
+    window.dispatchEvent(new Event("pagehide"));
+    await waitForTimers();
+    expect(save).toHaveBeenCalledTimes(1);
+
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "hidden", type: "plain" },
+      "env-1",
+    );
+    const originalVisibility = Object.getOwnPropertyDescriptor(
+      document,
+      "visibilityState",
+    );
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitForTimers();
+    expect(save).toHaveBeenCalledTimes(2);
+    if (originalVisibility) {
+      Object.defineProperty(document, "visibilityState", originalVisibility);
+    }
+    stop();
+  });
+
+  test("propagates direct and chained immediate save failures", async () => {
+    const input = createPersistedPaneLayoutInput({
+      containerId: null,
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [],
+        activeTabId: null,
+      },
+    });
+    await expect(flushPaneLayoutNow(
+      "env-1",
+      input,
+      async () => {
+        throw new Error("direct offline");
+      },
+      async () => null,
+    )).rejects.toThrow("direct offline");
+
+    const stop = startPaneLayoutPersistence({
+      save: async () => {
+        throw new Error("chain offline");
+      },
+      debounceMs: 60_000,
+    });
+    await expect(flushPaneLayoutNow("env-1", input)).rejects.toThrow(
+      "chain offline",
+    );
+    stop();
   });
 });

@@ -453,6 +453,346 @@ describe("pane-layout binding", () => {
       usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
     ).toEqual(["terminal-1", "review-mobile"]);
   });
+
+  test("preserves renderer-only launch and connection fields on self-echo", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    for (const [id, type, dataKey, port] of [
+      ["claude", "claude-native", "claudeNativeData", 4101],
+      ["codex", "codex-native", "codexNativeData", 4102],
+      ["opencode", "opencode-native", "openCodeNativeData", 4103],
+    ] as const) {
+      paneStore.addTab("default", {
+        id,
+        type,
+        initialPrompt: `prompt-${id}`,
+        initialCommands: [`command-${id}`],
+        [dataKey]: {
+          environmentId: "env-1",
+          isLocal: true,
+          hostPort: port,
+          sessionId: `local-${id}`,
+        },
+      }, "env-1");
+    }
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+    const getPaneLayout = mock(async () => ({
+      version: 1,
+      environmentId: "env-1",
+      containerId: null,
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "claude",
+            type: "claude-native",
+            claudeNativeData: {
+              environmentId: "env-1",
+              isLocal: true,
+              sessionId: "backend-claude",
+            },
+          },
+          {
+            id: "codex",
+            type: "codex-native",
+            codexNativeData: {
+              environmentId: "env-1",
+              isLocal: true,
+              sessionId: "backend-codex",
+            },
+          },
+          {
+            id: "opencode",
+            type: "opencode-native",
+            openCodeNativeData: {
+              environmentId: "env-1",
+              isLocal: true,
+              sessionId: "backend-opencode",
+            },
+          },
+          { id: "remote", type: "plain" },
+        ],
+        activeTabId: "remote",
+      },
+      updatedAt: "2026-07-29T08:00:00.000Z",
+      revision: 5,
+    }));
+    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+
+    dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
+    await tick();
+
+    const byId = new Map(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map((tab) => [tab.id, tab]),
+    );
+    expect(byId.get("claude")).toMatchObject({
+      initialPrompt: "prompt-claude",
+      initialCommands: ["command-claude"],
+      claudeNativeData: { hostPort: 4101, sessionId: "backend-claude" },
+    });
+    expect(byId.get("codex")).toMatchObject({
+      initialPrompt: "prompt-codex",
+      initialCommands: ["command-codex"],
+      codexNativeData: { hostPort: 4102, sessionId: "backend-codex" },
+    });
+    expect(byId.get("opencode")).toMatchObject({
+      initialPrompt: "prompt-opencode",
+      initialCommands: ["command-opencode"],
+      openCodeNativeData: { hostPort: 4103, sessionId: "backend-opencode" },
+    });
+    expect(byId.has("remote")).toBe(true);
+  });
+
+  test("hydrates referenced pipeline and review records before validating tabs", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+    hydrateBuildPipeline.mockImplementationOnce(async (pipelineId) => {
+      useBuildPipelineStore.setState({
+        pipelines: new Map([[pipelineId, pipeline(pipelineId, 1)]]),
+      } as never);
+      return pipeline(pipelineId, 1);
+    });
+    hydrateLoopedReviewWorkflow.mockImplementationOnce(async (workflowId) => {
+      useLoopedReviewStore.setState({
+        workflows: new Map([[
+          workflowId,
+          { id: workflowId, environmentId: "env-1", backendRevision: 1 } as never,
+        ]]),
+      });
+      return {} as never;
+    });
+    const getPaneLayout = mock(async () => ({
+      version: 1,
+      environmentId: "env-1",
+      containerId: null,
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "base", type: "plain" },
+          {
+            id: "build",
+            type: "claude-build",
+            buildTabData: {
+              environmentId: "env-1",
+              pipelineId: "pipeline-remote",
+              taskId: "task-1",
+              isLocal: true,
+            },
+          },
+          {
+            id: "review",
+            type: "looped-review",
+            loopedReviewTabData: {
+              environmentId: "env-1",
+              workflowId: "workflow-remote",
+              isLocal: true,
+            },
+          },
+        ],
+        activeTabId: "base",
+      },
+      updatedAt: "2026-07-29T08:00:00.000Z",
+      revision: 2,
+    }));
+    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+
+    dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
+    await tick();
+
+    expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-remote");
+    expect(hydrateLoopedReviewWorkflow).toHaveBeenCalledWith("workflow-remote");
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["base", "build", "review"]);
+  });
+
+  test("ignores a delayed layout response after the container is replaced", async () => {
+    detach?.();
+    const containerEnvironment = (containerId: string) => ({
+      ...environment("env-1"),
+      environmentType: "containerized",
+      containerId,
+    }) as Environment;
+    useEnvironmentStore.setState({
+      environments: [containerEnvironment("container-a")],
+    });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize("container-a", "env-1");
+    paneStore.addTab("default", { id: "container-a-tab", type: "plain" }, "env-1");
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+    let resolveLayout!: (value: unknown) => void;
+    const getPaneLayout = mock(() => new Promise((resolve) => {
+      resolveLayout = resolve;
+    }));
+    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+
+    dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
+    await tick();
+    useEnvironmentStore.setState({
+      environments: [containerEnvironment("container-b")],
+    });
+    usePaneLayoutStore.getState().initialize("container-b", "env-1");
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "container-b-tab", type: "plain" },
+      "env-1",
+    );
+    resolveLayout({
+      version: 1,
+      environmentId: "env-1",
+      containerId: "container-a",
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "stale-a-tab", type: "plain" }],
+        activeTabId: "stale-a-tab",
+      },
+      updatedAt: "2026-07-29T08:00:00.000Z",
+      revision: 2,
+    });
+    await tick(0);
+
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["container-b-tab"]);
+    expect(
+      usePaneLayoutStore.getState().environments.get("env-1")?.containerId,
+    ).toBe("container-b");
+  });
+
+  test("ignores older overlapping reads and pending reads after detach", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+    const resolvers: Array<(value: unknown) => void> = [];
+    const getPaneLayout = mock(() => new Promise((resolve) => {
+      resolvers.push(resolve);
+    }));
+    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    const saved = (tabId: string, revision: number) => ({
+      version: 1,
+      environmentId: "env-1",
+      containerId: null,
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: tabId, type: "plain" }],
+        activeTabId: tabId,
+      },
+      updatedAt: "2026-07-29T08:00:00.000Z",
+      revision,
+    });
+
+    dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
+    await tick();
+    dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 2 });
+    await tick();
+    resolvers[1]?.(saved("newer", 3));
+    await tick(0);
+    resolvers[0]?.(saved("older", 2));
+    await tick(0);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["newer"]);
+
+    dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 3 });
+    await tick();
+    detach?.();
+    detach = null;
+    resolvers[2]?.(saved("after-detach", 4));
+    await tick(0);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["newer"]);
+  });
+
+  test("contains fetch failures, invalid snapshots, and declined adoption", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+    const getPaneLayout = mock()
+      .mockImplementationOnce(async () => {
+        throw new Error("offline");
+      })
+      .mockImplementationOnce(async () => null)
+      .mockImplementationOnce(async () => ({
+        version: 1,
+        environmentId: "env-1",
+        containerId: null,
+        activePaneId: "default",
+        root: { kind: "broken" },
+        updatedAt: "2026-07-29T08:00:00.000Z",
+        revision: 2,
+      }))
+      .mockImplementationOnce(async () => ({
+        version: 1,
+        environmentId: "env-1",
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [{ id: "declined", type: "plain" }],
+          activeTabId: "declined",
+        },
+        updatedAt: "2026-07-29T08:00:00.000Z",
+        revision: 3,
+      }));
+    const adoptPaneLayout = mock(() => false);
+    detach = startStoreResourceSync({
+      getPaneLayout: getPaneLayout as never,
+      adoptPaneLayout,
+    });
+
+    for (let revision = 1; revision <= 4; revision += 1) {
+      dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision });
+      await tick();
+    }
+
+    expect(getPaneLayout).toHaveBeenCalledTimes(4);
+    expect(adoptPaneLayout).toHaveBeenCalledTimes(1);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["base"]);
+  });
 });
 
 describe("authoritative resync", () => {
@@ -609,6 +949,78 @@ describe("authoritative resync", () => {
     await tick(0);
 
     expect(setConfig).not.toHaveBeenCalled();
+  });
+
+  test("waits for dependency hydration before applying pane layouts", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+    let releaseReviews!: () => void;
+    const reviewsBlocked = new Promise<void>((resolve) => {
+      releaseReviews = resolve;
+    });
+    hydrateLoopedReviewWorkflowsForEnvironment.mockImplementationOnce(async () => {
+      await reviewsBlocked;
+      return [];
+    });
+    const getPaneLayout = mock(async () => null);
+    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+
+    requestResourceResync();
+    await tick(0);
+    expect(getPaneLayout).not.toHaveBeenCalled();
+    releaseReviews();
+    await tick();
+    expect(getPaneLayout).toHaveBeenCalledWith("env-1");
+  });
+
+  test("continues pane resync after another authoritative read fails", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration("env-1");
+    hydratePromptQueuesForEnvironment.mockImplementationOnce(async () => {
+      throw new Error("queue offline");
+    });
+    const getPaneLayout = mock(async () => null);
+    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+
+    requestResourceResync();
+    await tick();
+
+    expect(getPaneLayout).toHaveBeenCalledWith("env-1");
+  });
+
+  test("coalesces a resync requested while one is running into one follow-up", async () => {
+    detach?.();
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const getConfig = mock()
+      .mockImplementationOnce(async () => {
+        await firstBlocked;
+        return { theme: "first" };
+      })
+      .mockImplementationOnce(async () => ({ theme: "second" }));
+    detach = startStoreResourceSync({ getConfig: getConfig as never });
+
+    requestResourceResync();
+    requestResourceResync();
+    await tick(0);
+    expect(getConfig).toHaveBeenCalledTimes(1);
+    releaseFirst();
+    await tick();
+    expect(getConfig).toHaveBeenCalledTimes(2);
   });
 });
 

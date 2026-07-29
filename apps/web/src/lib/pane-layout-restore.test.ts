@@ -3,7 +3,8 @@ import {
   preserveClientPaneSelection,
   reconcilePersistedLayout,
 } from "./pane-layout-restore";
-import type { PersistedPaneLayout } from "@/types/paneLayout";
+import type { PersistedPaneLayout, TabInfo } from "@/types/paneLayout";
+import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 
 function saved(root: unknown, overrides: Partial<PersistedPaneLayout> = {}): PersistedPaneLayout {
   return {
@@ -455,6 +456,103 @@ describe("reconcilePersistedLayout", () => {
       activeTabId: "future",
     }), context)).toBeNull();
   });
+
+  test("drops every malformed specialized tab shape while retaining a valid sibling", () => {
+    const malformedTabs: Array<{ name: string; tab: Record<string, unknown> }> = [
+      { name: "file without data", tab: { id: "bad-file-data", type: "file" } },
+      {
+        name: "file without a path",
+        tab: { id: "bad-file-path", type: "file", fileData: {} },
+      },
+      {
+        name: "Claude native without data",
+        tab: { id: "bad-claude-native", type: "claude-native" },
+      },
+      {
+        name: "Codex native without data",
+        tab: { id: "bad-codex-native", type: "codex-native" },
+      },
+      {
+        name: "OpenCode native without data",
+        tab: { id: "bad-opencode-native", type: "opencode-native" },
+      },
+      {
+        name: "tmux without data",
+        tab: { id: "bad-tmux", type: "claude-tmux" },
+      },
+      {
+        name: "build without data",
+        tab: { id: "bad-build-data", type: "claude-build" },
+      },
+      {
+        name: "build without a task",
+        tab: {
+          id: "bad-build-task",
+          type: "claude-build",
+          buildTabData: { pipelineId: "pipeline-1" },
+        },
+      },
+      {
+        name: "build whose pipeline is absent",
+        tab: {
+          id: "bad-build-reference",
+          type: "claude-build",
+          buildTabData: { pipelineId: "missing-pipeline", taskId: "task-1" },
+        },
+      },
+      {
+        name: "review without data",
+        tab: { id: "bad-review-data", type: "looped-review" },
+      },
+      {
+        name: "review without a workflow",
+        tab: {
+          id: "bad-review-workflow",
+          type: "looped-review",
+          loopedReviewTabData: {},
+        },
+      },
+      {
+        name: "review whose workflow is absent",
+        tab: {
+          id: "bad-review-reference",
+          type: "looped-review",
+          loopedReviewTabData: { workflowId: "missing-workflow" },
+        },
+      },
+      {
+        name: "unknown tab type",
+        tab: { id: "bad-unknown", type: "future-tab" },
+      },
+    ];
+    const restoreContext = {
+      ...context,
+      hasBuildPipeline: () => false,
+      hasLoopedReview: () => false,
+    };
+
+    for (const { name, tab } of malformedTabs) {
+      const restored = reconcilePersistedLayout(saved({
+        kind: "leaf",
+        id: "pane",
+        tabs: [{ id: "valid", type: "plain" }, tab],
+        activeTabId: tab.id,
+      }), restoreContext);
+
+      expect(restored?.root, name).toMatchObject({
+        kind: "leaf",
+        tabs: [{ id: "valid", type: "plain" }],
+        activeTabId: "valid",
+      });
+    }
+
+    expect(reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane",
+      tabs: malformedTabs.map(({ tab }) => tab),
+      activeTabId: "bad-file-data",
+    }), restoreContext)).toBeNull();
+  });
 });
 
 describe("preserveClientPaneSelection", () => {
@@ -488,6 +586,462 @@ describe("preserveClientPaneSelection", () => {
     expect(reconciled.root).toMatchObject({
       tabs: [{ id: "review-3" }, { id: "review-4" }],
       activeTabId: "review-3",
+    });
+  });
+
+  test("preserves only renderer-local fields for matching tab identities and types", () => {
+    const authoritative: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "pane",
+      backendRevision: 7,
+      root: {
+        kind: "leaf",
+        id: "pane",
+        tabs: [
+          {
+            id: "claude",
+            type: "claude-native",
+            claudeNativeData: {
+              environmentId: "env-1",
+              containerId: "container-1",
+              sessionId: "authoritative-session",
+            },
+          },
+          {
+            id: "codex",
+            type: "codex-native",
+            codexNativeData: {
+              environmentId: "env-1",
+              containerId: "container-1",
+              sessionId: "authoritative-codex-session",
+            },
+          },
+          {
+            id: "opencode",
+            type: "opencode-native",
+            openCodeNativeData: {
+              environmentId: "env-1",
+              containerId: "container-1",
+              sessionId: "authoritative-opencode-session",
+            },
+          },
+          { id: "changed-type", type: "plain" },
+        ],
+        activeTabId: "claude",
+      },
+    };
+    const current: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "pane",
+      backendRevision: 6,
+      root: {
+        kind: "leaf",
+        id: "pane",
+        tabs: [
+          {
+            id: "claude",
+            type: "claude-native",
+            initialPrompt: "local prompt",
+            initialCommands: ["local command"],
+            claudeNativeData: {
+              environmentId: "env-1",
+              containerId: "container-1",
+              sessionId: "stale-session",
+              hostPort: 4101,
+            },
+          },
+          {
+            id: "codex",
+            type: "codex-native",
+            codexNativeData: {
+              environmentId: "env-1",
+              containerId: "container-1",
+              sessionId: "stale-codex-session",
+              hostPort: 4102,
+            },
+          },
+          {
+            id: "opencode",
+            type: "opencode-native",
+            openCodeNativeData: {
+              environmentId: "env-1",
+              containerId: "container-1",
+              sessionId: "stale-opencode-session",
+              hostPort: 4103,
+            },
+          },
+          {
+            id: "changed-type",
+            type: "claude-native",
+            initialPrompt: "must not cross a type change",
+            claudeNativeData: {
+              environmentId: "env-1",
+              hostPort: 4999,
+            },
+          },
+        ],
+        activeTabId: "claude",
+      },
+    };
+
+    const reconciled = preserveClientPaneSelection(authoritative, current);
+    if (reconciled.root.kind !== "leaf") {
+      throw new Error("expected leaf");
+    }
+    const [claude, codex, opencode, changedType] = reconciled.root.tabs;
+
+    expect(claude).toMatchObject({
+      initialPrompt: "local prompt",
+      initialCommands: ["local command"],
+      claudeNativeData: {
+        sessionId: "authoritative-session",
+        hostPort: 4101,
+      },
+    });
+    expect(codex?.codexNativeData).toMatchObject({
+      sessionId: "authoritative-codex-session",
+      hostPort: 4102,
+    });
+    expect(opencode?.openCodeNativeData).toMatchObject({
+      sessionId: "authoritative-opencode-session",
+      hostPort: 4103,
+    });
+    expect(changedType).toEqual({ id: "changed-type", type: "plain" });
+    expect(reconciled.backendRevision).toBe(7);
+
+    if (current.root.kind !== "leaf") {
+      throw new Error("expected current leaf");
+    }
+    current.root.tabs[0]!.initialCommands![0] = "mutated later";
+    expect(claude?.initialCommands).toEqual(["local command"]);
+  });
+
+  test("preserves renderer-local fields when native tabs move between panes", () => {
+    const nativeTabs: TabInfo[] = [
+      {
+        id: "claude",
+        type: "claude-native",
+        initialPrompt: "continue the launch",
+        initialCommands: ["bun test"],
+        claudeNativeData: {
+          environmentId: "env-1",
+          containerId: "container-1",
+          sessionId: "local-claude-session",
+          hostPort: 4101,
+        },
+      },
+      {
+        id: "codex",
+        type: "codex-native",
+        codexNativeData: {
+          environmentId: "env-1",
+          containerId: "container-1",
+          sessionId: "local-codex-session",
+          hostPort: 4102,
+        },
+      },
+      {
+        id: "opencode",
+        type: "opencode-native",
+        openCodeNativeData: {
+          environmentId: "env-1",
+          containerId: "container-1",
+          sessionId: "local-opencode-session",
+          hostPort: 4103,
+        },
+      },
+    ];
+    const current: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "left",
+      backendRevision: 6,
+      root: {
+        kind: "split",
+        id: "split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: nativeTabs,
+            activeTabId: "claude",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [{ id: "stable", type: "plain" }],
+            activeTabId: "stable",
+          },
+        ],
+      },
+    };
+    const authoritative: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "right",
+      backendRevision: 7,
+      root: {
+        kind: "split",
+        id: "split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [],
+            activeTabId: null,
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [
+              {
+                id: "stable",
+                type: "plain",
+              },
+              {
+                id: "claude",
+                type: "claude-native",
+                claudeNativeData: {
+                  environmentId: "env-1",
+                  containerId: "container-1",
+                  sessionId: "authoritative-claude-session",
+                },
+              },
+              {
+                id: "codex",
+                type: "codex-native",
+                codexNativeData: {
+                  environmentId: "env-1",
+                  containerId: "container-1",
+                  sessionId: "authoritative-codex-session",
+                },
+              },
+              {
+                id: "opencode",
+                type: "opencode-native",
+                openCodeNativeData: {
+                  environmentId: "env-1",
+                  containerId: "container-1",
+                  sessionId: "authoritative-opencode-session",
+                },
+              },
+            ],
+            activeTabId: "stable",
+          },
+        ],
+      },
+    };
+
+    const reconciled = preserveClientPaneSelection(authoritative, current);
+    if (reconciled.root.kind !== "split") throw new Error("expected split");
+    const moved = reconciled.root.children[1];
+    if (moved.kind !== "leaf") throw new Error("expected moved leaf");
+
+    expect(moved.tabs.find((tab) => tab.id === "claude")).toMatchObject({
+      initialPrompt: "continue the launch",
+      initialCommands: ["bun test"],
+      claudeNativeData: {
+        sessionId: "authoritative-claude-session",
+        hostPort: 4101,
+      },
+    });
+    expect(
+      moved.tabs.find((tab) => tab.id === "codex")?.codexNativeData,
+    ).toMatchObject({
+      sessionId: "authoritative-codex-session",
+      hostPort: 4102,
+    });
+    expect(
+      moved.tabs.find((tab) => tab.id === "opencode")?.openCodeNativeData,
+    ).toMatchObject({
+      sessionId: "authoritative-opencode-session",
+      hostPort: 4103,
+    });
+  });
+
+  test("preserves selections independently across a recursive split tree", () => {
+    const authoritative: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "left",
+      root: {
+        kind: "split",
+        id: "outer",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [
+              { id: "left-1", type: "plain" },
+              { id: "left-2", type: "plain" },
+            ],
+            activeTabId: "left-2",
+          },
+          {
+            kind: "split",
+            id: "inner",
+            direction: "vertical",
+            sizes: [50, 50],
+            depth: 2,
+            children: [
+              {
+                kind: "leaf",
+                id: "middle",
+                tabs: [
+                  { id: "middle-1", type: "plain" },
+                  { id: "middle-2", type: "plain" },
+                ],
+                activeTabId: "middle-2",
+              },
+              {
+                kind: "leaf",
+                id: "right",
+                tabs: [
+                  { id: "right-1", type: "plain" },
+                  { id: "right-2", type: "plain" },
+                ],
+                activeTabId: "right-2",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const current: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "right",
+      root: {
+        kind: "split",
+        id: "current-outer",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [
+              { id: "left-1", type: "plain" },
+              { id: "left-2", type: "plain" },
+            ],
+            activeTabId: "left-1",
+          },
+          {
+            kind: "split",
+            id: "current-inner",
+            direction: "vertical",
+            sizes: [50, 50],
+            depth: 2,
+            children: [
+              {
+                kind: "leaf",
+                id: "middle",
+                tabs: [
+                  { id: "middle-1", type: "plain" },
+                  { id: "middle-2", type: "plain" },
+                ],
+                activeTabId: "middle-1",
+              },
+              {
+                kind: "leaf",
+                id: "right",
+                tabs: [
+                  { id: "right-1", type: "plain" },
+                  { id: "right-2", type: "plain" },
+                ],
+                activeTabId: "right-1",
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const reconciled = preserveClientPaneSelection(authoritative, current);
+    if (reconciled.root.kind !== "split") {
+      throw new Error("expected recursive split");
+    }
+    const [left, inner] = reconciled.root.children;
+    if (left.kind !== "leaf" || inner.kind !== "split") {
+      throw new Error("expected left leaf and inner split");
+    }
+    const [middle, right] = inner.children;
+    if (middle.kind !== "leaf" || right.kind !== "leaf") {
+      throw new Error("expected inner leaves");
+    }
+
+    expect(reconciled.activePaneId).toBe("right");
+    expect(left.activeTabId).toBe("left-1");
+    expect(middle.activeTabId).toBe("middle-1");
+    expect(right.activeTabId).toBe("right-1");
+  });
+
+  test("falls back to authoritative selections when local pane or tab selections disappeared", () => {
+    const authoritative: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "right",
+      root: {
+        kind: "split",
+        id: "split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [{ id: "left-new", type: "plain" }],
+            activeTabId: "left-new",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [{ id: "right-new", type: "plain" }],
+            activeTabId: "right-new",
+          },
+        ],
+      },
+    };
+    const current: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "removed-pane",
+      root: {
+        kind: "split",
+        id: "old-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [{ id: "left-removed", type: "plain" }],
+            activeTabId: "left-removed",
+          },
+          {
+            kind: "leaf",
+            id: "removed-pane",
+            tabs: [{ id: "removed-tab", type: "plain" }],
+            activeTabId: "removed-tab",
+          },
+        ],
+      },
+    };
+
+    const reconciled = preserveClientPaneSelection(authoritative, current);
+
+    expect(reconciled.activePaneId).toBe("right");
+    expect(reconciled.root).toMatchObject({
+      children: [
+        { id: "left", activeTabId: "left-new" },
+        { id: "right", activeTabId: "right-new" },
+      ],
     });
   });
 });

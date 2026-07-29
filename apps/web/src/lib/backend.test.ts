@@ -876,7 +876,7 @@ describe("backend pane layout wrappers", () => {
       environmentId: "env-1",
       containerId: "container-1",
       activePaneId: "pane-1",
-      root: { kind: "leaf", id: "pane-1", tabs: [], activeTabId: null },
+      root: { kind: "leaf" as const, id: "pane-1", tabs: [], activeTabId: null },
       updatedAt: "2026-07-16T00:00:00.000Z",
       revision: 2,
     };
@@ -889,7 +889,7 @@ describe("backend pane layout wrappers", () => {
       containerId: layout.containerId,
       activePaneId: layout.activePaneId,
       root: layout.root,
-    })).resolves.toEqual(layout);
+    }, 1)).resolves.toEqual(layout);
     await expect(deletePaneLayout("env-1")).resolves.toBeUndefined();
 
     expect(invokeMock.mock.calls).toEqual([
@@ -902,6 +902,7 @@ describe("backend pane layout wrappers", () => {
           activePaneId: "pane-1",
           root: layout.root,
         },
+        expectedRevision: 1,
       }],
       ["delete_pane_layout", { environmentId: "env-1" }],
     ]);

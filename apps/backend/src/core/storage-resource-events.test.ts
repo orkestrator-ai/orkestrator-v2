@@ -331,7 +331,7 @@ describe("StorageService resource change announcements", () => {
         containerId: null,
         activePaneId: "pane-1",
         root: { kind: "leaf", id: "pane-1", tabs: [] },
-      });
+      }, 0);
       expect(changes.at(-1)).toMatchObject({ resource: "pane-layout", id: "e1" });
 
       await storage.saveLoopedReviewWorkflow("w1", "e1", 1, { id: "w1" });

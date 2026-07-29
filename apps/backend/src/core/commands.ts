@@ -7353,7 +7353,10 @@ export function createCommandRegistry(
   register("get_pane_layout", ({ environmentId }, { storage }) =>
     storage.getPaneLayout(asString(environmentId, "environmentId")),
   );
-  register("save_pane_layout", async ({ environmentId, layout }, { storage }) => {
+  register("save_pane_layout", async (
+    { environmentId, layout, expectedRevision },
+    { storage },
+  ) => {
     const envId = asString(environmentId, "environmentId");
     const value = asRecord(layout, "layout");
     const version = asNumber(value.version, "layout.version");
@@ -7371,7 +7374,7 @@ export function createCommandRegistry(
       containerId,
       activePaneId,
       root,
-    });
+    }, asNumber(expectedRevision, "expectedRevision"));
   });
   register("delete_pane_layout", ({ environmentId }, { storage }) =>
     storage.deletePaneLayout(asString(environmentId, "environmentId")),

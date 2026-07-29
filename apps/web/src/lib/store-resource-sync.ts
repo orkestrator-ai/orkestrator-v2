@@ -40,6 +40,52 @@ import { useSessionStore } from "@/stores/sessionStore";
 interface StoreResourceSyncOptions {
   getConfig?: typeof getConfig;
   getPaneLayout?: typeof getPaneLayout;
+  adoptPaneLayout?: typeof adoptPersistedPaneLayout;
+}
+
+function collectPaneDependencyIds(root: unknown): {
+  pipelineIds: Set<string>;
+  workflowIds: Set<string>;
+} {
+  const pipelineIds = new Set<string>();
+  const workflowIds = new Set<string>();
+  const visit = (value: unknown, depth: number): void => {
+    if (
+      depth > 10
+      || !value
+      || typeof value !== "object"
+      || Array.isArray(value)
+    ) {
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    if (record.kind === "leaf" && Array.isArray(record.tabs)) {
+      for (const tab of record.tabs) {
+        if (!tab || typeof tab !== "object" || Array.isArray(tab)) continue;
+        const candidate = tab as Record<string, unknown>;
+        const build = candidate.buildTabData;
+        if (build && typeof build === "object" && !Array.isArray(build)) {
+          const pipelineId = (build as Record<string, unknown>).pipelineId;
+          if (typeof pipelineId === "string" && pipelineId.trim()) {
+            pipelineIds.add(pipelineId);
+          }
+        }
+        const review = candidate.loopedReviewTabData;
+        if (review && typeof review === "object" && !Array.isArray(review)) {
+          const workflowId = (review as Record<string, unknown>).workflowId;
+          if (typeof workflowId === "string" && workflowId.trim()) {
+            workflowIds.add(workflowId);
+          }
+        }
+      }
+      return;
+    }
+    if (record.kind === "split" && Array.isArray(record.children)) {
+      record.children.forEach((child) => visit(child, depth + 1));
+    }
+  };
+  visit(root, 0);
+  return { pipelineIds, workflowIds };
 }
 
 export function startStoreResourceSync(
@@ -116,6 +162,11 @@ export function startStoreResourceSync(
       .getState()
       .getEnvironmentById(environmentId);
     if (!environment || !paneStore.environments.has(environmentId)) return;
+    const requestedContainerId = environment.environmentType === "local"
+      ? null
+      : environment.containerId;
+    const requestedEnvironmentType = environment.environmentType;
+    const requestedWorktreePath = environment.worktreePath;
 
     const generation = (paneLayoutRequestGenerations.get(environmentId) ?? 0) + 1;
     paneLayoutRequestGenerations.set(environmentId, generation);
@@ -127,21 +178,58 @@ export function startStoreResourceSync(
       return;
     }
 
+    if (saved) {
+      const dependencies = collectPaneDependencyIds(saved.root);
+      await Promise.all([
+        ...[...dependencies.pipelineIds].map((pipelineId) =>
+          useBuildPipelineStore.getState().pipelines.has(pipelineId)
+            ? Promise.resolve()
+            : hydrateBuildPipeline(pipelineId).then(() => undefined)
+        ),
+        ...[...dependencies.workflowIds].map((workflowId) =>
+          useLoopedReviewStore.getState().workflows.has(workflowId)
+            ? Promise.resolve()
+            : hydrateLoopedReviewWorkflow(workflowId).then(() => undefined)
+        ),
+      ]);
+      if (
+        disposed
+        || paneLayoutRequestGenerations.get(environmentId) !== generation
+      ) {
+        return;
+      }
+    }
+
     const latestPaneStore = usePaneLayoutStore.getState();
     const current = latestPaneStore.environments.get(environmentId);
+    const latestEnvironment = useEnvironmentStore
+      .getState()
+      .getEnvironmentById(environmentId);
     if (
       latestPaneStore.hydration.get(environmentId) !== "done"
       || !current
+      || !latestEnvironment
+    ) {
+      return;
+    }
+    const latestContainerId = latestEnvironment.environmentType === "local"
+      ? null
+      : latestEnvironment.containerId;
+    if (
+      latestEnvironment.environmentType !== requestedEnvironmentType
+      || latestContainerId !== requestedContainerId
+      || latestEnvironment.worktreePath !== requestedWorktreePath
+      || current.containerId !== latestContainerId
     ) {
       return;
     }
 
-    const isLocal = environment.environmentType === "local";
+    const isLocal = latestEnvironment.environmentType === "local";
     const restored = reconcilePersistedLayout(saved, {
       environmentId,
-      containerId: isLocal ? null : environment.containerId,
+      containerId: latestContainerId,
       isLocal,
-      worktreePath: environment.worktreePath,
+      worktreePath: latestEnvironment.worktreePath,
       hasBuildPipeline: (pipelineId) =>
         useBuildPipelineStore.getState().pipelines.has(pipelineId),
       hasLoopedReview: (workflowId) =>
@@ -152,7 +240,10 @@ export function startStoreResourceSync(
     const selected = preserveClientPaneSelection(restored, current);
     // Prime the persistence mirror before publishing the store update so this
     // read-through snapshot does not become a redundant write-back.
-    if (!adoptPersistedPaneLayout(environmentId, selected)) return;
+    if (!(options.adoptPaneLayout ?? adoptPersistedPaneLayout)(
+      environmentId,
+      selected,
+    )) return;
     latestPaneStore.applyAuthoritativeLayout(environmentId, selected);
   };
 
@@ -179,14 +270,15 @@ export function startStoreResourceSync(
     const kanban = useKanbanStore.getState();
     const featurePlan = useFeaturePlanStore.getState();
     const tasks: Array<Promise<unknown>> = [refreshConfig()];
+    const paneEnvironmentIds: string[] = [];
 
     for (const { id: environmentId } of environments) {
       tasks.push(
         hydratePromptQueuesForEnvironment(environmentId, promptQueueSources),
         useSessionStore.getState().loadSessionsForEnvironment(environmentId),
         refreshLoopedReviewsForEnvironment(environmentId),
-        refreshPaneLayout(environmentId),
       );
+      paneEnvironmentIds.push(environmentId);
     }
     for (const { id: projectId } of projects) {
       tasks.push(refreshBuildPipelinesForProject(projectId));
@@ -206,6 +298,17 @@ export function startStoreResourceSync(
       if (result.status === "rejected") {
         console.warn(
           "[store-resource-sync] Authoritative resync read failed:",
+          result.reason,
+        );
+      }
+    }
+    const paneResults = await Promise.allSettled(
+      paneEnvironmentIds.map(refreshPaneLayout),
+    );
+    for (const result of paneResults) {
+      if (result.status === "rejected") {
+        console.warn(
+          "[store-resource-sync] Authoritative pane resync failed:",
           result.reason,
         );
       }

@@ -1455,36 +1455,59 @@ describe("Electron StorageService", () => {
       containerId: "container-1",
       activePaneId: "default",
       root,
-    });
+    }, 0);
     expect(first).toMatchObject({
       environmentId: firstEnvironment.id,
       revision: 1,
       root,
     });
     await expect(storage.getPaneLayout(firstEnvironment.id)).resolves.toEqual(first);
+    await expect(storage.savePaneLayout(firstEnvironment.id, {
+      version: 1,
+      containerId: "container-1",
+      activePaneId: "default",
+      root,
+    }, -1)).rejects.toThrow("non-negative integer");
 
-    const [second, third] = await Promise.all([
+    const competingStorage = new StorageService(dataDir);
+    await competingStorage.init();
+    const competingWrites = await Promise.allSettled([
       storage.savePaneLayout(firstEnvironment.id, {
         version: 1,
         containerId: "container-1",
         activePaneId: "default",
         root: { ...root, activeTabId: "tab-2" },
-      }),
-      storage.savePaneLayout(firstEnvironment.id, {
+      }, 1),
+      competingStorage.savePaneLayout(firstEnvironment.id, {
         version: 1,
         containerId: "container-1",
         activePaneId: "default",
         root: { ...root, activeTabId: "tab-3" },
-      }),
+      }, 1),
     ]);
-    expect([second.revision, third.revision]).toEqual([2, 3]);
+    expect(competingWrites.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    const rejected = competingWrites.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    expect(rejected?.reason).toEqual(
+      new Error("Pane layout revision conflict: expected 1, current 2"),
+    );
+    expect((await storage.getPaneLayout(firstEnvironment.id))?.revision).toBe(2);
+
+    const third = await storage.savePaneLayout(firstEnvironment.id, {
+      version: 1,
+      containerId: "container-1",
+      activePaneId: "default",
+      root: { ...root, activeTabId: "tab-3" },
+    }, 2);
+    expect(third.revision).toBe(3);
 
     const isolated = await storage.savePaneLayout(secondEnvironment.id, {
       version: 1,
       containerId: null,
       activePaneId: "local-pane",
       root: { kind: "leaf", id: "local-pane", tabs: [], activeTabId: null },
-    });
+    }, 0);
     expect(isolated.revision).toBe(1);
     expect((await storage.getPaneLayout(firstEnvironment.id))?.revision).toBe(3);
 
@@ -1493,13 +1516,13 @@ describe("Electron StorageService", () => {
       containerId: "container-1",
       activePaneId: "default",
       root: { value: "x".repeat(256 * 1024) },
-    })).rejects.toThrow("256 KB");
+    }, 3)).rejects.toThrow("256 KB");
     await expect(storage.savePaneLayout("missing", {
       version: 1,
       containerId: null,
       activePaneId: "default",
       root,
-    })).rejects.toThrow("Environment not found");
+    }, 0)).rejects.toThrow("Environment not found");
 
     await storage.deletePaneLayout(firstEnvironment.id);
     await expect(storage.getPaneLayout(firstEnvironment.id)).resolves.toBeNull();
@@ -1519,20 +1542,20 @@ describe("Electron StorageService", () => {
       containerId: null,
       activePaneId: "default",
       root: cyclicRoot,
-    })).rejects.toThrow("JSON serializable");
+    }, 0)).rejects.toThrow("JSON serializable");
     await expect(storage.savePaneLayout("missing", {
       version: 1,
       containerId: null,
       activePaneId: "default",
       root: {},
-    })).rejects.toThrow("Environment not found");
+    }, 0)).rejects.toThrow("Environment not found");
 
     await expect(storage.savePaneLayout(environment.id, {
       version: 1,
       containerId: null,
       activePaneId: "default",
       root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
-    })).resolves.toMatchObject({ environmentId: environment.id, revision: 1 });
+    }, 0)).resolves.toMatchObject({ environmentId: environment.id, revision: 1 });
   });
 
   test("deleting an absent pane layout is a no-op", async () => {

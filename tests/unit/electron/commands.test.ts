@@ -13281,7 +13281,11 @@ describe("pane layout commands", () => {
       revision: 1,
     };
     const getPaneLayout = mock(async () => persisted);
-    const savePaneLayout = mock(async (environmentId: string, layout: Record<string, unknown>) => ({
+    const savePaneLayout = mock(async (
+      environmentId: string,
+      layout: Record<string, unknown>,
+      _expectedRevision: number,
+    ) => ({
       ...layout,
       environmentId,
       updatedAt: new Date(0).toISOString(),
@@ -13306,6 +13310,7 @@ describe("pane layout commands", () => {
         activePaneId: "default",
         root,
       },
+      expectedRevision: 0,
     }, context);
 
     expect(savePaneLayout).toHaveBeenCalledWith("env-1", {
@@ -13313,7 +13318,7 @@ describe("pane layout commands", () => {
       containerId: null,
       activePaneId: "default",
       root,
-    });
+    }, 0);
     await expect(commands.get("get_pane_layout")?.({ environmentId: "env-1" }, context))
       .resolves.toEqual(persisted);
     expect(getPaneLayout).toHaveBeenCalledWith("env-1");
@@ -13323,15 +13328,22 @@ describe("pane layout commands", () => {
     await expect(commands.get("save_pane_layout")?.({
       environmentId: "env-1",
       layout: { version: 2, containerId: null, activePaneId: "default", root },
+      expectedRevision: 0,
     }, context)).rejects.toThrow("Unsupported pane layout version");
     await expect(commands.get("save_pane_layout")?.({
       environmentId: "env-1",
       layout: { version: 1, containerId: null, activePaneId: "", root },
+      expectedRevision: 0,
     }, context)).rejects.toThrow("non-empty");
     await expect(commands.get("save_pane_layout")?.({
       environmentId: "env-1",
       layout: { version: 1, containerId: null, activePaneId: "default", root: [] },
+      expectedRevision: 0,
     }, context)).rejects.toThrow("layout.root");
+    await expect(commands.get("save_pane_layout")?.({
+      environmentId: "env-1",
+      layout: { version: 1, containerId: null, activePaneId: "default", root },
+    }, context)).rejects.toThrow("Expected expectedRevision to be a number");
   });
 });
 

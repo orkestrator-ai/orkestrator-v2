@@ -31,6 +31,7 @@ import type {
   EnvironmentSetupSession,
   InitialPromptImageAttachment,
   PersistedPaneLayout,
+  PersistedPaneLayoutInput,
   ClaudeModelCatalogSnapshot,
   PersistedLoopedReviewWorkflow,
   PersistedBuildPipeline,
@@ -1666,9 +1667,14 @@ export async function getPaneLayout(
 
 export async function savePaneLayout(
   environmentId: string,
-  layout: Pick<PersistedPaneLayout, "version" | "containerId" | "activePaneId" | "root">,
+  layout: PersistedPaneLayoutInput,
+  expectedRevision: number,
 ): Promise<PersistedPaneLayout> {
-  return invoke<PersistedPaneLayout>("save_pane_layout", { environmentId, layout });
+  return invoke<PersistedPaneLayout>("save_pane_layout", {
+    environmentId,
+    layout,
+    expectedRevision,
+  });
 }
 
 export async function deletePaneLayout(environmentId: string): Promise<void> {

@@ -83,6 +83,18 @@ export interface ClaudeMessagePart {
   /** The MCP server name if this is an MCP tool */
   mcpServerName?: string;
   /**
+   * Background-task identity joined onto launch/action rows for display.
+   *
+   * This is client-derived decoration, not part of the bridge wire contract.
+   * `status` is absent when a persisted transcript can recover the task name
+   * and id from tool results but no authoritative lifecycle snapshot exists.
+   */
+  backgroundTask?: {
+    id: string;
+    description?: string;
+    status?: ClaudeBackgroundTask["status"];
+  };
+  /**
    * State of the whole task list immediately after this tool call, for task
    * tools. Always supplied by a backend that saw the call — the bridge in
    * Native Mode, the tmux session's transcript reader in tmux mode — never

@@ -103,6 +103,7 @@ function toNativeToolInvocationPart(
     parentTaskUseId: part.parentTaskUseId,
     isMcpTool: part.isMcpTool,
     mcpServerName: part.mcpServerName,
+    backgroundTask: part.backgroundTask,
     taskSnapshot: part.taskSnapshot,
   };
 }
@@ -435,43 +436,212 @@ function backgroundTaskAgentState(
   }
 }
 
+function stringArgument(
+  args: Record<string, unknown> | undefined,
+  ...keys: string[]
+): string | undefined {
+  if (!args) return undefined;
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function normalizeToolName(toolName?: string): string | undefined {
+  return typeof toolName === "string" ? toolName.trim().toLowerCase() : undefined;
+}
+
+/*
+ * Providers spell these tools in either casing convention, exactly as the task
+ * todo tools do (`todo-tool.ts`). The argument lookups already accept both
+ * `task_id` and `taskId`, so the tool-name check must not be the strict half.
+ */
+const BACKGROUND_TASK_STOP_TOOL_NAMES = new Set(["taskstop", "task_stop"]);
+const BACKGROUND_TASK_ACTION_TOOL_NAMES = new Set([
+  ...BACKGROUND_TASK_STOP_TOOL_NAMES,
+  "taskoutput",
+  "task_output",
+]);
+
+/** True for the tool that stops a background task, in any supported spelling. */
+export function isBackgroundTaskStopTool(toolName?: string): boolean {
+  const normalized = normalizeToolName(toolName);
+  return normalized !== undefined && BACKGROUND_TASK_STOP_TOOL_NAMES.has(normalized);
+}
+
+/** True for any tool that acts on an existing background task by id. */
+export function isBackgroundTaskActionTool(toolName?: string): boolean {
+  const normalized = normalizeToolName(toolName);
+  return normalized !== undefined && BACKGROUND_TASK_ACTION_TOOL_NAMES.has(normalized);
+}
+
+function isBackgroundTaskLaunch(part: ClaudeMessagePart): boolean {
+  return (
+    part.type === "tool-invocation"
+    && part.toolArgs?.run_in_background === true
+  );
+}
+
+/*
+ * Claude emits three different notes when a command ends up in the background,
+ * and all three carry the same durable id:
+ *   "Command running in background with ID: <id>. …"
+ *   "Command was manually backgrounded by user with ID: <id>"
+ *   "…timeout and was moved to the background (ID: <id>). …"
+ * Matching only the first would leave Ctrl+B and timeout-backgrounded commands
+ * unnamed and unlabelled after a transcript rehydration.
+ */
+const LAUNCH_TASK_ID_PATTERN =
+  /\bbackground(?:ed by user)?\s*(?:with ID:|\(ID:)\s*([^\s.)]+)/i;
+
+function backgroundTaskIdFromLaunchOutput(output?: string): string | undefined {
+  if (!output) return undefined;
+
+  const textMatch = output.match(LAUNCH_TASK_ID_PATTERN);
+  if (textMatch?.[1]) return textMatch[1];
+
+  try {
+    const parsed = JSON.parse(output) as Record<string, unknown>;
+    return stringArgument(parsed, "backgroundTaskId", "task_id", "taskId");
+  } catch {
+    return undefined;
+  }
+}
+
+function sameBackgroundTask(
+  left: ClaudeMessagePart["backgroundTask"],
+  right: ClaudeMessagePart["backgroundTask"],
+): boolean {
+  return (
+    left?.id === right?.id
+    && left?.description === right?.description
+    && left?.status === right?.status
+  );
+}
+
 /**
- * Join Claude's authoritative background-task lifecycle back onto the
- * Task/Agent tool row that launched it.
+ * Join Claude's authoritative background-task lifecycle onto the Task/Agent
+ * or background command that launched it, plus later task action rows.
  *
- * A background Agent tool_result means "launched successfully", not "the
- * child finished". The SDK's task events carry `tool_use_id`, which is the
- * stable correlation key; descriptions are intentionally never guessed.
+ * A background tool_result means "launched successfully", not "the task
+ * finished". SDK events use `tool_use_id` as the stable launch correlation;
+ * persisted Bash results provide a durable task-id fallback after restart.
  */
 export function applyClaudeBackgroundTaskStates(
   messages: ClaudeMessage[],
   backgroundTasks: Record<string, ClaudeBackgroundTask>,
 ): ClaudeMessage[] {
+  const tasksById = new Map<string, ClaudeBackgroundTask>();
   const tasksByToolUseId = new Map<string, ClaudeBackgroundTask>();
   for (const task of Object.values(backgroundTasks)) {
+    tasksById.set(task.id, task);
     if (task.toolUseId) tasksByToolUseId.set(task.toolUseId, task);
   }
-  if (tasksByToolUseId.size === 0) return messages;
+
+  /*
+   * Transcript replay does not persist SDK task lifecycle edges on every
+   * Claude version. Recover the durable task-id → launch-description join from
+   * the Bash tool result so stopped rows remain named after a bridge restart.
+   */
+  const launchesByTaskId = new Map<
+    string,
+    { id: string; description?: string; status?: ClaudeBackgroundTask["status"] }
+  >();
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool-invocation") continue;
+      const authoritative = part.toolUseId
+        ? tasksByToolUseId.get(part.toolUseId)
+        : undefined;
+      const recoveredId = isBackgroundTaskLaunch(part)
+        ? backgroundTaskIdFromLaunchOutput(part.toolOutput)
+        : undefined;
+      const taskId = authoritative?.id ?? recoveredId;
+      if (!taskId) continue;
+      launchesByTaskId.set(taskId, {
+        id: taskId,
+        description:
+          authoritative?.description
+          ?? stringArgument(part.toolArgs, "description"),
+        status: authoritative?.status,
+      });
+    }
+  }
+
+  /*
+   * Nothing to join: no authoritative snapshot and no launch recoverable from
+   * the transcript. Bail before the rewrite so the common case (a session with
+   * no background work at all) stays allocation-free — this memo recomputes on
+   * every streamed message update.
+   */
+  if (tasksById.size === 0 && launchesByTaskId.size === 0) return messages;
 
   let messagesChanged = false;
   const nextMessages = messages.map((message) => {
     let partsChanged = false;
     const parts = message.parts.map((part) => {
+      if (part.type !== "tool-invocation") return part;
+
+      const isAgentTool = isTaskTool(part.toolName);
+      const authoritativeLaunch = part.toolUseId
+        ? tasksByToolUseId.get(part.toolUseId)
+        : undefined;
+
+      let agentState = part.agentState;
+      if (isAgentTool && authoritativeLaunch) {
+        agentState = backgroundTaskAgentState(authoritativeLaunch.status);
+      }
+
+      let backgroundTask = part.backgroundTask;
+      if (!isAgentTool && isBackgroundTaskLaunch(part)) {
+        const recoveredId = backgroundTaskIdFromLaunchOutput(part.toolOutput);
+        const launch =
+          authoritativeLaunch
+          ?? (recoveredId ? tasksById.get(recoveredId) : undefined)
+          ?? (recoveredId ? launchesByTaskId.get(recoveredId) : undefined);
+        if (launch) {
+          backgroundTask = {
+            id: launch.id,
+            description:
+              launch.description
+              ?? stringArgument(part.toolArgs, "description"),
+            status: launch.status,
+          };
+        }
+      } else if (isBackgroundTaskActionTool(part.toolName)) {
+        const taskId = stringArgument(part.toolArgs, "task_id", "taskId");
+        const task = taskId
+          ? tasksById.get(taskId) ?? launchesByTaskId.get(taskId)
+          : undefined;
+        /*
+         * Only decorate a row whose task we actually resolved. An id with no
+         * launch and no snapshot behind it adds nothing the renderer cannot
+         * read straight off `toolArgs`, and decorating it would churn a new
+         * part object on every pass.
+         */
+        if (taskId && task) {
+          backgroundTask = {
+            id: taskId,
+            description: task.description,
+            status: task.status,
+          };
+        }
+      }
+
       if (
-        part.type !== "tool-invocation"
-        || !isTaskTool(part.toolName)
-        || !part.toolUseId
+        part.agentState === agentState
+        && sameBackgroundTask(part.backgroundTask, backgroundTask)
       ) {
         return part;
       }
 
-      const task = tasksByToolUseId.get(part.toolUseId);
-      if (!task) return part;
-      const agentState = backgroundTaskAgentState(task.status);
-      if (part.agentState === agentState) return part;
-
       partsChanged = true;
-      return { ...part, agentState };
+      return {
+        ...part,
+        ...(agentState === undefined ? {} : { agentState }),
+        ...(backgroundTask === undefined ? {} : { backgroundTask }),
+      };
     });
 
     if (!partsChanged) return message;

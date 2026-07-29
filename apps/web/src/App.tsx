@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@/lib/native/events";
 import { exit } from "@/lib/native/process";
+import { getCurrentWindow } from "@/lib/native/window";
 import { toast } from "sonner";
 import { AppShell } from "@/components/layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -448,9 +449,41 @@ function App() {
     }
   };
 
-  // Apply zoom level to the document
+  // Prefer Chromium's real page zoom in Electron. Unlike CSS `zoom`, native
+  // page zoom changes the layout viewport as well as the painted pixels, so
+  // 100%-height shells and bottom-pinned compose bars stay inside the window.
+  // Browser clients retain a compensated CSS fallback because they do not have
+  // access to Electron's webContents.
   useEffect(() => {
-    document.documentElement.style.zoom = `${zoomLevel}%`;
+    let active = true;
+    const rootStyle = document.documentElement.style;
+    const applyCssFallback = () => {
+      rootStyle.zoom = `${zoomLevel}%`;
+      rootStyle.setProperty("--app-viewport-width", `${10_000 / zoomLevel}dvw`);
+      rootStyle.setProperty("--app-viewport-height", `${10_000 / zoomLevel}dvh`);
+    };
+
+    void getCurrentWindow()
+      .setZoomFactor(zoomLevel / 100)
+      .then((appliedNatively) => {
+        if (!active) return;
+        if (!appliedNatively) {
+          applyCssFallback();
+          return;
+        }
+        rootStyle.zoom = "";
+        rootStyle.removeProperty("--app-viewport-width");
+        rootStyle.removeProperty("--app-viewport-height");
+      })
+      .catch((error) => {
+        if (!active) return;
+        console.warn("[App] Failed to apply native zoom; using CSS fallback:", error);
+        applyCssFallback();
+      });
+
+    return () => {
+      active = false;
+    };
   }, [zoomLevel]);
 
   // Surface Claude credential refresh/push failures as a non-blocking toast.

@@ -484,6 +484,8 @@ function resetAppMocks() {
     return Promise.resolve(mockAppUnlisten);
   });
   document.documentElement.style.zoom = "";
+  document.documentElement.style.removeProperty("--app-viewport-width");
+  document.documentElement.style.removeProperty("--app-viewport-height");
 }
 
 afterAll(() => {
@@ -1526,6 +1528,12 @@ describe("App startup checks and global events", () => {
     });
     await waitFor(() => {
       expect(document.documentElement.style.zoom).toBe("110%");
+      expect(document.documentElement.style.getPropertyValue("--app-viewport-width")).toBe(
+        `${10_000 / 110}dvw`,
+      );
+      expect(document.documentElement.style.getPropertyValue("--app-viewport-height")).toBe(
+        `${10_000 / 110}dvh`,
+      );
     });
 
     act(() => {
@@ -1547,6 +1555,42 @@ describe("App startup checks and global events", () => {
         }),
       );
     });
+  });
+
+  test("uses native page zoom without leaving CSS viewport compensation active", async () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+    const originalOrkestrator = window.orkestrator;
+    const setZoomFactor = mock(async () => true);
+    window.orkestrator = {
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor,
+      },
+    } as unknown as Window["orkestrator"];
+
+    try {
+      render(<App />);
+      await waitFor(() => expect(setZoomFactor).toHaveBeenCalledWith(1));
+
+      act(() => {
+        appEventCallbacks.get("menu-zoom")?.({ payload: "in" });
+      });
+      await waitFor(() => expect(setZoomFactor).toHaveBeenCalledWith(1.1));
+
+      expect(document.documentElement.style.zoom).toBe("");
+      expect(
+        document.documentElement.style.getPropertyValue("--app-viewport-width"),
+      ).toBe("");
+      expect(
+        document.documentElement.style.getPropertyValue("--app-viewport-height"),
+      ).toBe("");
+    } finally {
+      window.orkestrator = originalOrkestrator;
+    }
   });
 
   test("handles every zoom shortcut and throttles alternate credential errors", async () => {

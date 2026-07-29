@@ -97,7 +97,7 @@ export function AppShell({ children }: AppShellProps) {
   }, [windowTitle]);
 
   return (
-    <div className="flex h-dvh w-screen flex-col overflow-hidden">
+    <div className="flex h-full w-full flex-col overflow-hidden">
       <OpenFileDialog />
       {isMobile ? (
         <MobileAppShellLayout

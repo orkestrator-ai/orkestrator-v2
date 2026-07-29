@@ -704,6 +704,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       startDragging(): Promise<void> {
         return Promise.resolve();
       },
+      setZoomFactor(): Promise<boolean> {
+        return Promise.resolve(false);
+      },
     },
   };
 }

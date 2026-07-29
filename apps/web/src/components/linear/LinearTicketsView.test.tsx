@@ -1,8 +1,12 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
-import { mockToastSuccess as toastSuccessMock } from "../../../../../tests/mocks/sonner";
+import {
+  mockToastError as toastErrorMock,
+  mockToastSuccess as toastSuccessMock,
+} from "../../../../../tests/mocks/sonner";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import type { LinearConnectionStatus, LinearIssueDetail, LinearIssueListItem } from "@/types/linear";
 
 const realBackendSnapshot = { ...realBackend };
@@ -43,6 +47,15 @@ const saveComposeDraftMock = mock(async (
   updatedAt: "2026-07-28T00:00:00.000Z",
 }));
 const deleteComposeDraftMock = mock(async (_draftKey: string) => undefined);
+const retryCompletionCommentMock = mock(async (pipelineId: string) => {
+  const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+  return {
+    ...current,
+    completionCommentStatus: undefined,
+    completionCommentError: undefined,
+    backendRevision: current.backendRevision + 1,
+  };
+});
 const startBuildFromLinearIssueMock = mock(async () => undefined);
 const navigateToPipelineMock = mock(async () => undefined);
 
@@ -57,6 +70,7 @@ mock.module("@/lib/backend", () => ({
   getComposeDraft: getComposeDraftMock,
   saveComposeDraft: saveComposeDraftMock,
   deleteComposeDraft: deleteComposeDraftMock,
+  retryBuildPipelineCompletionComment: retryCompletionCommentMock,
 }));
 
 const { LinearTicketsViewContent } = await import("./LinearTicketsView");
@@ -162,9 +176,11 @@ describe("LinearTicketsView", () => {
     }));
     deleteComposeDraftMock.mockReset();
     deleteComposeDraftMock.mockResolvedValue(undefined);
+    retryCompletionCommentMock.mockClear();
     startBuildFromLinearIssueMock.mockClear();
     navigateToPipelineMock.mockClear();
     toastSuccessMock.mockClear();
+    toastErrorMock.mockClear();
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -514,11 +530,12 @@ describe("LinearTicketsView", () => {
 
   test("uses the active Linear pipeline when the same issue has older completed runs", async () => {
     const store = useBuildPipelineStore.getState();
-    const oldPipelineId = store.createPipeline({
+    const oldPipelineId = "linear-old";
+    store.replacePipeline(buildPipelineFixture({
+      id: oldPipelineId,
       taskId: "issue-1",
-      projectId: "project-1",
-      environmentType: "local",
-      agentType: "codex",
+      environmentId: "env-old",
+      phase: "complete",
       taskTitle: "ENG-123: Add Linear integration",
       taskSnapshot: {
         title: "ENG-123: Add Linear integration",
@@ -532,15 +549,14 @@ describe("LinearTicketsView", () => {
         issueId: "issue-1",
         issueIdentifier: "ENG-123",
       },
-    });
-    store.setPipelineEnvironment(oldPipelineId, "env-old");
-    store.setPhase(oldPipelineId, "complete");
+    }));
 
-    const activePipelineId = store.createPipeline({
+    const activePipelineId = "linear-active";
+    store.replacePipeline(buildPipelineFixture({
+      id: activePipelineId,
       taskId: "issue-1",
-      projectId: "project-1",
-      environmentType: "local",
-      agentType: "codex",
+      environmentId: "env-active",
+      phase: "building",
       taskTitle: "ENG-123: Add Linear integration",
       taskSnapshot: {
         title: "ENG-123: Add Linear integration",
@@ -554,9 +570,7 @@ describe("LinearTicketsView", () => {
         issueId: "issue-1",
         issueIdentifier: "ENG-123",
       },
-    });
-    store.setPipelineEnvironment(activePipelineId, "env-active");
-    store.setPhase(activePipelineId, "building");
+    }));
 
     renderLinearTicketsView();
 
@@ -590,11 +604,11 @@ describe("LinearTicketsView", () => {
   });
 
   test("clears failed completion comment state when retrying from ticket details", async () => {
-    const pipelineId = useBuildPipelineStore.getState().createPipeline({
+    const pipelineId = "linear-completion-failed";
+    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
+      id: pipelineId,
       taskId: "issue-1",
-      projectId: "project-1",
-      environmentType: "local",
-      agentType: "codex",
+      phase: "complete",
       taskTitle: "ENG-123: Add Linear integration",
       taskSnapshot: {
         title: "ENG-123: Add Linear integration",
@@ -608,11 +622,9 @@ describe("LinearTicketsView", () => {
         issueId: "issue-1",
         issueIdentifier: "ENG-123",
       },
-    });
-    useBuildPipelineStore.getState().setPhase(pipelineId, "complete");
-    useBuildPipelineStore.getState().setCompletionCommentStatus(pipelineId, "failed", {
-      error: "Linear unavailable",
-    });
+      completionCommentStatus: "failed",
+      completionCommentError: "Linear unavailable",
+    }));
 
     renderLinearTicketsView();
 
@@ -621,6 +633,53 @@ describe("LinearTicketsView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /retry comment/i }));
 
-    expect(useBuildPipelineStore.getState().pipelines.get(pipelineId)?.completionCommentStatus).toBeUndefined();
+    await waitFor(() => {
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(pipelineId)
+          ?.completionCommentStatus,
+      ).toBeUndefined();
+    });
+  });
+
+  test("keeps Linear completion retries single-flight and recovers after rejection", async () => {
+    const pipelineId = "linear-completion-retry";
+    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
+      id: pipelineId,
+      taskId: "issue-1",
+      phase: "complete",
+      taskTitle: "ENG-123: Add Linear integration",
+      source: {
+        type: "linear",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-123",
+      },
+      completionCommentStatus: "failed",
+      completionCommentError: "Linear unavailable",
+    }));
+    const pending = deferred<Awaited<
+      ReturnType<typeof retryCompletionCommentMock>
+    >>();
+    retryCompletionCommentMock.mockImplementationOnce(() => pending.promise);
+    renderLinearTicketsView();
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    const button = await screen.findByRole("button", {
+      name: /retry comment/i,
+    }) as HTMLButtonElement;
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(retryCompletionCommentMock).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(true);
+
+    pending.reject(new Error("still offline"));
+    await waitFor(() => expect(button.disabled).toBe(false));
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Failed to retry Linear completion comment",
+      { description: "still offline" },
+    );
+
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(retryCompletionCommentMock).toHaveBeenCalledTimes(2));
   });
 });

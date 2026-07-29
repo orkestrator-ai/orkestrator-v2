@@ -3,6 +3,10 @@ import { getGatewayBaseUrl } from "@/lib/gateway-url";
 import type { EnvironmentDiffStatsSnapshot } from "@orkestrator/protocol/diff-stats";
 import type { PrMonitorMode, PrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
 import type {
+  BuildPipeline as BackendBuildPipeline,
+  StartBuildPipelineInput,
+} from "@orkestrator/protocol/build-pipeline";
+import type {
   Project,
   Environment,
   EnvironmentType,
@@ -1737,6 +1741,64 @@ export async function deleteLoopedReviewWorkflow(
 
 // --- Build Pipeline Persistence ---
 
+export async function startBuildPipeline(
+  input: StartBuildPipelineInput,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("start_build_pipeline", { ...input });
+}
+
+export async function pauseBuildPipeline(
+  pipelineId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("pause_build_pipeline", { pipelineId });
+}
+
+export async function resumeBuildPipeline(
+  pipelineId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("resume_build_pipeline", { pipelineId });
+}
+
+export async function cancelBuildPipeline(
+  pipelineId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("cancel_build_pipeline", { pipelineId });
+}
+
+export async function sendBuildPipelineMessage(
+  pipelineId: string,
+  text: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("send_build_pipeline_message", {
+    pipelineId,
+    text,
+  });
+}
+
+export async function retryBuildPipelineReview(
+  pipelineId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("retry_build_pipeline_review", {
+    pipelineId,
+  });
+}
+
+export async function retryBuildPipelineCompletionComment(
+  pipelineId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>(
+    "retry_build_pipeline_completion_comment",
+    { pipelineId },
+  );
+}
+
+export async function importLegacyBuildPipelines(
+  projectId: string,
+  snapshots: unknown[],
+): Promise<{ importedIds: string[]; skipped: number }> {
+  return invoke("import_legacy_build_pipelines", { projectId, snapshots });
+}
+
 export async function getBuildPipeline<T = unknown>(
   pipelineId: string,
 ): Promise<PersistedBuildPipeline<T> | null> {
@@ -1747,24 +1809,6 @@ export async function listBuildPipelines<T = unknown>(
   projectId: string,
 ): Promise<Array<PersistedBuildPipeline<T>>> {
   return invoke<Array<PersistedBuildPipeline<T>>>("list_build_pipelines", { projectId });
-}
-
-export async function saveBuildPipeline<T>(
-  pipelineId: string,
-  projectId: string,
-  environmentId: string,
-  version: number,
-  snapshot: T,
-  expectedRevision?: number,
-): Promise<PersistedBuildPipeline<T>> {
-  return invoke<PersistedBuildPipeline<T>>("save_build_pipeline", {
-    pipelineId,
-    projectId,
-    environmentId,
-    version,
-    snapshot,
-    ...(expectedRevision === undefined ? {} : { expectedRevision }),
-  });
 }
 
 export async function deleteBuildPipeline(pipelineId: string): Promise<void> {

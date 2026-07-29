@@ -75,7 +75,8 @@ Begin by running git status to understand the current state.`;
 /**
  * Generates the prompt for the code review workflow.
  * This prompt instructs the agent to commit changes and perform a code review.
- * Shares its body with `createBuildReviewPrompt` via `buildReviewBody()`.
+ * Shares its body with the other interactive review workflows via
+ * `buildReviewBody()`.
  */
 function createDefaultReviewPrompt(
   targetBranch: string,

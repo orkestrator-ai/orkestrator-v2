@@ -1,11 +1,9 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import {
   hydrateBuildPipeline,
   hydrateBuildPipelinesForProject,
   LEGACY_BUILD_PIPELINE_STORAGE_KEY,
   migrateLegacyBuildPipelines,
-  persistBuildPipelineNow,
-  startBuildPipelinePersistence,
 } from "./build-pipeline-persistence";
 import {
   BUILD_PIPELINE_VERSION,
@@ -13,18 +11,12 @@ import {
   type BuildPipeline,
 } from "@/stores/buildPipelineStore";
 import type { PersistedBuildPipeline } from "@/types";
-import {
-  TEST_LEGACY_STRUCTURED_REVIEW_REPORT,
-  TEST_STRUCTURED_REVIEW_REPORT,
-} from "@/components/build-pipeline/structured-review-test-fixture";
 
-const PROJECT_ID = "project-1";
-
-function pipeline(overrides: Partial<BuildPipeline> = {}): BuildPipeline {
+function snapshot(id = "pipeline-1"): BuildPipeline {
   return {
-    id: "pipeline-1",
+    id,
     taskId: "task-1",
-    projectId: PROJECT_ID,
+    projectId: "project-1",
     environmentId: "env-1",
     environmentType: "local",
     agentType: "codex",
@@ -33,8 +25,7 @@ function pipeline(overrides: Partial<BuildPipeline> = {}): BuildPipeline {
     currentSessionIndex: -1,
     iteration: 0,
     maxIterations: 3,
-    backendRevision: 0,
-    createdAt: "2026-01-01T00:00:00.000Z",
+    createdAt: "2026-07-29T00:00:00.000Z",
     taskTitle: "Task",
     taskSnapshot: {
       title: "Task",
@@ -43,774 +34,429 @@ function pipeline(overrides: Partial<BuildPipeline> = {}): BuildPipeline {
       comments: [],
       images: [],
     },
-    ...overrides,
+    backendRevision: 0,
+    controller: "backend",
   };
 }
 
-function persisted(
-  snapshot: BuildPipeline,
+function record(
+  pipeline: BuildPipeline,
   revision: number,
 ): PersistedBuildPipeline<BuildPipeline> {
   return {
     version: BUILD_PIPELINE_VERSION,
-    id: snapshot.id,
-    projectId: snapshot.projectId,
-    environmentId: snapshot.environmentId,
-    snapshot,
-    updatedAt: "2026-01-01T00:00:00.000Z",
+    id: pipeline.id,
+    projectId: pipeline.projectId,
+    environmentId: pipeline.environmentId,
+    snapshot: pipeline,
     revision,
+    updatedAt: "2026-07-29T00:00:00.000Z",
   };
 }
 
-function seed(...pipelines: BuildPipeline[]): void {
-  useBuildPipelineStore.setState({
-    pipelines: new Map(pipelines.map((entry) => [entry.id, entry])),
-    buildEnvironmentIds: new Set(
-      pipelines.map((entry) => entry.environmentId).filter(Boolean),
-    ),
-  });
-}
-
-function deferred<T>() {
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
   });
   return { promise, resolve };
 }
 
-const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function waitForCondition(
-  predicate: () => boolean,
-  timeoutMs = 500,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error("Timed out waiting for condition");
-    await tick(5);
-  }
-}
-
-beforeEach(() => {
-  useBuildPipelineStore.setState({
-    pipelines: new Map(),
-    buildEnvironmentIds: new Set(),
-  });
-});
-
-describe("hydrateBuildPipeline", () => {
-  test("adopts the backend snapshot and stamps its revision", async () => {
-    const restored = await hydrateBuildPipeline(
-      "pipeline-1",
-      async () => persisted(pipeline({ phase: "reviewing" }), 7),
-    );
-
-    expect(restored).toMatchObject({ phase: "reviewing", backendRevision: 7 });
-    expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1"))
-      .toMatchObject({ phase: "reviewing", backendRevision: 7 });
+describe("build pipeline read model", () => {
+  beforeEach(() => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map(),
+      buildEnvironmentIds: new Set(),
+    });
   });
 
-  test("normalizes legacy structured reviews before installing the snapshot", async () => {
+  test("hydrates an authoritative backend snapshot", async () => {
     const restored = await hydrateBuildPipeline(
       "pipeline-1",
-      async () => persisted(pipeline({
-        phase: "failed",
-        structuredReview: TEST_LEGACY_STRUCTURED_REVIEW_REPORT as never,
-      }), 8),
+      async () => record(snapshot(), 7),
+    );
+    expect(restored).toMatchObject({
+      id: "pipeline-1",
+      backendRevision: 7,
+      controller: "backend",
+    });
+  });
+
+  test("hydrates every project pipeline", async () => {
+    const restored = await hydrateBuildPipelinesForProject(
+      "project-1",
+      async () => [record(snapshot("one"), 1), record(snapshot("two"), 2)],
+    );
+    expect(restored.map((pipeline) => pipeline.id)).toEqual(["one", "two"]);
+  });
+
+  test("rejects malformed record metadata and mismatched snapshots", async () => {
+    const valid = record(snapshot(), 1);
+    const invalidRecords = [
+      { ...valid, version: BUILD_PIPELINE_VERSION + 1 },
+      { ...valid, revision: 0 },
+      { ...valid, revision: Number.NaN },
+      { ...valid, updatedAt: "not-a-date" },
+      { ...valid, id: "different-id" },
+      { ...valid, projectId: "different-project" },
+      { ...valid, environmentId: "different-environment" },
+      { ...valid, snapshot: { ...snapshot(), controller: "renderer" } as never },
+    ];
+
+    for (const invalid of invalidRecords) {
+      useBuildPipelineStore.setState({
+        pipelines: new Map(),
+        buildEnvironmentIds: new Set(),
+      });
+      expect(
+        await hydrateBuildPipeline("pipeline-1", async () => invalid),
+      ).toBeNull();
+      expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    }
+  });
+
+  test("keeps a newer local revision when a stale point read completes", async () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...snapshot(),
+      phase: "reviewing",
+      backendRevision: 9,
+    });
+
+    const restored = await hydrateBuildPipeline(
+      "pipeline-1",
+      async () => record({ ...snapshot(), phase: "building" }, 4),
     );
 
-    expect(restored?.structuredReview?.testResults.notRun).toBe(13);
+    expect(restored?.phase).toBe("reviewing");
+    expect(restored?.backendRevision).toBe(9);
+  });
+
+  test("does not resurrect a pipeline deleted during a slow project hydration", async () => {
+    const listing = deferred<Array<PersistedBuildPipeline<BuildPipeline>>>();
+    const projectHydration = hydrateBuildPipelinesForProject(
+      "project-1",
+      async () => listing.promise,
+    );
+
     expect(
-      useBuildPipelineStore.getState().pipelines
-        .get("pipeline-1")
-        ?.structuredReview
-        ?.testResults.notRun,
-    ).toBe(13);
+      await hydrateBuildPipeline("pipeline-1", async () => null),
+    ).toBeNull();
+    useBuildPipelineStore.getState().removePipeline("pipeline-1");
+    listing.resolve([record(snapshot(), 3)]);
+
+    expect(await projectHydration).toEqual([]);
+    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(false);
   });
 
-  test("leaves an already-normalized review untouched", async () => {
-    // Rewriting an unchanged report would change the snapshot fingerprint and
-    // schedule a pointless backend write on every hydration.
-    const restored = await hydrateBuildPipeline(
+  test("ignores an older project response that finishes after a newer response", async () => {
+    const older = deferred<Array<PersistedBuildPipeline<BuildPipeline>>>();
+    const first = hydrateBuildPipelinesForProject(
+      "project-1",
+      async () => older.promise,
+    );
+    const second = await hydrateBuildPipelinesForProject(
+      "project-1",
+      async () => [record({ ...snapshot("new"), phase: "reviewing" }, 7)],
+    );
+
+    older.resolve([record({ ...snapshot("old"), phase: "building" }, 1)]);
+    const staleResult = await first;
+
+    expect(second.map(({ id }) => id)).toEqual(["new"]);
+    expect(staleResult.map(({ id }) => id)).toEqual(["new"]);
+    expect(useBuildPipelineStore.getState().pipelines.has("old")).toBe(false);
+  });
+
+  test("a superseded point read cannot remove a newer point-read result", async () => {
+    const older = deferred<PersistedBuildPipeline<BuildPipeline> | null>();
+    const first = hydrateBuildPipeline("pipeline-1", async () => older.promise);
+    const second = await hydrateBuildPipeline(
       "pipeline-1",
-      async () => persisted(pipeline({
-        phase: "failed",
-        structuredReview: TEST_STRUCTURED_REVIEW_REPORT,
-      }), 8),
+      async () => record({ ...snapshot(), phase: "verifying" }, 8),
     );
 
-    expect(restored?.structuredReview).toBe(TEST_STRUCTURED_REVIEW_REPORT);
-  });
+    older.resolve(null);
+    const staleResult = await first;
 
-  test("drops a snapshot whose structured review cannot be repaired", async () => {
-    const restored = await hydrateBuildPipeline(
-      "pipeline-1",
-      async () => persisted(pipeline({
-        phase: "failed",
-        structuredReview: {
-          ...TEST_STRUCTURED_REVIEW_REPORT,
-          testResults: { total: 5, passed: 6, failed: 0, failures: [] },
-        } as never,
-      }), 8),
-    );
-
-    expect(restored).toBeNull();
-    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
-  });
-
-  test("normalizes legacy structured reviews for every pipeline in a project", async () => {
-    const restored = await hydrateBuildPipelinesForProject(
-      PROJECT_ID,
-      async () => [persisted(pipeline({
-        phase: "failed",
-        structuredReview: TEST_LEGACY_STRUCTURED_REVIEW_REPORT as never,
-      }), 4)],
-    );
-
-    expect(restored[0]?.structuredReview?.testResults.notRun).toBe(13);
-  });
-
-  test("keeps a local snapshot that has already seen a newer revision", async () => {
-    seed(pipeline({ phase: "verifying", backendRevision: 9 }));
-
-    const restored = await hydrateBuildPipeline(
-      "pipeline-1",
-      async () => persisted(pipeline({ phase: "building" }), 4),
-    );
-
-    expect(restored).toMatchObject({ phase: "verifying", backendRevision: 9 });
-  });
-
-  test("keeps an unsaved local transition at the same backend revision", async () => {
-    const save = mock(async (
-      _id: string,
-      _projectId: string,
-      _environmentId: string,
-      _version: number,
-      snapshot: BuildPipeline,
-    ) => persisted(snapshot, 6));
-    const stop = startBuildPipelinePersistence({
-      debounceMs: 10_000,
-      save: save as never,
-    });
-    try {
-      seed(pipeline({ phase: "verifying", backendRevision: 5 }));
-
-      const restored = await hydrateBuildPipeline(
-        "pipeline-1",
-        async () => persisted(pipeline({ phase: "building" }), 5),
-      );
-
-      expect(restored).toMatchObject({ phase: "verifying", backendRevision: 5 });
-    } finally {
-      stop();
-      await tick(10);
-    }
-  });
-
-  test("drops a snapshot whose id does not match the record", async () => {
-    const restored = await hydrateBuildPipeline(
-      "pipeline-1",
-      async () => ({
-        ...persisted(pipeline(), 3),
-        snapshot: pipeline({ id: "someone-else" }),
-      }),
-    );
-
-    expect(restored).toBeNull();
-    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
-  });
-
-  test("drops a structurally invalid snapshot rather than applying half of it", async () => {
-    const restored = await hydrateBuildPipeline(
-      "pipeline-1",
-      async () => ({
-        ...persisted(pipeline(), 3),
-        snapshot: { id: "pipeline-1", phase: "not-a-phase" } as unknown as BuildPipeline,
-      }),
-    );
-
-    expect(restored).toBeNull();
-    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
-  });
-
-  test("rejects past and future snapshot schema versions", async () => {
-    for (const version of [BUILD_PIPELINE_VERSION - 1, BUILD_PIPELINE_VERSION + 1]) {
-      const restored = await hydrateBuildPipeline(
-        "pipeline-1",
-        async () => ({ ...persisted(pipeline(), 3), version }),
-      );
-
-      expect(restored).toBeNull();
-      expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
-    }
-  });
-
-  test("rejects invalid record metadata and environment mismatches", async () => {
-    for (const record of [
-      { ...persisted(pipeline(), 3), revision: Number.NaN },
-      { ...persisted(pipeline(), 3), revision: 0 },
-      { ...persisted(pipeline(), 3), updatedAt: "not-a-date" },
-      { ...persisted(pipeline(), 3), environmentId: "another-env" },
-    ]) {
-      const restored = await hydrateBuildPipeline(
-        "pipeline-1",
-        async () => record,
-      );
-
-      expect(restored).toBeNull();
-      expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
-    }
-  });
-
-  test("returns null when the backend has no record", async () => {
-    expect(await hydrateBuildPipeline("pipeline-1", async () => null)).toBeNull();
+    expect(second?.phase).toBe("verifying");
+    expect(staleResult?.phase).toBe("verifying");
+    expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1")?.phase)
+      .toBe("verifying");
   });
 });
 
-describe("hydrateBuildPipelinesForProject", () => {
-  test("restores every pipeline belonging to the project", async () => {
-    const restored = await hydrateBuildPipelinesForProject(PROJECT_ID, async () => [
-      persisted(pipeline({ id: "pipeline-1" }), 1),
-      persisted(pipeline({ id: "pipeline-2", environmentId: "env-2" }), 2),
-    ]);
-
-    expect(restored.map((entry) => entry.id)).toEqual(["pipeline-1", "pipeline-2"]);
-    expect(useBuildPipelineStore.getState().buildEnvironmentIds)
-      .toEqual(new Set(["env-1", "env-2"]));
-  });
-
-  test("ignores records belonging to another project", async () => {
-    const restored = await hydrateBuildPipelinesForProject(PROJECT_ID, async () => [
-      { ...persisted(pipeline({ id: "foreign" }), 1), projectId: "project-2" },
-    ]);
-
-    expect(restored).toEqual([]);
-    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
-  });
-
-  test("restores a pipeline that never reached an environment", async () => {
-    // The crash window this exists for: a pipeline created, then the client
-    // died before its environment existed. It is keyed only by project, so
-    // nothing about it can be recovered from the environment list.
-    const stranded = pipeline({
-      id: "pipeline-stranded",
-      environmentId: "",
-      phase: "creating-environment",
-    });
-
-    const restored = await hydrateBuildPipelinesForProject(
-      PROJECT_ID,
-      async () => [persisted(stranded, 1)],
-    );
-
-    expect(restored.map((entry) => entry.id)).toEqual(["pipeline-stranded"]);
-    expect(useBuildPipelineStore.getState().pipelines.get("pipeline-stranded")?.phase)
-      .toBe("creating-environment");
-    // A blank environment id must not be added to the derived set.
-    expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("")).toBe(false);
-  });
-
-  test("releases a completion-comment lease stranded by a dead client", async () => {
-    const restored = await hydrateBuildPipelinesForProject(PROJECT_ID, async () => [
-      persisted(pipeline({
-        completionCommentStatus: "posting",
-        completionCommentError: "half-written",
-      }), 3),
-    ]);
-
-    expect(restored[0]?.completionCommentStatus).toBeUndefined();
-    expect(restored[0]?.completionCommentError).toBeUndefined();
-  });
-
-  test("preserves a terminal completion-comment result", async () => {
-    const restored = await hydrateBuildPipelinesForProject(PROJECT_ID, async () => [
-      persisted(pipeline({ completionCommentStatus: "posted", completionCommentId: "c1" }), 3),
-    ]);
-
-    expect(restored[0]).toMatchObject({
-      completionCommentStatus: "posted",
-      completionCommentId: "c1",
-    });
-  });
-
-  test("keeps dirty equal-revision and locally newer pipelines during project hydration", async () => {
-    const save = mock(async (
-      _id: string,
-      _projectId: string,
-      _environmentId: string,
-      _version: number,
-      snapshot: BuildPipeline,
-    ) => persisted(snapshot, snapshot.backendRevision + 1));
-    const stop = startBuildPipelinePersistence({
-      debounceMs: 10_000,
-      save: save as never,
-    });
-    try {
-      seed(
-        pipeline({ id: "pipeline-1", phase: "verifying", backendRevision: 5 }),
-        pipeline({
-          id: "pipeline-newer",
-          environmentId: "env-newer",
-          phase: "creating-pr",
-          backendRevision: 9,
-        }),
-      );
-
-      const restored = await hydrateBuildPipelinesForProject(PROJECT_ID, async () => [
-        persisted(pipeline({ id: "pipeline-1", phase: "building" }), 5),
-        persisted(pipeline({
-          id: "pipeline-newer",
-          environmentId: "env-newer",
-          phase: "reviewing",
-        }), 8),
-      ]);
-
-      expect(restored).toEqual([
-        expect.objectContaining({ id: "pipeline-1", phase: "verifying", backendRevision: 5 }),
-        expect.objectContaining({
-          id: "pipeline-newer",
-          phase: "creating-pr",
-          backendRevision: 9,
-        }),
-      ]);
-    } finally {
-      stop();
-      await tick(10);
-    }
-  });
-});
-
-describe("persistBuildPipelineNow", () => {
-  test("writes with the local revision as the compare-and-swap expectation", async () => {
-    seed(pipeline({ backendRevision: 4 }));
-    const save = mock(async (
-      ..._args: unknown[]
-    ) => persisted(pipeline({ backendRevision: 4 }), 5));
-
-    await persistBuildPipelineNow("pipeline-1", { save: save as never });
-
-    expect(save.mock.calls[0]?.[5]).toBe(4);
-    expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1")?.backendRevision)
-      .toBe(5);
-  });
-
-  test("adopts the backend winner on a revision conflict instead of retrying", async () => {
-    seed(pipeline({ phase: "building", backendRevision: 2 }));
-    const save = mock(async () => {
-      throw new Error("Build pipeline revision conflict");
-    });
-    const load = mock(async () => persisted(pipeline({ phase: "creating-pr" }), 6));
-
-    const result = await persistBuildPipelineNow("pipeline-1", {
-      save: save as never,
-      load: load as never,
-    });
-
-    expect(result).toMatchObject({ phase: "creating-pr", backendRevision: 6 });
-  });
-
-  test("propagates a non-conflict failure so the caller does not assume durability", async () => {
-    seed(pipeline());
-    const save = mock(async () => {
-      throw new Error("disk is full");
-    });
-
-    await expect(
-      persistBuildPipelineNow("pipeline-1", { save: save as never }),
-    ).rejects.toThrow("disk is full");
-  });
-
-  test("propagates a conflict when the backend winner is invalid", async () => {
-    seed(pipeline({ backendRevision: 2 }));
-    const save = mock(async () => {
-      throw new Error("Build pipeline revision conflict");
-    });
-    const load = mock(async () => ({
-      ...persisted(pipeline({ phase: "creating-pr" }), 6),
-      version: BUILD_PIPELINE_VERSION + 1,
-    }));
-
-    await expect(
-      persistBuildPipelineNow("pipeline-1", {
-        save: save as never,
-        load: load as never,
-      }),
-    ).rejects.toThrow("revision conflict");
-  });
-
-  test("throws for a pipeline this client does not hold", async () => {
-    await expect(persistBuildPipelineNow("missing")).rejects.toThrow("not found");
-  });
-});
-
-describe("startBuildPipelinePersistence", () => {
-  test("serializes an immediate reservation behind an in-flight mirror write", async () => {
-    const firstSave = deferred<PersistedBuildPipeline<BuildPipeline>>();
-    const save = mock(async (...args: unknown[]) => {
-      const snapshot = args[4] as BuildPipeline;
-      if (save.mock.calls.length === 1) return firstSave.promise;
-      return persisted(snapshot, 2);
-    });
-    const stop = startBuildPipelinePersistence({
-      debounceMs: 1,
-      save: save as never,
-    });
-    try {
-      seed(pipeline({ backendRevision: 0 }));
-      await waitForCondition(() => save.mock.calls.length === 1);
-
-      const immediate = persistBuildPipelineNow("pipeline-1");
-      await tick(5);
-      expect(save).toHaveBeenCalledTimes(1);
-
-      firstSave.resolve(persisted(pipeline(), 1));
-      await immediate;
-
-      expect(save).toHaveBeenCalledTimes(2);
-      expect(save.mock.calls[1]?.[5]).toBe(1);
-      expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1")?.backendRevision)
-        .toBe(2);
-    } finally {
-      stop();
-    }
-  });
-
-  test("mirrors a transition to the backend after the debounce", async () => {
-    const save = mock(async (..._args: unknown[]) => persisted(pipeline(), 1));
-    const stop = startBuildPipelinePersistence({ debounceMs: 5, save: save as never });
-    try {
-      seed(pipeline());
-      await tick(40);
-
-      expect(save).toHaveBeenCalledTimes(1);
-      expect(save.mock.calls[0]?.[3]).toBe(BUILD_PIPELINE_VERSION);
-    } finally {
-      stop();
-    }
-  });
-
-  test("coalesces a burst of transitions into one write", async () => {
-    const save = mock(async (..._args: unknown[]) => persisted(pipeline(), 1));
-    const stop = startBuildPipelinePersistence({ debounceMs: 20, save: save as never });
-    try {
-      seed(pipeline({ phase: "building" }));
-      useBuildPipelineStore.getState().setPhase("pipeline-1", "reviewing");
-      useBuildPipelineStore.getState().setPhase("pipeline-1", "verifying");
-      await tick(80);
-
-      expect(save).toHaveBeenCalledTimes(1);
-      expect((save.mock.calls[0]?.[4] as BuildPipeline).phase).toBe("verifying");
-    } finally {
-      stop();
-    }
-  });
-
-  test("deletes the backend record when a persisted pipeline is dropped", async () => {
-    const remove = mock(async () => {});
-    const stop = startBuildPipelinePersistence({
-      debounceMs: 5,
-      save: mock(async () => persisted(pipeline(), 1)) as never,
-      remove,
-    });
-    try {
-      seed(pipeline({ backendRevision: 3 }));
-      await tick(30);
-      useBuildPipelineStore.getState().removePipeline("pipeline-1");
-      await tick(30);
-
-      expect(remove).toHaveBeenCalledWith("pipeline-1");
-    } finally {
-      stop();
-    }
-  });
-
-  test("does not delete a pipeline the backend never stored", async () => {
-    const remove = mock(async () => {});
-    const stop = startBuildPipelinePersistence({
-      debounceMs: 500,
-      save: mock(async () => persisted(pipeline(), 1)) as never,
-      remove,
-    });
-    try {
-      seed(pipeline({ backendRevision: 0 }));
-      useBuildPipelineStore.getState().removePipeline("pipeline-1");
-      await tick(30);
-
-      expect(remove).not.toHaveBeenCalled();
-    } finally {
-      stop();
-    }
-  });
-
-  test("adopts the backend winner when a mirrored write conflicts", async () => {
-    const save = mock(async () => {
-      throw new Error("Build pipeline revision conflict");
-    });
-    const load = mock(async () => persisted(pipeline({ phase: "complete" }), 11));
-    const stop = startBuildPipelinePersistence({
-      debounceMs: 5,
-      save: save as never,
-      load: load as never,
-    });
-    try {
-      seed(pipeline({ phase: "building", backendRevision: 1 }));
-      await tick(60);
-
-      expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1"))
-        .toMatchObject({ phase: "complete", backendRevision: 11 });
-    } finally {
-      stop();
-    }
-  });
-
-  test("retries a transient mirrored write without requiring another transition", async () => {
-    let calls = 0;
-    const save = mock(async (..._args: unknown[]) => {
-      calls += 1;
-      if (calls === 1) throw new Error("disk temporarily unavailable");
-      return persisted(pipeline(), 1);
-    });
-    const stop = startBuildPipelinePersistence({
-      debounceMs: 5,
-      retryMs: 5,
-      maxRetryMs: 10,
-      save: save as never,
-    });
-    try {
-      seed(pipeline({ phase: "reviewing" }));
-
-      await waitForCondition(() => save.mock.calls.length >= 2);
-
-      expect(save).toHaveBeenCalledTimes(2);
-      expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1")?.backendRevision)
-        .toBe(1);
-    } finally {
-      stop();
-    }
-  });
-
-  test("stops mirroring once detached", async () => {
-    const save = mock(async () => persisted(pipeline(), 1));
-    const stop = startBuildPipelinePersistence({ debounceMs: 5, save: save as never });
-    stop();
-
-    seed(pipeline());
-    await tick(40);
-
-    expect(save).not.toHaveBeenCalled();
-  });
-
-  test("seeds pipelines that predate the subscription so a restart cannot strand one", async () => {
-    // A pipeline restored from localStorage, or created before the mirror
-    // started, has no transition left to observe — only this pass writes it.
-    seed(pipeline());
-    const save = mock(async () => persisted(pipeline(), 1));
-    const stop = startBuildPipelinePersistence({ debounceMs: 5, save: save as never });
-    try {
-      await tick(40);
-      expect(save).toHaveBeenCalledTimes(1);
-      expect((save.mock.calls[0] as unknown as unknown[])[0]).toBe("pipeline-1");
-    } finally {
-      stop();
-    }
-  });
-
-  test("flushes an outstanding write when the page is hidden", async () => {
-    // The debounce would otherwise lose a transition to a closing window.
-    const save = mock(async () => persisted(pipeline(), 1));
-    const stop = startBuildPipelinePersistence({ debounceMs: 10_000, save: save as never });
-    try {
-      seed(pipeline({ phase: "reviewing" }));
-      await tick(5);
-      expect(save).not.toHaveBeenCalled();
-
-      window.dispatchEvent(new Event("pagehide"));
-      await tick(20);
-
-      expect(save).toHaveBeenCalledTimes(1);
-    } finally {
-      stop();
-    }
-  });
-
-  test("flushes an outstanding write on detach rather than dropping it", async () => {
-    const save = mock(async () => persisted(pipeline(), 1));
-    const stop = startBuildPipelinePersistence({ debounceMs: 10_000, save: save as never });
-    seed(pipeline({ phase: "reviewing" }));
-    await tick(5);
-    expect(save).not.toHaveBeenCalled();
-
-    stop();
-    await tick(20);
-
-    expect(save).toHaveBeenCalledTimes(1);
-  });
-
-  test("stops listening for pagehide after detach", async () => {
-    const save = mock(async () => persisted(pipeline(), 1));
-    const stop = startBuildPipelinePersistence({ debounceMs: 10_000, save: save as never });
-    stop();
-    await tick(20);
-    save.mockClear();
-
-    window.dispatchEvent(new Event("pagehide"));
-    await tick(20);
-
-    expect(save).not.toHaveBeenCalled();
-  });
-});
-
-describe("migrateLegacyBuildPipelines", () => {
-  function legacyEntry(overrides: Record<string, unknown> = {}) {
-    const { backendRevision: _drop, ...legacy } = pipeline();
+describe("legacy build pipeline migration", () => {
+  function legacySnapshot(
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    const {
+      backendRevision: _backendRevision,
+      controller: _controller,
+      ...legacy
+    } = snapshot();
     return { ...legacy, ...overrides };
   }
 
-  function legacyStorage(value: unknown) {
-    const store = new Map<string, string>();
+  function storageWith(value: unknown) {
+    const values = new Map<string, string>();
     if (value !== undefined) {
-      store.set(LEGACY_BUILD_PIPELINE_STORAGE_KEY, JSON.stringify(value));
+      values.set(LEGACY_BUILD_PIPELINE_STORAGE_KEY, JSON.stringify(value));
     }
     return {
-      store,
-      getItem: (key: string) => store.get(key) ?? null,
-      removeItem: (key: string) => { store.delete(key); },
+      values,
+      getItem: (key: string) => values.get(key) ?? null,
+      removeItem: (key: string) => {
+        values.delete(key);
+      },
     };
   }
 
-  test("adopts a pipeline left behind by a pre-backend build", () => {
-    const storage = legacyStorage({
-      state: { pipelines: [["pipeline-1", legacyEntry({ phase: "building" })]] },
+  test("imports valid legacy snapshots through the backend and removes the key", async () => {
+    const legacy = legacySnapshot();
+    const storage = storageWith({
       version: 1,
+      state: { pipelines: [["pipeline-1", legacy]] },
     });
+    const imports: Array<{ projectId: string; snapshots: unknown[] }> = [];
 
-    const adopted = migrateLegacyBuildPipelines(storage);
-
-    expect(adopted.map((entry) => entry.id)).toEqual(["pipeline-1"]);
-    const restored = useBuildPipelineStore.getState().pipelines.get("pipeline-1");
-    expect(restored?.phase).toBe("building");
-    // The backend has never seen it, so the first save must find no prior record.
-    expect(restored?.backendRevision).toBe(0);
-    expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-1")).toBe(true);
-  });
-
-  test("normalizes a legacy structured review while adopting the pipeline", () => {
-    // A pre-backend snapshot is the oldest data in the app, so it is the most
-    // likely to hold a report written before `testResults.notRun` existed.
-    // Rejecting it here would silently drop an in-flight build on upgrade.
-    const storage = legacyStorage({
-      state: {
-        pipelines: [["pipeline-1", legacyEntry({
-          phase: "failed",
-          structuredReview: TEST_LEGACY_STRUCTURED_REVIEW_REPORT,
-        })]],
+    const result = await migrateLegacyBuildPipelines(
+      storage,
+      async (projectId, snapshots) => {
+        imports.push({ projectId, snapshots });
+        return { importedIds: ["pipeline-1"], skipped: 0 };
       },
-      version: 1,
-    });
+      async () => record(snapshot(), 1),
+    );
 
-    const adopted = migrateLegacyBuildPipelines(storage);
-
-    expect(adopted[0]?.structuredReview?.testResults.notRun).toBe(13);
-    expect(
-      useBuildPipelineStore.getState().pipelines
-        .get("pipeline-1")
-        ?.structuredReview
-        ?.testResults.notRun,
-    ).toBe(13);
-  });
-
-  test("removes the legacy key so the migration runs exactly once", () => {
-    const storage = legacyStorage({
-      state: { pipelines: [["pipeline-1", legacyEntry()]] },
-      version: 1,
-    });
-
-    migrateLegacyBuildPipelines(storage);
-
+    expect(imports).toEqual([{
+      projectId: "project-1",
+      snapshots: [legacy],
+    }]);
+    expect(result).toEqual({ importedIds: ["pipeline-1"], skipped: 0 });
     expect(storage.getItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY)).toBeNull();
-    expect(migrateLegacyBuildPipelines(storage)).toEqual([]);
+    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(true);
   });
 
-  test("clears a posting lease left by a client that died mid-post", () => {
-    const storage = legacyStorage({
-      state: {
-        pipelines: [["pipeline-1", legacyEntry({
-          phase: "complete",
-          completionCommentStatus: "posting",
-          completionCommentError: "half-written",
-        })]],
-      },
+  test("groups imports by project and counts malformed entries", async () => {
+    const storage = storageWith({
       version: 1,
-    });
-
-    migrateLegacyBuildPipelines(storage);
-
-    const restored = useBuildPipelineStore.getState().pipelines.get("pipeline-1");
-    expect(restored?.completionCommentStatus).toBeUndefined();
-    expect(restored?.completionCommentError).toBeUndefined();
-  });
-
-  test("never overwrites a pipeline the backend already restored", () => {
-    // Hydration can win the race; the backend copy is by definition newer.
-    seed(pipeline({ phase: "complete", backendRevision: 9 }));
-    const storage = legacyStorage({
-      state: { pipelines: [["pipeline-1", legacyEntry({ phase: "building" })]] },
-      version: 1,
-    });
-
-    expect(migrateLegacyBuildPipelines(storage)).toEqual([]);
-    expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1")?.phase).toBe("complete");
-  });
-
-  test("skips malformed entries while retaining the valid ones", () => {
-    const storage = legacyStorage({
       state: {
         pipelines: [
+          ["pipeline-1", legacySnapshot()],
+          ["pipeline-2", legacySnapshot({
+            id: "pipeline-2",
+            projectId: "project-2",
+          })],
+          ["wrong-id", legacySnapshot()],
+          ["missing-project", legacySnapshot({
+            id: "missing-project",
+            projectId: "",
+          })],
           null,
-          ["missing-pipeline"],
-          [42, legacyEntry()],
-          ["empty", null],
-          ["mismatched-id", legacyEntry({ id: "other" })],
-          ["broken", legacyEntry({ id: "broken", phase: "teleporting" })],
-          ["pipeline-1", legacyEntry()],
         ],
       },
+    });
+    const projects: string[] = [];
+
+    const result = await migrateLegacyBuildPipelines(
+      storage,
+      async (projectId, snapshots) => {
+        projects.push(projectId);
+        return {
+          importedIds: snapshots.map((entry) =>
+            (entry as { id: string }).id),
+          skipped: 0,
+        };
+      },
+      async (id) => record(snapshot(id), 1),
+    );
+
+    expect(projects).toEqual(["project-1", "project-2"]);
+    expect(result.importedIds).toEqual(["pipeline-1", "pipeline-2"]);
+    expect(result.skipped).toBe(3);
+  });
+
+  test("retains the legacy key when the backend import fails", async () => {
+    const storage = storageWith({
       version: 1,
+      state: { pipelines: [["pipeline-1", legacySnapshot()]] },
     });
 
-    migrateLegacyBuildPipelines(storage);
-
-    expect([...useBuildPipelineStore.getState().pipelines.keys()]).toEqual(["pipeline-1"]);
+    await expect(migrateLegacyBuildPipelines(
+      storage,
+      async () => {
+        throw new Error("backend unavailable");
+      },
+    )).rejects.toThrow("backend unavailable");
+    expect(storage.getItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY)).not.toBeNull();
   });
 
-  test("does nothing when there is no legacy entry", () => {
-    expect(migrateLegacyBuildPipelines(legacyStorage(undefined))).toEqual([]);
-    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+  test("does not consume a future or invalid legacy schema version", async () => {
+    for (const version of [2, -1, "one"]) {
+      const storage = storageWith({
+        version,
+        state: { pipelines: [["pipeline-1", legacySnapshot()]] },
+      });
+      const result = await migrateLegacyBuildPipelines(storage);
+
+      expect(result.importedIds).toEqual([]);
+      expect(result.skipped).toBe(1);
+      expect(storage.getItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY)).not.toBeNull();
+    }
   });
 
-  test("survives an unparseable legacy entry", () => {
-    const store = new Map([[LEGACY_BUILD_PIPELINE_STORAGE_KEY, "{not json"]]);
+  test("discards irrecoverably malformed JSON without throwing", async () => {
+    const values = new Map([[LEGACY_BUILD_PIPELINE_STORAGE_KEY, "{broken"]]);
     const storage = {
-      getItem: (key: string) => store.get(key) ?? null,
-      removeItem: (key: string) => { store.delete(key); },
+      getItem: (key: string) => values.get(key) ?? null,
+      removeItem: (key: string) => {
+        values.delete(key);
+      },
     };
 
-    expect(() => migrateLegacyBuildPipelines(storage)).not.toThrow();
-    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    expect(await migrateLegacyBuildPipelines(storage)).toEqual({
+      importedIds: [],
+      skipped: 1,
+    });
+    expect(values.has(LEGACY_BUILD_PIPELINE_STORAGE_KEY)).toBe(false);
   });
 
-  test("survives storage that throws, as blocked or private-mode storage does", () => {
-    const storage = {
-      getItem: () => { throw new Error("access denied"); },
-      removeItem: () => { throw new Error("access denied"); },
-    };
+  test("handles absent and inaccessible storage", async () => {
+    expect(await migrateLegacyBuildPipelines(undefined)).toEqual({
+      importedIds: [],
+      skipped: 0,
+    });
+    expect(await migrateLegacyBuildPipelines({
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      removeItem: () => {
+        throw new Error("blocked");
+      },
+    })).toEqual({ importedIds: [], skipped: 0 });
+  });
+});
 
-    expect(migrateLegacyBuildPipelines(storage)).toEqual([]);
+describe("structured review normalization on hydrate", () => {
+  beforeEach(() => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map(),
+      buildEnvironmentIds: new Set(),
+    });
   });
 
-  test("does nothing when no storage is available at all", () => {
-    expect(migrateLegacyBuildPipelines(undefined)).toEqual([]);
+  const legacyReport = {
+    reviewScope: {
+      targetBranch: "main",
+      baseRef: "base",
+      commit: { sha: "head", subject: "feat: build" },
+      filesReviewed: [],
+      filesSkipped: [],
+      filesLeftUncommitted: [],
+      commandsRun: [],
+      commandsNotRun: [],
+      limitations: [],
+    },
+    whatChanged: {
+      overview: "o",
+      before: "b",
+      after: "a",
+      keyCodeChanges: [],
+      userImpact: "u",
+    },
+    riskProfile: {
+      changeTypes: ["feature"],
+      riskAreas: [],
+      overallRisk: "low",
+      reasoning: "r",
+    },
+    // The legacy shape the parser is asked to upgrade: no notRun field, which
+    // the current contract requires and the backfill derives.
+    testResults: { total: 3, passed: 2, failed: 0, failures: [] },
+    strengths: [],
+    issues: [],
+    testCoverageGaps: [],
+    verdict: { ready: "yes", reasoning: "r" },
+    summaryOfChange: "s",
+    reviewSummary: "r",
+  };
+
+  test("upgrades a legacy structured review so the snapshot still validates", async () => {
+    const stored = {
+      ...snapshot(),
+      structuredReview: legacyReport,
+    } as unknown as BuildPipeline;
+
+    const hydrated = await hydrateBuildPipeline(
+      "pipeline-1",
+      async () => record(stored, 4),
+    );
+
+    // Without normalization the guard rejects the legacy report and the whole
+    // pipeline silently disappears from the UI with no error anywhere.
+    expect(hydrated).not.toBeNull();
+    expect(hydrated?.structuredReview?.testResults.notRun).toBe(1);
+  });
+
+  test("passes through a snapshot that carries no review at all", async () => {
+    const hydrated = await hydrateBuildPipeline(
+      "pipeline-1",
+      async () => record(snapshot(), 2),
+    );
+
+    expect(hydrated?.structuredReview).toBeUndefined();
+    expect(hydrated?.backendRevision).toBe(2);
+  });
+
+  test("drops a review that cannot be repaired rather than guessing", async () => {
+    const stored = {
+      ...snapshot(),
+      structuredReview: { issues: "not-a-report" },
+    } as unknown as BuildPipeline;
+
+    // The unrepaired value fails isBuildPipeline, so the record is treated as
+    // unusable. Installing it half-parsed would put an invalid report on screen.
+    expect(await hydrateBuildPipeline(
+      "pipeline-1",
+      async () => record(stored, 3),
+    )).toBeNull();
+  });
+});
+
+describe("hydration generation bookkeeping", () => {
+  beforeEach(() => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map(),
+      buildEnvironmentIds: new Set(),
+    });
+  });
+
+  test("keeps deletion markers effective across many distinct pipelines", async () => {
+    // The marker maps are bounded, and an evicted deletion marker re-opens the
+    // resurrect-a-deleted-pipeline case the markers exist to prevent. Prove the
+    // most recent deletion still wins after a burst of unrelated hydrations.
+    const listResult = deferred<Array<ReturnType<typeof record>>>();
+    const projectHydration = hydrateBuildPipelinesForProject(
+      "project-1",
+      () => listResult.promise,
+    );
+
+    for (let index = 0; index < 50; index += 1) {
+      await hydrateBuildPipeline(`filler-${index}`, async () => record(
+        { ...snapshot(`filler-${index}`) },
+        1,
+      ));
+    }
+    expect(await hydrateBuildPipeline("pipeline-1", async () => null)).toBeNull();
+
+    listResult.resolve([record(snapshot("pipeline-1"), 1)]);
+    const restored = await projectHydration;
+
+    expect(restored.map((pipeline) => pipeline.id)).not.toContain("pipeline-1");
+    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1"))
+      .toBe(false);
   });
 });

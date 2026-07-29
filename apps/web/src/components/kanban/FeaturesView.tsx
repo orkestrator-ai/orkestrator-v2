@@ -2057,15 +2057,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
 
         await startBuild(task, getPreferredEnvironmentType(projectId), "codex", {
           existingEnvironmentId: feature.codexEnvironmentId,
-          onPipelineLinked: ({ pipelineId, environmentId }) =>
-            updateFeature(feature.id, {
-              status: "building",
-              buildTaskId: taskId,
-              buildPipelineId: pipelineId,
-              codexEnvironmentId: environmentId,
-            }).then((updated) => {
-              if (!updated) throw new Error("Failed to persist the feature build linkage");
-            }),
+          featurePlanId: feature.id,
         });
         const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId(taskId);
         if (!pipeline || pipeline.phase === "failed") {

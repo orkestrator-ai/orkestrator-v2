@@ -65,8 +65,6 @@ interface LoadEnvironmentsOptions {
   silent?: boolean;
   /** Reconcile persisted container state with Docker before returning the list. */
   reconcileStatus?: boolean;
-  /** Remove persisted creation reservations that have no backend association. */
-  cleanupOrphanedPipelines?: boolean;
 }
 
 export interface StartEnvironmentOptions {
@@ -630,7 +628,7 @@ export function useEnvironments(
   // Load environments when projectId changes
   useEffect(() => {
     if (projectId) {
-      loadEnvironments(projectId, { cleanupOrphanedPipelines: true });
+      loadEnvironments(projectId);
     }
   }, [projectId]);
 
@@ -687,7 +685,6 @@ export function useEnvironments(
       const {
         silent = false,
         reconcileStatus = true,
-        cleanupOrphanedPipelines = false,
       } = options;
       const creationGeneration = getEnvironmentCreationState(pid).generation;
       if (!silent) {
@@ -717,15 +714,6 @@ export function useEnvironments(
           );
           reconcileEnvironmentLifecycleErrors();
         }
-        useBuildPipelineStore.getState().reconcilePipelinesForProject(
-          pid,
-          envs,
-          {
-            removeMissingActive: snapshotIsCurrent,
-            removeUnresolvedCreating:
-              cleanupOrphanedPipelines && snapshotIsCurrent,
-          },
-        );
       } catch (err) {
         const message = getErrorMessage(err, "Failed to load environments");
         if (silent) {

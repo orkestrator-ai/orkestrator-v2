@@ -8,7 +8,7 @@ import {
   type ReviewFindingPool,
   type ReviewReconciliation,
   type StructuredReviewReport,
-} from "./types";
+} from "./types.js";
 
 export type ReviewContractValidationCode =
   | "invalid_type"

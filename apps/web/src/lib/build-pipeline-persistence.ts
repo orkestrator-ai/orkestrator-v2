@@ -10,87 +10,57 @@ import { parseStructuredReviewReport } from "@orkestrator/protocol/structured-re
 
 export { isBuildPipeline } from "@/stores/buildPipelineStore";
 
-interface PendingWrite {
-  pipeline: BuildPipeline;
-  fingerprint: string;
-}
-
 type PipelineLoader = (
   pipelineId: string,
 ) => Promise<PersistedBuildPipeline<BuildPipeline> | null>;
 type PipelineListLoader = (
   projectId: string,
 ) => Promise<Array<PersistedBuildPipeline<BuildPipeline>>>;
-type PipelineSaver = (
-  pipelineId: string,
+type LegacyPipelineImporter = (
   projectId: string,
-  environmentId: string,
-  version: number,
-  snapshot: BuildPipeline,
-  expectedRevision?: number,
-) => Promise<PersistedBuildPipeline<BuildPipeline>>;
+  snapshots: unknown[],
+) => Promise<{ importedIds: string[]; skipped: number }>;
 
-/**
- * Process-local dirty markers keep a transition made since this client started
- * from being overwritten by an equal-revision backend snapshot. They are only
- * set by the subscriber below, never by hydration: on startup the backend is
- * authoritative for equal revisions.
- */
-const dirtyPipelineFingerprints = new Map<string, string>();
-let coordinatedImmediatePersist:
-  | ((pipelineId: string) => Promise<BuildPipeline>)
-  | null = null;
+let hydrationGeneration = 0;
+const pipelineHydrationGenerations = new Map<string, number>();
+const projectHydrationGenerations = new Map<string, number>();
+const pipelineDeletionGenerations = new Map<string, number>();
+const MAX_PIPELINE_HYDRATION_MARKERS = 2_048;
+const MAX_PROJECT_HYDRATION_MARKERS = 512;
 
-function pipelineFingerprint(pipeline: BuildPipeline): string {
-  const { backendRevision: _backendRevision, ...durable } = pipeline;
-  return JSON.stringify(durable);
+function nextHydrationGeneration(): number {
+  hydrationGeneration += 1;
+  return hydrationGeneration;
 }
 
-function isUnsavedLocalPipeline(pipeline: BuildPipeline): boolean {
-  return dirtyPipelineFingerprints.get(pipeline.id) === pipelineFingerprint(pipeline);
-}
-
-function markPipelineClean(pipelineId: string, fingerprint: string): void {
-  if (dirtyPipelineFingerprints.get(pipelineId) === fingerprint) {
-    dirtyPipelineFingerprints.delete(pipelineId);
+function setBoundedGeneration(
+  generations: Map<string, number>,
+  key: string,
+  value: number,
+  limit: number,
+): void {
+  generations.delete(key);
+  generations.set(key, value);
+  while (generations.size > limit) {
+    const oldest = generations.keys().next().value;
+    if (oldest === undefined) break;
+    generations.delete(oldest);
   }
 }
 
-/**
- * Clears a completion-comment lease left behind by a client that died mid-post.
- *
- * "posting" is an in-process lease, not a result. Only the initial restore does
- * this: on a later refresh the lease may belong to another *live* client, and
- * clearing it there would invite a double post. The backend's durable marker
- * check (`withGitHubCompletionCommentLock`) remains the actual guard either way.
- */
-function releaseStalePostingLease(pipeline: BuildPipeline): BuildPipeline {
-  if (pipeline.completionCommentStatus !== "posting") return pipeline;
-  const recovered = { ...pipeline };
-  delete recovered.completionCommentStatus;
-  delete recovered.completionCommentError;
-  return recovered;
-}
-
-function normalizePipelineStructuredReview(value: unknown): unknown {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return value;
-  }
+function normalizeStructuredReview(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const pipeline = value as Record<string, unknown>;
   if (pipeline.structuredReview === undefined) return value;
   try {
-    // A persisted snapshot is durable data this app wrote earlier, so it may
-    // predate `testResults.notRun`. Materialize the field here rather than
-    // leaving every reader to infer it.
-    const structuredReview = parseStructuredReviewReport(
-      pipeline.structuredReview,
-      { allowLegacyTestResults: true },
-    );
-    return structuredReview === pipeline.structuredReview
-      ? value
-      : { ...pipeline, structuredReview };
+    return {
+      ...pipeline,
+      structuredReview: parseStructuredReviewReport(
+        pipeline.structuredReview,
+        { allowLegacyTestResults: true },
+      ),
+    };
   } catch {
-    // Let isBuildPipeline reject the original invalid snapshot below.
     return value;
   }
 }
@@ -98,7 +68,7 @@ function normalizePipelineStructuredReview(value: unknown): unknown {
 function toSnapshot(
   persisted: PersistedBuildPipeline<BuildPipeline>,
 ): BuildPipeline | null {
-  const snapshot = normalizePipelineStructuredReview(persisted.snapshot);
+  const snapshot = normalizeStructuredReview(persisted.snapshot);
   if (
     persisted.version !== BUILD_PIPELINE_VERSION
     || !Number.isSafeInteger(persisted.revision)
@@ -112,68 +82,85 @@ function toSnapshot(
   ) {
     return null;
   }
-  return { ...snapshot, backendRevision: persisted.revision };
+  return {
+    ...snapshot,
+    backendRevision: persisted.revision,
+    controller: "backend",
+  };
 }
 
-/**
- * Rehydrates one pipeline from the backend authority. The local snapshot is
- * kept only when it has already observed a newer revision, or when it holds an
- * unsaved transition at the same revision.
- */
+/** Installs one authoritative backend read model into the renderer cache. */
 export async function hydrateBuildPipeline(
   pipelineId: string,
   load: PipelineLoader = backend.getBuildPipeline,
 ): Promise<BuildPipeline | null> {
+  const generation = nextHydrationGeneration();
+  setBoundedGeneration(
+    pipelineHydrationGenerations,
+    pipelineId,
+    generation,
+    MAX_PIPELINE_HYDRATION_MARKERS,
+  );
   const persisted = await load(pipelineId);
-  if (!persisted || persisted.id !== pipelineId) return null;
-  const snapshot = toSnapshot(persisted);
-  if (!snapshot) return null;
-
-  const local = useBuildPipelineStore.getState().pipelines.get(pipelineId);
-  if (local && local.backendRevision > persisted.revision) return local;
-  if (
-    local
-    && local.backendRevision === persisted.revision
-    && isUnsavedLocalPipeline(local)
-  ) {
-    return local;
+  if (pipelineHydrationGenerations.get(pipelineId) !== generation) {
+    return useBuildPipelineStore.getState().pipelines.get(pipelineId) ?? null;
   }
+  if (!persisted || persisted.id !== pipelineId) {
+    setBoundedGeneration(
+      pipelineDeletionGenerations,
+      pipelineId,
+      generation,
+      MAX_PIPELINE_HYDRATION_MARKERS,
+    );
+    return null;
+  }
+  const snapshot = toSnapshot(persisted);
+  if (!snapshot) {
+    setBoundedGeneration(
+      pipelineDeletionGenerations,
+      pipelineId,
+      generation,
+      MAX_PIPELINE_HYDRATION_MARKERS,
+    );
+    return null;
+  }
+  const local = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+  if (local && local.backendRevision > snapshot.backendRevision) return local;
   useBuildPipelineStore.getState().replacePipeline(snapshot);
-  dirtyPipelineFingerprints.delete(pipelineId);
   return snapshot;
 }
 
-/**
- * Restores every authoritative pipeline for a project after app restart, or
- * when a client opens a project for the first time.
- */
+/** Replaces the project projection with backend snapshots. */
 export async function hydrateBuildPipelinesForProject(
   projectId: string,
   list: PipelineListLoader = backend.listBuildPipelines,
 ): Promise<BuildPipeline[]> {
-  if (typeof list !== "function") return [];
+  const generation = nextHydrationGeneration();
+  setBoundedGeneration(
+    projectHydrationGenerations,
+    projectId,
+    generation,
+    MAX_PROJECT_HYDRATION_MARKERS,
+  );
   const persisted = await list(projectId);
+  if (projectHydrationGenerations.get(projectId) !== generation) {
+    return Array.from(useBuildPipelineStore.getState().pipelines.values())
+      .filter((pipeline) => pipeline.projectId === projectId);
+  }
   if (!Array.isArray(persisted)) return [];
-
   const restored: BuildPipeline[] = [];
   for (const entry of persisted) {
     if (entry.projectId !== projectId) continue;
+    // A point read that observed this record missing after the list request
+    // began is newer authority. Skipping the stale list entry prevents a slow
+    // project hydration from resurrecting a pipeline deleted in the meantime.
+    if ((pipelineDeletionGenerations.get(entry.id) ?? 0) > generation) continue;
     const snapshot = toSnapshot(entry);
     if (!snapshot) continue;
-
     const local = useBuildPipelineStore.getState().pipelines.get(entry.id);
-    const keepDirtyEqualRevision =
-      local
-      && local.backendRevision === entry.revision
-      && isUnsavedLocalPipeline(local);
-    if (
-      !local
-      || (local.backendRevision <= entry.revision && !keepDirtyEqualRevision)
-    ) {
-      const recovered = releaseStalePostingLease(snapshot);
-      useBuildPipelineStore.getState().replacePipeline(recovered);
-      dirtyPipelineFingerprints.delete(entry.id);
-      restored.push(recovered);
+    if (!local || local.backendRevision <= snapshot.backendRevision) {
+      useBuildPipelineStore.getState().replacePipeline(snapshot);
+      restored.push(snapshot);
     } else {
       restored.push(local);
     }
@@ -181,336 +168,124 @@ export async function hydrateBuildPipelinesForProject(
   return restored;
 }
 
-/**
- * Key the pre-backend build pipeline store persisted to under zustand's
- * `persist` middleware. Retained only so the one-shot migration below can find
- * what an upgrading client left behind.
- */
+/** Storage key used by the pre-backend Zustand pipeline controller. */
 export const LEGACY_BUILD_PIPELINE_STORAGE_KEY = "orkestrator-build-pipelines";
+const LEGACY_BUILD_PIPELINE_MAX_VERSION = 1;
+const MAX_LEGACY_PIPELINES = 100;
+const MAX_LEGACY_STORAGE_BYTES = 5 * 1024 * 1024;
+
+export interface LegacyBuildPipelineMigrationResult {
+  importedIds: string[];
+  skipped: number;
+  unsupportedVersion?: number;
+}
 
 /**
- * Adopts pipelines left in `localStorage` by a pre-backend build of the app.
+ * Imports the pre-backend renderer store through the backend supervisor.
  *
- * Without this an upgrade silently drops every in-flight build: the backend has
- * no record yet, the old entry is orphaned, and a pipeline mid-`building` stops
- * advancing while its environment and agent session carry on existing. Runs
- * once — the key is removed on success — and must run before
- * {@link startBuildPipelinePersistence}, whose seeding pass is what actually
- * writes the adopted pipelines to the backend.
- *
- * A pipeline the backend already knows about wins: hydration may have raced
- * ahead of this call, and the backend copy is by definition the newer one.
+ * The renderer deliberately does not install or rewrite these snapshots: the
+ * backend validates ownership and becomes their first authoritative writer.
+ * The legacy key is removed only after every project import succeeds, so a
+ * transient backend failure is safely retried on the next launch.
  */
-export function migrateLegacyBuildPipelines(
+export async function migrateLegacyBuildPipelines(
   storage: Pick<Storage, "getItem" | "removeItem"> | undefined =
     typeof localStorage === "undefined" ? undefined : localStorage,
-): BuildPipeline[] {
-  if (!storage) return [];
+  importLegacy: LegacyPipelineImporter = backend.importLegacyBuildPipelines,
+  load: PipelineLoader = backend.getBuildPipeline,
+): Promise<LegacyBuildPipelineMigrationResult> {
+  const empty = { importedIds: [], skipped: 0 };
+  if (!storage) return empty;
 
   let raw: string | null;
   try {
     raw = storage.getItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY);
   } catch {
-    // Private browsing and blocked storage both throw rather than return null.
-    return [];
+    return empty;
   }
-  if (!raw) return [];
+  if (!raw) return empty;
+  if (raw.length > MAX_LEGACY_STORAGE_BYTES) {
+    console.warn("[BuildPipeline] Legacy pipeline state exceeds the migration limit");
+    return { ...empty, skipped: 1 };
+  }
 
-  const adopted: BuildPipeline[] = [];
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw) as { state?: { pipelines?: unknown } };
-    const entries = Array.isArray(parsed?.state?.pipelines) ? parsed.state!.pipelines : [];
-    for (const entry of entries) {
-      if (!Array.isArray(entry) || entry.length !== 2) continue;
-      const [id, stored] = entry as [unknown, unknown];
-      if (typeof id !== "string" || !id || typeof stored !== "object" || stored === null) continue;
-      // The legacy snapshot predates `backendRevision`; 0 is the correct value
-      // for it anyway, since the backend has never seen this pipeline.
-      const candidate = normalizePipelineStructuredReview({
-        ...(stored as Record<string, unknown>),
-        backendRevision: 0,
-      });
-      if (!isBuildPipeline(candidate) || candidate.id !== id) continue;
-      if (useBuildPipelineStore.getState().pipelines.has(id)) continue;
-      const recovered = releaseStalePostingLease(candidate);
-      useBuildPipelineStore.getState().replacePipeline(recovered);
-      adopted.push(recovered);
+    parsed = JSON.parse(raw);
+  } catch {
+    try {
+      storage.removeItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY);
+    } catch {
+      // A blocked storage implementation may reject cleanup as well.
     }
-  } catch (error) {
-    console.warn("[BuildPipeline] Failed to migrate legacy pipelines:", error);
-    return adopted;
+    return { ...empty, skipped: 1 };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ...empty, skipped: 1 };
+  }
+
+  const legacyVersion = (parsed as { version?: unknown }).version;
+  if (
+    legacyVersion !== undefined
+    && (
+      !Number.isSafeInteger(legacyVersion)
+      || (legacyVersion as number) < 0
+      || (legacyVersion as number) > LEGACY_BUILD_PIPELINE_MAX_VERSION
+    )
+  ) {
+    return {
+      ...empty,
+      skipped: 1,
+      ...(typeof legacyVersion === "number"
+        ? { unsupportedVersion: legacyVersion }
+        : {}),
+    };
+  }
+
+  const entries = (parsed as { state?: { pipelines?: unknown } }).state?.pipelines;
+  if (!Array.isArray(entries)) return { ...empty, skipped: 1 };
+
+  const byProject = new Map<string, unknown[]>();
+  let skipped = 0;
+  for (const entry of entries.slice(0, MAX_LEGACY_PIPELINES)) {
+    if (!Array.isArray(entry) || entry.length !== 2) {
+      skipped += 1;
+      continue;
+    }
+    const [id, value] = entry;
+    if (
+      typeof id !== "string"
+      || id.length === 0
+      || !value
+      || typeof value !== "object"
+      || Array.isArray(value)
+      || (value as { id?: unknown }).id !== id
+      || typeof (value as { projectId?: unknown }).projectId !== "string"
+      || (value as { projectId: string }).projectId.length === 0
+    ) {
+      skipped += 1;
+      continue;
+    }
+    const projectId = (value as { projectId: string }).projectId;
+    const projectSnapshots = byProject.get(projectId) ?? [];
+    projectSnapshots.push(value);
+    byProject.set(projectId, projectSnapshots);
+  }
+  skipped += Math.max(0, entries.length - MAX_LEGACY_PIPELINES);
+
+  const importedIds: string[] = [];
+  for (const [projectId, snapshots] of byProject) {
+    const result = await importLegacy(projectId, snapshots);
+    importedIds.push(...result.importedIds);
+    skipped += result.skipped;
   }
 
   try {
     storage.removeItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY);
   } catch {
-    // Leaving the key behind only costs a repeated no-op migration next start.
-  }
-  return adopted;
-}
-
-/**
- * Durably records the pipeline before an irreversible side effect.
- *
- * Callers use this ahead of dispatching a prompt or posting a comment, so a
- * client that dies immediately afterwards leaves behind a record that says the
- * attempt was made rather than one that invites a second attempt.
- */
-async function persistBuildPipelineSnapshotNow(
-  pipelineId: string,
-  save: PipelineSaver,
-  load: PipelineLoader,
-): Promise<BuildPipeline> {
-  const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId);
-  if (!pipeline) throw new Error(`Build pipeline not found: ${pipelineId}`);
-  const fingerprint = pipelineFingerprint(pipeline);
-
-  let saved;
-  try {
-    saved = await save(
-      pipeline.id,
-      pipeline.projectId,
-      pipeline.environmentId,
-      BUILD_PIPELINE_VERSION,
-      pipeline,
-      pipeline.backendRevision,
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("revision conflict")) {
-      const winner = await hydrateBuildPipeline(pipelineId, load);
-      if (winner) return winner;
-    }
-    throw error;
-  }
-  markPipelineClean(pipelineId, fingerprint);
-  useBuildPipelineStore.getState().setBackendRevision(pipelineId, saved.revision);
-  return useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
-}
-
-export async function persistBuildPipelineNow(
-  pipelineId: string,
-  options: Pick<BuildPipelinePersistenceOptions, "save" | "load"> = {},
-): Promise<BuildPipeline> {
-  if (!options.save && !options.load && coordinatedImmediatePersist) {
-    return coordinatedImmediatePersist(pipelineId);
-  }
-  return persistBuildPipelineSnapshotNow(
-    pipelineId,
-    options.save ?? backend.saveBuildPipeline,
-    options.load ?? backend.getBuildPipeline,
-  );
-}
-
-export interface BuildPipelinePersistenceOptions {
-  debounceMs?: number;
-  /** Initial retry delay for a transient backend failure. */
-  retryMs?: number;
-  /** Maximum delay between retries while a pipeline remains dirty. */
-  maxRetryMs?: number;
-  save?: PipelineSaver;
-  load?: PipelineLoader;
-  remove?: (pipelineId: string) => Promise<void>;
-}
-
-/**
- * Mirrors every pipeline transition into the revisioned backend store.
- *
- * Writes are serialized per pipeline and use compare-and-swap revisions. A
- * conflict rehydrates the backend winner rather than letting two clients each
- * believe they own the next phase of the same build.
- */
-export function startBuildPipelinePersistence(
-  options: BuildPipelinePersistenceOptions = {},
-): () => void {
-  const debounceMs = options.debounceMs ?? 250;
-  const retryMs = Math.max(1, options.retryMs ?? 1_000);
-  const maxRetryMs = Math.max(retryMs, options.maxRetryMs ?? 30_000);
-  const save = options.save ?? backend.saveBuildPipeline;
-  const load = options.load ?? backend.getBuildPipeline;
-  const remove = options.remove ?? backend.deleteBuildPipeline;
-  const timers = new Map<string, ReturnType<typeof setTimeout>>();
-  const pending = new Map<string, PendingWrite>();
-  const chains = new Map<string, Promise<void>>();
-  const lastSavedFingerprint = new Map<string, string>();
-  const retryAttempts = new Map<string, number>();
-  let stopped = false;
-
-  const cancelTimer = (pipelineId: string) => {
-    const timer = timers.get(pipelineId);
-    if (timer) clearTimeout(timer);
-    timers.delete(pipelineId);
-  };
-
-  const scheduleRetry = (pipelineId: string) => {
-    if (stopped || timers.has(pipelineId) || !pending.has(pipelineId)) return;
-    const attempt = retryAttempts.get(pipelineId) ?? 1;
-    const delay = Math.min(maxRetryMs, retryMs * (2 ** Math.min(attempt - 1, 20)));
-    timers.set(pipelineId, setTimeout(() => {
-      void flush(pipelineId);
-    }, delay));
-  };
-
-  const retainDirtyWrite = (pipelineId: string) => {
-    const latest = useBuildPipelineStore.getState().pipelines.get(pipelineId);
-    if (!latest) return;
-    const fingerprint = pipelineFingerprint(latest);
-    dirtyPipelineFingerprints.set(pipelineId, fingerprint);
-    pending.set(pipelineId, { pipeline: latest, fingerprint });
-    retryAttempts.set(pipelineId, (retryAttempts.get(pipelineId) ?? 0) + 1);
-    scheduleRetry(pipelineId);
-  };
-
-  const enqueue = (pipelineId: string): Promise<void> => {
-    const previous = chains.get(pipelineId) ?? Promise.resolve();
-    const next = previous.then(async () => {
-      const current = useBuildPipelineStore.getState().pipelines.get(pipelineId);
-      if (!current) return;
-      try {
-        const saved = await save(
-          pipelineId,
-          current.projectId,
-          current.environmentId,
-          BUILD_PIPELINE_VERSION,
-          current,
-          current.backendRevision,
-        );
-        const savedFingerprint = pipelineFingerprint(current);
-        lastSavedFingerprint.set(pipelineId, savedFingerprint);
-        markPipelineClean(pipelineId, savedFingerprint);
-        retryAttempts.delete(pipelineId);
-        useBuildPipelineStore.getState().setBackendRevision(pipelineId, saved.revision);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.includes("revision conflict")) {
-          // Another client advanced this pipeline. Adopt its state rather than
-          // retrying ours, which would replay a phase that already ran.
-          const winner = await load(pipelineId).catch(() => null);
-          if (winner) {
-            const snapshot = toSnapshot(winner);
-            if (snapshot) {
-              useBuildPipelineStore.getState().replacePipeline(snapshot);
-              lastSavedFingerprint.set(pipelineId, pipelineFingerprint(snapshot));
-              dirtyPipelineFingerprints.delete(pipelineId);
-              retryAttempts.delete(pipelineId);
-              return;
-            }
-          }
-        }
-        retainDirtyWrite(pipelineId);
-        console.error(
-          `[BuildPipeline] Failed to persist pipeline ${pipelineId}:`,
-          message,
-        );
-      }
-    });
-    chains.set(pipelineId, next);
-    void next.finally(() => {
-      if (chains.get(pipelineId) === next) chains.delete(pipelineId);
-    });
-    return next;
-  };
-
-  const flush = (pipelineId: string): Promise<void> | undefined => {
-    const write = pending.get(pipelineId);
-    if (!write) return undefined;
-    cancelTimer(pipelineId);
-    pending.delete(pipelineId);
-    return enqueue(pipelineId);
-  };
-
-  const flushAll = () => Promise.all(
-    [...pending.keys()].map((id) => flush(id) ?? Promise.resolve()),
-  ).then(() => undefined);
-
-  const persistImmediately = async (pipelineId: string): Promise<BuildPipeline> => {
-    if (!useBuildPipelineStore.getState().pipelines.has(pipelineId)) {
-      throw new Error(`Build pipeline not found: ${pipelineId}`);
-    }
-    cancelTimer(pipelineId);
-    pending.delete(pipelineId);
-
-    let result: BuildPipeline | undefined;
-    const previous = chains.get(pipelineId) ?? Promise.resolve();
-    const next = previous.then(async () => {
-      result = await persistBuildPipelineSnapshotNow(pipelineId, save, load);
-    });
-    chains.set(pipelineId, next);
-    try {
-      await next;
-      return result!;
-    } finally {
-      if (chains.get(pipelineId) === next) chains.delete(pipelineId);
-    }
-  };
-
-  const unsubscribe = useBuildPipelineStore.subscribe((state, previous) => {
-    const ids = new Set([...state.pipelines.keys(), ...previous.pipelines.keys()]);
-    for (const id of ids) {
-      const pipeline = state.pipelines.get(id);
-      if (!pipeline) {
-        cancelTimer(id);
-        pending.delete(id);
-        lastSavedFingerprint.delete(id);
-        retryAttempts.delete(id);
-        dirtyPipelineFingerprints.delete(id);
-        // A non-zero backendRevision means the backend holds a record for this
-        // pipeline, so dropping it locally is a real deletion and must remove
-        // that record too. A pipeline that was never persisted has nothing to
-        // delete, and issuing one anyway would race a sibling client that is
-        // mid-way through creating it.
-        if (previous.pipelines.get(id)?.backendRevision) {
-          void remove(id).catch((error: unknown) => {
-            console.warn(
-              `[BuildPipeline] Failed to delete pipeline ${id} from the backend:`,
-              error,
-            );
-          });
-        }
-        continue;
-      }
-      if (pipeline === previous.pipelines.get(id)) continue;
-      const fingerprint = pipelineFingerprint(pipeline);
-      if (
-        fingerprint === lastSavedFingerprint.get(id)
-        || fingerprint === pending.get(id)?.fingerprint
-      ) {
-        continue;
-      }
-      dirtyPipelineFingerprints.set(id, fingerprint);
-      pending.set(id, { pipeline, fingerprint });
-      cancelTimer(id);
-      timers.set(id, setTimeout(() => {
-        void flush(id);
-      }, debounceMs));
-    }
-  });
-
-  // Pipelines already in the store when persistence starts predate this
-  // subscription; seed them so a restart cannot strand an unsaved pipeline.
-  for (const id of useBuildPipelineStore.getState().pipelines.keys()) {
-    const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
-    pending.set(id, { pipeline, fingerprint: pipelineFingerprint(pipeline) });
-    timers.set(id, setTimeout(() => {
-      void flush(id);
-    }, debounceMs));
+    // Repeating the migration is safe because the backend never overwrites IDs.
   }
 
-  const previousImmediatePersist = coordinatedImmediatePersist;
-  coordinatedImmediatePersist = persistImmediately;
-
-  const onPageHide = () => {
-    void flushAll();
-  };
-  window.addEventListener("pagehide", onPageHide);
-
-  return () => {
-    stopped = true;
-    if (coordinatedImmediatePersist === persistImmediately) {
-      coordinatedImmediatePersist = previousImmediatePersist;
-    }
-    unsubscribe();
-    window.removeEventListener("pagehide", onPageHide);
-    void flushAll();
-  };
+  await Promise.all(importedIds.map((id) => hydrateBuildPipeline(id, load)));
+  return { importedIds, skipped };
 }

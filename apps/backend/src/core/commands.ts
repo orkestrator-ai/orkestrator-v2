@@ -121,6 +121,11 @@ import {
   type GitHubIssueStatus,
   type GitHubRepositoryRef,
 } from "./github.js";
+import {
+  isStartBuildPipelineInput,
+  type StartBuildPipelineInput,
+} from "@orkestrator/protocol/build-pipeline";
+import type { BuildPipelineService } from "./build-pipeline-service.js";
 
 export type BackendEmit = (event: string, payload: unknown) => void;
 
@@ -131,6 +136,7 @@ export type CommandContext = {
   resourceRoot: string;
   environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   toolchainBinDir?: string;
+  buildPipelines?: BuildPipelineService;
 };
 
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
@@ -7824,31 +7830,73 @@ export function createCommandRegistry(
     storage.deleteLoopedReviewWorkflow(asString(workflowId, "workflowId")),
   );
 
+  register("start_build_pipeline", (args, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    if (!isStartBuildPipelineInput(args)) {
+      throw new Error("Invalid build pipeline start request");
+    }
+    return context.buildPipelines.start(args as StartBuildPipelineInput);
+  });
+  register("pause_build_pipeline", ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.pause(asNonBlankString(pipelineId, "pipelineId"));
+  });
+  register("resume_build_pipeline", ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.resume(asNonBlankString(pipelineId, "pipelineId"));
+  });
+  register("cancel_build_pipeline", ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.cancel(asNonBlankString(pipelineId, "pipelineId"));
+  });
+  register("send_build_pipeline_message", ({ pipelineId, text }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.sendMessage(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asString(text, "text"),
+    );
+  });
+  register("retry_build_pipeline_review", ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.retryReview(
+      asNonBlankString(pipelineId, "pipelineId"),
+    );
+  });
+  register("retry_build_pipeline_completion_comment", ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.retryCompletionComment(
+      asNonBlankString(pipelineId, "pipelineId"),
+    );
+  });
+  register("import_legacy_build_pipelines", ({ projectId, snapshots }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    const id = asNonBlankString(projectId, "projectId");
+    if (!Array.isArray(snapshots)) {
+      throw new Error("Expected snapshots to be an array");
+    }
+    if (snapshots.length > 100) {
+      throw new Error("Legacy build pipeline import is limited to 100 snapshots");
+    }
+    return context.buildPipelines.importLegacy(id, snapshots);
+  });
   register("get_build_pipeline", ({ pipelineId }, { storage }) =>
-    storage.getBuildPipeline(asString(pipelineId, "pipelineId")),
+    storage.getBuildPipeline(asNonBlankString(pipelineId, "pipelineId")),
   );
   register("list_build_pipelines", ({ projectId }, { storage }) =>
-    storage.listBuildPipelines(asString(projectId, "projectId")),
+    storage.listBuildPipelines(asNonBlankString(projectId, "projectId")),
   );
   register(
     "save_build_pipeline",
-    ({ pipelineId, projectId, environmentId, version, snapshot, expectedRevision }, { storage }) =>
-      storage.saveBuildPipeline(
-        asString(pipelineId, "pipelineId"),
-        asString(projectId, "projectId"),
-        // A pipeline is stored before its environment exists, so this is the one
-        // identifier here that is legitimately blank.
-        typeof environmentId === "string" ? environmentId : "",
-        asNumber(version, "version"),
-        snapshot,
-        expectedRevision === undefined
-          ? undefined
-          : asNumber(expectedRevision, "expectedRevision"),
-      ),
+    () => {
+      throw new Error("Build pipeline state is backend-owned");
+    },
   );
-  register("delete_build_pipeline", ({ pipelineId }, { storage }) =>
-    storage.deleteBuildPipeline(asString(pipelineId, "pipelineId")),
-  );
+  register("delete_build_pipeline", ({ pipelineId }, context) => {
+    const id = asNonBlankString(pipelineId, "pipelineId");
+    return context.buildPipelines
+      ? context.buildPipelines.remove(id)
+      : context.storage.deleteBuildPipeline(id);
+  });
 
   register(
     "set_environment_unread",

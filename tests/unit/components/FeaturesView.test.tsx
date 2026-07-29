@@ -488,18 +488,27 @@ function seedStores(featureOrFeatures: FeaturePlan | FeaturePlan[]) {
 function seedPipeline(
   { taskId = "task-1", environmentId, failed = false }: { taskId?: string; environmentId?: string; failed?: boolean } = {},
 ): string {
-  const store = useBuildPipelineStore.getState();
-  const id = store.createPipeline({
+  const id = `pipeline-${taskId}`;
+  useBuildPipelineStore.getState().replacePipeline({
+    id,
     taskId,
     projectId: "project-1",
+    environmentId: environmentId ?? "",
     environmentType: "containerized",
     agentType: "codex",
+    phase: failed ? "failed" : "building",
+    sessions: [],
+    currentSessionIndex: -1,
+    iteration: 0,
+    maxIterations: 3,
+    createdAt: NOW,
     taskTitle: "Task",
     taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "", comments: [], images: [] },
     source: { type: "kanban", taskId },
+    ...(failed ? { error: "failed to start environment" } : {}),
+    backendRevision: 1,
+    controller: "backend",
   });
-  if (environmentId) store.setPipelineEnvironment(id, environmentId);
-  if (failed) store.setPipelineError(id, "failed to start environment");
   return id;
 }
 
@@ -1634,9 +1643,16 @@ describe("FeaturesView lifecycle and navigation", () => {
     }
     expect(screen.getByRole("alert").textContent).toContain("no matching response");
     // The grace is 8s and each poll advances the faked clock by the 1.5s poll
-    // interval, so the loop hydrates on the first poll at or past the deadline.
-    expect(getSessionStatusMock).toHaveBeenCalledTimes(
-      Math.ceil(8_000 / 1_500) + 1,
+    // interval, so the loop cannot hydrate before the deadline is reached.
+    //
+    // The bound is one-sided on purpose. Breaking out of the drain above when
+    // the alert appears does not stop the poll chain, and each poll is
+    // rescheduled with a zero delay, so under load one or two further polls
+    // resolve in the same macrotask batch. Asserting an exact count made this
+    // fail only under `--parallel`; what the grace actually guarantees is that
+    // no *fewer* polls happen, and that the hydration below runs exactly once.
+    expect(getSessionStatusMock.mock.calls.length).toBeGreaterThanOrEqual(
+      Math.ceil(8_000 / 1_500),
     );
     expect(getSessionMessagesMock).toHaveBeenCalledTimes(1);
     expect(sendPromptMock).not.toHaveBeenCalled();
@@ -4860,7 +4876,7 @@ describe("FeaturesView build action", () => {
       "codex",
       expect.objectContaining({
         existingEnvironmentId: "env-feature",
-        onPipelineLinked: expect.any(Function),
+        featurePlanId: "feature-1",
       }),
     );
     await waitFor(() => {
@@ -5050,7 +5066,7 @@ describe("FeaturesView build action", () => {
       "codex",
       expect.objectContaining({
         existingEnvironmentId: undefined,
-        onPipelineLinked: expect.any(Function),
+        featurePlanId: "feature-1",
       }),
     ));
   });
@@ -5086,7 +5102,7 @@ describe("FeaturesView build action", () => {
       "codex",
       expect.objectContaining({
         existingEnvironmentId: undefined,
-        onPipelineLinked: expect.any(Function),
+        featurePlanId: "feature-1",
       }),
     ));
   });

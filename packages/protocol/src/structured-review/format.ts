@@ -3,8 +3,8 @@ import type {
   ReviewIssue,
   ReviewScopedFile,
   StructuredReviewReport,
-} from "./types";
-import { parseStructuredReviewReport } from "./validation";
+} from "./types.js";
+import { parseStructuredReviewReport } from "./validation.js";
 
 function text(value: string): string {
   return value.length > 0 ? value : "Not provided.";

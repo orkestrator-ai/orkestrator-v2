@@ -16,7 +16,9 @@ import {
 import type { GitHubIssueDetail, GitHubRepository } from "@/types/github";
 import type { EnvironmentType } from "@/types";
 import type { GitHubIssueBuildInput } from "@/hooks/useBuildPipeline";
+import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import * as realBackend from "@/lib/backend";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 const realBackendSnapshot = { ...realBackend };
 const openInBrowserMock = mock(async () => undefined);
@@ -37,12 +39,22 @@ const saveComposeDraftMock = mock(async (
   updatedAt: "2026-07-28T00:00:00.000Z",
 }));
 const deleteComposeDraftMock = mock(async (_draftKey: string) => undefined);
+const retryCompletionCommentMock = mock(async (pipelineId: string) => {
+  const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+  return {
+    ...current,
+    completionCommentStatus: undefined,
+    completionCommentError: undefined,
+    backendRevision: current.backendRevision + 1,
+  };
+});
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   openInBrowser: openInBrowserMock,
   getComposeDraft: getComposeDraftMock,
   saveComposeDraft: saveComposeDraftMock,
   deleteComposeDraft: deleteComposeDraftMock,
+  retryBuildPipelineCompletionComment: retryCompletionCommentMock,
 }));
 
 const { GitHubIssueDetailContent } = await import("./GitHubIssueDetail");
@@ -154,6 +166,8 @@ describe("GitHubIssueDetail", () => {
     }));
     deleteComposeDraftMock.mockReset();
     deleteComposeDraftMock.mockResolvedValue(undefined);
+    retryCompletionCommentMock.mockClear();
+    mockToastError.mockClear();
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -204,11 +218,12 @@ describe("GitHubIssueDetail", () => {
     phase: "creating-environment" | "building" | "complete" | "failed",
     environmentId?: string,
   ) {
-    const pipelineId = useBuildPipelineStore.getState().createPipeline({
+    const pipelineId = `pipeline-${phase}-${environmentId ?? "pending"}`;
+    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
+      id: pipelineId,
       taskId: "github:acme/widget#42",
-      projectId: "project-1",
-      environmentType: "local",
-      agentType: "codex",
+      environmentId: environmentId ?? "",
+      phase,
       taskTitle: "#42: Ship GitHub issues",
       taskSnapshot: {
         title: detail.title,
@@ -225,13 +240,7 @@ describe("GitHubIssueDetail", () => {
         issueUrl: detail.htmlUrl,
         status: "Todo",
       },
-    });
-    if (environmentId) {
-      useBuildPipelineStore
-        .getState()
-        .setPipelineEnvironment(pipelineId, environmentId);
-    }
-    useBuildPipelineStore.getState().setPhase(pipelineId, phase);
+    }));
     return pipelineId;
   }
 
@@ -520,14 +529,22 @@ describe("GitHubIssueDetail", () => {
 
   test("keeps retry controls visible for every failed completion comment", async () => {
     const olderId = seedIssuePipeline("failed", "env-old");
-    useBuildPipelineStore
-      .getState()
-      .setCompletionCommentStatus(olderId, "failed", { error: "first failure" });
+    const older = useBuildPipelineStore.getState().pipelines.get(olderId)!;
+    useBuildPipelineStore.getState().replacePipeline({
+      ...older,
+      completionCommentStatus: "failed",
+      completionCommentError: "first failure",
+      backendRevision: older.backendRevision + 1,
+    });
     await new Promise((resolve) => setTimeout(resolve, 2));
     const newerId = seedIssuePipeline("complete", "env-new");
-    useBuildPipelineStore
-      .getState()
-      .setCompletionCommentStatus(newerId, "failed", { error: "second failure" });
+    const newer = useBuildPipelineStore.getState().pipelines.get(newerId)!;
+    useBuildPipelineStore.getState().replacePipeline({
+      ...newer,
+      completionCommentStatus: "failed",
+      completionCommentError: "second failure",
+      backendRevision: newer.backendRevision + 1,
+    });
 
     renderDetail();
 
@@ -559,5 +576,41 @@ describe("GitHubIssueDetail", () => {
           ?.completionCommentStatus,
       ).toBe("failed");
     });
+  });
+
+  test("keeps completion retries single-flight and recovers after rejection", async () => {
+    const pipelineId = seedIssuePipeline("complete", "env-retry");
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      completionCommentStatus: "failed",
+      completionCommentError: "offline",
+      backendRevision: pipeline.backendRevision + 1,
+    });
+    let rejectRetry!: (reason?: unknown) => void;
+    retryCompletionCommentMock.mockImplementationOnce(() =>
+      new Promise((_resolve, reject) => {
+        rejectRetry = reject;
+      }));
+    renderDetail();
+    const button = screen.getByRole("button", {
+      name: `Retry completion comment for build ${pipelineId}`,
+    }) as HTMLButtonElement;
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(retryCompletionCommentMock).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(true);
+
+    rejectRetry(new Error("still offline"));
+    await waitFor(() => expect(button.disabled).toBe(false));
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to retry GitHub completion comment",
+      { description: "still offline" },
+    );
+
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(retryCompletionCommentMock).toHaveBeenCalledTimes(2));
   });
 });

@@ -824,6 +824,7 @@ describe("App background processing mounts", () => {
     expect(mockSavePaneLayout).toHaveBeenCalledWith(
       "env-1",
       expect.objectContaining({ version: 1, activePaneId: "default" }),
+      0,
     );
   });
 

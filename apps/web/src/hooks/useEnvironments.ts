@@ -7,6 +7,7 @@ import { createSessionKey, useBuildPipelineStore, useClaudeOptionsStore, useConf
 import { useSessionStore } from "@/stores/sessionStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import * as backend from "@/lib/backend";
+import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
 import { preserveCompletedSetupState } from "@/lib/setup-commands";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, PrState } from "@/types";
 
@@ -788,6 +789,11 @@ export function useEnvironments(
           }
         }
         removeEnvironmentFromStore(environmentId);
+        // The backend drops this environment's pane layout with the
+        // environment, so the remembered selection has nothing left to point
+        // at. The bounded store would evict it eventually; dropping it now
+        // keeps that budget for environments the user still has.
+        clearStoredPaneSelection(environmentId);
         // The unread marker lives on the environment record, so deleting the
         // environment takes it with it — nothing to prune here any more.
         toast.success("Environment deleted");

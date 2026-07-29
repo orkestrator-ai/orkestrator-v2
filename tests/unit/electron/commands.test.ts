@@ -6,6 +6,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  isPaneLayoutRevisionConflict,
+  paneLayoutRevisionConflictMessage,
+} from "@orkestrator/protocol/pane-layout";
 import { spawnCommand } from "../../../apps/backend/src/core/shell";
 import type { Environment, RepositoryConfig } from "../../../apps/backend/src/core/models";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
@@ -14563,7 +14567,11 @@ describe("pane layout commands", () => {
       revision: 1,
     };
     const getPaneLayout = mock(async () => persisted);
-    const savePaneLayout = mock(async (environmentId: string, layout: Record<string, unknown>) => ({
+    const savePaneLayout = mock(async (
+      environmentId: string,
+      layout: Record<string, unknown>,
+      _expectedRevision: number,
+    ) => ({
       ...layout,
       environmentId,
       updatedAt: new Date(0).toISOString(),
@@ -14588,6 +14596,7 @@ describe("pane layout commands", () => {
         activePaneId: "default",
         root,
       },
+      expectedRevision: 0,
     }, context);
 
     expect(savePaneLayout).toHaveBeenCalledWith("env-1", {
@@ -14595,7 +14604,7 @@ describe("pane layout commands", () => {
       containerId: null,
       activePaneId: "default",
       root,
-    });
+    }, 0);
     await expect(commands.get("get_pane_layout")?.({ environmentId: "env-1" }, context))
       .resolves.toEqual(persisted);
     expect(getPaneLayout).toHaveBeenCalledWith("env-1");
@@ -14605,15 +14614,65 @@ describe("pane layout commands", () => {
     await expect(commands.get("save_pane_layout")?.({
       environmentId: "env-1",
       layout: { version: 2, containerId: null, activePaneId: "default", root },
+      expectedRevision: 0,
     }, context)).rejects.toThrow("Unsupported pane layout version");
     await expect(commands.get("save_pane_layout")?.({
       environmentId: "env-1",
       layout: { version: 1, containerId: null, activePaneId: "", root },
+      expectedRevision: 0,
     }, context)).rejects.toThrow("non-empty");
     await expect(commands.get("save_pane_layout")?.({
       environmentId: "env-1",
       layout: { version: 1, containerId: null, activePaneId: "default", root: [] },
+      expectedRevision: 0,
     }, context)).rejects.toThrow("layout.root");
+    await expect(commands.get("save_pane_layout")?.({
+      environmentId: "env-1",
+      layout: { version: 1, containerId: null, activePaneId: "default", root },
+    }, context)).rejects.toThrow("Expected expectedRevision to be a number");
+  });
+
+  test("rejects a non-numeric expectedRevision before reaching storage", async () => {
+    const savePaneLayout = mock(async () => ({}));
+    const context = { storage: { savePaneLayout } } as unknown as CommandContext;
+    const commands = createCommandRegistry();
+    const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+    const layout = { version: 1, containerId: null, activePaneId: "default", root };
+
+    for (const expectedRevision of ["0", null, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expect(commands.get("save_pane_layout")?.({
+        environmentId: "env-1",
+        layout,
+        expectedRevision,
+      }, context)).rejects.toThrow("Expected expectedRevision to be a number");
+    }
+    expect(savePaneLayout).not.toHaveBeenCalled();
+  });
+
+  test("propagates a storage revision conflict with the marker intact", async () => {
+    const conflict = new Error(paneLayoutRevisionConflictMessage(3, 5));
+    const savePaneLayout = mock(async () => {
+      throw conflict;
+    });
+    const context = { storage: { savePaneLayout } } as unknown as CommandContext;
+    const commands = createCommandRegistry();
+    const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+
+    const rejection = await commands.get("save_pane_layout")?.({
+      environmentId: "env-1",
+      layout: { version: 1, containerId: null, activePaneId: "default", root },
+      expectedRevision: 3,
+    }, context).then(() => null, (error: unknown) => error);
+
+    expect(rejection).toBe(conflict);
+    // The renderer's rebase-and-retry path keys off this predicate alone.
+    expect(isPaneLayoutRevisionConflict(rejection)).toBe(true);
+    expect(savePaneLayout).toHaveBeenCalledWith("env-1", {
+      version: 1,
+      containerId: null,
+      activePaneId: "default",
+      root,
+    }, 3);
   });
 });
 

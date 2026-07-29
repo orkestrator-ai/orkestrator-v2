@@ -7,6 +7,7 @@ import type { McpServerConfig } from "../types/mcp.js";
 import {
   configToSdkFormat,
   getMcpRuntimeConfig,
+  getOrkestratorAgentMcpServer,
   getMcpServerInfo,
   getMergedMcpServers,
   loadGlobalMcpServers,
@@ -67,6 +68,29 @@ describe("configToSdkFormat", () => {
   test("returns null for a config that is neither http nor stdio", () => {
     const result = configToSdkFormat({} as McpServerConfig);
     expect(result).toBeNull();
+  });
+});
+
+describe("Orkestrator agent MCP injection", () => {
+  test("builds the private HTTP server from backend-provided environment values", () => {
+    expect(getOrkestratorAgentMcpServer({
+      ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:4567/mcp",
+      ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
+    })).toEqual({
+      type: "http",
+      url: "http://127.0.0.1:4567/mcp",
+      headers: { Authorization: "Bearer project-token" },
+    });
+  });
+
+  test("rejects incomplete or non-local injected endpoints", () => {
+    expect(getOrkestratorAgentMcpServer({
+      ORKESTRATOR_AGENT_MCP_URL: "https://attacker.example/mcp",
+      ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
+    })).toBeNull();
+    expect(getOrkestratorAgentMcpServer({
+      ORKESTRATOR_AGENT_MCP_URL: "http://host.docker.internal:4567/mcp",
+    })).toBeNull();
   });
 });
 

@@ -12,6 +12,7 @@ import {
 } from "./local-server-reaper.js";
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
+import { AgentToolsServer } from "./agent-tools.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
 
@@ -23,6 +24,7 @@ export class OrkestratorBackend {
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private readonly reapPidServers: typeof reapOrphanedLocalServers;
   private readonly reapTmuxRuntimes: typeof reapOrphanedClaudeTmuxRuntimes;
+  private readonly agentTools: AgentToolsServer;
 
   constructor(options: {
     dataDir: string;
@@ -36,6 +38,7 @@ export class OrkestratorBackend {
     };
   }) {
     const storage = new StorageService(options.dataDir);
+    this.agentTools = new AgentToolsServer(storage);
     // Every committed mutation fans out to all connected clients, so a second
     // window or browser converges without polling. `emit` is read lazily by the
     // caller's closure, which is how this survives the gateway not existing yet.
@@ -48,6 +51,7 @@ export class OrkestratorBackend {
       appRoot: options.appRoot,
       resourceRoot: options.resourceRoot,
       emit: options.emit,
+      agentTools: this.agentTools,
     };
     this.reapPidServers =
       options.startupReapers?.localServers ?? reapOrphanedLocalServers;
@@ -58,6 +62,7 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
+    await this.agentTools.start();
     // No renderer can be alive yet, so every persisted `frontend` activity
     // snapshot belongs to a process that is gone. They cannot be retracted
     // later — the aggregate is a max — so a renderer that quit mid-turn would
@@ -113,7 +118,13 @@ export class OrkestratorBackend {
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     shutdownDiffStatsTracking();
     shutdownPrMonitorTracking();
-    const attempt = shutdownLocalServers();
+    const attempt = (async () => {
+      try {
+        await shutdownLocalServers();
+      } finally {
+        await this.agentTools.stop();
+      }
+    })();
     this.shutdownPromise = attempt;
     try {
       await attempt;

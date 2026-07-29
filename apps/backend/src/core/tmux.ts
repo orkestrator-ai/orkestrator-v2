@@ -5,6 +5,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import type { CommandContext } from "./commands.js";
+import {
+  ORKESTRATOR_AGENT_MCP_SERVER_NAME,
+  type AgentToolConnection,
+} from "./agent-tools.js";
 import type { Environment } from "./models.js";
 import type { JsonRecord } from "./storage.js";
 import { runCommand } from "./shell.js";
@@ -62,6 +66,20 @@ export function claudeTmuxRuntimeRootPrefix(dataDir: string): string {
     .digest("hex")
     .slice(0, 16);
   return path.join(RUNTIME_ROOT_PREFIX, namespace);
+}
+
+export function agentMcpConfigJson(connection: AgentToolConnection): string {
+  // Claude's --mcp-config file uses the same direct server-name mapping as
+  // .mcp.json. The `mcpServers` wrapper belongs to plugin manifests.
+  return JSON.stringify({
+    [ORKESTRATOR_AGENT_MCP_SERVER_NAME]: {
+      type: "http",
+      url: connection.url,
+      headers: {
+        Authorization: `Bearer ${connection.token}`,
+      },
+    },
+  });
 }
 
 function runtimeRootPrefixForContext(context: CommandContext): string {
@@ -1654,6 +1672,23 @@ class TmuxSession {
     const alive = await this.tmuxAlive();
     const launchedNew = !alive;
     if (launchedNew) {
+      let agentMcpConfigPath: string | undefined;
+      if (context.agentTools && helpText.includes("--mcp-config")) {
+        const environment = await context.storage.getEnvironment(this.environmentId);
+        if (environment) {
+          const connection = context.agentTools.connection(
+            environment.id,
+            environment.projectId,
+            this.backend.kind === "container" ? "container" : "host",
+          );
+          agentMcpConfigPath = `${this.workspaceHookPaths.root}/agent-mcp.json`;
+          await this.backend.writeFile(
+            agentMcpConfigPath,
+            agentMcpConfigJson(connection),
+          );
+          await this.backend.exec(["chmod", "600", agentMcpConfigPath]);
+        }
+      }
       const thinkingDisplay = await probeThinkingDisplaySupport(
         (args, stdin, timeoutMs) => this.backend.exec(args, stdin, timeoutMs),
         claudeCommand,
@@ -1664,6 +1699,7 @@ class TmuxSession {
         model,
         effort,
         thinkingDisplay,
+        agentMcpConfigPath,
       );
       const runtimePrefix = this.backend.kind === "container"
         ? ". /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true; "
@@ -1734,6 +1770,7 @@ class TmuxSession {
     model: string | undefined,
     effort: string | undefined,
     supportsThinkingDisplay: boolean,
+    agentMcpConfigPath?: string,
   ): string {
     let command = shellArg(claudeCommand);
     if (model?.trim()) command += ` --model ${shellArg(model)}`;
@@ -1750,6 +1787,9 @@ class TmuxSession {
     // Agent SDK; do the same here so the tmux chat tab renders reasoning too.
     if (supportsThinkingDisplay) {
       command += ` ${THINKING_MODE_ARGS.join(" ")} ${THINKING_DISPLAY_FLAG} ${THINKING_DISPLAY_VALUE}`;
+    }
+    if (agentMcpConfigPath) {
+      command += ` --mcp-config ${shellArg(agentMcpConfigPath)}`;
     }
     command += " --dangerously-skip-permissions";
     command += this.resumed ? ` --resume ${this.sessionId}` : ` --session-id ${this.sessionId}`;

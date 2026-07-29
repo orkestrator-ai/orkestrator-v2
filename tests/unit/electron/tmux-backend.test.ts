@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+  agentMcpConfigJson,
   CAPTURE_PANE_CACHE_MS,
   CLAUDE_STATE_POLL_INTERVAL_MS,
   CLAUDE_STATE_READ_TIMEOUT_MS,
@@ -49,6 +50,21 @@ import type { CommandContext } from "../../../apps/backend/src/core/commands";
 const tempDirs: string[] = [];
 /** mkdtemp prefix for the fake tmux runtime; also the guard for its cleanup path. */
 const RUNTIME_TEMP_PREFIX = "ork-tmux-runtime-";
+
+test("Claude tmux agent MCP config uses the direct .mcp.json server mapping", () => {
+  expect(JSON.parse(agentMcpConfigJson({
+    url: "http://127.0.0.1:4567/mcp",
+    token: "project-token",
+  }))).toEqual({
+    orkestrator: {
+      type: "http",
+      url: "http://127.0.0.1:4567/mcp",
+      headers: {
+        Authorization: "Bearer project-token",
+      },
+    },
+  });
+});
 
 async function createTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));

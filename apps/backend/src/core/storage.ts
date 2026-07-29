@@ -55,21 +55,21 @@ export type JsonRecord = Record<string, unknown>;
 
 const MAX_FRONTEND_AGENT_ACTIVITY_OBSERVERS = 32;
 
-type KanbanComment = {
+export type KanbanComment = {
   id: string;
   text: string;
   createdAt: string;
 };
 
-type KanbanImage = {
+export type KanbanImage = {
   id: string;
   filename: string;
   createdAt: string;
 };
 
-type KanbanStatus = "backlog" | "in-progress" | "review" | "done";
+export type KanbanStatus = "backlog" | "in-progress" | "review" | "done";
 
-type KanbanTask = {
+export type KanbanTask = {
   id: string;
   projectId: string;
   title: string;
@@ -3776,7 +3776,19 @@ export class StorageService {
     }));
   }
 
-  async addKanbanTask(projectId: string, title: string, description: string): Promise<KanbanTask> {
+  async addKanbanTask(
+    projectId: string,
+    title: string,
+    description: string,
+    initial: {
+      acceptanceCriteria?: string;
+      status?: KanbanStatus;
+    } = {},
+  ): Promise<KanbanTask> {
+    const status = initial.status ?? "backlog";
+    if (!isOneOf(status, ["backlog", "in-progress", "review", "done"])) {
+      throw new Error("Kanban task status is invalid");
+    }
     return this.enqueueKanbanMutation(async () => {
       const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
       const task: KanbanTask = {
@@ -3784,12 +3796,12 @@ export class StorageService {
         projectId,
         title,
         description,
-        acceptanceCriteria: "",
-        status: "backlog",
+        acceptanceCriteria: initial.acceptanceCriteria ?? "",
+        status,
         comments: [],
         images: [],
         createdAt: nowIso(),
-        order: Math.max(-1, ...tasks.filter((candidate) => candidate.projectId === projectId && candidate.status === "backlog").map((candidate) => candidate.order)) + 1,
+        order: Math.max(-1, ...tasks.filter((candidate) => candidate.projectId === projectId && candidate.status === status).map((candidate) => candidate.order)) + 1,
         prMergeCommented: false,
       };
       tasks.push(task);

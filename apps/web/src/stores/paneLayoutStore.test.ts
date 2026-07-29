@@ -714,6 +714,157 @@ describe("paneLayoutStore tab cleanup", () => {
     });
   });
 
+  test("clears setup state when the root pane's last setup tab is removed", () => {
+    // The root leaf has no parent split, so removeTab empties it in place
+    // instead of delegating to closePane. That branch owns the flag reset.
+    const terminalDispose = mock(() => {});
+    seedSingleTabEnvironment("env-setup-root", null, {
+      id: "setup-tab",
+      type: "plain",
+      isSetupTab: true,
+    });
+    useEnvironmentStore.getState().setSetupScriptsRunning("env-setup-root", true);
+    useTerminalPortalStore.setState({
+      terminals: new Map([[
+        createTerminalKey("env-setup-root", "setup-tab"),
+        {
+          environmentId: "env-setup-root",
+          tabId: "setup-tab",
+          terminal: { dispose: terminalDispose },
+          portalElement: document.createElement("div"),
+        } as never,
+      ]]),
+    });
+
+    usePaneLayoutStore.getState().removeTab("default", "setup-tab", "env-setup-root");
+
+    expect(useEnvironmentStore.getState().setupScriptsRunning.has("env-setup-root"))
+      .toBe(false);
+    expect(terminalDispose).toHaveBeenCalledTimes(1);
+    expect(
+      useTerminalPortalStore.getState().hasTerminal("env-setup-root", "setup-tab"),
+    ).toBe(false);
+    expect(usePaneLayoutStore.getState().getRoot("env-setup-root")).toMatchObject({
+      kind: "leaf",
+      id: "default",
+      tabs: [],
+      activeTabId: null,
+    });
+  });
+
+  test("clears setup state when a setup tab is removed from a pane with other tabs", () => {
+    const terminalDispose = mock(() => {});
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [
+        { id: "setup-tab", type: "plain", isSetupTab: true },
+        { id: "other-tab", type: "plain" },
+      ],
+      activeTabId: "setup-tab",
+    }, "default", "env-setup-siblings");
+    useEnvironmentStore.getState().setSetupScriptsRunning("env-setup-siblings", true);
+    useTerminalPortalStore.setState({
+      terminals: new Map([[
+        createTerminalKey("env-setup-siblings", "setup-tab"),
+        {
+          environmentId: "env-setup-siblings",
+          tabId: "setup-tab",
+          terminal: { dispose: terminalDispose },
+          portalElement: document.createElement("div"),
+        } as never,
+      ]]),
+    });
+
+    usePaneLayoutStore.getState().removeTab(
+      "default",
+      "setup-tab",
+      "env-setup-siblings",
+    );
+
+    expect(useEnvironmentStore.getState().setupScriptsRunning.has("env-setup-siblings"))
+      .toBe(false);
+    expect(terminalDispose).toHaveBeenCalledTimes(1);
+    expect(
+      useTerminalPortalStore.getState().hasTerminal("env-setup-siblings", "setup-tab"),
+    ).toBe(false);
+    expect(usePaneLayoutStore.getState().getRoot("env-setup-siblings")).toMatchObject({
+      kind: "leaf",
+      id: "default",
+      tabs: [{ id: "other-tab" }],
+      activeTabId: "other-tab",
+    });
+  });
+
+  test("closing a pane clears setup state when it held the tree's last setup tab", () => {
+    seedPaneTree({
+      kind: "split",
+      id: "root-split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "closing",
+          tabs: [
+            { id: "plain-tab", type: "plain" },
+            { id: "setup-tab", type: "plain", isSetupTab: true },
+          ],
+          activeTabId: "setup-tab",
+        },
+        {
+          kind: "leaf",
+          id: "remaining",
+          tabs: [{ id: "remaining-tab", type: "plain" }],
+          activeTabId: "remaining-tab",
+        },
+      ],
+    }, "closing", "env-close-last-setup");
+    useEnvironmentStore.getState().setSetupScriptsRunning("env-close-last-setup", true);
+
+    usePaneLayoutStore.getState().closePane("closing", "env-close-last-setup");
+
+    expect(useEnvironmentStore.getState().setupScriptsRunning.has("env-close-last-setup"))
+      .toBe(false);
+  });
+
+  test("closing a pane keeps setup state while another pane still runs setup", () => {
+    // Setup scripts can be split across panes; the flag is environment-wide, so
+    // it may only clear once the last setup tab in the tree is gone.
+    seedPaneTree({
+      kind: "split",
+      id: "root-split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "closing",
+          tabs: [{ id: "setup-closing", type: "plain", isSetupTab: true }],
+          activeTabId: "setup-closing",
+        },
+        {
+          kind: "leaf",
+          id: "remaining",
+          tabs: [{ id: "setup-remaining", type: "plain", isSetupTab: true }],
+          activeTabId: "setup-remaining",
+        },
+      ],
+    }, "closing", "env-close-other-setup");
+    useEnvironmentStore.getState().setSetupScriptsRunning("env-close-other-setup", true);
+
+    usePaneLayoutStore.getState().closePane("closing", "env-close-other-setup");
+
+    expect(useEnvironmentStore.getState().setupScriptsRunning.has("env-close-other-setup"))
+      .toBe(true);
+    expect(usePaneLayoutStore.getState().getRoot("env-close-other-setup")).toMatchObject({
+      kind: "leaf",
+      id: "remaining",
+    });
+  });
+
   test("destroys a sole child browser preview only once", () => {
     const destroy = mock(async () => undefined);
     window.orkestrator = { browserPreview: { destroy } } as never;
@@ -1153,6 +1304,102 @@ describe("paneLayoutStore authoritative cleanup", () => {
     expect(terminalDispose).not.toHaveBeenCalled();
     expect(closeLocalTerminalSession).not.toHaveBeenCalled();
     expect(detachTerminal).not.toHaveBeenCalled();
+  });
+
+  test("keeps setup state when the authoritative layout still holds a setup tab", () => {
+    const environmentId = "env-authoritative-setup-retained";
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [
+        { id: "setup-removed", type: "plain", isSetupTab: true },
+        { id: "setup-retained", type: "plain", isSetupTab: true },
+      ],
+      activeTabId: "setup-removed",
+    }, "default", environmentId);
+    usePaneLayoutStore.setState({ hydration: new Map([[environmentId, "done"]]) });
+    useEnvironmentStore.getState().setSetupScriptsRunning(environmentId, true);
+
+    usePaneLayoutStore.getState().applyAuthoritativeLayout(environmentId, {
+      containerId: null,
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "setup-retained", type: "plain", isSetupTab: true }],
+        activeTabId: "setup-retained",
+      },
+    });
+
+    expect(useEnvironmentStore.getState().setupScriptsRunning.has(environmentId))
+      .toBe(true);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs(environmentId).map((tab) => tab.id),
+    ).toEqual(["setup-retained"]);
+  });
+
+  test("disposes the portal terminal for removed tab types with no other cleanup", () => {
+    // `file` and `looped-review` match none of the type branches, so the
+    // unconditional portal disposal is the only reclaim they get.
+    const environmentId = "env-authoritative-plain-types";
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [
+        { id: "file-tab", type: "file", fileData: { filePath: "/repo/a.ts" } },
+        { id: "review-tab", type: "looped-review" },
+      ],
+      activeTabId: "file-tab",
+    }, "default", environmentId);
+    usePaneLayoutStore.setState({ hydration: new Map([[environmentId, "done"]]) });
+    const fileDispose = mock(() => {});
+    const reviewDispose = mock(() => {});
+    useTerminalPortalStore.setState({
+      terminals: new Map([
+        [
+          createTerminalKey(environmentId, "file-tab"),
+          {
+            environmentId,
+            tabId: "file-tab",
+            terminal: { dispose: fileDispose },
+            portalElement: document.createElement("div"),
+          } as never,
+        ],
+        [
+          createTerminalKey(environmentId, "review-tab"),
+          {
+            environmentId,
+            tabId: "review-tab",
+            terminal: { dispose: reviewDispose },
+            portalElement: document.createElement("div"),
+          } as never,
+        ],
+      ]),
+    });
+
+    expect(() => {
+      usePaneLayoutStore.getState().applyAuthoritativeLayout(environmentId, {
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [],
+          activeTabId: null,
+        },
+      });
+    }).not.toThrow();
+
+    expect(fileDispose).toHaveBeenCalledTimes(1);
+    expect(reviewDispose).toHaveBeenCalledTimes(1);
+    expect(useTerminalPortalStore.getState().hasTerminal(environmentId, "file-tab"))
+      .toBe(false);
+    expect(useTerminalPortalStore.getState().hasTerminal(environmentId, "review-tab"))
+      .toBe(false);
+    expect(usePaneLayoutStore.getState().getAllTabs(environmentId)).toEqual([]);
+    expect(closeLocalTerminalSession).not.toHaveBeenCalled();
+    expect(detachTerminal).not.toHaveBeenCalled();
+    expect(stopTmuxSession).not.toHaveBeenCalled();
   });
 
   test("does not clean up or install an authoritative layout before hydration", () => {
@@ -1997,6 +2244,138 @@ describe("paneLayoutStore pane and tab actions", () => {
     expect(
       useTerminalSessionStore.getState().sessions.get(sessionKey)?.sessionId,
     ).toBe("pty-live-move");
+  });
+
+  test("keeps the moved tab's portal terminal instance alive across panes", () => {
+    // A move is not a close: disposing the xterm instance here would blank the
+    // terminal the user just dragged into another pane.
+    seedPaneTree({
+      kind: "split",
+      id: "root-split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "left",
+          tabs: [
+            { id: "terminal-moving", type: "plain" },
+            { id: "left-stays", type: "plain" },
+          ],
+          activeTabId: "terminal-moving",
+        },
+        {
+          kind: "leaf",
+          id: "right",
+          tabs: [{ id: "tab-target", type: "plain" }],
+          activeTabId: "tab-target",
+        },
+      ],
+    }, "left", "env-move-portal");
+    const terminalDispose = mock(() => {});
+    useTerminalPortalStore.setState({
+      terminals: new Map([[
+        createTerminalKey("env-move-portal", "terminal-moving"),
+        {
+          environmentId: "env-move-portal",
+          tabId: "terminal-moving",
+          terminal: { dispose: terminalDispose },
+          portalElement: document.createElement("div"),
+        } as never,
+      ]]),
+    });
+
+    usePaneLayoutStore.getState().moveTab(
+      "left",
+      "right",
+      "terminal-moving",
+      undefined,
+      "env-move-portal",
+    );
+
+    expect(terminalDispose).not.toHaveBeenCalled();
+    expect(
+      useTerminalPortalStore.getState().hasTerminal("env-move-portal", "terminal-moving"),
+    ).toBe(true);
+    expect(
+      usePaneLayoutStore.getState().getPane("right", "env-move-portal")
+        ?.tabs.map((tab) => tab.id),
+    ).toEqual(["tab-target", "terminal-moving"]);
+  });
+
+  test("keeps the portal terminal alive when the emptied source pane collapses", () => {
+    seedPaneTree({
+      kind: "split",
+      id: "root-split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "left",
+          tabs: [{ id: "terminal-moving", type: "plain" }],
+          activeTabId: "terminal-moving",
+        },
+        {
+          kind: "leaf",
+          id: "right",
+          tabs: [{ id: "tab-target", type: "plain" }],
+          activeTabId: "tab-target",
+        },
+      ],
+    }, "left", "env-move-portal-collapse");
+    const terminalDispose = mock(() => {});
+    useTerminalPortalStore.setState({
+      terminals: new Map([[
+        createTerminalKey("env-move-portal-collapse", "terminal-moving"),
+        {
+          environmentId: "env-move-portal-collapse",
+          tabId: "terminal-moving",
+          terminal: { dispose: terminalDispose },
+          portalElement: document.createElement("div"),
+        } as never,
+      ]]),
+    });
+
+    usePaneLayoutStore.getState().moveTab(
+      "left",
+      "right",
+      "terminal-moving",
+      undefined,
+      "env-move-portal-collapse",
+    );
+
+    expect(terminalDispose).not.toHaveBeenCalled();
+    expect(
+      useTerminalPortalStore.getState()
+        .hasTerminal("env-move-portal-collapse", "terminal-moving"),
+    ).toBe(true);
+    expect(usePaneLayoutStore.getState().getRoot("env-move-portal-collapse"))
+      .toMatchObject({ kind: "leaf", id: "right" });
+  });
+
+  test("moving the only tab of a root-level leaf leaves the store untouched", () => {
+    // A root leaf has no parent split to collapse into, so there is nowhere to
+    // move the tab to and nothing may be written.
+    seedSingleTabEnvironment("env-root-leaf-move", null, {
+      id: "only-tab",
+      type: "plain",
+    });
+    const seeded = usePaneLayoutStore.getState().environments;
+    const originalRoot = usePaneLayoutStore.getState().getRoot("env-root-leaf-move");
+
+    usePaneLayoutStore.getState().moveTab(
+      "default",
+      "default",
+      "only-tab",
+      undefined,
+      "env-root-leaf-move",
+    );
+
+    expect(usePaneLayoutStore.getState().environments).toBe(seeded);
+    expect(usePaneLayoutStore.getState().getRoot("env-root-leaf-move")).toBe(originalRoot);
   });
 
   test("does not mutate state for invalid move requests", () => {

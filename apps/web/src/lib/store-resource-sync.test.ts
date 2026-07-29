@@ -793,6 +793,238 @@ describe("pane-layout binding", () => {
       usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
     ).toEqual(["base"]);
   });
+
+  test("re-reads a snapshot it declined once the local write chain settles", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+
+    const remoteLayout = (revision: number) => ({
+      version: 1,
+      environmentId: "env-1",
+      containerId: null,
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "base", type: "plain" },
+          { id: "from-other-client", type: "plain" },
+        ],
+        activeTabId: "base",
+      },
+      updatedAt: "2026-07-29T08:00:00.000Z",
+      revision,
+    });
+    const getPaneLayout = mock(async () => remoteLayout(5));
+    // The first adoption is declined because a local write is in flight; the
+    // second, after that write settled, is accepted.
+    const adoptPaneLayout = mock(() => adoptPaneLayout.mock.calls.length > 1);
+    const settledBinding: { notify: ((environmentId: string) => void) | null } = {
+      notify: null,
+    };
+    const onWriteSettled = mock((handler: (environmentId: string) => void) => {
+      settledBinding.notify = handler;
+      return () => {
+        settledBinding.notify = null;
+      };
+    });
+
+    detach = startStoreResourceSync({
+      getPaneLayout: getPaneLayout as never,
+      adoptPaneLayout,
+      onPaneLayoutWriteSettled: onWriteSettled as never,
+    });
+
+    dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 5 });
+    await tick();
+    expect(adoptPaneLayout).toHaveBeenCalledTimes(1);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["base"]);
+
+    // Without this replay the dropped snapshot is only recoverable if the write
+    // it deferred to succeeds and announces its own revision.
+    settledBinding.notify?.("env-1");
+    await tick();
+
+    expect(getPaneLayout).toHaveBeenCalledTimes(2);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["base", "from-other-client"]);
+
+    // A settle for an environment with nothing queued is not a refresh trigger.
+    settledBinding.notify?.("env-1");
+    await tick();
+    expect(getPaneLayout).toHaveBeenCalledTimes(2);
+  });
+
+  test("ignores a change for an environment this client has not loaded", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [] });
+    const getPaneLayout = mock(async () => null);
+    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+
+    dispatchResourceChange({ resource: "pane-layout", id: "env-unknown", revision: 1 });
+    await tick();
+
+    expect(getPaneLayout).not.toHaveBeenCalled();
+  });
+
+  test("drops a snapshot once the environment changed shape mid-read", async () => {
+    detach?.();
+    useEnvironmentStore.setState({
+      environments: [{ ...environment("env-1"), worktreePath: "/tmp/before" } as never],
+    });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+
+    const getPaneLayout = mock(async () => {
+      // The environment is re-created onto a different worktree while the read
+      // is in flight, so its file tabs would resolve against the wrong tree.
+      useEnvironmentStore.setState({
+        environments: [{ ...environment("env-1"), worktreePath: "/tmp/after" } as never],
+      });
+      return {
+        version: 1,
+        environmentId: "env-1",
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "base", type: "plain" },
+            { id: "late", type: "plain" },
+          ],
+          activeTabId: "base",
+        },
+        updatedAt: "2026-07-29T08:00:00.000Z",
+        revision: 6,
+      };
+    });
+    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+
+    dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 6 });
+    await tick();
+
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["base"]);
+  });
+
+  test("drops a snapshot once the environment type changed mid-read", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+
+    const getPaneLayout = mock(async () => {
+      useEnvironmentStore.setState({
+        environments: [{
+          ...environment("env-1"),
+          environmentType: "docker",
+          containerId: null,
+        } as never],
+      });
+      return {
+        version: 1,
+        environmentId: "env-1",
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "base", type: "plain" },
+            { id: "late", type: "plain" },
+          ],
+          activeTabId: "base",
+        },
+        updatedAt: "2026-07-29T08:00:00.000Z",
+        revision: 7,
+      };
+    });
+    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+
+    dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 7 });
+    await tick();
+
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["base"]);
+  });
+
+  test("drops a snapshot superseded while its dependencies were hydrating", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+
+    const layoutWithDependency = (tabId: string, revision: number) => ({
+      version: 1,
+      environmentId: "env-1",
+      containerId: null,
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "base", type: "plain" },
+          {
+            id: tabId,
+            type: "looped-review",
+            loopedReviewTabData: { workflowId: `workflow-${tabId}` },
+          },
+        ],
+        activeTabId: "base",
+      },
+      updatedAt: "2026-07-29T08:00:00.000Z",
+      revision,
+    });
+    const getPaneLayout = mock()
+      .mockImplementationOnce(async () => layoutWithDependency("stale", 8))
+      .mockImplementationOnce(async () => layoutWithDependency("fresh", 9));
+    // A newer change lands while the first read's workflow is still loading.
+    hydrateLoopedReviewWorkflow.mockImplementationOnce(async () => {
+      dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 9 });
+      return undefined;
+    });
+    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+
+    dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 8 });
+    await tick();
+
+    // Whatever else happens, the abandoned read must not install "stale".
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).not.toContain("stale");
+  });
 });
 
 describe("authoritative resync", () => {
@@ -998,6 +1230,31 @@ describe("authoritative resync", () => {
     await tick();
 
     expect(getPaneLayout).toHaveBeenCalledWith("env-1");
+  });
+
+  test("reports a failed pane read without abandoning the other environments", async () => {
+    detach?.();
+    useEnvironmentStore.setState({
+      environments: [environment("env-1"), environment("env-2")],
+    });
+    const paneStore = usePaneLayoutStore.getState();
+    for (const environmentId of ["env-1", "env-2"]) {
+      paneStore.initialize(null, environmentId);
+      usePaneLayoutStore.getState().beginHydration(environmentId);
+      usePaneLayoutStore.getState().finishHydration(environmentId);
+    }
+    const getPaneLayout = mock(async (environmentId: string) => {
+      if (environmentId === "env-1") throw new Error("pane read offline");
+      return null;
+    });
+    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+
+    // A rejected read is settled, not awaited-and-thrown: one bad environment
+    // must not strand the reconnect resync for every other one.
+    requestResourceResync();
+    await tick();
+
+    expect(getPaneLayout.mock.calls.map(([id]) => id).sort()).toEqual(["env-1", "env-2"]);
   });
 
   test("coalesces a resync requested while one is running into one follow-up", async () => {

@@ -33,6 +33,15 @@ describe("reconcilePersistedLayout", () => {
     expect(reconcilePersistedLayout(saved(root, { containerId: "other" }), context)).toBeNull();
   });
 
+  test("carries the record's revision onto the restored state", () => {
+    const root = { kind: "leaf", id: "pane", tabs: [{ id: "tab", type: "plain" }], activeTabId: "tab" };
+
+    // This is the CAS token every later write is based on; losing it here would
+    // make the first edit after a reload look like a create.
+    expect(reconcilePersistedLayout(saved(root, { revision: 12 }), context))
+      .toMatchObject({ backendRevision: 12 });
+  });
+
   test("sanitizes tabs, one-shot fields, native connection data, and active pointers", () => {
     const restored = reconcilePersistedLayout(saved({
       kind: "leaf",
@@ -1043,5 +1052,52 @@ describe("preserveClientPaneSelection", () => {
         { id: "right", activeTabId: "right-new" },
       ],
     });
+  });
+
+  test("does not graft a host port onto a tab the backend sent without one", () => {
+    const authoritative: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "pane",
+      backendRevision: 9,
+      root: {
+        kind: "leaf",
+        id: "pane",
+        // Same id and type, but the authoritative record carries no native
+        // connection data at all — the session it described is gone.
+        tabs: [{ id: "native", type: "claude-native" }],
+        activeTabId: "native",
+      },
+    };
+    const current: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "pane",
+      root: {
+        kind: "leaf",
+        id: "pane",
+        tabs: [{
+          id: "native",
+          type: "claude-native",
+          claudeNativeData: {
+            environmentId: "env-1",
+            containerId: "container-1",
+            hostPort: 4321,
+            sessionId: "session-1",
+          },
+        }],
+        activeTabId: "native",
+      },
+    };
+
+    const reconciled = preserveClientPaneSelection(authoritative, current);
+
+    // Re-attaching only the port would leave a tab claiming a live bridge with
+    // no session behind it.
+    expect(reconciled.root).toMatchObject({
+      tabs: [{ id: "native", type: "claude-native" }],
+    });
+    expect(
+      (reconciled.root as { tabs: Array<{ claudeNativeData?: unknown }> })
+        .tabs[0]?.claudeNativeData,
+    ).toBeUndefined();
   });
 });

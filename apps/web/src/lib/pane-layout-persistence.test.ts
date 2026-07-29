@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import {
   type EnvironmentPaneState,
   usePaneLayoutStore,
 } from "@/stores/paneLayoutStore";
+import type { Environment } from "@/types";
 import type { PaneLeaf, PersistedPaneLayout } from "@/types/paneLayout";
 import {
   adoptPersistedPaneLayout,
   createPersistedPaneLayoutInput,
   flushPaneLayoutNow,
+  onPaneLayoutWriteSettled,
   startPaneLayoutPersistence,
 } from "./pane-layout-persistence";
 import { reconcilePersistedLayout } from "./pane-layout-restore";
@@ -15,7 +19,32 @@ import { reconcilePersistedLayout } from "./pane-layout-restore";
 const waitForTimers = () => new Promise((resolve) => setTimeout(resolve, 20));
 type LayoutInput = ReturnType<typeof createPersistedPaneLayoutInput>;
 
+/**
+ * The post-save install reconciles against the environment record, exactly as
+ * the change-feed refresh does, so a layout can never be installed for an
+ * environment this client no longer has.
+ */
+function seedEnvironment(
+  containerId: string | null,
+  environmentId = "env-1",
+): void {
+  useEnvironmentStore.setState({
+    environments: [{
+      id: environmentId,
+      name: environmentId,
+      projectId: "project-1",
+      status: "running",
+      environmentType: containerId === null ? "local" : "docker",
+      containerId,
+      branch: "main",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    } as Environment],
+  });
+}
+
 function resetStore() {
+  useEnvironmentStore.setState({ environments: [] });
+  seedEnvironment("container-1");
   usePaneLayoutStore.setState({
     environments: new Map(),
     hydration: new Map(),
@@ -1019,6 +1048,504 @@ describe("pane layout persistence", () => {
     await expect(flushPaneLayoutNow("env-1", input)).rejects.toThrow(
       "chain offline",
     );
+    stop();
+  });
+
+  test("flushPaneLayoutNow accepts an already-durable record without rewriting it", async () => {
+    const input = createPersistedPaneLayoutInput({
+      containerId: "container-1",
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "tab-1", type: "plain" }],
+        activeTabId: "tab-1",
+      },
+    });
+    const save = mock(async (environmentId: string, layout: LayoutInput) =>
+      createSaved(environmentId, layout)
+    );
+    const load = mock(async () => savedResult("env-1", input));
+
+    // Identical content means the caller's durability requirement is already
+    // met; a write here would burn a revision for nothing.
+    await expect(flushPaneLayoutNow("env-1", input, save, load)).resolves
+      .toBeUndefined();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  test("flushPaneLayoutNow refuses a stored record it cannot even parse", async () => {
+    const input = createPersistedPaneLayoutInput({
+      containerId: "container-1",
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "tab-1", type: "plain" }],
+        activeTabId: "tab-1",
+      },
+    });
+    const save = mock(async (environmentId: string, layout: LayoutInput) =>
+      createSaved(environmentId, layout)
+    );
+    const load = mock(async () => ({
+      ...savedResult("env-1", input),
+      root: { kind: "leaf" } as never,
+    }));
+
+    // A record that fails validation cannot be compared, so it cannot be
+    // declared already-durable either.
+    await expect(flushPaneLayoutNow("env-1", input, save, load)).rejects.toThrow(
+      "authoritative merge base",
+    );
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  test("refuses a chained write for an environment that never hydrated", async () => {
+    const save = mock(async (environmentId: string, layout: LayoutInput) =>
+      createSaved(environmentId, layout)
+    );
+    const divergent = createPersistedPaneLayoutInput({
+      containerId: "container-1",
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "remote-only", type: "plain" }],
+        activeTabId: "remote-only",
+      },
+    });
+    const load = mock(async () => savedResult("env-1", divergent));
+    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 60_000 });
+
+    // Nothing hydrated this environment, so the mirror holds no common base and
+    // the stored record disagrees. Blessing it with a freshly read revision
+    // would silently drop whatever the other client wrote.
+    await expect(flushPaneLayoutNow(
+      "env-1",
+      createPersistedPaneLayoutInput({
+        containerId: "container-1",
+        activePaneId: "default",
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [{ id: "local-only", type: "plain" }],
+          activeTabId: "local-only",
+        },
+      }),
+    )).rejects.toThrow("authoritative merge base");
+    expect(save).not.toHaveBeenCalled();
+    stop();
+  });
+
+  test("retries against revision zero when the record vanished mid-conflict", async () => {
+    const save = mock(async (
+      environmentId: string,
+      layout: LayoutInput,
+      expectedRevision: number,
+    ) => {
+      if (save.mock.calls.length === 1) {
+        throw new Error(
+          `Pane layout revision conflict: expected ${expectedRevision}, current 9`,
+        );
+      }
+      return { ...savedResult(environmentId, layout), revision: 1 };
+    });
+    // Another client deleted the environment's layout between our save and the
+    // re-read, so there is nothing to merge with and nothing to overwrite.
+    const load = mock(async () => null);
+    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "local", type: "plain" }, "env-1");
+    await waitForTimers();
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls[1]?.[2]).toBe(0);
+    expect(
+      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> })
+        .tabs.map(({ id }) => id),
+    ).toEqual(["local"]);
+    stop();
+  });
+
+  test("replaces an unparseable remote record at its own revision", async () => {
+    const save = mock(async (
+      environmentId: string,
+      layout: LayoutInput,
+      expectedRevision: number,
+    ) => {
+      if (save.mock.calls.length === 1) {
+        throw new Error(
+          `Pane layout revision conflict: expected ${expectedRevision}, current 6`,
+        );
+      }
+      return { ...savedResult(environmentId, layout), revision: 7 };
+    });
+    const load = mock(async () => ({
+      version: 1,
+      environmentId: "env-1",
+      containerId: "container-1",
+      activePaneId: "default",
+      // Older or corrupt on-disk shape: a valid CAS token, but nothing a merge
+      // can treat as a common base.
+      root: { kind: "leaf", tabs: "not-an-array" } as never,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 6,
+    }));
+    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "local", type: "plain" }, "env-1");
+    await waitForTimers();
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls[1]?.[2]).toBe(6);
+    expect(
+      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> })
+        .tabs.map(({ id }) => id),
+    ).toEqual(["local"]);
+    stop();
+  });
+
+  test("replaces a conflicting layout written under a different wire version", async () => {
+    const save = mock(async (
+      environmentId: string,
+      layout: LayoutInput,
+      expectedRevision: number,
+    ) => {
+      if (save.mock.calls.length === 1) {
+        throw new Error(
+          `Pane layout revision conflict: expected ${expectedRevision}, current 4`,
+        );
+      }
+      return { ...savedResult(environmentId, layout), revision: 5 };
+    });
+    const load = mock(async () => ({
+      version: 99,
+      environmentId: "env-1",
+      containerId: "container-1",
+      activePaneId: "default",
+      root: {
+        kind: "leaf" as const,
+        id: "default",
+        tabs: [{ id: "future", type: "plain" as const }],
+        activeTabId: "future",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 4,
+    }));
+    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "local", type: "plain" }, "env-1");
+    await waitForTimers();
+
+    // A record from another wire version is not a common base any more than one
+    // from another container generation is.
+    expect(save.mock.calls[1]?.[2]).toBe(4);
+    expect(
+      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> })
+        .tabs.map(({ id }) => id),
+    ).toEqual(["local"]);
+    stop();
+  });
+
+  test("empties every pane of a split tree when there is no saved base", async () => {
+    const splitState: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "left",
+      backendRevision: 0,
+      root: {
+        kind: "split",
+        id: "split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [{ id: "local-left", type: "plain" }],
+            activeTabId: "local-left",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [{ id: "local-right", type: "plain" }],
+            activeTabId: "local-right",
+          },
+        ],
+      },
+    };
+    const remoteInput = createPersistedPaneLayoutInput({
+      ...splitState,
+      root: {
+        ...splitState.root,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [{ id: "remote-left", type: "plain" }],
+            activeTabId: "remote-left",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [],
+            activeTabId: null,
+          },
+        ],
+      } as typeof splitState.root,
+    });
+    const save = mock(async (
+      environmentId: string,
+      layout: LayoutInput,
+      expectedRevision: number,
+    ) => {
+      if (save.mock.calls.length === 1) {
+        throw new Error(
+          `Pane layout revision conflict: expected ${expectedRevision}, current 3`,
+        );
+      }
+      return { ...savedResult(environmentId, layout), revision: 4 };
+    });
+    const load = mock(async () => ({
+      ...savedResult("env-1", remoteInput),
+      revision: 3,
+    }));
+    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1", splitState);
+    usePaneLayoutStore.getState().addTab(
+      "left",
+      { id: "new-local", type: "plain" },
+      "env-1",
+    );
+    await waitForTimers();
+
+    // Revision zero means nothing local was ever saved, so the merge base has
+    // to be empty in every pane — otherwise a tab present only on the remote
+    // side would read as a local deletion. Nothing is lost here.
+    const merged = save.mock.calls[1]![1].root as {
+      children: Array<{ tabs: Array<{ id: string }> }>;
+    };
+    expect(merged.children.flatMap(({ tabs }) => tabs.map(({ id }) => id)).sort())
+      .toEqual(["local-left", "local-right", "new-local", "remote-left"].sort());
+    stop();
+  });
+
+  test("declines an adoption that is behind or disagrees with the known revision", () => {
+    const stop = startPaneLayoutPersistence({
+      save: async (environmentId, input) => createSaved(environmentId, input),
+      debounceMs: 60_000,
+    });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1", {
+      containerId: "container-1",
+      activePaneId: "default",
+      backendRevision: 5,
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "known", type: "plain" }],
+        activeTabId: "known",
+      },
+    });
+
+    const snapshot = (revision: number, tabId: string): EnvironmentPaneState => ({
+      containerId: "container-1",
+      activePaneId: "default",
+      backendRevision: revision,
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: tabId, type: "plain" }],
+        activeTabId: tabId,
+      },
+    });
+
+    // Strictly older than what the mirror already holds.
+    expect(adoptPersistedPaneLayout("env-1", snapshot(4, "stale"))).toBe(false);
+    // Same revision, different content: one of the two is wrong, and the mirror
+    // is the one that came from a completed save.
+    expect(adoptPersistedPaneLayout("env-1", snapshot(5, "different"))).toBe(false);
+    // Same revision, same content is simply a redundant echo.
+    expect(adoptPersistedPaneLayout("env-1", snapshot(5, "known"))).toBe(true);
+    // A newer revision is exactly what adoption is for.
+    expect(adoptPersistedPaneLayout("env-1", snapshot(6, "newer"))).toBe(true);
+    stop();
+  });
+
+  test("does not roll back a local edit that landed while a save was in flight", async () => {
+    const inFlight: { release: (() => void) | null } = { release: null };
+    const save = mock(async (environmentId: string, layout: LayoutInput) => {
+      if (save.mock.calls.length === 1) {
+        await new Promise<void>((resolve) => {
+          inFlight.release = resolve;
+        });
+      }
+      return createSaved(environmentId, layout);
+    });
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "first", type: "plain" }, "env-1");
+    await waitForTimers();
+    expect(save).toHaveBeenCalledTimes(1);
+
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "second", type: "plain" },
+      "env-1",
+    );
+    inFlight.release?.();
+    await waitForTimers();
+
+    // The completed save only knew about "first". Installing its result would
+    // have wiped "second" out of the UI until the next write came back.
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["first", "second"]);
+    stop();
+  });
+
+  test("validates a rebased tab against this client's records before installing it", async () => {
+    const buildTab = {
+      id: "remote-build",
+      type: "claude-build" as const,
+      buildTabData: {
+        environmentId: "env-1",
+        pipelineId: "pipeline-1",
+        taskId: "task-1",
+        isLocal: false,
+      },
+    };
+    const baseRoot: PaneLeaf = {
+      kind: "leaf",
+      id: "default",
+      tabs: [{ id: "base", type: "plain" }],
+      activeTabId: "base",
+    };
+    const baseState: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "default",
+      backendRevision: 1,
+      root: baseRoot,
+    };
+    const remoteInput = createPersistedPaneLayoutInput({
+      ...baseState,
+      root: { ...baseRoot, tabs: [...baseRoot.tabs, buildTab] },
+    });
+    const runRebase = async () => {
+      const save = mock(async (
+        environmentId: string,
+        layout: LayoutInput,
+        expectedRevision: number,
+      ) => {
+        if (save.mock.calls.length === 1) {
+          throw new Error(
+            `Pane layout revision conflict: expected ${expectedRevision}, current 2`,
+          );
+        }
+        return { ...savedResult(environmentId, layout), revision: 3 };
+      });
+      const load = mock(async () => ({
+        ...savedResult("env-1", remoteInput),
+        revision: 2,
+      }));
+      const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
+      const store = usePaneLayoutStore.getState();
+      store.initialize("container-1", "env-1");
+      store.beginHydration("env-1");
+      store.finishHydration("env-1", baseState);
+      usePaneLayoutStore.getState().addTab(
+        "default",
+        { id: "local", type: "plain" },
+        "env-1",
+      );
+      await waitForTimers();
+      const savedTabIds =
+        (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> })
+          .tabs.map(({ id }) => id);
+      const storeTabIds = usePaneLayoutStore.getState()
+        .getAllTabs("env-1").map(({ id }) => id);
+      stop();
+      return { savedTabIds, storeTabIds };
+    };
+
+    // The build tab is merged into the record either way — the shared layout is
+    // not this client's to prune.
+    const withoutPipeline = await runRebase();
+    expect(withoutPipeline.savedTabIds).toEqual(["base", "remote-build", "local"]);
+    // ...but installing it locally would render a build tab with no pipeline
+    // behind it, so reconciliation drops it from what this client shows.
+    expect(withoutPipeline.storeTabIds).toEqual(["base", "local"]);
+
+    resetStore();
+    useBuildPipelineStore.setState({
+      pipelines: new Map([["pipeline-1", { id: "pipeline-1" } as never]]),
+      buildEnvironmentIds: new Set(),
+    });
+    const withPipeline = await runRebase();
+    expect(withPipeline.savedTabIds).toEqual(["base", "remote-build", "local"]);
+    expect(withPipeline.storeTabIds).toEqual(["base", "remote-build", "local"]);
+    useBuildPipelineStore.setState({
+      pipelines: new Map(),
+      buildEnvironmentIds: new Set(),
+    });
+  });
+
+  test("announces a settled write chain on success and on failure", async () => {
+    const settled: string[] = [];
+    const unsubscribe = onPaneLayoutWriteSettled((environmentId) => {
+      settled.push(environmentId);
+    });
+    const save = mock(async (environmentId: string, layout: LayoutInput) => {
+      if (save.mock.calls.length === 2) throw new Error("offline");
+      return createSaved(environmentId, layout);
+    });
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+
+    store.addTab("default", { id: "ok", type: "plain" }, "env-1");
+    await waitForTimers();
+    expect(settled).toEqual(["env-1"]);
+
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "fails", type: "plain" },
+      "env-1",
+    );
+    await waitForTimers();
+    // A failed write must still announce: the whole point of the signal is to
+    // let a dropped remote snapshot be re-fetched when the write it deferred
+    // to never lands.
+    expect(settled).toEqual(["env-1", "env-1"]);
+
+    unsubscribe();
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "after", type: "plain" },
+      "env-1",
+    );
+    await waitForTimers();
+    expect(settled).toEqual(["env-1", "env-1"]);
     stop();
   });
 });

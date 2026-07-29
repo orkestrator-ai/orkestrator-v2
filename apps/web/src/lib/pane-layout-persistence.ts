@@ -1,9 +1,13 @@
+import { isPaneLayoutRevisionConflict } from "@orkestrator/protocol/pane-layout";
 import * as backend from "@/lib/backend";
+import {
+  hydratePaneLayoutDependencies,
+  reconcileAuthoritativePaneLayout,
+} from "@/lib/pane-layout-authoritative";
 import {
   isPaneNode,
   mergePersistedPaneLayouts,
 } from "@/lib/pane-layout-merge";
-import { preserveClientPaneSelection } from "@/lib/pane-layout-restore";
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
@@ -34,6 +38,27 @@ export interface PaneLayoutPersistenceOptions {
   load?: LoadPaneLayout;
   debounceMs?: number;
   maxConflictRetries?: number;
+}
+
+type PaneLayoutWriteSettledHandler = (environmentId: string) => void;
+
+const writeSettledHandlers = new Set<PaneLayoutWriteSettledHandler>();
+
+/**
+ * Fires once an environment's write chain has fully drained, whether the last
+ * write succeeded or failed.
+ *
+ * A refresh that `adoptPersistedPaneLayout` declined is only recoverable
+ * because the write it deferred to eventually settles. Without this signal a
+ * failed write silently strands the remote snapshot that was dropped for it.
+ */
+export function onPaneLayoutWriteSettled(
+  handler: PaneLayoutWriteSettledHandler,
+): () => void {
+  writeSettledHandlers.add(handler);
+  return () => {
+    writeSettledHandlers.delete(handler);
+  };
 }
 
 function sanitizeTab(tab: TabInfo): TabInfo {
@@ -187,13 +212,6 @@ export function startPaneLayoutPersistence(
     timers.delete(environmentId);
   };
 
-  const isRevisionConflict = (error: unknown): boolean =>
-    error instanceof Error
-    // Electron prefixes errors crossing ipcRenderer.invoke with
-    // "Error invoking remote method ...", so the stable marker may not start
-    // the transported message.
-    && error.message.includes("Pane layout revision conflict:");
-
   const persistedInput = (
     layout: PersistedPaneLayout,
   ): PersistedPaneLayoutInput | null => {
@@ -225,6 +243,77 @@ export function startPaneLayoutPersistence(
       ...input,
       root: emptyRoot(input.root),
     };
+  };
+
+  /**
+   * Installs the tree a rebased save produced, so the next local edit is
+   * derived from the complete shared layout rather than from a snapshot that
+   * predates the merge.
+   *
+   * A rebase can graft in tabs this client has never seen, so the snapshot goes
+   * through the same dependency hydration and reconciliation as a change-feed
+   * refresh. Anything that fails here is skipped rather than raised: the save
+   * itself already succeeded, and the backend's own announcement drives a full
+   * refresh right behind us.
+   */
+  const installSavedLayout = async (
+    environmentId: string,
+    saved: PersistedPaneLayout,
+    savedInput: PersistedPaneLayoutInput,
+    desiredInput: PersistedPaneLayoutInput,
+  ): Promise<void> => {
+    // If another local mutation happened while this save was in flight, its
+    // already-enqueued write will rebase over savedInput using the updated
+    // authoritative map. Installing here would generate a redundant third write
+    // and could momentarily roll that local edit back.
+    const hasNewerLocalEdit = (): boolean => {
+      const paneStore = usePaneLayoutStore.getState();
+      const current = paneStore.environments.get(environmentId);
+      if (!current || paneStore.hydration.get(environmentId) !== "done") {
+        return true;
+      }
+      return JSON.stringify(createPersistedPaneLayoutInput(current))
+        !== JSON.stringify(desiredInput);
+    };
+    if (hasNewerLocalEdit()) return;
+
+    try {
+      await hydratePaneLayoutDependencies(savedInput.root);
+    } catch (error) {
+      console.warn(
+        "[PaneLayout] Skipped installing a saved layout whose dependencies "
+          + "could not be hydrated:",
+        error,
+      );
+      return;
+    }
+    // Re-check after the await: hydration yields, so a local edit or a
+    // container swap can land in between.
+    if (hasNewerLocalEdit()) return;
+
+    const paneStore = usePaneLayoutStore.getState();
+    const current = paneStore.environments.get(environmentId);
+    if (!current) return;
+    const restored = reconcileAuthoritativePaneLayout(
+      environmentId,
+      { ...saved, ...savedInput },
+      current,
+    );
+    if (!restored) return;
+
+    // Reconciliation canonicalises tab shape and drops any tab whose backing
+    // record the backend no longer has, so the installed tree can serialize
+    // differently from what was just saved. Re-prime the mirror from the tree
+    // actually installed, or the subscriber reads it as a fresh local edit and
+    // writes it straight back. This mirrors `adoptPersistedPaneLayout`, which
+    // primes from the reconciled snapshot for the same reason.
+    const installedInput = createPersistedPaneLayoutInput(restored);
+    lastEnqueued.set(environmentId, JSON.stringify(installedInput));
+    authoritative.set(environmentId, {
+      input: installedInput,
+      revision: saved.revision,
+    });
+    paneStore.applyAuthoritativeLayout(environmentId, restored);
   };
 
   const persistWithRebase = async (
@@ -270,37 +359,10 @@ export function startPaneLayoutPersistence(
           revision: saved.revision,
         });
         lastEnqueued.set(environmentId, JSON.stringify(savedInput));
-        const paneStore = usePaneLayoutStore.getState();
-        const current = paneStore.environments.get(environmentId);
-        if (
-          current
-          && paneStore.hydration.get(environmentId) === "done"
-          && current.containerId === savedInput.containerId
-        ) {
-          const currentInput = createPersistedPaneLayoutInput(current);
-          // If another local mutation happened while this save was in flight,
-          // its already-enqueued write will rebase over savedInput using the
-          // updated authoritative map. Installing here would generate a
-          // redundant third write and could momentarily roll that local edit
-          // back. With no newer mutation, install the rebased result now so the
-          // next edit is derived from the complete shared tree.
-          if (
-            JSON.stringify(currentInput) === JSON.stringify(desiredInput)
-          ) {
-            paneStore.applyAuthoritativeLayout(
-              environmentId,
-              preserveClientPaneSelection({
-                containerId: savedInput.containerId,
-                activePaneId: savedInput.activePaneId,
-                root: savedInput.root,
-                backendRevision: saved.revision,
-              }, current),
-            );
-          }
-        }
+        await installSavedLayout(environmentId, saved, savedInput, desiredInput);
         return;
       } catch (error) {
-        if (!isRevisionConflict(error) || attempt >= maxConflictRetries) {
+        if (!isPaneLayoutRevisionConflict(error) || attempt >= maxConflictRetries) {
           throw error;
         }
         const current = await load(environmentId);
@@ -359,15 +421,25 @@ export function startPaneLayoutPersistence(
         throw error;
       });
     writeChains.set(environmentId, nextWrite);
-    void nextWrite.then(() => {
-      if (writeChains.get(environmentId) === nextWrite) {
-        writeChains.delete(environmentId);
+    const settle = () => {
+      if (writeChains.get(environmentId) !== nextWrite) return;
+      writeChains.delete(environmentId);
+      // Only announce a genuinely idle environment. A queued debounced write
+      // would decline the very adoption this signal exists to unblock, and its
+      // own settle will follow.
+      if (pendingWrites.has(environmentId)) return;
+      for (const handler of [...writeSettledHandlers]) {
+        try {
+          handler(environmentId);
+        } catch (error) {
+          console.warn(
+            "[PaneLayout] A write-settled handler threw:",
+            error,
+          );
+        }
       }
-    }, () => {
-      if (writeChains.get(environmentId) === nextWrite) {
-        writeChains.delete(environmentId);
-      }
-    });
+    };
+    void nextWrite.then(settle, settle);
     return nextWrite;
   };
 

@@ -6,6 +6,7 @@ import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { writeStoredPaneSelection } from "@/lib/pane-selection-storage";
 import {
   useLoopedReviewStore,
   type LoopedReviewWorkflow,
@@ -309,6 +310,7 @@ describe("TerminalContainer", () => {
     savePaneLayoutMock.mockClear();
     getPaneLayoutMock.mockReset();
     getPaneLayoutMock.mockResolvedValue(null);
+    localStorage.clear();
     listLoopedReviewWorkflowsMock.mockReset();
     listLoopedReviewWorkflowsMock.mockResolvedValue([]);
     writeContainerFileMock.mockReset();
@@ -400,6 +402,113 @@ describe("TerminalContainer", () => {
       });
     });
     expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
+  });
+
+  test("restores this client's own pane and tab selection on a cold start", async () => {
+    // The shared record carries a canonical selection so that clicking a tab
+    // never writes a revision and never moves another client's focus. Without
+    // the local mirror, every restart would drop the user on the first tab.
+    getPaneLayoutMock.mockResolvedValue({
+      version: 1,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "left",
+      root: {
+        kind: "split",
+        id: "split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [
+              { id: "left-a", type: "plain" },
+              { id: "left-b", type: "plain" },
+            ],
+            activeTabId: "left-a",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [
+              { id: "right-a", type: "plain" },
+              { id: "right-b", type: "plain" },
+            ],
+            activeTabId: "right-a",
+          },
+        ],
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 3,
+    });
+    writeStoredPaneSelection("env-hidden", {
+      activePaneId: "right",
+      // "gone" no longer exists in the restored layout and must be ignored.
+      activeTabIds: { left: "left-b", right: "right-b", missing: "gone" },
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const restored = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      expect(restored?.activePaneId).toBe("right");
+      expect(restored?.root).toMatchObject({
+        children: [
+          { id: "left", activeTabId: "left-b" },
+          { id: "right", activeTabId: "right-b" },
+        ],
+      });
+    });
+  });
+
+  test("falls back to the layout's own selection when nothing was remembered", async () => {
+    getPaneLayoutMock.mockResolvedValue({
+      version: 1,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "restored-pane",
+      root: {
+        kind: "leaf",
+        id: "restored-pane",
+        tabs: [
+          { id: "restored-tab", type: "plain" },
+          { id: "second-tab", type: "plain" },
+        ],
+        activeTabId: "restored-tab",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const restored = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      expect(restored?.activePaneId).toBe("restored-pane");
+      expect(restored?.root).toMatchObject({ activeTabId: "restored-tab" });
+    });
   });
 
   test("rebinds a restored completed setup tab before stale cleanup can replace its PTY", async () => {

@@ -18,6 +18,7 @@ import {
   getReviewInstructionValidationError,
   parseReviewInstruction,
 } from "@orkestrator/protocol/review-instruction";
+import { paneLayoutRevisionConflictMessage } from "@orkestrator/protocol/pane-layout";
 import type { ResourceChange, ResourceKind } from "@orkestrator/protocol/resource-events";
 import {
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
@@ -2471,7 +2472,7 @@ export class StorageService {
       const currentRevision = previous?.revision ?? 0;
       if (currentRevision !== expectedRevision) {
         throw new Error(
-          `Pane layout revision conflict: expected ${expectedRevision}, current ${currentRevision}`,
+          paneLayoutRevisionConflictMessage(expectedRevision, currentRevision),
         );
       }
       const saved: PersistedPaneLayout = {

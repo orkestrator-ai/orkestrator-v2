@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { paneLayoutRevisionConflictMessage } from "@orkestrator/protocol/pane-layout";
 import { REVIEW_INSTRUCTION_MAX_LENGTH } from "../../../packages/protocol/src/review-prompt";
 import {
   createEnvironment,
@@ -1490,7 +1491,7 @@ describe("Electron StorageService", () => {
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
     expect(rejected?.reason).toEqual(
-      new Error("Pane layout revision conflict: expected 1, current 2"),
+      new Error(paneLayoutRevisionConflictMessage(1, 2)),
     );
     expect((await storage.getPaneLayout(firstEnvironment.id))?.revision).toBe(2);
 
@@ -1565,6 +1566,213 @@ describe("Electron StorageService", () => {
 
     await expect(storage.deletePaneLayout("missing")).resolves.toBeUndefined();
     await expect(fs.stat(path.join(dataDir, "pane-layouts.json"))).rejects.toThrow();
+  });
+
+  test("serializes concurrent same-instance pane layout saves in issue order", async () => {
+    const dataDir = await createTempDir("ork-storage-pane-layout-serialize-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const rootFor = (index: number) => ({
+      kind: "leaf",
+      id: "default",
+      tabs: [{ id: `tab-${index}`, type: "plain" }],
+      activeTabId: `tab-${index}`,
+    });
+    const expectedRevisions = [0, 1, 2, 3, 4];
+
+    // Each call passes the revision it would see if the queue ran them in issue
+    // order, so any reordering or interleaving turns into a revision conflict.
+    const writes = await Promise.allSettled(expectedRevisions.map((expectedRevision) =>
+      storage.savePaneLayout(environment.id, {
+        version: 1,
+        containerId: "container-1",
+        activePaneId: "default",
+        root: rootFor(expectedRevision),
+      }, expectedRevision)));
+
+    expect(writes.map((result) =>
+      result.status === "fulfilled" ? result.value.revision : result.reason,
+    )).toEqual([1, 2, 3, 4, 5]);
+    expect(writes.map((result) =>
+      result.status === "fulfilled" ? result.value.root : result.reason,
+    )).toEqual(expectedRevisions.map(rootFor));
+
+    const stored = await storage.getPaneLayout(environment.id);
+    expect(stored).toMatchObject({ revision: 5, root: rootFor(4) });
+    const onDisk = JSON.parse(
+      await fs.readFile(path.join(dataDir, "pane-layouts.json"), "utf8"),
+    );
+    expect(Object.keys(onDisk)).toEqual([environment.id]);
+    expect(onDisk[environment.id]).toEqual(stored);
+  });
+
+  test("keeps a pane layout delete racing a save on one instance non-corrupt", async () => {
+    const dataDir = await createTempDir("ork-storage-pane-layout-delete-race-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+    await storage.savePaneLayout(environment.id, {
+      version: 1,
+      containerId: "container-1",
+      activePaneId: "default",
+      root,
+    }, 0);
+
+    const [deleted, saved] = await Promise.allSettled([
+      storage.deletePaneLayout(environment.id),
+      storage.savePaneLayout(environment.id, {
+        version: 1,
+        containerId: "container-1",
+        activePaneId: "default",
+        root: { ...root, activeTabId: "tab-2" },
+      }, 1),
+    ]);
+
+    expect(deleted).toEqual({ status: "fulfilled", value: undefined });
+    // Either the save ran first and the delete removed its result, or the delete
+    // ran first and the save lost the compare-and-swap. Nothing else is legal.
+    if (saved.status === "fulfilled") {
+      expect(saved.value.revision).toBe(2);
+    } else {
+      expect(saved.reason).toEqual(new Error(paneLayoutRevisionConflictMessage(1, 0)));
+    }
+    await expect(storage.getPaneLayout(environment.id)).resolves.toBeNull();
+    const onDisk = JSON.parse(
+      await fs.readFile(path.join(dataDir, "pane-layouts.json"), "utf8"),
+    );
+    expect(onDisk).toEqual({});
+
+    await expect(storage.savePaneLayout(environment.id, {
+      version: 1,
+      containerId: "container-1",
+      activePaneId: "default",
+      root,
+    }, 0)).resolves.toMatchObject({ revision: 1 });
+  });
+
+  test("keeps a cross-instance pane layout delete racing a save non-corrupt", async () => {
+    const dataDir = await createTempDir("ork-storage-pane-layout-delete-race-cross-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+    await storage.savePaneLayout(environment.id, {
+      version: 1,
+      containerId: "container-1",
+      activePaneId: "default",
+      root,
+    }, 0);
+
+    const competingStorage = new StorageService(dataDir);
+    await competingStorage.init();
+    const [deleted, saved] = await Promise.allSettled([
+      storage.deletePaneLayout(environment.id),
+      competingStorage.savePaneLayout(environment.id, {
+        version: 1,
+        containerId: "container-1",
+        activePaneId: "default",
+        root: { ...root, activeTabId: "tab-2" },
+      }, 1),
+    ]);
+
+    expect(deleted).toEqual({ status: "fulfilled", value: undefined });
+    if (saved.status === "fulfilled") {
+      expect(saved.value.revision).toBe(2);
+    } else {
+      expect(saved.reason).toEqual(new Error(paneLayoutRevisionConflictMessage(1, 0)));
+    }
+    await expect(storage.getPaneLayout(environment.id)).resolves.toBeNull();
+    expect(JSON.parse(
+      await fs.readFile(path.join(dataDir, "pane-layouts.json"), "utf8"),
+    )).toEqual({});
+
+    await expect(competingStorage.savePaneLayout(environment.id, {
+      version: 1,
+      containerId: "container-1",
+      activePaneId: "default",
+      root,
+    }, 0)).resolves.toMatchObject({ revision: 1 });
+  });
+
+  test("rejects non-integer and non-finite pane layout expected revisions", async () => {
+    const dataDir = await createTempDir("ork-storage-pane-layout-revision-types-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+
+    for (const expectedRevision of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expect(storage.savePaneLayout(environment.id, {
+        version: 1,
+        containerId: null,
+        activePaneId: "default",
+        root,
+      }, expectedRevision)).rejects.toThrow(
+        "Pane layout expected revision must be a non-negative integer",
+      );
+    }
+    await expect(storage.getPaneLayout(environment.id)).resolves.toBeNull();
+
+    await expect(storage.savePaneLayout(environment.id, {
+      version: 1,
+      containerId: null,
+      activePaneId: "default",
+      root,
+    }, 0)).resolves.toMatchObject({ revision: 1 });
+  });
+
+  test("an oversize pane layout root rejects without consuming the revision", async () => {
+    const dataDir = await createTempDir("ork-storage-pane-layout-oversize-cas-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+
+    const first = await storage.savePaneLayout(environment.id, {
+      version: 1,
+      containerId: null,
+      activePaneId: "default",
+      root,
+    }, 0);
+    expect(first.revision).toBe(1);
+
+    await expect(storage.savePaneLayout(environment.id, {
+      version: 1,
+      containerId: null,
+      activePaneId: "default",
+      root: { value: "x".repeat(256 * 1024) },
+    }, 1)).rejects.toThrow("Pane layout root exceeds the 256 KB limit");
+    await expect(storage.getPaneLayout(environment.id)).resolves.toEqual(first);
+
+    // The rejected oversize write must not have burned revision 1.
+    const second = await storage.savePaneLayout(environment.id, {
+      version: 1,
+      containerId: null,
+      activePaneId: "default",
+      root: { ...root, activeTabId: "tab-2" },
+    }, 1);
+    expect(second).toMatchObject({ revision: 2, root: { ...root, activeTabId: "tab-2" } });
+  });
+
+  test("reports pane layout conflicts with the shared protocol message", async () => {
+    const dataDir = await createTempDir("ork-storage-pane-layout-conflict-message-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+    const layout = { version: 1, containerId: null, activePaneId: "default", root };
+
+    await storage.savePaneLayout(environment.id, layout, 0);
+    await expect(storage.savePaneLayout(environment.id, layout, 0))
+      .rejects.toThrow(paneLayoutRevisionConflictMessage(0, 1));
+    await expect(storage.savePaneLayout(environment.id, layout, 7))
+      .rejects.toThrow(paneLayoutRevisionConflictMessage(7, 1));
+    // A save against an environment that has never stored a layout compares to 0.
+    const other = await storage.addEnvironment(createEnvironment("project-1", { name: "other" }));
+    await expect(storage.savePaneLayout(other.id, layout, 3))
+      .rejects.toThrow(paneLayoutRevisionConflictMessage(3, 0));
   });
 
   test("updates and deletes kanban tasks and comments with missing-id errors", async () => {

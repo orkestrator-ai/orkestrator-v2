@@ -1,10 +1,13 @@
 import { getConfig, getPaneLayout } from "@/lib/backend";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
-import { adoptPersistedPaneLayout } from "@/lib/pane-layout-persistence";
 import {
-  preserveClientPaneSelection,
-  reconcilePersistedLayout,
-} from "@/lib/pane-layout-restore";
+  adoptPersistedPaneLayout,
+  onPaneLayoutWriteSettled,
+} from "@/lib/pane-layout-persistence";
+import {
+  hydratePaneLayoutDependencies,
+  reconcileAuthoritativePaneLayout,
+} from "@/lib/pane-layout-authoritative";
 import {
   hydrateLoopedReviewWorkflow,
   hydrateLoopedReviewWorkflowsForEnvironment,
@@ -41,51 +44,7 @@ interface StoreResourceSyncOptions {
   getConfig?: typeof getConfig;
   getPaneLayout?: typeof getPaneLayout;
   adoptPaneLayout?: typeof adoptPersistedPaneLayout;
-}
-
-function collectPaneDependencyIds(root: unknown): {
-  pipelineIds: Set<string>;
-  workflowIds: Set<string>;
-} {
-  const pipelineIds = new Set<string>();
-  const workflowIds = new Set<string>();
-  const visit = (value: unknown, depth: number): void => {
-    if (
-      depth > 10
-      || !value
-      || typeof value !== "object"
-      || Array.isArray(value)
-    ) {
-      return;
-    }
-    const record = value as Record<string, unknown>;
-    if (record.kind === "leaf" && Array.isArray(record.tabs)) {
-      for (const tab of record.tabs) {
-        if (!tab || typeof tab !== "object" || Array.isArray(tab)) continue;
-        const candidate = tab as Record<string, unknown>;
-        const build = candidate.buildTabData;
-        if (build && typeof build === "object" && !Array.isArray(build)) {
-          const pipelineId = (build as Record<string, unknown>).pipelineId;
-          if (typeof pipelineId === "string" && pipelineId.trim()) {
-            pipelineIds.add(pipelineId);
-          }
-        }
-        const review = candidate.loopedReviewTabData;
-        if (review && typeof review === "object" && !Array.isArray(review)) {
-          const workflowId = (review as Record<string, unknown>).workflowId;
-          if (typeof workflowId === "string" && workflowId.trim()) {
-            workflowIds.add(workflowId);
-          }
-        }
-      }
-      return;
-    }
-    if (record.kind === "split" && Array.isArray(record.children)) {
-      record.children.forEach((child) => visit(child, depth + 1));
-    }
-  };
-  visit(root, 0);
-  return { pipelineIds, workflowIds };
+  onPaneLayoutWriteSettled?: typeof onPaneLayoutWriteSettled;
 }
 
 export function startStoreResourceSync(
@@ -99,6 +58,7 @@ export function startStoreResourceSync(
   let resyncRequested = false;
   const paneLayoutRequestGenerations = new Map<string, number>();
   const deferredPaneLayoutRefreshes = new Set<string>();
+  const declinedPaneLayoutRefreshes = new Set<string>();
 
   const refreshConfig = async (): Promise<void> => {
     const generation = ++configRequestGeneration;
@@ -179,19 +139,7 @@ export function startStoreResourceSync(
     }
 
     if (saved) {
-      const dependencies = collectPaneDependencyIds(saved.root);
-      await Promise.all([
-        ...[...dependencies.pipelineIds].map((pipelineId) =>
-          useBuildPipelineStore.getState().pipelines.has(pipelineId)
-            ? Promise.resolve()
-            : hydrateBuildPipeline(pipelineId).then(() => undefined)
-        ),
-        ...[...dependencies.workflowIds].map((workflowId) =>
-          useLoopedReviewStore.getState().workflows.has(workflowId)
-            ? Promise.resolve()
-            : hydrateLoopedReviewWorkflow(workflowId).then(() => undefined)
-        ),
-      ]);
+      await hydratePaneLayoutDependencies(saved.root);
       if (
         disposed
         || paneLayoutRequestGenerations.get(environmentId) !== generation
@@ -224,28 +172,46 @@ export function startStoreResourceSync(
       return;
     }
 
-    const isLocal = latestEnvironment.environmentType === "local";
-    const restored = reconcilePersistedLayout(saved, {
+    if (!saved) return;
+    const selected = reconcileAuthoritativePaneLayout(
       environmentId,
-      containerId: latestContainerId,
-      isLocal,
-      worktreePath: latestEnvironment.worktreePath,
-      hasBuildPipeline: (pipelineId) =>
-        useBuildPipelineStore.getState().pipelines.has(pipelineId),
-      hasLoopedReview: (workflowId) =>
-        useLoopedReviewStore.getState().workflows.has(workflowId),
-    });
-    if (!restored) return;
+      saved,
+      current,
+    );
+    if (!selected) return;
 
-    const selected = preserveClientPaneSelection(restored, current);
     // Prime the persistence mirror before publishing the store update so this
     // read-through snapshot does not become a redundant write-back.
     if (!(options.adoptPaneLayout ?? adoptPersistedPaneLayout)(
       environmentId,
       selected,
-    )) return;
+    )) {
+      // The layout we just fetched is dropped in favour of a local write that
+      // has not landed yet. That write announces its own revision on success —
+      // but if it fails, nothing else would ever come back for this snapshot.
+      declinedPaneLayoutRefreshes.add(environmentId);
+      return;
+    }
+    declinedPaneLayoutRefreshes.delete(environmentId);
     latestPaneStore.applyAuthoritativeLayout(environmentId, selected);
   };
+
+  const requestPaneLayoutRefresh = (environmentId: string): void => {
+    void refreshPaneLayout(environmentId).catch((error) => {
+      console.warn(
+        `[store-resource-sync] Failed to refresh pane layout ${environmentId}:`,
+        error,
+      );
+    });
+  };
+
+  unsubscribes.push((options.onPaneLayoutWriteSettled ?? onPaneLayoutWriteSettled)(
+    (environmentId) => {
+      if (disposed || !declinedPaneLayoutRefreshes.has(environmentId)) return;
+      declinedPaneLayoutRefreshes.delete(environmentId);
+      requestPaneLayoutRefresh(environmentId);
+    },
+  ));
 
   unsubscribes.push(usePaneLayoutStore.subscribe((state, previous) => {
     for (const environmentId of [...deferredPaneLayoutRefreshes]) {
@@ -254,12 +220,20 @@ export function startStoreResourceSync(
         && state.hydration.get(environmentId) === "done"
       ) {
         deferredPaneLayoutRefreshes.delete(environmentId);
-        void refreshPaneLayout(environmentId).catch((error) => {
-          console.warn(
-            `[store-resource-sync] Failed to refresh pane layout ${environmentId}:`,
-            error,
-          );
-        });
+        requestPaneLayoutRefresh(environmentId);
+      }
+    }
+    // An environment that left the pane store will never settle a write or
+    // finish hydrating, so its queued replays would be retained forever.
+    for (const environmentId of [...deferredPaneLayoutRefreshes]) {
+      if (!state.hydration.has(environmentId)) {
+        deferredPaneLayoutRefreshes.delete(environmentId);
+      }
+    }
+    for (const environmentId of [...declinedPaneLayoutRefreshes]) {
+      if (!state.environments.has(environmentId)) {
+        declinedPaneLayoutRefreshes.delete(environmentId);
+        paneLayoutRequestGenerations.delete(environmentId);
       }
     }
   }));
@@ -419,6 +393,7 @@ export function startStoreResourceSync(
   return () => {
     disposed = true;
     deferredPaneLayoutRefreshes.clear();
+    declinedPaneLayoutRefreshes.clear();
     paneLayoutRequestGenerations.clear();
     for (const unsubscribe of unsubscribes) unsubscribe();
   };
